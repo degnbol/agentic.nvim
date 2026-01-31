@@ -552,7 +552,7 @@ function SessionManager:add_selection_to_session()
     return false
 end
 
---- @param buf? number|string Buffer number or path, if nil the current buffer is used or `0`
+--- @param buf number|string|nil Buffer number or path, if nil the current buffer is used or `0`
 function SessionManager:add_file_to_session(buf)
     local bufnr = buf and vim.fn.bufnr(buf) or 0
     local buf_path = vim.api.nvim_buf_get_name(bufnr)
@@ -604,7 +604,7 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
 end
 
 --- @param tool_call_id string
---- @param is_rejection? boolean
+--- @param is_rejection boolean|nil
 function SessionManager:_clear_diff_in_buffer(tool_call_id, is_rejection)
     local tracker = tool_call_id
         and self.message_writer.tool_call_blocks[tool_call_id]

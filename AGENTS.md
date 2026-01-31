@@ -659,20 +659,19 @@ plugin.
 
 #### ACP Providers (Agent Client Protocol)
 
-These providers spawn **external CLI tools** as subprocesses and communicate via
-the Agent Client Protocol:
+This plugin spawn **external CLI tools** as subprocesses and communicate via the
+Agent Client Protocol:
 
-- **Requirements**: External CLI tools must be installed
-  - `pnpm add -g @zed-industries/claude-code-acp` or
-    `brew install --cask claude-code` or
-    `curl -fsSL https://claude.ai/install.sh | bash`
-  - `pnpm add -g @google/gemini-cli` or `brew install --cask gemini`
-  - `pnpm add -g @zed-industries/codex-acp` or `brew install --cask codex` or
-    download from releases
-  - `pnpm add -g opencode-ai` or `brew install opencode` or
-    `curl -fsSL https://opencode.ai/install | bash`
-  - `pnpm add -g @blowmage/cursor-agent-acp`
-  - `pnpm add -g @github/copilot` or `brew install copilot-cli`
+- **Requirements**: External CLI tools must be installed by the user, we don't
+  install them for security reasons.
+  - `claude-code-acp` for Claude
+  - `gemini` for Gemini
+  - `codex-acp` for Codex
+  - `opencode` for OpenCode
+  - `cursor-agent-acp` for Cursor Agent
+  - `auggie` for Augment Code
+
+NOTE: Install instructs are in the README.md
 
 ##### Provider adapters:
 
@@ -715,6 +714,8 @@ acp_providers = {
 }
 ```
 
+#### ACP Protocol Documentation and schema
+
 The ACP documentation can be found at:
 
 - Complete Schema: https://agentclientprotocol.com/protocol/schema.md
@@ -732,7 +733,7 @@ The ACP documentation can be found at:
 - Extensibility: https://agentclientprotocol.com/protocol/extensibility.md
 - Transports: https://agentclientprotocol.com/protocol/transports.md
 
-##### ACP architectural limitations:
+#### ACP architectural limitations:
 
 - **No partial acceptance of file changes:** Users must accept or reject the
   entire file's changes as a unit. The ACP protocol is async and transactional
@@ -773,4 +774,3 @@ https://raw.githubusercontent.com/neovim/neovim/refs/tags/v<version>/runtime/doc
 
 **Tip:** Do not assume a file contains what you need, use `rg`, or `grep` on the
 `runtime/doc` folder to find the file containing needed info.
-

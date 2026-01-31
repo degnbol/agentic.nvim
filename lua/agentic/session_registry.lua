@@ -7,7 +7,7 @@ local SessionRegistry = {
 }
 
 --- @param tab_page_id integer|nil
---- @param callback nil|fun(session: agentic.SessionManager)
+--- @param callback fun(session: agentic.SessionManager)|nil
 --- @return agentic.SessionManager|nil session valid session instance or nil on failure
 function SessionRegistry.get_session_for_tab_page(tab_page_id, callback)
     tab_page_id = tab_page_id ~= nil and tab_page_id

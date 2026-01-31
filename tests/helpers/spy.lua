@@ -15,7 +15,7 @@ local M = {}
 --- @field revert fun(self: TestSpy) Revert to original function
 
 --- Create a new spy function
---- @param fn? function Optional function to wrap
+--- @param fn function|nil Optional function to wrap
 --- @return TestSpy
 function M.new(fn)
     local spy = {

@@ -5,7 +5,7 @@ local ACPHealth = {}
 --- Check if a command exists and is executable
 --- Handles command names (e.g., "node"), absolute paths (e.g., "/usr/bin/node"),
 --- and tilde paths (e.g., "~/.local/bin/node")
---- @param command? string The command name or path to check
+--- @param command string|nil The command name or path to check
 --- @return boolean exists Whether the command exists and is executable
 function ACPHealth.is_command_available(command)
     if not command or command == "" then

@@ -139,7 +139,7 @@ end
 --- @protected
 --- @param code number
 --- @param message string
---- @param data? any
+--- @param data any|nil
 --- @return agentic.acp.ACPError
 function ACPClient:__create_error(code, message, data)
     return {
@@ -156,7 +156,7 @@ function ACPClient:_next_id()
 end
 
 --- @param method string
---- @param params? table
+--- @param params table|nil
 --- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
 function ACPClient:_send_request(method, params, callback)
     local id = self:_next_id()
@@ -177,7 +177,7 @@ function ACPClient:_send_request(method, params, callback)
 end
 
 --- @param method string
---- @param params? table
+--- @param params table|nil
 function ACPClient:_send_notification(method, params)
     local message = {
         jsonrpc = "2.0",
@@ -207,7 +207,7 @@ end
 
 --- @param id number
 --- @param message string
---- @param code? number
+--- @param code number|nil
 --- @return nil
 function ACPClient:_send_error(id, message, code)
     code = code or self.ERROR_CODES.TRANSPORT_ERROR
@@ -480,7 +480,7 @@ end
 
 --- @param session_id string
 --- @param cwd string
---- @param mcp_servers? table[]
+--- @param mcp_servers table[]|nil
 --- @param handlers agentic.acp.ClientHandlers
 function ACPClient:load_session(session_id, cwd, mcp_servers, handlers)
     --FIXIT: check if it's possible to ignore this check and just try to send load message

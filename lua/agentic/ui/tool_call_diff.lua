@@ -295,7 +295,7 @@ function M.filter_unchanged_lines(old_lines, new_lines)
 end
 
 --- Normalize text to lines array, handling nil and vim.NIL
---- @param text? string|string[]
+--- @param text string|string[]|nil
 --- @return string[]
 function M._normalize_text_to_lines(text)
     if not text or text == "" or text == vim.NIL then

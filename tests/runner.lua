@@ -21,7 +21,7 @@ local function run_with_exit(fn)
 end
 
 --- Run all tests
---- @param opts? { verbose?: boolean }
+--- @param opts { verbose?: boolean }|nil
 function M.run(opts)
     opts = opts or {}
     run_with_exit(function()

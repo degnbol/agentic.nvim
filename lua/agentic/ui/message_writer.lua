@@ -810,7 +810,7 @@ function MessageWriter:_apply_status_footer(footer_line, status)
     })
 end
 
---- @param ids? integer[]
+--- @param ids integer[]|nil
 function MessageWriter:_clear_decoration_extmarks(ids)
     if not ids then
         return
@@ -848,7 +848,7 @@ end
 
 --- @param start_row integer
 --- @param end_row integer
---- @param status? string
+--- @param status string|nil
 function MessageWriter:_apply_status_highlights_if_present(
     start_row,
     end_row,

@@ -60,7 +60,7 @@ end
 --- @param mode string|string[]
 --- @param lhs string
 --- @param rhs string|fun()
---- @param opts? vim.keymap.set.Opts
+--- @param opts vim.keymap.set.Opts|nil
 function BufHelpers.keymap_set(bufnr, mode, lhs, rhs, opts)
     opts = opts or {}
     opts.buffer = bufnr

@@ -28,7 +28,7 @@ local function set_diff_bufnr(tabpage, bufnr)
 end
 
 --- Get the buffer number with active diff preview for the current or specified tabpage
---- @param tabpage? number Tabpage ID (defaults to current tabpage)
+--- @param tabpage number|nil Tabpage ID (defaults to current tabpage)
 --- @return number|nil bufnr Buffer number with active diff, or nil if none
 function M.get_active_diff_buffer(tabpage)
     local tab = tabpage or vim.api.nvim_get_current_tabpage()
@@ -94,7 +94,7 @@ end
 --- Get the diff highlight for a column position based on word-level change
 --- Always returns DIFF_ADD for line background, DIFF_ADD_WORD for changed portions
 --- @param col integer 0-indexed column
---- @param change? table Change info from find_inline_change
+--- @param change table|nil Change info from find_inline_change
 --- @return string hl_group
 local function get_diff_hl_for_col(col, change)
     if change and col >= change.new_start and col < change.new_end then
@@ -105,7 +105,7 @@ end
 
 --- Builds segments for a line without syntax highlighting
 --- @param line string
---- @param change? table Change info from find_inline_change
+--- @param change table|nil Change info from find_inline_change
 --- @return table[] segments
 local function build_plain_segments(line, change)
     if not change then
@@ -134,7 +134,7 @@ end
 --- Builds segments for a line with syntax highlighting
 --- @param line string
 --- @param col_hl table<number, string>
---- @param change? table Change info from find_inline_change
+--- @param change table|nil Change info from find_inline_change
 --- @return table[] segments
 local function build_highlighted_segments(line, col_hl, change)
     local segments = {}
@@ -193,7 +193,7 @@ end
 
 --- Builds virt_lines with syntax highlighting and diff background
 --- @param new_lines string[]
---- @param old_lines? (string|nil)[] Sequential old lines aligned with new_lines
+--- @param old_lines (string|nil)[]|nil Sequential old lines aligned with new_lines
 --- @param lang string
 --- @return table virt_lines
 local function get_highlighted_virt_lines(new_lines, old_lines, lang)
@@ -363,7 +363,7 @@ end
 
 --- Clears the diff highlights from the given buffer
 --- @param buf number|string Buffer number or file path
---- @param is_rejection? boolean If true and file doesn't exist, cleanup buffer
+--- @param is_rejection boolean|nil If true and file doesn't exist, cleanup buffer
 function M.clear_diff(buf, is_rejection)
     local bufnr = type(buf) == "string" and vim.fn.bufnr(buf) or buf --[[@as integer]]
 
@@ -421,7 +421,7 @@ function M.clear_diff(buf, is_rejection)
 end
 
 --- Add hint line for navigation keybindings to permission request
---- @param tracker? table Tool call tracker with kind field
+--- @param tracker table|nil Tool call tracker with kind field
 --- @param lines_to_append string[] Array of lines to append hint to
 --- @return number|nil hint_line_index Index of hint line in array, or nil if not added
 function M.add_navigation_hint(tracker, lines_to_append)

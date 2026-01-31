@@ -235,8 +235,8 @@ function ChatWidget:_submit_input()
     self:move_cursor_to(self.win_nrs.chat)
 end
 
---- @param winid? integer
---- @param callback? fun()
+--- @param winid integer|nil
+--- @param callback fun()|nil
 function ChatWidget:move_cursor_to(winid, callback)
     vim.schedule(function()
         if winid and vim.api.nvim_win_is_valid(winid) then
@@ -617,7 +617,7 @@ end
 --- @param window_name agentic.ui.ChatWidget.PanelNames Window identifier (code, files, todos)
 --- @param open_win_opts table Options to pass to _open_win() for window creation
 --- @param max_height number Maximum height for the window
---- @param should_display? boolean Optional condition for displaying (defaults to true)
+--- @param should_display boolean|nil Optional condition for displaying (defaults to true)
 function ChatWidget:_open_or_resize_dynamic_window(
     window_name,
     open_win_opts,
@@ -791,7 +791,7 @@ function ChatWidget:_is_widget_buffer(bufnr)
 end
 
 --- Opens a new window on the left side with full height
---- @param bufnr? number The buffer to display in the new window
+--- @param bufnr number|nil The buffer to display in the new window
 --- @return number|nil winid The newly created window ID or nil on failure
 function ChatWidget:open_left_window(bufnr)
     if bufnr == nil then
