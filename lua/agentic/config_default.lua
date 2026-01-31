@@ -1,4 +1,11 @@
---- @alias agentic.UserConfig.ProviderName "claude-acp" | "gemini-acp" | "codex-acp" | "opencode-acp" | "cursor-acp" | "auggie-acp" | "copilot-acp"
+--- @alias agentic.UserConfig.ProviderName
+--- | "claude-acp"
+--- | "gemini-acp"
+--- | "codex-acp"
+--- | "opencode-acp"
+--- | "cursor-acp"
+--- | "copilot-acp"
+--- | "auggie-acp"
 
 --- @alias agentic.UserConfig.HeaderRenderFn fun(parts: agentic.ui.ChatWidget.HeaderParts): string|nil
 
