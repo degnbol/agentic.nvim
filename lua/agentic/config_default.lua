@@ -39,6 +39,7 @@
 --- @class agentic.UserConfig.Keymaps
 --- @field widget table<string, agentic.UserConfig.KeymapValue>
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
+--- @field chat table<string, agentic.UserConfig.KeymapValue>
 --- @field diff_preview table<string, string>
 
 --- Window options passed to nvim_set_option_value
@@ -156,7 +157,7 @@ local ConfigDefault = {
     --- @field todos agentic.UserConfig.Windows.Todos
     windows = {
         position = "right",
-        width = "40%",
+        width = "50%",
         height = "30%",
         stack_width_ratio = 0.4,
         chat = { win_opts = {} },
@@ -186,10 +187,6 @@ local ConfigDefault = {
         prompt = {
             submit = {
                 "<CR>",
-                {
-                    "<C-s>",
-                    mode = { "i", "n", "v" },
-                },
             },
 
             paste_image = {
@@ -209,6 +206,12 @@ local ConfigDefault = {
                     mode = { "i" },
                 },
             },
+        },
+
+        --- Key bindings for the chat buffer
+        chat = {
+            prev_prompt = "[[",
+            next_prompt = "]]",
         },
 
         --- Keys bindings for diff preview navigation
@@ -303,7 +306,14 @@ local ConfigDefault = {
     --- The context field is managed internally and shows dynamic info like counts.
     ---
     --- @type agentic.UserConfig.Headers
-    headers = {},
+    headers = {
+        input = function() end,
+        files = function() end,
+        chat = function() end,
+        code = { suffix = "" },
+        diagnostics = { suffix = "" },
+        todos = function() end,
+    },
 
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings

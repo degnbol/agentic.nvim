@@ -5,6 +5,7 @@ local DiffHighlighter = require("agentic.utils.diff_highlighter")
 local DiffPreview = require("agentic.ui.diff_preview")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local Logger = require("agentic.utils.logger")
+local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
@@ -63,6 +64,7 @@ function MessageWriter:new(bufnr)
         _last_message_type = nil,
         _should_auto_scroll = nil,
         _scroll_scheduled = false,
+        _chunk_start_line = nil,
     }, self)
 
     return instance
@@ -90,7 +92,18 @@ function MessageWriter:_with_modifiable_and_notify_change(fn)
     end
 end
 
---- Writes a full message to the chat buffer and append two blank lines after
+--- Returns the width of the window displaying the chat buffer, or 80 as fallback.
+--- @return integer
+function MessageWriter:_get_wrap_width()
+    local winid = vim.fn.bufwinid(self.bufnr)
+    if winid ~= -1 then
+        return vim.api.nvim_win_get_width(winid)
+    end
+    return 80
+end
+
+--- Writes a full message to the chat buffer and append two blank lines after.
+--- Prose lines are hard-wrapped to the chat window width; code blocks are untouched.
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message(update)
     local text = update.content
@@ -102,6 +115,7 @@ function MessageWriter:write_message(update)
     end
 
     local lines = vim.split(text, "\n", { plain = true })
+    lines = TextWrap.wrap_prose(lines, self:_get_wrap_width())
 
     self:_auto_scroll(self.bufnr)
 
@@ -111,10 +125,73 @@ function MessageWriter:write_message(update)
     end)
 end
 
+--- Append trailing blank lines to separate from the next message.
+--- If streamed chunks preceded this call, reflow their prose first.
+function MessageWriter:append_separator()
+    self:_with_modifiable_and_notify_change(function(bufnr)
+        self:_reflow_chunks(bufnr, true)
+        self:_append_lines({ "" })
+    end)
+end
+
+--- Reflow prose in the region written by write_message_chunk.
+--- When `flush_all` is false (during streaming), only reflows complete
+--- paragraphs — up to the last blank line, leaving the in-progress
+--- paragraph untouched. When true (response finished), reflows everything.
+--- @param bufnr integer
+--- @param flush_all? boolean
+function MessageWriter:_reflow_chunks(bufnr, flush_all)
+    local start = self._chunk_start_line
+    if not start then
+        return
+    end
+
+    local buf_end = vim.api.nvim_buf_line_count(bufnr)
+    if start >= buf_end then
+        return
+    end
+
+    local reflow_end = buf_end -- 0-indexed exclusive
+
+    if not flush_all then
+        -- Find the last blank line in the range (excluding the final line
+        -- which is still being appended to). Reflow up to and including it.
+        local last_blank = nil
+        local lines = vim.api.nvim_buf_get_lines(bufnr, start, buf_end, false)
+        for i = #lines - 1, 1, -1 do -- skip last line (index #lines)
+            if lines[i]:match("^%s*$") then
+                last_blank = start + (i - 1) -- lines[1] = buffer line `start`
+                break
+            end
+        end
+        if not last_blank then
+            return -- no complete paragraph yet
+        end
+        reflow_end = last_blank + 1 -- exclusive, include the blank line
+    end
+
+    local raw = vim.api.nvim_buf_get_lines(bufnr, start, reflow_end, false)
+    local wrapped = TextWrap.wrap_prose(raw, self:_get_wrap_width())
+
+    if not vim.deep_equal(raw, wrapped) then
+        vim.api.nvim_buf_set_lines(bufnr, start, reflow_end, false, wrapped)
+    end
+
+    if flush_all then
+        self._chunk_start_line = nil
+    else
+        -- Advance past the reflowed region
+        self._chunk_start_line = start + #wrapped
+    end
+end
+
 --- Appends message chunks to the last line and column in the chat buffer
 --- Some ACP providers stream chunks instead of full messages
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message_chunk(update)
+    -- Hide thinking chunks from chat
+    if update.sessionUpdate == "agent_thought_chunk" then return end
+
     local text = update.content
         and update.content.type == "text"
         and update.content.text
@@ -139,6 +216,16 @@ function MessageWriter:write_message_chunk(update)
     self:_with_modifiable_and_notify_change(function(bufnr)
         local last_line = vim.api.nvim_buf_line_count(bufnr) - 1
 
+        -- Record where streamed content starts (0-indexed)
+        if not self._chunk_start_line then
+            local current = vim.api.nvim_buf_get_lines(
+                bufnr, last_line, last_line + 1, false
+            )[1] or ""
+            -- If appending to a non-empty line, this line is the start
+            -- If the line is empty, the new content starts here
+            self._chunk_start_line = current == "" and last_line or last_line
+        end
+
         local current_line = vim.api.nvim_buf_get_lines(
             bufnr,
             last_line,
@@ -161,6 +248,11 @@ function MessageWriter:write_message_chunk(update)
 
         if not success then
             Logger.debug("Failed to set text in buffer", err, lines_to_write)
+        end
+
+        -- Reflow complete paragraphs when a paragraph boundary was written
+        if text:find("\n") then
+            self:_reflow_chunks(bufnr)
         end
     end)
 end
@@ -582,21 +674,8 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         -- Sanitize argument to prevent newlines in the permission request, neovim throws error
         local sanitized_argument = tracker.argument:gsub("\n", "\\n")
 
-        -- Get buffer width and limit the display line
-        local winid = vim.fn.bufwinid(self.bufnr)
-
-        local buf_width = 80 -- default fallback width, in case buf is not visible
-        if winid ~= -1 then
-            buf_width = vim.api.nvim_win_get_width(winid)
-        end
-
         local tool_line =
             string.format(" %s(%s)", tracker.kind, sanitized_argument)
-
-        -- Truncate if longer than buffer width, leaving space for "...)"
-        if #tool_line > buf_width then
-            tool_line = tool_line:sub(1, buf_width - 4) .. "...)"
-        end
 
         vim.list_extend(lines_to_append, {
             tool_line,

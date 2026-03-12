@@ -94,8 +94,7 @@ local function open_win(bufnr, enter, opts, window_name, win_opts)
     local config_win_opts = window_config.win_opts or {}
 
     local merged_win_opts = vim.tbl_deep_extend("force", {
-        wrap = true,
-        linebreak = true,
+        wrap = false,
         winfixbuf = true,
         winfixheight = true,
     }, win_opts or {}, config_win_opts)

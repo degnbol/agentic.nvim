@@ -69,14 +69,10 @@ SessionManager.__index = SessionManager
 --- @param provider_name string
 --- @param session_id string|nil
 --- @return string header
-function SessionManager._generate_welcome_header(provider_name, session_id)
-    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-    return string.format(
-        "# Agentic - %s - %s\n- %s\n--- --",
-        provider_name,
-        session_id or "unknown",
-        timestamp
-    )
+function SessionManager._generate_welcome_header(_, session_id)
+    local ts = os.date("%Y-%m-%d %H:%M")
+    local short_id = session_id and session_id:sub(1, 8) or "unknown"
+    return string.format("# %s · %s", ts, short_id)
 end
 
 --- @param tab_page_id integer
@@ -257,6 +253,20 @@ function SessionManager:_on_session_update(update)
     end
 end
 
+--- Handle non-JSON text from the ACP process (stdout non-JSON or stderr).
+--- Used for local command output (e.g. /context) that bypasses JSON-RPC.
+--- Only displays when a prompt is actively generating to avoid noise.
+--- @param text string
+function SessionManager:_on_stdout_text(text)
+    if not self.is_generating then
+        return
+    end
+
+    self.message_writer:write_message(
+        ACPPayloads.generate_agent_message(text)
+    )
+end
+
 --- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
@@ -404,6 +414,30 @@ end
 
 --- @param input_text string
 function SessionManager:_handle_input_submit(input_text)
+    -- Defer until agent is ready (avoids error on early submit before session exists)
+    if not (self.session_id and self.agent and self.agent.state == "ready") then
+        local timer = vim.uv.new_timer()
+        local attempts = 0
+        timer:start(100, 100, vim.schedule_wrap(function()
+            attempts = attempts + 1
+            if self.session_id and self.agent and self.agent.state == "ready" then
+                timer:stop()
+                timer:close()
+                self:_handle_input_submit_inner(input_text)
+            elseif attempts >= 100
+                or (self.agent and (self.agent.state == "error" or self.agent.state == "disconnected"))
+            then
+                timer:stop()
+                timer:close()
+            end
+        end))
+        return
+    end
+    self:_handle_input_submit_inner(input_text)
+end
+
+--- @param input_text string
+function SessionManager:_handle_input_submit_inner(input_text)
     self.todo_list:close_if_all_completed()
 
     -- Intercept /new command to start new session locally, cancelling existing one
@@ -443,7 +477,7 @@ function SessionManager:_handle_input_submit(input_text)
 
     --- The message to be written to the chat widget
     local message_lines = {
-        string.format("##  User - %s", os.date("%Y-%m-%d %H:%M:%S")),
+        "##",
     }
 
     table.insert(message_lines, "")
@@ -560,7 +594,7 @@ function SessionManager:_handle_input_submit(input_text)
 
     table.insert(
         message_lines,
-        "\n\n### 󱚠 Agent - " .. self.agent.provider_config.name
+        "\n---"
     )
 
     local user_message = ACPPayloads.generate_user_message(message_lines)
@@ -595,27 +629,22 @@ function SessionManager:_handle_input_submit(input_text)
         vim.schedule(function()
             self.is_generating = false
 
-            local finish_message = string.format(
-                "\n### 🏁 %s\n-----",
-                os.date("%Y-%m-%d %H:%M:%S")
-            )
+            local finish_message = nil
 
             if err then
                 finish_message = string.format(
-                    "\n### ❌ Agent finished with error: %s\n%s",
-                    vim.inspect(err),
-                    finish_message
-                )
-            elseif response and response.stopReason == "cancelled" then
-                finish_message = string.format(
-                    "\n### 🛑 Generation stopped by the user request\n%s",
-                    finish_message
+                    "\n**Error:** %s",
+                    vim.inspect(err)
                 )
             end
 
-            self.message_writer:write_message(
-                ACPPayloads.generate_agent_message(finish_message)
-            )
+            if finish_message then
+                self.message_writer:write_message(
+                    ACPPayloads.generate_agent_message(finish_message)
+                )
+            end
+
+            self.message_writer:append_separator()
 
             self.status_animation:stop()
 
@@ -686,6 +715,10 @@ function SessionManager:new_session(opts)
 
         on_tool_call_update = function(tool_call_update)
             self:_on_tool_call_update(tool_call_update)
+        end,
+
+        on_stdout_text = function(text)
+            self:_on_stdout_text(text)
         end,
 
         on_request_permission = function(request, callback)
@@ -925,19 +958,19 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
         file_path = tracker.argument,
         diff = tracker.diff,
         get_winid = function(bufnr)
-            local winid = self.widget:find_first_non_widget_window()
-            if not winid then
-                return self.widget:open_left_window(bufnr)
+            local agent_tab = vim.api.nvim_get_current_tabpage()
+            -- Reuse existing diff tab or create one
+            local ok, diff_tab = pcall(vim.api.nvim_tabpage_get_var, agent_tab, "_agentic_diff_tab")
+            if ok and vim.api.nvim_tabpage_is_valid(diff_tab) then
+                vim.api.nvim_set_current_tabpage(diff_tab)
+            else
+                vim.cmd("tabnew")
+                diff_tab = vim.api.nvim_get_current_tabpage()
+                vim.api.nvim_tabpage_set_var(agent_tab, "_agentic_diff_tab", diff_tab)
+                vim.api.nvim_set_current_tabpage(agent_tab)
             end
-            local ok, err = pcall(vim.api.nvim_win_set_buf, winid, bufnr)
-
-            if not ok then
-                Logger.notify(
-                    "Failed to set buffer in window: " .. tostring(err),
-                    vim.log.levels.WARN
-                )
-                return nil
-            end
+            local winid = vim.api.nvim_tabpage_list_wins(diff_tab)[1]
+            vim.api.nvim_win_set_buf(winid, bufnr)
             return winid
         end,
     })

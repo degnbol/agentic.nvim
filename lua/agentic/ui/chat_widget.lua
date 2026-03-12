@@ -256,6 +256,8 @@ function ChatWidget:_initialize()
     self.buf_nrs = self:_create_buf_nrs()
 
     self:_bind_keymaps()
+    self:_setup_write_submit()
+    self:_setup_prompt_signs()
 
     -- I only want to trigger a full close of the chat widget when closing the chat or the input buffers, the others are auxiliary
     for _, bufnr in ipairs({
@@ -269,6 +271,83 @@ function ChatWidget:_initialize()
             end,
         })
     end
+end
+
+--- Make :w submit the prompt in the input buffer
+function ChatWidget:_setup_write_submit()
+    local input_buf = self.buf_nrs.input
+    -- Schedule: _create_new_buf sets options in unordered loop,
+    -- so buftype=nofile may be set after filetype triggers this.
+    vim.schedule(function()
+        vim.api.nvim_buf_set_name(input_buf, "agentic://prompt")
+        vim.bo[input_buf].buftype = "acwrite"
+    end)
+    vim.api.nvim_create_autocmd("BufWriteCmd", {
+        buffer = input_buf,
+        callback = function()
+            vim.bo[input_buf].modified = false
+            vim.api.nvim_feedkeys(
+                vim.api.nvim_replace_termcodes("<CR>", true, false, true),
+                "m", false
+            )
+        end,
+    })
+end
+
+--- Mark user prompts with signs and [[ / ]] navigation in the chat buffer
+function ChatWidget:_setup_prompt_signs()
+    local PROMPT_NS = vim.api.nvim_create_namespace("agentic_prompt_signs")
+    vim.fn.sign_define("AgenticPrompt", { text = "❯", texthl = "NonText" })
+
+    local chat_buf = self.buf_nrs.chat
+
+    local function place_prompt_signs()
+        vim.fn.sign_unplace("AgenticPrompt", { buffer = chat_buf })
+        local lines = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
+        for i, line in ipairs(lines) do
+            if line == "##" then
+                vim.fn.sign_place(0, "AgenticPrompt", "AgenticPrompt", chat_buf, { lnum = i })
+            end
+        end
+    end
+
+    vim.api.nvim_create_autocmd("TextChanged", {
+        buffer = chat_buf,
+        callback = place_prompt_signs,
+    })
+
+    -- Jump between prompts
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.chat and Config.keymaps.chat.prev_prompt or "[[",
+        chat_buf,
+        function()
+            local row = vim.api.nvim_win_get_cursor(0)[1]
+            local lines = vim.api.nvim_buf_get_lines(chat_buf, 0, row - 1, false)
+            for i = #lines, 1, -1 do
+                if lines[i] == "##" then
+                    vim.api.nvim_win_set_cursor(0, { i, 0 })
+                    return
+                end
+            end
+        end,
+        { desc = "Agentic: Previous prompt" }
+    )
+
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.chat and Config.keymaps.chat.next_prompt or "]]",
+        chat_buf,
+        function()
+            local row = vim.api.nvim_win_get_cursor(0)[1]
+            local lines = vim.api.nvim_buf_get_lines(chat_buf, row, -1, false)
+            for i, line in ipairs(lines) do
+                if line == "##" then
+                    vim.api.nvim_win_set_cursor(0, { row + i, 0 })
+                    return
+                end
+            end
+        end,
+        { desc = "Agentic: Next prompt" }
+    )
 end
 
 function ChatWidget:_bind_keymaps()
@@ -338,6 +417,17 @@ function ChatWidget:_bind_keymaps()
                         self.win_nrs.input,
                         BufHelpers.start_insert_on_last_char
                     )
+                end)
+            end
+
+            -- Paste in chat/panel → focus input window and paste there
+            for _, key in ipairs({ "p", "P" }) do
+                BufHelpers.keymap_set(bufnr, "n", key, function()
+                    local input_win = self.win_nrs.input
+                    if input_win and vim.api.nvim_win_is_valid(input_win) then
+                        vim.api.nvim_set_current_win(input_win)
+                        vim.cmd("normal! " .. key)
+                    end
                 end)
             end
         end

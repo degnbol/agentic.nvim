@@ -40,6 +40,7 @@ local KNOWN_ACP_KINDS = {
 
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field _on_ready fun(client: agentic.acp.ACPClient)
+--- @field _broadcast_stdout_text fun(self: agentic.acp.ACPClient, text: string)
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -111,6 +112,20 @@ function ACPClient:__with_subscriber(session_id, callback)
     end)
 end
 
+--- Broadcast non-JSON stdout text to all subscribers that handle it.
+--- Used for local command output (e.g. /context) that bypasses JSON-RPC.
+--- @param text string
+function ACPClient:_broadcast_stdout_text(text)
+    Logger.debug_to_file("broadcast_stdout_text: ", text)
+    for _, subscriber in pairs(self.subscribers) do
+        if subscriber.on_stdout_text then
+            vim.schedule(function()
+                subscriber.on_stdout_text(text)
+            end)
+        end
+    end
+end
+
 function ACPClient:_setup_transport()
     local transport_type = self.provider_config.transport_type or "stdio"
 
@@ -136,6 +151,12 @@ function ACPClient:_setup_transport()
                 if self.state == "disconnected" then
                     self:_connect()
                 end
+            end,
+            on_stdout_text = function(text)
+                self:_broadcast_stdout_text(text)
+            end,
+            on_stderr_text = function(text)
+                self:_broadcast_stdout_text(text)
             end,
             get_reconnect_count = function()
                 return self.reconnect_count
@@ -965,6 +986,7 @@ return ACPClient
 --- @field on_error agentic.acp.ClientHandlers.on_error
 --- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock): nil
 --- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase): nil
+--- @field on_stdout_text? fun(text: string): nil Non-JSON stdout lines (e.g. local command output)
 
 --- @class agentic.acp.ACPProviderConfig
 --- @field name? string Provider name

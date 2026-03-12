@@ -87,54 +87,19 @@ end
 
 function StatusAnimation:_render_frame()
     if not self._state or not vim.api.nvim_buf_is_valid(self._bufnr) then
-        -- return early to stop the animation in case state was cleared, or buffer is invalid
-        -- this avoids an infinite loop of deferred calls without a state and it actually renders nil in the UI
         return
     end
 
-    local spinner_chars = Config.spinner_chars[self._state]
-        or Config.spinner_chars.generating
-
-    local char = spinner_chars[self._spinner_idx] or spinner_chars[1]
-
-    self._spinner_idx = (self._spinner_idx % #spinner_chars) + 1
-
-    local display_text = string.format(" %s %s ", char, self._state)
-
-    local hl_group = Theme.get_spinner_hl_group(self._state)
     local lines = vim.api.nvim_buf_get_lines(self._bufnr, 0, -1, false)
     local line_num = math.max(0, #lines - 1)
 
-    local virt_text = { { display_text, hl_group } }
-
-    local winid = vim.fn.bufwinid(self._bufnr)
-    if winid ~= -1 and vim.api.nvim_win_is_valid(winid) then
-        local win_width = vim.api.nvim_win_get_width(winid)
-        local text_width = vim.fn.strdisplaywidth(display_text)
-        if win_width > text_width then
-            local padding = math.floor((win_width - text_width) / 2)
-            table.insert(virt_text, 1, { string.rep(" ", padding), "Normal" })
-        end
-    end
-
-    local delay = TIMING[self._state] or TIMING.generating
-
-    local virt_lines = {
-        { { "" } }, -- Empty line above
-        virt_text, -- Animation in middle
-        { { "" } }, -- Empty line below
-    }
-
     self._extmark_id =
         vim.api.nvim_buf_set_extmark(self._bufnr, NS_ANIMATION, line_num, 0, {
-            id = self._extmark_id, -- Reuse existing extmark ID to update in-place
-            virt_lines = virt_lines,
+            id = self._extmark_id,
+            virt_lines = { { { " " .. self._state, "NonText" } } },
             virt_lines_above = false,
         })
-
-    self._next_frame_handle = vim.defer_fn(function()
-        self:_render_frame()
-    end, delay)
+    -- No timer — static text, no animation loop
 end
 
 return StatusAnimation

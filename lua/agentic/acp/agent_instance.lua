@@ -83,9 +83,9 @@ function AgentInstance.get_instance(provider_name, on_ready)
     return client
 end
 
---- Cleanup all active instances and processes
---- This is called automatically on VimLeavePre and signal handlers
---- Can also be called manually if needed
+--- Cleanup all active instances and processes.
+--- Called automatically on VimLeavePre (covers :q, :qa, :qa!, :cq),
+--- SIGTERM, and SIGINT. Each transport is killed with SIGTERM then SIGKILL.
 function AgentInstance:cleanup_all()
     for _name, instance in pairs(self._instances) do
         if instance then

@@ -67,10 +67,7 @@ function TodoList:render(entries)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     end)
 
-    if #entries > 0 then
-        local context = string.format("%d of %d", completed, #entries)
-        WindowDecoration.render_header(self._bufnr, "todos", context)
-    end
+    -- Header removed — the checkbox list is self-explanatory
 
     self._on_change(self)
     self:_scroll_to_non_completed(entries)
