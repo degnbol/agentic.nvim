@@ -94,12 +94,13 @@ function MessageWriter:_with_modifiable_and_notify_change(fn)
     end
 end
 
---- Returns the width of the window displaying the chat buffer, or 80 as fallback.
+--- Returns the text area width of the chat window (excluding sign column), or 80.
+--- The chat window always has signcolumn=yes:1 (2 columns).
 --- @return integer
 function MessageWriter:_get_wrap_width()
     local winid = vim.fn.bufwinid(self.bufnr)
     if winid ~= -1 then
-        return vim.api.nvim_win_get_width(winid)
+        return vim.api.nvim_win_get_width(winid) - 2
     end
     return 80
 end
