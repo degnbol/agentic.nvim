@@ -14,8 +14,6 @@ Theme.HL_GROUPS = {
     STATUS_COMPLETED = "AgenticStatusCompleted",
     STATUS_FAILED = "AgenticStatusFailed",
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
-    WIN_BAR_TITLE = "AgenticTitle",
-
     SPINNER_GENERATING = "AgenticSpinnerGenerating",
     SPINNER_THINKING = "AgenticSpinnerThinking",
     SPINNER_SEARCHING = "AgenticSpinnerSearching",
@@ -31,9 +29,6 @@ local COLORS = {
     status_pending_bg = "#5f4d8f",
     status_completed_bg = "#2d5a3d",
     status_failed_bg = "#7a2d2d",
-
-    title_bg = "#2787b0",
-    title_fg = "#000000",
 
     spinner_generating_fg = "#61afef",
     spinner_thinking_fg = "#c678dd",
@@ -83,9 +78,6 @@ function Theme.setup()
         { Theme.HL_GROUPS.STATUS_COMPLETED, { bg = COLORS.status_completed_bg } },
         { Theme.HL_GROUPS.STATUS_FAILED, { bg = COLORS.status_failed_bg } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "Directory" } },
-
-        -- Title highlight
-        { Theme.HL_GROUPS.WIN_BAR_TITLE, { bg = COLORS.title_bg, fg = COLORS.title_fg, bold = true } },
 
         -- Tool call header highlights
         { Theme.HL_GROUPS.TOOL_KIND, { link = "Function" } },

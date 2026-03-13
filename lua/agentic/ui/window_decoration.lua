@@ -1,31 +1,7 @@
---- Window decoration module for managing window titles, statuslines, and highlights.
----
---- This module provides utilities to render headers (winbar) and statuslines for windows.
----
---- ## Lualine Compatibility
----
---- If you're using lualine or similar statusline plugins, ensure windows have their
---- statusline set to prevent the plugin from hijacking them:
----
---- ```lua
---- vim.api.nvim_set_option_value("statusline", " ", { win = winid })
---- ```
----
---- Alternatively, configure lualine to ignore specific filetypes:
---- ```lua
---- require('lualine').setup({
----   options = {
----     disabled_filetypes = {
----       statusline = { 'AgenticChat', 'AgenticInput', 'AgenticCode', 'AgenticFiles', 'AgenticDiagnostics' },
----       winbar = { 'AgenticChat', 'AgenticInput', 'AgenticCode', 'AgenticFiles', 'AgenticDiagnostics' },
----     }
----   }
---- })
---- ```
+--- Window decoration module for managing window titles and buffer naming.
 
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
-local Theme = require("agentic.theme")
 
 --- @class agentic.ui.WindowDecoration
 local WindowDecoration = {}
@@ -40,24 +16,14 @@ local WINDOW_HEADERS = {
         title = "󰪸 Selected Code Snippets",
     },
     files = {
-        title = " Referenced Files",
+        title = " Referenced Files",
     },
     diagnostics = {
-        title = " Diagnostics",
+        title = " Diagnostics",
     },
     todos = {
-        title = " Tasks list",
+        title = " Tasks list",
     },
-}
-
---- @class agentic.ui.WindowDecoration.Config
---- @field align? "left"|"center"|"right" Header text alignment
---- @field hl? string Highlight group for the header text
---- @field reverse_hl? string Highlight group for the separator
-local default_config = {
-    align = "center",
-    hl = Theme.HL_GROUPS.WIN_BAR_TITLE,
-    reverse_hl = "NormalFloat",
 }
 
 --- Concatenates header parts (title, context) into a single string
@@ -143,55 +109,6 @@ local function resolve_header_text(dynamic_header, window_name)
         )
 end
 
---- Cache if there's a lualine like plugin managing the winbar
---- @type boolean|nil
-local has_line_plugin = nil
-
---- @param winid integer
---- @param text string
-local function set_winbar(winid, text)
-    if not winid or not vim.api.nvim_win_is_valid(winid) then
-        return
-    end
-
-    -- If winbar is already set (not empty), a plugin like lualine is managing it
-    -- Skip setting ours to prevent flickering
-    if has_line_plugin == nil then
-        local current_winbar = vim.wo[winid].winbar
-        has_line_plugin = current_winbar ~= ""
-    end
-
-    if has_line_plugin then
-        return
-    end
-
-    -- Handle empty string case - disable winbar completely
-    if text == "" then
-        vim.api.nvim_set_option_value("winbar", nil, { win = winid })
-        return
-    end
-
-    local opts = default_config
-
-    -- Escape literal % to %% so they aren't interpreted as statusline format
-    -- specifiers (e.g. context "42%" would otherwise trigger E539).
-    local safe_text = text:gsub("%%", "%%%%")
-    local winbar_text =
-        string.format("%%#%s# %s %%#Normal#", opts.hl, safe_text)
-
-    if opts.align == "left" then
-        winbar_text = winbar_text .. "%="
-    elseif opts.align == "center" then
-        winbar_text = "%=" .. winbar_text .. "%="
-    elseif opts.align == "right" then
-        winbar_text = "%=" .. winbar_text
-    end
-
-    winbar_text = "%#Normal#" .. winbar_text
-
-    vim.api.nvim_set_option_value("winbar", winbar_text, { win = winid })
-end
-
 --- Sets the buffer name based on header text and tab count
 --- @param bufnr integer Buffer number
 --- @param header_text string|nil Resolved header text
@@ -215,7 +132,7 @@ local function set_buffer_name(bufnr, header_text, tab_page_id)
     vim.api.nvim_buf_set_name(bufnr, buf_name)
 end
 
---- Renders a header for a window, handling user customization, winbar, and buffer naming
+--- Renders a header for a window, handling user customization and buffer naming.
 --- Derives all context from bufnr: winid, tab_page_id, and dynamic header from vim.t
 --- @param bufnr integer Buffer number - stable reference to derive window and tab context
 --- @param window_name string Name of the window (for Config.headers lookup and error messages)
@@ -224,7 +141,6 @@ function WindowDecoration.render_header(bufnr, window_name, context)
     vim.schedule(function()
         local winid = vim.fn.bufwinid(bufnr)
         if winid == -1 then
-            -- Buffer not displayed in any window, skip rendering
             return
         end
 
@@ -250,16 +166,10 @@ function WindowDecoration.render_header(bufnr, window_name, context)
             WindowDecoration.set_headers_state(tab_page_id, headers)
         end
 
-        local header_text, err =
-            resolve_header_text(dynamic_header, window_name)
-
+        local _, err = resolve_header_text(dynamic_header, window_name)
         if err then
             Logger.notify(err)
         end
-
-        local text = (header_text and header_text ~= "") and header_text or ""
-
-        set_winbar(winid, text)
 
         -- Buffer name uses the base title only (no context or suffix) so
         -- tabline/bufferline plugins show a clean, short name.

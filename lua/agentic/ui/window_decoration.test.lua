@@ -18,7 +18,6 @@ describe("agentic.ui.WindowDecoration", function()
         original_headers = Config.headers
         Config.headers = nil --- @diagnostic disable-line: inject-field
 
-        -- Reset has_line_plugin cache (module-level local, cleared by re-require)
         package.loaded["agentic.ui.window_decoration"] = nil
         WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -30,8 +29,6 @@ describe("agentic.ui.WindowDecoration", function()
             row = 0,
             col = 0,
         })
-        -- Ensure winbar starts empty so set_winbar doesn't skip (lualine guard)
-        vim.wo[winid].winbar = ""
     end)
 
     after_each(function()
@@ -44,7 +41,7 @@ describe("agentic.ui.WindowDecoration", function()
         end
     end)
 
-    describe("render_header with % in context", function()
+    describe("render_header", function()
         --- @type TestStub
         local schedule_stub
 
@@ -59,44 +56,27 @@ describe("agentic.ui.WindowDecoration", function()
             schedule_stub:revert()
         end)
 
-        it(
-            "does not error when context contains percent signs (E539)",
-            function()
-                local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
-                WindowDecoration.set_headers_state(tab_page_id, {
-                    chat = { title = "Chat" },
-                })
+        it("sets buffer name from header title", function()
+            local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
+            WindowDecoration.set_headers_state(tab_page_id, {
+                chat = { title = "󰻞 Agentic Chat" },
+            })
 
-                -- Context with "42%" — the exact pattern from usage_update.
-                -- Without escaping, this triggers E539 because "% " is an
-                -- invalid statusline format specifier.
-                assert.has_no_errors(function()
-                    WindowDecoration.render_header(
-                        bufnr,
-                        "chat",
-                        "Mode: chat · 42%"
-                    )
-                end)
+            WindowDecoration.render_header(bufnr, "chat")
 
-                local winbar = vim.wo[winid].winbar
-                assert.is_not_nil(winbar)
-                -- In the statusline format string, literal % is escaped as %%
-                assert.is_true(winbar:find("42%%%%") ~= nil)
-            end
-        )
+            local name = vim.api.nvim_buf_get_name(bufnr)
+            assert.is_true(name:find("Agentic Chat") ~= nil)
+        end)
 
-        it("renders plain text without percent signs normally", function()
+        it("does not set winbar", function()
             local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
             WindowDecoration.set_headers_state(tab_page_id, {
                 chat = { title = "Chat" },
             })
 
-            assert.has_no_errors(function()
-                WindowDecoration.render_header(bufnr, "chat", "Mode: plan")
-            end)
+            WindowDecoration.render_header(bufnr, "chat", "Mode: plan")
 
-            local winbar = vim.wo[winid].winbar
-            assert.is_true(winbar:find("Mode: plan") ~= nil)
+            assert.equal("", vim.wo[winid].winbar)
         end)
     end)
 end)
