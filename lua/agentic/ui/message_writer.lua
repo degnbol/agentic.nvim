@@ -891,7 +891,9 @@ function MessageWriter:_apply_block_highlights(
             return
         end
 
-        -- Apply Comment highlight for non-edit blocks without diffs
+        -- Apply Comment highlight for non-edit blocks without diffs.
+        -- Skip lines starting with ``` so treesitter markdown highlights
+        -- code fence delimiters consistently (matches ANSI path behaviour).
         for line_idx = body_start, end_row - 1 do
             local line = vim.api.nvim_buf_get_lines(
                 bufnr,
@@ -899,7 +901,7 @@ function MessageWriter:_apply_block_highlights(
                 line_idx + 1,
                 false
             )[1]
-            if line and #line > 0 then
+            if line and #line > 0 and not vim.startswith(line, "```") then
                 vim.api.nvim_buf_set_extmark(
                     bufnr,
                     NS_DIFF_HIGHLIGHTS,
