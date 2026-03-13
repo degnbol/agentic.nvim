@@ -215,6 +215,8 @@ local function show_layout(params, position)
 
     get_or_create_window(win_nrs, "input", buf_nrs.input, input_opts, {
         winfixheight = not is_bottom,
+        wrap = true,
+        linebreak = true,
     })
 
     open_or_resize_dynamic_window(buf_nrs, win_nrs, "code", {

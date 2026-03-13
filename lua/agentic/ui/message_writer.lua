@@ -524,13 +524,21 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     local kind = tool_call_block.kind
     local argument = tool_call_block.argument
 
-    -- Sanitize argument to prevent newlines in the header line
-    -- nvim_buf_set_lines doesn't accept array items with embedded newlines
-    argument = argument:gsub("\n", "\\n")
-
-    local lines = {
-        string.format(" %s(%s) ", kind, argument),
-    }
+    --- @type string[]
+    local lines
+    if kind == "execute" then
+        local cmd_lines = vim.split(argument, "\n", { plain = true })
+        lines = { string.format(" %s ", kind), "```zsh" }
+        vim.list_extend(lines, cmd_lines)
+        table.insert(lines, "```")
+    else
+        -- Sanitize argument to prevent newlines in the header line
+        -- nvim_buf_set_lines doesn't accept array items with embedded newlines
+        argument = argument:gsub("\n", "\\n")
+        lines = {
+            string.format(" %s(%s) ", kind, argument),
+        }
+    end
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]
     local highlight_ranges = {}
@@ -667,21 +675,18 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
     local option_mapping = {}
 
     local lines_to_append = {
-        "### Waiting for your response:",
+        "### Allow?",
         "",
     }
 
     local tracker = self.tool_call_blocks[tool_call_id]
 
-    if tracker then
+    if tracker and tracker.kind ~= "execute" then
         -- Sanitize argument to prevent newlines in the permission request, neovim throws error
         local sanitized_argument = tracker.argument:gsub("\n", "\\n")
 
-        local tool_line =
-            string.format(" %s(%s)", tracker.kind, sanitized_argument)
-
         vim.list_extend(lines_to_append, {
-            tool_line,
+            string.format(" %s(%s)", tracker.kind, sanitized_argument),
             "", -- Blank line prevents markdown inline markers from spanning to next content
         })
     end
@@ -762,7 +767,7 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
                 row + 1,
                 false
             )[1]
-            if row_line and row_line:find("^ %a[%a_]*%(") then
+            if row_line and (row_line:find("^ %a[%a_]*%(") or row_line:find("^ %a[%a_]*%s*$")) then
                 self:_apply_tool_header_syntax(row, NS_PERMISSION_BUTTONS)
                 break
             end
@@ -825,8 +830,21 @@ function MessageWriter:_apply_block_highlights(
     if #highlight_ranges > 0 then
         self:_apply_diff_highlights(start_row, highlight_ranges)
     elseif kind ~= "edit" and kind ~= "switch_mode" then
+        -- Execute blocks have a code fence after the header that gets
+        -- treesitter injection from the markdown parser — skip those lines.
+        local body_start = start_row + 1
+        if kind == "execute" then
+            -- Find the closing ``` to skip the code fence
+            for i = start_row + 2, end_row - 1 do
+                local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
+                if l == "```" then
+                    body_start = i + 1
+                    break
+                end
+            end
+        end
         -- Apply Comment highlight for non-edit blocks without diffs
-        for line_idx = start_row + 1, end_row - 1 do
+        for line_idx = body_start, end_row - 1 do
             local line = vim.api.nvim_buf_get_lines(
                 bufnr,
                 line_idx,
@@ -931,15 +949,10 @@ function MessageWriter:_apply_header_highlight(header_line, status)
     })
 end
 
---- Map tool call kind to treesitter language for argument syntax highlighting.
---- Falls back to flat TOOL_ARGUMENT colour when parser is unavailable.
-local TOOL_ARG_LANGUAGES = {
-    execute = "zsh",
-}
-
---- Apply syntax highlighting to a tool call header line: " kind(argument) "
---- Highlights `kind` with TOOL_KIND and `argument` with TOOL_ARGUMENT
---- (or treesitter highlights for known kinds like execute).
+--- Apply syntax highlighting to a tool call header line.
+--- Handles two formats:
+---   " kind(argument) " — highlights kind with TOOL_KIND, argument with TOOL_ARGUMENT
+---   " kind "           — highlights kind with TOOL_KIND only (e.g. execute, rendered as code fence)
 --- @param line_row integer 0-indexed row
 --- @param ns integer Namespace to use for extmarks
 function MessageWriter:_apply_tool_header_syntax(line_row, ns)
@@ -953,22 +966,20 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
         return
     end
 
-    -- Match " kind(argument)" — leading space, kind word, parens with content
-    -- find() returns: match_start, match_end, captured_kind, captured_arg
+    -- Try " kind(argument) " first, then " kind " (no argument)
     local _, _, kind_str, arg_str =
         line:find("^ (%a[%a_]*)%((.-)%)%s*$")
+
+    if not kind_str then
+        _, _, kind_str = line:find("^ (%a[%a_]*)%s*$")
+    end
 
     if not kind_str then
         return
     end
 
-    -- Byte offsets (0-indexed for extmarks)
-    -- Line format: " kind(argument) "
-    --              0123456...
     local kind_col = 1 -- after leading space
     local kind_col_end = kind_col + #kind_str
-    local arg_col = kind_col_end + 1 -- after "("
-    local arg_col_end = arg_col + #arg_str
 
     vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, kind_col, {
         end_col = kind_col_end,
@@ -976,88 +987,22 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
         priority = 200,
     })
 
-    if #arg_str > 0 then
-        local lang = TOOL_ARG_LANGUAGES[kind_str]
-        local applied_ts = lang
-            and self:_apply_arg_treesitter_highlights(
-                line_row,
-                ns,
-                arg_col,
-                arg_str,
-                lang
-            )
+    if arg_str and #arg_str > 0 then
+        local arg_col = kind_col_end + 1 -- after "("
+        local arg_col_end = arg_col + #arg_str
 
-        if not applied_ts then
-            vim.api.nvim_buf_set_extmark(
-                self.bufnr,
-                ns,
-                line_row,
-                arg_col,
-                {
-                    end_col = arg_col_end,
-                    hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
-                    priority = 200,
-                }
-            )
-        end
+        vim.api.nvim_buf_set_extmark(
+            self.bufnr,
+            ns,
+            line_row,
+            arg_col,
+            {
+                end_col = arg_col_end,
+                hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
+                priority = 200,
+            }
+        )
     end
-end
-
---- Parse argument text with a treesitter parser and apply highlight captures as extmarks.
---- @param line_row integer 0-indexed buffer row
---- @param ns integer Namespace for extmarks
---- @param arg_col integer 0-indexed byte offset where argument starts in the line
---- @param arg_str string
---- @param lang string Treesitter language name
---- @return boolean applied
-function MessageWriter:_apply_arg_treesitter_highlights(
-    line_row,
-    ns,
-    arg_col,
-    arg_str,
-    lang
-)
-    local ok_parser, parser =
-        pcall(vim.treesitter.get_string_parser, arg_str, lang)
-    if not ok_parser or not parser then
-        return false
-    end
-
-    local ok_query, query =
-        pcall(vim.treesitter.query.get, lang, "highlights")
-    if not ok_query or not query then
-        return false
-    end
-
-    local trees = parser:parse(true)
-    if not trees or #trees == 0 then
-        return false
-    end
-
-    local root = trees[1]:root()
-
-    for id, node in query:iter_captures(root, arg_str) do
-        local start_row, start_col, _, end_col = node:range()
-
-        -- Only single-line captures (argument is always one line)
-        if start_row == 0 then
-            local hl_group = "@" .. query.captures[id] .. "." .. lang
-
-            vim.api.nvim_buf_set_extmark(
-                self.bufnr,
-                ns,
-                line_row,
-                arg_col + start_col,
-                {
-                    end_col = arg_col + end_col,
-                    hl_group = hl_group,
-                    priority = 210,
-                }
-            )
-        end
-    end
-
-    return true
 end
 
 --- @param footer_line integer 0-indexed footer line number

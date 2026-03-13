@@ -396,6 +396,59 @@ describe("agentic.ui.MessageWriter", function()
             path_stub:revert()
         end)
 
+        it("renders execute tool call as a zsh code fence", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-fence",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la /tmp",
+                body = { "total 16" },
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal(" execute ", lines[1])
+            assert.equal("```zsh", lines[2])
+            assert.equal("ls -la /tmp", lines[3])
+            assert.equal("```", lines[4])
+            assert.equal("total 16", lines[5])
+        end)
+
+        it("splits multi-line execute arguments into separate lines", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-multi",
+                status = "pending",
+                kind = "execute",
+                argument = "for i in 1 2 3; do\necho $i\ndone",
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal(" execute ", lines[1])
+            assert.equal("```zsh", lines[2])
+            assert.equal("for i in 1 2 3; do", lines[3])
+            assert.equal("echo $i", lines[4])
+            assert.equal("done", lines[5])
+            assert.equal("```", lines[6])
+        end)
+
+        it("renders non-execute tool call with inline argument", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-inline",
+                status = "pending",
+                kind = "read",
+                argument = "/tmp/file.txt",
+                body = { "line1" },
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal(" read(/tmp/file.txt) ", lines[1])
+        end)
+
         it("creates highlight ranges for pure insertion hunks", function()
             read_stub:returns({ "line1", "line2", "line3" })
 

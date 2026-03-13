@@ -463,7 +463,7 @@ function ChatWidget:_create_buf_nrs()
         modifiable = true,
     })
 
-    -- Don't call it for the chat buffer as its managed somewhere else
+    pcall(vim.treesitter.start, chat, "markdown")
     pcall(vim.treesitter.start, todos, "markdown")
     pcall(vim.treesitter.start, code, "markdown")
     pcall(vim.treesitter.start, files, "markdown")

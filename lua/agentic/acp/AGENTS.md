@@ -141,6 +141,36 @@ Same as Phase 2, but status = "completed" | "failed"
   auto-adjusts when buffer content shifts. Single source of truth for block
   position.
 
+## Execute tool call rendering
+
+Execute tool calls render their command inside a markdown fenced code block
+(` ```zsh `) instead of inline in the header. This lets the markdown treesitter
+parser inject zsh syntax highlighting automatically via its built-in injection
+queries.
+
+**Requirements for injection to work:**
+
+- `vim.treesitter.start(chat_bufnr, "markdown")` must be called on the chat
+  buffer (done in `ChatWidget:_create_buf_nrs`)
+- The zsh treesitter parser must be installed (bash is aliased to zsh via
+  `vim.treesitter.language.register("zsh", "bash")` in `init.lua` as fallback)
+- The `_apply_block_highlights` Comment extmarks skip the code fence lines to
+  avoid overriding treesitter highlights (extmark default priority 4096 >
+  treesitter priority 100)
+
+**Format comparison:**
+
+```
+Non-execute:  " read(/tmp/file.txt) "     (inline argument)
+Execute:      " execute "                  (header, no argument)
+              ```zsh                       (code fence — treesitter injection)
+              ls -la /tmp
+              ```
+```
+
+Multi-line commands (containing `\n`) are split into separate lines within the
+fence rather than escaped to literal `\n`.
+
 ## Permission flow (interleaved with tool calls)
 
 ```
