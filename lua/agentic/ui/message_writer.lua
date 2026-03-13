@@ -334,13 +334,16 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     self:_with_modifiable_and_notify_change(function(bufnr)
         local kind = tool_call_block.kind
 
-        local start_row = vim.api.nvim_buf_line_count(bufnr)
         local lines, highlight_ranges, ansi_highlights =
             self:_prepare_block_lines(tool_call_block)
 
         self:_append_lines(lines)
 
+        -- Compute start/end AFTER _append_lines: when the buffer was empty,
+        -- _append_lines replaces instead of appending, so line_count before
+        -- the call would over-count by 1.
         local end_row = vim.api.nvim_buf_line_count(bufnr) - 1
+        local start_row = end_row - #lines + 1
 
         self:_apply_block_highlights(
             bufnr,
@@ -372,7 +375,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self:_apply_tool_header_syntax(start_row, NS_STATUS)
         self:_apply_status_footer(end_row, tool_call_block.status)
 
-        self:_append_lines({ "", "" })
+        self:_append_lines({ "" })
     end)
 end
 
@@ -434,6 +437,22 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             { tool_call_id = tracker.tool_call_id, details = details }
         )
         return
+    end
+
+    if start_row >= old_end_row then
+        Logger.debug_to_file(
+            "COLLAPSED EXTMARK — tool call block range is degenerate",
+            {
+                tool_call_id = tracker.tool_call_id,
+                kind = tracker.kind,
+                argument = tracker.argument,
+                start_row = start_row,
+                old_end_row = old_end_row,
+                status = tool_call_block.status,
+                already_has_diff = already_has_diff,
+                line_count = vim.api.nvim_buf_line_count(self.bufnr),
+            }
+        )
     end
 
     self:_with_modifiable_and_notify_change(function(bufnr)
@@ -576,6 +595,34 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             }
 
             table.insert(highlight_ranges, range)
+        end
+    elseif kind == "search" then
+        local body = tool_call_block.body
+        if body then
+            local max_lines = 8
+            local count = #body
+            local shown = math.min(count, max_lines)
+
+            for i = 1, shown do
+                local line_index = #lines
+                table.insert(lines, body[i])
+                table.insert(highlight_ranges, {
+                    type = "comment",
+                    line_index = line_index,
+                })
+            end
+
+            if count > max_lines then
+                local line_index = #lines
+                table.insert(
+                    lines,
+                    string.format("... and %d more", count - max_lines)
+                )
+                table.insert(highlight_ranges, {
+                    type = "comment",
+                    line_index = line_index,
+                })
+            end
         end
     elseif tool_call_block.diff then
         local diff_blocks = ToolCallDiff.extract_diff_blocks({
