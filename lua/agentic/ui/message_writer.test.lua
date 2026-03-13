@@ -483,7 +483,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("_freeze_tool_call_block", function()
+    describe("status footer as direct buffer text", function()
         --- @type TestStub
         local schedule_stub
 
@@ -496,207 +496,133 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "defers freeze until next content write, then removes block",
+            "writes status text into the footer line on initial write",
             function()
-                local block = make_tool_call_block("freeze-1", "pending")
+                local block = make_tool_call_block("status-1", "pending")
                 writer:write_tool_call_block(block)
 
-                writer:update_tool_call_block({
-                    tool_call_id = "freeze-1",
-                    status = "completed",
-                })
-
-                -- Block is still tracked (freeze is deferred)
-                assert.is_not_nil(writer.tool_call_blocks["freeze-1"])
-
-                -- Next content write triggers the freeze
-                writer:write_message(make_message_update("Done."))
-
-                assert.is_nil(writer.tool_call_blocks["freeze-1"])
-
-                -- Footer line should contain static status text
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                local found_status = false
+                local found_pending = false
                 for _, line in ipairs(lines) do
-                    if line:find("completed") then
-                        found_status = true
+                    if line:find("pending") then
+                        found_pending = true
                         break
                     end
                 end
-                assert.is_true(found_status)
+                assert.is_true(found_pending)
             end
         )
 
-        it("ignores subsequent updates after freeze", function()
-            local block = make_tool_call_block("freeze-2", "pending")
+        it("updates footer line in place when status changes", function()
+            local block = make_tool_call_block("status-2", "pending")
             writer:write_tool_call_block(block)
 
-            writer:update_tool_call_block({
-                tool_call_id = "freeze-2",
-                status = "completed",
-            })
-
-            -- Flush the freeze
-            writer:write_message(make_message_update("Done."))
-
-            -- Second update should be silently ignored
             local line_count_before = vim.api.nvim_buf_line_count(bufnr)
+
             writer:update_tool_call_block({
-                tool_call_id = "freeze-2",
+                tool_call_id = "status-2",
                 status = "completed",
-                body = { "extra output" },
-            })
-            local line_count_after = vim.api.nvim_buf_line_count(bufnr)
-
-            assert.equal(line_count_before, line_count_after)
-        end)
-
-        it("defers freeze on initial write until next content", function()
-            local block = make_tool_call_block("freeze-3", "completed")
-            writer:write_tool_call_block(block)
-
-            -- Still tracked (deferred)
-            assert.is_not_nil(writer.tool_call_blocks["freeze-3"])
-
-            -- Next write triggers freeze
-            writer:write_message(make_message_update("Done."))
-            assert.is_nil(writer.tool_call_blocks["freeze-3"])
-        end)
-
-        it("freezes failed blocks on next content write", function()
-            local block = make_tool_call_block("freeze-4", "pending")
-            writer:write_tool_call_block(block)
-
-            writer:update_tool_call_block({
-                tool_call_id = "freeze-4",
-                status = "failed",
             })
 
-            assert.is_not_nil(writer.tool_call_blocks["freeze-4"])
+            -- Line count should not change (footer replaced, not appended)
+            assert.equal(line_count_before, vim.api.nvim_buf_line_count(bufnr))
 
-            writer:write_message(make_message_update("Error occurred."))
-            assert.is_nil(writer.tool_call_blocks["freeze-4"])
+            -- Footer should now contain completed text
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local found_completed = false
+            for _, line in ipairs(lines) do
+                if line:find("completed") then
+                    found_completed = true
+                    break
+                end
+            end
+            assert.is_true(found_completed)
         end)
 
-        it("removes range extmark from NS_TOOL_BLOCKS after freeze", function()
+        it(
+            "no overlay extmarks — only line highlights in NS_STATUS",
+            function()
+                local NS_STATUS =
+                    vim.api.nvim_create_namespace("agentic_status_footer")
+
+                local block = make_tool_call_block("status-3", "pending")
+                writer:write_tool_call_block(block)
+
+                local extmarks = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_STATUS,
+                    0,
+                    -1,
+                    { details = true }
+                )
+                for _, ext in ipairs(extmarks) do
+                    assert.is_nil(ext[4].virt_text)
+                end
+            end
+        )
+
+        it("keeps block tracked after terminal status", function()
+            local block = make_tool_call_block("status-4", "completed")
+            writer:write_tool_call_block(block)
+
+            -- Block remains tracked (no freeze/removal)
+            assert.is_not_nil(writer.tool_call_blocks["status-4"])
+        end)
+
+        it("keeps range extmark after terminal status", function()
             local NS_TOOL_BLOCKS =
                 vim.api.nvim_create_namespace("agentic_tool_blocks")
 
-            local block = make_tool_call_block("freeze-ext-1", "pending")
+            local block = make_tool_call_block("status-5", "completed")
             writer:write_tool_call_block(block)
 
-            local tracker = writer.tool_call_blocks["freeze-ext-1"]
-            local extmark_id = tracker.extmark_id
-
-            -- Verify range extmark exists before freeze
-            local pos = vim.api.nvim_buf_get_extmark_by_id(
-                bufnr,
-                NS_TOOL_BLOCKS,
-                extmark_id,
-                {}
-            )
-            assert.is_not_nil(pos[1])
-
-            writer:update_tool_call_block({
-                tool_call_id = "freeze-ext-1",
-                status = "completed",
-            })
-            writer:write_message(make_message_update("Done."))
-
-            -- Range extmark should be gone after freeze
-            pos = vim.api.nvim_buf_get_extmark_by_id(
-                bufnr,
-                NS_TOOL_BLOCKS,
-                extmark_id,
-                {}
-            )
-            -- Deleted extmarks return {0, 0} with no error
+            local tracker = writer.tool_call_blocks["status-5"]
             local all_extmarks =
                 vim.api.nvim_buf_get_extmarks(bufnr, NS_TOOL_BLOCKS, 0, -1, {})
-            assert.equal(0, #all_extmarks)
+            assert.equal(1, #all_extmarks)
+            assert.equal(tracker.extmark_id, all_extmarks[1][1])
         end)
 
-        it("re-renders decoration sign extmarks after freeze", function()
+        it("decoration signs survive status update", function()
             local NS_DECORATIONS =
                 vim.api.nvim_create_namespace("agentic_tool_decorations")
 
-            local block = make_tool_call_block("freeze-ext-2", "pending")
+            local block = make_tool_call_block("status-6", "pending")
             writer:write_tool_call_block(block)
 
-            -- Count decorations before freeze
             local before =
                 vim.api.nvim_buf_get_extmarks(bufnr, NS_DECORATIONS, 0, -1, {})
             assert.is_true(#before > 0)
 
             writer:update_tool_call_block({
-                tool_call_id = "freeze-ext-2",
+                tool_call_id = "status-6",
                 status = "completed",
             })
-            writer:write_message(make_message_update("Done."))
 
-            -- Decorations should still exist (re-rendered, not just deleted)
             local after =
                 vim.api.nvim_buf_get_extmarks(bufnr, NS_DECORATIONS, 0, -1, {})
-            assert.is_true(#after > 0)
+            assert.equal(#before, #after)
         end)
 
-        it(
-            "clears status overlay extmarks and writes static status text",
-            function()
-                local NS_STATUS =
-                    vim.api.nvim_create_namespace("agentic_status_footer")
+        it("handles failed status in footer", function()
+            local block = make_tool_call_block("status-7", "pending")
+            writer:write_tool_call_block(block)
 
-                local block = make_tool_call_block("freeze-ext-3", "pending")
-                writer:write_tool_call_block(block)
+            writer:update_tool_call_block({
+                tool_call_id = "status-7",
+                status = "failed",
+            })
 
-                -- Before freeze: overlay extmark exists in NS_STATUS
-                local before_status = vim.api.nvim_buf_get_extmarks(
-                    bufnr,
-                    NS_STATUS,
-                    0,
-                    -1,
-                    { details = true }
-                )
-                local has_overlay = false
-                for _, ext in ipairs(before_status) do
-                    if ext[4].virt_text then
-                        has_overlay = true
-                        break
-                    end
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local found_failed = false
+            for _, line in ipairs(lines) do
+                if line:find("failed") then
+                    found_failed = true
+                    break
                 end
-                assert.is_true(has_overlay)
-
-                writer:update_tool_call_block({
-                    tool_call_id = "freeze-ext-3",
-                    status = "completed",
-                })
-                writer:write_message(make_message_update("Done."))
-
-                -- After freeze: no overlay extmarks (cleared during freeze)
-                -- Only a line highlight extmark should remain
-                local after_status = vim.api.nvim_buf_get_extmarks(
-                    bufnr,
-                    NS_STATUS,
-                    0,
-                    -1,
-                    { details = true }
-                )
-                for _, ext in ipairs(after_status) do
-                    assert.is_nil(ext[4].virt_text)
-                end
-
-                -- Static text should be in buffer
-                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                local found = false
-                for _, line in ipairs(lines) do
-                    if line:find("completed") then
-                        found = true
-                        break
-                    end
-                end
-                assert.is_true(found)
             end
-        )
+            assert.is_true(found_failed)
+        end)
     end)
 
     describe("collapsed extmark handling", function()

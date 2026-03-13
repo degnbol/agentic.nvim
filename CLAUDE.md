@@ -44,13 +44,15 @@ Border decorations (╭─ │ ╰─) use `sign_text` extmarks in the sign colu
 inline virtual text. This is more stable during buffer edits — signs survive
 line content replacement without delete/recreate cycles.
 
-When a tool call reaches terminal status ("completed"/"failed"), the block is
-queued for **deferred freezing**. The actual freeze runs when the next content
-write occurs (message chunk, new tool call), so the visual transition is hidden
-by new content arriving. The freeze writes status text as static buffer content,
-deletes old decoration + range extmarks, re-renders fresh decoration signs, and
-removes the block from `MessageWriter.tool_call_blocks`. Subsequent updates are
-silently ignored.
+Status text (" ✔ completed ", " ✖ failed ", etc.) is written directly into the
+footer buffer line as real text using `nvim_buf_set_text` (not `set_lines` —
+that shifts extmarks on the replaced line). This avoids the entire class of
+overlay-to-static-text timing bugs. Status changes just replace the footer line
+content in place. No deferred freezing, no overlay extmarks, no cleanup passes.
+
+Content comparison in `update_tool_call_block` excludes the footer line (which
+has status text in the buffer but `""` in `_prepare_block_lines` output), so
+status-only updates skip the expensive content replacement path.
 
 If a range extmark collapses (start >= end, indicating corruption),
 `update_tool_call_block` bails out and removes the block from tracking rather

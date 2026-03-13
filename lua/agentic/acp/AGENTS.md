@@ -87,8 +87,8 @@ determines routing:
 
 ## Tool call lifecycle
 
-Tool calls go through **3 phases**. `MessageWriter` tracks each via
-`tool_call_blocks[tool_call_id]`, persisting state across all phases.
+Tool calls go through **2 phases**. `MessageWriter` tracks each via
+`tool_call_blocks[tool_call_id]`, persisting state across both phases.
 
 **Phase 1 — `tool_call` (initial)**
 
@@ -97,11 +97,11 @@ Provider sends "tool_call"
   -> Adapter builds ToolCallBlock { tool_call_id, kind, argument, status, body?, diff? }
   -> subscriber.on_tool_call(block)
   -> MessageWriter:write_tool_call_block(block)
-     1. Renders header + body/diff lines to buffer
-     2. Creates sign_text extmarks (NS_DECORATIONS) for ╭─ │ ╰─ borders
-     3. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
-     4. Stores block in tool_call_blocks[id]
-     5. If status is terminal: freezes immediately (see Phase 3)
+     1. Renders header + body/diff lines to buffer (footer is empty "")
+     2. Writes status text directly into footer line via set_text
+     3. Creates sign_text extmarks (NS_DECORATIONS) for ╭─ │ ╰─ borders
+     4. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
+     5. Stores block in tool_call_blocks[id]
 ```
 
 **Phase 2 — `tool_call_update` (one or more)**
@@ -117,29 +117,13 @@ Provider sends "tool_call_update"
      3. Appends body (if both old and new exist and differ)
      4. Locates block position via range extmark
      5. If range extmark collapsed (start >= end): bails out, removes block
-     6. Diff already rendered: refresh status highlights only
-     7. Diff is NEW: replace buffer lines, re-render everything
+     6. Content unchanged (excludes footer from comparison): refresh status only
+     7. Content changed: replace buffer lines, write status, re-render decorations
 ```
 
-**Phase 3 — deferred freeze on terminal status**
-
-```
-Status = "completed" | "failed" (after Phase 1 or 2)
-  -> _queue_freeze(tool_call_id): adds to pending list
-  -> Next content write (message chunk, new tool call, etc.):
-     -> _flush_pending_freezes() runs BEFORE the new content
-     -> _freeze_tool_call_block():
-        1. Deletes old decoration extmarks (avoids displaced duplicates)
-        2. Writes status text into footer line as static buffer content
-        3. Clears status overlay, applies line hl_group
-        4. Re-renders all decoration signs from scratch
-        5. Deletes range extmark (NS_TOOL_BLOCKS)
-        6. Removes block from tool_call_blocks (subsequent updates ignored)
-  -> If "failed": PermissionManager removes pending request
-```
-
-The deferred freeze ensures the visual transition from dynamic extmarks to static
-text is hidden by the arrival of new content (no visible duplication flash).
+Status text is always real buffer content (written via `nvim_buf_set_text` to
+avoid displacing sign extmarks). No deferred freezing, no overlay extmarks, no
+cleanup passes. Blocks remain tracked after terminal status.
 
 ## Key design rules for adapters
 
@@ -150,9 +134,9 @@ text is hidden by the arrival of new content (no visible duplication flash).
   updates.
 - **Body accumulates:** Multiple updates with different body content get
   concatenated with `---` dividers, not replaced.
-- **Freeze on terminal status:** Once a block reaches "completed" or "failed",
-  its status is written as static buffer text and the block is removed from
-  tracking. No further updates are accepted.
+- **Status is always real buffer text:** Footer line content is written via
+  `nvim_buf_set_text` (not `set_lines`, which displaces extmarks). No overlay
+  extmarks, no deferred freezing. Blocks stay tracked after terminal status.
 - **Sign column for borders:** Block decorations (╭─ │ ╰─) use `sign_text`
   extmarks in the sign column rather than inline virtual text. This is more
   stable during buffer edits — signs survive line content replacement without
