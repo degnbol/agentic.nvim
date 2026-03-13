@@ -15,8 +15,6 @@ describe("agentic.ui.TodoList", function()
 
     --- @type integer
     local bufnr
-    --- @type TestStub
-    local render_header_stub
     --- @type TestSpy
     local on_change_spy
     --- @type TestSpy
@@ -26,14 +24,9 @@ describe("agentic.ui.TodoList", function()
         bufnr = vim.api.nvim_create_buf(false, true)
         on_change_spy = spy.new(function() end)
         on_close_spy = spy.new(function() end)
-
-        local WindowDecoration = require("agentic.ui.window_decoration")
-        render_header_stub = spy.stub(WindowDecoration, "render_header")
     end)
 
     after_each(function()
-        render_header_stub:revert()
-
         if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end
@@ -61,12 +54,6 @@ describe("agentic.ui.TodoList", function()
                 assert.equal("- [x] Second task", lines[2])
                 assert.equal("- [~] Third task", lines[3])
 
-                assert.stub(render_header_stub).was.called(1)
-                local call_args = render_header_stub.calls[1]
-                assert.equal(bufnr, call_args[1])
-                assert.equal("todos", call_args[2])
-                assert.equal("1 of 3", call_args[3])
-
                 assert.spy(on_change_spy).was.called(1)
                 assert.is_false(todo_list:is_empty())
             end
@@ -84,7 +71,6 @@ describe("agentic.ui.TodoList", function()
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
             assert.equal("", lines[1])
-            assert.stub(render_header_stub).was.called(0)
             assert.spy(on_change_spy).was.called(1)
             assert.is_true(todo_list:is_empty())
         end)
@@ -103,8 +89,7 @@ describe("agentic.ui.TodoList", function()
             assert.equal(1, #lines)
             assert.equal("- [x] New task", lines[1])
 
-            assert.stub(render_header_stub).was.called(2)
-            assert.equal("1 of 1", render_header_stub.calls[2][3])
+            assert.spy(on_change_spy).was.called(2)
         end)
     end)
 

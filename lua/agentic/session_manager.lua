@@ -69,7 +69,6 @@ local SessionManager = {}
 SessionManager.__index = SessionManager
 
 --- Generate the welcome header for a new session
---- @param provider_name string
 --- @param session_id string|nil
 --- @return string header
 function SessionManager._generate_welcome_header(_, session_id)
@@ -251,7 +250,9 @@ function SessionManager:_on_session_update(update)
             cost = update.cost,
         }
 
-        local current_mode = (self.config_options.mode and self.config_options.mode.currentValue)
+        local current_mode = (
+            self.config_options.mode and self.config_options.mode.currentValue
+        )
             or self.config_options.legacy_agent_modes.current_mode_id
         self:_update_chat_header(current_mode)
     else
@@ -277,7 +278,10 @@ function SessionManager:_display_context_usage()
         local used_k = string.format("%.1fk", self._usage.used / 1000)
         local size_k = string.format("%.1fk", self._usage.size / 1000)
 
-        table.insert(lines, string.format("- Tokens: %s / %s (%d%%)", used_k, size_k, pct))
+        table.insert(
+            lines,
+            string.format("- Tokens: %s / %s (%d%%)", used_k, size_k, pct)
+        )
 
         if self._usage.cost then
             table.insert(
@@ -308,9 +312,7 @@ function SessionManager:_on_stdout_text(text)
         return
     end
 
-    self.message_writer:write_message(
-        ACPPayloads.generate_agent_message(text)
-    )
+    self.message_writer:write_message(ACPPayloads.generate_agent_message(text))
 end
 
 --- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers
@@ -473,19 +475,34 @@ function SessionManager:_handle_input_submit(input_text)
     if not (self.session_id and self.agent and self.agent.state == "ready") then
         local timer = vim.uv.new_timer()
         local attempts = 0
-        timer:start(100, 100, vim.schedule_wrap(function()
-            attempts = attempts + 1
-            if self.session_id and self.agent and self.agent.state == "ready" then
-                timer:stop()
-                timer:close()
-                self:_handle_input_submit_inner(input_text)
-            elseif attempts >= 100
-                or (self.agent and (self.agent.state == "error" or self.agent.state == "disconnected"))
-            then
-                timer:stop()
-                timer:close()
-            end
-        end))
+        timer:start(
+            100,
+            100,
+            vim.schedule_wrap(function()
+                attempts = attempts + 1
+                if
+                    self.session_id
+                    and self.agent
+                    and self.agent.state == "ready"
+                then
+                    timer:stop()
+                    timer:close()
+                    self:_handle_input_submit_inner(input_text)
+                elseif
+                    attempts >= 100
+                    or (
+                        self.agent
+                        and (
+                            self.agent.state == "error"
+                            or self.agent.state == "disconnected"
+                        )
+                    )
+                then
+                    timer:stop()
+                    timer:close()
+                end
+            end)
+        )
         return
     end
     self:_handle_input_submit_inner(input_text)
@@ -654,10 +671,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    table.insert(
-        message_lines,
-        "\n---"
-    )
+    table.insert(message_lines, "\n---\n")
 
     local user_message = ACPPayloads.generate_user_message(message_lines)
     self.message_writer:write_message(user_message)
@@ -687,17 +701,15 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     self.is_generating = true
 
-    self.agent:send_prompt(self.session_id, prompt, function(response, err)
+    self.agent:send_prompt(self.session_id, prompt, function(_response, err)
         vim.schedule(function()
             self.is_generating = false
 
             local finish_message = nil
 
             if err then
-                finish_message = string.format(
-                    "\n**Error:** %s",
-                    vim.inspect(err)
-                )
+                finish_message =
+                    string.format("\n**Error:** %s", vim.inspect(err))
             end
 
             if finish_message then
@@ -953,29 +965,40 @@ function SessionManager:_do_load_acp_session(session_id)
     }
 
     local cwd = vim.fn.getcwd()
-    self.agent:load_session(session_id, cwd, {}, handlers, function(_result, err)
-        vim.schedule(function()
-            if err then
-                local details = err.data and err.data.details or err.message or "Unknown error"
-                Logger.notify(
-                    string.format("session/load failed: %s — falling back to local history", details),
-                    vim.log.levels.WARN
+    self.agent:load_session(
+        session_id,
+        cwd,
+        {},
+        handlers,
+        function(_result, err)
+            vim.schedule(function()
+                if err then
+                    local details = err.data and err.data.details
+                        or err.message
+                        or "Unknown error"
+                    Logger.notify(
+                        string.format(
+                            "session/load failed: %s — falling back to local history",
+                            details
+                        ),
+                        vim.log.levels.WARN
+                    )
+                    self:_fallback_restore_from_local(session_id)
+                    return
+                end
+
+                self.status_animation:stop()
+
+                local welcome = string.format(
+                    "### Resumed session `%s`\n",
+                    session_id:sub(1, 8)
                 )
-                self:_fallback_restore_from_local(session_id)
-                return
-            end
-
-            self.status_animation:stop()
-
-            local welcome = string.format(
-                "### Resumed session `%s`\n",
-                session_id:sub(1, 8)
-            )
-            self.message_writer:write_message(
-                ACPPayloads.generate_user_message(welcome)
-            )
-        end)
-    end)
+                self.message_writer:write_message(
+                    ACPPayloads.generate_user_message(welcome)
+                )
+            end)
+        end
+    )
 end
 
 --- Fallback: load session from local chat history when ACP session/load fails.
@@ -1149,13 +1172,21 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
         get_winid = function(bufnr)
             local agent_tab = vim.api.nvim_get_current_tabpage()
             -- Reuse existing diff tab or create one
-            local ok, diff_tab = pcall(vim.api.nvim_tabpage_get_var, agent_tab, "_agentic_diff_tab")
+            local ok, diff_tab = pcall(
+                vim.api.nvim_tabpage_get_var,
+                agent_tab,
+                "_agentic_diff_tab"
+            )
             if ok and vim.api.nvim_tabpage_is_valid(diff_tab) then
                 vim.api.nvim_set_current_tabpage(diff_tab)
             else
                 vim.cmd("tabnew")
                 diff_tab = vim.api.nvim_get_current_tabpage()
-                vim.api.nvim_tabpage_set_var(agent_tab, "_agentic_diff_tab", diff_tab)
+                vim.api.nvim_tabpage_set_var(
+                    agent_tab,
+                    "_agentic_diff_tab",
+                    diff_tab
+                )
                 vim.api.nvim_set_current_tabpage(agent_tab)
             end
             local winid = vim.api.nvim_tabpage_list_wins(diff_tab)[1]

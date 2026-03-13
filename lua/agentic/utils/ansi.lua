@@ -247,8 +247,7 @@ local function process_line(line, state)
             clean[#clean + 1] = text
             col = col + #text
             if next(state) then
-                spans[#spans + 1] =
-                    { start_col, col, get_or_create_hl(state) }
+                spans[#spans + 1] = { start_col, col, get_or_create_hl(state) }
             end
         end
 
@@ -257,12 +256,7 @@ local function process_line(line, state)
         local csi_params, csi_end =
             line:match("^%[([%d;]*)([%a@-~])", esc_pos + 1)
         if csi_params and csi_end then
-            local seq_end = esc_pos
-                + 1
-                + #"["
-                + #csi_params
-                + #csi_end
-                - 1
+            local seq_end = esc_pos + 1 + #"[" + #csi_params + #csi_end - 1
             if csi_end == "m" then
                 apply_sgr(state, csi_params)
             end

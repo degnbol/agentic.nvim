@@ -98,9 +98,10 @@ Provider sends "tool_call"
   -> subscriber.on_tool_call(block)
   -> MessageWriter:write_tool_call_block(block)
      1. Renders header + body/diff lines to buffer
-     2. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
-     3. Creates decoration extmarks (borders, status icon)
+     2. Creates sign_text extmarks (NS_DECORATIONS) for ╭─ │ ╰─ borders
+     3. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
      4. Stores block in tool_call_blocks[id]
+     5. If status is terminal: freezes immediately (see Phase 3)
 ```
 
 **Phase 2 — `tool_call_update` (one or more)**
@@ -115,18 +116,30 @@ Provider sends "tool_call_update"
      2. Deep-merges via tbl_deep_extend("force", tracker, partial)
      3. Appends body (if both old and new exist and differ)
      4. Locates block position via range extmark
-     5. Diff already rendered: refresh decorations + status only
-        (content frozen to prevent flicker)
-     6. Diff is NEW: replace buffer lines, re-render everything
+     5. If range extmark collapsed (start >= end): bails out, removes block
+     6. Diff already rendered: refresh status highlights only
+     7. Diff is NEW: replace buffer lines, re-render everything
 ```
 
-**Phase 3 — final `tool_call_update` with terminal status**
+**Phase 3 — deferred freeze on terminal status**
 
 ```
-Same as Phase 2, but status = "completed" | "failed"
-  -> Visual status icon updates to final state
+Status = "completed" | "failed" (after Phase 1 or 2)
+  -> _queue_freeze(tool_call_id): adds to pending list
+  -> Next content write (message chunk, new tool call, etc.):
+     -> _flush_pending_freezes() runs BEFORE the new content
+     -> _freeze_tool_call_block():
+        1. Deletes old decoration extmarks (avoids displaced duplicates)
+        2. Writes status text into footer line as static buffer content
+        3. Clears status overlay, applies line hl_group
+        4. Re-renders all decoration signs from scratch
+        5. Deletes range extmark (NS_TOOL_BLOCKS)
+        6. Removes block from tool_call_blocks (subsequent updates ignored)
   -> If "failed": PermissionManager removes pending request
 ```
+
+The deferred freeze ensures the visual transition from dynamic extmarks to static
+text is hidden by the arrival of new content (no visible duplication flash).
 
 ## Key design rules for adapters
 
@@ -137,9 +150,13 @@ Same as Phase 2, but status = "completed" | "failed"
   updates.
 - **Body accumulates:** Multiple updates with different body content get
   concatenated with `---` dividers, not replaced.
-- **Extmarks as position anchors:** Range extmark in `NS_TOOL_BLOCKS`
-  auto-adjusts when buffer content shifts. Single source of truth for block
-  position.
+- **Freeze on terminal status:** Once a block reaches "completed" or "failed",
+  its status is written as static buffer text and the block is removed from
+  tracking. No further updates are accepted.
+- **Sign column for borders:** Block decorations (╭─ │ ╰─) use `sign_text`
+  extmarks in the sign column rather than inline virtual text. This is more
+  stable during buffer edits — signs survive line content replacement without
+  needing delete/recreate cycles.
 
 ## Execute tool call rendering
 

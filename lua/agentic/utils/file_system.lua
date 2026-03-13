@@ -186,17 +186,37 @@ function FileSystem.get_file_extension(file_path)
 end
 
 --- Create directory recursively (equivalent to mkdir -p)
+--- Uses libuv fs_mkdir directly. vim.fn.mkdir can silently no-op
+--- in some contexts (e.g. test runners with sandbox-like behaviour).
 --- @param path string
 --- @return boolean success
 --- @return string|nil error
 function FileSystem.mkdirp(path)
-    local result = vim.fn.mkdir(path, "p")
-    if result == 1 then
+    local stat = vim.uv.fs_stat(path)
+    if stat and stat.type == "directory" then
         return true, nil
     end
-    local errmsg = vim.v.errmsg
-    local error_str = errmsg ~= "" and errmsg or "mkdir failed"
-    return false, error_str
+
+    -- Walk path components and create each missing directory
+    local parts = {}
+    local current = path
+    while current ~= "/" and current ~= "" do
+        local parent_stat = vim.uv.fs_stat(current)
+        if parent_stat and parent_stat.type == "directory" then
+            break
+        end
+        table.insert(parts, 1, current)
+        current = vim.fn.fnamemodify(current, ":h")
+    end
+
+    for _, dir in ipairs(parts) do
+        local ok, err = vim.uv.fs_mkdir(dir, 493) -- 0755
+        if not ok and err ~= "EEXIST" then
+            return false, err or ("failed to create: " .. dir)
+        end
+    end
+
+    return true, nil
 end
 
 return FileSystem

@@ -13,10 +13,10 @@ local function wrap_line(line, width)
     end
 
     -- Detect leading prefix (whitespace + optional list marker) for continuation
-    local prefix = line:match("^(%s*%d+%.%s)")        -- "  1. "
-        or line:match("^(%s*[%-%*]%s)")               -- "- ", "* "
-        or line:match("^(%s*>%s?)")                   -- "> "
-        or line:match("^(%s+)")                       -- plain indent
+    local prefix = line:match("^(%s*%d+%.%s)") -- "  1. "
+        or line:match("^(%s*[%-%*]%s)") -- "- ", "* "
+        or line:match("^(%s*>%s?)") -- "> "
+        or line:match("^(%s+)") -- plain indent
         or ""
     local continuation_indent = string.rep(" ", #prefix)
 
@@ -60,10 +60,7 @@ function M.wrap_prose(lines, width)
         if line:match("^%s*```") then
             in_fence = not in_fence
             out[#out + 1] = line
-        elseif in_fence then
-            out[#out + 1] = line
-        elseif line:match("^%s*$") then
-            -- Blank line — preserve as-is
+        elseif in_fence or line:match("^%s*$") then
             out[#out + 1] = line
         else
             local wrapped = wrap_line(line, width)

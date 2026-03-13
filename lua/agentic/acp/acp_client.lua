@@ -600,11 +600,20 @@ end
 --- @param mcp_servers table[]|nil
 --- @param handlers agentic.acp.ClientHandlers
 --- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
-function ACPClient:load_session(session_id, cwd, mcp_servers, handlers, callback)
+function ACPClient:load_session(
+    session_id,
+    cwd,
+    mcp_servers,
+    handlers,
+    callback
+)
     if
         not self.agent_capabilities or not self.agent_capabilities.loadSession
     then
-        callback(nil, { code = -1, message = "Agent does not support loading sessions" })
+        callback(
+            nil,
+            { code = -1, message = "Agent does not support loading sessions" }
+        )
         return
     end
 

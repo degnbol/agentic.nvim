@@ -34,20 +34,16 @@ local WindowDecoration = {}
 local WINDOW_HEADERS = {
     chat = {
         title = "󰻞 Agentic Chat",
-        suffix = "<S-Tab>: change mode",
     },
-    input = { title = "󰦨 Prompt", suffix = "<C-s>: submit" },
+    input = { title = "󰦨 Prompt" },
     code = {
         title = "󰪸 Selected Code Snippets",
-        suffix = "d: remove block",
     },
     files = {
         title = " Referenced Files",
-        suffix = "d: remove file",
     },
     diagnostics = {
         title = " Diagnostics",
-        suffix = "d: remove diagnostic",
     },
     todos = {
         title = " Tasks list",
@@ -64,16 +60,13 @@ local default_config = {
     reverse_hl = "NormalFloat",
 }
 
---- Concatenates header parts (title, context, suffix) into a single string
+--- Concatenates header parts (title, context) into a single string
 --- @param parts agentic.ui.ChatWidget.HeaderParts
 --- @return string header_text
 local function concat_header_parts(parts)
     local pieces = { parts.title }
     if parts.context ~= nil then
         table.insert(pieces, parts.context)
-    end
-    if parts.suffix ~= nil then
-        table.insert(pieces, parts.suffix)
     end
     return table.concat(pieces, " | ")
 end
@@ -180,7 +173,11 @@ local function set_winbar(winid, text)
 
     local opts = default_config
 
-    local winbar_text = string.format("%%#%s# %s %%#Normal#", opts.hl, text)
+    -- Escape literal % to %% so they aren't interpreted as statusline format
+    -- specifiers (e.g. context "42%" would otherwise trigger E539).
+    local safe_text = text:gsub("%%", "%%%%")
+    local winbar_text =
+        string.format("%%#%s# %s %%#Normal#", opts.hl, safe_text)
 
     if opts.align == "left" then
         winbar_text = winbar_text .. "%="
@@ -263,7 +260,10 @@ function WindowDecoration.render_header(bufnr, window_name, context)
         local text = (header_text and header_text ~= "") and header_text or ""
 
         set_winbar(winid, text)
-        set_buffer_name(bufnr, header_text, tab_page_id)
+
+        -- Buffer name uses the base title only (no context or suffix) so
+        -- tabline/bufferline plugins show a clean, short name.
+        set_buffer_name(bufnr, dynamic_header.title, tab_page_id)
     end)
 end
 

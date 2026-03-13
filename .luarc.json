@@ -38,8 +38,6 @@
       "$VIMRUNTIME/lua/vim",
       "${3rd}/luv/library",
       "${3rd}/busted/library",
-      "$PWD/lua",
-      "$PWD/tests",
       "$PWD/deps/mini.nvim/lua"
     ],
     "checkThirdParty": false,

@@ -17,6 +17,8 @@ local NS_DIFF_HIGHLIGHTS =
     vim.api.nvim_create_namespace("agentic_diff_highlights")
 local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 
+local TERMINAL_STATUSES = { completed = true, failed = true }
+
 --- @class agentic.ui.MessageWriter.HighlightRange
 --- @field type "comment"|"old"|"new"|"new_modification" Type of highlight to apply
 --- @field line_index integer Line index relative to returned lines (0-based)
@@ -62,10 +64,12 @@ function MessageWriter:new(bufnr)
     local instance = setmetatable({
         bufnr = bufnr,
         tool_call_blocks = {},
+        _pending_freezes = {},
         _last_message_type = nil,
         _should_auto_scroll = nil,
         _scroll_scheduled = false,
         _chunk_start_line = nil,
+        _last_wrote_tool_call = false,
     }, self)
 
     return instance
@@ -107,6 +111,8 @@ end
 --- Prose lines are hard-wrapped to the chat window width; code blocks are untouched.
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message(update)
+    self:_flush_pending_freezes()
+
     local text = update.content
         and update.content.type == "text"
         and update.content.text
@@ -190,8 +196,12 @@ end
 --- Some ACP providers stream chunks instead of full messages
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message_chunk(update)
+    self:_flush_pending_freezes()
+
     -- Hide thinking chunks from chat
-    if update.sessionUpdate == "agent_thought_chunk" then return end
+    if update.sessionUpdate == "agent_thought_chunk" then
+        return
+    end
 
     local text = update.content
         and update.content.type == "text"
@@ -210,6 +220,13 @@ function MessageWriter:write_message_chunk(update)
         text = "\n\n" .. text
     end
 
+    -- Add blank line before text that follows a tool call block,
+    -- so responses between tool calls have visual breathing room
+    if self._last_wrote_tool_call then
+        text = "\n" .. text
+        self._last_wrote_tool_call = false
+    end
+
     self._last_message_type = update.sessionUpdate
 
     self:_auto_scroll(self.bufnr)
@@ -220,7 +237,10 @@ function MessageWriter:write_message_chunk(update)
         -- Record where streamed content starts (0-indexed)
         if not self._chunk_start_line then
             local current = vim.api.nvim_buf_get_lines(
-                bufnr, last_line, last_line + 1, false
+                bufnr,
+                last_line,
+                last_line + 1,
+                false
             )[1] or ""
             -- If appending to a non-empty line, this line is the start
             -- If the line is empty, the new content starts here
@@ -329,6 +349,7 @@ end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:write_tool_call_block(tool_call_block)
+    self:_flush_pending_freezes()
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_and_notify_change(function(bufnr)
@@ -367,6 +388,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             vim.api.nvim_buf_set_extmark(bufnr, NS_TOOL_BLOCKS, start_row, 0, {
                 end_row = end_row,
                 right_gravity = false,
+                end_right_gravity = false,
             })
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
@@ -376,7 +398,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self:_apply_status_footer(end_row, tool_call_block.status)
 
         self:_append_lines({ "" })
+        self._last_wrote_tool_call = true
     end)
+
+    if TERMINAL_STATUSES[tool_call_block.status] then
+        self:_queue_freeze(tool_call_block.tool_call_id)
+    end
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBase
@@ -441,7 +468,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
     if start_row >= old_end_row then
         Logger.debug_to_file(
-            "COLLAPSED EXTMARK — tool call block range is degenerate",
+            "COLLAPSED EXTMARK — tool call block range is degenerate, bailing out",
             {
                 tool_call_id = tracker.tool_call_id,
                 kind = tracker.kind,
@@ -453,6 +480,9 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 line_count = vim.api.nvim_buf_line_count(self.bufnr),
             }
         )
+        -- Remove from tracking — the block is corrupt and cannot be updated
+        self.tool_call_blocks[tool_call_block.tool_call_id] = nil
+        return
     end
 
     self:_with_modifiable_and_notify_change(function(bufnr)
@@ -485,12 +515,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         -- If content hasn't changed (e.g. status-only update), keep
         -- decorations in place and just refresh status highlights.
-        local current_lines = vim.api.nvim_buf_get_lines(
-            bufnr,
-            start_row,
-            old_end_row + 1,
-            false
-        )
+        local current_lines =
+            vim.api.nvim_buf_get_lines(bufnr, start_row, old_end_row + 1, false)
         if vim.deep_equal(new_lines, current_lines) then
             self:_clear_status_namespace(start_row, old_end_row)
             self:_apply_status_highlights_if_present(
@@ -540,6 +566,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             id = tracker.extmark_id,
             end_row = new_end_row,
             right_gravity = false,
+            end_right_gravity = false,
         })
 
         tracker.decoration_extmark_ids =
@@ -552,6 +579,10 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         )
         self:_apply_tool_header_syntax(start_row, NS_STATUS)
     end)
+
+    if TERMINAL_STATUSES[tracker.status] then
+        self:_queue_freeze(tool_call_block.tool_call_id)
+    end
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
@@ -842,13 +873,15 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
     -- Apply syntax highlighting to the tool call header line within the permission block
     if tracker then
         for row = button_start_row, button_end_row do
-            local row_line = vim.api.nvim_buf_get_lines(
-                self.bufnr,
-                row,
-                row + 1,
-                false
-            )[1]
-            if row_line and (row_line:find("^ %a[%a_]*%(") or row_line:find("^ %a[%a_]*%s*$")) then
+            local row_line =
+                vim.api.nvim_buf_get_lines(self.bufnr, row, row + 1, false)[1]
+            if
+                row_line
+                and (
+                    row_line:find("^ %a[%a_]*%(")
+                    or row_line:find("^ %a[%a_]*%s*$")
+                )
+            then
                 self:_apply_tool_header_syntax(row, NS_PERMISSION_BUTTONS)
                 break
             end
@@ -1053,19 +1086,14 @@ end
 --- @param line_row integer 0-indexed row
 --- @param ns integer Namespace to use for extmarks
 function MessageWriter:_apply_tool_header_syntax(line_row, ns)
-    local line = vim.api.nvim_buf_get_lines(
-        self.bufnr,
-        line_row,
-        line_row + 1,
-        false
-    )[1]
+    local line =
+        vim.api.nvim_buf_get_lines(self.bufnr, line_row, line_row + 1, false)[1]
     if not line then
         return
     end
 
     -- Try " kind(argument) " first, then " kind " (no argument)
-    local _, _, kind_str, arg_str =
-        line:find("^ (%a[%a_]*)%((.-)%)%s*$")
+    local _, _, kind_str, arg_str = line:find("^ (%a[%a_]*)%((.-)%)%s*$")
 
     if not kind_str then
         _, _, kind_str = line:find("^ (%a[%a_]*)%s*$")
@@ -1088,17 +1116,11 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
         local arg_col = kind_col_end + 1 -- after "("
         local arg_col_end = arg_col + #arg_str
 
-        vim.api.nvim_buf_set_extmark(
-            self.bufnr,
-            ns,
-            line_row,
-            arg_col,
-            {
-                end_col = arg_col_end,
-                hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
-                priority = 200,
-            }
-        )
+        vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, arg_col, {
+            end_col = arg_col_end,
+            hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
+            priority = 200,
+        })
     end
 end
 
@@ -1174,6 +1196,122 @@ function MessageWriter:_apply_status_highlights_if_present(
         self:_apply_header_highlight(start_row, status)
         self:_apply_status_footer(end_row, status)
     end
+end
+
+--- Queue a tool call block for deferred freezing. The actual freeze happens
+--- when the next content write occurs (message chunk, new tool call, etc.),
+--- so the visual transition from dynamic extmarks to static text is hidden
+--- by the arrival of new content.
+--- @param tool_call_id string
+function MessageWriter:_queue_freeze(tool_call_id)
+    table.insert(self._pending_freezes, tool_call_id)
+end
+
+--- Flush all pending freezes. Called at the start of write methods so the
+--- freeze is visually simultaneous with the new content that follows.
+function MessageWriter:_flush_pending_freezes()
+    if #self._pending_freezes == 0 then
+        return
+    end
+
+    local ids = self._pending_freezes
+    self._pending_freezes = {}
+
+    for _, tool_call_id in ipairs(ids) do
+        self:_freeze_tool_call_block(tool_call_id)
+    end
+end
+
+--- Freeze a completed/failed tool call block: write the status as static buffer
+--- text, remove the range extmark and stop tracking the block. Old decoration
+--- extmarks are deleted and a clean footer sign is placed to avoid displaced
+--- duplicates from the set_lines replacement.
+--- @param tool_call_id string
+function MessageWriter:_freeze_tool_call_block(tool_call_id)
+    local tracker = self.tool_call_blocks[tool_call_id]
+    if not tracker or not tracker.extmark_id then
+        return
+    end
+
+    local pos = vim.api.nvim_buf_get_extmark_by_id(
+        self.bufnr,
+        NS_TOOL_BLOCKS,
+        tracker.extmark_id,
+        { details = true }
+    )
+    if not pos or not pos[1] then
+        self.tool_call_blocks[tool_call_id] = nil
+        return
+    end
+
+    local start_row = pos[1]
+    local end_row = pos[3] and pos[3].end_row
+    if not end_row or start_row >= end_row then
+        self.tool_call_blocks[tool_call_id] = nil
+        return
+    end
+
+    local icons = Config.status_icons or {}
+    local icon = icons[tracker.status] or ""
+    local status_text = string.format(" %s %s ", icon, tracker.status)
+
+    -- Delete old decoration extmarks before the set_lines replacement.
+    -- This prevents displaced sign_text extmarks from floating below the
+    -- block as stale duplicates.
+    self:_clear_decoration_extmarks(tracker.decoration_extmark_ids)
+
+    BufHelpers.with_modifiable(self.bufnr, function(bufnr)
+        -- Clear status extmarks BEFORE set_lines — replacing a line shifts
+        -- extmarks on that line to the next row, moving them outside the
+        -- clear range. Clearing first avoids orphaned overlays.
+        pcall(
+            vim.api.nvim_buf_clear_namespace,
+            bufnr,
+            NS_STATUS,
+            start_row,
+            end_row + 1
+        )
+
+        -- Replace the empty footer line with actual status text
+        vim.api.nvim_buf_set_lines(
+            bufnr,
+            end_row,
+            end_row + 1,
+            false,
+            { status_text }
+        )
+
+        -- Apply a final line highlight on the footer
+        local hl_group = Theme.get_status_hl_group(tracker.status)
+        vim.api.nvim_buf_set_extmark(bufnr, NS_STATUS, end_row, 0, {
+            end_col = #status_text,
+            hl_group = hl_group,
+        })
+    end)
+
+    -- Re-render all decoration signs from scratch at their correct positions
+    ExtmarkBlock.render_block(self.bufnr, NS_DECORATIONS, {
+        header_line = start_row,
+        body_start = start_row + 1,
+        body_end = end_row - 1,
+        footer_line = end_row,
+        hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
+    })
+
+    -- Re-apply header highlights that were cleared with NS_STATUS
+    self:_apply_header_highlight(start_row, tracker.status)
+    self:_apply_tool_header_syntax(start_row, NS_STATUS)
+
+    -- Delete range extmark — no more position tracking needed
+    pcall(
+        vim.api.nvim_buf_del_extmark,
+        self.bufnr,
+        NS_TOOL_BLOCKS,
+        tracker.extmark_id
+    )
+
+    -- Stop tracking — subsequent updates hit the "not found" early return
+    self.tool_call_blocks[tool_call_id] = nil
 end
 
 return MessageWriter

@@ -36,7 +36,8 @@ end
 
 --- Assert value is true
 --- @param value any Value to check
-function M.is_true(value)
+--- @param _msg? string Optional message (ignored, for busted compatibility)
+function M.is_true(value, _msg)
     expect.equality(value, true)
 end
 

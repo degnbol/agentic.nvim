@@ -1,5 +1,4 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
-local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic.ui.TodoList
 --- @field _bufnr integer

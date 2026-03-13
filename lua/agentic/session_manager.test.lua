@@ -51,7 +51,7 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { chat = test_bufnr },
                 },
                 _on_session_update = SessionManager._on_session_update,
-                _set_mode_to_chat_header = SessionManager._set_mode_to_chat_header,
+                _update_chat_header = SessionManager._update_chat_header,
             } --[[@as agentic.SessionManager]]
         end)
 
@@ -123,7 +123,7 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { chat = test_bufnr },
                 },
                 _on_session_update = SessionManager._on_session_update,
-                _set_mode_to_chat_header = SessionManager._set_mode_to_chat_header,
+                _update_chat_header = SessionManager._update_chat_header,
                 _handle_new_config_options = SessionManager._handle_new_config_options,
             } --[[@as agentic.SessionManager]]
         end)
@@ -164,28 +164,24 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("_generate_welcome_header", function()
-        it(
-            "returns header with provider name, session id, and timestamp",
-            function()
-                local header = SessionManager._generate_welcome_header(
-                    "Claude ACP",
-                    "abc123"
-                )
+        it("returns header with timestamp and short session id", function()
+            local header = SessionManager._generate_welcome_header(
+                "Claude ACP",
+                "abc12345-long-id"
+            )
 
-                assert.truthy(
-                    header:match("^# Agentic %- Claude ACP %- abc123\n")
-                )
-                assert.truthy(header:match("\n%- %d%d%d%d%-%d%d%-%d%d"))
-                assert.truthy(header:match("\n%-%-%- %-%-$"))
-            end
-        )
+            assert.truthy(
+                header:match("^# %d%d%d%d%-%d%d%-%d%d %d%d:%d%d · abc12345$")
+            )
+        end)
 
         it("uses 'unknown' when session_id is nil", function()
             local header =
                 SessionManager._generate_welcome_header("Claude ACP", nil)
 
-            assert.truthy(header:match("^# Agentic %- Claude ACP %- unknown\n"))
-            assert.truthy(header:match("\n%-%-%- %-%-$"))
+            assert.truthy(
+                header:match("^# %d%d%d%d%-%d%d%-%d%d %d%d:%d%d · unknown$")
+            )
         end)
     end)
 

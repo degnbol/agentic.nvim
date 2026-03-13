@@ -59,7 +59,7 @@ local function escape_xml(text)
     )
 end
 
---- @param severity vim.diagnostic.Severity|nil
+--- @param severity integer|nil
 --- @return string severity_label
 local function severity_to_label(severity)
     local label = ({

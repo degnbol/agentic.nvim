@@ -196,6 +196,7 @@ local function show_layout(params, position)
         scrolloff = 4,
         winfixheight = is_bottom,
         winfixwidth = not is_bottom,
+        signcolumn = "yes:1",
     })
 
     -- Input window: right splits below chat with height, bottom splits right

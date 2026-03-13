@@ -34,6 +34,8 @@ end)()
     it("buffer names mirror header titles", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
+        vim.uv.sleep(50)
+        child.flush()
 
         local basename = get_panel_basename("chat")
 
@@ -43,11 +45,15 @@ end)()
     it("adds tab suffix for multiple instances", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
+        vim.uv.sleep(50)
+        child.flush()
 
         local tab1_basename = get_panel_basename("input")
 
         child.cmd("tabnew")
         child.lua([[ require("agentic").toggle() ]])
+        child.flush()
+        vim.uv.sleep(50)
         child.flush()
 
         local tab2_basename = get_panel_basename("input")
@@ -80,6 +86,8 @@ end)()
 
     it("each panel has distinct buffer name prefix", function()
         child.lua([[ require("agentic").toggle() ]])
+        child.flush()
+        vim.uv.sleep(50)
         child.flush()
 
         local expected_prefixes = {

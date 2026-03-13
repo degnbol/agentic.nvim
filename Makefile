@@ -4,7 +4,7 @@ LUALS    ?= $(shell which lua-language-server 2>/dev/null || echo "$(HOME)/.loca
 SELENE   ?= $(shell which selene 2>/dev/null || echo "$(HOME)/.local/share/nvim/mason/bin/selene")
 STYLUA   ?= $(shell which stylua 2>/dev/null || echo "$(HOME)/.local/share/nvim/mason/bin/stylua")
 
-PROJECT ?= lua/ tests/
+PROJECT ?= .
 LOGDIR  ?= .luals-log
 
 .PHONY: luals selene selene-file format-check format format-file check test validate install-hooks

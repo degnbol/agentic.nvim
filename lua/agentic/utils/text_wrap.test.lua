@@ -10,7 +10,8 @@ describe("agentic.utils.TextWrap", function()
         end)
 
         it("wraps long prose lines at word boundaries", function()
-            local line = "the quick brown fox jumps over the lazy dog and keeps running"
+            local line =
+                "the quick brown fox jumps over the lazy dog and keeps running"
             local result = TextWrap.wrap_prose({ line }, 30)
             for _, l in ipairs(result) do
                 assert.is_true(#l <= 30, "line too long: " .. l)
@@ -46,12 +47,17 @@ describe("agentic.utils.TextWrap", function()
         end)
 
         it("preserves list marker indentation on continuation", function()
-            local lines = { "- this is a very long list item that should wrap at some point around here" }
+            local lines = {
+                "- this is a very long list item that should wrap at some point around here",
+            }
             local result = TextWrap.wrap_prose(lines, 40)
             assert.is_true(#result > 1)
             -- Continuation lines should be indented to align with list text
             for i = 2, #result do
-                assert.is_true(result[i]:match("^  ") ~= nil, "continuation should be indented: " .. result[i])
+                assert.is_true(
+                    result[i]:match("^  ") ~= nil,
+                    "continuation should be indented: " .. result[i]
+                )
             end
         end)
 
@@ -72,7 +78,10 @@ describe("agentic.utils.TextWrap", function()
             local found_code1 = false
             local found_code2 = false
             for _, l in ipairs(result) do
-                if l == "code block one with a really long line that should not be wrapped at all ever" then
+                if
+                    l
+                    == "code block one with a really long line that should not be wrapped at all ever"
+                then
                     found_code1 = true
                 end
                 if l == "another_long_code_line = True" then

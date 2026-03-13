@@ -31,8 +31,7 @@ describe("agentic.utils.Ansi", function()
         end)
 
         it("handles multiple colours on one line", function()
-            local result =
-                Ansi.process_lines({ "\27[31mred\27[34mblue\27[0m" })
+            local result = Ansi.process_lines({ "\27[31mred\27[34mblue\27[0m" })
             assert.equal("redblue", result.lines[1])
             assert.is_true(result.has_ansi)
             assert.equal(2, #result.highlights[1])
@@ -77,8 +76,7 @@ describe("agentic.utils.Ansi", function()
         end)
 
         it("handles 256-colour mode", function()
-            local result =
-                Ansi.process_lines({ "\27[38;5;208morange\27[0m" })
+            local result = Ansi.process_lines({ "\27[38;5;208morange\27[0m" })
             assert.equal("orange", result.lines[1])
             assert.is_true(result.has_ansi)
             assert.equal(1, #result.highlights[1])
@@ -94,15 +92,13 @@ describe("agentic.utils.Ansi", function()
 
         it("strips non-SGR CSI sequences", function()
             -- CSI H = cursor position, CSI J = erase display
-            local result =
-                Ansi.process_lines({ "\27[2Jhello\27[1;1Hworld" })
+            local result = Ansi.process_lines({ "\27[2Jhello\27[1;1Hworld" })
             assert.equal("helloworld", result.lines[1])
             assert.is_false(result.has_ansi)
         end)
 
         it("handles bold and italic attributes", function()
-            local result =
-                Ansi.process_lines({ "\27[1;3mbold italic\27[0m" })
+            local result = Ansi.process_lines({ "\27[1;3mbold italic\27[0m" })
             assert.equal("bold italic", result.lines[1])
             assert.is_true(result.has_ansi)
             assert.equal(1, #result.highlights[1])
@@ -134,8 +130,7 @@ describe("agentic.utils.Ansi", function()
         end)
 
         it("handles background colours", function()
-            local result =
-                Ansi.process_lines({ "\27[41mred bg\27[0m" })
+            local result = Ansi.process_lines({ "\27[41mred bg\27[0m" })
             assert.equal("red bg", result.lines[1])
             assert.is_true(result.has_ansi)
             assert.equal(1, #result.highlights[1])

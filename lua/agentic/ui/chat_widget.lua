@@ -11,7 +11,6 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @class agentic.ui.ChatWidget.HeaderParts
 --- @field title string Main header text
 --- @field context? string Dynamic info (managed internally)
---- @field suffix? string Context help text
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
 --- @alias agentic.ui.ChatWidget.WinNrs table<agentic.ui.ChatWidget.PanelNames, integer|nil>
@@ -47,7 +46,6 @@ function ChatWidget:new(tab_page_id, on_submit_input)
     self.tab_page_id = tab_page_id
 
     self:_initialize()
-    self:_bind_events_to_change_headers()
 
     return self
 end
@@ -288,7 +286,8 @@ function ChatWidget:_setup_write_submit()
             vim.bo[input_buf].modified = false
             vim.api.nvim_feedkeys(
                 vim.api.nvim_replace_termcodes("<CR>", true, false, true),
-                "m", false
+                "m",
+                false
             )
         end,
     })
@@ -297,16 +296,17 @@ end
 --- Mark user prompts with signs and [[ / ]] navigation in the chat buffer
 function ChatWidget:_setup_prompt_signs()
     local PROMPT_NS = vim.api.nvim_create_namespace("agentic_prompt_signs")
-    vim.fn.sign_define("AgenticPrompt", { text = "❯", texthl = "NonText" })
-
     local chat_buf = self.buf_nrs.chat
 
     local function place_prompt_signs()
-        vim.fn.sign_unplace("AgenticPrompt", { buffer = chat_buf })
+        vim.api.nvim_buf_clear_namespace(chat_buf, PROMPT_NS, 0, -1)
         local lines = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
         for i, line in ipairs(lines) do
             if line == "##" then
-                vim.fn.sign_place(0, "AgenticPrompt", "AgenticPrompt", chat_buf, { lnum = i })
+                vim.api.nvim_buf_set_extmark(chat_buf, PROMPT_NS, i - 1, 0, {
+                    sign_text = "❯ ",
+                    sign_hl_group = "NonText",
+                })
             end
         end
     end
@@ -322,7 +322,8 @@ function ChatWidget:_setup_prompt_signs()
         chat_buf,
         function()
             local row = vim.api.nvim_win_get_cursor(0)[1]
-            local lines = vim.api.nvim_buf_get_lines(chat_buf, 0, row - 1, false)
+            local lines =
+                vim.api.nvim_buf_get_lines(chat_buf, 0, row - 1, false)
             for i = #lines, 1, -1 do
                 if lines[i] == "##" then
                     vim.api.nvim_win_set_cursor(0, { i, 0 })
@@ -501,85 +502,6 @@ function ChatWidget:_create_new_buf(opts)
     end
 
     return bufnr
-end
-
---- @param keymaps  agentic.UserConfig.KeymapValue
---- @param mode string
-local function find_keymap(keymaps, mode)
-    if type(keymaps) == "string" then
-        return keymaps
-    end
-
-    for _, keymap in ipairs(keymaps) do
-        if type(keymap) == "string" and mode == "n" then
-            return keymap
-        elseif type(keymap) == "table" then
-            if keymap.mode == mode then
-                return keymap[1]
-            end
-
-            if type(keymap.mode) == "table" then
-                ---@diagnostic disable-next-line: param-type-mismatch
-                for _, m in ipairs(keymap.mode) do
-                    if m == mode then
-                        return keymap[1]
-                    end
-                end
-            end
-        end
-    end
-end
-
---- Binds events to change the suffix header texts based on current mode keymaps
---- For the Chat and Input buffers only
-function ChatWidget:_bind_events_to_change_headers()
-    local tab_page_id = self.tab_page_id
-
-    for _, bufnr in ipairs({ self.buf_nrs.chat, self.buf_nrs.input }) do
-        vim.api.nvim_create_autocmd("ModeChanged", {
-            buffer = bufnr,
-            callback = function()
-                vim.schedule(function()
-                    -- Check if tabpage is still valid before accessing vim.t
-                    -- I couldn't test it, it seems to only happen from command -> normal, not from insert -> normal
-                    if not vim.api.nvim_tabpage_is_valid(tab_page_id) then
-                        return
-                    end
-
-                    -- Get headers from tabpage-local storage (must reassign after modification)
-                    local headers =
-                        WindowDecoration.get_headers_state(tab_page_id)
-
-                    local mode = vim.fn.mode()
-                    local change_mode_key =
-                        find_keymap(Config.keymaps.widget.change_mode, mode)
-
-                    if change_mode_key ~= nil then
-                        headers.chat.suffix =
-                            string.format("%s: change mode", change_mode_key)
-                    else
-                        headers.chat.suffix = nil
-                    end
-
-                    local submit_key =
-                        find_keymap(Config.keymaps.prompt.submit, mode)
-
-                    if submit_key ~= nil then
-                        headers.input.suffix =
-                            string.format("%s: submit", submit_key)
-                    else
-                        headers.input.suffix = nil
-                    end
-
-                    -- Reassign to persist changes
-                    WindowDecoration.set_headers_state(tab_page_id, headers)
-
-                    self:render_header("chat")
-                    self:render_header("input")
-                end)
-            end,
-        })
-    end
 end
 
 --- @param window_name agentic.ui.ChatWidget.PanelNames

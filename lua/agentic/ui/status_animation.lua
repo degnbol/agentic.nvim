@@ -13,18 +13,7 @@
 --- ```
 ---
 
-local Config = require("agentic.config")
-local Theme = require("agentic.theme")
-
 local NS_ANIMATION = vim.api.nvim_create_namespace("agentic_animation")
-
---- @type table<agentic.Theme.SpinnerState, number>
-local TIMING = {
-    generating = 200,
-    thinking = 600,
-    searching = 600,
-    busy = 100,
-}
 
 --- @class agentic.ui.StatusAnimation
 --- @field _bufnr number Buffer number where animation is rendered

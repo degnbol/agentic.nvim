@@ -44,8 +44,7 @@ local function do_restore(session_id, tab_page_id, has_conflict)
             ChatHistory.load(session_id, function(history, err)
                 if err or not history then
                     Logger.notify(
-                        "Failed to load session: "
-                            .. (err or "unknown error"),
+                        "Failed to load session: " .. (err or "unknown error"),
                         vim.log.levels.WARN
                     )
                     return

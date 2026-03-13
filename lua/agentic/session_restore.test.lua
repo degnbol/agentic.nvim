@@ -296,28 +296,22 @@ describe("SessionRestore", function()
             }))
         end
 
-        it(
-            "uses load_acp_session when agent supports loadSession",
-            function()
-                local mock_session = session_with_load_support()
-                setup_list_stub()
-                setup_registry_stub(mock_session)
+        it("uses load_acp_session when agent supports loadSession", function()
+            local mock_session = session_with_load_support()
+            setup_list_stub()
+            setup_registry_stub(mock_session)
 
-                SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(1, nil)
 
-                local callback = select_session(1)
-                callback({ session_id = "session-1" })
+            local callback = select_session(1)
+            callback({ session_id = "session-1" })
 
-                assert.spy(mock_session.load_acp_session).was.called(1)
-                assert.equal(
-                    "session-1",
-                    mock_session.load_acp_session.calls[1][2]
-                )
-                assert.spy(mock_session.restore_from_history).was.called(0)
-                assert.spy(chat_history_load_stub).was.called(0)
-                assert.spy(mock_session.widget.show).was.called(1)
-            end
-        )
+            assert.spy(mock_session.load_acp_session).was.called(1)
+            assert.equal("session-1", mock_session.load_acp_session.calls[1][2])
+            assert.spy(mock_session.restore_from_history).was.called(0)
+            assert.spy(chat_history_load_stub).was.called(0)
+            assert.spy(mock_session.widget.show).was.called(1)
+        end)
 
         it(
             "skips manual cancel when using load_acp_session (it cancels internally)",

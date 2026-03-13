@@ -1,12 +1,13 @@
-local GLYPHS = {
-    TOP_LEFT = "╭",
-    BOTTOM_LEFT = "╰",
-    HORIZONTAL = "─",
-    VERTICAL = "│",
+local SIGNS = {
+    HEADER = "╭─",
+    BODY = "│ ",
+    FOOTER = "╰─",
 }
 
 --- @class agentic.utils.ExtmarkBlock
 local ExtmarkBlock = {}
+
+ExtmarkBlock.SIGNS = SIGNS
 
 --- @class agentic.utils.ExtmarkBlock.RenderBlockOpts
 --- @field header_line integer 0-indexed line number for header
@@ -15,7 +16,7 @@ local ExtmarkBlock = {}
 --- @field footer_line? integer 0-indexed line number for footer (optional)
 --- @field hl_group string Highlight group name
 
---- Renders a complete block with header, optional body, and optional footer
+--- Renders a complete block with sign column decorations
 --- @param bufnr integer
 --- @param ns_id integer
 --- @param opts agentic.utils.ExtmarkBlock.RenderBlockOpts
@@ -26,23 +27,18 @@ function ExtmarkBlock.render_block(bufnr, ns_id, opts)
     table.insert(
         decoration_ids,
         vim.api.nvim_buf_set_extmark(bufnr, ns_id, opts.header_line, 0, {
-            virt_text = {
-                { GLYPHS.TOP_LEFT .. GLYPHS.HORIZONTAL .. " ", opts.hl_group },
-            },
-            virt_text_pos = "inline",
-            hl_mode = "combine",
+            sign_text = SIGNS.HEADER,
+            sign_hl_group = opts.hl_group,
         })
     )
 
-    -- Add body pipe padding if body exists
     if opts.body_start and opts.body_end then
         for line_num = opts.body_start, opts.body_end do
             table.insert(
                 decoration_ids,
                 vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_num, 0, {
-                    virt_text = { { GLYPHS.VERTICAL .. " ", opts.hl_group } },
-                    virt_text_pos = "inline",
-                    hl_mode = "combine",
+                    sign_text = SIGNS.BODY,
+                    sign_hl_group = opts.hl_group,
                 })
             )
         end
@@ -52,14 +48,8 @@ function ExtmarkBlock.render_block(bufnr, ns_id, opts)
         table.insert(
             decoration_ids,
             vim.api.nvim_buf_set_extmark(bufnr, ns_id, opts.footer_line, 0, {
-                virt_text = {
-                    {
-                        GLYPHS.BOTTOM_LEFT .. GLYPHS.HORIZONTAL .. " ",
-                        opts.hl_group,
-                    },
-                },
-                virt_text_pos = "inline",
-                hl_mode = "combine",
+                sign_text = SIGNS.FOOTER,
+                sign_hl_group = opts.hl_group,
             })
         )
     end
