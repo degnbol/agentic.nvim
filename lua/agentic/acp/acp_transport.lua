@@ -185,10 +185,6 @@ function M.create_stdio_transport(config, callbacks)
             end
 
             if data then
-                do -- temporary raw logging
-                    local f = io.open("/tmp/acp_raw.log", "a")
-                    if f then f:write("STDOUT: " .. data .. "\n===\n") f:close() end
-                end
                 chunks = chunks .. data
 
                 -- Split on newlines and process complete JSON-RPC messages
@@ -202,7 +198,6 @@ function M.create_stdio_transport(config, callbacks)
                         if ok then
                             callbacks.on_message(message)
                         else
-                            Logger.debug("Non-JSON stdout line: ", line)
                             if callbacks.on_stdout_text then
                                 callbacks.on_stdout_text(line)
                             end
@@ -214,10 +209,6 @@ function M.create_stdio_transport(config, callbacks)
 
         stderr:read_start(function(_, data)
             if data then
-                do -- temporary raw logging
-                    local f = io.open("/tmp/acp_raw.log", "a")
-                    if f then f:write("STDERR: " .. data .. "\n===\n") f:close() end
-                end
                 -- Always capture stderr for error reporting
                 local trimmed = vim.trim(data)
                 if trimmed ~= "" then

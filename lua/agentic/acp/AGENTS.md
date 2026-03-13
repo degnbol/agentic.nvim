@@ -171,3 +171,28 @@ Override when the provider sends data in non-standard fields (e.g. `rawInput`,
 `rawOutput`), needs synthetic events (Gemini synthesizes `tool_call` from
 permission request), or skips events (Gemini doesn't send cancel updates on
 rejection).
+
+## Known ACP limitations
+
+### Slash commands with local-only output
+
+Some slash commands (e.g. `/context`, `/compact`) are handled entirely inside the
+provider process. Their output is rendered in the provider's own terminal UI but
+**never emitted** via the ACP protocol — the prompt response returns
+`{stopReason: "end_turn", usage: all zeros}` with no `agent_message_chunk`
+notifications.
+
+**Workarounds in agentic.nvim:**
+
+- **`/context`**: Intercepted locally in `SessionManager`. Displays token usage
+  from the most recent `usage_update` notification (which *is* sent via ACP).
+  The chat header also shows a live context percentage from `usage_update`.
+- **`/new`**: Already intercepted locally to manage session lifecycle.
+
+### Non-JSON stdout/stderr forwarding
+
+The transport layer forwards non-JSON stdout lines and non-ignored stderr lines
+to subscribers via `on_stdout_text`. This is wired through `ACPClient` →
+`SessionManager` → `MessageWriter`, gated by `is_generating` to suppress noise.
+Currently no known ACP provider emits useful non-JSON stdout, but the
+infrastructure exists for future use.

@@ -42,12 +42,16 @@ describe("SessionRestore", function()
         return {
             session_id = opts.session_id or "current-session",
             chat_history = opts.chat_history or { messages = {} },
-            agent = { cancel_session = spy.new(function() end) },
+            agent = {
+                cancel_session = spy.new(function() end),
+                agent_capabilities = opts.agent_capabilities,
+            },
             widget = {
                 clear = spy.new(function() end),
                 show = spy.new(function() end),
             },
             restore_from_history = spy.new(function() end),
+            load_acp_session = spy.new(function() end),
         }
     end
 
@@ -251,8 +255,10 @@ describe("SessionRestore", function()
 
     describe("load failures", function()
         it("shows warning on load error", function()
+            local mock_session = create_mock_session()
             setup_list_stub()
             setup_load_stub(nil, "File not found")
+            setup_registry_stub(mock_session)
 
             SessionRestore.show_picker(1, nil)
 
@@ -264,12 +270,13 @@ describe("SessionRestore", function()
                 logger_notify_stub.calls[1][1]:match("File not found")
             )
             assert.equal(vim.log.levels.WARN, logger_notify_stub.calls[1][2])
-            assert.spy(session_registry_stub).was.called(0)
         end)
 
         it("shows warning on nil history without error", function()
+            local mock_session = create_mock_session()
             setup_list_stub()
             setup_load_stub(nil, nil)
+            setup_registry_stub(mock_session)
 
             SessionRestore.show_picker(1, nil)
 
@@ -278,8 +285,84 @@ describe("SessionRestore", function()
 
             assert.spy(logger_notify_stub).was.called(1)
             assert.truthy(logger_notify_stub.calls[1][1]:match("unknown error"))
-            assert.spy(session_registry_stub).was.called(0)
         end)
+    end)
+
+    describe("restore via load_acp_session", function()
+        local function session_with_load_support(opts)
+            opts = opts or {}
+            return create_mock_session(vim.tbl_extend("force", opts, {
+                agent_capabilities = { loadSession = true },
+            }))
+        end
+
+        it(
+            "uses load_acp_session when agent supports loadSession",
+            function()
+                local mock_session = session_with_load_support()
+                setup_list_stub()
+                setup_registry_stub(mock_session)
+
+                SessionRestore.show_picker(1, nil)
+
+                local callback = select_session(1)
+                callback({ session_id = "session-1" })
+
+                assert.spy(mock_session.load_acp_session).was.called(1)
+                assert.equal(
+                    "session-1",
+                    mock_session.load_acp_session.calls[1][2]
+                )
+                assert.spy(mock_session.restore_from_history).was.called(0)
+                assert.spy(chat_history_load_stub).was.called(0)
+                assert.spy(mock_session.widget.show).was.called(1)
+            end
+        )
+
+        it(
+            "skips manual cancel when using load_acp_session (it cancels internally)",
+            function()
+                local mock_session = session_with_load_support({
+                    chat_history = { messages = { { type = "user" } } },
+                })
+                setup_list_stub()
+                setup_registry_stub(mock_session)
+
+                SessionRestore.show_picker(
+                    1,
+                    mock_session --[[@as agentic.SessionManager]]
+                )
+
+                local callback = select_session(1)
+                callback({ session_id = "session-1" })
+
+                -- Conflict prompt
+                local conflict_callback = vim_ui_select_stub.calls[2][3]
+                conflict_callback("Clear current session and restore")
+
+                assert.spy(mock_session.agent.cancel_session).was.called(0)
+                assert.spy(mock_session.widget.clear).was.called(0)
+                assert.spy(mock_session.load_acp_session).was.called(1)
+            end
+        )
+
+        it(
+            "falls back to restore_from_history when loadSession not supported",
+            function()
+                local mock_session = create_mock_session()
+                setup_list_stub()
+                setup_load_stub(mock_history)
+                setup_registry_stub(mock_session)
+
+                SessionRestore.show_picker(1, nil)
+
+                local callback = select_session(1)
+                callback({ session_id = "session-1" })
+
+                assert.spy(mock_session.load_acp_session).was.called(0)
+                assert.spy(mock_session.restore_from_history).was.called(1)
+            end
+        )
     end)
 
     describe("conflict detection", function()

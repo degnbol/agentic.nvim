@@ -20,6 +20,9 @@ Theme.HL_GROUPS = {
     SPINNER_THINKING = "AgenticSpinnerThinking",
     SPINNER_SEARCHING = "AgenticSpinnerSearching",
     SPINNER_BUSY = "AgenticSpinnerBusy",
+
+    TOOL_KIND = "AgenticToolKind",
+    TOOL_ARGUMENT = "AgenticToolArgument",
 }
 
 local COLORS = {
@@ -83,6 +86,10 @@ function Theme.setup()
 
         -- Title highlight
         { Theme.HL_GROUPS.WIN_BAR_TITLE, { bg = COLORS.title_bg, fg = COLORS.title_fg, bold = true } },
+
+        -- Tool call header highlights
+        { Theme.HL_GROUPS.TOOL_KIND, { link = "Function" } },
+        { Theme.HL_GROUPS.TOOL_ARGUMENT, { link = "String" } },
 
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { fg = COLORS.spinner_generating_fg, bold = true } },

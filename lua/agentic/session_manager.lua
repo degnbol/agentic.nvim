@@ -62,6 +62,9 @@ end
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
+--- @field _pending_load_session_id? string Deferred session/load until agent is ready
+--- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
+--- @field _last_prompt? string
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -98,8 +101,14 @@ function SessionManager:new(tab_page_id)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
         vim.schedule(function()
-            -- Skip auto-new_session if restore_from_history was called
-            if not self._restoring then
+            if self._pending_load_session_id then
+                -- Deferred load_acp_session: agent is now ready
+                --- @type string
+                local sid = self._pending_load_session_id
+                self._pending_load_session_id = nil
+                self:_do_load_acp_session(sid)
+            elseif not self._restoring then
+                -- Skip auto-new_session if restore_from_history was called
                 self:new_session()
             end
         end)
@@ -231,14 +240,20 @@ function SessionManager:_on_session_update(update)
                 update.currentModeId
             )
         then
-            self:_set_mode_to_chat_header(update.currentModeId)
+            self:_update_chat_header(update.currentModeId)
         end
     elseif update.sessionUpdate == "config_option_update" then
         self:_handle_new_config_options(update.configOptions)
     elseif update.sessionUpdate == "usage_update" then
-        -- Usage updates contain token/cost information - currently informational only
-        -- Fields: used (tokens), size (context window), cost (optional: amount, currency)
-        -- Keeping silent for now to avoid "press any key" prompts on large JSON output
+        self._usage = {
+            used = update.used,
+            size = update.size,
+            cost = update.cost,
+        }
+
+        local current_mode = (self.config_options.mode and self.config_options.mode.currentValue)
+            or self.config_options.legacy_agent_modes.current_mode_id
+        self:_update_chat_header(current_mode)
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
         Logger.notify(
@@ -251,6 +266,37 @@ function SessionManager:_on_session_update(update)
             { title = "⚠️ Unknown session update" }
         )
     end
+end
+
+--- Display context usage info locally (intercepted /context command)
+function SessionManager:_display_context_usage()
+    local lines = { "**Context usage:**", "" }
+
+    if self._usage and self._usage.size > 0 then
+        local pct = math.floor(self._usage.used / self._usage.size * 100)
+        local used_k = string.format("%.1fk", self._usage.used / 1000)
+        local size_k = string.format("%.1fk", self._usage.size / 1000)
+
+        table.insert(lines, string.format("- Tokens: %s / %s (%d%%)", used_k, size_k, pct))
+
+        if self._usage.cost then
+            table.insert(
+                lines,
+                string.format(
+                    "- Cost: $%.4f %s",
+                    self._usage.cost.amount,
+                    self._usage.cost.currency
+                )
+            )
+        end
+    else
+        table.insert(lines, "No usage data available yet.")
+    end
+
+    self.message_writer:write_message(
+        ACPPayloads.generate_agent_message(table.concat(lines, "\n"))
+    )
+    self.message_writer:append_separator()
 end
 
 --- Handle non-JSON text from the ACP process (stdout non-JSON or stderr).
@@ -339,7 +385,7 @@ function SessionManager:_handle_mode_change(mode_id, is_legacy)
                 self:_handle_new_config_options(result.configOptions)
             end
 
-            self:_set_mode_to_chat_header(mode_id)
+            self:_update_chat_header(mode_id)
 
             local mode_name = self.config_options:get_mode_name(mode_id)
             Logger.notify(
@@ -403,13 +449,22 @@ function SessionManager:_handle_model_change(model_id, is_legacy)
     end
 end
 
---- @param mode_id string
-function SessionManager:_set_mode_to_chat_header(mode_id)
-    local mode_name = self.config_options:get_mode_name(mode_id)
-    self.widget:render_header(
-        "chat",
-        string.format("Mode: %s", mode_name or mode_id)
-    )
+--- @param mode_id string|nil
+function SessionManager:_update_chat_header(mode_id)
+    local parts = {}
+
+    if mode_id then
+        local mode_name = self.config_options:get_mode_name(mode_id)
+        table.insert(parts, string.format("Mode: %s", mode_name or mode_id))
+    end
+
+    if self._usage and self._usage.size > 0 then
+        local pct = math.floor(self._usage.used / self._usage.size * 100)
+        table.insert(parts, string.format("%d%%", pct))
+    end
+
+    local context = #parts > 0 and table.concat(parts, " · ") or nil
+    self.widget:render_header("chat", context)
 end
 
 --- @param input_text string
@@ -445,6 +500,13 @@ function SessionManager:_handle_input_submit_inner(input_text)
     -- the Agent might not send an identifiable response that could be acted upon
     if input_text:match("^/new%s*") then
         self:new_session()
+        return
+    end
+
+    -- Intercept /context — ACP providers don't emit context info via the protocol,
+    -- so we display the last known usage_update data locally
+    if input_text:match("^/context%s*$") then
+        self:_display_context_usage()
         return
     end
 
@@ -767,7 +829,7 @@ function SessionManager:new_session(opts)
             if response.modes then
                 Logger.debug("Provider announce legacy mode")
                 self.config_options:set_legacy_modes(response.modes)
-                self:_set_mode_to_chat_header(response.modes.currentModeId)
+                self:_update_chat_header(response.modes.currentModeId)
             end
 
             if response.models then
@@ -809,6 +871,132 @@ function SessionManager:new_session(opts)
     end)
 end
 
+--- Load an existing ACP session by ID (e.g. from claude-agent-acp).
+--- The agent replays the conversation via session/update notifications.
+--- If the agent isn't ready yet (fresh SessionManager), the load is deferred
+--- until the on_ready callback fires.
+--- @param session_id string Full UUID of the session to load
+function SessionManager:load_acp_session(session_id)
+    if self.agent and self.agent.agent_capabilities then
+        -- Agent is already initialised, load immediately
+        self:_do_load_acp_session(session_id)
+    else
+        -- Agent still starting — defer until on_ready fires
+        self._restoring = true
+        self._pending_load_session_id = session_id
+    end
+end
+
+--- Internal: actually send session/load after the agent is ready.
+--- @param session_id string
+function SessionManager:_do_load_acp_session(session_id)
+    self:_cancel_session()
+    self.status_animation:start("busy")
+
+    self.session_id = session_id
+    self.chat_history.session_id = session_id
+    self.chat_history.timestamp = os.time()
+
+    --- @type agentic.acp.ClientHandlers
+    local handlers = {
+        on_error = function(err)
+            Logger.debug("Agent error: ", err)
+            self.message_writer:write_message(
+                ACPPayloads.generate_agent_message({
+                    "Agent Error:",
+                    "",
+                    vim.inspect(err),
+                })
+            )
+        end,
+
+        on_session_update = function(update)
+            self:_on_session_update(update)
+        end,
+
+        on_tool_call = function(tool_call)
+            self.message_writer:write_tool_call_block(tool_call)
+        end,
+
+        on_tool_call_update = function(tool_call_update)
+            self:_on_tool_call_update(tool_call_update)
+        end,
+
+        on_stdout_text = function(text)
+            self:_on_stdout_text(text)
+        end,
+
+        on_request_permission = function(request, callback)
+            self.status_animation:stop()
+
+            local function wrapped_callback(option_id)
+                callback(option_id)
+
+                local is_rejection = option_id == "reject_once"
+                    or option_id == "reject_always"
+                self:_clear_diff_in_buffer(
+                    request.toolCall.toolCallId,
+                    is_rejection
+                )
+
+                if
+                    not self.permission_manager.current_request
+                    and #self.permission_manager.queue == 0
+                then
+                    self.status_animation:start("generating")
+                end
+            end
+
+            self:_show_diff_in_buffer(request.toolCall.toolCallId)
+            self.permission_manager:add_request(request, wrapped_callback)
+        end,
+    }
+
+    local cwd = vim.fn.getcwd()
+    self.agent:load_session(session_id, cwd, {}, handlers, function(_result, err)
+        vim.schedule(function()
+            if err then
+                local details = err.data and err.data.details or err.message or "Unknown error"
+                Logger.notify(
+                    string.format("session/load failed: %s — falling back to local history", details),
+                    vim.log.levels.WARN
+                )
+                self:_fallback_restore_from_local(session_id)
+                return
+            end
+
+            self.status_animation:stop()
+
+            local welcome = string.format(
+                "### Resumed session `%s`\n",
+                session_id:sub(1, 8)
+            )
+            self.message_writer:write_message(
+                ACPPayloads.generate_user_message(welcome)
+            )
+        end)
+    end)
+end
+
+--- Fallback: load session from local chat history when ACP session/load fails.
+--- Creates a new ACP session and replays the saved messages.
+--- @param session_id string
+function SessionManager:_fallback_restore_from_local(session_id)
+    ChatHistory.load(session_id, function(history, load_err)
+        if load_err or not history then
+            self.status_animation:stop()
+            Logger.notify(
+                "No local history found for session " .. session_id:sub(1, 8),
+                vim.log.levels.WARN
+            )
+            return
+        end
+
+        self.session_id = nil -- clear stale ID so restore_from_history creates a new ACP session
+        self:restore_from_history(history)
+    end)
+end
+
 function SessionManager:_cancel_session()
     if self.session_id then
         -- only cancel and clear content if there was an session
@@ -828,6 +1016,7 @@ function SessionManager:_cancel_session()
 
     self.chat_history = ChatHistory:new()
     self._history_to_send = nil
+    self._usage = nil
 end
 
 --- Switch to a different ACP provider while preserving chat UI and history.
@@ -994,7 +1183,7 @@ function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
 
     if self.config_options.mode and self.config_options.mode.currentValue then
-        self:_set_mode_to_chat_header(self.config_options.mode.currentValue)
+        self:_update_chat_header(self.config_options.mode.currentValue)
     end
 end
 
@@ -1091,14 +1280,15 @@ function SessionManager:restore_from_history(history, opts)
     local SessionRestore = require("agentic.session_restore")
 
     if opts.reuse_session and self.session_id then
-        -- Reuse existing ACP session, just replay messages
+        -- Reuse existing ACP session, replay messages to UI
         self._restoring = false
         SessionRestore.replay_messages(
             self.message_writer,
             self._history_to_send
         )
-        -- ACP session already knows these messages; clear to prevent duplicate prepend
-        self._history_to_send = nil
+        -- Keep _history_to_send: the ACP provider doesn't have these messages
+        -- (they came from disk, not the current session). They'll be prepended
+        -- to the first user prompt so the provider has conversation context.
     else
         -- Create fresh ACP session, then replay messages after session is ready
         self:new_session({

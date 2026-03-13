@@ -16,34 +16,49 @@ local function check_conflict(current_session)
         and #current_session.chat_history.messages > 0
 end
 
+--- Check whether the agent supports the session/load RPC.
+--- @param session agentic.SessionManager
+--- @return boolean
+local function agent_supports_load(session)
+    return session.agent ~= nil
+        and session.agent.agent_capabilities ~= nil
+        and session.agent.agent_capabilities.loadSession == true
+end
+
 --- @param session_id string
 --- @param tab_page_id integer
 --- @param has_conflict boolean
 local function do_restore(session_id, tab_page_id, has_conflict)
-    ChatHistory.load(session_id, function(history, err)
-        if err or not history then
-            Logger.notify(
-                "Failed to load session: " .. (err or "unknown error"),
-                vim.log.levels.WARN
-            )
-            return
-        end
-
-        SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
-            if has_conflict then
-                if session.session_id then
-                    session.agent:cancel_session(session.session_id)
-                    session.widget:clear()
-                end
+    SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
+        if agent_supports_load(session) then
+            -- Provider can resume server-side; load_acp_session handles
+            -- its own cancel, replay, and fallback to local history.
+            session:load_acp_session(session_id)
+        else
+            -- Provider doesn't support session/load — replay from disk.
+            if has_conflict and session.session_id then
+                session.agent:cancel_session(session.session_id)
+                session.widget:clear()
             end
 
-            session:restore_from_history(
-                history,
-                { reuse_session = not has_conflict }
-            )
+            ChatHistory.load(session_id, function(history, err)
+                if err or not history then
+                    Logger.notify(
+                        "Failed to load session: "
+                            .. (err or "unknown error"),
+                        vim.log.levels.WARN
+                    )
+                    return
+                end
 
-            session.widget:show()
-        end)
+                session:restore_from_history(
+                    history,
+                    { reuse_session = not has_conflict }
+                )
+            end)
+        end
+
+        session.widget:show()
     end)
 end
 

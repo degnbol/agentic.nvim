@@ -370,6 +370,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
 
         self:_apply_header_highlight(start_row, tool_call_block.status)
+        self:_apply_tool_header_syntax(start_row, NS_STATUS)
         self:_apply_status_footer(end_row, tool_call_block.status)
 
         self:_append_lines({ "", "" })
@@ -458,6 +459,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 old_end_row,
                 tracker.status
             )
+            self:_apply_tool_header_syntax(start_row, NS_STATUS)
 
             return false
         end
@@ -511,6 +513,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             new_end_row,
             tracker.status
         )
+        self:_apply_tool_header_syntax(start_row, NS_STATUS)
     end)
 end
 
@@ -664,7 +667,7 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
     local option_mapping = {}
 
     local lines_to_append = {
-        "### Waiting for your response: ",
+        "### Waiting for your response:",
         "",
     }
 
@@ -748,6 +751,22 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
             button_start_row,
             hint_line_index
         )
+    end
+
+    -- Apply syntax highlighting to the tool call header line within the permission block
+    if tracker then
+        for row = button_start_row, button_end_row do
+            local row_line = vim.api.nvim_buf_get_lines(
+                self.bufnr,
+                row,
+                row + 1,
+                false
+            )[1]
+            if row_line and row_line:find("^ %a[%a_]*%(") then
+                self:_apply_tool_header_syntax(row, NS_PERMISSION_BUTTONS)
+                break
+            end
+        end
     end
 
     -- Create extmark to track button block
@@ -910,6 +929,135 @@ function MessageWriter:_apply_header_highlight(header_line, status)
         end_col = #line,
         hl_group = hl_group,
     })
+end
+
+--- Map tool call kind to treesitter language for argument syntax highlighting.
+--- Falls back to flat TOOL_ARGUMENT colour when parser is unavailable.
+local TOOL_ARG_LANGUAGES = {
+    execute = "zsh",
+}
+
+--- Apply syntax highlighting to a tool call header line: " kind(argument) "
+--- Highlights `kind` with TOOL_KIND and `argument` with TOOL_ARGUMENT
+--- (or treesitter highlights for known kinds like execute).
+--- @param line_row integer 0-indexed row
+--- @param ns integer Namespace to use for extmarks
+function MessageWriter:_apply_tool_header_syntax(line_row, ns)
+    local line = vim.api.nvim_buf_get_lines(
+        self.bufnr,
+        line_row,
+        line_row + 1,
+        false
+    )[1]
+    if not line then
+        return
+    end
+
+    -- Match " kind(argument)" — leading space, kind word, parens with content
+    -- find() returns: match_start, match_end, captured_kind, captured_arg
+    local _, _, kind_str, arg_str =
+        line:find("^ (%a[%a_]*)%((.-)%)%s*$")
+
+    if not kind_str then
+        return
+    end
+
+    -- Byte offsets (0-indexed for extmarks)
+    -- Line format: " kind(argument) "
+    --              0123456...
+    local kind_col = 1 -- after leading space
+    local kind_col_end = kind_col + #kind_str
+    local arg_col = kind_col_end + 1 -- after "("
+    local arg_col_end = arg_col + #arg_str
+
+    vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, kind_col, {
+        end_col = kind_col_end,
+        hl_group = Theme.HL_GROUPS.TOOL_KIND,
+        priority = 200,
+    })
+
+    if #arg_str > 0 then
+        local lang = TOOL_ARG_LANGUAGES[kind_str]
+        local applied_ts = lang
+            and self:_apply_arg_treesitter_highlights(
+                line_row,
+                ns,
+                arg_col,
+                arg_str,
+                lang
+            )
+
+        if not applied_ts then
+            vim.api.nvim_buf_set_extmark(
+                self.bufnr,
+                ns,
+                line_row,
+                arg_col,
+                {
+                    end_col = arg_col_end,
+                    hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
+                    priority = 200,
+                }
+            )
+        end
+    end
+end
+
+--- Parse argument text with a treesitter parser and apply highlight captures as extmarks.
+--- @param line_row integer 0-indexed buffer row
+--- @param ns integer Namespace for extmarks
+--- @param arg_col integer 0-indexed byte offset where argument starts in the line
+--- @param arg_str string
+--- @param lang string Treesitter language name
+--- @return boolean applied
+function MessageWriter:_apply_arg_treesitter_highlights(
+    line_row,
+    ns,
+    arg_col,
+    arg_str,
+    lang
+)
+    local ok_parser, parser =
+        pcall(vim.treesitter.get_string_parser, arg_str, lang)
+    if not ok_parser or not parser then
+        return false
+    end
+
+    local ok_query, query =
+        pcall(vim.treesitter.query.get, lang, "highlights")
+    if not ok_query or not query then
+        return false
+    end
+
+    local trees = parser:parse(true)
+    if not trees or #trees == 0 then
+        return false
+    end
+
+    local root = trees[1]:root()
+
+    for id, node in query:iter_captures(root, arg_str) do
+        local start_row, start_col, _, end_col = node:range()
+
+        -- Only single-line captures (argument is always one line)
+        if start_row == 0 then
+            local hl_group = "@" .. query.captures[id] .. "." .. lang
+
+            vim.api.nvim_buf_set_extmark(
+                self.bufnr,
+                ns,
+                line_row,
+                arg_col + start_col,
+                {
+                    end_col = arg_col + end_col,
+                    hl_group = hl_group,
+                    priority = 210,
+                }
+            )
+        end
+    end
+
+    return true
 end
 
 --- @param footer_line integer 0-indexed footer line number

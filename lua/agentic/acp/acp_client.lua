@@ -116,7 +116,6 @@ end
 --- Used for local command output (e.g. /context) that bypasses JSON-RPC.
 --- @param text string
 function ACPClient:_broadcast_stdout_text(text)
-    Logger.debug_to_file("broadcast_stdout_text: ", text)
     for _, subscriber in pairs(self.subscribers) do
         if subscriber.on_stdout_text then
             vim.schedule(function()
@@ -600,13 +599,12 @@ end
 --- @param cwd string
 --- @param mcp_servers table[]|nil
 --- @param handlers agentic.acp.ClientHandlers
-function ACPClient:load_session(session_id, cwd, mcp_servers, handlers)
-    --FIXIT: check if it's possible to ignore this check and just try to send load message
-    -- handle the response error properly also
+--- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+function ACPClient:load_session(session_id, cwd, mcp_servers, handlers, callback)
     if
         not self.agent_capabilities or not self.agent_capabilities.loadSession
     then
-        Logger.notify("Agent does not support loading sessions")
+        callback(nil, { code = -1, message = "Agent does not support loading sessions" })
         return
     end
 
@@ -616,9 +614,7 @@ function ACPClient:load_session(session_id, cwd, mcp_servers, handlers)
         sessionId = session_id,
         cwd = cwd,
         mcpServers = mcp_servers or {},
-    }, function()
-        -- no-op
-    end)
+    }, callback)
 end
 
 --- @param session_id string

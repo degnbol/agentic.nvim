@@ -192,6 +192,16 @@ function Agentic.restore_session()
     SessionRestore.show_picker(tab_page_id, current_session)
 end
 
+--- Load an existing ACP session by full UUID.
+--- Opens the chat widget and sends session/load to the agent.
+--- @param session_id string
+function Agentic.load_acp_session(session_id)
+    SessionRegistry.get_session_for_tab_page(nil, function(session)
+        session:load_acp_session(session_id)
+        session.widget:show()
+    end)
+end
+
 --- Used to make sure we don't set multiple signal handlers or autocmds, if the user calls setup multiple times
 local traps_set = false
 local cleanup_group = vim.api.nvim_create_augroup("AgenticCleanup", {
