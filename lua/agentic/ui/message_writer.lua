@@ -1,4 +1,5 @@
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
+local Ansi = require("agentic.utils.ansi")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
@@ -121,7 +122,7 @@ function MessageWriter:write_message(update)
 
     self:_with_modifiable_and_notify_change(function()
         self:_append_lines(lines)
-        self:_append_lines({ "", "" })
+        self:_append_lines({ "" })
     end)
 end
 
@@ -333,11 +334,8 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     self:_with_modifiable_and_notify_change(function(bufnr)
         local kind = tool_call_block.kind
 
-        -- Always add a leading blank line for spacing the previous message chunk
-        self:_append_lines({ "" })
-
         local start_row = vim.api.nvim_buf_line_count(bufnr)
-        local lines, highlight_ranges =
+        local lines, highlight_ranges, ansi_highlights =
             self:_prepare_block_lines(tool_call_block)
 
         self:_append_lines(lines)
@@ -349,7 +347,8 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             start_row,
             end_row,
             kind,
-            highlight_ranges
+            highlight_ranges,
+            ansi_highlights
         )
 
         tool_call_block.decoration_extmark_ids =
@@ -449,10 +448,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 return false
             end
 
-            self:_clear_decoration_extmarks(tracker.decoration_extmark_ids)
-            tracker.decoration_extmark_ids =
-                self:_render_decorations(start_row, old_end_row)
-
+            -- Decorations (╭│╰ borders) are stable — leave them in place.
+            -- Only refresh status highlights which change on completion.
             self:_clear_status_namespace(start_row, old_end_row)
             self:_apply_status_highlights_if_present(
                 start_row,
@@ -464,10 +461,30 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             return false
         end
 
+        local new_lines, highlight_ranges, ansi_highlights =
+            self:_prepare_block_lines(tracker)
+
+        -- If content hasn't changed (e.g. status-only update), keep
+        -- decorations in place and just refresh status highlights.
+        local current_lines = vim.api.nvim_buf_get_lines(
+            bufnr,
+            start_row,
+            old_end_row + 1,
+            false
+        )
+        if vim.deep_equal(new_lines, current_lines) then
+            self:_clear_status_namespace(start_row, old_end_row)
+            self:_apply_status_highlights_if_present(
+                start_row,
+                old_end_row,
+                tracker.status
+            )
+            self:_apply_tool_header_syntax(start_row, NS_STATUS)
+            return false
+        end
+
         self:_clear_decoration_extmarks(tracker.decoration_extmark_ids)
         self:_clear_status_namespace(start_row, old_end_row)
-
-        local new_lines, highlight_ranges = self:_prepare_block_lines(tracker)
 
         vim.api.nvim_buf_set_lines(
             bufnr,
@@ -494,7 +511,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                     start_row,
                     new_end_row,
                     tracker.kind,
-                    highlight_ranges
+                    highlight_ranges,
+                    ansi_highlights
                 )
             end
         end)
@@ -520,6 +538,7 @@ end
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
 --- @return string[] lines Array of lines to render
 --- @return agentic.ui.MessageWriter.HighlightRange[] highlight_ranges Array of highlight range specifications (relative to returned lines)
+--- @return agentic.utils.Ansi.Span[][]|nil ansi_highlights Per-line ANSI highlight spans (execute blocks only)
 function MessageWriter:_prepare_block_lines(tool_call_block)
     local kind = tool_call_block.kind
     local argument = tool_call_block.argument
@@ -661,9 +680,24 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         end
     end
 
+    -- Process ANSI escape codes in execute block body output
+    --- @type agentic.utils.Ansi.Span[][]|nil
+    local ansi_highlights
+    if kind == "execute" and tool_call_block.body then
+        local body_start_index = #lines - #tool_call_block.body
+        local result = Ansi.process_lines(tool_call_block.body)
+        if result.has_ansi then
+            -- Replace raw body lines with clean (stripped) versions
+            for i, clean_line in ipairs(result.lines) do
+                lines[body_start_index + i] = clean_line
+            end
+            ansi_highlights = result.highlights
+        end
+    end
+
     table.insert(lines, "")
 
-    return lines, highlight_ranges
+    return lines, highlight_ranges, ansi_highlights
 end
 
 --- Display permission request buttons at the end of the buffer
@@ -820,12 +854,14 @@ end
 --- @param end_row integer Footer line number
 --- @param kind string Tool call kind
 --- @param highlight_ranges agentic.ui.MessageWriter.HighlightRange[] Diff highlight ranges
+--- @param ansi_highlights? agentic.utils.Ansi.Span[][] Per-line ANSI highlight spans
 function MessageWriter:_apply_block_highlights(
     bufnr,
     start_row,
     end_row,
     kind,
-    highlight_ranges
+    highlight_ranges,
+    ansi_highlights
 )
     if #highlight_ranges > 0 then
         self:_apply_diff_highlights(start_row, highlight_ranges)
@@ -843,6 +879,18 @@ function MessageWriter:_apply_block_highlights(
                 end
             end
         end
+
+        -- Execute blocks with ANSI codes get per-character colour highlights
+        if ansi_highlights then
+            Ansi.apply_highlights(
+                bufnr,
+                NS_DIFF_HIGHLIGHTS,
+                body_start,
+                ansi_highlights
+            )
+            return
+        end
+
         -- Apply Comment highlight for non-edit blocks without diffs
         for line_idx = body_start, end_row - 1 do
             local line = vim.api.nvim_buf_get_lines(
