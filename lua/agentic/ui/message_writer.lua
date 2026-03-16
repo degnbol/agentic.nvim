@@ -41,6 +41,7 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field argument string
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
+--- @field truncated? boolean True if body was truncated for display
 
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
@@ -625,9 +626,9 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     elseif kind == "search" then
         local body = tool_call_block.body
         if body then
-            local max_lines = 8
+            local max_lines = Config.tool_call_display.search_max_lines
             local count = #body
-            local shown = math.min(count, max_lines)
+            local shown = max_lines > 0 and math.min(count, max_lines) or count
 
             for i = 1, shown do
                 local line_index = #lines
@@ -638,7 +639,8 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 })
             end
 
-            if count > max_lines then
+            if max_lines > 0 and count > max_lines then
+                tool_call_block.truncated = true
                 local line_index = #lines
                 table.insert(
                     lines,
@@ -749,7 +751,30 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         end
     else
         if tool_call_block.body then
-            vim.list_extend(lines, tool_call_block.body)
+            --- @type string[]
+            local body = tool_call_block.body
+            local max_lines = kind == "execute"
+                    and Config.tool_call_display.execute_max_lines
+                or 0
+            local count = #body
+
+            if max_lines > 0 and count > max_lines then
+                tool_call_block.truncated = true
+                for i = 1, max_lines do
+                    table.insert(lines, body[i])
+                end
+                local line_index = #lines
+                table.insert(
+                    lines,
+                    string.format("... and %d more", count - max_lines)
+                )
+                table.insert(highlight_ranges, {
+                    type = "comment",
+                    line_index = line_index,
+                })
+            else
+                vim.list_extend(lines, body)
+            end
         end
     end
 
@@ -757,20 +782,119 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     --- @type agentic.utils.Ansi.Span[][]|nil
     local ansi_highlights
     if kind == "execute" and tool_call_block.body then
-        local body_start_index = #lines - #tool_call_block.body
+        local displayed_count = tool_call_block.truncated
+                and Config.tool_call_display.execute_max_lines
+            or #tool_call_block.body
+        local body_start_index = #lines - displayed_count
+        -- Truncation adds a "... and N more" line after the body lines,
+        -- so offset past it to find the actual body start
+        if tool_call_block.truncated then
+            body_start_index = body_start_index - 1
+        end
         local result = Ansi.process_lines(tool_call_block.body)
         if result.has_ansi then
             -- Replace raw body lines with clean (stripped) versions
-            for i, clean_line in ipairs(result.lines) do
-                lines[body_start_index + i] = clean_line
+            for i = 1, displayed_count do
+                lines[body_start_index + i] = result.lines[i]
             end
-            ansi_highlights = result.highlights
+            -- Only include highlights for displayed lines
+            ansi_highlights = {}
+            for i = 1, displayed_count do
+                ansi_highlights[i] = result.highlights[i]
+            end
         end
     end
 
     table.insert(lines, "")
 
     return lines, highlight_ranges, ansi_highlights
+end
+
+--- Find the truncated tool call block whose range extmark contains the given row.
+--- @param row integer 0-based row number
+--- @return agentic.ui.MessageWriter.ToolCallBlock|nil
+function MessageWriter:get_truncated_block_at(row)
+    for _, tracker in pairs(self.tool_call_blocks) do
+        if tracker.truncated and tracker.extmark_id then
+            local pos = vim.api.nvim_buf_get_extmark_by_id(
+                self.bufnr,
+                NS_TOOL_BLOCKS,
+                tracker.extmark_id,
+                { details = true }
+            )
+            if pos and pos[1] then
+                local start_row = pos[1]
+                local end_row = pos[3] and pos[3].end_row or start_row
+                if row >= start_row and row <= end_row then
+                    return tracker
+                end
+            end
+        end
+    end
+end
+
+--- Open a scratch buffer showing the full body of a truncated tool call block.
+--- @param tracker agentic.ui.MessageWriter.ToolCallBlock
+function MessageWriter:expand_tool_call(tracker)
+    if not tracker.body or #tracker.body == 0 then
+        return
+    end
+
+    --- @type string[]
+    local body = tracker.body
+    local result = Ansi.process_lines(body)
+    local clean_lines = result.has_ansi and result.lines or body
+
+    local title = string.format(" %s(%s) ", tracker.kind, tracker.argument)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, clean_lines)
+    vim.bo[buf].modifiable = false
+
+    local win_width = math.min(120, vim.o.columns - 4)
+    local win_height = math.min(#clean_lines, vim.o.lines - 6)
+
+    local win = vim.api.nvim_open_win(buf, true, {
+        relative = "editor",
+        width = win_width,
+        height = win_height,
+        col = math.floor((vim.o.columns - win_width) / 2),
+        row = math.floor((vim.o.lines - win_height) / 2),
+        style = "minimal",
+        border = "rounded",
+        title = title,
+        title_pos = "center",
+    })
+
+    if result.has_ansi then
+        local ns = vim.api.nvim_create_namespace("")
+        Ansi.apply_highlights(buf, ns, 0, result.highlights)
+    end
+
+    vim.wo[win].wrap = true
+    vim.wo[win].cursorline = true
+
+    -- Wipe buffer after window closes (not via bufhidden, which can race
+    -- with keymap dispatch and cause the key to fall through to the chat buffer)
+    vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = tostring(win),
+        once = true,
+        callback = function()
+            vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(buf) then
+                    vim.api.nvim_buf_delete(buf, { force = true })
+                end
+            end)
+        end,
+    })
+
+    local function close_float()
+        if vim.api.nvim_win_is_valid(win) then
+            vim.api.nvim_win_close(win, true)
+        end
+    end
+
+    vim.keymap.set("n", "q", close_float, { buffer = buf, nowait = true })
+    vim.keymap.set("n", "<Esc>", close_float, { buffer = buf, nowait = true })
 end
 
 --- Display permission request buttons at the end of the buffer

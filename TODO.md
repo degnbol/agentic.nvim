@@ -1,4 +1,4 @@
-- Do we have custom completion in the plugin? It should probably just build on top of blink.cmp.
+- Looks like we have custom completion in the plugin, e.g. using tab. It should probably just build on top of blink.cmp.
   It currently shows completion for e.g. /context, but if I press <Enter> after writing /context the menu doesn't go away.
 
 - When making new files a new tab is opened with that file, which is fine but I 
@@ -8,7 +8,7 @@
 
 - Messages don't seem to be queued properly while compacting
 
-- The formatting that hard wraps line of prose needs to take into account the gutter adds a little width.
-
 - :w sends input to claude, but :wq would try to close windows and cause errors.
   Can we safe-guard against this, e.g. use :q! and/or tabclose to end claude session and close all windows.
+
+- Some executions have long console "code" block outputs. Folding could be a vim-native way to hide lines from this, while keeping it available for expansion.

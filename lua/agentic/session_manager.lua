@@ -130,6 +130,21 @@ function SessionManager:new(tab_page_id)
     self.status_animation = StatusAnimation:new(self.widget.buf_nrs.chat)
     self.permission_manager = PermissionManager:new(self.message_writer)
 
+    local expand_key = Config.keymaps.chat.expand_tool_call
+    if expand_key then
+        local mw = self.message_writer
+        vim.keymap.set("n", expand_key, function()
+            local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+            local tracker = mw:get_truncated_block_at(row)
+            if tracker then
+                mw:expand_tool_call(tracker)
+            end
+        end, {
+            buffer = self.widget.buf_nrs.chat,
+            desc = "Agentic: Expand truncated tool call output",
+        })
+    end
+
     FilePicker:new(self.widget.buf_nrs.input)
     SlashCommands.setup_completion(self.widget.buf_nrs.input)
 

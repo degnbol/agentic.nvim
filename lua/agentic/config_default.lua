@@ -212,6 +212,7 @@ local ConfigDefault = {
         chat = {
             prev_prompt = "[[",
             next_prompt = "]]",
+            expand_tool_call = "<CR>",
         },
 
         --- Keys bindings for diff preview navigation
@@ -313,6 +314,17 @@ local ConfigDefault = {
         code = function() end,
         diagnostics = function() end,
         todos = function() end,
+    },
+
+    --- Maximum lines shown for tool call output before truncation.
+    --- Truncated blocks can be expanded with the expand_tool_call keymap.
+    --- Set to 0 to disable truncation for a given kind.
+    --- @class agentic.UserConfig.ToolCallDisplay
+    --- @field search_max_lines integer
+    --- @field execute_max_lines integer
+    tool_call_display = {
+        search_max_lines = 8,
+        execute_max_lines = 25,
     },
 
     --- Control various behaviors and features of the plugin
