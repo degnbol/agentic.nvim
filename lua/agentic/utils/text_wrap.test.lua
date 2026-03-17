@@ -105,5 +105,98 @@ describe("agentic.utils.TextWrap", function()
             assert.equal(1, #result)
             assert.equal("supercalifragilisticexpialidocious", result[1])
         end)
+
+        it("formats markdown tables with aligned columns", function()
+            local lines = {
+                "| Name | Value |",
+                "|---|---|",
+                "| short | x |",
+                "| longer name | longer value |",
+            }
+            local result = TextWrap.wrap_prose(lines, 40)
+            assert.same({
+                "| Name        | Value        |",
+                "| ----------- | ------------ |",
+                "| short       | x            |",
+                "| longer name | longer value |",
+            }, result)
+        end)
+
+        it("does not wrap table lines", function()
+            local lines = {
+                "| Column A | Column B | Column C | Column D | Column E |",
+                "|---|---|---|---|---|",
+                "| val1 | val2 | val3 | val4 | val5 |",
+            }
+            local result = TextWrap.wrap_prose(lines, 20)
+            -- Table lines must not be word-wrapped even if wider than target
+            assert.equal(3, #result)
+            for _, l in ipairs(result) do
+                assert.is_true(
+                    l:match("^|") ~= nil,
+                    "should be a table row: " .. l
+                )
+            end
+        end)
+
+        it("preserves table alignment markers", function()
+            local lines = {
+                "| Left | Centre | Right |",
+                "|:---|:---:|---:|",
+                "| a | b | c |",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            -- Separator row should preserve alignment colons
+            assert.equal("| :--- | :----: | ----: |", result[2])
+        end)
+
+        it("formats tables surrounded by prose", function()
+            local lines = {
+                "Here is a table:",
+                "",
+                "| A | B |",
+                "|---|---|",
+                "| 1 | 2 |",
+                "",
+                "And more prose after the table.",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            assert.equal("Here is a table:", result[1])
+            assert.equal("", result[2])
+            assert.is_true(result[3]:match("^| A") ~= nil)
+            assert.equal("", result[6])
+            assert.equal("And more prose after the table.", result[7])
+        end)
+
+        it("handles table with missing trailing pipe", function()
+            local lines = {
+                "| A | B",
+                "|---|---",
+                "| 1 | 2",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            -- Should still format as a table
+            assert.equal(3, #result)
+            for _, l in ipairs(result) do
+                assert.is_true(l:match("^|") ~= nil)
+                assert.is_true(
+                    l:match("|$") ~= nil,
+                    "should have trailing pipe: " .. l
+                )
+            end
+        end)
+
+        it("handles table with uneven column counts", function()
+            local lines = {
+                "| A | B | C |",
+                "|---|---|---|",
+                "| 1 | 2 |",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            -- Row with fewer columns should be padded
+            assert.equal(3, #result)
+            -- All rows should have same structure
+            assert.is_true(result[3]:match("| 1") ~= nil)
+        end)
     end)
 end)
