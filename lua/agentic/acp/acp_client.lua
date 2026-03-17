@@ -808,6 +808,7 @@ return ACPClient
 --- @field replace_all? boolean
 --- @field description? string
 --- @field command? string
+--- @field pattern? string Search pattern from Grep/search tools
 --- @field url? string Usually from the fetch tool
 --- @field prompt? string Usually accompanying the fetch tool, not the web_search
 --- @field query? string Usually from the web_search tool

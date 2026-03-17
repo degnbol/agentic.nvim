@@ -720,6 +720,7 @@ colorscheme.
 | `AgenticStatusCompleted` | Completed tool call status indicator     | `bg=#2d5a3d`                        |
 | `AgenticStatusFailed`    | Failed tool call status indicator        | `bg=#7a2d2d`                        |
 | `AgenticCodeBlockFence`  | The left border decoration on tool calls | Links to `Directory`                |
+| `AgenticSearchMatch`     | Matched pattern text in search output    | Links to `Search`                   |
 | `AgenticTitle`           | Window titles in sidebar                 | `bg=#2787b0, fg=#000000, bold=true` |
 
 If any of these highlight exists, Agentic will use it instead of creating new

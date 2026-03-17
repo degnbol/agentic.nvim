@@ -94,7 +94,8 @@ describe("agentic.utils.Ansi", function()
             -- CSI H = cursor position, CSI J = erase display
             local result = Ansi.process_lines({ "\27[2Jhello\27[1;1Hworld" })
             assert.equal("helloworld", result.lines[1])
-            assert.is_false(result.has_ansi)
+            -- has_ansi is true because escape codes were present (even without highlights)
+            assert.is_true(result.has_ansi)
         end)
 
         it("handles bold and italic attributes", function()
@@ -117,7 +118,8 @@ describe("agentic.utils.Ansi", function()
         it("handles line with only escape codes", function()
             local result = Ansi.process_lines({ "\27[0m\27[32m\27[0m" })
             assert.equal("", result.lines[1])
-            assert.is_false(result.has_ansi)
+            -- has_ansi is true because escape codes were stripped
+            assert.is_true(result.has_ansi)
         end)
 
         it("handles text before first escape", function()

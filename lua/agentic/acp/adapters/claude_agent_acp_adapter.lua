@@ -27,6 +27,37 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
     return self
 end
 
+--- Mode-switching tools whose body contains internal instructions, not user-facing content
+local MODE_SWITCH_TOOLS = {
+    EnterPlanMode = true,
+    ExitPlanMode = true,
+    EnterWorktree = true,
+}
+
+--- Intercept mode-switching tools at the initial tool_call level before the
+--- base class renders the body (which contains internal instructions).
+--- @protected
+--- @param session_id string
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
+    if update.kind == "other" and MODE_SWITCH_TOOLS[update.title] then
+        --- @type agentic.ui.MessageWriter.ToolCallBlock
+        local message = {
+            tool_call_id = update.toolCallId,
+            kind = "switch_mode",
+            status = update.status,
+            argument = update.title,
+        }
+
+        self:__with_subscriber(session_id, function(subscriber)
+            subscriber.on_tool_call(message)
+        end)
+        return
+    end
+
+    ACPClient.__handle_tool_call(self, session_id, update)
+end
+
 --- Build enriched update from rawInput fields that claude-agent-acp
 --- sends on tool_call_update instead of tool_call.
 --- @protected
@@ -100,6 +131,9 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             if rawInput.args then
                 message.body = self:safe_split(rawInput.args)
             end
+        elseif MODE_SWITCH_TOOLS[update.title] then
+            message.kind = "switch_mode"
+            message.argument = update.title
         end
     else
         local command = rawInput.command
@@ -111,6 +145,10 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
 
         if not message.body then
             message.body = self:extract_content_body(update)
+        end
+
+        if kind == "search" and rawInput.pattern then
+            message.search_pattern = rawInput.pattern
         end
     end
 

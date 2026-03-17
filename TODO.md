@@ -12,3 +12,11 @@
   Can we safe-guard against this, e.g. use :q! and/or tabclose to end claude session and close all windows.
 
 - Some executions have long console "code" block outputs. Folding could be a vim-native way to hide lines from this, while keeping it available for expansion.
+
+- Improve permission checks
+  - split on `;` and `&&` and evaluate each part individually
+  - allow `> /dev/null`, it's not a dangerous pipe.
+
+- Change all Tasks from read(filename), etc. to read `filename` and only do the background coloring that indicates pending vs completed for the taks name ("read", etc.) and not the whole line.
+
+- Reduce default fraction for input window

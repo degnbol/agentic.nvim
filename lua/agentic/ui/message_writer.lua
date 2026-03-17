@@ -36,6 +36,11 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field old_line? string Original line content (for diff types)
 --- @field new_line? string Modified line content (for diff types)
 
+--- @class agentic.ui.MessageWriter.SearchMatch
+--- @field line_index integer Line index relative to block lines (0-based)
+--- @field col_start integer Start column (byte offset)
+--- @field col_end integer End column (byte offset)
+
 --- @class agentic.ui.MessageWriter.ToolCallDiff
 --- @field new string[]
 --- @field old string[]
@@ -48,6 +53,7 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field diff? agentic.ui.MessageWriter.ToolCallDiff
 --- @field kind? agentic.acp.ToolKind
 --- @field argument? string
+--- @field search_pattern? string Regex pattern for highlighting matches in search output
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -56,6 +62,8 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
 --- @field truncated? boolean True if body was truncated for display
 --- @field truncation_closed_fence? boolean True if a closing ``` was inserted after truncation
+--- @field search_matches? agentic.ui.MessageWriter.SearchMatch[] Pattern match positions (relative to block lines)
+--- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
 
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
@@ -380,7 +388,9 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             end_row,
             kind,
             highlight_ranges,
-            ansi_highlights
+            ansi_highlights,
+            tool_call_block.search_matches,
+            tool_call_block.search_ansi
         )
 
         tool_call_block.decoration_extmark_ids =
@@ -571,7 +581,9 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                     new_end_row,
                     tracker.kind,
                     highlight_ranges,
-                    ansi_highlights
+                    ansi_highlights,
+                    tracker.search_matches,
+                    tracker.search_ansi
                 )
             end
         end)
@@ -610,6 +622,13 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         lines = { string.format(" %s ", kind), "```zsh" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
+    elseif kind == "search" then
+        -- Use backtick-wrapped argument to prevent markdown formatting
+        -- in grep patterns (which often contain *, |, etc.)
+        argument = argument:gsub("\n", "\\n")
+        lines = {
+            string.format(" %s `%s` ", kind, argument),
+        }
     else
         -- Sanitize argument to prevent newlines in the header line
         -- nvim_buf_set_lines doesn't accept array items with embedded newlines
@@ -644,22 +663,78 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             local count = #body
             local shown = max_lines > 0 and math.min(count, max_lines) or count
 
+            -- Wrap in a code fence to prevent markdown parsing (setext
+            -- headings from "--", emphasis from "*", etc.). Comment highlight
+            -- is applied by the generic path in _apply_block_highlights which
+            -- already skips ``` lines.
+            table.insert(lines, "```console")
+
+            -- Match highlighting strategy:
+            -- 1. ANSI codes from grep --color (ideal — zero re-work). ACP
+            --    providers currently strip ANSI before sending, so this
+            --    path rarely fires. Kept for future-proofing.
+            -- 2. Regex fallback: extract the search pattern from the
+            --    command string and re-match against body lines. Not
+            --    ideal (double work) but necessary while ACP strips ANSI.
+            local ansi_result = Ansi.process_lines(body)
+
             for i = 1, shown do
-                local line_index = #lines
-                table.insert(lines, body[i])
-                table.insert(highlight_ranges, {
-                    type = "comment",
-                    line_index = line_index,
-                })
+                local line = ansi_result.has_ansi and ansi_result.lines[i]
+                    or body[i]
+                table.insert(lines, line)
+            end
+
+            if ansi_result.has_ansi then
+                local displayed = {}
+                for i = 1, shown do
+                    displayed[i] = ansi_result.highlights[i]
+                end
+                tool_call_block.search_ansi = displayed
+            else
+                local pattern = tool_call_block.search_pattern
+                if not pattern then
+                    -- Extract first quoted string from command
+                    pattern = argument:match('"([^"]+)"')
+                        or argument:match("'([^']+)'")
+                end
+                local regex
+                if pattern and pattern ~= "" then
+                    -- \v = very magic: makes |, +, (, ) etc. work like PCRE
+                    local ok, r = pcall(vim.regex, "\\v" .. pattern)
+                    if ok then
+                        regex = r
+                    end
+                end
+
+                if regex then
+                    --- @type agentic.ui.MessageWriter.SearchMatch[]
+                    local search_matches = {}
+                    for i = 1, shown do
+                        local line = body[i]
+                        local line_index = #lines - shown + i - 1
+                        local offset = 0
+                        while offset < #line do
+                            local s, e = regex:match_str(line:sub(offset + 1))
+                            if not s then
+                                break
+                            end
+                            table.insert(search_matches, {
+                                line_index = line_index,
+                                col_start = offset + s,
+                                col_end = offset + e,
+                            })
+                            offset = offset + math.max(e --[[@as integer]], 1)
+                        end
+                    end
+                    if #search_matches > 0 then
+                        tool_call_block.search_matches = search_matches
+                    end
+                end
             end
 
             if max_lines > 0 and count > max_lines then
                 tool_call_block.truncated = true
-                -- Close any unclosed markdown code fence left by truncation
-                if _has_unclosed_fence(lines) then
-                    tool_call_block.truncation_closed_fence = true
-                    table.insert(lines, "```")
-                end
+                table.insert(lines, "```")
                 local line_index = #lines
                 table.insert(
                     lines,
@@ -669,6 +744,8 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                     type = "comment",
                     line_index = line_index,
                 })
+            else
+                table.insert(lines, "```")
             end
         end
     elseif tool_call_block.diff then
@@ -1081,13 +1158,17 @@ end
 --- @param kind string Tool call kind
 --- @param highlight_ranges agentic.ui.MessageWriter.HighlightRange[] Diff highlight ranges
 --- @param ansi_highlights? agentic.utils.Ansi.Span[][] Per-line ANSI highlight spans
+--- @param search_matches? agentic.ui.MessageWriter.SearchMatch[] Search pattern match positions
+--- @param search_ansi? agentic.utils.Ansi.Span[][] ANSI highlights for search body
 function MessageWriter:_apply_block_highlights(
     bufnr,
     start_row,
     end_row,
     kind,
     highlight_ranges,
-    ansi_highlights
+    ansi_highlights,
+    search_matches,
+    search_ansi
 )
     if #highlight_ranges > 0 then
         self:_apply_diff_highlights(start_row, highlight_ranges)
@@ -1139,6 +1220,33 @@ function MessageWriter:_apply_block_highlights(
                     }
                 )
             end
+        end
+    end
+
+    -- Apply search highlights on top of Comment (higher priority).
+    -- Prefer ANSI colours from grep --color output; fall back to regex matches.
+    if search_ansi then
+        -- search body starts after header + opening ```console fence
+        local body_start = start_row + 2
+        Ansi.apply_highlights(
+            bufnr,
+            NS_DIFF_HIGHLIGHTS,
+            body_start,
+            search_ansi
+        )
+    elseif search_matches then
+        for _, match in ipairs(search_matches) do
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                NS_DIFF_HIGHLIGHTS,
+                start_row + match.line_index,
+                match.col_start,
+                {
+                    end_col = match.col_end,
+                    hl_group = "AgenticSearchMatch",
+                    priority = 200,
+                }
+            )
         end
     end
 end

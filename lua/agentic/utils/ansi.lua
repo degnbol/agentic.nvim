@@ -293,7 +293,7 @@ function Ansi.process_lines(lines)
         local clean, spans = process_line(line, state)
         clean_lines[i] = clean
         all_highlights[i] = spans
-        if #spans > 0 then
+        if not has_ansi and clean ~= line then
             has_ansi = true
         end
     end

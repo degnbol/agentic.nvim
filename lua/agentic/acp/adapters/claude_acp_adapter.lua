@@ -1,6 +1,13 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
 
+--- Mode-switching tools whose body contains internal instructions, not user-facing content
+local MODE_SWITCH_TOOLS = {
+    EnterPlanMode = true,
+    ExitPlanMode = true,
+    EnterWorktree = true,
+}
+
 --- @class agentic.acp.ClaudeRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
 --- @field subagent_type? string For sub-agent tasks (Task tool)
@@ -108,6 +115,9 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
             if update.rawInput.args then
                 message.body = self:safe_split(update.rawInput.args)
             end
+        elseif MODE_SWITCH_TOOLS[update.title] then
+            message.kind = "switch_mode"
+            message.argument = update.title
         end
     else
         local command = update.rawInput.command
@@ -117,6 +127,10 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
 
         message.argument = command or update.title or ""
         message.body = self:extract_content_body(update)
+
+        if kind == "search" and update.rawInput.pattern then
+            message.search_pattern = update.rawInput.pattern
+        end
     end
 
     self:__with_subscriber(session_id, function(subscriber)

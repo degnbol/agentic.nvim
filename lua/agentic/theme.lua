@@ -21,6 +21,7 @@ Theme.HL_GROUPS = {
 
     TOOL_KIND = "AgenticToolKind",
     TOOL_ARGUMENT = "AgenticToolArgument",
+    SEARCH_MATCH = "AgenticSearchMatch",
 }
 
 local COLORS = {
@@ -82,6 +83,9 @@ function Theme.setup()
         -- Tool call header highlights
         { Theme.HL_GROUPS.TOOL_KIND, { link = "Function" } },
         { Theme.HL_GROUPS.TOOL_ARGUMENT, { link = "String" } },
+
+        -- Search match highlight
+        { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
 
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { fg = COLORS.spinner_generating_fg, bold = true } },
