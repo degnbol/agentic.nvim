@@ -9,6 +9,19 @@ local Logger = require("agentic.utils.logger")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
+--- Check if a lines array has an unclosed markdown code fence (``` opened but not closed).
+--- @param lines string[]
+--- @return boolean
+local function _has_unclosed_fence(lines)
+    local open = false
+    for _, line in ipairs(lines) do
+        if line:match("^```") then
+            open = not open
+        end
+    end
+    return open
+end
+
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
 local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
 local NS_PERMISSION_BUTTONS =
@@ -42,6 +55,7 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
 --- @field truncated? boolean True if body was truncated for display
+--- @field truncation_closed_fence? boolean True if a closing ``` was inserted after truncation
 
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
@@ -641,6 +655,11 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
 
             if max_lines > 0 and count > max_lines then
                 tool_call_block.truncated = true
+                -- Close any unclosed markdown code fence left by truncation
+                if _has_unclosed_fence(lines) then
+                    tool_call_block.truncation_closed_fence = true
+                    table.insert(lines, "```")
+                end
                 local line_index = #lines
                 table.insert(
                     lines,
@@ -763,6 +782,11 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 for i = 1, max_lines do
                     table.insert(lines, body[i])
                 end
+                -- Close any unclosed markdown code fence left by truncation
+                if _has_unclosed_fence(lines) then
+                    tool_call_block.truncation_closed_fence = true
+                    table.insert(lines, "```")
+                end
                 local line_index = #lines
                 table.insert(
                     lines,
@@ -786,9 +810,12 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 and Config.tool_call_display.execute_max_lines
             or #tool_call_block.body
         local body_start_index = #lines - displayed_count
-        -- Truncation adds a "... and N more" line after the body lines,
-        -- so offset past it to find the actual body start
+        -- Truncation adds trailing lines (closing fence + "... and N more")
+        -- after the body lines, so offset past them to find the actual body start
         if tool_call_block.truncated then
+            body_start_index = body_start_index - 1
+        end
+        if tool_call_block.truncation_closed_fence then
             body_start_index = body_start_index - 1
         end
         local result = Ansi.process_lines(tool_call_block.body)
