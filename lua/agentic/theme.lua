@@ -96,7 +96,8 @@ function Theme.setup()
     -- stylua: ignore end
 
     for _, hl in ipairs(highlights) do
-        Theme._create_hl_if_not_exists(hl[1], hl[2])
+        hl[2].default = true
+        vim.api.nvim_set_hl(0, hl[1], hl[2])
     end
 end
 
@@ -124,17 +125,5 @@ function Theme.get_spinner_hl_group(state)
     return spinner_hl[state] or Theme.HL_GROUPS.SPINNER_GENERATING
 end
 
---- @private
---- @param group string
---- @param opts table
-function Theme._create_hl_if_not_exists(group, opts)
-    local hl = vim.api.nvim_get_hl(0, { name = group })
-    -- Check if highlight actually exists by checking for specific keys or count
-    -- An empty table {} would have next() == nil, but we want to check if it's truly defined
-    if vim.tbl_count(hl) > 0 then
-        return
-    end
-    vim.api.nvim_set_hl(0, group, opts)
-end
 
 return Theme
