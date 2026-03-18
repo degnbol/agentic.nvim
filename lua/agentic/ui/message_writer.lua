@@ -623,12 +623,10 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
     elseif kind == "search" then
-        -- Use backtick-wrapped argument to prevent markdown formatting
-        -- in grep patterns (which often contain *, |, etc.)
-        argument = argument:gsub("\n", "\\n")
-        lines = {
-            string.format(" %s `%s` ", kind, argument),
-        }
+        local cmd_lines = vim.split(argument, "\n", { plain = true })
+        lines = { string.format(" %s ", kind), "```bash" }
+        vim.list_extend(lines, cmd_lines)
+        table.insert(lines, "```")
     else
         -- Sanitize argument to prevent newlines in the header line
         -- nvim_buf_set_lines doesn't accept array items with embedded newlines
@@ -1173,11 +1171,11 @@ function MessageWriter:_apply_block_highlights(
     if #highlight_ranges > 0 then
         self:_apply_diff_highlights(start_row, highlight_ranges)
     elseif kind ~= "edit" and kind ~= "switch_mode" then
-        -- Execute blocks have a code fence after the header that gets
-        -- treesitter injection from the markdown parser — skip those lines.
+        -- Execute and search blocks have a code fence after the header that
+        -- gets treesitter injection from the markdown parser — skip those lines.
         local body_start = start_row + 1
-        if kind == "execute" then
-            -- Find the closing ``` to skip the code fence
+        if kind == "execute" or kind == "search" then
+            -- Find the closing ``` to skip the command code fence
             for i = start_row + 2, end_row - 1 do
                 local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
                 if l == "```" then
@@ -1226,8 +1224,16 @@ function MessageWriter:_apply_block_highlights(
     -- Apply search highlights on top of Comment (higher priority).
     -- Prefer ANSI colours from grep --color output; fall back to regex matches.
     if search_ansi then
-        -- search body starts after header + opening ```console fence
+        -- Find the ```console fence that starts the search body
+        -- (after the header and ```bash command code fence).
         local body_start = start_row + 2
+        for i = start_row + 1, end_row - 1 do
+            local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
+            if l == "```console" then
+                body_start = i + 1
+                break
+            end
+        end
         Ansi.apply_highlights(
             bufnr,
             NS_DIFF_HIGHLIGHTS,
@@ -1346,9 +1352,34 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
         return
     end
 
-    -- Try " kind(argument) " first, then " kind " (no argument)
-    local _, _, kind_str, arg_str = line:find("^ (%a[%a_]*)%((.-)%)%s*$")
+    -- Match header formats:
+    --   " kind(argument) "    → kind + argument
+    --   " kind `argument` "   → kind + argument (backtick-wrapped)
+    --   " kind "              → kind only
+    local kind_str, arg_str, arg_col
 
+    -- " kind(argument) "
+    local _, _, k, a = line:find("^ (%a[%a_]*)%((.-)%)%s*$")
+    if k then
+        kind_str, arg_str = k, a
+        arg_col = 1 + #k + 1 -- leading space + kind + "("
+    end
+
+    -- " kind `argument` "
+    if not kind_str then
+        local bt_start = line:find("`")
+        if bt_start then
+            local bt_end = line:find("`", bt_start + 1)
+            if bt_end then
+                -- Everything before first backtick is "kind"
+                kind_str = line:sub(2, bt_start - 2) -- strip leading/trailing spaces
+                arg_str = line:sub(bt_start + 1, bt_end - 1)
+                arg_col = bt_start -- 0-indexed = bt_start (1-indexed) - 1 + 1 (after `)
+            end
+        end
+    end
+
+    -- " kind " (no argument)
     if not kind_str then
         _, _, kind_str = line:find("^ (%a[%a_]*)%s*$")
     end
@@ -1367,7 +1398,6 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
     })
 
     if arg_str and #arg_str > 0 then
-        local arg_col = kind_col_end + 1 -- after "("
         local arg_col_end = arg_col + #arg_str
 
         vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, arg_col, {

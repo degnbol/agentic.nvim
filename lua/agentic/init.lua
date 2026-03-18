@@ -233,8 +233,8 @@ function Agentic.setup(opts)
 
     vim.treesitter.language.register("markdown", "AgenticChat")
 
-    -- Use the zsh parser for bash injections (bash parser not installed,
-    -- and agents commonly emit ```bash code blocks in their responses).
+    -- zsh parser for bash is registered globally in nvim config (treesitter.lua).
+    -- Fallback here in case agentic.nvim is used standalone without the config.
     if not pcall(vim.treesitter.language.inspect, "bash") then
         vim.treesitter.language.register("zsh", "bash")
     end
