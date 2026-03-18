@@ -408,7 +408,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal(" execute ", lines[1])
+            assert.equal("Execute ", lines[1])
             assert.equal("```zsh", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
@@ -426,7 +426,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal(" execute ", lines[1])
+            assert.equal("Execute ", lines[1])
             assert.equal("```zsh", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
@@ -446,7 +446,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal(" read(/tmp/file.txt) ", lines[1])
+            assert.equal("Read `/tmp/file.txt` ", lines[1])
         end)
 
         it("creates highlight ranges for pure insertion hunks", function()

@@ -9,6 +9,17 @@ local Logger = require("agentic.utils.logger")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
+--- Format a tool kind for display: capitalise each word, replace underscores with spaces.
+--- Leaves already-capitalised kinds (WebSearch, SubAgent, etc.) unchanged.
+--- @param kind string
+--- @return string
+local function display_kind(kind)
+    local result = kind:gsub("(%a)([%a]*)", function(first, rest)
+        return first:upper() .. rest
+    end):gsub("_", " ")
+    return result
+end
+
 --- Check if a lines array has an unclosed markdown code fence (``` opened but not closed).
 --- @param lines string[]
 --- @return boolean
@@ -619,12 +630,12 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     local lines
     if kind == "execute" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
-        lines = { string.format(" %s ", kind), "```zsh" }
+        lines = { string.format("%s ", display_kind(kind)), "```zsh" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
     elseif kind == "search" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
-        lines = { string.format(" %s ", kind), "```bash" }
+        lines = { string.format("%s ", display_kind(kind)), "```bash" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
     else
@@ -632,7 +643,7 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         -- nvim_buf_set_lines doesn't accept array items with embedded newlines
         argument = argument:gsub("\n", "\\n")
         lines = {
-            string.format(" %s(%s) ", kind, argument),
+            string.format("%s `%s` ", display_kind(kind), argument),
         }
     end
 
@@ -947,7 +958,8 @@ function MessageWriter:expand_tool_call(tracker)
     local result = Ansi.process_lines(body)
     local clean_lines = result.has_ansi and result.lines or body
 
-    local title = string.format(" %s(%s) ", tracker.kind, tracker.argument)
+    local title =
+        string.format("%s `%s` ", display_kind(tracker.kind), tracker.argument)
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, clean_lines)
     vim.bo[buf].modifiable = false
@@ -1019,7 +1031,11 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         local sanitized_argument = tracker.argument:gsub("\n", "\\n")
 
         vim.list_extend(lines_to_append, {
-            string.format(" %s(%s)", tracker.kind, sanitized_argument),
+            string.format(
+                "%s `%s`",
+                display_kind(tracker.kind),
+                sanitized_argument
+            ),
             "", -- Blank line prevents markdown inline markers from spanning to next content
         })
     end
@@ -1099,8 +1115,8 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
             if
                 row_line
                 and (
-                    row_line:find("^ %a[%a_]*%(")
-                    or row_line:find("^ %a[%a_]*%s*$")
+                    row_line:find("^%a[%a_]*[(`]")
+                    or row_line:find("^%a[%a_]*%s*$")
                 )
             then
                 self:_apply_tool_header_syntax(row, NS_PERMISSION_BUTTONS)
@@ -1315,6 +1331,8 @@ function MessageWriter:_apply_diff_highlights(start_row, highlight_ranges)
     end
 end
 
+--- Apply status background highlight to the kind name only (not the whole line).
+--- Matches the leading " kind" portion of the header.
 --- @param header_line integer 0-indexed header line number
 --- @param status string Status value (pending, completed, etc.)
 function MessageWriter:_apply_header_highlight(header_line, status)
@@ -1332,17 +1350,31 @@ function MessageWriter:_apply_header_highlight(header_line, status)
         return
     end
 
+    -- Extract the kind name: "kind(...) " or "kind `...` " or "kind "
+    local kind_str = line:match("^(%a[%a_]*)[(` ]")
+    if not kind_str then
+        return
+    end
+
     local hl_group = Theme.get_status_hl_group(status)
-    vim.api.nvim_buf_set_extmark(self.bufnr, NS_STATUS, header_line, 0, {
-        end_col = #line,
-        hl_group = hl_group,
-    })
+    local kind_start = 0
+    local kind_end = #kind_str
+    vim.api.nvim_buf_set_extmark(
+        self.bufnr,
+        NS_STATUS,
+        header_line,
+        kind_start,
+        {
+            end_col = kind_end,
+            hl_group = hl_group,
+        }
+    )
 end
 
 --- Apply syntax highlighting to a tool call header line.
---- Handles two formats:
----   " kind(argument) " — highlights kind with TOOL_KIND, argument with TOOL_ARGUMENT
----   " kind "           — highlights kind with TOOL_KIND only (e.g. execute, rendered as code fence)
+--- Handles formats:
+---   " kind `argument` " — highlights kind with TOOL_KIND, argument with TOOL_ARGUMENT
+---   " kind "            — highlights kind with TOOL_KIND only (e.g. execute, rendered as code fence)
 --- @param line_row integer 0-indexed row
 --- @param ns integer Namespace to use for extmarks
 function MessageWriter:_apply_tool_header_syntax(line_row, ns)
@@ -1353,43 +1385,42 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
     end
 
     -- Match header formats:
-    --   " kind(argument) "    → kind + argument
-    --   " kind `argument` "   → kind + argument (backtick-wrapped)
-    --   " kind "              → kind only
+    --   "kind(argument) "    → kind + argument (legacy)
+    --   "kind `argument` "   → kind + argument (backtick-wrapped)
+    --   "kind "              → kind only
     local kind_str, arg_str, arg_col
 
-    -- " kind(argument) "
-    local _, _, k, a = line:find("^ (%a[%a_]*)%((.-)%)%s*$")
+    -- "kind(argument) "
+    local _, _, k, a = line:find("^(%a[%a_]*)%((.-)%)%s*$")
     if k then
         kind_str, arg_str = k, a
-        arg_col = 1 + #k + 1 -- leading space + kind + "("
+        arg_col = #k + 1 -- kind + "("
     end
 
-    -- " kind `argument` "
+    -- "kind `argument` "
     if not kind_str then
         local bt_start = line:find("`")
         if bt_start then
             local bt_end = line:find("`", bt_start + 1)
             if bt_end then
-                -- Everything before first backtick is "kind"
-                kind_str = line:sub(2, bt_start - 2) -- strip leading/trailing spaces
+                kind_str = line:sub(1, bt_start - 2) -- strip trailing space before backtick
                 arg_str = line:sub(bt_start + 1, bt_end - 1)
                 arg_col = bt_start -- 0-indexed = bt_start (1-indexed) - 1 + 1 (after `)
             end
         end
     end
 
-    -- " kind " (no argument)
+    -- "kind " (no argument)
     if not kind_str then
-        _, _, kind_str = line:find("^ (%a[%a_]*)%s*$")
+        _, _, kind_str = line:find("^(%a[%a_]*)%s*$")
     end
 
     if not kind_str then
         return
     end
 
-    local kind_col = 1 -- after leading space
-    local kind_col_end = kind_col + #kind_str
+    local kind_col = 0
+    local kind_col_end = #kind_str
 
     vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, kind_col, {
         end_col = kind_col_end,
