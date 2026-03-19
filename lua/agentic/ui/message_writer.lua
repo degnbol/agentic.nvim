@@ -20,19 +20,6 @@ local function display_kind(kind)
     return result
 end
 
---- Check if a lines array has an unclosed markdown code fence (``` opened but not closed).
---- @param lines string[]
---- @return boolean
-local function _has_unclosed_fence(lines)
-    local open = false
-    for _, line in ipairs(lines) do
-        if line:match("^```") then
-            open = not open
-        end
-    end
-    return open
-end
-
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
 local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
 local NS_PERMISSION_BUTTONS =
@@ -71,8 +58,6 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field argument string
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
---- @field truncated? boolean True if body was truncated for display
---- @field truncation_closed_fence? boolean True if a closing ``` was inserted after truncation
 --- @field search_matches? agentic.ui.MessageWriter.SearchMatch[] Pattern match positions (relative to block lines)
 --- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
 
@@ -422,7 +407,6 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
 
-        self:_apply_header_highlight(start_row, tool_call_block.status)
         self:_apply_tool_header_syntax(start_row, NS_STATUS)
         self:_apply_status_footer(end_row, tool_call_block.status)
 
@@ -523,14 +507,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             end
 
             -- Decorations (╭│╰ borders) are stable — leave them in place.
-            -- Only refresh status highlights which change on completion.
-            self:_clear_status_namespace(start_row, old_end_row)
-            self:_apply_status_highlights_if_present(
-                start_row,
-                old_end_row,
-                tracker.status
-            )
-            self:_apply_tool_header_syntax(start_row, NS_STATUS)
+            -- Only refresh status footer which changes on completion.
+            self:_apply_status_footer(old_end_row, tracker.status)
 
             return false
         end
@@ -553,13 +531,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         end
 
         if content_unchanged then
-            self:_clear_status_namespace(start_row, old_end_row)
-            self:_apply_status_highlights_if_present(
-                start_row,
-                old_end_row,
-                tracker.status
-            )
-            self:_apply_tool_header_syntax(start_row, NS_STATUS)
+            self:_apply_status_footer(old_end_row, tracker.status)
             return false
         end
 
@@ -609,12 +581,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         tracker.decoration_extmark_ids =
             self:_render_decorations(start_row, new_end_row)
 
-        self:_apply_status_highlights_if_present(
-            start_row,
-            new_end_row,
-            tracker.status
-        )
         self:_apply_tool_header_syntax(start_row, NS_STATUS)
+        self:_apply_status_footer(new_end_row, tracker.status)
     end)
 end
 
@@ -670,13 +638,17 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         if body then
             local max_lines = Config.tool_call_display.search_max_lines
             local count = #body
-            local shown = max_lines > 0 and math.min(count, max_lines) or count
 
             -- Wrap in a code fence to prevent markdown parsing (setext
             -- headings from "--", emphasis from "*", etc.). Comment highlight
             -- is applied by the generic path in _apply_block_highlights which
             -- already skips ``` lines.
+            -- Add fold markers when body exceeds threshold.
+            local use_fold = max_lines > 0 and count > max_lines
             table.insert(lines, "```console")
+            if use_fold then
+                table.insert(lines, "{{{")
+            end
 
             -- Match highlighting strategy:
             -- 1. ANSI codes from grep --color (ideal — zero re-work). ACP
@@ -687,7 +659,7 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             --    ideal (double work) but necessary while ACP strips ANSI.
             local ansi_result = Ansi.process_lines(body)
 
-            for i = 1, shown do
+            for i = 1, count do
                 local line = ansi_result.has_ansi and ansi_result.lines[i]
                     or body[i]
                 table.insert(lines, line)
@@ -695,7 +667,7 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
 
             if ansi_result.has_ansi then
                 local displayed = {}
-                for i = 1, shown do
+                for i = 1, count do
                     displayed[i] = ansi_result.highlights[i]
                 end
                 tool_call_block.search_ansi = displayed
@@ -718,9 +690,9 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 if regex then
                     --- @type agentic.ui.MessageWriter.SearchMatch[]
                     local search_matches = {}
-                    for i = 1, shown do
+                    for i = 1, count do
                         local line = body[i]
-                        local line_index = #lines - shown + i - 1
+                        local line_index = #lines - count + i - 1
                         local offset = 0
                         while offset < #line do
                             local s, e = regex:match_str(line:sub(offset + 1))
@@ -741,21 +713,10 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 end
             end
 
-            if max_lines > 0 and count > max_lines then
-                tool_call_block.truncated = true
-                table.insert(lines, "```")
-                local line_index = #lines
-                table.insert(
-                    lines,
-                    string.format("... and %d more", count - max_lines)
-                )
-                table.insert(highlight_ranges, {
-                    type = "comment",
-                    line_index = line_index,
-                })
-            else
-                table.insert(lines, "```")
+            if use_fold then
+                table.insert(lines, "}}}")
             end
+            table.insert(lines, "```")
         end
     elseif tool_call_block.diff then
         local diff_blocks = ToolCallDiff.extract_diff_blocks({
@@ -862,28 +823,14 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                     and Config.tool_call_display.execute_max_lines
                 or 0
             local count = #body
+            local use_fold = max_lines > 0 and count > max_lines
 
-            if max_lines > 0 and count > max_lines then
-                tool_call_block.truncated = true
-                for i = 1, max_lines do
-                    table.insert(lines, body[i])
-                end
-                -- Close any unclosed markdown code fence left by truncation
-                if _has_unclosed_fence(lines) then
-                    tool_call_block.truncation_closed_fence = true
-                    table.insert(lines, "```")
-                end
-                local line_index = #lines
-                table.insert(
-                    lines,
-                    string.format("... and %d more", count - max_lines)
-                )
-                table.insert(highlight_ranges, {
-                    type = "comment",
-                    line_index = line_index,
-                })
-            else
-                vim.list_extend(lines, body)
+            if use_fold then
+                table.insert(lines, "{{{")
+            end
+            vim.list_extend(lines, body)
+            if use_fold then
+                table.insert(lines, "}}}")
             end
         end
     end
@@ -892,27 +839,27 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     --- @type agentic.utils.Ansi.Span[][]|nil
     local ansi_highlights
     if kind == "execute" and tool_call_block.body then
-        local displayed_count = tool_call_block.truncated
-                and Config.tool_call_display.execute_max_lines
-            or #tool_call_block.body
-        local body_start_index = #lines - displayed_count
-        -- Truncation adds trailing lines (closing fence + "... and N more")
-        -- after the body lines, so offset past them to find the actual body start
-        if tool_call_block.truncated then
-            body_start_index = body_start_index - 1
+        local body_count = #tool_call_block.body
+        -- Body lines end just before the footer ("") and optional closing fold fence
+        local body_end_index = #lines -- last body line (1-indexed)
+        -- Check if the last line before footer is a fold closing marker
+        local has_fold_close = lines[body_end_index]
+            and lines[body_end_index] == "}}}"
+        if has_fold_close then
+            body_end_index = body_end_index - 1 -- skip }}}
         end
-        if tool_call_block.truncation_closed_fence then
-            body_start_index = body_start_index - 1
+        local body_start_index = body_end_index - body_count
+        -- Check if a fold opening marker was inserted before body
+        if body_start_index >= 1 and lines[body_start_index] == "{{{" then
+            body_start_index = body_start_index -- fold marker line, body starts after
         end
         local result = Ansi.process_lines(tool_call_block.body)
         if result.has_ansi then
-            -- Replace raw body lines with clean (stripped) versions
-            for i = 1, displayed_count do
+            for i = 1, body_count do
                 lines[body_start_index + i] = result.lines[i]
             end
-            -- Only include highlights for displayed lines
             ansi_highlights = {}
-            for i = 1, displayed_count do
+            for i = 1, body_count do
                 ansi_highlights[i] = result.highlights[i]
             end
         end
@@ -921,94 +868,6 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     table.insert(lines, "")
 
     return lines, highlight_ranges, ansi_highlights
-end
-
---- Find the truncated tool call block whose range extmark contains the given row.
---- @param row integer 0-based row number
---- @return agentic.ui.MessageWriter.ToolCallBlock|nil
-function MessageWriter:get_truncated_block_at(row)
-    for _, tracker in pairs(self.tool_call_blocks) do
-        if tracker.truncated and tracker.extmark_id then
-            local pos = vim.api.nvim_buf_get_extmark_by_id(
-                self.bufnr,
-                NS_TOOL_BLOCKS,
-                tracker.extmark_id,
-                { details = true }
-            )
-            if pos and pos[1] then
-                local start_row = pos[1]
-                local end_row = pos[3] and pos[3].end_row or start_row
-                if row >= start_row and row <= end_row then
-                    return tracker
-                end
-            end
-        end
-    end
-end
-
---- Open a scratch buffer showing the full body of a truncated tool call block.
---- @param tracker agentic.ui.MessageWriter.ToolCallBlock
-function MessageWriter:expand_tool_call(tracker)
-    if not tracker.body or #tracker.body == 0 then
-        return
-    end
-
-    --- @type string[]
-    local body = tracker.body
-    local result = Ansi.process_lines(body)
-    local clean_lines = result.has_ansi and result.lines or body
-
-    local title =
-        string.format("%s `%s` ", display_kind(tracker.kind), tracker.argument)
-    local buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, clean_lines)
-    vim.bo[buf].modifiable = false
-
-    local win_width = math.min(120, vim.o.columns - 4)
-    local win_height = math.min(#clean_lines, vim.o.lines - 6)
-
-    local win = vim.api.nvim_open_win(buf, true, {
-        relative = "editor",
-        width = win_width,
-        height = win_height,
-        col = math.floor((vim.o.columns - win_width) / 2),
-        row = math.floor((vim.o.lines - win_height) / 2),
-        style = "minimal",
-        border = "rounded",
-        title = title,
-        title_pos = "center",
-    })
-
-    if result.has_ansi then
-        local ns = vim.api.nvim_create_namespace("")
-        Ansi.apply_highlights(buf, ns, 0, result.highlights)
-    end
-
-    vim.wo[win].wrap = true
-    vim.wo[win].cursorline = true
-
-    -- Wipe buffer after window closes (not via bufhidden, which can race
-    -- with keymap dispatch and cause the key to fall through to the chat buffer)
-    vim.api.nvim_create_autocmd("WinClosed", {
-        pattern = tostring(win),
-        once = true,
-        callback = function()
-            vim.schedule(function()
-                if vim.api.nvim_buf_is_valid(buf) then
-                    vim.api.nvim_buf_delete(buf, { force = true })
-                end
-            end)
-        end,
-    })
-
-    local function close_float()
-        if vim.api.nvim_win_is_valid(win) then
-            vim.api.nvim_win_close(win, true)
-        end
-    end
-
-    vim.keymap.set("n", "q", close_float, { buffer = buf, nowait = true })
-    vim.keymap.set("n", "<Esc>", close_float, { buffer = buf, nowait = true })
 end
 
 --- Display permission request buttons at the end of the buffer
@@ -1271,6 +1130,42 @@ function MessageWriter:_apply_block_highlights(
             )
         end
     end
+
+    -- Conceal fold markers ({{{ and }}}) embedded in code fence lines.
+    -- Treesitter is active on the chat buffer so vim syntax conceal rules
+    -- don't apply; extmark conceal works alongside treesitter.
+    for line_idx = start_row, end_row - 1 do
+        local line =
+            vim.api.nvim_buf_get_lines(bufnr, line_idx, line_idx + 1, false)[1]
+        if line then
+            local col = line:find("{{{", 1, true)
+            if col then
+                vim.api.nvim_buf_set_extmark(
+                    bufnr,
+                    NS_DECORATIONS,
+                    line_idx,
+                    col - 1,
+                    {
+                        end_col = col + 2,
+                        conceal = "",
+                    }
+                )
+            end
+            col = line:find("}}}", 1, true)
+            if col then
+                vim.api.nvim_buf_set_extmark(
+                    bufnr,
+                    NS_DECORATIONS,
+                    line_idx,
+                    col - 1,
+                    {
+                        end_col = col + 2,
+                        conceal = "",
+                    }
+                )
+            end
+        end
+    end
 end
 
 --- @param start_row integer
@@ -1329,46 +1224,6 @@ function MessageWriter:_apply_diff_highlights(start_row, highlight_ranges)
             end
         end
     end
-end
-
---- Apply status background highlight to the kind name only (not the whole line).
---- Matches the leading " kind" portion of the header.
---- @param header_line integer 0-indexed header line number
---- @param status string Status value (pending, completed, etc.)
-function MessageWriter:_apply_header_highlight(header_line, status)
-    if not status or status == "" then
-        return
-    end
-
-    local line = vim.api.nvim_buf_get_lines(
-        self.bufnr,
-        header_line,
-        header_line + 1,
-        false
-    )[1]
-    if not line then
-        return
-    end
-
-    -- Extract the kind name: "kind(...) " or "kind `...` " or "kind "
-    local kind_str = line:match("^(%a[%a_]*)[(` ]")
-    if not kind_str then
-        return
-    end
-
-    local hl_group = Theme.get_status_hl_group(status)
-    local kind_start = 0
-    local kind_end = #kind_str
-    vim.api.nvim_buf_set_extmark(
-        self.bufnr,
-        NS_STATUS,
-        header_line,
-        kind_start,
-        {
-            end_col = kind_end,
-            hl_group = hl_group,
-        }
-    )
 end
 
 --- Apply syntax highlighting to a tool call header line.
@@ -1439,9 +1294,9 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
     end
 end
 
---- Write status text directly into the footer buffer line and apply highlight.
+--- Write status text directly into the footer buffer line.
 --- Uses set_text (not set_lines) so sign_text extmarks on the footer line
---- are not shifted — set_lines replaces the line, displacing extmarks.
+--- are not shifted. Syntax rules in AgenticChat.vim handle the highlighting.
 --- @param footer_line integer 0-indexed footer line number
 --- @param status string Status value (pending, completed, etc.)
 function MessageWriter:_apply_status_footer(footer_line, status)
@@ -1456,7 +1311,6 @@ function MessageWriter:_apply_status_footer(footer_line, status)
     local icons = Config.status_icons or {}
     local icon = icons[status] or ""
     local status_text = string.format(" %s %s ", icon, status)
-    local hl_group = Theme.get_status_hl_group(status)
 
     local current = vim.api.nvim_buf_get_lines(
         self.bufnr,
@@ -1473,11 +1327,6 @@ function MessageWriter:_apply_status_footer(footer_line, status)
         #current,
         { status_text }
     )
-
-    vim.api.nvim_buf_set_extmark(self.bufnr, NS_STATUS, footer_line, 0, {
-        end_col = #status_text,
-        hl_group = hl_group,
-    })
 end
 
 --- @param ids integer[]|nil
@@ -1514,20 +1363,6 @@ function MessageWriter:_clear_status_namespace(start_row, end_row)
         start_row,
         end_row + 1
     )
-end
-
---- @param start_row integer
---- @param end_row integer
---- @param status string|nil
-function MessageWriter:_apply_status_highlights_if_present(
-    start_row,
-    end_row,
-    status
-)
-    if status then
-        self:_apply_header_highlight(start_row, status)
-        self:_apply_status_footer(end_row, status)
-    end
 end
 
 return MessageWriter

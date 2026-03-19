@@ -51,13 +51,6 @@ local lang_map = {
     markdown = "md",
 }
 
-local status_hl = {
-    pending = Theme.HL_GROUPS.STATUS_PENDING,
-    in_progress = Theme.HL_GROUPS.STATUS_PENDING, -- pending and in_progress should look the same, to avoid too many colors, added initially because of Codex, but not limited to it
-    completed = Theme.HL_GROUPS.STATUS_COMPLETED,
-    failed = Theme.HL_GROUPS.STATUS_FAILED,
-}
-
 local spinner_hl = {
     generating = Theme.HL_GROUPS.SPINNER_GENERATING,
     thinking = Theme.HL_GROUPS.SPINNER_THINKING,
@@ -113,17 +106,10 @@ function Theme.get_language_from_path(file_path)
     return lang_map[ext] or ext
 end
 
---- @param status string
---- @return string hl_group
-function Theme.get_status_hl_group(status)
-    return status_hl[status] or "Comment"
-end
-
 --- @param state agentic.Theme.SpinnerState
 --- @return string hl_group
 function Theme.get_spinner_hl_group(state)
     return spinner_hl[state] or Theme.HL_GROUPS.SPINNER_GENERATING
 end
-
 
 return Theme
