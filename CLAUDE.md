@@ -55,9 +55,10 @@ deferred freezing, no cleanup passes.
 work regardless of `vim.bo.syntax` state — whether treesitter has disabled it
 (default after `vim.treesitter.start()`) or a user/plugin re-enables it with
 `vim.bo.syntax = 'ON'`. This makes the highlighting robust against user
-configuration. Treesitter highlight group links (e.g. `@markup.raw.block.markdown
-→ Comment`) are set in `theme.lua` via `nvim_set_hl`, which also works
-independently of vim syntax state.
+configuration. Highlight group definitions are set in `theme.lua` via
+`nvim_set_hl`, which works independently of vim syntax state. The
+`AgenticDimmedBlock` group (dims ` ```markdown ` fences only) is defined in
+`ftplugin/AgenticChat.lua` via a targeted treesitter query override.
 
 Content comparison in `update_tool_call_block` excludes the footer line (which
 has status text in the buffer but `""` in `_prepare_block_lines` output), so
@@ -99,6 +100,22 @@ Folding thresholds are configured per tool kind:
 
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
+
+## Keymaps and configuration
+
+All user-configurable options live in `config_default.lua`. Keymaps are grouped
+by scope: `keymaps.widget` (all Agentic buffers), `keymaps.prompt` (input
+buffer only), `keymaps.chat` (chat buffer only), `keymaps.diff_preview`.
+
+Keymap values use `BufHelpers.multi_keymap_set` which accepts a string, a list
+of strings, or a list of `{ key, mode = ... }` tables for multi-mode bindings.
+All widget keymaps are applied as buffer-local maps in `ChatWidget:_setup_keymaps`
+over every buffer in `self.buf_nrs` (chat, input, todos, code, files, diagnostics).
+
+The plugin's `ftplugin/` directory holds filetype-specific setup (e.g.
+`AgenticChat.lua` for treesitter query overrides). Buffer filetypes are set in
+`ChatWidget:_create_buf_nrs`: `AgenticChat`, `AgenticInput`, `AgenticTodos`,
+`AgenticCode`, `AgenticFiles`, `AgenticDiagnostics`.
 
 ## ACP details
 

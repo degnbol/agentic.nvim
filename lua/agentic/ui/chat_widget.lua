@@ -396,6 +396,15 @@ function ChatWidget:_bind_keymaps()
             end,
             { desc = "Agentic: Switch provider" }
         )
+
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.stop_generation,
+            bufnr,
+            function()
+                require("agentic").stop_generation()
+            end,
+            { desc = "Agentic: Stop generation" }
+        )
     end
 
     -- Add keybindings to chat, todos, code, and files buffers to jump back to input and start insert mode

@@ -173,6 +173,12 @@ local ConfigDefault = {
         --- Keys bindings for ALL buffers in the widget
         widget = {
             close = "q",
+            stop_generation = {
+                {
+                    "<C-c>",
+                    mode = { "n", "i" },
+                },
+            },
             change_mode = {
                 {
                     "<S-Tab>",
