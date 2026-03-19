@@ -837,8 +837,9 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             -- Fetch/WebSearch body is informational text that the agent wrote
             -- to itself. Wrap in a code fence to prevent markdown parsing
             -- artefacts and always fold since users rarely need it.
-            -- Use `markdown` info string so treesitter captures the block as
-            -- @markup.raw.block.markdown (linked to Comment in theme.lua).
+            -- `markdown` info string dims the block via AgenticDimmedBlock
+            -- (priority 101, set in ftplugin/AgenticChat.lua) while keeping
+            -- injected bold/underline styling.
             local fence = safe_fence(tool_call_block.body)
             table.insert(lines, fence .. "markdown")
             table.insert(lines, "{{{")
@@ -943,6 +944,7 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         option_mapping[i] = option.optionId
     end
 
+    table.insert(lines_to_append, "0.  Reject all")
     table.insert(lines_to_append, "--- ---")
 
     local hint_line_index =
@@ -1030,16 +1032,33 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
     return button_start_row, button_end_row, option_mapping
 end
 
---- @param start_row integer Start row of button block
---- @param end_row integer End row of button block
-function MessageWriter:remove_permission_buttons(start_row, end_row)
-    pcall(
-        vim.api.nvim_buf_clear_namespace,
+--- Remove permission buttons by finding their extmark position.
+--- Falls back to no-op if the extmark is missing (already removed).
+function MessageWriter:remove_permission_buttons()
+    local extmarks = vim.api.nvim_buf_get_extmarks(
         self.bufnr,
         NS_PERMISSION_BUTTONS,
-        start_row,
-        end_row + 1
+        0,
+        -1,
+        { details = true }
     )
+
+    -- Find the range extmark (has end_row)
+    local start_row, end_row
+    for _, mark in ipairs(extmarks) do
+        local details = mark[4]
+        if details.end_row then
+            start_row = mark[2]
+            end_row = details.end_row
+            break
+        end
+    end
+
+    if not start_row then
+        return
+    end
+
+    vim.api.nvim_buf_clear_namespace(self.bufnr, NS_PERMISSION_BUTTONS, 0, -1)
 
     BufHelpers.with_modifiable(self.bufnr, function(bufnr)
         pcall(
@@ -1102,10 +1121,11 @@ function MessageWriter:_apply_block_highlights(
             return
         end
 
-        -- Apply Comment highlight to all body lines (both inside and outside
-        -- code fences). Priority 101 beats injected language highlights (100)
-        -- so headings/emphasis from markdown injection are also dimmed, while
-        -- search match highlights (200) still show on top.
+        -- Apply Comment highlight for body lines outside code fences.
+        -- Content inside ```markdown fences is dimmed by treesitter via
+        -- AgenticDimmedBlock (ftplugin/AgenticChat.lua). Other fences
+        -- (zsh, console) keep their injected syntax highlights.
+        local in_fence = false
         for line_idx = body_start, end_row - 1 do
             local line = vim.api.nvim_buf_get_lines(
                 bufnr,
@@ -1113,7 +1133,9 @@ function MessageWriter:_apply_block_highlights(
                 line_idx + 1,
                 false
             )[1]
-            if line and #line > 0 and not vim.startswith(line, "`") then
+            if line and vim.startswith(line, "`") then
+                in_fence = not in_fence
+            elseif not in_fence and line and #line > 0 then
                 vim.api.nvim_buf_set_extmark(
                     bufnr,
                     NS_DIFF_HIGHLIGHTS,
@@ -1122,7 +1144,6 @@ function MessageWriter:_apply_block_highlights(
                     {
                         end_col = #line,
                         hl_group = "Comment",
-                        priority = 101,
                     }
                 )
             end

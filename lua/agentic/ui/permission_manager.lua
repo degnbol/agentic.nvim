@@ -18,7 +18,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Reference to MessageWriter instance
 --- @field queue table[] Queue of pending requests {toolCallId, request, callback}
---- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request with button positions
+--- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
 --- @field keymap_info table[] Keymap info for cleanup {mode, lhs}
 --- @field _reanchoring boolean Guard flag to prevent recursive on_content_changed during reanchor
 local PermissionManager = {}
@@ -68,19 +68,16 @@ function PermissionManager:_process_next()
     local callback = item[3]
     local sorted_options = self._sort_permission_options(request.options)
 
-    local button_start_row, button_end_row, option_mapping =
-        self.message_writer:display_permission_buttons(
-            request.toolCall.toolCallId,
-            sorted_options
-        )
+    local _, _, option_mapping = self.message_writer:display_permission_buttons(
+        request.toolCall.toolCallId,
+        sorted_options
+    )
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
     self.current_request = {
         toolCallId = toolCallId,
         request = request,
         callback = callback,
-        button_start_row = button_start_row,
-        button_end_row = button_end_row,
         option_mapping = option_mapping,
     }
 
@@ -102,23 +99,18 @@ function PermissionManager:_reanchor_permission_prompt()
     local current = self.current_request
 
     local ok, err = pcall(function()
-        self.message_writer:remove_permission_buttons(
-            current.button_start_row,
-            current.button_end_row
-        )
+        self.message_writer:remove_permission_buttons()
         self:_remove_keymaps()
 
         local sorted_options =
             self._sort_permission_options(current.request.options)
 
-        local button_start_row, button_end_row, option_mapping =
+        local _, _, option_mapping =
             self.message_writer:display_permission_buttons(
                 current.request.toolCall.toolCallId,
                 sorted_options
             )
 
-        current.button_start_row = button_start_row
-        current.button_end_row = button_end_row
         current.option_mapping = option_mapping
 
         self:_setup_keymaps(option_mapping)
@@ -159,10 +151,7 @@ function PermissionManager:_complete_request(option_id)
         return
     end
 
-    self.message_writer:remove_permission_buttons(
-        current.button_start_row,
-        current.button_end_row
-    )
+    self.message_writer:remove_permission_buttons()
 
     self:_remove_keymaps()
     self.message_writer:set_on_content_changed(nil)
@@ -172,19 +161,51 @@ function PermissionManager:_complete_request(option_id)
     self:_process_next()
 end
 
---- Clear all displayed buttons and keymaps, cancel all pending requests
+--- Clear all displayed buttons and keymaps, cancel all pending requests.
+--- Called when session ends or user cancels generation.
 function PermissionManager:clear()
     if self.current_request then
-        self.message_writer:remove_permission_buttons(
-            self.current_request.button_start_row,
-            self.current_request.button_end_row
-        )
+        self.message_writer:remove_permission_buttons()
         self:_remove_keymaps()
         self.message_writer:set_on_content_changed(nil)
 
         pcall(self.current_request.callback, nil)
         self.current_request = nil
     end
+
+    for _, item in ipairs(self.queue) do
+        local callback = item[3]
+        pcall(callback, nil)
+    end
+
+    self.queue = {}
+end
+
+--- Reject the current request and cancel all remaining queued requests.
+--- Unlike clear(), sends reject_once (not cancelled) for the current request
+--- so the provider sees an active rejection and can adapt its approach.
+function PermissionManager:reject_and_cancel_remaining()
+    if not self.current_request then
+        return
+    end
+
+    -- Find the reject_once option
+    local reject_option_id
+    for _, option in ipairs(self.current_request.request.options) do
+        if option.kind == "reject_once" then
+            reject_option_id = option.optionId
+            break
+        end
+    end
+
+    -- Remove UI and keymaps for current request
+    self.message_writer:remove_permission_buttons()
+    self:_remove_keymaps()
+    self.message_writer:set_on_content_changed(nil)
+
+    -- Send reject_once for current, cancelled for the rest
+    pcall(self.current_request.callback, reject_option_id)
+    self.current_request = nil
 
     for _, item in ipairs(self.queue) do
         local callback = item[3]
@@ -226,6 +247,12 @@ function PermissionManager:_setup_keymaps(option_mapping)
 
         table.insert(self.keymap_info, { mode = "n", lhs = lhs })
     end
+
+    -- Reject current + cancel remaining (graceful, unlike <C-c> hard abort)
+    BufHelpers.keymap_set(self.message_writer.bufnr, "n", "0", function()
+        self:reject_and_cancel_remaining()
+    end, { desc = "Reject and cancel remaining permissions" })
+    table.insert(self.keymap_info, { mode = "n", lhs = "0" })
 end
 
 function PermissionManager:_remove_keymaps()

@@ -184,12 +184,36 @@ Provider sends "session/request_permission"
   -> PermissionManager:add_request(request, callback)
      -> Queues request (sequential — one prompt at a time)
      -> Renders permission buttons in chat buffer
-     -> Sets up buffer-local keymaps (1,2,3,4)
+     -> Sets up buffer-local keymaps (1,2,3,4,0)
   -> User presses key
      -> Sends result back to provider via callback
      -> Clears diff preview
      -> Dequeues next permission if any
 ```
+
+### Permission response keys
+
+| Key | Action | ACP outcome |
+| --- | ------ | ----------- |
+| `1` | Allow once | `selected` with `allow_once` option |
+| `2` | Allow always | `selected` with `allow_always` option |
+| `3` | Reject once (show next) | `selected` with `reject_once` option |
+| `4` | Reject always | `selected` with `reject_always` option |
+| `0` | Reject all | `reject_once` for current, `cancelled` for remaining |
+| `<C-c>` | Hard abort | `cancelled` for all + `session/cancel` |
+
+**`0` vs `<C-c>`:** Both stop permission processing, but `0` sends `reject_once`
+for the current tool call so the provider sees an active rejection and can adapt
+(explain why, suggest alternatives). `<C-c>` kills the turn immediately via
+`session/cancel` — the provider gets no chance to react. Use `0` when you want
+to reject and provide follow-up feedback in the next turn.
+
+### Permission button positions
+
+Button positions are tracked via an extmark in the `NS_PERMISSION_BUTTONS`
+namespace, not stored row numbers. `remove_permission_buttons` queries the
+extmark to find the current position, making it robust against buffer shifts
+from concurrent tool call updates.
 
 ## Adapter override points
 

@@ -87,11 +87,6 @@ function Theme.setup()
         -- Search match highlight
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
 
-        -- Dim code block content in chat buffers (fetch body, search output, etc.)
-        -- Uses the markdown parser's capture suffix since chat buffers run
-        -- vim.treesitter.start(buf, "markdown").
-        { "@markup.raw.block.markdown", { link = "Comment" } },
-
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { fg = COLORS.spinner_generating_fg, bold = true } },
         { Theme.HL_GROUPS.SPINNER_THINKING, { fg = COLORS.spinner_thinking_fg, bold = true } },
