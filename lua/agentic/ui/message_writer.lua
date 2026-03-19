@@ -20,6 +20,22 @@ local function display_kind(kind)
     return result
 end
 
+--- Return a backtick fence string long enough to avoid clashing with any
+--- literal backtick runs inside `body_lines`.
+--- @param body_lines string[]
+--- @return string fence e.g. "```" or "````"
+local function safe_fence(body_lines)
+    local fence = "```"
+    for _, line in ipairs(body_lines) do
+        for ticks in line:gmatch("(`+)") do
+            if #ticks >= #fence then
+                fence = string.rep("`", #ticks + 1)
+            end
+        end
+    end
+    return fence
+end
+
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
 local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
 local NS_PERMISSION_BUTTONS =
@@ -645,7 +661,8 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             -- already skips ``` lines.
             -- Add fold markers when body exceeds threshold.
             local use_fold = max_lines > 0 and count > max_lines
-            table.insert(lines, "```console")
+            local fence = safe_fence(body)
+            table.insert(lines, fence .. "console")
             if use_fold then
                 table.insert(lines, "{{{")
             end
@@ -716,7 +733,7 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             if use_fold then
                 table.insert(lines, "}}}")
             end
-            table.insert(lines, "```")
+            table.insert(lines, fence)
         end
     elseif tool_call_block.diff then
         local diff_blocks = ToolCallDiff.extract_diff_blocks({
@@ -814,6 +831,20 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         -- Close code fences, if not markdown, to avoid conflicts
         if has_fences then
             table.insert(lines, "```")
+        end
+    elseif kind == "fetch" or kind == "WebSearch" then
+        if tool_call_block.body then
+            -- Fetch/WebSearch body is informational text that the agent wrote
+            -- to itself. Wrap in a code fence to prevent markdown parsing
+            -- artefacts and always fold since users rarely need it.
+            -- Use `markdown` info string so treesitter captures the block as
+            -- @markup.raw.block.markdown (linked to Comment in theme.lua).
+            local fence = safe_fence(tool_call_block.body)
+            table.insert(lines, fence .. "markdown")
+            table.insert(lines, "{{{")
+            vim.list_extend(lines, tool_call_block.body)
+            table.insert(lines, "}}}")
+            table.insert(lines, fence)
         end
     else
         if tool_call_block.body then
@@ -1071,9 +1102,10 @@ function MessageWriter:_apply_block_highlights(
             return
         end
 
-        -- Apply Comment highlight for non-edit blocks without diffs.
-        -- Skip lines starting with ``` so treesitter markdown highlights
-        -- code fence delimiters consistently (matches ANSI path behaviour).
+        -- Apply Comment highlight to all body lines (both inside and outside
+        -- code fences). Priority 101 beats injected language highlights (100)
+        -- so headings/emphasis from markdown injection are also dimmed, while
+        -- search match highlights (200) still show on top.
         for line_idx = body_start, end_row - 1 do
             local line = vim.api.nvim_buf_get_lines(
                 bufnr,
@@ -1081,7 +1113,7 @@ function MessageWriter:_apply_block_highlights(
                 line_idx + 1,
                 false
             )[1]
-            if line and #line > 0 and not vim.startswith(line, "```") then
+            if line and #line > 0 and not vim.startswith(line, "`") then
                 vim.api.nvim_buf_set_extmark(
                     bufnr,
                     NS_DIFF_HIGHLIGHTS,
@@ -1090,6 +1122,7 @@ function MessageWriter:_apply_block_highlights(
                     {
                         end_col = #line,
                         hl_group = "Comment",
+                        priority = 101,
                     }
                 )
             end
@@ -1104,7 +1137,7 @@ function MessageWriter:_apply_block_highlights(
         local body_start = start_row + 2
         for i = start_row + 1, end_row - 1 do
             local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
-            if l == "```console" then
+            if l and l:match("^`+console$") then
                 body_start = i + 1
                 break
             end
@@ -1294,9 +1327,9 @@ function MessageWriter:_apply_tool_header_syntax(line_row, ns)
     end
 end
 
---- Write status text directly into the footer buffer line.
+--- Write status text directly into the footer buffer line and apply highlight.
 --- Uses set_text (not set_lines) so sign_text extmarks on the footer line
---- are not shifted. Syntax rules in AgenticChat.vim handle the highlighting.
+--- are not shifted — set_lines replaces the line, displacing extmarks.
 --- @param footer_line integer 0-indexed footer line number
 --- @param status string Status value (pending, completed, etc.)
 function MessageWriter:_apply_status_footer(footer_line, status)
@@ -1311,6 +1344,7 @@ function MessageWriter:_apply_status_footer(footer_line, status)
     local icons = Config.status_icons or {}
     local icon = icons[status] or ""
     local status_text = string.format(" %s %s ", icon, status)
+    local hl_group = Theme.get_status_hl_group(status)
 
     local current = vim.api.nvim_buf_get_lines(
         self.bufnr,
@@ -1327,6 +1361,11 @@ function MessageWriter:_apply_status_footer(footer_line, status)
         #current,
         { status_text }
     )
+
+    vim.api.nvim_buf_set_extmark(self.bufnr, NS_STATUS, footer_line, 0, {
+        end_col = #status_text,
+        hl_group = hl_group,
+    })
 end
 
 --- @param ids integer[]|nil

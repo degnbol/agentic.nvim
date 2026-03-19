@@ -46,9 +46,18 @@ line content replacement without delete/recreate cycles.
 
 Status text (" ✔ completed ", " ✖ failed ", etc.) is written directly into the
 footer buffer line as real text using `nvim_buf_set_text` (not `set_lines` —
-that shifts extmarks on the replaced line). This avoids the entire class of
-overlay-to-static-text timing bugs. Status changes just replace the footer line
-content in place. No deferred freezing, no overlay extmarks, no cleanup passes.
+that shifts extmarks on the replaced line), then highlighted with an extmark
+(`NS_STATUS` namespace). This avoids the entire class of overlay-to-static-text
+timing bugs. Status changes just replace the footer line content in place. No
+deferred freezing, no cleanup passes.
+
+**All programmatic highlighting uses extmarks**, not vim syntax rules. Extmarks
+work regardless of `vim.bo.syntax` state — whether treesitter has disabled it
+(default after `vim.treesitter.start()`) or a user/plugin re-enables it with
+`vim.bo.syntax = 'ON'`. This makes the highlighting robust against user
+configuration. Treesitter highlight group links (e.g. `@markup.raw.block.markdown
+→ Comment`) are set in `theme.lua` via `nvim_set_hl`, which also works
+independently of vim syntax state.
 
 Content comparison in `update_tool_call_block` excludes the footer line (which
 has status text in the buffer but `""` in `_prepare_block_lines` output), so
@@ -57,6 +66,39 @@ status-only updates skip the expensive content replacement path.
 If a range extmark collapses (start >= end, indicating corruption),
 `update_tool_call_block` bails out and removes the block from tracking rather
 than proceeding with stale positions.
+
+## Search tool call rendering
+
+Search/grep results use two separate code fences in `_prepare_block_lines`:
+
+1. **Command** — ` ```bash ` fence around the search command (argument)
+2. **Results body** — ` ```console ` fence around result lines
+
+The body always gets a `console` fence (prevents markdown parsing of `--`,
+`*`, etc.). Fold markers (`{{{`/`}}}`) go inside the console fence when line
+count exceeds `search_max_lines` (default 8). Never double-wrap — the body
+from the adapter is raw text lines (no fences), so the console fence is the
+only one.
+
+Match highlighting: ANSI codes from the provider (preferred, rarely available)
+or regex fallback that extracts the pattern from the command string and
+re-matches against body lines. Highlights use `AgenticSearchMatch` extmark
+with priority 200.
+
+## Tool call body folding
+
+Long tool call output uses vim-native folds (`foldmethod=marker`) instead of
+truncation. Fold markers (`{{{`/`}}}`) are embedded in the buffer content and
+concealed via extmarks (treesitter is active, so vim syntax `conceal` doesn't
+work). The chat buffer sets `foldlevel=0` so folds start closed.
+
+Folding thresholds are configured per tool kind:
+- `search_max_lines` — search/grep tool output
+- `execute_max_lines` — shell command stdout
+- `fetch`/`WebSearch` — always folded (informational, rarely needed by users)
+
+`lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
+Users toggle with standard fold commands (`zo`/`zc`/`za`).
 
 ## ACP details
 

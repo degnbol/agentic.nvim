@@ -51,6 +51,13 @@ local lang_map = {
     markdown = "md",
 }
 
+local status_hl = {
+    pending = Theme.HL_GROUPS.STATUS_PENDING,
+    in_progress = Theme.HL_GROUPS.STATUS_PENDING,
+    completed = Theme.HL_GROUPS.STATUS_COMPLETED,
+    failed = Theme.HL_GROUPS.STATUS_FAILED,
+}
+
 local spinner_hl = {
     generating = Theme.HL_GROUPS.SPINNER_GENERATING,
     thinking = Theme.HL_GROUPS.SPINNER_THINKING,
@@ -80,6 +87,11 @@ function Theme.setup()
         -- Search match highlight
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
 
+        -- Dim code block content in chat buffers (fetch body, search output, etc.)
+        -- Uses the markdown parser's capture suffix since chat buffers run
+        -- vim.treesitter.start(buf, "markdown").
+        { "@markup.raw.block.markdown", { link = "Comment" } },
+
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { fg = COLORS.spinner_generating_fg, bold = true } },
         { Theme.HL_GROUPS.SPINNER_THINKING, { fg = COLORS.spinner_thinking_fg, bold = true } },
@@ -104,6 +116,12 @@ function Theme.get_language_from_path(file_path)
     end
 
     return lang_map[ext] or ext
+end
+
+--- @param status string
+--- @return string hl_group
+function Theme.get_status_hl_group(status)
+    return status_hl[status] or "Comment"
 end
 
 --- @param state agentic.Theme.SpinnerState

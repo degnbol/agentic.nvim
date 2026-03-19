@@ -98,7 +98,7 @@ Provider sends "tool_call"
   -> subscriber.on_tool_call(block)
   -> MessageWriter:write_tool_call_block(block)
      1. Renders header + body/diff lines to buffer (footer is empty "")
-     2. Writes status text directly into footer line via set_text
+     2. Writes status text into footer line via set_text + extmark highlight
      3. Creates sign_text extmarks (NS_DECORATIONS) for ╭─ │ ╰─ borders
      4. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
      5. Stores block in tool_call_blocks[id]
@@ -122,8 +122,11 @@ Provider sends "tool_call_update"
 ```
 
 Status text is always real buffer content (written via `nvim_buf_set_text` to
-avoid displacing sign extmarks). No deferred freezing, no overlay extmarks, no
-cleanup passes. Blocks remain tracked after terminal status.
+avoid displacing sign extmarks), then highlighted with an extmark in the
+`NS_STATUS` namespace. Extmarks work regardless of `vim.bo.syntax` state —
+whether treesitter has disabled it (default) or a user re-enables it with
+`vim.bo.syntax = 'ON'`. No deferred freezing, no cleanup passes. Blocks remain
+tracked after terminal status.
 
 ## Key design rules for adapters
 
@@ -135,8 +138,9 @@ cleanup passes. Blocks remain tracked after terminal status.
 - **Body accumulates:** Multiple updates with different body content get
   concatenated with `---` dividers, not replaced.
 - **Status is always real buffer text:** Footer line content is written via
-  `nvim_buf_set_text` (not `set_lines`, which displaces extmarks). No overlay
-  extmarks, no deferred freezing. Blocks stay tracked after terminal status.
+  `nvim_buf_set_text` (not `set_lines`, which displaces extmarks), then
+  highlighted with an extmark in the `NS_STATUS` namespace. No deferred
+  freezing. Blocks stay tracked after terminal status.
 - **Sign column for borders:** Block decorations (╭─ │ ╰─) use `sign_text`
   extmarks in the sign column rather than inline virtual text. This is more
   stable during buffer edits — signs survive line content replacement without
