@@ -198,14 +198,17 @@ Provider sends "session/request_permission"
 | `1` | Allow once | `selected` with `allow_once` option |
 | `2` | Allow always | `selected` with `allow_always` option |
 | `3` | Reject once (show next) | `selected` with `reject_once` option |
-| `4` | Reject always | `selected` with `reject_always` option |
-| `0` | Reject all | `reject_once` for current, `cancelled` for remaining |
+| `4` | Reject all | `reject_once` for current, `cancelled` for remaining |
+| `5` | Reject always | `selected` with `reject_always` option |
 | `<C-c>` | Hard abort | `cancelled` for all + `session/cancel` |
 
-**`0` vs `<C-c>`:** Both stop permission processing, but `0` sends `reject_once`
+Key numbers match escalating severity: reject-all (4, local) comes before
+reject-always (5, permanent rule). Numbers adapt if a provider sends fewer options.
+
+**`4` vs `<C-c>`:** Both stop permission processing, but `4` sends `reject_once`
 for the current tool call so the provider sees an active rejection and can adapt
 (explain why, suggest alternatives). `<C-c>` kills the turn immediately via
-`session/cancel` — the provider gets no chance to react. Use `0` when you want
+`session/cancel` — the provider gets no chance to react. Use `4` when you want
 to reject and provide follow-up feedback in the next turn.
 
 ### Permission button positions

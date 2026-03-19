@@ -1,13 +1,8 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Logger = require("agentic.utils.logger")
 
--- Priority order for permission option kinds based on ACP tool-calls documentation
--- Lower number = higher priority (appears first)
--- Order from https://agentclientprotocol.com/protocol/tool-calls.md:
--- 1. allow_once - Allow this operation only this time
--- 2. allow_always - Allow this operation and remember the choice
--- 3. reject_once - Reject this operation only this time
--- 4. reject_always - Reject this operation and remember the choice
+-- Priority order for permission option kinds.
+-- Lower number = higher priority (appears first).
 local PERMISSION_KIND_PRIORITY = {
     allow_once = 1,
     allow_always = 2,
@@ -234,11 +229,17 @@ end
 function PermissionManager:_setup_keymaps(option_mapping)
     self:_remove_keymaps()
 
-    -- Add buffer-local key mappings for each option
     for number, option_id in pairs(option_mapping) do
         local lhs = tostring(number)
-        local callback = function()
-            self:_complete_request(option_id)
+        local callback
+        if option_id == "__reject_all__" then
+            callback = function()
+                self:reject_and_cancel_remaining()
+            end
+        else
+            callback = function()
+                self:_complete_request(option_id)
+            end
         end
 
         BufHelpers.keymap_set(self.message_writer.bufnr, "n", lhs, callback, {
@@ -247,12 +248,6 @@ function PermissionManager:_setup_keymaps(option_mapping)
 
         table.insert(self.keymap_info, { mode = "n", lhs = lhs })
     end
-
-    -- Reject current + cancel remaining (graceful, unlike <C-c> hard abort)
-    BufHelpers.keymap_set(self.message_writer.bufnr, "n", "0", function()
-        self:reject_and_cancel_remaining()
-    end, { desc = "Reject and cancel remaining permissions" })
-    table.insert(self.keymap_info, { mode = "n", lhs = "0" })
 end
 
 function PermissionManager:_remove_keymaps()

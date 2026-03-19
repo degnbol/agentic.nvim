@@ -931,7 +931,30 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         })
     end
 
-    for i, option in ipairs(options) do
+    -- Insert "Reject all" before reject_always (permanent rule is stronger).
+    -- Build a merged list of ACP options + our local reject-all entry.
+    local merged_options = {}
+    local reject_all_inserted = false
+    for _, option in ipairs(options) do
+        if option.kind == "reject_always" and not reject_all_inserted then
+            table.insert(merged_options, {
+                kind = "__reject_all__",
+                name = "Reject all",
+                optionId = "__reject_all__",
+            })
+            reject_all_inserted = true
+        end
+        table.insert(merged_options, option)
+    end
+    if not reject_all_inserted then
+        table.insert(merged_options, {
+            kind = "__reject_all__",
+            name = "Reject all",
+            optionId = "__reject_all__",
+        })
+    end
+
+    for i, option in ipairs(merged_options) do
         table.insert(
             lines_to_append,
             string.format(
@@ -944,7 +967,6 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         option_mapping[i] = option.optionId
     end
 
-    table.insert(lines_to_append, "0.  Reject all")
     table.insert(lines_to_append, "--- ---")
 
     local hint_line_index =

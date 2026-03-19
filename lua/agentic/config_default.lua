@@ -267,6 +267,7 @@ local ConfigDefault = {
         allow_once = "",
         allow_always = "",
         reject_once = "",
+        __reject_all__ = "",
         reject_always = "󰜺",
     },
 
