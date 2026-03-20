@@ -205,13 +205,6 @@ local ConfigDefault = {
                     mode = { "i" },
                 },
             },
-
-            accept_completion = {
-                {
-                    "<Tab>",
-                    mode = { "i" },
-                },
-            },
         },
 
         --- Key bindings for the chat buffer

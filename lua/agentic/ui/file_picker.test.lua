@@ -127,13 +127,13 @@ describe("FilePicker:scan_files", function()
 
             -- Extract just the word (filename) for comparison
             local words_rg = vim.tbl_map(function(f)
-                return f.word
+                return f.path
             end, files_rg)
             local words_fd = vim.tbl_map(function(f)
-                return f.word
+                return f.path
             end, files_fd)
             local words_git = vim.tbl_map(function(f)
-                return f.word
+                return f.path
             end, files_git)
 
             local rg_only, fd_only = table_diff(words_rg, words_fd)
@@ -184,10 +184,10 @@ describe("FilePicker:scan_files", function()
 
             -- Extract just the word (filename) for comparison
             local words_rg = vim.tbl_map(function(f)
-                return f.word
+                return f.path
             end, files_rg)
             local words_glob = vim.tbl_map(function(f)
-                return f.word
+                return f.path
             end, files_glob)
 
             local rg_only, glob_only = table_diff(words_rg, words_glob)
@@ -195,62 +195,5 @@ describe("FilePicker:scan_files", function()
 
             assert.are.equal(#words_rg, #words_glob)
         end)
-    end)
-end)
-
-describe("FilePicker keymap fallback", function()
-    local child = require("tests.helpers.child").new()
-
-    --- Setup a tracking expr keymap using vimscript (fully typed, no child.lua needed)
-    --- @param key string The key to map (e.g., "<Tab>", "<CR>")
-    --- @param global_name string The global variable name (g:) to track calls
-    local function setup_tracking_keymap(key, global_name)
-        child.g[global_name] = false
-        -- vimscript expr: execute() returns "" on success, concat with return value
-        local rhs = ("execute('let g:%s = v:true') .. '%s_CALLED'"):format(
-            global_name,
-            key:upper():gsub("[<>]", "")
-        )
-        child.api.nvim_set_keymap("i", key, rhs, { expr = true })
-    end
-
-    --- Load FilePicker in child process to void polluting main test env
-    local function load_file_picker()
-        child.lua([[require("agentic.ui.file_picker"):new(0)]])
-    end
-
-    before_each(function()
-        child.setup()
-    end)
-
-    after_each(function()
-        child.stop()
-    end)
-
-    it("should accept completion when completion menu is visible", function()
-        local prop_name = "tab_called"
-        setup_tracking_keymap("<Tab>", prop_name)
-        load_file_picker()
-
-        -- Set up buffer with multiple completion candidates
-        child.api.nvim_buf_set_lines(
-            0,
-            0,
-            -1,
-            false,
-            { "hello help helicopter", "" }
-        )
-        child.api.nvim_win_set_cursor(0, { 2, 0 })
-
-        -- Type partial word and trigger keyword completion
-        child.type_keys("i", "hel", "<C-x><C-n>")
-
-        -- Verify completion menu is actually visible
-        assert.equal(1, child.fn.pumvisible())
-
-        -- Now press Tab while menu is visible - should accept completion, not call fallback
-        child.type_keys("<Tab>")
-
-        assert.is_false(child.g[prop_name])
     end)
 end)

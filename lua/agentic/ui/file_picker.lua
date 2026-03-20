@@ -1,10 +1,12 @@
 local FileSystem = require("agentic.utils.file_system")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
-local BufHelpers = require("agentic.utils.buf_helpers")
+
+--- @class agentic.ui.FilePickerFile
+--- @field path string Relative file path
 
 --- @class agentic.ui.FilePicker
---- @field _files table[]
+--- @field _files agentic.ui.FilePickerFile[]
 local FilePicker = {}
 FilePicker.__index = FilePicker
 
@@ -43,84 +45,25 @@ function FilePicker:new(bufnr)
 
     --- @type agentic.ui.FilePicker
     local instance = setmetatable({ _files = {} }, self)
-    instance:_setup_completion(bufnr)
+    instances_by_buffer[bufnr] = instance
     return instance
 end
 
---- Completion menu accept sequence
---- Space after <C-y> ensures completion menu closes and user is ready to start a new completion
-local COMPLETION_ACCEPT =
-    vim.api.nvim_replace_termcodes("<C-y> ", true, true, true)
+--- Get cached file list for a buffer, scanning if empty.
+--- Called by the LSP completion server.
+--- @param bufnr integer
+--- @return agentic.ui.FilePickerFile[]
+function FilePicker.get_files(bufnr)
+    local instance = instances_by_buffer[bufnr]
+    if not instance then
+        return {}
+    end
 
---- Sets up omnifunc completion and @ trigger detection
---- @param bufnr number
-function FilePicker:_setup_completion(bufnr)
-    vim.bo[bufnr].omnifunc =
-        "v:lua.require'agentic.ui.file_picker'.complete_func"
-    vim.bo[bufnr].iskeyword = vim.bo[bufnr].iskeyword .. ",@"
-    instances_by_buffer[bufnr] = self
+    if #instance._files == 0 then
+        instance:scan_files()
+    end
 
-    BufHelpers.multi_keymap_set(
-        Config.keymaps.prompt.accept_completion,
-        bufnr,
-        function()
-            if vim.fn.pumvisible() == 1 then
-                return COMPLETION_ACCEPT
-            end
-
-            return ""
-        end,
-        {
-            desc = "Agentic accept completion",
-            expr = true,
-            replace_keycodes = false,
-        }
-    )
-
-    local last_at_pos = nil
-
-    vim.api.nvim_create_autocmd("TextChangedI", {
-        buffer = bufnr,
-        callback = function()
-            local cursor = vim.api.nvim_win_get_cursor(0)
-            local line = vim.api.nvim_get_current_line()
-            local before_cursor = line:sub(1, cursor[2])
-
-            -- Match @ at start of line or after whitespace (space/tab)
-            local at_match = before_cursor:match("^@[^%s]*$")
-                or before_cursor:match("[%s]@[^%s]*$")
-
-            if at_match then
-                local at_pos = before_cursor:reverse():find("@")
-                local current_pos = cursor[2] - at_pos
-
-                -- Only scan if this is a new @ position
-                if current_pos ~= last_at_pos then
-                    last_at_pos = current_pos
-                    self:scan_files()
-                end
-
-                if self._files and #self._files > 0 then
-                    -- Set popup menu width a % of editor width
-                    -- Neovim will auto-reposition ("nudge") the menu to fit on screen
-                    vim.opt_local.pumwidth = math.floor(vim.o.columns * 0.6)
-
-                    vim.api.nvim_feedkeys(
-                        vim.api.nvim_replace_termcodes(
-                            "<C-x><C-o>",
-                            true,
-                            false,
-                            true
-                        ),
-                        "n",
-                        false
-                    )
-                end
-            else
-                last_at_pos = nil
-            end
-        end,
-    })
+    return instance._files
 end
 
 function FilePicker:scan_files()
@@ -147,17 +90,12 @@ function FilePicker:scan_files()
             for line in output:gmatch("[^\n]+") do
                 if line ~= "" then
                     local relative_path = FileSystem.to_smart_path(line)
-                    table.insert(files, {
-                        word = "@" .. relative_path,
-                        menu = "File",
-                        kind = "@",
-                        icase = 1,
-                    })
+                    table.insert(files, { path = relative_path })
                 end
             end
 
             table.sort(files, function(a, b)
-                return a.word < b.word
+                return a.path < b.path
             end)
 
             self._files = files
@@ -183,18 +121,13 @@ function FilePicker:scan_files()
             local relative_path = FileSystem.to_smart_path(path)
             if not seen[relative_path] then
                 seen[relative_path] = true
-                table.insert(files, {
-                    word = "@" .. relative_path,
-                    menu = "File",
-                    kind = "@",
-                    icase = 1,
-                })
+                table.insert(files, { path = relative_path })
             end
         end
     end
 
     table.sort(files, function(a, b)
-        return a.word < b.word
+        return a.path < b.path
     end)
 
     self._files = files
@@ -272,36 +205,6 @@ function FilePicker:_should_exclude(path)
     end
 
     return false
-end
-
---- Omnifunc completion function (called by Neovim)
---- @param findstart number 1 for finding start position, 0 for returning matches
---- @param _base string The text to complete
---- @return number|table
-function FilePicker.complete_func(findstart, _base)
-    if findstart == 1 then
-        local line = vim.api.nvim_get_current_line()
-        local cursor = vim.api.nvim_win_get_cursor(0)
-        local before_cursor = line:sub(1, cursor[2])
-
-        local at_pos = before_cursor:reverse():find("@")
-        if at_pos then
-            local start_col = cursor[2] - at_pos
-            return start_col
-        end
-        -- Return -3: Cancel silently and leave completion mode (see :h complete-functions)
-        return -3
-    else
-        local bufnr = vim.api.nvim_get_current_buf()
-        local instance = instances_by_buffer[bufnr]
-        if not instance then
-            Logger.debug("[FilePicker] No instance found for buffer:", bufnr)
-            return {}
-        end
-
-        -- Return all files - Neovim handles fuzzy filtering
-        return instance._files
-    end
 end
 
 return FilePicker

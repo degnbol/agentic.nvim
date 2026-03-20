@@ -27,11 +27,16 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
     return self
 end
 
---- Mode-switching tools whose body contains internal instructions, not user-facing content
+--- Mode-switching tools: maps ACP tool_call title to a short display label.
+--- Body contains internal instructions, not user-facing content.
+--- ACP has no stable tool-name field — `title` is the only identifier, and
+--- the provider may send either the internal name or a user-facing string.
 local MODE_SWITCH_TOOLS = {
-    EnterPlanMode = true,
-    ExitPlanMode = true,
-    EnterWorktree = true,
+    EnterPlanMode = "Plan",
+    ExitPlanMode = "Normal",
+    EnterWorktree = "Normal",
+    -- claude-agent-acp sends the display name as title for ExitPlanMode
+    ["Ready to code?"] = "Normal",
 }
 
 --- Intercept mode-switching tools at the initial tool_call level before the
@@ -40,13 +45,15 @@ local MODE_SWITCH_TOOLS = {
 --- @param session_id string
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
-    if update.kind == "other" and MODE_SWITCH_TOOLS[update.title] then
+    local mode_label = update.kind == "other"
+        and MODE_SWITCH_TOOLS[update.title]
+    if mode_label then
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local message = {
             tool_call_id = update.toolCallId,
             kind = "switch_mode",
             status = update.status,
-            argument = update.title,
+            argument = mode_label,
         }
 
         self:__with_subscriber(session_id, function(subscriber)
@@ -133,7 +140,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             end
         elseif MODE_SWITCH_TOOLS[update.title] then
             message.kind = "switch_mode"
-            message.argument = update.title
+            message.argument = MODE_SWITCH_TOOLS[update.title]
         end
     else
         local command = rawInput.command

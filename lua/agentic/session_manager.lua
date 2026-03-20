@@ -130,8 +130,12 @@ function SessionManager:new(tab_page_id)
     self.status_animation = StatusAnimation:new(self.widget.buf_nrs.chat)
     self.permission_manager = PermissionManager:new(self.message_writer)
 
-    FilePicker:new(self.widget.buf_nrs.input)
-    SlashCommands.setup_completion(self.widget.buf_nrs.input)
+    self._file_picker = FilePicker:new(self.widget.buf_nrs.input)
+
+    local LspServer = require("agentic.completion.lsp_server")
+    vim.schedule(function()
+        LspServer.attach(self.widget.buf_nrs.input)
+    end)
 
     self.config_options = AgentConfigOptions:new(
         self.widget.buf_nrs,
@@ -801,12 +805,27 @@ function SessionManager:new_session(opts)
             local function wrapped_callback(option_id)
                 callback(option_id)
 
-                local is_rejection = option_id == "reject_once"
-                    or option_id == "reject_always"
+                -- Look up the option kind from the request options.
+                -- option_id is an opaque ACP identifier (e.g. "reject-once"),
+                -- not the kind string ("reject_once").
+                local option_kind
+                for _, opt in ipairs(request.options) do
+                    if opt.optionId == option_id then
+                        option_kind = opt.kind
+                        break
+                    end
+                end
+
+                local is_rejection = option_kind == "reject_once"
+                    or option_kind == "reject_always"
                 self:_clear_diff_in_buffer(
                     request.toolCall.toolCallId,
                     is_rejection
                 )
+
+                if is_rejection then
+                    self.message_writer:suppress_next_rejection()
+                end
 
                 if
                     not self.permission_manager.current_request
@@ -944,12 +963,27 @@ function SessionManager:_do_load_acp_session(session_id)
             local function wrapped_callback(option_id)
                 callback(option_id)
 
-                local is_rejection = option_id == "reject_once"
-                    or option_id == "reject_always"
+                -- Look up the option kind from the request options.
+                -- option_id is an opaque ACP identifier (e.g. "reject-once"),
+                -- not the kind string ("reject_once").
+                local option_kind
+                for _, opt in ipairs(request.options) do
+                    if opt.optionId == option_id then
+                        option_kind = opt.kind
+                        break
+                    end
+                end
+
+                local is_rejection = option_kind == "reject_once"
+                    or option_kind == "reject_always"
                 self:_clear_diff_in_buffer(
                     request.toolCall.toolCallId,
                     is_rejection
                 )
+
+                if is_rejection then
+                    self.message_writer:suppress_next_rejection()
+                end
 
                 if
                     not self.permission_manager.current_request

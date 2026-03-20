@@ -194,6 +194,11 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field search_matches? agentic.ui.MessageWriter.SearchMatch[] Pattern match positions (relative to block lines)
 --- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
 
+--- Known prefix of the rejection boilerplate injected by the provider after
+--- a permission denial. Streamed as agent_message_chunk but meant for the
+--- model, not the user.
+local REJECTION_PREFIX = "The user doesn't want to proceed"
+
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
@@ -201,6 +206,8 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field _should_auto_scroll? boolean
 --- @field _scroll_scheduled? boolean
 --- @field _on_content_changed? fun()
+--- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
+--- @field _rejection_buffer string Accumulated text while detecting rejection
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -219,9 +226,18 @@ function MessageWriter:new(bufnr)
         _scroll_scheduled = false,
         _chunk_start_line = nil,
         _last_wrote_tool_call = false,
+        _suppressing_rejection = false,
+        _rejection_buffer = "",
     }, self)
 
     return instance
+end
+
+--- Start buffering the next message chunks to detect and suppress the
+--- rejection boilerplate that the provider injects after permission denial.
+function MessageWriter:suppress_next_rejection()
+    self._suppressing_rejection = true
+    self._rejection_buffer = ""
 end
 
 --- @param callback fun()|nil
@@ -355,6 +371,36 @@ function MessageWriter:write_message_chunk(update)
 
     if not text or text == "" then
         return
+    end
+
+    -- After a permission rejection, the provider streams boilerplate
+    -- instructions meant for the model ("The user doesn't want to proceed…").
+    -- Buffer incoming chunks and check for the known prefix. Once we have
+    -- enough text: if it matches, suppress the whole paragraph; if not, flush
+    -- the buffer and continue rendering normally.
+    if self._suppressing_rejection then
+        self._rejection_buffer = self._rejection_buffer .. text
+        local buf = self._rejection_buffer
+
+        -- Still accumulating — not enough text to decide yet
+        if #buf < #REJECTION_PREFIX then
+            -- Check that what we have so far could still match
+            if REJECTION_PREFIX:sub(1, #buf) == buf then
+                return
+            end
+            -- Mismatch — not rejection text, flush below
+        elseif buf:sub(1, #REJECTION_PREFIX) == REJECTION_PREFIX then
+            -- Confirmed rejection boilerplate — suppress entirely.
+            -- Keep _suppressing_rejection true to drop remaining chunks
+            -- of this paragraph. Reset on next tool call via
+            -- write_tool_call_block.
+            return
+        end
+
+        -- Not rejection text — stop suppressing and flush the buffer
+        self._suppressing_rejection = false
+        text = self._rejection_buffer
+        self._rejection_buffer = ""
     end
 
     if
@@ -495,6 +541,19 @@ end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:write_tool_call_block(tool_call_block)
+    -- A new tool call means any rejection boilerplate is over
+    if self._suppressing_rejection then
+        self._suppressing_rejection = false
+        self._rejection_buffer = ""
+    end
+
+    -- Mode-switch tool calls (EnterPlanMode, ExitPlanMode, EnterWorktree)
+    -- carry internal instructions in their body — strip it so only the
+    -- compact header renders (e.g. "Switch Mode `EnterPlanMode`").
+    if tool_call_block.kind == "switch_mode" then
+        tool_call_block.body = nil
+    end
+
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_and_notify_change(function(bufnr)
@@ -565,6 +624,11 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         )
 
         return
+    end
+
+    -- Strip internal instructions from switch_mode updates
+    if tracker.kind == "switch_mode" then
+        tool_call_block.body = nil
     end
 
     -- Some ACP providers don't send the diff on the first tool_call

@@ -1,11 +1,16 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
 
---- Mode-switching tools whose body contains internal instructions, not user-facing content
+--- Mode-switching tools: maps ACP tool_call title to a short display label.
+--- Body contains internal instructions, not user-facing content.
+--- ACP has no stable tool-name field — `title` is the only identifier, and
+--- the provider may send either the internal name or a user-facing string.
 local MODE_SWITCH_TOOLS = {
-    EnterPlanMode = true,
-    ExitPlanMode = true,
-    EnterWorktree = true,
+    EnterPlanMode = "Plan",
+    ExitPlanMode = "Normal",
+    EnterWorktree = "Normal",
+    -- claude-agent-acp sends the display name as title for ExitPlanMode
+    ["Ready to code?"] = "Normal",
 }
 
 --- @class agentic.acp.ClaudeRawInput : agentic.acp.RawInput
@@ -117,7 +122,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
             end
         elseif MODE_SWITCH_TOOLS[update.title] then
             message.kind = "switch_mode"
-            message.argument = update.title
+            message.argument = MODE_SWITCH_TOOLS[update.title]
         end
     else
         local command = update.rawInput.command

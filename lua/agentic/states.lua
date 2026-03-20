@@ -53,16 +53,24 @@ end
 
 --- Slash commands are stored per buffer, as it can only be triggered in insert mode, so the use will be in the right buffer
 --- @param bufnr integer
---- @param items agentic.acp.CompletionItem[]
+--- @param items agentic.acp.SlashCommand[]
 function M.setSlashCommands(bufnr, items)
     safe_set(vim.b, bufnr, "agentic_slash_commands", items)
 end
 
 --- Retrieve slash commands for the current buffer, we assume it's the correct one
 --- as it can only be triggered in insert mode
---- @return agentic.acp.CompletionItem[]
+--- @return agentic.acp.SlashCommand[]
 function M.getSlashCommands()
     return safe_get(vim.b, 0, "agentic_slash_commands") or {}
+end
+
+--- Retrieve slash commands for a specific buffer (used by LSP handler where
+--- vim.b[0] may not reliably point to the input buffer).
+--- @param bufnr integer
+--- @return agentic.acp.SlashCommand[]
+function M.getSlashCommandsForBuffer(bufnr)
+    return safe_get(vim.b, bufnr, "agentic_slash_commands") or {}
 end
 
 return M

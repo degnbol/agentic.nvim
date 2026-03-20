@@ -1,25 +1,22 @@
 local States = require("agentic.states")
 
---- Neovim completion item structure (vim.fn.complete() dictionary format)
---- For complete list of properties, see |complete-items| in insert.txt help manual
---- @class agentic.acp.CompletionItem
---- @field word string The text to insert (mandatory)
---- @field menu string Description shown in completion menu
---- @field info string Full description shown in popup window
---- @field kind string Type/category of completion item
---- @field icase number 1 for case-insensitive, 0 for case-sensitive
+--- Stored slash command structure
+--- @class agentic.acp.SlashCommand
+--- @field word string Command name (without leading /)
+--- @field menu string Short description
+--- @field info string Full description
 
 --- @class agentic.acp.SlashCommands
 local SlashCommands = {}
 
---- Replace all commands with new list in completion format
---- Validates each command has required fields, skips invalid commands and commands with spaces
---- Filters out `clear` command (handled by specific agents internally)
---- Automatically adds `/new` command if not provided by agent
+--- Replace all commands with new list.
+--- Validates each command has required fields, skips invalid commands and commands with spaces.
+--- Filters out `clear` command (handled by specific agents internally).
+--- Automatically adds `/new` command if not provided by agent.
 --- @param bufnr integer
 --- @param available_commands agentic.acp.AvailableCommand[]
 function SlashCommands.setCommands(bufnr, available_commands)
-    --- @type agentic.acp.CompletionItem[]
+    --- @type agentic.acp.SlashCommand[]
     local commands = {}
 
     local has_new_command = false
@@ -35,93 +32,29 @@ function SlashCommands.setCommands(bufnr, available_commands)
                 has_new_command = true
             end
 
-            --- @type agentic.acp.CompletionItem
-            local completion_item = {
+            --- @type agentic.acp.SlashCommand
+            local item = {
                 word = cmd.name,
                 menu = cmd.description,
                 info = cmd.description,
-                kind = "/",
-                icase = 1,
             }
-            table.insert(commands, completion_item)
+            table.insert(commands, item)
         end
     end
 
     -- Add /new command if not provided by agent
     if not has_new_command then
-        --- @type agentic.acp.CompletionItem
+        --- @type agentic.acp.SlashCommand
         local new_command = {
             word = "new",
             menu = "Start a new session",
             info = "Start a new session",
-            kind = "/",
-            icase = 1,
         }
         table.insert(commands, new_command)
     end
 
     -- must be set at the end, as it gets serialized and loses the reference
     States.setSlashCommands(bufnr, commands)
-end
-
---- Setup native Neovim completion for slash commands in the input buffer
---- Uses completefunc with <C-x><C-u> trigger
---- Neovim handles fuzzy filtering automatically via completeopt
---- @param bufnr integer The input buffer number
-function SlashCommands.setup_completion(bufnr)
-    vim.bo[bufnr].completeopt = "menu,menuone,noinsert,popup,fuzzy"
-
-    -- Include `-` as keyword character so completion doesn't close when typing it
-    vim.bo[bufnr].iskeyword = vim.bo[bufnr].iskeyword .. ",-"
-
-    -- Set completefunc to return our commands
-    -- CRITICAL: v:lua syntax does NOT support parens in require call
-    vim.bo[bufnr].completefunc =
-        "v:lua.require'agentic.acp.slash_commands'.complete_func"
-
-    vim.api.nvim_create_autocmd("TextChangedI", {
-        buffer = bufnr,
-        callback = function()
-            local commands = States.getSlashCommands()
-            if #commands == 0 then
-                return
-            end
-
-            local cursor = vim.api.nvim_win_get_cursor(0)
-            local row = cursor[1]
-            local col = cursor[2]
-
-            if row ~= 1 or col < 1 then
-                return
-            end
-
-            local line = vim.api.nvim_get_current_line()
-
-            if not line:match("^/") or line:match("%s") then
-                return
-            end
-
-            -- Feed <C-x><C-u> to trigger completefunc
-            vim.api.nvim_feedkeys(
-                vim.api.nvim_replace_termcodes("<C-x><C-u>", true, false, true),
-                "n",
-                false
-            )
-        end,
-    })
-end
-
---- Completion function for completefunc
---- @param findstart number 1 to find start of completion, 0 to return matches
---- @param _base string The text to match when findstart=0
---- @return number|table Start column when findstart=1, completion items when findstart=0
-function SlashCommands.complete_func(findstart, _base)
-    if findstart == 1 then
-        -- Return the column where the completion starts (after the "/")
-        return 1
-    end
-
-    return States.getSlashCommands()
 end
 
 return SlashCommands
