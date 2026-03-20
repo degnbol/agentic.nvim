@@ -29,15 +29,29 @@ end
 
 --- Mode-switching tools: maps ACP tool_call title to a short display label.
 --- Body contains internal instructions, not user-facing content.
---- ACP has no stable tool-name field — `title` is the only identifier, and
---- the provider may send either the internal name or a user-facing string.
 local MODE_SWITCH_TOOLS = {
     EnterPlanMode = "Plan",
     ExitPlanMode = "Normal",
     EnterWorktree = "Normal",
-    -- claude-agent-acp sends the display name as title for ExitPlanMode
-    ["Ready to code?"] = "Normal",
 }
+
+--- Resolve mode-switch label from a tool_call title.
+--- ACP has no stable tool-name field — `title` is the only identifier, and
+--- the provider may send a user-facing string (e.g. "Ready to code?",
+--- "Ready for implementation") instead of the internal tool name.
+--- @param title string
+--- @return string|nil label "Plan" or "Normal", or nil if not a mode switch
+local function mode_switch_label(title)
+    local label = MODE_SWITCH_TOOLS[title]
+    if label then
+        return label
+    end
+    -- Provider exit-plan titles start with "Ready" (e.g. "Ready to code?")
+    if title:match("^Ready%s") then
+        return "Normal"
+    end
+    return nil
+end
 
 --- Intercept mode-switching tools at the initial tool_call level before the
 --- base class renders the body (which contains internal instructions).
@@ -45,8 +59,10 @@ local MODE_SWITCH_TOOLS = {
 --- @param session_id string
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
-    local mode_label = update.kind == "other"
-        and MODE_SWITCH_TOOLS[update.title]
+    -- Provider sends kind="other" for EnterPlanMode but kind="switch_mode"
+    -- for ExitPlanMode ("Ready to code?"). Check both.
+    local mode_label = (update.kind == "other" or update.kind == "switch_mode")
+        and mode_switch_label(update.title)
     if mode_label then
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local message = {
@@ -128,7 +144,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         if rawInput.prompt then
             message.body = self:safe_split(rawInput.prompt)
         end
-    elseif kind == "other" then
+    elseif kind == "other" or kind == "switch_mode" then
         if update.title == "SlashCommand" then
             message.kind = "SlashCommand"
         elseif update.title == "Skill" then
@@ -138,9 +154,12 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             if rawInput.args then
                 message.body = self:safe_split(rawInput.args)
             end
-        elseif MODE_SWITCH_TOOLS[update.title] then
-            message.kind = "switch_mode"
-            message.argument = MODE_SWITCH_TOOLS[update.title]
+        else
+            local ml = mode_switch_label(update.title)
+            if ml then
+                message.kind = "switch_mode"
+                message.argument = ml
+            end
         end
     else
         local command = rawInput.command

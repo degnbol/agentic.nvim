@@ -101,6 +101,23 @@ Folding thresholds are configured per tool kind:
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
 
+## Input buffer completion
+
+Completion for `/` slash commands and `@` file references uses an in-process LSP
+server (`lua/agentic/completion/lsp_server.lua`), not custom completefunc/omnifunc.
+The LSP declares `/` and `@` as trigger characters so any LSP-aware completion
+framework (blink.cmp, nvim-cmp, built-in) picks them up automatically. No
+plugin-specific keymaps needed.
+
+- `vim.lsp.start()` with same `name` + `root_dir` reuses one client across
+  buffers (handles multi-tabpage)
+- Handler uses `nvim_get_current_buf()` not URI (all input buffers share name
+  `agentic://prompt`)
+- `States.getSlashCommandsForBuffer(bufnr)` reads from specific buffer (not
+  `vim.b[0]` which is unreliable in LSP handler context)
+- `FilePicker.get_files(bufnr)` provides cached file list; `SessionManager`
+  holds a strong reference to prevent GC of the weak-tabled FilePicker instance
+
 ## Keymaps and configuration
 
 All user-configurable options live in `config_default.lua`. Keymaps are grouped

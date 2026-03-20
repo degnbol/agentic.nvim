@@ -3,15 +3,29 @@ local FileSystem = require("agentic.utils.file_system")
 
 --- Mode-switching tools: maps ACP tool_call title to a short display label.
 --- Body contains internal instructions, not user-facing content.
---- ACP has no stable tool-name field — `title` is the only identifier, and
---- the provider may send either the internal name or a user-facing string.
 local MODE_SWITCH_TOOLS = {
     EnterPlanMode = "Plan",
     ExitPlanMode = "Normal",
     EnterWorktree = "Normal",
-    -- claude-agent-acp sends the display name as title for ExitPlanMode
-    ["Ready to code?"] = "Normal",
 }
+
+--- Resolve mode-switch label from a tool_call title.
+--- ACP has no stable tool-name field — `title` is the only identifier, and
+--- the provider may send a user-facing string (e.g. "Ready to code?",
+--- "Ready for implementation") instead of the internal tool name.
+--- @param title string
+--- @return string|nil label "Plan" or "Normal", or nil if not a mode switch
+local function mode_switch_label(title)
+    local label = MODE_SWITCH_TOOLS[title]
+    if label then
+        return label
+    end
+    -- Provider exit-plan titles start with "Ready" (e.g. "Ready to code?")
+    if title:match("^Ready%s") then
+        return "Normal"
+    end
+    return nil
+end
 
 --- @class agentic.acp.ClaudeRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -109,7 +123,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         if update.rawInput.prompt then
             message.body = self:safe_split(update.rawInput.prompt)
         end
-    elseif kind == "other" then
+    elseif kind == "other" or kind == "switch_mode" then
         if update.title == "SlashCommand" then
             -- Override kind to increase UX, `other` doesn't say much
             message.kind = "SlashCommand"
@@ -120,9 +134,12 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
             if update.rawInput.args then
                 message.body = self:safe_split(update.rawInput.args)
             end
-        elseif MODE_SWITCH_TOOLS[update.title] then
-            message.kind = "switch_mode"
-            message.argument = MODE_SWITCH_TOOLS[update.title]
+        else
+            local ml = mode_switch_label(update.title)
+            if ml then
+                message.kind = "switch_mode"
+                message.argument = ml
+            end
         end
     else
         local command = update.rawInput.command
