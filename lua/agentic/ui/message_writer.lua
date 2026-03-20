@@ -36,6 +36,82 @@ local function safe_fence(body_lines)
     return fence
 end
 
+--- Format a long single-line shell command for readability by inserting
+--- newlines after top-level operators (&&, ||, ;, |) outside of quotes and
+--- subshells. Already-multiline commands or short commands are returned as-is.
+--- @param cmd string
+--- @return string
+local function format_long_command(cmd)
+    -- Skip if already multiline or short enough to read comfortably
+    if cmd:find("\n", 1, true) or #cmd <= 80 then
+        return cmd
+    end
+
+    local parts = {}
+    local i = 1
+    local len = #cmd
+    local in_single = false
+    local in_double = false
+    local depth = 0 -- parenthesis/brace depth for $(...), (...), {...}
+
+    while i <= len do
+        local c = cmd:sub(i, i)
+
+        if c == "'" and not in_double and depth == 0 then
+            in_single = not in_single
+            parts[#parts + 1] = c
+            i = i + 1
+        elseif c == '"' and not in_single and depth == 0 then
+            in_double = not in_double
+            parts[#parts + 1] = c
+            i = i + 1
+        elseif c == "\\" and not in_single then
+            parts[#parts + 1] = cmd:sub(i, i + 1)
+            i = i + 2
+        elseif not in_single and not in_double then
+            if c == "(" or c == "{" then
+                depth = depth + 1
+                parts[#parts + 1] = c
+                i = i + 1
+            elseif (c == ")" or c == "}") and depth > 0 then
+                depth = depth - 1
+                parts[#parts + 1] = c
+                i = i + 1
+            elseif depth == 0 then
+                local two = cmd:sub(i, i + 1)
+                local op, op_len
+                if two == "&&" or two == "||" then
+                    op, op_len = two, 2
+                elseif c == ";" or c == "|" then
+                    op, op_len = c, 1
+                end
+
+                if op then
+                    parts[#parts + 1] = op
+                    i = i + op_len
+                    while i <= len and cmd:sub(i, i) == " " do
+                        i = i + 1
+                    end
+                    if i <= len then
+                        parts[#parts + 1] = "\n"
+                    end
+                else
+                    parts[#parts + 1] = c
+                    i = i + 1
+                end
+            else
+                parts[#parts + 1] = c
+                i = i + 1
+            end
+        else
+            parts[#parts + 1] = c
+            i = i + 1
+        end
+    end
+
+    return table.concat(parts)
+end
+
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
 local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
 local NS_PERMISSION_BUTTONS =
@@ -381,6 +457,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_and_notify_change(function(bufnr)
+        -- Flush any pending prose reflow before writing the tool call block.
+        -- Without this, append_separator's _reflow_chunks would later process
+        -- a range that includes these tool call lines, destroying extmarks
+        -- (decorations, status, range tracking) via nvim_buf_set_lines.
+        self:_reflow_chunks(bufnr, true)
+
         local kind = tool_call_block.kind
 
         local lines, highlight_ranges, ansi_highlights =
@@ -613,7 +695,8 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     --- @type string[]
     local lines
     if kind == "execute" then
-        local cmd_lines = vim.split(argument, "\n", { plain = true })
+        local cmd_lines =
+            vim.split(format_long_command(argument), "\n", { plain = true })
         lines = { string.format("%s ", display_kind(kind)), "```zsh" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")

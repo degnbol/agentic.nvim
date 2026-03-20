@@ -481,6 +481,76 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(#new_ranges > 0)
             assert.equal("inserted", new_ranges[1].new_line)
         end)
+
+        it("splits long one-liner execute commands at operators", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-long",
+                status = "pending",
+                kind = "execute",
+                argument = "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test",
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("Execute ", lines[1])
+            assert.equal("```zsh", lines[2])
+            assert.equal("cd /some/very/long/project/path &&", lines[3])
+            assert.equal("npm install --save-dev typescript &&", lines[4])
+            assert.equal("npm run build &&", lines[5])
+            assert.equal("npm test", lines[6])
+            assert.equal("```", lines[7])
+        end)
+
+        it("does not split short execute commands", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-short",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la && echo done",
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("ls -la && echo done", lines[3])
+        end)
+
+        it("does not split inside quoted strings", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-quoted",
+                status = "pending",
+                kind = "execute",
+                argument = [[echo "this && that || other" && echo 'pipes | here ; too' && echo done with a very long command line]],
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("```zsh", lines[2])
+            assert.equal([[echo "this && that || other" &&]], lines[3])
+            assert.equal([[echo 'pipes | here ; too' &&]], lines[4])
+            assert.equal("echo done with a very long command line", lines[5])
+        end)
+
+        it("does not split inside subshells", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-subshell",
+                status = "pending",
+                kind = "execute",
+                argument = "result=$(cmd1 && cmd2 || cmd3) && echo $result && final_command with some extra arguments to be long",
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("result=$(cmd1 && cmd2 || cmd3) &&", lines[3])
+            assert.equal("echo $result &&", lines[4])
+            assert.equal(
+                "final_command with some extra arguments to be long",
+                lines[5]
+            )
+        end)
     end)
 
     describe("status footer as direct buffer text", function()
