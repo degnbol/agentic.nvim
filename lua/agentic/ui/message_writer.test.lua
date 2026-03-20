@@ -695,6 +695,239 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("long command formatting", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it(
+            "write+update preserves header, body, and decorations for split commands",
+            function()
+                local long_cmd =
+                    "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test"
+
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "long-exec-1",
+                    status = "pending",
+                    kind = "execute",
+                    argument = long_cmd,
+                }
+                writer:write_tool_call_block(block)
+
+                local lines_after_write =
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+                -- Header should be present
+                assert.equal("Execute ", lines_after_write[1])
+                -- Code fence and split command
+                assert.equal("```zsh", lines_after_write[2])
+                assert.equal(
+                    "cd /some/very/long/project/path &&",
+                    lines_after_write[3]
+                )
+                assert.equal("npm test", lines_after_write[6])
+                assert.equal("```", lines_after_write[7])
+
+                -- Decorations should exist
+                local NS_DECORATIONS =
+                    vim.api.nvim_create_namespace("agentic_tool_decorations")
+                local decs_after_write = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_DECORATIONS,
+                    0,
+                    -1,
+                    {}
+                )
+                assert.is_true(#decs_after_write > 0)
+
+                -- Block should be tracked
+                assert.is_not_nil(writer.tool_call_blocks["long-exec-1"])
+
+                -- Now update with body (simulating command completion)
+                writer:update_tool_call_block({
+                    tool_call_id = "long-exec-1",
+                    status = "completed",
+                    body = { "output line 1", "output line 2" },
+                })
+
+                local lines_after_update =
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+                -- Header still present
+                assert.equal("Execute ", lines_after_update[1])
+                assert.equal("```zsh", lines_after_update[2])
+
+                -- Body output should be present
+                local found_output = false
+                for _, line in ipairs(lines_after_update) do
+                    if line == "output line 1" then
+                        found_output = true
+                        break
+                    end
+                end
+                assert.is_true(found_output)
+
+                -- Status should show completed
+                local found_completed = false
+                for _, line in ipairs(lines_after_update) do
+                    if line:find("completed") then
+                        found_completed = true
+                        break
+                    end
+                end
+                assert.is_true(found_completed)
+
+                -- Decorations should still exist
+                local decs_after_update = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_DECORATIONS,
+                    0,
+                    -1,
+                    {}
+                )
+                assert.is_true(#decs_after_update > 0)
+
+                -- Block still tracked
+                assert.is_not_nil(writer.tool_call_blocks["long-exec-1"])
+            end
+        )
+    end)
+
+    describe("message chunk + tool call + separator flow", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it(
+            "append_separator reflow does not corrupt tool call block",
+            function()
+                -- Simulate: agent streams message, then tool call, then separator
+                writer:write_message_chunk(
+                    make_message_update("Do a sample for loop\n\n---")
+                )
+
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "reflow-exec",
+                    status = "pending",
+                    kind = "execute",
+                    argument = "for colour in 31 32 33 34 35 36; do\n  printf 'hello'\ndone",
+                }
+                writer:write_tool_call_block(block)
+
+                -- This is what happens when the response ends
+                writer:append_separator()
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+                -- Find "Execute " header
+                local found_header = false
+                local found_fence = false
+                local found_command = false
+                for _, line in ipairs(lines) do
+                    if line == "Execute " then
+                        found_header = true
+                    end
+                    if line == "```zsh" then
+                        found_fence = true
+                    end
+                    if line:find("for colour") then
+                        found_command = true
+                    end
+                end
+                assert.is_true(found_header, "Execute header missing")
+                assert.is_true(found_fence, "```zsh fence missing")
+                assert.is_true(found_command, "Command missing")
+
+                -- Block should still be tracked
+                assert.is_not_nil(writer.tool_call_blocks["reflow-exec"])
+
+                -- Decorations should exist
+                local NS_DECORATIONS =
+                    vim.api.nvim_create_namespace("agentic_tool_decorations")
+                local decs = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_DECORATIONS,
+                    0,
+                    -1,
+                    {}
+                )
+                assert.is_true(#decs > 0, "Decoration extmarks missing")
+            end
+        )
+
+        it(
+            "narrow window reflow preserves tool call block after streamed chunks",
+            function()
+                -- Resize window to trigger prose wrapping in reflow
+                vim.api.nvim_win_set_config(winid, { width = 40, height = 40 })
+
+                -- Stream message in multiple chunks (like real ACP flow)
+                writer:write_message_chunk(
+                    make_message_update("Do a sample for loop that ")
+                )
+                writer:write_message_chunk(
+                    make_message_update("produces multiple lines ")
+                )
+                writer:write_message_chunk(
+                    make_message_update("with ansi colored text\n\n---")
+                )
+
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "narrow-exec",
+                    status = "pending",
+                    kind = "execute",
+                    argument = "for colour in 31 32 33 34 35 36; do\n  printf 'hello'\ndone",
+                }
+                writer:write_tool_call_block(block)
+                writer:append_separator()
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+                local found_header = false
+                local found_fence = false
+                for _, line in ipairs(lines) do
+                    if line == "Execute " then
+                        found_header = true
+                    end
+                    if line == "```zsh" then
+                        found_fence = true
+                    end
+                end
+                assert.is_true(found_header, "Execute header missing")
+                assert.is_true(found_fence, "```zsh fence missing")
+
+                -- Decorations should survive
+                local NS_DECORATIONS =
+                    vim.api.nvim_create_namespace("agentic_tool_decorations")
+                local decs = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_DECORATIONS,
+                    0,
+                    -1,
+                    {}
+                )
+                assert.is_true(#decs > 0, "Decoration extmarks missing")
+            end
+        )
+    end)
+
     describe("collapsed extmark handling", function()
         --- @type TestStub
         local schedule_stub

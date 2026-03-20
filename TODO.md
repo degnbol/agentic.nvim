@@ -40,6 +40,8 @@ AgenticChat filetype that extends markdown. Of course this has to be changes in 
 
 - for the grep/ripgrep search task, we could highlight the line number as Number and the colon right after as Delimiter.
   One non-extmark solution would be to detect that this is grep output, not just generic "console" code block, and then have a syntax/grep.vim with simple regex highlight rules.
+  - The grep is not always performed by the search tool, it also is called from the execute tool. This should also be colored.
+    - For the execute tool (and maybe the search tool as well?) there might be a `grep ... | head ...` pattern or similar. This should also be supported, that doesn't change the fact that the output is grep format. Same with a grep on a grep or other patterns.
 
 - When denying "Switch Mode `Read to Code?`" it shows
 ```
