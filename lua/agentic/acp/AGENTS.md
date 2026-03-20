@@ -258,6 +258,27 @@ notifications.
   The chat header also shows a live context percentage from `usage_update`.
 - **`/new`**: Already intercepted locally to manage session lifecycle.
 
+### Mode switch kind inconsistency (claude-agent-acp)
+
+The provider sends different `kind` values for plan mode entry vs exit:
+
+| Tool | `kind` on `tool_call` | `title` on `tool_call` | `title` on final `tool_call_update` |
+| --- | --- | --- | --- |
+| EnterPlanMode | `"other"` | `"EnterPlanMode"` | `"EnterPlanMode"` |
+| ExitPlanMode | `"switch_mode"` | `"Ready to code?"` | `"Exited Plan Mode"` |
+
+Adapters must check both `kind == "other"` and `kind == "switch_mode"` in any
+branch that handles mode switches. The `title` field is unstable — use pattern
+matching (e.g. `title:match("^Ready%s")`) rather than exact string comparison.
+
+### Permission optionId is opaque
+
+`request.options[].optionId` is a provider-assigned opaque string (e.g.
+`"reject-once"`), NOT the same as `option.kind` (e.g. `"reject_once"`). To
+determine the kind of a selected option, look up the option by `optionId` in the
+original `request.options` array and read its `kind` field. Never compare
+`optionId` directly against kind strings.
+
 ### Non-JSON stdout/stderr forwarding
 
 The transport layer forwards non-JSON stdout lines and non-ignored stderr lines
