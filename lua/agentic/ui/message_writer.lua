@@ -36,13 +36,12 @@ local function safe_fence(body_lines)
     return fence
 end
 
---- Format a long single-line shell command for readability by inserting
---- newlines after top-level operators (&&, ||, ;, |) outside of quotes and
---- subshells. Already-multiline commands or short commands are returned as-is.
+--- Fallback formatter: split a long single-line shell command at top-level
+--- operators (&&, ||, ;, |) outside of quotes and subshells. Does not indent
+--- control structures. Already-multiline or short commands are returned as-is.
 --- @param cmd string
 --- @return string
-local function format_long_command(cmd)
-    -- Skip if already multiline or short enough to read comfortably
+local function split_at_operators(cmd)
     if cmd:find("\n", 1, true) or #cmd <= 80 then
         return cmd
     end
@@ -110,6 +109,48 @@ local function format_long_command(cmd)
     end
 
     return table.concat(parts)
+end
+
+--- Try to format a shell command using an external formatter (shfmt by default).
+--- Returns nil if the formatter is disabled, not installed, or errors.
+--- @param cmd string
+--- @return string|nil
+local function try_external_formatter(cmd)
+    local formatter = Config.tool_call_display
+        and Config.tool_call_display.execute_formatter
+    if not formatter then
+        return nil
+    end
+
+    if vim.fn.executable(formatter) ~= 1 then
+        return nil
+    end
+
+    -- Use vim.fn.system (NOT vim.system():wait()) because the latter
+    -- processes the event loop while waiting, allowing re-entrant ACP
+    -- callbacks to fire mid-render and corrupt buffer state.
+    local output =
+        vim.fn.system({ formatter, "-ln", "bash", "-i", "2", "-ci" }, cmd)
+
+    if vim.v.shell_error ~= 0 or not output or output == "" then
+        return nil
+    end
+
+    -- shfmt adds a trailing newline
+    local formatted = output:gsub("%s+$", "")
+    return formatted
+end
+
+--- Format a shell command for display. First splits long single-line commands
+--- at top-level operators (|, &&, ||, ;), then runs the external formatter
+--- (shfmt) to clean up indentation of the result. The order matters: shfmt
+--- preserves one-liners, so splitting must happen first to give it multi-line
+--- input that it can then indent properly.
+--- @param cmd string
+--- @return string
+local function format_long_command(cmd)
+    local split = split_at_operators(cmd)
+    return try_external_formatter(split) or split
 end
 
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
@@ -697,7 +738,7 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
     if kind == "execute" then
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
-        lines = { string.format("%s ", display_kind(kind)), "```zsh" }
+        lines = { string.format("%s ", display_kind(kind)), "```bash" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
     elseif kind == "search" then

@@ -328,9 +328,11 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.ToolCallDisplay
     --- @field search_max_lines integer
     --- @field execute_max_lines integer
+    --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.
     tool_call_display = {
         search_max_lines = 8,
         execute_max_lines = 25,
+        execute_formatter = "shfmt",
     },
 
     --- Control various behaviors and features of the plugin

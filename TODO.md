@@ -50,3 +50,5 @@ The user doesn't want to proceed with this tool use. The tool use was rejected (
 Note: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions.
 ```
 This is meant for claude, not the user. Should be suppressed in the chat.
+
+- The AgenticInput should have conceallevel=0, conceallevel>0 was supposed to just be added for AgenticChat and maybe some other Agentic* window types.

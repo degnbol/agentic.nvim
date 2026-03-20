@@ -149,9 +149,16 @@ tracked after terminal status.
 ## Execute tool call rendering
 
 Execute tool calls render their command inside a markdown fenced code block
-(` ```zsh `) instead of inline in the header. This lets the markdown treesitter
-parser inject zsh syntax highlighting automatically via its built-in injection
-queries.
+(` ```bash `) instead of inline in the header. This lets the markdown treesitter
+parser inject bash/zsh syntax highlighting automatically via its built-in
+injection queries. The `bash` fence label is semantically correct (Claude Code
+executes via bash), and the zsh treesitter parser handles it via
+`vim.treesitter.language.register("zsh", "bash")`.
+
+Commands are formatted for readability using an external formatter (`shfmt` by
+default, configurable via `tool_call_display.execute_formatter`). If the
+formatter is not installed or errors, a built-in fallback splits long single-line
+commands at top-level shell operators (&&, ||, ;, |).
 
 **Requirements for injection to work:**
 
@@ -168,7 +175,7 @@ queries.
 ```
 Non-execute:  " read(/tmp/file.txt) "     (inline argument)
 Execute:      " execute "                  (header, no argument)
-              ```zsh                       (code fence — treesitter injection)
+              ```bash                      (code fence — treesitter injection)
               ls -la /tmp
               ```
 ```

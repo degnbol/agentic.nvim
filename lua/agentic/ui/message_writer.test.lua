@@ -15,9 +15,13 @@ describe("agentic.ui.MessageWriter", function()
 
     --- @type agentic.UserConfig.AutoScroll|nil
     local original_auto_scroll
+    local original_tool_call_display
 
     before_each(function()
         original_auto_scroll = Config.auto_scroll
+        original_tool_call_display = vim.deepcopy(Config.tool_call_display)
+        -- Disable external formatter for deterministic fallback tests
+        Config.tool_call_display.execute_formatter = false
         MessageWriter = require("agentic.ui.message_writer")
 
         bufnr = vim.api.nvim_create_buf(false, true)
@@ -36,6 +40,7 @@ describe("agentic.ui.MessageWriter", function()
 
     after_each(function()
         Config.auto_scroll = original_auto_scroll --- @diagnostic disable-line: assign-type-mismatch
+        Config.tool_call_display = original_tool_call_display
         if winid and vim.api.nvim_win_is_valid(winid) then
             vim.api.nvim_win_close(winid, true)
         end
@@ -409,7 +414,7 @@ describe("agentic.ui.MessageWriter", function()
             local lines, _ = writer:_prepare_block_lines(block)
 
             assert.equal("Execute ", lines[1])
-            assert.equal("```zsh", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
             assert.equal("total 16", lines[5])
@@ -427,7 +432,7 @@ describe("agentic.ui.MessageWriter", function()
             local lines, _ = writer:_prepare_block_lines(block)
 
             assert.equal("Execute ", lines[1])
-            assert.equal("```zsh", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
             assert.equal("done", lines[5])
@@ -494,7 +499,7 @@ describe("agentic.ui.MessageWriter", function()
             local lines, _ = writer:_prepare_block_lines(block)
 
             assert.equal("Execute ", lines[1])
-            assert.equal("```zsh", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal("cd /some/very/long/project/path &&", lines[3])
             assert.equal("npm install --save-dev typescript &&", lines[4])
             assert.equal("npm run build &&", lines[5])
@@ -527,7 +532,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal("```zsh", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal([[echo "this && that || other" &&]], lines[3])
             assert.equal([[echo 'pipes | here ; too' &&]], lines[4])
             assert.equal("echo done with a very long command line", lines[5])
@@ -728,7 +733,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- Header should be present
                 assert.equal("Execute ", lines_after_write[1])
                 -- Code fence and split command
-                assert.equal("```zsh", lines_after_write[2])
+                assert.equal("```bash", lines_after_write[2])
                 assert.equal(
                     "cd /some/very/long/project/path &&",
                     lines_after_write[3]
@@ -763,7 +768,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 -- Header still present
                 assert.equal("Execute ", lines_after_update[1])
-                assert.equal("```zsh", lines_after_update[2])
+                assert.equal("```bash", lines_after_update[2])
 
                 -- Body output should be present
                 local found_output = false
@@ -797,6 +802,71 @@ describe("agentic.ui.MessageWriter", function()
 
                 -- Block still tracked
                 assert.is_not_nil(writer.tool_call_blocks["long-exec-1"])
+            end
+        )
+    end)
+
+    describe("external formatter (shfmt)", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            Config.tool_call_display.execute_formatter = "shfmt"
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("indents control structures when shfmt is available", function()
+            if vim.fn.executable("shfmt") ~= 1 then
+                return -- skip when shfmt not installed
+            end
+
+            -- shfmt preserves one-liners; use multi-line input (as Claude sends)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "shfmt-1",
+                status = "pending",
+                kind = "execute",
+                argument = "for i in 1 2 3; do\necho $i\ndone",
+            }
+            writer:write_tool_call_block(block)
+
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+            -- shfmt should indent the loop body
+            local found_indent = false
+            for _, line in ipairs(lines) do
+                if line:match("^%s+echo") then
+                    found_indent = true
+                    break
+                end
+            end
+            assert.is_true(found_indent, "shfmt should indent loop body")
+        end)
+
+        it(
+            "falls back to operator splitting when formatter is disabled",
+            function()
+                Config.tool_call_display.execute_formatter = false
+
+                local long_cmd =
+                    "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test"
+
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "fallback-1",
+                    status = "pending",
+                    kind = "execute",
+                    argument = long_cmd,
+                }
+                writer:write_tool_call_block(block)
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                assert.equal("```bash", lines[2])
+                assert.equal("cd /some/very/long/project/path &&", lines[3])
             end
         )
     end)
@@ -843,7 +913,7 @@ describe("agentic.ui.MessageWriter", function()
                     if line == "Execute " then
                         found_header = true
                     end
-                    if line == "```zsh" then
+                    if line == "```bash" then
                         found_fence = true
                     end
                     if line:find("for colour") then
@@ -851,7 +921,7 @@ describe("agentic.ui.MessageWriter", function()
                     end
                 end
                 assert.is_true(found_header, "Execute header missing")
-                assert.is_true(found_fence, "```zsh fence missing")
+                assert.is_true(found_fence, "```bash fence missing")
                 assert.is_true(found_command, "Command missing")
 
                 -- Block should still be tracked
@@ -906,12 +976,12 @@ describe("agentic.ui.MessageWriter", function()
                     if line == "Execute " then
                         found_header = true
                     end
-                    if line == "```zsh" then
+                    if line == "```bash" then
                         found_fence = true
                     end
                 end
                 assert.is_true(found_header, "Execute header missing")
-                assert.is_true(found_fence, "```zsh fence missing")
+                assert.is_true(found_fence, "```bash fence missing")
 
                 -- Decorations should survive
                 local NS_DECORATIONS =
