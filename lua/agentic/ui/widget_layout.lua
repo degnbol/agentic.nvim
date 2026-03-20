@@ -225,6 +225,7 @@ local function show_layout(params, position)
         winfixheight = not is_bottom,
         wrap = true,
         linebreak = true,
+        conceallevel = 0,
     })
 
     open_or_resize_dynamic_window(buf_nrs, win_nrs, "code", {

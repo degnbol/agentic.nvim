@@ -7,8 +7,6 @@
 - In chat: for code blocks with no language indicated, either default to shell or edit claude's output to assign shell to the triple quotes.
  - This might already be happening, it might just be that we don't have any TS for bash. We could use the zsh one.
 
-- Messages don't seem to be queued properly while compacting
-
 - :w sends input to claude, but :wq would try to close windows and cause errors.
   Can we safe-guard against this, e.g. use :q! and/or tabclose to end claude session and close all windows.
 
