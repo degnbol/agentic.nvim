@@ -1227,7 +1227,11 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
                 )
                 vim.api.nvim_set_current_tabpage(agent_tab)
             end
-            local winid = vim.api.nvim_tabpage_list_wins(diff_tab)[1]
+            local wins = vim.api.nvim_tabpage_list_wins(diff_tab)
+            if #wins == 0 then
+                return nil
+            end
+            local winid = wins[1]
             vim.api.nvim_win_set_buf(winid, bufnr)
             return winid
         end,

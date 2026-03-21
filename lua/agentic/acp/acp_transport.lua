@@ -239,12 +239,8 @@ function M.create_stdio_transport(config, callbacks)
 
     function transport:stop()
         if self.process and not self.process:is_closing() then
-            local process = self.process
+            local process = self.process --[[@as uv.uv_process_t]]
             self.process = nil
-
-            if not process then
-                return
-            end
 
             -- Try to terminate gracefully
             pcall(function()

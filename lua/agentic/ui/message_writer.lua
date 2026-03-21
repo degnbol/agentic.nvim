@@ -1383,7 +1383,7 @@ function MessageWriter:_apply_block_highlights(
             -- Find the closing ``` to skip the command code fence
             for i = start_row + 2, end_row - 1 do
                 local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
-                if l == "```" then
+                if l and l == "```" then
                     body_start = i + 1
                     break
                 end
