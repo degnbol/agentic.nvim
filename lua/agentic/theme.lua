@@ -82,7 +82,7 @@ function Theme.setup()
         { Theme.HL_GROUPS.STATUS_PENDING, { bg = COLORS.status_pending_bg } },
         { Theme.HL_GROUPS.STATUS_COMPLETED, { bg = COLORS.status_completed_bg } },
         { Theme.HL_GROUPS.STATUS_FAILED, { bg = COLORS.status_failed_bg } },
-        { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "Directory" } },
+        { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
 
         -- Tool call header highlights
         { Theme.HL_GROUPS.TOOL_KIND, { link = "Function" } },
