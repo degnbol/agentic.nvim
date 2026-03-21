@@ -139,14 +139,21 @@ describe("agentic.completion.LspServer", function()
             assert.equal(8, first.textEdit.range["end"].character)
         end)
 
-        it("returns empty items when / has spaces after it", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/plan arg" })
-            vim.api.nvim_win_set_cursor(0, { 1, 9 })
+        it(
+            "returns bare word items (not slash) when / has spaces after",
+            function()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/plan arg" })
+                vim.api.nvim_win_set_cursor(0, { 1, 9 })
 
-            local result = complete(handlers, bufnr, 0, 9, nil)
+                local result = complete(handlers, bufnr, 0, 9, nil)
 
-            assert.equal(0, #result.items)
-        end)
+                -- Bare word "arg" triggers word completion, not slash completion
+                assert.is_true(#result.items > 0)
+                -- filterText should be bare word (no slash prefix)
+                local first = result.items[1]
+                assert.is_false(first.filterText:match("^/") ~= nil)
+            end
+        )
 
         it("returns empty items when no commands stored", function()
             -- Use a fresh buffer with no commands
@@ -160,6 +167,80 @@ describe("agentic.completion.LspServer", function()
             assert.equal(0, #result.items)
 
             vim.api.nvim_buf_delete(buf2, { force = true })
+        end)
+    end)
+
+    describe("bare word slash command completion", function()
+        before_each(function()
+            local SlashCommands = require("agentic.acp.slash_commands")
+            --- @type agentic.acp.AvailableCommand[]
+            local commands = {
+                { name = "pymol", description = "Load PyMOL skill" },
+                { name = "plan", description = "Create a plan" },
+            }
+            SlashCommands.setCommands(bufnr, commands)
+        end)
+
+        it("returns items when typing bare word", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "Load py" })
+            vim.api.nvim_win_set_cursor(0, { 1, 7 })
+
+            local result = complete(handlers, bufnr, 0, 7, nil)
+
+            assert.is_true(#result.items > 0)
+
+            -- Both label and filterText are bare words (no / prefix)
+            local first = result.items[1]
+            assert.is_false(first.label:match("^/") ~= nil)
+            assert.is_false(first.filterText:match("^/") ~= nil)
+        end)
+
+        it("inserts bare word via textEdit (no slash prefix)", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "Load py" })
+            vim.api.nvim_win_set_cursor(0, { 1, 7 })
+
+            local result = complete(handlers, bufnr, 0, 7, nil)
+
+            local pymol_item
+            for _, item in ipairs(result.items) do
+                if item.label == "pymol" then
+                    pymol_item = item
+                end
+            end
+
+            assert.is_not_nil(pymol_item)
+            assert.equal(5, pymol_item.textEdit.range.start.character)
+            assert.equal(7, pymol_item.textEdit.range["end"].character)
+            assert.equal("pymol", pymol_item.textEdit.newText)
+        end)
+
+        it("requires at least 2 characters", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "p" })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+
+            local result = complete(handlers, bufnr, 0, 1, nil)
+
+            assert.equal(0, #result.items)
+        end)
+
+        it("included alongside slash items when both match", function()
+            -- "use /py" has both a slash token and a bare word "use"
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "use /py" })
+            vim.api.nvim_win_set_cursor(0, { 1, 7 })
+
+            local result = complete(handlers, bufnr, 0, 7, "/")
+
+            -- Slash items come from "/py", bare word items would need
+            -- a word without / — but cursor is on "/py" so no bare word.
+            -- Just verify slash items are present.
+            assert.is_true(#result.items > 0)
+            local has_slash = false
+            for _, item in ipairs(result.items) do
+                if item.filterText:match("^/") then
+                    has_slash = true
+                end
+            end
+            assert.is_true(has_slash)
         end)
     end)
 

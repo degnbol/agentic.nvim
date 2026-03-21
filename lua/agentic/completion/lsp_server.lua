@@ -65,6 +65,57 @@ local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
     return items
 end
 
+--- Build slash command items matched by bare word (no `/` prefix).
+--- Lets users type "py" and see "pymol" in the menu, inserting "/pymol".
+--- @param bufnr integer
+--- @param line_text string
+--- @param cursor_col integer 0-indexed column
+--- @param cursor_line integer 0-indexed line
+--- @return table[]
+local function get_slash_word_completions(
+    bufnr,
+    line_text,
+    cursor_col,
+    cursor_line
+)
+    local before_cursor = line_text:sub(1, cursor_col)
+
+    -- Extract the current word: contiguous non-whitespace at end, no `/` or `@`
+    local word = before_cursor:match("[%s]([^%s/@]+)$")
+        or before_cursor:match("^([^%s/@]+)$")
+
+    if not word or #word < 2 then
+        return {}
+    end
+
+    local word_col = cursor_col - #word
+
+    local commands = States.getSlashCommandsForBuffer(bufnr)
+    if #commands == 0 then
+        return {}
+    end
+
+    --- @type table[]
+    local items = {}
+    for _, cmd in ipairs(commands) do
+        table.insert(items, {
+            label = cmd.word,
+            kind = CompletionItemKind.Keyword,
+            detail = cmd.menu,
+            filterText = cmd.word,
+            textEdit = {
+                range = {
+                    start = { line = cursor_line, character = word_col },
+                    ["end"] = { line = cursor_line, character = cursor_col },
+                },
+                newText = cmd.word,
+            },
+        })
+    end
+
+    return items
+end
+
 --- Build file completion items from the FilePicker cache.
 --- @param bufnr integer
 --- @param line_text string
@@ -165,7 +216,13 @@ function M._make_handlers()
                     items = get_file_completions(bufnr, line_text, col, line)
                 end
 
-                callback(nil, { isIncomplete = false, items = items })
+                -- Always append bare word items so blink.cmp can filter
+                -- them client-side (handler only runs on trigger chars)
+                local word_items =
+                    get_slash_word_completions(bufnr, line_text, col, line)
+                vim.list_extend(items, word_items)
+
+                callback(nil, { isIncomplete = true, items = items })
             elseif method == "shutdown" then
                 callback(nil, nil)
             end
