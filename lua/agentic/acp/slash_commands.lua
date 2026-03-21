@@ -18,13 +18,32 @@ function SlashCommands.setCommands(bufnr, available_commands)
     --- @type agentic.acp.SlashCommand[]
     local commands = {}
 
-    local has_new_command = false
+    --- Commands that should always be available regardless of what the
+    --- provider advertises. All three are intercepted locally in
+    --- SessionManager before reaching the provider.
+    --- @type table<string, agentic.acp.SlashCommand>
+    local builtins = {
+        new = {
+            word = "new",
+            menu = "Start a new session",
+            info = "Start a new session",
+        },
+        context = {
+            word = "context",
+            menu = "Show context usage",
+            info = "Show context usage",
+        },
+        clear = {
+            word = "clear",
+            menu = "Clear conversation",
+            info = "Clear conversation",
+        },
+    }
 
     for _, cmd in ipairs(available_commands) do
         if cmd.name and cmd.description and not cmd.name:match("%s") then
-            if cmd.name == "new" then
-                has_new_command = true
-            end
+            -- Provider-supplied command overrides builtin description
+            builtins[cmd.name] = nil
 
             --- @type agentic.acp.SlashCommand
             local item = {
@@ -36,15 +55,9 @@ function SlashCommands.setCommands(bufnr, available_commands)
         end
     end
 
-    -- Add /new command if not provided by agent
-    if not has_new_command then
-        --- @type agentic.acp.SlashCommand
-        local new_command = {
-            word = "new",
-            menu = "Start a new session",
-            info = "Start a new session",
-        }
-        table.insert(commands, new_command)
+    -- Append any builtins the provider didn't supply
+    for _, cmd in pairs(builtins) do
+        table.insert(commands, cmd)
     end
 
     -- must be set at the end, as it gets serialized and loses the reference

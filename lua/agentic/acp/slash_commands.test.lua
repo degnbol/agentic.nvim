@@ -19,60 +19,73 @@ describe("agentic.acp.SlashCommands", function()
         end
     end)
 
+    --- Helper: collect commands into a name→command map
+    --- @param commands agentic.acp.SlashCommand[]
+    --- @return table<string, agentic.acp.SlashCommand>
+    local function by_name(commands)
+        local map = {}
+        for _, cmd in ipairs(commands) do
+            map[cmd.word] = cmd
+        end
+        return map
+    end
+
     describe("setCommands", function()
-        it(
-            "sets commands from ACP provider and automatically adds /new",
-            function()
-                --- @type agentic.acp.AvailableCommand[]
-                local commands_mock = {
-                    { name = "plan", description = "Create a plan" },
-                    { name = "review", description = "Review code" },
-                }
+        it("sets commands from ACP provider and adds builtins", function()
+            --- @type agentic.acp.AvailableCommand[]
+            local commands_mock = {
+                { name = "plan", description = "Create a plan" },
+                { name = "review", description = "Review code" },
+            }
 
-                SlashCommands.setCommands(bufnr, commands_mock)
+            SlashCommands.setCommands(bufnr, commands_mock)
 
-                local commands = States.getSlashCommands()
+            local commands = States.getSlashCommands()
+            local map = by_name(commands)
 
-                -- Verify total count includes /new
-                assert.equal(3, #commands)
+            -- Provider commands present
+            assert.equal("Create a plan", map["plan"].menu)
+            assert.equal("Review code", map["review"].menu)
 
-                -- Verify provided commands are set correctly
-                assert.equal("plan", commands[1].word)
-                assert.equal("Create a plan", commands[1].menu)
-                assert.equal("Create a plan", commands[1].info)
-                assert.equal("review", commands[2].word)
-                assert.equal("Review code", commands[2].menu)
-                assert.equal("Review code", commands[2].info)
+            -- Builtins injected
+            assert.is_not_nil(map["new"])
+            assert.is_not_nil(map["context"])
+            assert.is_not_nil(map["clear"])
 
-                -- Verify /new was automatically added at the end
-                assert.equal("new", commands[3].word)
-                assert.equal("Start a new session", commands[3].menu)
-                assert.equal("Start a new session", commands[3].info)
-            end
-        )
+            -- Total: 2 provider + 3 builtins
+            assert.equal(5, #commands)
+        end)
 
-        it("does not duplicate /new command if already provided", function()
+        it("does not duplicate builtin if already provided", function()
             --- @type agentic.acp.AvailableCommand[]
             local commands_mock = {
                 { name = "new", description = "Custom new description" },
+                { name = "clear", description = "Custom clear" },
                 { name = "plan", description = "Create a plan" },
             }
 
             SlashCommands.setCommands(bufnr, commands_mock)
 
             local commands = States.getSlashCommands()
+            local map = by_name(commands)
 
-            assert.equal(2, #commands)
+            -- Provider descriptions win over builtins
+            assert.equal("Custom new description", map["new"].menu)
+            assert.equal("Custom clear", map["clear"].menu)
 
+            -- No duplicates
             local new_count = 0
+            local clear_count = 0
             for _, cmd in ipairs(commands) do
                 if cmd.word == "new" then
                     new_count = new_count + 1
-                    assert.equal("Custom new description", cmd.menu)
-                    assert.equal("Custom new description", cmd.info)
+                end
+                if cmd.word == "clear" then
+                    clear_count = clear_count + 1
                 end
             end
             assert.equal(1, new_count)
+            assert.equal(1, clear_count)
         end)
 
         it("filters out commands with spaces in name", function()
@@ -86,29 +99,11 @@ describe("agentic.acp.SlashCommands", function()
 
             local commands = States.getSlashCommands()
 
-            assert.equal(2, #commands) -- valid + /new
             for _, cmd in ipairs(commands) do
                 assert.is_false(cmd.word:match("%s") ~= nil)
             end
-        end)
-
-        it("includes all valid commands from the provider", function()
-            --- @type agentic.acp.AvailableCommand[]
-            local commands_mock = {
-                { name = "plan", description = "Create a plan" },
-                { name = "clear", description = "Clear session" },
-            }
-
-            SlashCommands.setCommands(bufnr, commands_mock)
-            local commands = States.getSlashCommands()
-
-            assert.equal(3, #commands) -- plan + clear + /new
-            local names = {}
-            for _, cmd in ipairs(commands) do
-                names[cmd.word] = true
-            end
-            assert.is_true(names["clear"])
-            assert.is_true(names["plan"])
+            -- valid + 3 builtins
+            assert.equal(4, #commands)
         end)
 
         it("skips commands with missing name or description", function()
@@ -123,7 +118,8 @@ describe("agentic.acp.SlashCommands", function()
             SlashCommands.setCommands(bufnr, commands_mock)
             local commands = States.getSlashCommands()
 
-            assert.equal(2, #commands) -- valid + /new
+            -- valid + 3 builtins
+            assert.equal(4, #commands)
         end)
     end)
 
@@ -148,10 +144,13 @@ describe("agentic.acp.SlashCommands", function()
             vim.api.nvim_set_current_buf(bufnr2)
             local commands_buf2 = States.getSlashCommands()
 
-            assert.equal(2, #commands_buf1) -- plan + /new
-            assert.equal(2, #commands_buf2) -- review + /new
-            assert.equal("plan", commands_buf1[1].word)
-            assert.equal("review", commands_buf2[1].word)
+            local map1 = by_name(commands_buf1)
+            local map2 = by_name(commands_buf2)
+
+            assert.is_not_nil(map1["plan"])
+            assert.is_nil(map1["review"])
+            assert.is_not_nil(map2["review"])
+            assert.is_nil(map2["plan"])
 
             if vim.api.nvim_buf_is_valid(bufnr2) then
                 vim.api.nvim_buf_delete(bufnr2, { force = true })

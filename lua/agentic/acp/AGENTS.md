@@ -244,20 +244,24 @@ rejection).
 
 ## Known ACP limitations
 
-### Slash commands with local-only output
+### Slash commands intercepted locally
 
-Some slash commands (e.g. `/context`, `/compact`) are handled entirely inside the
-provider process. Their output is rendered in the provider's own terminal UI but
+Some slash commands are handled entirely inside the provider process (TUI) and
 **never emitted** via the ACP protocol — the prompt response returns
 `{stopReason: "end_turn", usage: all zeros}` with no `agent_message_chunk`
-notifications.
+notifications. Others behave differently through ACP than in the TUI.
 
-**Workarounds in agentic.nvim:**
+These commands are intercepted in `SessionManager` before reaching the provider,
+and injected as builtin completions in `SlashCommands.setCommands` (since
+providers don't advertise them in `available_commands_update`):
 
-- **`/context`**: Intercepted locally in `SessionManager`. Displays token usage
-  from the most recent `usage_update` notification (which *is* sent via ACP).
-  The chat header also shows a live context percentage from `usage_update`.
-- **`/new`**: Already intercepted locally to manage session lifecycle.
+- **`/context`**: Displays token usage from the most recent `usage_update`
+  notification (which *is* sent via ACP). The chat header also shows a live
+  context percentage from `usage_update`.
+- **`/new`**: Manages session lifecycle locally (cancel, cleanup, fresh session).
+- **`/clear`**: Aliased to `/new`. Through ACP, `/clear` doesn't actually reset
+  provider context (unlike the TUI where it clears the conversation). Starting a
+  fresh session is the only reliable way to clear context via ACP.
 
 ### Mode switch kind inconsistency (claude-agent-acp)
 

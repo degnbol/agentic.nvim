@@ -516,10 +516,11 @@ end
 function SessionManager:_handle_input_submit_inner(input_text)
     self.todo_list:close_if_all_completed()
 
-    -- Intercept /new command to start new session locally, cancelling existing one
-    -- Its necessary to avoid race conditions and make sure everything is cleaned properly,
-    -- the Agent might not send an identifiable response that could be acted upon
-    if input_text:match("^/new%s*") then
+    -- Intercept /new and /clear to start new session locally, cancelling
+    -- existing one. Necessary to avoid race conditions — the agent might not
+    -- send an identifiable response that could be acted upon. /clear through
+    -- ACP doesn't actually reset provider context, so we handle it as /new.
+    if input_text:match("^/new%s*") or input_text:match("^/clear%s*$") then
         self:new_session()
         return
     end
