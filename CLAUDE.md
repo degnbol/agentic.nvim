@@ -125,6 +125,13 @@ via `syntax/AgenticInput.vim`, sourced by a deferred `vim.bo.syntax = "ON"` in
 `ftplugin/AgenticInput.lua` (needed because `vim.treesitter.start()` clears syntax
 after the ftplugin runs).
 
+The prefix character (`/`, `@`) and the body text are separate syntax groups using
+`nextgroup` + `contained` — no character belongs to two groups, preventing
+unintended style bleed (e.g. underline from the path group leaking onto `@`).
+Prefix groups (`AgenticSlashCommandPrefix`, `AgenticMentionPrefix`) link to
+`@punctuation.special`; body groups keep their existing links (`@function.call`,
+`@string.special.path`).
+
 **Slash commands are highlighted only at line start** (`^/`), not mid-line. Completions
 trigger in both positions, but only line-start invocations have call semantics — a `/`
 mid-line is discussion or documentation, not an invocation. The highlight
