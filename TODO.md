@@ -26,10 +26,3 @@ Consider formatting this nicer and maybe making it Error red. Try to do that add
   - The grep is not always performed by the search tool, it also is called from the execute tool. This should also be colored.
     - For the execute tool (and maybe the search tool as well?) there might be a `grep ... | head ...` pattern or similar. This should also be supported, that doesn't change the fact that the output is grep format. Same with a grep on a grep or other patterns.
 
-- Fetch will sometimes have a long human readable input line, e.g.
-  Fetch `https://agentclientprotocol.com/protocol/tool-calls What fields are in a tool_call session update? Specifically, is there a toolName field separate from title? List all fields of the tool_call and tool_call_update messages.` 
-  Let's do formatting on this to add newline breaks like we do with other prose elsewhere.
-
-- SubAgent tasks should have the {{{ }}} manual folding added.
-
-- Add highlights for slash commands and @ paths in AgenticInput. But maybe only if they're valid?
