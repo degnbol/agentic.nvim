@@ -133,10 +133,13 @@ Prefix groups (`AgenticSlashCommandPrefix`, `AgenticMentionPrefix`) link to
 `@punctuation.special`; body groups keep their existing links (`@function.call`,
 `@string.special.path`).
 
-**Slash commands are highlighted only at line start** (`^/`), not mid-line. Completions
-trigger in both positions, but only line-start invocations have call semantics — a `/`
-mid-line is discussion or documentation, not an invocation. The highlight
-(`AgenticSlashCommand` → `@function.call`) signals "this will execute" vs plain text.
+**Slash commands are highlighted only at line start** (`^/`), not mid-line.
+Line-start `/command` is intercepted by the CLI before the LLM sees it —
+whether it's a built-in (`/model`, `/compact`), a skill (`/bevy`, `/commit`),
+or an unknown command. The LLM never receives raw `/something` as a plain
+message. Mid-line `/word` has no special meaning at the protocol level — it's
+plain prose. The highlight (`AgenticSlashCommand` → `@function.call`) signals
+"this is intercepted and acted upon" vs unmarked text.
 
 ## Keymaps and configuration
 
