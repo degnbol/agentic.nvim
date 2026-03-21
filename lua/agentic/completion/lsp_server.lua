@@ -24,14 +24,19 @@ local CompletionItemKind = {
 --- @param cursor_line integer 0-indexed line
 --- @return table[]
 local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
-    -- Only complete on first line, must start with `/`, no spaces
-    if cursor_line ~= 0 then
+    local before_cursor = line_text:sub(1, cursor_col)
+
+    -- Find `/` at line start or preceded by whitespace, no spaces after
+    local slash_match = before_cursor:match("^/[^%s]*$")
+        or before_cursor:match("[%s]/[^%s]*$")
+
+    if not slash_match then
         return {}
     end
 
-    if not line_text:match("^/[^%s]*$") then
-        return {}
-    end
+    -- Find the `/` position (0-indexed column)
+    local slash_byte_pos = before_cursor:reverse():find("/")
+    local slash_col = cursor_col - slash_byte_pos
 
     -- Read from specific buffer, not vim.b[0], to be robust in LSP context
     local commands = States.getSlashCommandsForBuffer(bufnr)
@@ -49,8 +54,8 @@ local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
             filterText = "/" .. cmd.word,
             textEdit = {
                 range = {
-                    start = { line = 0, character = 0 },
-                    ["end"] = { line = 0, character = cursor_col },
+                    start = { line = cursor_line, character = slash_col },
+                    ["end"] = { line = cursor_line, character = cursor_col },
                 },
                 newText = "/" .. cmd.word,
             },
@@ -147,13 +152,15 @@ function M._make_handlers()
 
                 local items = {}
 
-                if trigger == "/" or line_text:match("^/") then
+                local before_cursor = line_text:sub(1, col)
+
+                if trigger == "/" or before_cursor:find("/") then
                     items = get_slash_completions(bufnr, line_text, col, line)
                 end
 
                 if
                     #items == 0
-                    and (trigger == "@" or line_text:sub(1, col):find("@"))
+                    and (trigger == "@" or before_cursor:find("@"))
                 then
                     items = get_file_completions(bufnr, line_text, col, line)
                 end

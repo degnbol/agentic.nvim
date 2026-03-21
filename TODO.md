@@ -8,8 +8,6 @@
   - split on `;` and `&&` and evaluate each part individually
   - allow `> /dev/null`, it's not a dangerous pipe.
 
-- Change all Tasks from read(filename), etc. to read `filename` and only do the background coloring that indicates pending vs completed for the taks name ("read", etc.) and not the whole line.
-
 - When claude is overloaded we get the following written to the chat:
 **Error:** {
   code = -32603,
@@ -32,3 +30,6 @@ Consider formatting this nicer and maybe making it Error red. Try to do that add
   Fetch `https://agentclientprotocol.com/protocol/tool-calls What fields are in a tool_call session update? Specifically, is there a toolName field separate from title? List all fields of the tool_call and tool_call_update messages.` 
   Let's do formatting on this to add newline breaks like we do with other prose elsewhere.
 
+- SubAgent tasks should have the {{{ }}} manual folding added.
+
+- Add highlights for slash commands and @ paths in AgenticInput. But maybe only if they're valid?

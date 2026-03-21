@@ -105,7 +105,7 @@ describe("agentic.completion.LspServer", function()
             assert.equal("/context", context_item.textEdit.newText)
         end)
 
-        it("returns empty items on line 2", function()
+        it("returns items when typing / on line 2", function()
             vim.api.nvim_buf_set_lines(
                 bufnr,
                 0,
@@ -117,10 +117,29 @@ describe("agentic.completion.LspServer", function()
 
             local result = complete(handlers, bufnr, 1, 2, "/")
 
-            assert.equal(0, #result.items)
+            assert.is_true(#result.items > 0)
+
+            -- textEdit should cover the / on line 1 (0-indexed)
+            local first = result.items[1]
+            assert.equal(1, first.textEdit.range.start.line)
+            assert.equal(0, first.textEdit.range.start.character)
         end)
 
-        it("returns empty items when line has spaces", function()
+        it("returns items when / is after whitespace mid-line", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "Load /py" })
+            vim.api.nvim_win_set_cursor(0, { 1, 8 })
+
+            local result = complete(handlers, bufnr, 0, 8, nil)
+
+            assert.is_true(#result.items > 0)
+
+            -- textEdit should cover from the / position
+            local first = result.items[1]
+            assert.equal(5, first.textEdit.range.start.character)
+            assert.equal(8, first.textEdit.range["end"].character)
+        end)
+
+        it("returns empty items when / has spaces after it", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/plan arg" })
             vim.api.nvim_win_set_cursor(0, { 1, 9 })
 
