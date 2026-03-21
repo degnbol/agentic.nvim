@@ -1032,18 +1032,22 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         if has_fences then
             table.insert(lines, "```")
         end
-    elseif kind == "fetch" or kind == "WebSearch" then
+    elseif kind == "fetch" or kind == "WebSearch" or kind == "SubAgent" then
         if tool_call_block.body then
-            -- Fetch/WebSearch body is informational text that the agent wrote
-            -- to itself. Wrap in a code fence to prevent markdown parsing
-            -- artefacts and always fold since users rarely need it.
+            -- Fetch/WebSearch/SubAgent body is informational text that the
+            -- agent wrote to itself. Wrap in a code fence to prevent markdown
+            -- parsing artefacts and always fold since users rarely need it.
             -- `markdown` info string dims the block via AgenticDimmedBlock
             -- (priority 101, set in ftplugin/AgenticChat.lua) while keeping
             -- injected bold/underline styling.
-            local fence = safe_fence(tool_call_block.body)
+            local wrapped = TextWrap.wrap_prose(
+                tool_call_block.body,
+                self:_get_wrap_width()
+            )
+            local fence = safe_fence(wrapped)
             table.insert(lines, fence .. "markdown")
             table.insert(lines, "{{{")
-            vim.list_extend(lines, tool_call_block.body)
+            vim.list_extend(lines, wrapped)
             table.insert(lines, "}}}")
             table.insert(lines, fence)
         end
