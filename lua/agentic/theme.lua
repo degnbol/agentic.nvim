@@ -22,6 +22,8 @@ Theme.HL_GROUPS = {
     TOOL_KIND = "AgenticToolKind",
     TOOL_ARGUMENT = "AgenticToolArgument",
     SEARCH_MATCH = "AgenticSearchMatch",
+    SLASH_COMMAND = "AgenticSlashCommand",
+    MENTION = "AgenticMention",
 }
 
 local COLORS = {
@@ -86,6 +88,10 @@ function Theme.setup()
 
         -- Search match highlight
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
+
+        -- Input buffer highlights
+        { Theme.HL_GROUPS.SLASH_COMMAND, { link = "Special" } },
+        { Theme.HL_GROUPS.MENTION, { link = "@string.special.path" } },
 
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { fg = COLORS.spinner_generating_fg, bold = true } },
