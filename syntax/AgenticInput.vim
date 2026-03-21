@@ -5,7 +5,7 @@ endif
 syn match AgenticSlashCommandPrefix "^/" nextgroup=AgenticSlashCommand
 syn match AgenticSlashCommand "[[:alnum:]_-]\+" contained
 
-syn match AgenticMentionPrefix "@" nextgroup=AgenticMention
-syn match AgenticMention "[^ \t]\+" contained
+syn match AgenticMentionPrefix "@\ze[[:alnum:]_.~/$]" nextgroup=AgenticMention
+syn match AgenticMention "[[:alnum:]_.~/$][^ \t]*" contained
 
 let b:current_syntax = 'AgenticInput'
