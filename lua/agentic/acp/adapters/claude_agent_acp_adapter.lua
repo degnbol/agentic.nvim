@@ -7,6 +7,8 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field model? string Model used for sub-agent tasks
 --- @field skill? string Skill name
 --- @field args? string Arguments for the skill
+--- @field offset? integer Line offset for range reads
+--- @field limit? integer Line count for range reads
 
 --- claude-agent-acp sends rawInput/title/kind on tool_call_update, not just tool_call
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
@@ -102,7 +104,30 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
     local kind = update.kind
 
     if kind == "read" or kind == "edit" then
-        message.argument = FileSystem.to_smart_path(rawInput.file_path)
+        if rawInput.file_path then
+            message.argument = FileSystem.to_smart_path(rawInput.file_path)
+        end
+
+        if kind == "read" then
+            if rawInput.offset then
+                message.read_range = {
+                    offset = rawInput.offset,
+                    limit = rawInput.limit,
+                }
+            elseif update.title then
+                -- rawInput may lack offset/limit; fall back to parsing
+                -- the title string e.g. "Read file.txt (10 - 42)"
+                local a, b = update.title:match("%((%d+)%s*%-%s*(%d+)%)%s*$")
+                if a then
+                    local na = tonumber(a) --[[@as integer]]
+                    local nb = tonumber(b) --[[@as integer]]
+                    message.read_range = {
+                        offset = na,
+                        limit = nb - na + 1,
+                    }
+                end
+            end
+        end
 
         if kind == "edit" then
             local new_string = rawInput.content or rawInput.new_string
@@ -130,6 +155,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         end
     elseif kind == "think" and rawInput.subagent_type then
         message.kind = "SubAgent"
+        message.argument = rawInput.description or rawInput.subagent_type
     elseif
         kind == "SubAgent" or (kind == "other" and rawInput.subagent_type)
     then
@@ -147,6 +173,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
     elseif kind == "other" or kind == "switch_mode" then
         if update.title == "SlashCommand" then
             message.kind = "SlashCommand"
+            message.argument = rawInput.command or ""
         elseif update.title == "Skill" then
             message.kind = "Skill"
             message.argument = rawInput.skill or "unknown skill"

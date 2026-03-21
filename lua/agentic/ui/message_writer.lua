@@ -20,6 +20,22 @@ local function display_kind(kind)
     return result
 end
 
+--- Strip redundant kind prefix from an argument string.
+--- The header already shows the kind, so "Read filename.txt" → "filename.txt".
+--- @param kind string ACP tool kind
+--- @param argument string?
+--- @return string
+local function strip_kind_prefix(kind, argument)
+    if not argument or argument == "" then
+        return ""
+    end
+    local display = display_kind(kind)
+    if argument:sub(1, #display + 1):lower() == display:lower() .. " " then
+        return argument:sub(#display + 2)
+    end
+    return argument
+end
+
 --- Return a backtick fence string long enough to avoid clashing with any
 --- literal backtick runs inside `body_lines`.
 --- @param body_lines string[]
@@ -185,6 +201,7 @@ local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
 --- @field kind? agentic.acp.ToolKind
 --- @field argument? string
 --- @field search_pattern? string Regex pattern for highlighting matches in search output
+--- @field read_range? { offset: integer, limit?: integer } Line range for partial reads
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -631,6 +648,19 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         tool_call_block.body = nil
     end
 
+    -- For read blocks, extract range from the current argument before the merge
+    -- overwrites it — the initial title may contain "(N - M)" that the adapter
+    -- update replaces with just the file path.
+    if tracker.kind == "read" and not tracker.read_range then
+        local _, a, b =
+            tracker.argument:match("^(.-)%s*%((%d+)%s*%-%s*(%d+)%)%s*$")
+        if a then
+            local na = tonumber(a) --[[@as integer]]
+            local nb = tonumber(b) --[[@as integer]]
+            tracker.read_range = { offset = na, limit = nb - na + 1 }
+        end
+    end
+
     -- Some ACP providers don't send the diff on the first tool_call
     local already_has_diff = tracker.diff ~= nil
     local previous_body = tracker.body
@@ -795,7 +825,22 @@ end
 --- @return agentic.utils.Ansi.Span[][]|nil ansi_highlights Per-line ANSI highlight spans (execute blocks only)
 function MessageWriter:_prepare_block_lines(tool_call_block)
     local kind = tool_call_block.kind
-    local argument = tool_call_block.argument
+    local argument = strip_kind_prefix(kind, tool_call_block.argument)
+
+    -- For read blocks, strip a trailing "(N - M)" range from the argument
+    -- (often baked into the ACP title) — it belongs on the info line, not here.
+    if kind == "read" then
+        local path, a, b = argument:match("^(.-)%s*%((%d+)%s*%-%s*(%d+)%)%s*$")
+        if path then
+            argument = path
+            if not tool_call_block.read_range then
+                local na = tonumber(a) --[[@as integer]]
+                local nb = tonumber(b) --[[@as integer]]
+                tool_call_block.read_range =
+                    { offset = na, limit = nb - na + 1 }
+            end
+        end
+    end
 
     --- @type string[]
     local lines
@@ -839,7 +884,24 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         local line_count = tool_call_block.body and #tool_call_block.body or 0
 
         if line_count > 0 then
-            table.insert(lines, string.format("Read %d lines", line_count))
+            local rr = tool_call_block.read_range
+            local line_info
+            if rr then
+                local n = rr.limit or line_count
+                local first = rr.offset
+                local last = rr.limit and (first + rr.limit - 1)
+                line_info = last
+                        and string.format(
+                            "Read %d lines (%d - %d)",
+                            n,
+                            first,
+                            last
+                        )
+                    or string.format("Read %d lines (%d - …)", n, first)
+            else
+                line_info = string.format("Read %d lines", line_count)
+            end
+            table.insert(lines, line_info)
 
             --- @type agentic.ui.MessageWriter.HighlightRange
             local range = {
@@ -1123,7 +1185,8 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
 
     if tracker and tracker.kind ~= "execute" then
         -- Sanitize argument to prevent newlines in the permission request, neovim throws error
-        local sanitized_argument = tracker.argument:gsub("\n", "\\n")
+        local sanitized_argument =
+            strip_kind_prefix(tracker.kind, tracker.argument):gsub("\n", "\\n")
 
         vim.list_extend(lines_to_append, {
             string.format("### %s", display_kind(tracker.kind)),

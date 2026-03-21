@@ -458,6 +458,57 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
+        it("strips redundant kind prefix from argument", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-prefix",
+                status = "pending",
+                kind = "read",
+                argument = "Read /tmp/file.txt",
+                body = { "line1" },
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("### Read", lines[1])
+            assert.equal("`/tmp/file.txt`", lines[2])
+        end)
+
+        it("extracts range from argument into read_range", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-title-range",
+                status = "pending",
+                kind = "read",
+                argument = "Read /tmp/file.txt (1 - 100)",
+                body = { "a", "b", "c" },
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("### Read", lines[1])
+            assert.equal("`/tmp/file.txt`", lines[2])
+            assert.equal("Read 100 lines (1 - 100)", lines[3])
+        end)
+
+        it("shows line range in read info when read_range is set", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-range",
+                status = "pending",
+                kind = "read",
+                argument = "/tmp/file.txt",
+                body = { "a", "b", "c" },
+                read_range = { offset = 10, limit = 3 },
+            }
+
+            local lines, _ = writer:_prepare_block_lines(block)
+
+            assert.equal("### Read", lines[1])
+            assert.equal("`/tmp/file.txt`", lines[2])
+            assert.equal("Read 3 lines (10 - 12)", lines[3])
+        end)
+
         it("creates highlight ranges for pure insertion hunks", function()
             read_stub:returns({ "line1", "line2", "line3" })
 
