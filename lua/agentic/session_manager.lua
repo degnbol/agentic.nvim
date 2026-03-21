@@ -564,7 +564,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
         "##",
     }
 
-    table.insert(message_lines, "")
     table.insert(message_lines, input_text)
 
     if not self.code_selection:is_empty() then
