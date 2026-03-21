@@ -118,6 +118,18 @@ plugin-specific keymaps needed.
 - `FilePicker.get_files(bufnr)` provides cached file list; `SessionManager`
   holds a strong reference to prevent GC of the weak-tabled FilePicker instance
 
+### Input buffer syntax highlighting
+
+Slash commands (`/command`) and `@` mentions (`@path`) get vim syntax highlighting
+via `syntax/AgenticInput.vim`, sourced by a deferred `vim.bo.syntax = "ON"` in
+`ftplugin/AgenticInput.lua` (needed because `vim.treesitter.start()` clears syntax
+after the ftplugin runs).
+
+**Slash commands are highlighted only at line start** (`^/`), not mid-line. Completions
+trigger in both positions, but only line-start invocations have call semantics — a `/`
+mid-line is discussion or documentation, not an invocation. The highlight
+(`AgenticSlashCommand` → `@function.call`) signals "this will execute" vs plain text.
+
 ## Keymaps and configuration
 
 All user-configurable options live in `config_default.lua`. Keymaps are grouped
