@@ -811,6 +811,16 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         lines = { header, "```bash" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
+    elseif kind == "fetch" then
+        -- Fetch argument is "URL prompt" — show only the URL. The prompt
+        -- is repeated in the body (model instructions to itself).
+        local url = argument:match("^(%S+)")
+        if url then
+            lines = { header, string.format("`%s`", url) }
+        else
+            argument = argument:gsub("\n", "\\n")
+            lines = { header, string.format("`%s`", argument) }
+        end
     else
         -- Sanitize argument to prevent newlines
         -- nvim_buf_set_lines doesn't accept array items with embedded newlines
