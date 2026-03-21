@@ -413,7 +413,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal("Execute ", lines[1])
+            assert.equal("### Execute", lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
@@ -431,7 +431,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal("Execute ", lines[1])
+            assert.equal("### Execute", lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
@@ -439,20 +439,24 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("```", lines[6])
         end)
 
-        it("renders non-execute tool call with inline argument", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "read-inline",
-                status = "pending",
-                kind = "read",
-                argument = "/tmp/file.txt",
-                body = { "line1" },
-            }
+        it(
+            "renders non-execute tool call with argument on separate line",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "read-inline",
+                    status = "pending",
+                    kind = "read",
+                    argument = "/tmp/file.txt",
+                    body = { "line1" },
+                }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+                local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal("Read `/tmp/file.txt` ", lines[1])
-        end)
+                assert.equal("### Read", lines[1])
+                assert.equal("`/tmp/file.txt`", lines[2])
+            end
+        )
 
         it("creates highlight ranges for pure insertion hunks", function()
             read_stub:returns({ "line1", "line2", "line3" })
@@ -498,7 +502,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = writer:_prepare_block_lines(block)
 
-            assert.equal("Execute ", lines[1])
+            assert.equal("### Execute", lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("cd /some/very/long/project/path &&", lines[3])
             assert.equal("npm install --save-dev typescript &&", lines[4])
@@ -731,7 +735,7 @@ describe("agentic.ui.MessageWriter", function()
                     vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 -- Header should be present
-                assert.equal("Execute ", lines_after_write[1])
+                assert.equal("### Execute", lines_after_write[1])
                 -- Code fence and split command
                 assert.equal("```bash", lines_after_write[2])
                 assert.equal(
@@ -767,7 +771,7 @@ describe("agentic.ui.MessageWriter", function()
                     vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 -- Header still present
-                assert.equal("Execute ", lines_after_update[1])
+                assert.equal("### Execute", lines_after_update[1])
                 assert.equal("```bash", lines_after_update[2])
 
                 -- Body output should be present
@@ -905,12 +909,12 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-                -- Find "Execute " header
+                -- Find "### Execute" header
                 local found_header = false
                 local found_fence = false
                 local found_command = false
                 for _, line in ipairs(lines) do
-                    if line == "Execute " then
+                    if line == "### Execute" then
                         found_header = true
                     end
                     if line == "```bash" then
@@ -973,7 +977,7 @@ describe("agentic.ui.MessageWriter", function()
                 local found_header = false
                 local found_fence = false
                 for _, line in ipairs(lines) do
-                    if line == "Execute " then
+                    if line == "### Execute" then
                         found_header = true
                     end
                     if line == "```bash" then

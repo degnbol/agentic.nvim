@@ -799,23 +799,25 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
 
     --- @type string[]
     local lines
+    local header = string.format("### %s", display_kind(kind))
     if kind == "execute" then
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
-        lines = { string.format("%s ", display_kind(kind)), "```bash" }
+        lines = { header, "```bash" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
     elseif kind == "search" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
-        lines = { string.format("%s ", display_kind(kind)), "```bash" }
+        lines = { header, "```bash" }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, "```")
     else
-        -- Sanitize argument to prevent newlines in the header line
+        -- Sanitize argument to prevent newlines
         -- nvim_buf_set_lines doesn't accept array items with embedded newlines
         argument = argument:gsub("\n", "\\n")
         lines = {
-            string.format("%s `%s` ", display_kind(kind), argument),
+            header,
+            string.format("`%s`", argument),
         }
     end
 
@@ -1110,11 +1112,8 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         local sanitized_argument = tracker.argument:gsub("\n", "\\n")
 
         vim.list_extend(lines_to_append, {
-            string.format(
-                "%s `%s`",
-                display_kind(tracker.kind),
-                sanitized_argument
-            ),
+            string.format("### %s", display_kind(tracker.kind)),
+            string.format("`%s`", sanitized_argument),
             "", -- Blank line prevents markdown inline markers from spanning to next content
         })
     end
@@ -1214,13 +1213,7 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         for row = button_start_row, button_end_row do
             local row_line =
                 vim.api.nvim_buf_get_lines(self.bufnr, row, row + 1, false)[1]
-            if
-                row_line
-                and (
-                    row_line:find("^%a[%a_]*[(`]")
-                    or row_line:find("^%a[%a_]*%s*$")
-                )
-            then
+            if row_line and row_line:find("^### %a") then
                 self:_apply_tool_header_syntax(row, NS_PERMISSION_BUTTONS)
                 break
             end
@@ -1306,9 +1299,9 @@ function MessageWriter:_apply_block_highlights(
     if #highlight_ranges > 0 then
         self:_apply_diff_highlights(start_row, highlight_ranges)
     elseif kind ~= "edit" and kind ~= "switch_mode" then
-        -- Execute and search blocks have a code fence after the header that
-        -- gets treesitter injection from the markdown parser — skip those lines.
-        local body_start = start_row + 1
+        -- Header is "### Kind" (1 line) for execute/search, or "### Kind" +
+        -- "`argument`" (2 lines) for others. Skip both before body content.
+        local body_start = start_row + 2
         if kind == "execute" or kind == "search" then
             -- Find the closing ``` to skip the command code fence
             for i = start_row + 2, end_row - 1 do
@@ -1491,70 +1484,49 @@ function MessageWriter:_apply_diff_highlights(start_row, highlight_ranges)
 end
 
 --- Apply syntax highlighting to a tool call header line.
---- Handles formats:
----   " kind `argument` " — highlights kind with TOOL_KIND, argument with TOOL_ARGUMENT
----   " kind "            — highlights kind with TOOL_KIND only (e.g. execute, rendered as code fence)
---- @param line_row integer 0-indexed row
+--- Header format: "### Kind" — highlights the kind portion with TOOL_KIND.
+--- The argument (if any) is on the next line as `` `argument` `` and gets
+--- TOOL_ARGUMENT highlight.
+--- @param line_row integer 0-indexed row of the "### Kind" line
 --- @param ns integer Namespace to use for extmarks
 function MessageWriter:_apply_tool_header_syntax(line_row, ns)
-    local line =
-        vim.api.nvim_buf_get_lines(self.bufnr, line_row, line_row + 1, false)[1]
+    local lines =
+        vim.api.nvim_buf_get_lines(self.bufnr, line_row, line_row + 2, false)
+    local line = lines[1]
     if not line then
         return
     end
 
-    -- Match header formats:
-    --   "kind(argument) "    → kind + argument (legacy)
-    --   "kind `argument` "   → kind + argument (backtick-wrapped)
-    --   "kind "              → kind only
-    local kind_str, arg_str, arg_col
-
-    -- "kind(argument) "
-    local _, _, k, a = line:find("^(%a[%a_]*)%((.-)%)%s*$")
-    if k then
-        kind_str, arg_str = k, a
-        arg_col = #k + 1 -- kind + "("
-    end
-
-    -- "kind `argument` "
-    if not kind_str then
-        local bt_start = line:find("`")
-        if bt_start then
-            local bt_end = line:find("`", bt_start + 1)
-            if bt_end then
-                kind_str = line:sub(1, bt_start - 2) -- strip trailing space before backtick
-                arg_str = line:sub(bt_start + 1, bt_end - 1)
-                arg_col = bt_start -- 0-indexed = bt_start (1-indexed) - 1 + 1 (after `)
-            end
-        end
-    end
-
-    -- "kind " (no argument)
-    if not kind_str then
-        _, _, kind_str = line:find("^(%a[%a_]*)%s*$")
-    end
-
-    if not kind_str then
-        return
-    end
-
-    local kind_col = 0
-    local kind_col_end = #kind_str
-
-    vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, kind_col, {
-        end_col = kind_col_end,
-        hl_group = Theme.HL_GROUPS.TOOL_KIND,
-        priority = 200,
-    })
-
-    if arg_str and #arg_str > 0 then
-        local arg_col_end = arg_col + #arg_str
-
-        vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, arg_col, {
-            end_col = arg_col_end,
-            hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
+    -- "### Kind" — highlight the kind after "### "
+    local prefix = line:match("^###%s+")
+    if prefix then
+        vim.api.nvim_buf_set_extmark(self.bufnr, ns, line_row, #prefix, {
+            end_col = #line,
+            hl_group = Theme.HL_GROUPS.TOOL_KIND,
             priority = 200,
         })
+    end
+
+    -- Next line: "`argument`" — highlight the argument text inside backticks
+    local arg_line = lines[2]
+    if arg_line then
+        local bt_start = arg_line:find("`")
+        if bt_start then
+            local bt_end = arg_line:find("`", bt_start + 1)
+            if bt_end then
+                vim.api.nvim_buf_set_extmark(
+                    self.bufnr,
+                    ns,
+                    line_row + 1,
+                    bt_start,
+                    {
+                        end_col = bt_end - 1,
+                        hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
+                        priority = 200,
+                    }
+                )
+            end
+        end
     end
 end
 

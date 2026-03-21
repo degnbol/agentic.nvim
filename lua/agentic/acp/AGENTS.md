@@ -173,8 +173,9 @@ commands at top-level shell operators (&&, ||, ;, |).
 **Format comparison:**
 
 ```
-Non-execute:  " read(/tmp/file.txt) "     (inline argument)
-Execute:      " execute "                  (header, no argument)
+All kinds:    "### Read"                   (heading — ### is @punctuation.special, kind is TOOL_KIND)
+              "`/tmp/file.txt`"            (argument on next line, TOOL_ARGUMENT highlight)
+Execute:      "### Execute"                (heading only, no argument line)
               ```bash                      (code fence — treesitter injection)
               ls -la /tmp
               ```
