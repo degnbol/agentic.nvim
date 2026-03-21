@@ -22,7 +22,9 @@ Theme.HL_GROUPS = {
     TOOL_KIND = "AgenticToolKind",
     TOOL_ARGUMENT = "AgenticToolArgument",
     SEARCH_MATCH = "AgenticSearchMatch",
+    SLASH_COMMAND_PREFIX = "AgenticSlashCommandPrefix",
     SLASH_COMMAND = "AgenticSlashCommand",
+    MENTION_PREFIX = "AgenticMentionPrefix",
     MENTION = "AgenticMention",
 }
 
@@ -90,7 +92,9 @@ function Theme.setup()
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
 
         -- Input buffer highlights
+        { Theme.HL_GROUPS.SLASH_COMMAND_PREFIX, { link = "@punctuation.special" } },
         { Theme.HL_GROUPS.SLASH_COMMAND, { link = "@function.call" } },
+        { Theme.HL_GROUPS.MENTION_PREFIX, { link = "@punctuation.special" } },
         { Theme.HL_GROUPS.MENTION, { link = "@string.special.path" } },
 
         -- Spinner highlights
