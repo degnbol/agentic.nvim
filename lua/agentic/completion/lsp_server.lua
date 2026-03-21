@@ -44,7 +44,7 @@ local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
     for _, cmd in ipairs(commands) do
         table.insert(items, {
             label = "/" .. cmd.word,
-            kind = CompletionItemKind.Function,
+            kind = CompletionItemKind.Keyword,
             detail = cmd.menu,
             filterText = "/" .. cmd.word,
             textEdit = {
