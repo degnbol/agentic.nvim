@@ -90,7 +90,7 @@ function Theme.setup()
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
 
         -- Input buffer highlights
-        { Theme.HL_GROUPS.SLASH_COMMAND, { link = "Special" } },
+        { Theme.HL_GROUPS.SLASH_COMMAND, { link = "@function.call" } },
         { Theme.HL_GROUPS.MENTION, { link = "@string.special.path" } },
 
         -- Spinner highlights
