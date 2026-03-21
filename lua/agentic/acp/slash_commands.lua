@@ -11,7 +11,6 @@ local SlashCommands = {}
 
 --- Replace all commands with new list.
 --- Validates each command has required fields, skips invalid commands and commands with spaces.
---- Filters out `clear` command (handled by specific agents internally).
 --- Automatically adds `/new` command if not provided by agent.
 --- @param bufnr integer
 --- @param available_commands agentic.acp.AvailableCommand[]
@@ -22,12 +21,7 @@ function SlashCommands.setCommands(bufnr, available_commands)
     local has_new_command = false
 
     for _, cmd in ipairs(available_commands) do
-        if
-            cmd.name
-            and cmd.description
-            and not cmd.name:match("%s")
-            and cmd.name ~= "clear"
-        then
+        if cmd.name and cmd.description and not cmd.name:match("%s") then
             if cmd.name == "new" then
                 has_new_command = true
             end

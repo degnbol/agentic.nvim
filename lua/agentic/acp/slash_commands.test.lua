@@ -92,7 +92,7 @@ describe("agentic.acp.SlashCommands", function()
             end
         end)
 
-        it("filters out clear command", function()
+        it("includes all valid commands from the provider", function()
             --- @type agentic.acp.AvailableCommand[]
             local commands_mock = {
                 { name = "plan", description = "Create a plan" },
@@ -102,10 +102,13 @@ describe("agentic.acp.SlashCommands", function()
             SlashCommands.setCommands(bufnr, commands_mock)
             local commands = States.getSlashCommands()
 
-            assert.equal(2, #commands) -- plan + /new
+            assert.equal(3, #commands) -- plan + clear + /new
+            local names = {}
             for _, cmd in ipairs(commands) do
-                assert.is_not.equal("clear", cmd.word)
+                names[cmd.word] = true
             end
+            assert.is_true(names["clear"])
+            assert.is_true(names["plan"])
         end)
 
         it("skips commands with missing name or description", function()
