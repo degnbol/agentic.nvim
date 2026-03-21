@@ -118,11 +118,12 @@ plugin-specific keymaps needed.
 - `FilePicker.get_files(bufnr)` provides cached file list; `SessionManager`
   holds a strong reference to prevent GC of the weak-tabled FilePicker instance
 
-### Input buffer syntax highlighting
+### Syntax highlighting for `/` and `@`
 
 Slash commands (`/command`) and `@` mentions (`@path`) get vim syntax highlighting
-via `syntax/AgenticInput.vim`, sourced by a deferred `vim.bo.syntax = "ON"` in
-`ftplugin/AgenticInput.lua` (needed because `vim.treesitter.start()` clears syntax
+in both input and chat buffers via `syntax/AgenticInput.vim` and
+`syntax/AgenticChat.vim`, sourced by a deferred `vim.bo.syntax = "ON"` in
+their respective ftplugins (needed because `vim.treesitter.start()` clears syntax
 after the ftplugin runs).
 
 The prefix character (`/`, `@`) and the body text are separate syntax groups using
