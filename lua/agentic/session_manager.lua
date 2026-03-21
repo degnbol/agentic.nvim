@@ -504,6 +504,10 @@ function SessionManager:_handle_input_submit(input_text)
                 then
                     timer:stop()
                     timer:close()
+                    Logger.notify(
+                        "Agent not ready — input discarded. Try again.",
+                        vim.log.levels.WARN
+                    )
                 end
             end)
         )

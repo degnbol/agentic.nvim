@@ -72,10 +72,10 @@ function FilePicker:scan_files()
     -- Try each command until one succeeds
     for _, cmd_parts in ipairs(commands) do
         Logger.debug("[FilePicker] Trying command:", vim.inspect(cmd_parts))
-        local start_time = vim.loop.hrtime()
+        local start_time = vim.uv.hrtime()
 
         local output = vim.fn.system(cmd_parts)
-        local elapsed = (vim.loop.hrtime() - start_time) / 1e6
+        local elapsed = (vim.uv.hrtime() - start_time) / 1e6
 
         Logger.debug(
             string.format(

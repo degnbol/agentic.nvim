@@ -127,6 +127,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         if update.title == "SlashCommand" then
             -- Override kind to increase UX, `other` doesn't say much
             message.kind = "SlashCommand"
+            message.argument = update.rawInput.command or ""
         elseif update.title == "Skill" then
             message.kind = "Skill"
             message.argument = update.rawInput.skill or "unknown skill"
