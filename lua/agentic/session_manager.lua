@@ -65,6 +65,7 @@ end
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _last_prompt? string
+--- @field _destroyed boolean Flag set on destroy() to guard async callbacks
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -96,10 +97,15 @@ function SessionManager:new(tab_page_id)
         _is_first_message = true,
         is_generating = false,
         _restoring = false,
+        _destroyed = false,
     }, self)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
         vim.schedule(function()
+            if self._destroyed then
+                return
+            end
+
             if self._pending_load_session_id then
                 -- Deferred load_acp_session: agent is now ready
                 --- @type string
@@ -478,11 +484,24 @@ function SessionManager:_handle_input_submit(input_text)
     -- Defer until agent is ready (avoids error on early submit before session exists)
     if not (self.session_id and self.agent and self.agent.state == "ready") then
         local timer = vim.uv.new_timer()
+        if not timer then
+            Logger.notify(
+                "Agent not ready — input discarded. Try again.",
+                vim.log.levels.WARN
+            )
+            return
+        end
         local attempts = 0
         timer:start(
             100,
             100,
             vim.schedule_wrap(function()
+                if self._destroyed then
+                    timer:stop()
+                    timer:close()
+                    return
+                end
+
                 attempts = attempts + 1
                 if
                     self.session_id
@@ -809,6 +828,10 @@ function SessionManager:new_session(opts)
             local function wrapped_callback(option_id)
                 callback(option_id)
 
+                if self._destroyed then
+                    return
+                end
+
                 -- Look up the option kind from the request options.
                 -- option_id is an opaque ACP identifier (e.g. "reject-once"),
                 -- not the kind string ("reject_once").
@@ -966,6 +989,10 @@ function SessionManager:_do_load_acp_session(session_id)
 
             local function wrapped_callback(option_id)
                 callback(option_id)
+
+                if self._destroyed then
+                    return
+                end
 
                 -- Look up the option kind from the request options.
                 -- option_id is an opaque ACP identifier (e.g. "reject-once"),
@@ -1325,6 +1352,7 @@ function SessionManager:_get_system_info()
 end
 
 function SessionManager:destroy()
+    self._destroyed = true
     self:_cancel_session()
     self.widget:destroy()
 end

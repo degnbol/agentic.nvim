@@ -108,7 +108,10 @@ function ACPClient:__with_subscriber(session_id, callback)
     end
 
     vim.schedule(function()
-        callback(subscriber)
+        local ok, err = pcall(callback, subscriber)
+        if not ok then
+            Logger.debug("Subscriber callback error: ", err)
+        end
     end)
 end
 
@@ -214,6 +217,10 @@ function ACPClient:_send_request(method, params, callback)
 
     Logger.debug_to_file("request: ", message)
 
+    if not self.transport then
+        Logger.debug("Cannot send request: transport not initialised")
+        return
+    end
     self.transport:send(data)
 end
 
@@ -230,6 +237,10 @@ function ACPClient:_send_notification(method, params)
 
     Logger.debug_to_file("notification: ", message, "\n\n")
 
+    if not self.transport then
+        Logger.debug("Cannot send notification: transport not initialised")
+        return
+    end
     self.transport:send(data)
 end
 
@@ -243,6 +254,10 @@ function ACPClient:__send_result(id, result)
     local data = vim.json.encode(message)
     Logger.debug_to_file("request:", message)
 
+    if not self.transport then
+        Logger.debug("Cannot send result: transport not initialised")
+        return
+    end
     self.transport:send(data)
 end
 
@@ -251,6 +266,11 @@ end
 --- @param code number|nil
 --- @return nil
 function ACPClient:_send_error(id, message, code)
+    if not self.transport then
+        Logger.debug("Cannot send error: transport not initialised")
+        return
+    end
+
     code = code or self.ERROR_CODES.TRANSPORT_ERROR
     local msg =
         { jsonrpc = "2.0", id = id, error = { code = code, message = message } }
@@ -497,11 +517,13 @@ function ACPClient:__handle_request_permission(message_id, request)
 end
 
 function ACPClient:stop()
-    self.transport:stop()
+    if self.transport then
+        self.transport:stop()
+    end
 end
 
 function ACPClient:_connect()
-    if self.state ~= "disconnected" then
+    if self.state ~= "disconnected" or not self.transport then
         return
     end
 
