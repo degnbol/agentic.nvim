@@ -94,6 +94,22 @@ local function build_separator_cell(original, width)
     return left .. string.rep("-", dashes) .. right
 end
 
+--- Visual width of a table cell accounting for multibyte characters and
+--- concealed backticks. At conceallevel=2 (the chat window default),
+--- treesitter conceals the backtick delimiters of inline code spans, so each
+--- `` `...` `` pair loses 2 visible columns. If a user changes conceallevel
+--- after rendering, the table will look misaligned — that's acceptable.
+--- @param cell string
+--- @return integer
+local function cell_visual_width(cell)
+    local w = vim.api.nvim_strwidth(cell)
+    -- Subtract 2 per backtick-delimited inline code span (concealed at level 2)
+    for _ in cell:gmatch("`[^`]+`") do
+        w = w - 2
+    end
+    return w
+end
+
 --- Format a contiguous block of markdown table lines with aligned columns.
 --- @param table_lines string[]
 --- @return string[]
@@ -133,8 +149,9 @@ local function format_table(table_lines)
         if idx ~= sep_idx then
             for c = 1, num_cols do
                 local cell = row[c] or ""
-                if #cell > col_widths[c] then
-                    col_widths[c] = #cell
+                local vw = cell_visual_width(cell)
+                if vw > col_widths[c] then
+                    col_widths[c] = vw
                 end
             end
         end
@@ -158,7 +175,7 @@ local function format_table(table_lines)
                 parts[#parts + 1] = build_separator_cell(cell, col_widths[c])
             else
                 parts[#parts + 1] = cell
-                    .. string.rep(" ", col_widths[c] - #cell)
+                    .. string.rep(" ", col_widths[c] - cell_visual_width(cell))
             end
         end
         result[#result + 1] = "| " .. table.concat(parts, " | ") .. " |"

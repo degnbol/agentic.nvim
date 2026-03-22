@@ -186,6 +186,31 @@ describe("agentic.utils.TextWrap", function()
             end
         end)
 
+        it("accounts for concealed backticks in table column widths", function()
+            local lines = {
+                "| Name | Type |",
+                "|---|---|",
+                "| `foo` | string |",
+                "| longname | `int` |",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            assert.equal(4, #result)
+            -- All rows must have the same visual width (backtick pairs subtract 2 each)
+            local function visual_width(s)
+                local w = #s
+                for _ in s:gmatch("`[^`]+`") do
+                    w = w - 2
+                end
+                return w
+            end
+            local vw1 = visual_width(result[1])
+            for i = 2, #result do
+                assert.equal(vw1, visual_width(result[i]))
+            end
+            -- Rows with backticks have more bytes than rows without
+            assert.is_true(#result[3] > #result[1])
+        end)
+
         it("handles table with uneven column counts", function()
             local lines = {
                 "| A | B | C |",
