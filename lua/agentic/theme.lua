@@ -28,17 +28,6 @@ Theme.HL_GROUPS = {
     MENTION = "AgenticMention",
 }
 
-local COLORS = {
-    diff_delete_word_bg = "#9a3c3c",
-    diff_add_word_bg = "#155729",
-    status_pending_bg = "#5f4d8f",
-    status_completed_bg = "#2d5a3d",
-    status_failed_bg = "#7a2d2d",
-
-    spinner_generating_fg = "#61afef",
-    spinner_thinking_fg = "#c678dd",
-    spinner_searching_fg = "#e5c07b",
-}
 
 --- A lang map of extension to language identifier for markdown code fences
 --- Keep only possible unknown mappings
@@ -75,13 +64,13 @@ function Theme.setup()
         -- Diff highlights
         { Theme.HL_GROUPS.DIFF_DELETE, { link = "DiffDelete" } },
         { Theme.HL_GROUPS.DIFF_ADD, { link = "DiffAdd" } },
-        { Theme.HL_GROUPS.DIFF_DELETE_WORD, { bg = COLORS.diff_delete_word_bg, bold = true } },
-        { Theme.HL_GROUPS.DIFF_ADD_WORD, { bg = COLORS.diff_add_word_bg, bold = true } },
+        { Theme.HL_GROUPS.DIFF_DELETE_WORD, { link = "DiffText" } },
+        { Theme.HL_GROUPS.DIFF_ADD_WORD, { link = "DiffText" } },
 
         -- Status highlights
-        { Theme.HL_GROUPS.STATUS_PENDING, { bg = COLORS.status_pending_bg } },
-        { Theme.HL_GROUPS.STATUS_COMPLETED, { bg = COLORS.status_completed_bg } },
-        { Theme.HL_GROUPS.STATUS_FAILED, { bg = COLORS.status_failed_bg } },
+        { Theme.HL_GROUPS.STATUS_PENDING, { link = "DiagnosticVirtualTextHint" } },
+        { Theme.HL_GROUPS.STATUS_COMPLETED, { link = "DiagnosticVirtualTextOk" } },
+        { Theme.HL_GROUPS.STATUS_FAILED, { link = "DiagnosticVirtualTextError" } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
 
         -- Tool call header highlights
@@ -98,9 +87,9 @@ function Theme.setup()
         { Theme.HL_GROUPS.MENTION, { link = "@string.special.path" } },
 
         -- Spinner highlights
-        { Theme.HL_GROUPS.SPINNER_GENERATING, { fg = COLORS.spinner_generating_fg, bold = true } },
-        { Theme.HL_GROUPS.SPINNER_THINKING, { fg = COLORS.spinner_thinking_fg, bold = true } },
-        { Theme.HL_GROUPS.SPINNER_SEARCHING, { fg = COLORS.spinner_searching_fg, bold = true } },
+        { Theme.HL_GROUPS.SPINNER_GENERATING, { link = "DiagnosticWarn" } },
+        { Theme.HL_GROUPS.SPINNER_THINKING, { link = "Special" } },
+        { Theme.HL_GROUPS.SPINNER_SEARCHING, { link = "DiagnosticInfo" } },
         { Theme.HL_GROUPS.SPINNER_BUSY, { link = "Comment" } },
     }
     -- stylua: ignore end
