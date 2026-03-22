@@ -160,7 +160,7 @@ local function get_file_completions(bufnr, line_text, cursor_col, cursor_line)
                     start = { line = cursor_line, character = at_col },
                     ["end"] = { line = cursor_line, character = cursor_col },
                 },
-                newText = "@" .. path .. " ",
+                newText = "@" .. path,
             },
         })
     end
