@@ -480,6 +480,26 @@ function MessageWriter:write_message_chunk(update)
             Logger.debug("Failed to set text in buffer", err, lines_to_write)
         end
 
+        -- Wrap the last line immediately if it overflows, so the user sees
+        -- wrapping during streaming instead of after the line completes.
+        local wrap_width = self:_get_wrap_width()
+        local end_line = vim.api.nvim_buf_line_count(bufnr) - 1
+        local tail =
+            vim.api.nvim_buf_get_lines(bufnr, end_line, end_line + 1, false)[1]
+                or ""
+        if #tail > wrap_width then
+            local wrapped = TextWrap.wrap_single_line(tail, wrap_width)
+            if #wrapped > 1 then
+                vim.api.nvim_buf_set_lines(
+                    bufnr,
+                    end_line,
+                    end_line + 1,
+                    false,
+                    wrapped
+                )
+            end
+        end
+
         -- Reflow complete paragraphs when a paragraph boundary was written
         if text:find("\n") then
             self:_reflow_chunks(bufnr)

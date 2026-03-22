@@ -167,6 +167,25 @@ local function format_table(table_lines)
     return result
 end
 
+--- Wrap a single prose line at word boundaries.
+--- Returns the original line unchanged (in a table) if it fits within width,
+--- is blank, or looks like a code fence / table row.
+--- @param line string
+--- @param width integer
+--- @return string[]
+function M.wrap_single_line(line, width)
+    if
+        width <= 0
+        or #line <= width
+        or line:match("^%s*$")
+        or line:match("^%s*```")
+        or is_table_line(line)
+    then
+        return { line }
+    end
+    return wrap_line(line, width)
+end
+
 --- Hard-wrap prose in a block of lines, skipping fenced code blocks and
 --- formatting markdown tables with aligned columns.
 --- @param lines string[]

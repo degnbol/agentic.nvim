@@ -199,4 +199,46 @@ describe("agentic.utils.TextWrap", function()
             assert.is_true(result[3]:match("| 1") ~= nil)
         end)
     end)
+
+    describe("wrap_single_line", function()
+        it("wraps a long prose line", function()
+            local line = "the quick brown fox jumps over the lazy dog"
+            local result = TextWrap.wrap_single_line(line, 20)
+            assert.is_true(#result > 1)
+            for _, l in ipairs(result) do
+                assert.is_true(#l <= 20, "line too long: " .. l)
+            end
+        end)
+
+        it("leaves short lines unchanged", function()
+            local result = TextWrap.wrap_single_line("hello", 80)
+            assert.same({ "hello" }, result)
+        end)
+
+        it("skips blank lines", function()
+            local result = TextWrap.wrap_single_line("", 20)
+            assert.same({ "" }, result)
+        end)
+
+        it("skips code fence lines", function()
+            local result = TextWrap.wrap_single_line(
+                "```bash this is a very long fence line that exceeds the width",
+                20
+            )
+            assert.equal(1, #result)
+        end)
+
+        it("skips table rows", function()
+            local result = TextWrap.wrap_single_line(
+                "| column one content | column two content | column three |",
+                20
+            )
+            assert.equal(1, #result)
+        end)
+
+        it("returns original when width is 0", function()
+            local result = TextWrap.wrap_single_line("hello world", 0)
+            assert.same({ "hello world" }, result)
+        end)
+    end)
 end)
