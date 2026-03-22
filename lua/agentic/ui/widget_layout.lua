@@ -62,12 +62,15 @@ end
 
 --- @param bufnr integer
 --- @param max_height integer
+--- @param padding? integer Override default padding (1 for side, 2 for bottom)
 --- @return integer
-local function calculate_dynamic_height(bufnr, max_height)
+local function calculate_dynamic_height(bufnr, max_height, padding)
     max_height = math.max(1, max_height)
     local line_count = vim.api.nvim_buf_line_count(bufnr)
-    -- Use 2 in bottom layout to prevent the file list from touching the screen edge
-    local padding = Config.windows.position == "bottom" and 2 or 1
+    if padding == nil then
+        -- Use 2 in bottom layout to prevent the file list from touching the screen edge
+        padding = Config.windows.position == "bottom" and 2 or 1
+    end
     return math.min(line_count + padding, max_height)
 end
 
@@ -136,12 +139,14 @@ end
 --- @param window_name agentic.ui.ChatWidget.PanelNames
 --- @param open_win_opts vim.api.keyset.win_config
 --- @param max_height integer
+--- @param padding? integer Override default padding for height calculation
 local function open_or_resize_dynamic_window(
     buf_nrs,
     win_nrs,
     window_name,
     open_win_opts,
-    max_height
+    max_height,
+    padding
 )
     local bufnr = buf_nrs[window_name]
     local winid = win_nrs[window_name]
@@ -154,7 +159,7 @@ local function open_or_resize_dynamic_window(
         return
     end
 
-    local height = calculate_dynamic_height(bufnr, max_height)
+    local height = calculate_dynamic_height(bufnr, max_height, padding)
 
     if not winid or not vim.api.nvim_win_is_valid(winid) then
         open_win_opts.height = height
@@ -257,7 +262,7 @@ local function show_layout(params, position)
         open_or_resize_dynamic_window(buf_nrs, win_nrs, "todos", {
             win = ref_win,
             split = "below",
-        }, Config.windows.todos.max_height)
+        }, Config.windows.todos.max_height, 0)
     end
 
     if should_focus then
