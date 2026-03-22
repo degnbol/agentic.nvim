@@ -545,9 +545,18 @@ function MessageWriter:_auto_scroll(bufnr)
             if self._should_auto_scroll then
                 local wins = vim.fn.win_findbuf(bufnr)
                 if #wins > 0 then
-                    vim.api.nvim_win_call(wins[1], function()
+                    local winid = wins[1]
+                    local old_topline = vim.fn.getwininfo(winid)[1].topline
+                    vim.api.nvim_win_call(winid, function()
                         vim.cmd("normal! G0zb")
                     end)
+                    -- Only allow downward scroll; restore if it jumped up
+                    local new_topline = vim.fn.getwininfo(winid)[1].topline
+                    if new_topline < old_topline then
+                        vim.api.nvim_win_call(winid, function()
+                            vim.fn.winrestview({ topline = old_topline })
+                        end)
+                    end
                 end
             end
         end
