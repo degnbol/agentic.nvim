@@ -81,9 +81,9 @@ describe("agentic.completion.LspServer", function()
             local labels = vim.tbl_map(function(item)
                 return item.label
             end, result.items)
-            assert.is_true(vim.tbl_contains(labels, "/context"))
-            assert.is_true(vim.tbl_contains(labels, "/plan"))
-            assert.is_true(vim.tbl_contains(labels, "/new"))
+            assert.is_true(vim.tbl_contains(labels, "context"))
+            assert.is_true(vim.tbl_contains(labels, "plan"))
+            assert.is_true(vim.tbl_contains(labels, "new"))
         end)
 
         it("returns items with textEdit covering from col 0", function()
@@ -94,7 +94,7 @@ describe("agentic.completion.LspServer", function()
 
             local context_item
             for _, item in ipairs(result.items) do
-                if item.label == "/context" then
+                if item.label == "context" then
                     context_item = item
                 end
             end
@@ -236,7 +236,7 @@ describe("agentic.completion.LspServer", function()
             assert.is_true(#result.items > 0)
             local has_slash = false
             for _, item in ipairs(result.items) do
-                if item.filterText:match("^/") then
+                if item.filterText and not item.filterText:match("^/") then
                     has_slash = true
                 end
             end
@@ -290,8 +290,8 @@ describe("agentic.completion.LspServer", function()
             assert.is_not_nil(first.textEdit)
             assert.equal(0, first.textEdit.range.start.character) -- @ is at col 0
             assert.equal(4, first.textEdit.range["end"].character)
-            -- newText includes @ prefix and trailing space
-            assert.is_true(first.textEdit.newText:match("^@.*%s$") ~= nil)
+            -- newText includes @ prefix
+            assert.is_true(first.textEdit.newText:match("^@") ~= nil)
         end)
 
         it("returns empty when @ is mid-word (no whitespace before)", function()

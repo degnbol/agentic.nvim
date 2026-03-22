@@ -48,10 +48,11 @@ local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
     local items = {}
     for _, cmd in ipairs(commands) do
         table.insert(items, {
-            label = "/" .. cmd.word,
+            label = cmd.word,
             kind = CompletionItemKind.Keyword,
             detail = cmd.menu,
-            filterText = "/" .. cmd.word,
+            filterText = cmd.word,
+            score_offset = 5,
             textEdit = {
                 range = {
                     start = { line = cursor_line, character = slash_col },
@@ -154,7 +155,8 @@ local function get_file_completions(bufnr, line_text, cursor_col, cursor_line)
         table.insert(items, {
             label = path,
             kind = CompletionItemKind.File,
-            filterText = "@" .. path,
+            filterText = path,
+            score_offset = 5,
             textEdit = {
                 range = {
                     start = { line = cursor_line, character = at_col },
