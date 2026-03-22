@@ -831,8 +831,24 @@ setup.
 
 ### Blink.cmp
 
-You can disable `blink.cmp` from attaching to Agentic prompt buffers by adding
-the following to your `blink.cmp` setup:
+Agentic's `/` and `@` completions are served by an in-process LSP server that
+any LSP-aware completion framework picks up automatically. Since `/` is also a
+path separator, the `path` source may rank filesystem paths above slash commands.
+To control source priority for the prompt buffer, use `per_filetype`:
+
+```lua
+require('blink.cmp').setup({
+  sources = {
+    per_filetype = {
+      -- Only LSP (slash commands, @ mentions) and buffer words in the prompt.
+      -- Add "path", "snippets", etc. if you want them alongside.
+      AgenticInput = { "lsp", "buffer" },
+    },
+  },
+})
+```
+
+To disable `blink.cmp` on the prompt buffer entirely:
 
 ```lua
 require('blink.cmp').setup({
