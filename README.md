@@ -836,6 +836,34 @@ require('lualine').setup({
 This ensures that Agentic's custom window titles and statuslines render
 correctly without interference from your statusline plugin.
 
+### Incline.nvim
+
+If you use [incline.nvim](https://github.com/b0o/incline.nvim) to show buffer
+names in the winbar and want to display Agentic's context percentage or mode in
+the label, read `vim.t.agentic_headers` in your render function and listen for
+the `AgenticHeadersChanged` User event to trigger re-renders:
+
+```lua
+-- In incline setup (render function):
+render = function(props)
+  if vim.bo[props.buf].filetype == "AgenticChat" then
+    local headers = vim.t.agentic_headers
+    local label = "󰻞 Claude"
+    if headers and headers.chat and headers.chat.context then
+      label = label .. " " .. headers.chat.context
+    end
+    return { { label } }
+  end
+  -- ... normal file rendering
+end
+
+-- Refresh incline when header state changes (context %, mode, etc.)
+vim.api.nvim_create_autocmd("User", {
+  pattern = "AgenticHeadersChanged",
+  callback = function() require("incline").refresh() end,
+})
+```
+
 ### Markdown render plugins
 
 Only the `AgenticChat` buffer is properly set as `markdown` and starts
