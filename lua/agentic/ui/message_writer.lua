@@ -281,13 +281,21 @@ end
 
 --- Returns the text area width of the chat window (excluding sign column), or 80.
 --- The chat window always has signcolumn=yes:1 (2 columns).
+--- Capped by `Config.windows.max_wrap_width` when set.
 --- @return integer
 function MessageWriter:_get_wrap_width()
+    local win_width
     local winid = vim.fn.bufwinid(self.bufnr)
     if winid ~= -1 then
-        return vim.api.nvim_win_get_width(winid) - 2
+        win_width = vim.api.nvim_win_get_width(winid) - 2
+    else
+        win_width = 80
     end
-    return 80
+    local max = Config.windows.max_wrap_width
+    if max and max > 0 then
+        return math.min(win_width, max)
+    end
+    return win_width
 end
 
 --- Writes a full message to the chat buffer and append two blank lines after.
@@ -484,9 +492,12 @@ function MessageWriter:write_message_chunk(update)
         -- wrapping during streaming instead of after the line completes.
         local wrap_width = self:_get_wrap_width()
         local end_line = vim.api.nvim_buf_line_count(bufnr) - 1
-        local tail =
-            vim.api.nvim_buf_get_lines(bufnr, end_line, end_line + 1, false)[1]
-                or ""
+        local tail = vim.api.nvim_buf_get_lines(
+            bufnr,
+            end_line,
+            end_line + 1,
+            false
+        )[1] or ""
         if #tail > wrap_width then
             local wrapped = TextWrap.wrap_single_line(tail, wrap_width)
             if #wrapped > 1 then

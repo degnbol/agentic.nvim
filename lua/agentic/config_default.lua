@@ -149,6 +149,7 @@ local ConfigDefault = {
     --- @field width string|number
     --- @field height string|number
     --- @field stack_width_ratio number
+    --- @field max_wrap_width integer
     --- @field chat agentic.UserConfig.Windows.Chat
     --- @field input agentic.UserConfig.Windows.Input
     --- @field code agentic.UserConfig.Windows.Code
@@ -160,6 +161,7 @@ local ConfigDefault = {
         width = "50%",
         height = "20%",
         stack_width_ratio = 0.4,
+        max_wrap_width = 80,
         chat = { win_opts = {} },
         input = { height = 10, win_opts = {} },
         code = { max_height = 15, win_opts = {} },

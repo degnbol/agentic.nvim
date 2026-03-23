@@ -28,7 +28,6 @@ Theme.HL_GROUPS = {
     MENTION = "AgenticMention",
 }
 
-
 --- A lang map of extension to language identifier for markdown code fences
 --- Keep only possible unknown mappings
 local lang_map = {
