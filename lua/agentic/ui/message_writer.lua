@@ -282,10 +282,14 @@ end
 --- Returns the text area width of the chat window (excluding sign column), or 80.
 --- The chat window always has signcolumn=yes:1 (2 columns).
 --- Capped by `Config.windows.max_wrap_width` when set.
+--- Returns 0 when the chat window has soft wrap enabled (no hard wrapping needed).
 --- @return integer
 function MessageWriter:_get_wrap_width()
-    local win_width
     local winid = vim.fn.bufwinid(self.bufnr)
+    if winid ~= -1 and vim.wo[winid].wrap then
+        return 0
+    end
+    local win_width
     if winid ~= -1 then
         win_width = vim.api.nvim_win_get_width(winid) - 2
     else
@@ -490,6 +494,7 @@ function MessageWriter:write_message_chunk(update)
 
         -- Wrap the last line immediately if it overflows, so the user sees
         -- wrapping during streaming instead of after the line completes.
+        -- Skip when wrap_width is 0 (soft wrap enabled on the window).
         local wrap_width = self:_get_wrap_width()
         local end_line = vim.api.nvim_buf_line_count(bufnr) - 1
         local tail = vim.api.nvim_buf_get_lines(
@@ -498,7 +503,7 @@ function MessageWriter:write_message_chunk(update)
             end_line + 1,
             false
         )[1] or ""
-        if #tail > wrap_width then
+        if wrap_width > 0 and #tail > wrap_width then
             local wrapped = TextWrap.wrap_single_line(tail, wrap_width)
             if #wrapped > 1 then
                 vim.api.nvim_buf_set_lines(
@@ -1048,9 +1053,46 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         local lang = Theme.get_language_from_path(argument)
 
         -- Hack to avoid triple backtick conflicts in markdown files
-        local has_fences = lang ~= "md" and lang ~= "markdown"
+        local is_markdown = lang == "md" or lang == "markdown"
+        local has_fences = not is_markdown
         if has_fences then
             table.insert(lines, "```" .. lang)
+        end
+
+        -- For markdown diffs, wrap prose lines so they don't overflow the
+        -- chat window. Code blocks (inside fences) stay untouched.
+        local wrap_width = is_markdown and self:_get_wrap_width() or 0
+        local in_fence = false
+
+        --- Insert a diff line into `lines`, wrapping if markdown prose.
+        --- Tracks fence state so lines inside code blocks are not wrapped.
+        --- Creates a highlight_range entry for each resulting buffer line.
+        --- @param content string
+        --- @param hl_type string
+        --- @param old_line string|nil
+        --- @param new_line string|nil
+        local function insert_diff_line(content, hl_type, old_line, new_line)
+            if content:match("^%s*```") then
+                in_fence = not in_fence
+            end
+            local sub_lines
+            if wrap_width > 0 and not in_fence then
+                sub_lines = TextWrap.wrap_single_line(content, wrap_width)
+            else
+                sub_lines = { content }
+            end
+            for _, sub in ipairs(sub_lines) do
+                local line_index = #lines
+                table.insert(lines, sub)
+                --- @type agentic.ui.MessageWriter.HighlightRange
+                local range = {
+                    line_index = line_index,
+                    type = hl_type,
+                    old_line = old_line,
+                    new_line = new_line,
+                }
+                table.insert(highlight_ranges, range)
+            end
         end
 
         for _, block in ipairs(diff_blocks) do
@@ -1061,18 +1103,7 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
 
             if is_new_file then
                 for _, new_line in ipairs(block.new_lines) do
-                    local line_index = #lines
-                    table.insert(lines, new_line)
-
-                    --- @type agentic.ui.MessageWriter.HighlightRange
-                    local range = {
-                        line_index = line_index,
-                        type = "new",
-                        old_line = nil,
-                        new_line = new_line,
-                    }
-
-                    table.insert(highlight_ranges, range)
+                    insert_diff_line(new_line, "new", nil, new_line)
                 end
             else
                 local filtered = ToolCallDiff.filter_unchanged_lines(
@@ -1083,48 +1114,26 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 -- Insert old lines (removed content)
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.old_line then
-                        local line_index = #lines
-                        table.insert(lines, pair.old_line)
-
-                        --- @type agentic.ui.MessageWriter.HighlightRange
-                        local range = {
-                            line_index = line_index,
-                            type = "old",
-                            old_line = pair.old_line,
-                            new_line = is_modification and pair.new_line or nil,
-                        }
-
-                        table.insert(highlight_ranges, range)
+                        insert_diff_line(
+                            pair.old_line,
+                            "old",
+                            pair.old_line,
+                            is_modification and pair.new_line or nil
+                        )
                     end
                 end
 
                 -- Insert new lines (added content)
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.new_line then
-                        local line_index = #lines
-                        table.insert(lines, pair.new_line)
-
-                        if not is_modification then
-                            --- @type agentic.ui.MessageWriter.HighlightRange
-                            local range = {
-                                line_index = line_index,
-                                type = "new",
-                                old_line = nil,
-                                new_line = pair.new_line,
-                            }
-
-                            table.insert(highlight_ranges, range)
-                        else
-                            --- @type agentic.ui.MessageWriter.HighlightRange
-                            local range = {
-                                line_index = line_index,
-                                type = "new_modification",
-                                old_line = pair.old_line,
-                                new_line = pair.new_line,
-                            }
-
-                            table.insert(highlight_ranges, range)
-                        end
+                        local hl_type = is_modification and "new_modification"
+                            or "new"
+                        insert_diff_line(
+                            pair.new_line,
+                            hl_type,
+                            is_modification and pair.old_line or nil,
+                            pair.new_line
+                        )
                     end
                 end
             end
