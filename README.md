@@ -328,6 +328,29 @@ You can customize the behavior of individual chat widget windows by configuring
 the `win_opts` property for each window. These options override the default
 window settings.
 
+### Text Wrapping
+
+By default, chat text is hard-wrapped to fit the window width (capped at
+`max_wrap_width` columns). This keeps lines readable without enabling Neovim's
+`wrap` option.
+
+If you prefer Neovim's native soft wrapping instead, enable `wrap` on the chat
+window — hard wrapping is automatically disabled:
+
+```lua
+{
+  "carlos-algms/agentic.nvim",
+  opts = {
+    windows = {
+      max_wrap_width = 80, -- cap hard wrapping (default: 80, 0 = window width)
+      chat = {
+        win_opts = { wrap = true, linebreak = true }, -- soft wrap, no hard breaks
+      },
+    },
+  },
+}
+```
+
 ### Customizing Window Headers
 
 You can customize the header text for each panel in the chat widget using either
