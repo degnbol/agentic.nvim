@@ -53,6 +53,10 @@ end
 function WindowDecoration.set_headers_state(tab_page_id, headers)
     if vim.api.nvim_tabpage_is_valid(tab_page_id) then
         vim.t[tab_page_id].agentic_headers = headers
+        vim.api.nvim_exec_autocmds("User", {
+            pattern = "AgenticHeadersChanged",
+            data = { tab_page_id = tab_page_id },
+        })
     end
 end
 
