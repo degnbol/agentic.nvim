@@ -12,6 +12,7 @@ local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local SlashCommands = require("agentic.acp.slash_commands")
+local States = require("agentic.states")
 
 --- @class agentic._SessionManagerPrivate
 local P = {}
@@ -137,6 +138,8 @@ function SessionManager:new(tab_page_id)
     self.permission_manager = PermissionManager:new(self.message_writer)
 
     self._file_picker = FilePicker:new(self.widget.buf_nrs.input)
+
+    States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
 
     local LspServer = require("agentic.completion.lsp_server")
     vim.schedule(function()

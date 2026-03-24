@@ -170,6 +170,70 @@ local function get_file_completions(bufnr, line_text, cursor_col, cursor_line)
     return items
 end
 
+--- Minimum word length for buffer word completions.
+local MIN_WORD_LEN = 4
+
+--- Extract unique words from the chat buffer for completion.
+--- @param bufnr integer input buffer number
+--- @param line_text string current input line
+--- @param cursor_col integer 0-indexed column
+--- @param cursor_line integer 0-indexed line
+--- @return table[]
+local function get_buffer_word_completions(
+    bufnr,
+    line_text,
+    cursor_col,
+    cursor_line
+)
+    local before_cursor = line_text:sub(1, cursor_col)
+
+    -- Extract current word prefix (letters, digits, underscores, hyphens)
+    local prefix = before_cursor:match("[%w_%-]+$")
+    if not prefix or #prefix < 2 then
+        return {}
+    end
+
+    local prefix_col = cursor_col - #prefix
+
+    local chat_bufnr = States.getChatBufnr(bufnr)
+    if not chat_bufnr or not vim.api.nvim_buf_is_valid(chat_bufnr) then
+        return {}
+    end
+
+    local chat_lines = vim.api.nvim_buf_get_lines(chat_bufnr, 0, -1, false)
+    local seen = {}
+    --- @type table[]
+    local items = {}
+
+    for _, chat_line in ipairs(chat_lines) do
+        for word in chat_line:gmatch("[%w_%-]+") do
+            if #word >= MIN_WORD_LEN and not seen[word] then
+                seen[word] = true
+                table.insert(items, {
+                    label = word,
+                    kind = CompletionItemKind.Text,
+                    filterText = word,
+                    textEdit = {
+                        range = {
+                            start = {
+                                line = cursor_line,
+                                character = prefix_col,
+                            },
+                            ["end"] = {
+                                line = cursor_line,
+                                character = cursor_col,
+                            },
+                        },
+                        newText = word,
+                    },
+                })
+            end
+        end
+    end
+
+    return items
+end
+
 --- Create the LSP protocol handler for an input buffer.
 --- @return table
 function M._make_handlers()
@@ -223,6 +287,10 @@ function M._make_handlers()
                 local word_items =
                     get_slash_word_completions(bufnr, line_text, col, line)
                 vim.list_extend(items, word_items)
+
+                local buf_items =
+                    get_buffer_word_completions(bufnr, line_text, col, line)
+                vim.list_extend(items, buf_items)
 
                 callback(nil, { isIncomplete = true, items = items })
             elseif method == "shutdown" then

@@ -73,4 +73,19 @@ function M.getSlashCommandsForBuffer(bufnr)
     return safe_get(vim.b, bufnr, "agentic_slash_commands") or {}
 end
 
+--- Store the chat buffer number on an input buffer so the LSP completion
+--- server can read chat content for word completions.
+--- @param input_bufnr integer
+--- @param chat_bufnr integer
+function M.setChatBufnr(input_bufnr, chat_bufnr)
+    safe_set(vim.b, input_bufnr, "agentic_chat_bufnr", chat_bufnr)
+end
+
+--- Retrieve the associated chat buffer number for an input buffer.
+--- @param input_bufnr integer
+--- @return integer?
+function M.getChatBufnr(input_bufnr)
+    return safe_get(vim.b, input_bufnr, "agentic_chat_bufnr")
+end
+
 return M
