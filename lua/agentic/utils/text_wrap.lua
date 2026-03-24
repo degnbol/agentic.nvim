@@ -50,20 +50,50 @@ local function is_table_line(line)
     return line:match("^%s*|") ~= nil
 end
 
+--- Split a string on unescaped `|` delimiters (i.e. `|` not preceded by `\`).
+--- @param s string
+--- @return string[]
+local function split_on_pipes(s)
+    local parts = {}
+    local cur = ""
+    local i = 1
+    local len = #s
+    while i <= len do
+        local ch = s:sub(i, i)
+        if ch == "\\" and i < len and s:sub(i + 1, i + 1) == "|" then
+            cur = cur .. "\\|"
+            i = i + 2
+        elseif ch == "|" then
+            parts[#parts + 1] = cur
+            cur = ""
+            i = i + 1
+        else
+            cur = cur .. ch
+            i = i + 1
+        end
+    end
+    parts[#parts + 1] = cur
+    return parts
+end
+
 --- Parse a markdown table row into cells (content between pipes).
 --- @param line string
 --- @return string[]
 local function parse_table_row(line)
     local cells = {}
-    -- Strip leading/trailing pipes and split on |
+    -- Strip leading whitespace and leading pipe
     local inner = line:match("^%s*|(.*)$")
     if not inner then
         return cells
     end
-    -- Remove trailing pipe if present
-    inner = inner:match("^(.-)%s*|?%s*$")
-    for cell in (inner .. "|"):gmatch("(.-)|") do
-        cells[#cells + 1] = vim.trim(cell)
+    -- Split on unescaped pipes — gives empty strings for leading/trailing delimiters
+    local parts = split_on_pipes(inner)
+    for _, cell in ipairs(parts) do
+        local trimmed = vim.trim(cell)
+        -- Skip empty parts from trailing pipe
+        if trimmed ~= "" then
+            cells[#cells + 1] = trimmed
+        end
     end
     return cells
 end

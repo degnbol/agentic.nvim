@@ -211,6 +211,39 @@ describe("agentic.utils.TextWrap", function()
             assert.is_true(#result[3] > #result[1])
         end)
 
+        it("preserves escaped pipe characters in table cells", function()
+            local lines = {
+                "| Command | Description |",
+                "|---|---|",
+                "| echo foo \\| grep bar | filter output |",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            assert.equal(3, #result)
+            -- Escaped pipe must stay inside the cell, not split it
+            assert.is_true(
+                result[3]:match("echo foo \\| grep bar") ~= nil,
+                "escaped pipe lost: " .. result[3]
+            )
+            -- Should still have exactly 2 data columns
+            -- Count unescaped pipes (leading + separator + trailing = 3)
+            local pipe_count = 0
+            local i = 1
+            while i <= #result[3] do
+                if
+                    result[3]:sub(i, i) == "\\"
+                    and result[3]:sub(i + 1, i + 1) == "|"
+                then
+                    i = i + 2
+                elseif result[3]:sub(i, i) == "|" then
+                    pipe_count = pipe_count + 1
+                    i = i + 1
+                else
+                    i = i + 1
+                end
+            end
+            assert.equal(3, pipe_count)
+        end)
+
         it("handles table with uneven column counts", function()
             local lines = {
                 "| A | B | C |",
