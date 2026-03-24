@@ -85,6 +85,11 @@ end
 --- No-op if no animation is active. Call after any buffer modification that
 --- appends lines (tool call blocks, separators, etc.) to keep the status
 --- indicator pinned to the bottom.
+--- @return boolean
+function StatusAnimation:is_active()
+    return self._state ~= nil and self._extmark_id ~= nil
+end
+
 function StatusAnimation:reposition()
     if self._state and self._extmark_id then
         self:_render_frame()

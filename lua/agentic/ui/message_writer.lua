@@ -226,12 +226,14 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _redraw_scheduled? boolean
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
+--- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
 --- @param bufnr integer
+--- @param status_animation? agentic.ui.StatusAnimation
 --- @return agentic.ui.MessageWriter
-function MessageWriter:new(bufnr)
+function MessageWriter:new(bufnr, status_animation)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         error("Invalid buffer number: " .. tostring(bufnr))
     end
@@ -246,6 +248,7 @@ function MessageWriter:new(bufnr)
         _last_wrote_tool_call = false,
         _suppressing_rejection = false,
         _rejection_buffer = "",
+        _status_animation = status_animation,
     }, self)
 
     return instance
@@ -601,8 +604,14 @@ function MessageWriter:_auto_scroll(bufnr)
                 if #wins > 0 then
                     local winid = wins[1]
                     local old_topline = vim.fn.getwininfo(winid)[1].topline
+                    local has_virt_lines = self._status_animation
+                        and self._status_animation:is_active()
                     vim.api.nvim_win_call(winid, function()
-                        vim.cmd("normal! G0zb")
+                        if has_virt_lines then
+                            vim.cmd("normal! G0zb\5") -- \5 = <C-e>
+                        else
+                            vim.cmd("normal! G0zb")
+                        end
                     end)
                     -- Only allow downward scroll; restore if it jumped up
                     local new_topline = vim.fn.getwininfo(winid)[1].topline

@@ -133,8 +133,9 @@ function SessionManager:new(tab_page_id)
         self:_handle_input_submit(input_text)
     end)
 
-    self.message_writer = MessageWriter:new(self.widget.buf_nrs.chat)
     self.status_animation = StatusAnimation:new(self.widget.buf_nrs.chat)
+    self.message_writer =
+        MessageWriter:new(self.widget.buf_nrs.chat, self.status_animation)
     self.permission_manager = PermissionManager:new(self.message_writer)
 
     self._file_picker = FilePicker:new(self.widget.buf_nrs.input)
