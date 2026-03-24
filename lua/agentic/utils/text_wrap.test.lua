@@ -244,6 +244,24 @@ describe("agentic.utils.TextWrap", function()
             assert.equal(3, pipe_count)
         end)
 
+        it(
+            "treats double backslash before pipe as literal backslash + delimiter",
+            function()
+                local lines = {
+                    "| A | B | C |",
+                    "|---|---|---|",
+                    "| foo\\\\ | bar | baz |",
+                }
+                local result = TextWrap.wrap_prose(lines, 80)
+                assert.equal(3, #result)
+                -- foo\\ is a literal backslash — pipe after it is a real delimiter
+                -- so we should still have 3 data columns
+                assert.is_true(result[3]:match("foo\\\\") ~= nil)
+                assert.is_true(result[3]:match("bar") ~= nil)
+                assert.is_true(result[3]:match("baz") ~= nil)
+            end
+        )
+
         it("handles table with uneven column counts", function()
             local lines = {
                 "| A | B | C |",

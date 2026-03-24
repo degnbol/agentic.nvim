@@ -50,7 +50,9 @@ local function is_table_line(line)
     return line:match("^%s*|") ~= nil
 end
 
---- Split a string on unescaped `|` delimiters (i.e. `|` not preceded by `\`).
+--- Split a string on unescaped `|` delimiters.
+--- `\|` is a literal pipe (not a delimiter), `\\` is a literal backslash
+--- (so `\\|` is a literal backslash followed by a delimiter).
 --- @param s string
 --- @return string[]
 local function split_on_pipes(s)
@@ -60,9 +62,15 @@ local function split_on_pipes(s)
     local len = #s
     while i <= len do
         local ch = s:sub(i, i)
-        if ch == "\\" and i < len and s:sub(i + 1, i + 1) == "|" then
-            cur = cur .. "\\|"
-            i = i + 2
+        if ch == "\\" and i < len then
+            local next_ch = s:sub(i + 1, i + 1)
+            if next_ch == "|" or next_ch == "\\" then
+                cur = cur .. ch .. next_ch
+                i = i + 2
+            else
+                cur = cur .. ch
+                i = i + 1
+            end
         elseif ch == "|" then
             parts[#parts + 1] = cur
             cur = ""
