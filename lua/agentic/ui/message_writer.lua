@@ -844,6 +844,20 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         local new_end_row = start_row + #new_lines - 1
 
+        -- Adjust _chunk_start_line for the line count change so that
+        -- _reflow_chunks does not accidentally process tool call block
+        -- lines after the block expands (e.g. diff data arriving late).
+        local line_delta = new_end_row - old_end_row
+        if line_delta ~= 0 and self._chunk_start_line then
+            if self._chunk_start_line > old_end_row then
+                self._chunk_start_line = self._chunk_start_line + line_delta
+            elseif self._chunk_start_line > start_row then
+                -- Chunk start was inside the old block range — push it
+                -- past the new block so reflow never touches block lines.
+                self._chunk_start_line = new_end_row + 1
+            end
+        end
+
         pcall(
             vim.api.nvim_buf_clear_namespace,
             bufnr,
@@ -1120,7 +1134,11 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             local is_modification = old_count == new_count and old_count > 0
 
             if is_new_file then
-                for _, new_line in ipairs(block.new_lines) do
+                -- Format tables so they render with aligned columns
+                local fmt_new = is_markdown
+                        and TextWrap.format_tables_in_lines(block.new_lines)
+                    or block.new_lines
+                for _, new_line in ipairs(fmt_new) do
                     insert_diff_line(new_line, "new", nil, new_line)
                 end
             else
@@ -1129,11 +1147,34 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                     block.new_lines
                 )
 
-                -- Insert old lines (removed content)
+                -- Collect old/new lines, format tables within each
+                -- group independently so they don't merge across the
+                -- old→new boundary.
+                local old_raw = {} ---@type string[]
+                local new_raw = {} ---@type string[]
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.old_line then
+                        old_raw[#old_raw + 1] = pair.old_line
+                    end
+                    if pair.new_line then
+                        new_raw[#new_raw + 1] = pair.new_line
+                    end
+                end
+
+                local fmt_old = is_markdown
+                        and TextWrap.format_tables_in_lines(old_raw)
+                    or old_raw
+                local fmt_new = is_markdown
+                        and TextWrap.format_tables_in_lines(new_raw)
+                    or new_raw
+
+                -- Insert old lines (removed content)
+                local oi = 0
+                for _, pair in ipairs(filtered.pairs) do
+                    if pair.old_line then
+                        oi = oi + 1
                         insert_diff_line(
-                            pair.old_line,
+                            fmt_old[oi],
                             "old",
                             pair.old_line,
                             is_modification and pair.new_line or nil
@@ -1142,12 +1183,14 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 end
 
                 -- Insert new lines (added content)
+                local ni = 0
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.new_line then
+                        ni = ni + 1
                         local hl_type = is_modification and "new_modification"
                             or "new"
                         insert_diff_line(
-                            pair.new_line,
+                            fmt_new[ni],
                             hl_type,
                             is_modification and pair.old_line or nil,
                             pair.new_line

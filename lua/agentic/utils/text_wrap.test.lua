@@ -266,4 +266,46 @@ describe("agentic.utils.TextWrap", function()
             assert.same({ "hello world" }, result)
         end)
     end)
+
+    describe("format_tables_in_lines", function()
+        it("formats a table among prose lines", function()
+            local result = TextWrap.format_tables_in_lines({
+                "Some text before",
+                "| a | bb |",
+                "| --- | --- |",
+                "| longer | x |",
+                "After the table",
+            })
+            assert.same({
+                "Some text before",
+                "| a      | bb  |",
+                "| ------ | --- |",
+                "| longer | x   |",
+                "After the table",
+            }, result)
+        end)
+
+        it("formats two separate tables independently", function()
+            local result = TextWrap.format_tables_in_lines({
+                "| a | b |",
+                "| --- | --- |",
+                "| short | x |",
+                "divider line",
+                "| col1 | col2 | col3 |",
+                "| --- | --- | --- |",
+                "| val | val | val |",
+            })
+            assert.equal(7, #result)
+            -- First table: "short" is widest at 5, min-width 3 applies to col 2
+            assert.equal("| a     | b   |", result[1])
+            -- Second table: all columns same width
+            assert.equal("| col1 | col2 | col3 |", result[5])
+        end)
+
+        it("passes through lines without tables unchanged", function()
+            local input = { "hello", "world", "" }
+            local result = TextWrap.format_tables_in_lines(input)
+            assert.same(input, result)
+        end)
+    end)
 end)

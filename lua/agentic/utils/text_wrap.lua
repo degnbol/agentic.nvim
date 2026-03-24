@@ -203,6 +203,34 @@ function M.wrap_single_line(line, width)
     return wrap_line(line, width)
 end
 
+--- Align markdown tables in a block of lines without any prose wrapping.
+--- Non-table lines pass through unchanged.  format_table preserves line count,
+--- so the returned array has the same length as the input.
+--- @param lines string[]
+--- @return string[]
+function M.format_tables_in_lines(lines)
+    local out = {}
+    local table_buf = {} ---@type string[]
+
+    for _, line in ipairs(lines) do
+        if is_table_line(line) then
+            table_buf[#table_buf + 1] = line
+        else
+            if #table_buf > 0 then
+                vim.list_extend(out, format_table(table_buf))
+                table_buf = {}
+            end
+            out[#out + 1] = line
+        end
+    end
+
+    if #table_buf > 0 then
+        vim.list_extend(out, format_table(table_buf))
+    end
+
+    return out
+end
+
 --- Hard-wrap prose in a block of lines, skipping fenced code blocks and
 --- formatting markdown tables with aligned columns.
 --- @param lines string[]
