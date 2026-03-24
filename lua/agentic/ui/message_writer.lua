@@ -223,6 +223,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _should_auto_scroll? boolean
 --- @field _scroll_scheduled? boolean
 --- @field _on_content_changed? fun()
+--- @field _redraw_scheduled? boolean
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 local MessageWriter = {}
@@ -266,6 +267,23 @@ function MessageWriter:_notify_content_changed()
     if self._on_content_changed then
         self._on_content_changed()
     end
+    self:_schedule_redraw()
+end
+
+--- Coalesce rapid buffer modifications into a single screen redraw.
+--- Without this, parallel ACP notifications (tool calls, message chunks)
+--- modify the buffer but the screen only repaints on the next user input.
+function MessageWriter:_schedule_redraw()
+    if self._redraw_scheduled then
+        return
+    end
+    self._redraw_scheduled = true
+    vim.schedule(function()
+        self._redraw_scheduled = false
+        if vim.api.nvim_buf_is_valid(self.bufnr) then
+            vim.cmd.redraw()
+        end
+    end)
 end
 
 --- Wraps BufHelpers.with_modifiable and fires _notify_content_changed after.
