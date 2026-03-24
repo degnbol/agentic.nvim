@@ -38,10 +38,17 @@ function StatusAnimation:new(bufnr)
     return instance
 end
 
---- Start the animation with the given state
---- Always stops and restarts to avoid overlapping with new content
+--- Start the animation with the given state.
+--- If the state is unchanged, just repositions the extmark to the current
+--- buffer bottom without a delete/recreate cycle (avoids visual flicker
+--- during streaming when called on every chunk).
 --- @param state agentic.Theme.SpinnerState
 function StatusAnimation:start(state)
+    if self._state == state and self._extmark_id then
+        self:_render_frame()
+        return
+    end
+
     self:stop()
 
     self._state = state
@@ -74,13 +81,22 @@ function StatusAnimation:stop()
     self._extmark_id = nil
 end
 
+--- Move the extmark to the current buffer bottom without changing state.
+--- No-op if no animation is active. Call after any buffer modification that
+--- appends lines (tool call blocks, separators, etc.) to keep the status
+--- indicator pinned to the bottom.
+function StatusAnimation:reposition()
+    if self._state and self._extmark_id then
+        self:_render_frame()
+    end
+end
+
 function StatusAnimation:_render_frame()
     if not self._state or not vim.api.nvim_buf_is_valid(self._bufnr) then
         return
     end
 
-    local lines = vim.api.nvim_buf_get_lines(self._bufnr, 0, -1, false)
-    local line_num = math.max(0, #lines - 1)
+    local line_num = math.max(0, vim.api.nvim_buf_line_count(self._bufnr) - 1)
 
     self._extmark_id =
         vim.api.nvim_buf_set_extmark(self._bufnr, NS_ANIMATION, line_num, 0, {

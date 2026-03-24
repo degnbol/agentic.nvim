@@ -219,8 +219,8 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        self.status_animation:start("generating")
         self.message_writer:write_message_chunk(update)
+        self.status_animation:start("generating")
 
         if update.content and update.content.text then
             self.chat_history:append_agent_text({
@@ -230,8 +230,8 @@ function SessionManager:_on_session_update(update)
             })
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
-        self.status_animation:start("thinking")
         self.message_writer:write_message_chunk(update)
+        self.status_animation:start("thinking")
 
         if update.content and update.content.text then
             self.chat_history:append_agent_text({
@@ -803,6 +803,7 @@ function SessionManager:new_session(opts)
 
         on_tool_call = function(tool_call)
             self.message_writer:write_tool_call_block(tool_call)
+            self.status_animation:reposition()
             -- Store full tool_call in chat history
             --- @type agentic.ui.ChatHistory.ToolCall
             local tool_msg = {
@@ -819,6 +820,7 @@ function SessionManager:new_session(opts)
 
         on_tool_call_update = function(tool_call_update)
             self:_on_tool_call_update(tool_call_update)
+            self.status_animation:reposition()
         end,
 
         on_stdout_text = function(text)
@@ -977,10 +979,12 @@ function SessionManager:_do_load_acp_session(session_id)
 
         on_tool_call = function(tool_call)
             self.message_writer:write_tool_call_block(tool_call)
+            self.status_animation:reposition()
         end,
 
         on_tool_call_update = function(tool_call_update)
             self:_on_tool_call_update(tool_call_update)
+            self.status_animation:reposition()
         end,
 
         on_stdout_text = function(text)

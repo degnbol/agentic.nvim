@@ -26,4 +26,7 @@ Consider formatting this nicer and maybe making it Error red. Try to do that add
   - The grep is not always performed by the search tool, it also is called from the execute tool. This should also be colored.
     - For the execute tool (and maybe the search tool as well?) there might be a `grep ... | head ...` pattern or similar. This should also be supported, that doesn't change the fact that the output is grep format. Same with a grep on a grep or other patterns.
 
-- Open todo window with a height exactly matching the number of todo items.
+- We have a claude hook that rings a bell when claude is done thinking. In this ACP wrapper project, could we have a similar simpler implementation? Then a user can opt-in to that in their config without having to set up their own hook like we have done.
+
+- Investigate streaming performance — large tool call outputs (e.g. long file reads) can cause visible lag when writing to the chat buffer.
+
