@@ -218,6 +218,7 @@ local ConfigDefault = {
         chat = {
             prev_prompt = "[[",
             next_prompt = "]]",
+            refresh = "<localLeader>r",
         },
 
         --- Keys bindings for diff preview navigation
