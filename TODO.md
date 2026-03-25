@@ -8,14 +8,12 @@
   - split on `;` and `&&` and evaluate each part individually
   - allow `> /dev/null`, it's not a dangerous pipe.
 
-- When claude is overloaded we get the following written to the chat:
-**Error:** {
-  code = -32603,
-message = 'Internal error: API Error: 529
-  {"type":"error","error":{"type":"overloaded_error","message":"Overloaded.
-  https://docs.claude.com/en/api/errors"},"request_id":"req_011CZ9Kp7f61eygVGZCcwZ6w"}'
-}
-Consider formatting this nicer and maybe making it Error red. Try to do that adding some custom treesitter query, or vim syntax regex.
+- Error display: currently errors are shown inline in the chat buffer with red
+  highlighting (AgenticErrorHeading/AgenticErrorBody). A future option could use
+  neovim's native error display (vim.notify, vim.diagnostic, or floating window)
+  instead of or in addition to the inline chat display. This is a matter of user
+  preference — some may want errors in the editor, others in the chat. Could be a
+  config toggle (e.g. `error_display = "chat" | "notify" | "both"`).
 
 - extmarks seem more fragile than other approaches. Still need to fix when the 
   chat is updated and all the extmarks gets cleared, plus some rare cases where a 
