@@ -54,6 +54,11 @@ local ConfigDefault = {
     --- @type agentic.UserConfig.ProviderName
     provider = "claude-agent-acp",
 
+    --- Auth type for Claude CLI re-authentication.
+    --- Used when spawning `claude auth login` after an authentication error.
+    --- @type "claudeai" | "console" | "sso"
+    auth_type = "claudeai",
+
     --- @type table<agentic.UserConfig.ProviderName, agentic.acp.ACPProviderConfig|nil>
     acp_providers = {
         ["claude-agent-acp"] = {

@@ -348,9 +348,9 @@ function MessageWriter:write_message(update)
 end
 
 --- Hints for known API error types.
+--- authentication_error is handled by the caller (provider-specific re-auth flow).
 --- @type table<string, string>
 local error_hints = {
-    authentication_error = "Try running /login to re-authenticate.",
     overloaded_error = "The API is overloaded. Try again in a moment.",
     rate_limit_error = "Rate limited. Wait a moment before retrying.",
 }
@@ -366,6 +366,7 @@ local error_hints = {
 --- Output: {"401 Invalid authentication credentials", "", "Try running /login ..."}
 --- @param err agentic.acp.ACPError
 --- @return string[] lines
+--- @return string|nil error_type Parsed API error type (e.g. "authentication_error")
 local function format_error_lines(err)
     local lines = {}
     local msg = err.message or "Unknown error"
@@ -402,13 +403,14 @@ local function format_error_lines(err)
                 table.insert(lines, hint)
             end
 
-            return lines
+            local resolved_type = error_type ~= "" and error_type or nil
+            return lines, resolved_type
         end
     end
 
     -- Fallback: just use the raw message, split on newlines
     vim.list_extend(lines, vim.split(msg, "\n", { plain = true }))
-    return lines
+    return lines, nil
 end
 
 local HEADING = "### Error"
@@ -418,8 +420,9 @@ local HEADING_PREFIX_LEN = #"### "
 --- Uses `### Error` heading (same pattern as tool call headers) so markdown
 --- treesitter renders the `###` as heading punctuation.
 --- @param err agentic.acp.ACPError
+--- @return string|nil error_type Parsed API error type for caller to act on
 function MessageWriter:write_error_message(err)
-    local body_lines = format_error_lines(err)
+    local body_lines, error_type = format_error_lines(err)
     local all_lines = { HEADING, "" }
     vim.list_extend(all_lines, body_lines)
 
@@ -462,6 +465,24 @@ function MessageWriter:write_error_message(err)
         end
 
         self:_append_lines({ "" })
+    end)
+
+    return error_type
+end
+
+--- Write an action hint line after an error, styled with ERROR_BODY highlight.
+--- @param text string The action hint text (e.g. "Press [r] to re-authenticate")
+function MessageWriter:write_error_action(text)
+    self:_auto_scroll(self.bufnr)
+
+    self:_with_modifiable_and_notify_change(function(bufnr)
+        self:_append_lines({ text, "" })
+
+        local row = vim.api.nvim_buf_line_count(bufnr) - 2
+        vim.api.nvim_buf_set_extmark(bufnr, NS_ERROR, row, 0, {
+            end_col = #text,
+            hl_group = Theme.HL_GROUPS.ERROR_BODY,
+        })
     end)
 end
 

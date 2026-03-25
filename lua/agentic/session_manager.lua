@@ -67,6 +67,8 @@ end
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _last_prompt? string
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
+--- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
+--- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -737,7 +739,10 @@ function SessionManager:_handle_input_submit_inner(input_text)
             self.is_generating = false
 
             if err then
-                self.message_writer:write_error_message(err)
+                local error_type = self.message_writer:write_error_message(err)
+                if error_type == "authentication_error" then
+                    self:_offer_reauth()
+                end
             end
 
             self.message_writer:append_separator()
@@ -779,7 +784,10 @@ function SessionManager:new_session(opts)
     local handlers = {
         on_error = function(err)
             Logger.debug("Agent error: ", err)
-            self.message_writer:write_error_message(err)
+            local error_type = self.message_writer:write_error_message(err)
+            if error_type == "authentication_error" then
+                self:_offer_reauth()
+            end
         end,
 
         on_session_update = function(update)
@@ -949,7 +957,10 @@ function SessionManager:_do_load_acp_session(session_id)
     local handlers = {
         on_error = function(err)
             Logger.debug("Agent error: ", err)
-            self.message_writer:write_error_message(err)
+            local error_type = self.message_writer:write_error_message(err)
+            if error_type == "authentication_error" then
+                self:_offer_reauth()
+            end
         end,
 
         on_session_update = function(update)
@@ -1071,6 +1082,84 @@ function SessionManager:_fallback_restore_from_local(session_id)
     end)
 end
 
+--- Check if the current provider is Claude-based (supports `claude auth login`).
+local function is_claude_provider()
+    return Config.provider == "claude-acp"
+        or Config.provider == "claude-agent-acp"
+end
+
+--- Offer re-authentication after a Claude auth error.
+--- Writes an action hint to the chat buffer and sets up a buffer-local
+--- keymap to spawn `claude auth login`.
+function SessionManager:_offer_reauth()
+    if not is_claude_provider() then
+        return
+    end
+
+    self.message_writer:write_error_action(
+        "Press [r] to re-authenticate in browser."
+    )
+
+    local chat_bufnr = self.widget.buf_nrs.chat
+    local lhs = "r"
+
+    vim.keymap.set("n", lhs, function()
+        self:_run_reauth()
+    end, { buffer = chat_bufnr, nowait = true })
+
+    self._reauth_keymap = { bufnr = chat_bufnr, lhs = lhs }
+end
+
+--- Remove the re-auth keymap if one is active.
+function SessionManager:_remove_reauth_keymap()
+    local km = self._reauth_keymap
+    if not km then
+        return
+    end
+
+    if vim.api.nvim_buf_is_valid(km.bufnr) then
+        pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
+    end
+    self._reauth_keymap = nil
+end
+
+--- Spawn `claude auth login` to re-authenticate via browser OAuth.
+function SessionManager:_run_reauth()
+    self:_remove_reauth_keymap()
+
+    if self._reauth_job then
+        Logger.notify("Re-authentication already in progress.")
+        return
+    end
+
+    local auth_type = Config.auth_type or "claudeai"
+    local flag = "--" .. auth_type
+
+    Logger.notify("Opening browser for re-authentication...")
+
+    self._reauth_job = vim.system(
+        { "claude", "auth", "login", flag },
+        {},
+        function(result)
+            vim.schedule(function()
+                self._reauth_job = nil
+                if self._destroyed then
+                    return
+                end
+
+                if result.code == 0 then
+                    Logger.notify("Re-authenticated successfully.")
+                else
+                    Logger.notify(
+                        "Re-authentication failed. Try running 'claude auth login' manually.",
+                        vim.log.levels.WARN
+                    )
+                end
+            end)
+        end
+    )
+end
+
 function SessionManager:_cancel_session()
     if self.session_id then
         -- only cancel and clear content if there was an session
@@ -1085,6 +1174,7 @@ function SessionManager:_cancel_session()
     end
 
     self.session_id = nil
+    self:_remove_reauth_keymap()
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
 
@@ -1339,6 +1429,12 @@ end
 
 function SessionManager:destroy()
     self._destroyed = true
+
+    if self._reauth_job then
+        self._reauth_job:kill("sigterm") --- @diagnostic disable-line: undefined-field
+        self._reauth_job = nil
+    end
+
     self:_cancel_session()
     self.widget:destroy()
 end

@@ -1116,11 +1116,12 @@ describe("agentic.ui.MessageWriter", function()
                     .. '"request_id":"req_test123"}',
             }
 
-            local lines = MessageWriter._format_error_lines(err)
+            local lines, error_type = MessageWriter._format_error_lines(err)
 
             assert.equal("401 Invalid authentication credentials", lines[1])
-            assert.equal("", lines[2])
-            assert.equal("Try running /login to re-authenticate.", lines[3])
+            -- No hint line — auth re-login is handled by the caller
+            assert.equal(1, #lines)
+            assert.equal("authentication_error", error_type)
         end)
 
         it("parses overloaded error with embedded JSON", function()
@@ -1132,7 +1133,7 @@ describe("agentic.ui.MessageWriter", function()
                     .. '"message":"Overloaded."}}',
             }
 
-            local lines = MessageWriter._format_error_lines(err)
+            local lines, error_type = MessageWriter._format_error_lines(err)
 
             assert.equal("529 Overloaded.", lines[1])
             assert.equal("", lines[2])
@@ -1140,6 +1141,7 @@ describe("agentic.ui.MessageWriter", function()
                 "The API is overloaded. Try again in a moment.",
                 lines[3]
             )
+            assert.equal("overloaded_error", error_type)
         end)
 
         it("falls back to raw message when no JSON present", function()
@@ -1149,10 +1151,11 @@ describe("agentic.ui.MessageWriter", function()
                 message = "Authentication required",
             }
 
-            local lines = MessageWriter._format_error_lines(err)
+            local lines, error_type = MessageWriter._format_error_lines(err)
 
             assert.equal("Authentication required", lines[1])
             assert.equal(1, #lines)
+            assert.is_nil(error_type)
         end)
 
         it("falls back to raw message when JSON is invalid", function()
@@ -1162,9 +1165,10 @@ describe("agentic.ui.MessageWriter", function()
                 message = "Internal error: {not valid json}",
             }
 
-            local lines = MessageWriter._format_error_lines(err)
+            local lines, error_type = MessageWriter._format_error_lines(err)
 
             assert.equal("Internal error: {not valid json}", lines[1])
+            assert.is_nil(error_type)
         end)
 
         it("uses error type as fallback when message is empty", function()
@@ -1218,20 +1222,39 @@ describe("agentic.ui.MessageWriter", function()
             schedule_stub:revert()
         end)
 
-        it("writes heading and body to buffer", function()
+        it(
+            "writes heading and body to buffer and returns error_type",
+            function()
+                --- @type agentic.acp.ACPError
+                local err = {
+                    code = -32000,
+                    message = "Authentication required",
+                }
+
+                local error_type = writer:write_error_message(err)
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+                assert.equal("### Error", lines[1])
+                assert.equal("", lines[2])
+                assert.equal("Authentication required", lines[3])
+                -- No embedded JSON, so error_type is nil
+                assert.is_nil(error_type)
+            end
+        )
+
+        it("returns parsed error_type from embedded JSON", function()
             --- @type agentic.acp.ACPError
             local err = {
-                code = -32000,
-                message = "Authentication required",
+                code = -32603,
+                message = "Internal error: API Error: 401\n"
+                    .. '{"type":"error","error":{"type":"authentication_error",'
+                    .. '"message":"Invalid credentials"}}',
             }
 
-            writer:write_error_message(err)
+            local error_type = writer:write_error_message(err)
 
-            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-            assert.equal("### Error", lines[1])
-            assert.equal("", lines[2])
-            assert.equal("Authentication required", lines[3])
+            assert.equal("authentication_error", error_type)
         end)
 
         it("applies error heading extmark on Error text", function()
@@ -1324,6 +1347,60 @@ describe("agentic.ui.MessageWriter", function()
             end
             assert.is_true(found_heading)
             assert.is_true(found_body)
+        end)
+    end)
+
+    describe("write_error_action", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("appends action text with ERROR_BODY highlight", function()
+            local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+
+            -- Pre-fill buffer so action appends
+            vim.api.nvim_buf_set_lines(
+                bufnr,
+                0,
+                -1,
+                false,
+                { "### Error", "", "401 Auth failed", "" }
+            )
+
+            writer:write_error_action(
+                "Press [r] to re-authenticate in browser."
+            )
+
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+            -- Action text should be appended after existing content
+            local found = false
+            for _, line in ipairs(lines) do
+                if line == "Press [r] to re-authenticate in browser." then
+                    found = true
+                end
+            end
+            assert.is_true(found)
+
+            -- Should have an ERROR_BODY extmark on the action line
+            local extmarks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                NS_ERROR,
+                0,
+                -1,
+                { details = true }
+            )
+            local body_extmarks = vim.tbl_filter(function(ext)
+                return ext[4].hl_group == "AgenticErrorBody"
+            end, extmarks)
+            assert.is_true(#body_extmarks > 0)
         end)
     end)
 end)
