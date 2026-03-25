@@ -349,6 +349,17 @@ function ChatWidget:_setup_prompt_signs()
         end,
         { desc = "Agentic: Next prompt" }
     )
+
+    -- Refresh: scroll to bottom and redraw
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.chat and Config.keymaps.chat.refresh or "gr",
+        chat_buf,
+        function()
+            vim.cmd("normal! G0zb")
+            vim.cmd.redraw()
+        end,
+        { desc = "Agentic: Refresh chat (scroll to bottom)" }
+    )
 end
 
 function ChatWidget:_bind_keymaps()

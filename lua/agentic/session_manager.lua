@@ -224,6 +224,13 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
+        Logger.debug_to_file("CHUNK: agent_message_chunk", {
+            is_generating = self.is_generating,
+            text_len = update.content
+                    and update.content.text
+                    and #update.content.text
+                or 0,
+        })
         self.message_writer:write_message_chunk(update)
         self.status_animation:start("generating")
 
@@ -742,6 +749,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
             buf_lines = vim.api.nvim_buf_line_count(self.message_writer.bufnr),
         })
         vim.schedule(function()
+            Logger.debug_to_file("RESPONSE_SCHEDULED: processing response", {
+                buf_lines = vim.api.nvim_buf_line_count(
+                    self.message_writer.bufnr
+                ),
+            })
             self.is_generating = false
 
             if err then
@@ -794,9 +806,12 @@ function SessionManager:new_session(opts)
     local handlers = {
         on_error = function(err)
             Logger.debug("Agent error: ", err)
-            local error_type = self.message_writer:write_error_message(err)
+            local error_type, reset_epoch =
+                self.message_writer:write_error_message(err)
             if error_type == "authentication_error" then
                 self:_offer_reauth()
+            elseif error_type == "usage_limit" and reset_epoch then
+                self:_offer_auto_continue(reset_epoch)
             end
         end,
 
