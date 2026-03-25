@@ -224,13 +224,6 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        Logger.debug_to_file("CHUNK: agent_message_chunk", {
-            is_generating = self.is_generating,
-            text_len = update.content
-                    and update.content.text
-                    and #update.content.text
-                or 0,
-        })
         self.message_writer:write_message_chunk(update)
         self.status_animation:start("generating")
 
@@ -745,10 +738,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     self.agent:send_prompt(self.session_id, prompt, function(_response, err)
         vim.schedule(function()
-            Logger.debug_to_file("RESPONSE_CALLBACK: send_prompt returned", {
-                has_error = err ~= nil,
-                buf_lines = vim.api.nvim_buf_line_count(self.message_writer.bufnr),
-            })
             self.is_generating = false
 
             if err then

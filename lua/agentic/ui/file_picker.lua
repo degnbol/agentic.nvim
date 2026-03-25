@@ -146,7 +146,7 @@ function FilePicker:scan_files_async()
         return
     end
 
-    local commands = self._build_scan_commands(self)
+    local commands = self:_build_scan_commands()
     if #commands == 0 then
         -- No external commands available; synchronous glob fallback on first use
         return
@@ -169,11 +169,13 @@ function FilePicker:_try_async_command(commands, idx)
     vim.system(commands[idx], { text = true }, function(result)
         vim.schedule(function()
             local elapsed = (vim.uv.hrtime() - start_time) / 1e6
-            Logger.debug(string.format(
-                "[FilePicker] Async command completed in %.2fms, exit_code: %d",
-                elapsed,
-                result.code
-            ))
+            Logger.debug(
+                string.format(
+                    "[FilePicker] Async command completed in %.2fms, exit_code: %d",
+                    elapsed,
+                    result.code
+                )
+            )
 
             if result.code == 0 and result.stdout and result.stdout ~= "" then
                 local files = {}

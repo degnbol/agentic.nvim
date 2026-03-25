@@ -189,19 +189,7 @@ function M.create_stdio_transport(config, callbacks)
 
                 -- Split on newlines and process complete JSON-RPC messages
                 local lines = vim.split(chunks, "\n", { plain = true })
-                local residual = lines[#lines]
-
-                -- Log when data arrives but no complete messages are extracted,
-                -- meaning the response is split across pipe reads and sits in
-                -- the buffer until more data arrives.
-                if #lines <= 1 and residual ~= "" then
-                    Logger.debug_to_file(
-                        "TRANSPORT: partial data buffered, no complete message yet",
-                        { bytes = #data, residual_bytes = #residual }
-                    )
-                end
-
-                chunks = residual
+                chunks = lines[#lines]
 
                 for i = 1, #lines - 1 do
                     local line = vim.trim(lines[i])

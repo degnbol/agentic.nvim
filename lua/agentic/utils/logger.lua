@@ -3,6 +3,10 @@ local Config = require("agentic.config")
 --- @class agentic.utils.Logger
 local Logger = {}
 
+--- Cache the log file path at require time so debug_to_file is safe in libuv
+--- callbacks (vim.fn.stdpath cannot be called from fast events).
+local LOG_FILE_PATH = vim.fn.stdpath("cache") .. "/agentic_debug.log"
+
 function Logger.get_timestamp()
     return os.date("%Y-%m-%d %H:%M:%S")
 end
@@ -85,15 +89,10 @@ function Logger.debug_to_file(...)
         .. string.rep("=", 5)
         .. "\n\n"
 
-    local cache_dir = vim.fn.stdpath("cache")
-    local log_file_path = cache_dir .. "/agentic_debug.log"
-
-    local file = io.open(log_file_path, "a")
+    local file = io.open(LOG_FILE_PATH, "a")
     if file then
         file:write(log_message)
         file:close()
-    else
-        Logger.notify("Failed to write to log file: " .. log_file_path)
     end
 end
 
