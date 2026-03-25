@@ -59,6 +59,11 @@ local ConfigDefault = {
     --- @type "claudeai" | "console" | "sso"
     auth_type = "claudeai",
 
+    --- Auto-continue after usage limit errors.
+    --- When the provider reports "out of extra usage · resets Xpm", schedules
+    --- a timer to send "continue" once the reset time arrives.
+    auto_continue_on_usage_limit = true,
+
     --- @type table<agentic.UserConfig.ProviderName, agentic.acp.ACPProviderConfig|nil>
     acp_providers = {
         ["claude-agent-acp"] = {

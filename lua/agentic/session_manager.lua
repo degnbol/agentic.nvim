@@ -69,6 +69,8 @@ end
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
 --- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
+--- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
+--- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -735,17 +737,25 @@ function SessionManager:_handle_input_submit_inner(input_text)
     self.is_generating = true
 
     self.agent:send_prompt(self.session_id, prompt, function(_response, err)
+        Logger.debug_to_file("RESPONSE_CALLBACK: send_prompt returned", {
+            has_error = err ~= nil,
+            buf_lines = vim.api.nvim_buf_line_count(self.message_writer.bufnr),
+        })
         vim.schedule(function()
             self.is_generating = false
 
             if err then
-                local error_type = self.message_writer:write_error_message(err)
+                local error_type, reset_epoch =
+                    self.message_writer:write_error_message(err)
                 if error_type == "authentication_error" then
                     self:_offer_reauth()
+                elseif error_type == "usage_limit" and reset_epoch then
+                    self:_offer_auto_continue(reset_epoch)
                 end
             end
 
             self.message_writer:append_separator()
+            self.message_writer:scroll_to_bottom()
 
             self.status_animation:stop()
 
@@ -957,9 +967,12 @@ function SessionManager:_do_load_acp_session(session_id)
     local handlers = {
         on_error = function(err)
             Logger.debug("Agent error: ", err)
-            local error_type = self.message_writer:write_error_message(err)
+            local error_type, reset_epoch =
+                self.message_writer:write_error_message(err)
             if error_type == "authentication_error" then
                 self:_offer_reauth()
+            elseif error_type == "usage_limit" and reset_epoch then
+                self:_offer_auto_continue(reset_epoch)
             end
         end,
 
@@ -1160,6 +1173,100 @@ function SessionManager:_run_reauth()
     )
 end
 
+--- Cancel a pending auto-continue timer and remove the cancel keymap.
+function SessionManager:_cancel_retry_timer()
+    if self._retry_timer then
+        self._retry_timer:stop()
+        self._retry_timer:close()
+        self._retry_timer = nil
+    end
+
+    local km = self._retry_keymap
+    if km then
+        if vim.api.nvim_buf_is_valid(km.bufnr) then
+            pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
+        end
+        self._retry_keymap = nil
+    end
+end
+
+--- Format seconds into a human-readable duration (e.g. "2h 15m", "45m", "30s").
+--- @param seconds number
+--- @return string
+local function format_duration(seconds)
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    if h > 0 then
+        return string.format("%dh %dm", h, m)
+    elseif m > 0 then
+        return string.format("%dm", m)
+    end
+    return string.format("%ds", seconds)
+end
+
+--- Schedule auto-continue after a usage limit error.
+--- @param reset_epoch number Epoch seconds when usage resets
+function SessionManager:_offer_auto_continue(reset_epoch)
+    if not Config.auto_continue_on_usage_limit then
+        return
+    end
+
+    self:_cancel_retry_timer()
+
+    local delay_s = math.max(reset_epoch - os.time(), 10)
+    -- Add a small buffer to avoid racing the exact reset moment
+    delay_s = delay_s + 30
+    local reset_time = os.date("%H:%M", reset_epoch)
+    local duration = format_duration(delay_s)
+
+    self.message_writer:write_error_action(
+        string.format(
+            "Auto-continuing at %s (in %s). Press [c] to cancel.",
+            reset_time,
+            duration
+        )
+    )
+
+    local chat_bufnr = self.widget.buf_nrs.chat
+    local lhs = "c"
+
+    vim.keymap.set("n", lhs, function()
+        self:_cancel_retry_timer()
+        Logger.notify("Auto-continue cancelled.")
+    end, { buffer = chat_bufnr, nowait = true })
+
+    self._retry_keymap = { bufnr = chat_bufnr, lhs = lhs }
+
+    local timer = vim.uv.new_timer()
+    if not timer then
+        return
+    end
+    self._retry_timer = timer
+
+    timer:start(
+        delay_s * 1000,
+        0,
+        vim.schedule_wrap(function()
+            self:_cancel_retry_timer()
+
+            if self._destroyed then
+                return
+            end
+
+            if not self.session_id then
+                Logger.notify(
+                    "No active session for auto-continue.",
+                    vim.log.levels.WARN
+                )
+                return
+            end
+
+            Logger.notify("Usage limit reset — auto-continuing...")
+            self:_handle_input_submit("continue")
+        end)
+    )
+end
+
 function SessionManager:_cancel_session()
     if self.session_id then
         -- only cancel and clear content if there was an session
@@ -1175,6 +1282,7 @@ function SessionManager:_cancel_session()
 
     self.session_id = nil
     self:_remove_reauth_keymap()
+    self:_cancel_retry_timer()
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
 
@@ -1485,6 +1593,13 @@ function SessionManager:restore_from_history(history, opts)
             end,
         })
     end
+end
+
+--- @private
+--- @param seconds number
+--- @return string
+function SessionManager._format_duration(seconds)
+    return format_duration(seconds)
 end
 
 return SessionManager

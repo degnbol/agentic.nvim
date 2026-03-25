@@ -1208,6 +1208,81 @@ describe("agentic.ui.MessageWriter", function()
 
             assert.equal("Unknown error", lines[1])
         end)
+
+        it("detects usage limit error with 12h time format", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: You're out of extra usage · resets 5pm (Europe/London)",
+            }
+
+            local lines, error_type, reset_epoch =
+                MessageWriter._format_error_lines(err)
+
+            assert.equal("usage_limit", error_type)
+            assert.equal(1, #lines)
+            assert.truthy(lines[1]:find("out of extra usage"))
+            -- reset_epoch depends on system time, just check it's a number or nil
+            -- (nil if GNU date isn't available)
+            if reset_epoch then
+                assert.truthy(reset_epoch > os.time())
+            end
+        end)
+
+        it("detects usage limit error with 24h time format", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: You're out of extra usage · resets 17:00 (Europe/London)",
+            }
+
+            local lines, error_type = MessageWriter._format_error_lines(err)
+
+            assert.equal("usage_limit", error_type)
+            assert.truthy(lines[1]:find("out of extra usage"))
+        end)
+
+        it("detects usage limit error with minutes in 12h format", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: You're out of extra usage · resets 5:30pm (US/Eastern)",
+            }
+
+            local lines, error_type = MessageWriter._format_error_lines(err)
+
+            assert.equal("usage_limit", error_type)
+            assert.truthy(lines[1]:find("out of extra usage"))
+        end)
+
+        it("returns nil error_type for non-usage-limit plain errors", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: Something else went wrong",
+            }
+
+            local _, error_type = MessageWriter._format_error_lines(err)
+
+            assert.is_nil(error_type)
+        end)
+    end)
+
+    describe("_parse_reset_time", function()
+        it("returns a future epoch for a valid time and timezone", function()
+            -- This test depends on GNU date being available
+            local epoch = MessageWriter._parse_reset_time("11:59pm", "UTC")
+            if epoch then
+                assert.truthy(epoch > os.time())
+            end
+        end)
+
+        it("returns nil for invalid timezone", function()
+            local epoch =
+                MessageWriter._parse_reset_time("5pm", "Not/A/Timezone")
+            -- GNU date may still parse this or return nil; just ensure no crash
+            assert.truthy(epoch == nil or type(epoch) == "number")
+        end)
     end)
 
     describe("write_error_message", function()

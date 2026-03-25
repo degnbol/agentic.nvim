@@ -522,4 +522,29 @@ describe("agentic.SessionManager", function()
             debug_stub:revert()
         end)
     end)
+
+    describe("_format_duration", function()
+        it("formats hours and minutes", function()
+            assert.equal(
+                "2h 15m",
+                SessionManager._format_duration(2 * 3600 + 15 * 60)
+            )
+        end)
+
+        it("formats hours with zero minutes", function()
+            assert.equal("1h 0m", SessionManager._format_duration(3600))
+        end)
+
+        it("formats minutes only", function()
+            assert.equal("45m", SessionManager._format_duration(45 * 60))
+        end)
+
+        it("formats seconds for short durations", function()
+            assert.equal("30s", SessionManager._format_duration(30))
+        end)
+
+        it("formats zero seconds", function()
+            assert.equal("0s", SessionManager._format_duration(0))
+        end)
+    end)
 end)

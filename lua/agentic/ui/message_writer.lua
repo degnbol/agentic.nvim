@@ -355,6 +355,27 @@ local error_hints = {
     rate_limit_error = "Rate limited. Wait a moment before retrying.",
 }
 
+--- Parse a reset time like "5pm (Europe/London)" or "17:30 (Europe/London)"
+--- into epoch seconds. Returns nil if parsing fails.
+--- @param time_str string e.g. "5pm", "5:30pm", "17:00"
+--- @param tz string e.g. "Europe/London"
+--- @return number|nil epoch
+local function parse_reset_time(time_str, tz)
+    -- Use GNU date to parse the time in the given timezone
+    local cmd =
+        string.format("TZ=%s date -d 'today %s' +%%s 2>/dev/null", tz, time_str)
+    local result = vim.fn.system(cmd)
+    local epoch = tonumber(vim.trim(result))
+    if not epoch then
+        return nil
+    end
+    -- If the parsed time is in the past, it means tomorrow
+    if epoch <= os.time() then
+        epoch = epoch + 86400
+    end
+    return epoch
+end
+
 --- Format an ACP error into human-readable lines.
 --- Parses embedded JSON in the message to extract the meaningful error type
 --- and description, rather than dumping the raw Lua table.
@@ -367,6 +388,7 @@ local error_hints = {
 --- @param err agentic.acp.ACPError
 --- @return string[] lines
 --- @return string|nil error_type Parsed API error type (e.g. "authentication_error")
+--- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 local function format_error_lines(err)
     local lines = {}
     local msg = err.message or "Unknown error"
@@ -408,6 +430,18 @@ local function format_error_lines(err)
         end
     end
 
+    -- Detect usage limit errors: "You're out of extra usage · resets 5pm (Europe/London)"
+    local time_str, tz = msg:match("resets%s+(%d+:?%d*%s*[ap]m)%s+%(([%w/]+)%)")
+    if not time_str then
+        -- Try 24h format: "resets 17:00 (Europe/London)"
+        time_str, tz = msg:match("resets%s+(%d+:%d+)%s+%(([%w/]+)%)")
+    end
+    if time_str then
+        vim.list_extend(lines, vim.split(msg, "\n", { plain = true }))
+        local reset_epoch = parse_reset_time(time_str, tz)
+        return lines, "usage_limit", reset_epoch
+    end
+
     -- Fallback: just use the raw message, split on newlines
     vim.list_extend(lines, vim.split(msg, "\n", { plain = true }))
     return lines, nil
@@ -421,8 +455,9 @@ local HEADING_PREFIX_LEN = #"### "
 --- treesitter renders the `###` as heading punctuation.
 --- @param err agentic.acp.ACPError
 --- @return string|nil error_type Parsed API error type for caller to act on
+--- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 function MessageWriter:write_error_message(err)
-    local body_lines, error_type = format_error_lines(err)
+    local body_lines, error_type, reset_epoch = format_error_lines(err)
     local all_lines = { HEADING, "" }
     vim.list_extend(all_lines, body_lines)
 
@@ -467,7 +502,7 @@ function MessageWriter:write_error_message(err)
         self:_append_lines({ "" })
     end)
 
-    return error_type
+    return error_type, reset_epoch
 end
 
 --- Write an action hint line after an error, styled with ERROR_BODY highlight.
@@ -722,6 +757,26 @@ function MessageWriter:_check_auto_scroll(bufnr)
     local distance_from_bottom = total_lines - cursor_line
 
     return distance_from_bottom <= threshold
+end
+
+--- Force-scroll the chat window to the bottom and redraw.
+--- Unlike _auto_scroll, this ignores cursor proximity — always scrolls.
+function MessageWriter:scroll_to_bottom()
+    local bufnr = self.bufnr
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+    end
+
+    local wins = vim.fn.win_findbuf(bufnr)
+    if #wins == 0 then
+        return
+    end
+
+    local winid = wins[1]
+    vim.api.nvim_win_call(winid, function()
+        vim.cmd("normal! G0zb")
+    end)
+    vim.cmd.redraw()
 end
 
 --- @param bufnr integer Buffer number to scroll
@@ -1945,9 +2000,19 @@ end
 
 --- @private
 --- @param err agentic.acp.ACPError
---- @return string[]
+--- @return string[] lines
+--- @return string|nil error_type
+--- @return number|nil reset_epoch
 function MessageWriter._format_error_lines(err)
     return format_error_lines(err)
+end
+
+--- @private
+--- @param time_str string
+--- @param tz string
+--- @return number|nil epoch
+function MessageWriter._parse_reset_time(time_str, tz)
+    return parse_reset_time(time_str, tz)
 end
 
 return MessageWriter
