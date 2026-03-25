@@ -28,6 +28,9 @@ node_modules/
 lazy_repro/
 deps/
 
+# Python
+__pycache__/
+
 # Mac files
 .DS_Store
 

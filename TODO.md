@@ -28,3 +28,7 @@
 
 - Investigate streaming performance — large tool call outputs (e.g. long file reads) can cause visible lag when writing to the chat buffer.
 
+- Slim down readme, and remove the contribution markdown file.
+  These are currently written for the project we forked from, our readme should 
+  reflect our project and how it differs, e.g. claude focus, added formatting and 
+  syntax hl.
