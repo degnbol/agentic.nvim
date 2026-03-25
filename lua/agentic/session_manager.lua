@@ -736,17 +736,8 @@ function SessionManager:_handle_input_submit_inner(input_text)
         vim.schedule(function()
             self.is_generating = false
 
-            local finish_message = nil
-
             if err then
-                finish_message =
-                    string.format("\n**Error:** %s", vim.inspect(err))
-            end
-
-            if finish_message then
-                self.message_writer:write_message(
-                    ACPPayloads.generate_agent_message(finish_message)
-                )
+                self.message_writer:write_error_message(err)
             end
 
             self.message_writer:append_separator()
@@ -788,14 +779,7 @@ function SessionManager:new_session(opts)
     local handlers = {
         on_error = function(err)
             Logger.debug("Agent error: ", err)
-
-            self.message_writer:write_message(
-                ACPPayloads.generate_agent_message({
-                    "🐞 Agent Error:",
-                    "",
-                    vim.inspect(err),
-                })
-            )
+            self.message_writer:write_error_message(err)
         end,
 
         on_session_update = function(update)
@@ -965,13 +949,7 @@ function SessionManager:_do_load_acp_session(session_id)
     local handlers = {
         on_error = function(err)
             Logger.debug("Agent error: ", err)
-            self.message_writer:write_message(
-                ACPPayloads.generate_agent_message({
-                    "Agent Error:",
-                    "",
-                    vim.inspect(err),
-                })
-            )
+            self.message_writer:write_error_message(err)
         end,
 
         on_session_update = function(update)

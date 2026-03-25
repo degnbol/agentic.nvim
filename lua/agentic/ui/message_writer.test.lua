@@ -1104,4 +1104,226 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
     end)
+
+    describe("_format_error_lines", function()
+        it("parses auth error with embedded JSON", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: Failed to authenticate. API Error: 401\n"
+                    .. '{"type":"error","error":{"type":"authentication_error",'
+                    .. '"message":"Invalid authentication credentials"},'
+                    .. '"request_id":"req_test123"}',
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("401 Invalid authentication credentials", lines[1])
+            assert.equal("", lines[2])
+            assert.equal("Try running /login to re-authenticate.", lines[3])
+        end)
+
+        it("parses overloaded error with embedded JSON", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: API Error: 529\n"
+                    .. '{"type":"error","error":{"type":"overloaded_error",'
+                    .. '"message":"Overloaded."}}',
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("529 Overloaded.", lines[1])
+            assert.equal("", lines[2])
+            assert.equal(
+                "The API is overloaded. Try again in a moment.",
+                lines[3]
+            )
+        end)
+
+        it("falls back to raw message when no JSON present", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32000,
+                message = "Authentication required",
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("Authentication required", lines[1])
+            assert.equal(1, #lines)
+        end)
+
+        it("falls back to raw message when JSON is invalid", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: {not valid json}",
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("Internal error: {not valid json}", lines[1])
+        end)
+
+        it("uses error type as fallback when message is empty", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = 'API Error: 500\n{"type":"error","error":'
+                    .. '{"type":"api_error","message":""}}',
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("Api error", lines[1])
+        end)
+
+        it("handles error without HTTP code in prefix", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = 'Something went wrong\n{"type":"error","error":'
+                    .. '{"type":"unknown_error","message":"Details here"}}',
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("Details here", lines[1])
+        end)
+
+        it("handles missing message field", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = nil, --- @diagnostic disable-line: assign-type-mismatch
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("Unknown error", lines[1])
+        end)
+    end)
+
+    describe("write_error_message", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("writes heading and body to buffer", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32000,
+                message = "Authentication required",
+            }
+
+            writer:write_error_message(err)
+
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+            assert.equal("### Error", lines[1])
+            assert.equal("", lines[2])
+            assert.equal("Authentication required", lines[3])
+        end)
+
+        it("applies error heading extmark on Error text", function()
+            local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32000,
+                message = "Authentication required",
+            }
+
+            writer:write_error_message(err)
+
+            local extmarks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                NS_ERROR,
+                0,
+                -1,
+                { details = true }
+            )
+
+            -- First extmark should be the heading highlight
+            assert.is_true(#extmarks >= 1)
+            local heading_ext = extmarks[1]
+            assert.equal(0, heading_ext[2]) -- row 0
+            assert.equal(4, heading_ext[3]) -- col 4 (after "### ")
+            assert.equal("AgenticErrorHeading", heading_ext[4].hl_group)
+        end)
+
+        it("applies error body extmarks on non-empty lines", function()
+            local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: API Error: 401\n"
+                    .. '{"type":"error","error":{"type":"authentication_error",'
+                    .. '"message":"Invalid authentication credentials"}}',
+            }
+
+            writer:write_error_message(err)
+
+            local extmarks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                NS_ERROR,
+                0,
+                -1,
+                { details = true }
+            )
+
+            -- Should have heading + body extmarks (skip blank lines)
+            local body_extmarks = vim.tbl_filter(function(ext)
+                return ext[4].hl_group == "AgenticErrorBody"
+            end, extmarks)
+            assert.is_true(#body_extmarks > 0)
+        end)
+
+        it("writes parsed error on non-empty buffer", function()
+            -- Pre-fill buffer with existing content
+            vim.api.nvim_buf_set_lines(
+                bufnr,
+                0,
+                -1,
+                false,
+                { "previous message", "" }
+            )
+
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: API Error: 529\n"
+                    .. '{"type":"error","error":{"type":"overloaded_error",'
+                    .. '"message":"Overloaded."}}',
+            }
+
+            writer:write_error_message(err)
+
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+            -- Should find the error after existing content
+            local found_heading = false
+            local found_body = false
+            for _, line in ipairs(lines) do
+                if line == "### Error" then
+                    found_heading = true
+                end
+                if line == "529 Overloaded." then
+                    found_body = true
+                end
+            end
+            assert.is_true(found_heading)
+            assert.is_true(found_body)
+        end)
+    end)
 end)

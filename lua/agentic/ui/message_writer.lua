@@ -176,6 +176,7 @@ local NS_PERMISSION_BUTTONS =
 local NS_DIFF_HIGHLIGHTS =
     vim.api.nvim_create_namespace("agentic_diff_highlights")
 local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
+local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
 --- @class agentic.ui.MessageWriter.HighlightRange
 --- @field type "comment"|"old"|"new"|"new_modification" Type of highlight to apply
@@ -342,6 +343,124 @@ function MessageWriter:write_message(update)
 
     self:_with_modifiable_and_notify_change(function()
         self:_append_lines(lines)
+        self:_append_lines({ "" })
+    end)
+end
+
+--- Hints for known API error types.
+--- @type table<string, string>
+local error_hints = {
+    authentication_error = "Try running /login to re-authenticate.",
+    overloaded_error = "The API is overloaded. Try again in a moment.",
+    rate_limit_error = "Rate limited. Wait a moment before retrying.",
+}
+
+--- Format an ACP error into human-readable lines.
+--- Parses embedded JSON in the message to extract the meaningful error type
+--- and description, rather than dumping the raw Lua table.
+---
+--- Example input message:
+---   "Internal error: Failed to authenticate. API Error: 401\n
+---    {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",
+---    \"message\":\"Invalid authentication credentials\"}}"
+--- Output: {"401 Invalid authentication credentials", "", "Try running /login ..."}
+--- @param err agentic.acp.ACPError
+--- @return string[] lines
+local function format_error_lines(err)
+    local lines = {}
+    local msg = err.message or "Unknown error"
+
+    -- Try to extract embedded JSON from messages like:
+    -- 'Internal error: API Error: 529\n{"type":"error","error":{"type":"overloaded_error","message":"Overloaded."}}'
+    local json_str = msg:match("%b{}")
+    if json_str then
+        local ok, parsed = pcall(vim.json.decode, json_str)
+        if ok and type(parsed) == "table" then
+            local inner = parsed.error or parsed
+            local error_type = inner.type or ""
+            local error_msg = inner.message or ""
+
+            -- Extract HTTP status code from prefix (e.g. "API Error: 401")
+            local prefix = msg:sub(1, msg:find("{", 1, true) - 1)
+            local http_code = prefix:match("(%d%d%d)%s*$")
+
+            -- Build the main error line: "401 Invalid authentication credentials"
+            -- or just the message if no HTTP code is available
+            if http_code and error_msg ~= "" then
+                table.insert(lines, http_code .. " " .. error_msg)
+            elseif error_msg ~= "" then
+                table.insert(lines, error_msg)
+            elseif error_type ~= "" then
+                local readable = error_type:gsub("_", " ")
+                readable = readable:sub(1, 1):upper() .. readable:sub(2)
+                table.insert(lines, readable)
+            end
+
+            local hint = error_hints[error_type]
+            if hint then
+                table.insert(lines, "")
+                table.insert(lines, hint)
+            end
+
+            return lines
+        end
+    end
+
+    -- Fallback: just use the raw message, split on newlines
+    vim.list_extend(lines, vim.split(msg, "\n", { plain = true }))
+    return lines
+end
+
+local HEADING = "### Error"
+local HEADING_PREFIX_LEN = #"### "
+
+--- Write an error message to the chat buffer with red error highlighting.
+--- Uses `### Error` heading (same pattern as tool call headers) so markdown
+--- treesitter renders the `###` as heading punctuation.
+--- @param err agentic.acp.ACPError
+function MessageWriter:write_error_message(err)
+    local body_lines = format_error_lines(err)
+    local all_lines = { HEADING, "" }
+    vim.list_extend(all_lines, body_lines)
+
+    self:_auto_scroll(self.bufnr)
+
+    self:_with_modifiable_and_notify_change(function(bufnr)
+        local was_empty = BufHelpers.is_buffer_empty(bufnr)
+        self:_append_lines(all_lines)
+
+        local end_row = vim.api.nvim_buf_line_count(bufnr) - 1
+        local start_row = end_row - #all_lines + 1
+        -- When the buffer was empty, _append_lines replaces instead of
+        -- appending, so the heading is at row 0.
+        if was_empty then
+            start_row = 0
+        end
+
+        -- Highlight "Error" portion of "### Error" (after "### ")
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            NS_ERROR,
+            start_row,
+            HEADING_PREFIX_LEN,
+            {
+                end_col = #HEADING,
+                hl_group = Theme.HL_GROUPS.ERROR_HEADING,
+                priority = 200,
+            }
+        )
+
+        -- Highlight body lines (skip the blank separator at start_row + 1)
+        for i = start_row + 2, end_row do
+            local line = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
+            if line and line ~= "" then
+                vim.api.nvim_buf_set_extmark(bufnr, NS_ERROR, i, 0, {
+                    end_col = #line,
+                    hl_group = Theme.HL_GROUPS.ERROR_BODY,
+                })
+            end
+        end
+
         self:_append_lines({ "" })
     end)
 end
@@ -1801,6 +1920,13 @@ function MessageWriter:_clear_status_namespace(start_row, end_row)
         start_row,
         end_row + 1
     )
+end
+
+--- @private
+--- @param err agentic.acp.ACPError
+--- @return string[]
+function MessageWriter._format_error_lines(err)
+    return format_error_lines(err)
 end
 
 return MessageWriter

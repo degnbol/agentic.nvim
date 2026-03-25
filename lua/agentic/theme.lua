@@ -26,6 +26,8 @@ Theme.HL_GROUPS = {
     SLASH_COMMAND = "AgenticSlashCommand",
     MENTION_PREFIX = "AgenticMentionPrefix",
     MENTION = "AgenticMention",
+    ERROR_HEADING = "AgenticErrorHeading",
+    ERROR_BODY = "AgenticErrorBody",
 }
 
 --- A lang map of extension to language identifier for markdown code fences
@@ -84,6 +86,10 @@ function Theme.setup()
         { Theme.HL_GROUPS.SLASH_COMMAND, { link = "@function.call" } },
         { Theme.HL_GROUPS.MENTION_PREFIX, { link = "@punctuation.special" } },
         { Theme.HL_GROUPS.MENTION, { link = "@string.special.path" } },
+
+        -- Error highlights
+        { Theme.HL_GROUPS.ERROR_HEADING, { link = "DiagnosticError" } },
+        { Theme.HL_GROUPS.ERROR_BODY, { link = "DiagnosticVirtualTextError" } },
 
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { link = "DiagnosticWarn" } },
