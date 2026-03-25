@@ -744,15 +744,10 @@ function SessionManager:_handle_input_submit_inner(input_text)
     self.is_generating = true
 
     self.agent:send_prompt(self.session_id, prompt, function(_response, err)
-        Logger.debug_to_file("RESPONSE_CALLBACK: send_prompt returned", {
-            has_error = err ~= nil,
-            buf_lines = vim.api.nvim_buf_line_count(self.message_writer.bufnr),
-        })
         vim.schedule(function()
-            Logger.debug_to_file("RESPONSE_SCHEDULED: processing response", {
-                buf_lines = vim.api.nvim_buf_line_count(
-                    self.message_writer.bufnr
-                ),
+            Logger.debug_to_file("RESPONSE_CALLBACK: send_prompt returned", {
+                has_error = err ~= nil,
+                buf_lines = vim.api.nvim_buf_line_count(self.message_writer.bufnr),
             })
             self.is_generating = false
 

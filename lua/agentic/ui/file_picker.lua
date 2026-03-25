@@ -44,8 +44,12 @@ function FilePicker:new(bufnr)
     end
 
     --- @type agentic.ui.FilePicker
-    local instance = setmetatable({ _files = {} }, self)
+    local instance = setmetatable({ _files = {}, _scanning = false }, self)
     instances_by_buffer[bufnr] = instance
+
+    -- Pre-populate file cache asynchronously so @-completion doesn't block
+    instance:scan_files_async()
+
     return instance
 end
 
@@ -59,7 +63,7 @@ function FilePicker.get_files(bufnr)
         return {}
     end
 
-    if #instance._files == 0 then
+    if #instance._files == 0 and not instance._scanning then
         instance:scan_files()
     end
 
@@ -132,6 +136,64 @@ function FilePicker:scan_files()
 
     self._files = files
     return files
+end
+
+--- Asynchronously scan files and populate the cache.
+--- Uses vim.system() for non-blocking execution. Falls back to synchronous
+--- glob on next get_files() call if all async commands fail.
+function FilePicker:scan_files_async()
+    if self._scanning then
+        return
+    end
+
+    local commands = self._build_scan_commands(self)
+    if #commands == 0 then
+        -- No external commands available; synchronous glob fallback on first use
+        return
+    end
+
+    self._scanning = true
+    self:_try_async_command(commands, 1)
+end
+
+--- Try command at index `idx`; on failure, try the next one.
+--- @param commands table[]
+--- @param idx integer
+function FilePicker:_try_async_command(commands, idx)
+    if idx > #commands then
+        self._scanning = false
+        return
+    end
+
+    local start_time = vim.uv.hrtime()
+    vim.system(commands[idx], { text = true }, function(result)
+        vim.schedule(function()
+            local elapsed = (vim.uv.hrtime() - start_time) / 1e6
+            Logger.debug(string.format(
+                "[FilePicker] Async command completed in %.2fms, exit_code: %d",
+                elapsed,
+                result.code
+            ))
+
+            if result.code == 0 and result.stdout and result.stdout ~= "" then
+                local files = {}
+                for line in result.stdout:gmatch("[^\n]+") do
+                    if line ~= "" then
+                        local relative_path = FileSystem.to_smart_path(line)
+                        table.insert(files, { path = relative_path })
+                    end
+                end
+                table.sort(files, function(a, b)
+                    return a.path < b.path
+                end)
+                self._files = files
+                self._scanning = false
+            else
+                -- Try next command
+                self:_try_async_command(commands, idx + 1)
+            end
+        end)
+    end)
 end
 
 --- Builds list of all available scan commands to try in order
