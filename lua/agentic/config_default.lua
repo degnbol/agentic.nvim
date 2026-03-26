@@ -199,6 +199,7 @@ local ConfigDefault = {
                 },
             },
             continue = "<localLeader>c",
+            restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
             refresh = "<localLeader>r",
             switch_provider = "<localLeader>s",

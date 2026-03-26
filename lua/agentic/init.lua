@@ -225,6 +225,14 @@ function Agentic.stop_generation()
     end)
 end
 
+--- Restart the current session: cancel and restore from chat history.
+--- Use when a session becomes stuck or unresponsive.
+function Agentic.restart_session()
+    SessionRegistry.get_session_for_tab_page(nil, function(session)
+        session:restart_session()
+    end)
+end
+
 --- show a selector to restore a previous session
 function Agentic.restore_session()
     local tab_page_id = vim.api.nvim_get_current_tabpage()

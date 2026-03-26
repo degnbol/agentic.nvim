@@ -1598,6 +1598,21 @@ function SessionManager:restore_from_history(history, opts)
     end
 end
 
+--- Restart the current session: cancel it and restore from chat history.
+--- Use when a session becomes stuck or unresponsive.
+function SessionManager:restart_session()
+    local saved_history = vim.deepcopy(self.chat_history)
+
+    if #saved_history.messages == 0 then
+        -- Nothing to restore — just create a fresh session
+        self:new_session()
+        return
+    end
+
+    self:_cancel_session()
+    self:restore_from_history(saved_history)
+end
+
 --- @private
 --- @param seconds number
 --- @return string

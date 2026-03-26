@@ -414,6 +414,15 @@ function ChatWidget:_bind_keymaps()
         )
 
         BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.restart_session,
+            bufnr,
+            function()
+                require("agentic").restart_session()
+            end,
+            { desc = "Agentic: Restart session (cancel and restore)" }
+        )
+
+        BufHelpers.multi_keymap_set(
             Config.keymaps.widget.restore_session,
             bufnr,
             function()

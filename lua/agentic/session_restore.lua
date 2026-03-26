@@ -129,16 +129,10 @@ end
 function SessionRestore.replay_messages(writer, messages)
     for _, msg in ipairs(messages) do
         if msg.type == "user" then
-            -- Format user message for display with original timestamp
-            local timestamp_str = msg.timestamp
-                    and os.date("%Y-%m-%d %H:%M:%S", msg.timestamp)
-                or os.date("%Y-%m-%d %H:%M:%S")
             local message_lines = {
-                string.format("##  User - %s", timestamp_str),
-                "",
+                "##",
                 msg.text,
-                "\n\n### 󱚠 Agent - "
-                    .. (msg.provider_name or "Unknown provider"),
+                "\n---\n",
             }
             local user_message =
                 ACPPayloads.generate_user_message(message_lines)
