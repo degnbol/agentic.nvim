@@ -251,7 +251,7 @@ end
 function Agentic.send_prompt(text)
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:_handle_input_submit(text)
-        session.widget:show()
+        session.widget:show({ focus_prompt = false })
     end)
 end
 

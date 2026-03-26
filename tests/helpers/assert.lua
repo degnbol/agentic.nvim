@@ -55,7 +55,8 @@ end
 
 --- Assert value is truthy (not nil and not false)
 --- @param value any Value to check
-function M.truthy(value)
+--- @param _msg? string Optional message (ignored, for busted compatibility)
+function M.truthy(value, _msg)
     expect.equality(not not value, true)
 end
 

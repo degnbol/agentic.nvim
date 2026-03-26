@@ -270,7 +270,7 @@ local function show_layout(params, position)
             local winid = win_nrs.input
             if winid and vim.api.nvim_win_is_valid(winid) then
                 vim.api.nvim_set_current_win(winid)
-                BufHelpers.start_insert_on_last_char()
+                vim.cmd("normal! G$")
             end
         end)
     end

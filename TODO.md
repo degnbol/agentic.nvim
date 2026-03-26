@@ -32,3 +32,7 @@
   These are currently written for the project we forked from, our readme should 
   reflect our project and how it differs, e.g. claude focus, added formatting and 
   syntax hl.
+
+- Some sessions are more clearly completed than others. If user prompt is last in a session it's not completed. If the session ends in a commit etc. it's probably completed.
+  When it is and isn't might be a bit of a heuristic to detect but we could use a specific close keymap (instead of :qa!) to close marking a session for archive.
+  Why is this useful? For the resume functionality. So we can easily resume from just the unfinshed work (or choose to look at archive specifically.)
