@@ -130,4 +130,28 @@ function BufHelpers.feed_ESC_key()
     )
 end
 
+--- Scroll a window to the bottom, but only if it wouldn't scroll upward.
+--- Prevents the jarring jump when `G0zb` overshoots on short buffers.
+--- @param winid integer
+--- @param has_virt_lines? boolean Whether virtual lines (status animation) are active
+function BufHelpers.scroll_down_only(winid, has_virt_lines)
+    if not vim.api.nvim_win_is_valid(winid) then
+        return
+    end
+    local old_topline = vim.fn.getwininfo(winid)[1].topline
+    vim.api.nvim_win_call(winid, function()
+        if has_virt_lines then
+            vim.cmd("normal! G0zb\5") -- \5 = <C-e>
+        else
+            vim.cmd("normal! G0zb")
+        end
+    end)
+    local new_topline = vim.fn.getwininfo(winid)[1].topline
+    if new_topline < old_topline then
+        vim.api.nvim_win_call(winid, function()
+            vim.fn.winrestview({ topline = old_topline })
+        end)
+    end
+end
+
 return BufHelpers

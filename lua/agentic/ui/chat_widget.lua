@@ -236,12 +236,10 @@ function ChatWidget:move_cursor_to(winid, callback)
                 vim.api.nvim_set_current_win(winid)
             end
 
-            -- make sure to scroll to the bottom
-            -- 1. user can see the new message
-            -- 2. auto-scroll will start again
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd("normal! G0zb")
-            end)
+            -- Scroll to bottom so the user can see the new message and
+            -- auto-scroll will engage again. Only scroll downward — if the
+            -- buffer is short, G0zb can overshoot and jump the view up.
+            BufHelpers.scroll_down_only(winid)
 
             if callback then
                 callback()

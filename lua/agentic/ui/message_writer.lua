@@ -759,23 +759,20 @@ function MessageWriter:_check_auto_scroll(bufnr)
     return distance_from_bottom <= threshold
 end
 
---- Force-scroll the chat window to the bottom and redraw.
---- Unlike _auto_scroll, this ignores cursor proximity — always scrolls.
+--- Scroll the chat window to the bottom if the cursor is near the end.
+--- Respects the same proximity threshold as streaming auto-scroll so that
+--- users reading earlier content are not interrupted.
 function MessageWriter:scroll_to_bottom()
-    local bufnr = self.bufnr
-    if not vim.api.nvim_buf_is_valid(bufnr) then
+    if not self:_check_auto_scroll(self.bufnr) then
         return
     end
 
-    local wins = vim.fn.win_findbuf(bufnr)
+    local wins = vim.fn.win_findbuf(self.bufnr)
     if #wins == 0 then
         return
     end
 
-    local winid = wins[1]
-    vim.api.nvim_win_call(winid, function()
-        vim.cmd("normal! G0zb")
-    end)
+    BufHelpers.scroll_down_only(wins[1])
     vim.cmd.redraw()
 end
 
@@ -797,24 +794,9 @@ function MessageWriter:_auto_scroll(bufnr)
             if self._should_auto_scroll then
                 local wins = vim.fn.win_findbuf(bufnr)
                 if #wins > 0 then
-                    local winid = wins[1]
-                    local old_topline = vim.fn.getwininfo(winid)[1].topline
                     local has_virt_lines = self._status_animation
                         and self._status_animation:is_active()
-                    vim.api.nvim_win_call(winid, function()
-                        if has_virt_lines then
-                            vim.cmd("normal! G0zb\5") -- \5 = <C-e>
-                        else
-                            vim.cmd("normal! G0zb")
-                        end
-                    end)
-                    -- Only allow downward scroll; restore if it jumped up
-                    local new_topline = vim.fn.getwininfo(winid)[1].topline
-                    if new_topline < old_topline then
-                        vim.api.nvim_win_call(winid, function()
-                            vim.fn.winrestview({ topline = old_topline })
-                        end)
-                    end
+                    BufHelpers.scroll_down_only(wins[1], has_virt_lines)
                 end
             end
         end
