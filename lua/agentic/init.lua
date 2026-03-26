@@ -215,10 +215,13 @@ end
 --- Safe to call multiple times or when no generation is active
 function Agentic.stop_generation()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
-        if session.is_generating then
-            session.agent:stop_generation(session.session_id)
-            session.permission_manager:clear()
+        if not session.session_id then
+            return
         end
+
+        session.agent:stop_generation(session.session_id)
+        session.permission_manager:clear()
+        session.status_animation:stop()
     end)
 end
 
