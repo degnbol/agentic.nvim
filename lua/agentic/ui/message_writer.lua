@@ -676,11 +676,13 @@ function MessageWriter:write_message_chunk(update)
         -- Guard against two messages being concatenated with no whitespace
         -- (e.g. auto-compaction text followed by resumed response). Normal
         -- streaming tokens include leading whitespace at word boundaries, so
-        -- an uppercase letter directly after non-whitespace means the provider
-        -- spliced two separate messages together.
+        -- an uppercase letter directly after a lowercase letter, digit, or
+        -- sentence-ending punctuation means the provider spliced two separate
+        -- messages together. Uppercase after uppercase is left alone to avoid
+        -- splitting abbreviations like "CWD" streamed as "C" + "WD".
         if
             start_col > 0
-            and not current_line:sub(-1):match("%s")
+            and current_line:sub(-1):match("[%l%d%.%!%?%)\"']")
             and text:sub(1, 1):match("%u")
         then
             text = " " .. text

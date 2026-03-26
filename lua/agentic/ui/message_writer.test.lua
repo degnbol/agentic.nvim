@@ -1096,6 +1096,22 @@ describe("agentic.ui.MessageWriter", function()
                 "Should not insert space before lowercase: " .. last
             )
         end)
+
+        it(
+            "does not insert space inside abbreviations streamed as separate chunks",
+            function()
+                writer:write_message_chunk(make_message_update("the C"))
+                writer:write_message_chunk(make_message_update("WD is"))
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local last = lines[#lines] ~= "" and lines[#lines]
+                    or lines[#lines - 1]
+                assert.truthy(
+                    last:find("CWD"),
+                    "Should not split abbreviation: " .. last
+                )
+            end
+        )
     end)
 
     describe("collapsed extmark handling", function()
