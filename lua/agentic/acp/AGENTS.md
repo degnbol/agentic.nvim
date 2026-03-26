@@ -244,6 +244,19 @@ rejection).
 
 ## Known ACP limitations
 
+### Edit applied before permission request
+
+Providers (at least `claude-agent-acp`) write file edits to disk **before**
+sending `request_permission`. By the time the plugin reads the file to show the
+diff preview, the file already contains the new content. Matching
+`rawInput.old_string` against the file fails because the old text is no longer
+present.
+
+Both `diff_split_view.lua` and `tool_call_diff.lua` handle this via reverse
+matching: when forward matching fails, try matching `new_lines` against the file.
+If that succeeds, the edit is already applied and the diff is reconstructed by
+reversing the match. Any new diff-related code must account for both orderings.
+
 ### Slash commands intercepted locally
 
 Some slash commands are handled entirely inside the provider process (TUI) and
