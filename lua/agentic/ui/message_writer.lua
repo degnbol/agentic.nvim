@@ -211,6 +211,7 @@ local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
 --- @field search_matches? agentic.ui.MessageWriter.SearchMatch[] Pattern match positions (relative to block lines)
 --- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
+--- @field diff_tab? integer Tabpage ID of the diff preview tab (set by SessionManager)
 
 --- Known prefix of the rejection boilerplate injected by the provider after
 --- a permission denial. Streamed as agent_message_chunk but meant for the

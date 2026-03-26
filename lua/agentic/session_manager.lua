@@ -1414,29 +1414,18 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
         return
     end
 
+    local agent_tab = self.tab_page_id
+
     DiffPreview.show_diff({
         file_path = tracker.argument,
         diff = tracker.diff,
         get_winid = function(bufnr)
-            local agent_tab = vim.api.nvim_get_current_tabpage()
-            -- Reuse existing diff tab or create one
-            local ok, diff_tab = pcall(
-                vim.api.nvim_tabpage_get_var,
-                agent_tab,
-                "_agentic_diff_tab"
-            )
-            if ok and vim.api.nvim_tabpage_is_valid(diff_tab) then
-                vim.api.nvim_set_current_tabpage(diff_tab)
-            else
-                vim.cmd("tabnew")
-                diff_tab = vim.api.nvim_get_current_tabpage()
-                vim.api.nvim_tabpage_set_var(
-                    agent_tab,
-                    "_agentic_diff_tab",
-                    diff_tab
-                )
-                vim.api.nvim_set_current_tabpage(agent_tab)
-            end
+            -- Always create a fresh tabpage for each diff
+            vim.cmd("tabnew")
+            local diff_tab = vim.api.nvim_get_current_tabpage()
+            tracker.diff_tab = diff_tab
+            vim.api.nvim_set_current_tabpage(agent_tab)
+
             local wins = vim.api.nvim_tabpage_list_wins(diff_tab)
             if #wins == 0 then
                 return nil
@@ -1459,6 +1448,20 @@ function SessionManager:_clear_diff_in_buffer(tool_call_id, is_rejection)
     end
 
     DiffPreview.clear_diff(tracker.argument, is_rejection)
+
+    -- Close the diff tabpage created for this tool call
+    local diff_tab = tracker.diff_tab
+    if diff_tab and vim.api.nvim_tabpage_is_valid(diff_tab) then
+        -- Ensure we're not on the diff tab before closing it
+        if vim.api.nvim_get_current_tabpage() == diff_tab then
+            vim.api.nvim_set_current_tabpage(self.tab_page_id)
+        end
+        -- Close all windows in the diff tab, which closes the tab
+        for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(diff_tab)) do
+            pcall(vim.api.nvim_win_close, winid, true)
+        end
+    end
+    tracker.diff_tab = nil
 end
 
 --- @param new_config_options agentic.acp.ConfigOption[]
