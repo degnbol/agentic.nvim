@@ -673,6 +673,19 @@ function MessageWriter:write_message_chunk(update)
         )[1] or ""
         local start_col = #current_line
 
+        -- Guard against two messages being concatenated with no whitespace
+        -- (e.g. auto-compaction text followed by resumed response). Normal
+        -- streaming tokens include leading whitespace at word boundaries, so
+        -- an uppercase letter directly after non-whitespace means the provider
+        -- spliced two separate messages together.
+        if
+            start_col > 0
+            and not current_line:sub(-1):match("%s")
+            and text:sub(1, 1):match("%u")
+        then
+            text = " " .. text
+        end
+
         local lines_to_write = vim.split(text, "\n", { plain = true })
 
         local success, err = pcall(
@@ -686,7 +699,11 @@ function MessageWriter:write_message_chunk(update)
         )
 
         if not success then
-            Logger.debug("Failed to set text in buffer", err, lines_to_write)
+            Logger.notify(
+                "Failed to write message chunk:\n" .. tostring(err),
+                vim.log.levels.ERROR,
+                { title = "Agentic buffer write error" }
+            )
         end
 
         -- Wrap the last line immediately if it overflows, so the user sees
@@ -735,7 +752,11 @@ function MessageWriter:_append_lines(lines)
     )
 
     if not success then
-        Logger.debug("Failed to append lines to buffer", err, lines)
+        Logger.notify(
+            "Failed to append lines to buffer:\n" .. tostring(err),
+            vim.log.levels.ERROR,
+            { title = "Agentic buffer write error" }
+        )
     end
 end
 
@@ -885,11 +906,12 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     local tracker = self.tool_call_blocks[tool_call_block.tool_call_id]
 
     if not tracker then
-        Logger.debug(
-            "Tool call block not found, ID: ",
-            tool_call_block.tool_call_id
+        Logger.notify(
+            "Tool call update for unknown block: "
+                .. tostring(tool_call_block.tool_call_id),
+            vim.log.levels.WARN,
+            { title = "Agentic sync: missing tracker" }
         )
-
         return
     end
 
@@ -939,9 +961,10 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     )
 
     if not pos or not pos[1] then
-        Logger.debug(
-            "Extmark not found",
-            { tool_call_id = tracker.tool_call_id }
+        Logger.notify(
+            "Tool call extmark lost: " .. tostring(tracker.tool_call_id),
+            vim.log.levels.WARN,
+            { title = "Agentic sync: extmark lost" }
         )
         return
     end
@@ -951,9 +974,11 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     local old_end_row = details and details.end_row
 
     if not old_end_row then
-        Logger.debug(
-            "Could not determine end row of tool call block",
-            { tool_call_id = tracker.tool_call_id, details = details }
+        Logger.notify(
+            "Tool call extmark has no end_row: "
+                .. tostring(tracker.tool_call_id),
+            vim.log.levels.WARN,
+            { title = "Agentic sync: extmark corrupt" }
         )
         return
     end
@@ -982,10 +1007,15 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         -- only update status highlights - don't replace content
         if already_has_diff then
             if old_end_row > vim.api.nvim_buf_line_count(bufnr) then
-                Logger.debug("Footer line index out of bounds", {
-                    old_end_row = old_end_row,
-                    line_count = vim.api.nvim_buf_line_count(bufnr),
-                })
+                Logger.notify(
+                    string.format(
+                        "Tool call footer out of bounds: row %d, buf has %d lines",
+                        old_end_row,
+                        vim.api.nvim_buf_line_count(bufnr)
+                    ),
+                    vim.log.levels.WARN,
+                    { title = "Agentic sync: footer OOB" }
+                )
                 return false
             end
 

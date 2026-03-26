@@ -110,7 +110,11 @@ function ACPClient:__with_subscriber(session_id, callback)
     vim.schedule(function()
         local ok, err = pcall(callback, subscriber)
         if not ok then
-            Logger.debug("Subscriber callback error: ", err)
+            Logger.notify(
+                "Subscriber callback error:\n" .. tostring(err),
+                vim.log.levels.ERROR,
+                { title = "Agentic sync error" }
+            )
         end
     end)
 end
@@ -305,7 +309,13 @@ function ACPClient:_handle_message(message)
         local callback = self.callbacks[message.id]
         if callback then
             self.callbacks[message.id] = nil
-            callback(message.result, message.error)
+            -- Schedule response callbacks onto the main loop — _handle_message
+            -- runs from a libuv read_start callback where vim API calls are
+            -- unsafe. Notification handlers already go through __with_subscriber
+            -- which schedules; response callbacks must do the same.
+            vim.schedule(function()
+                callback(message.result, message.error)
+            end)
         else
             Logger.notify(
                 "No callback found for response id: "
