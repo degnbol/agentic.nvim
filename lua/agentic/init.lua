@@ -47,6 +47,43 @@ function Agentic.toggle(opts)
     end)
 end
 
+--- Toggle in a dedicated tab: opens a new tab for agentic, closes the tab on
+--- toggle-off when only the agentic window remains. Reuses dashboard/empty tabs.
+function Agentic.toggle_tab()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local session = SessionRegistry.sessions[tab]
+    if session and session.widget:is_open() then
+        session.widget:hide()
+        -- Close the tab if only 1 window remains (the empty one after hiding)
+        if #vim.api.nvim_tabpage_list_wins(tab) <= 1 then
+            vim.cmd("tabclose")
+        end
+    else
+        -- Reuse current tab if it's just a dashboard or empty buffer
+        local wins = vim.fn.filter(
+            vim.api.nvim_tabpage_list_wins(tab),
+            function(_, w)
+                return vim.api.nvim_win_get_config(w).relative == ""
+            end
+        )
+        local buf = vim.api.nvim_win_get_buf(wins[1])
+        local ft = vim.bo[buf].filetype
+        local fresh = #wins == 1
+            and (ft == "dashboard" or (ft == "" and vim.fn.bufname(buf) == ""))
+        if not fresh then
+            vim.cmd("tabnew")
+        end
+        local empty_win = vim.api.nvim_get_current_win()
+        Agentic.open({ auto_add_to_context = false })
+        -- Close the leftover empty window so agentic fills the tab
+        if vim.api.nvim_win_is_valid(empty_win) then
+            local ebuf = vim.api.nvim_win_get_buf(empty_win)
+            pcall(vim.api.nvim_win_close, empty_win, true)
+            pcall(vim.api.nvim_buf_delete, ebuf, { force = true })
+        end
+    end
+end
+
 --- Rotates through predefined window layouts for the chat widget
 --- @param layouts agentic.UserConfig.Windows.Position[]|nil
 function Agentic.rotate_layout(layouts)
@@ -200,6 +237,31 @@ function Agentic.load_acp_session(session_id)
         session:load_acp_session(session_id)
         session.widget:show()
     end)
+end
+
+--- Send arbitrary text as a prompt to the current session.
+--- Convenience for custom keymaps, e.g.:
+---   vim.keymap.set("n", "<localLeader>x", function()
+---       require("agentic").send_prompt("Explain the last error")
+---   end)
+--- @param text string
+function Agentic.send_prompt(text)
+    SessionRegistry.get_session_for_tab_page(nil, function(session)
+        session:_handle_input_submit(text)
+        session.widget:show()
+    end)
+end
+
+--- Operatorfunc callback for sending a motion or line to the chat context.
+--- Set via `<Plug>(agentic-send)` and `<Plug>(agentic-send-line)`.
+--- @param type string "char"|"line"|"block"
+function Agentic.send_operatorfunc(type)
+    if type == "char" then
+        vim.cmd("silent normal! `[v`]")
+    else
+        vim.cmd("silent normal! `[V`]")
+    end
+    Agentic.add_selection()
 end
 
 --- Used to make sure we don't set multiple signal handlers or autocmds, if the user calls setup multiple times

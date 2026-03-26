@@ -405,8 +405,10 @@ header parts:
 | Function                                                     | Description                                                       |
 | ------------------------------------------------------------ | ----------------------------------------------------------------- |
 | `:lua require("agentic").toggle()`                           | Toggle chat sidebar                                               |
+| `:lua require("agentic").toggle_tab()`                       | Toggle in a dedicated tab (creates/closes tab automatically)      |
 | `:lua require("agentic").open()`                             | Open chat sidebar (keep open if already visible)                  |
 | `:lua require("agentic").close()`                            | Close chat sidebar                                                |
+| `:lua require("agentic").send_prompt(text)`                  | Send arbitrary text as a prompt (for custom keymaps)              |
 | `:lua require("agentic").add_selection()`                    | Add visual selection to context                                   |
 | `:lua require("agentic").add_file()`                         | Add current file to context                                       |
 | `:lua require("agentic").add_selection_or_file_to_context()` | Add selection (if any) or file to the context                     |
@@ -449,20 +451,25 @@ require("agentic").add_selection({ focus_prompt = false })
 
 These keybindings are automatically set in Agentic buffers:
 
-| Keybinding       | Mode  | Description                                                     |
-| ---------------- | ----- | --------------------------------------------------------------- |
-| `<S-Tab>`        | n/v/i | Switch agent mode (only available if provider supports modes)   |
-| `<CR>`           | n     | Submit prompt                                                   |
-| `<C-s>`          | n/v/i | Submit prompt                                                   |
-| `<localLeader>p` | n     | Paste image from clipboard in the Prompt buffer                 |
-| `<C-v>`          | i     | Paste image from clipboard (same as Claude-code)                |
-| `<localLeader>s` | n     | Switch ACP provider (preserves chat history)                    |
-| `<localLeader>m` | n     | Switch model without (preserves chat history)                   |
-| `q`              | n     | Close chat widget                                               |
-| `d`              | n     | Remove file, code selection, or diagnostic at cursor            |
-| `d`              | v     | Remove multiple selected files, code selections, or diagnostics |
-| `]c`             | n     | Navigate to next diff hunk (when diff preview is active)        |
-| `[c`             | n     | Navigate to previous diff hunk (when diff preview is active)    |
+| Keybinding       | Mode  | Scope  | Description                                                     |
+| ---------------- | ----- | ------ | --------------------------------------------------------------- |
+| `<S-Tab>`        | n/v/i | widget | Switch agent mode (only available if provider supports modes)   |
+| `<C-c>`          | n/i   | widget | Stop current generation                                         |
+| `<localLeader>c` | n     | widget | Send "Continue" prompt                                          |
+| `<localLeader>R` | n     | widget | Restore a previous session (picker)                             |
+| `<localLeader>r` | n     | widget | Refresh chat (scroll to bottom)                                 |
+| `<localLeader>s` | n     | widget | Switch ACP provider (preserves chat history)                    |
+| `<localLeader>m` | n     | widget | Switch model (preserves chat history)                           |
+| `q`              | n     | widget | Close chat widget                                               |
+| `<CR>`           | n     | prompt | Submit prompt                                                   |
+| `<localLeader>p` | n     | prompt | Paste image from clipboard                                      |
+| `<C-v>`          | i     | prompt | Paste image from clipboard (same as Claude-code)                |
+| `[[`             | n     | chat   | Jump to previous user prompt                                    |
+| `]]`             | n     | chat   | Jump to next user prompt                                        |
+| `d`              | n     | panels | Remove file, code selection, or diagnostic at cursor            |
+| `d`              | v     | panels | Remove multiple selected files, code selections, or diagnostics |
+| `]c`             | n     | diff   | Navigate to next diff hunk (when diff preview is active)        |
+| `[c`             | n     | diff   | Navigate to previous diff hunk (when diff preview is active)    |
 
 #### Customizing Keybindings
 
@@ -483,8 +490,11 @@ your setup:
             mode = { "i", "n", "v" },  -- Specify modes for this keybinding
           },
         },
-        switch_provider = "<localLeader>s",  -- Switch ACP provider
-        switch_model = "<localLeader>m",     -- Switch model
+        continue = "<localLeader>c",          -- Send "Continue" prompt
+        restore_session = "<localLeader>R",   -- Restore previous session
+        refresh = "<localLeader>r",           -- Scroll chat to bottom
+        switch_provider = "<localLeader>s",   -- Switch ACP provider
+        switch_model = "<localLeader>m",      -- Switch model
       },
 
       -- Keybindings for the prompt buffer only
@@ -529,6 +539,64 @@ your setup:
 
 The header text in the chat and prompt buffers will automatically update to show
 the appropriate keybinding for the current mode.
+
+### Plug Mappings
+
+Agentic.nvim defines global `<Plug>` mappings for all public actions. These let
+you bind your preferred keys from any buffer without writing wrapper functions:
+
+```lua
+-- Example lazy.nvim keys using <Plug> mappings
+keys = {
+    { "<leader>ii", "<Plug>(agentic-toggle-tab)", desc = "Toggle agent" },
+    { "<leader>if", "<Plug>(agentic-open)", desc = "Focus agent" },
+    { "<leader>iq", "<Plug>(agentic-close)", desc = "Close agent" },
+    { "<leader>in", "<Plug>(agentic-new-session)", desc = "New session" },
+    { "<leader>ib", "<Plug>(agentic-add-file)", desc = "Add current buffer" },
+    { "<leader>is", "<Plug>(agentic-send)", mode = "v", desc = "Send selection" },
+    { "<M-CR>", "<Plug>(agentic-send)", desc = "Agent send motion" },
+    { "<M-CR><M-CR>", "<Plug>(agentic-send-line)", desc = "Agent send line" },
+}
+```
+
+**Available `<Plug>` mappings:**
+
+| Mapping                              | Mode | Description                                   |
+| ------------------------------------ | ---- | --------------------------------------------- |
+| `<Plug>(agentic-toggle)`             | n    | Toggle chat sidebar                           |
+| `<Plug>(agentic-toggle-tab)`         | n    | Toggle in dedicated tab                       |
+| `<Plug>(agentic-open)`               | n    | Open chat sidebar                             |
+| `<Plug>(agentic-close)`              | n    | Close chat sidebar                            |
+| `<Plug>(agentic-send)`               | n    | Send motion to context (operator)             |
+| `<Plug>(agentic-send)`               | x    | Send visual selection to context              |
+| `<Plug>(agentic-send-line)`          | n    | Send current line to context                  |
+| `<Plug>(agentic-add-file)`           | n    | Add current file to context                   |
+| `<Plug>(agentic-add-selection)`      | x    | Add visual selection to context               |
+| `<Plug>(agentic-add-diagnostics)`    | n    | Add cursor line diagnostics to context        |
+| `<Plug>(agentic-add-buffer-diagnostics)` | n | Add all buffer diagnostics to context        |
+| `<Plug>(agentic-new-session)`        | n    | Start new session                             |
+| `<Plug>(agentic-new-session-provider)` | n  | New session with provider picker              |
+| `<Plug>(agentic-switch-provider)`    | n    | Switch provider mid-session                   |
+| `<Plug>(agentic-restore-session)`    | n    | Restore previous session (picker)             |
+| `<Plug>(agentic-stop)`               | n    | Stop current generation                       |
+| `<Plug>(agentic-rotate-layout)`      | n    | Rotate window layout                          |
+
+### Custom Prompt Keymaps
+
+Use `send_prompt()` to define keymaps that send predefined text to the agent.
+This is how the built-in `<localLeader>c` (continue) keymap works:
+
+```lua
+-- Send "Continue" to nudge the agent to keep going
+vim.keymap.set("n", "<localLeader>c", function()
+    require("agentic").send_prompt("Continue")
+end)
+
+-- Send a custom instruction
+vim.keymap.set("n", "<localLeader>e", function()
+    require("agentic").send_prompt("Explain the last error")
+end)
+```
 
 ### Diff Preview
 

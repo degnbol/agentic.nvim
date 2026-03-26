@@ -408,10 +408,18 @@ function ChatWidget:_bind_keymaps()
             Config.keymaps.widget.continue,
             bufnr,
             function()
-                self.on_submit_input("Continue")
-                self:move_cursor_to(self.win_nrs.chat)
+                require("agentic").send_prompt("Continue")
             end,
             { desc = "Agentic: Send 'Continue' prompt" }
+        )
+
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.restore_session,
+            bufnr,
+            function()
+                require("agentic").restore_session()
+            end,
+            { desc = "Agentic: Restore previous session" }
         )
 
         BufHelpers.multi_keymap_set(
