@@ -71,6 +71,24 @@ function M.extract_diff_blocks(opts)
         local blocks =
             M.match_or_substring_fallback(file_lines, old_lines, new_lines)
 
+        if not blocks then
+            -- Reverse match: the provider may have already applied the edit
+            -- to disk before requesting permission. Match new_lines instead
+            -- and swap old/new so the diff still displays correctly.
+            local reverse_blocks =
+                M.match_or_substring_fallback(file_lines, new_lines, old_lines)
+            if reverse_blocks then
+                blocks = vim.tbl_map(function(b)
+                    return {
+                        start_line = b.start_line,
+                        end_line = b.end_line,
+                        old_lines = new_lines,
+                        new_lines = old_lines,
+                    }
+                end, reverse_blocks)
+            end
+        end
+
         if blocks then
             if opts.replace_all then
                 vim.list_extend(diff_blocks, blocks)

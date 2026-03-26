@@ -1,4 +1,3 @@
-local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
@@ -136,17 +135,6 @@ local function open_split_view(abs_path, bufnr, target_winid, modified_lines)
 
     vim.bo[scratch_bufnr].modifiable = false
 
-    vim.schedule(function()
-        if not vim.api.nvim_win_is_valid(target_winid) then
-            return
-        end
-        local center_cmd = Config.diff_preview.center_on_navigate_hunks and "zz"
-            or ""
-        pcall(vim.api.nvim_win_call, target_winid, function()
-            vim.cmd("normal! gg]c" .. center_cmd)
-        end)
-    end)
-
     local ok, tabpage = pcall(vim.api.nvim_win_get_tabpage, target_winid)
     if not ok then
         return false
@@ -246,19 +234,47 @@ function M.show_split_diff(opts)
         new_lines,
         opts.diff.all
     )
-    if not modified_lines then
-        Logger.notify(
-            "show_split_diff: could not match diff in file, the agent will most likely fail and retry"
+
+    if modified_lines then
+        local bufnr, target_winid =
+            resolve_buf_and_win(abs_path, opts.get_winid)
+        if not bufnr or not target_winid then
+            return false
+        end
+        return open_split_view(abs_path, bufnr, target_winid, modified_lines)
+    end
+
+    -- Reverse match: the provider may have already applied the edit to disk
+    -- before requesting permission. The file now contains new_lines, so match
+    -- those instead and reconstruct the original by reversing the diff.
+    local original_reconstructed = reconstruct_modified_file(
+        original_lines,
+        new_lines,
+        old_lines,
+        opts.diff.all
+    )
+
+    if original_reconstructed then
+        local bufnr, target_winid =
+            resolve_buf_and_win(abs_path, opts.get_winid)
+        if not bufnr or not target_winid then
+            return false
+        end
+        -- File buffer (left) = modified (as on disk).
+        -- Scratch buffer (right) = reconstructed original.
+        -- Vimdiff shows the changes regardless of side ordering.
+        return open_split_view(
+            abs_path,
+            bufnr,
+            target_winid,
+            original_reconstructed
         )
-        return false
     end
 
-    local bufnr, target_winid = resolve_buf_and_win(abs_path, opts.get_winid)
-    if not bufnr or not target_winid then
-        return false
-    end
-
-    return open_split_view(abs_path, bufnr, target_winid, modified_lines)
+    Logger.notify(
+        "show_split_diff: could not match diff in file, the agent will most likely fail and retry"
+    )
+    return false
 end
 
 --- @param tabpage number|nil Tabpage ID (defaults to current tabpage)
