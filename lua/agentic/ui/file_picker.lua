@@ -70,6 +70,17 @@ function FilePicker.get_files(bufnr)
     return instance._files
 end
 
+--- Count `/` separators to determine path depth (0 = file in current dir).
+--- @param path string
+--- @return integer
+local function path_depth(path)
+    local count = 0
+    for _ in path:gmatch("/") do
+        count = count + 1
+    end
+    return count
+end
+
 function FilePicker:scan_files()
     local commands = self:_build_scan_commands()
 
@@ -121,21 +132,46 @@ function FilePicker:scan_files()
     vim.list_extend(glob_files, files_in_hidden)
     Logger.debug("[FilePicker] Glob returned", #glob_files, "paths")
 
-    local max = Config.file_picker.max_files or 0
+    -- Bucket by depth for breadth-first selection (cheap first pass)
+    local buckets = {} --- @type table<integer, string[]>
+    local max_seen_depth = 0
     for _, path in ipairs(glob_files) do
         if vim.fn.isdirectory(path) == 0 and not self:_should_exclude(path) then
-            local relative_path = FileSystem.to_smart_path(path)
-            if not seen[relative_path] then
-                seen[relative_path] = true
-                table.insert(files, { path = relative_path })
-                if max > 0 and #files >= max then
-                    Logger.debug(
-                        string.format(
-                            "[FilePicker] Glob truncated to %d files (max_files limit)",
-                            max
+            local d = path_depth(path)
+            if not buckets[d] then
+                buckets[d] = {}
+            end
+            table.insert(buckets[d], path)
+            if d > max_seen_depth then
+                max_seen_depth = d
+            end
+        end
+    end
+
+    -- Collect level by level, calling fnamemodify only on kept files
+    local max = Config.file_picker.max_files or 0
+    local truncated = false
+    for depth = 0, max_seen_depth do
+        if truncated then
+            break
+        end
+        local bucket = buckets[depth]
+        if bucket then
+            for _, path in ipairs(bucket) do
+                local relative_path = FileSystem.to_smart_path(path)
+                if not seen[relative_path] then
+                    seen[relative_path] = true
+                    table.insert(files, { path = relative_path })
+                    if max > 0 and #files >= max then
+                        Logger.debug(
+                            string.format(
+                                "[FilePicker] Glob truncated to %d files (max_files limit)",
+                                max
+                            )
                         )
-                    )
-                    break
+                        truncated = true
+                        break
+                    end
                 end
             end
         end
@@ -167,18 +203,41 @@ function FilePicker:scan_files_async()
     self:_try_async_command(commands, 1)
 end
 
---- Parse stdout text into file list, respecting max_files limit.
+--- Parse stdout text into file list, preferring shallow files.
+--- Buckets paths by depth, then fills level by level up to max_files.
+--- Only calls fnamemodify on paths that make the cut (the expensive part).
 --- @param stdout string
 --- @return agentic.ui.FilePickerFile[]
 --- @return boolean truncated
 function FilePicker:_parse_file_output(stdout)
     local max = Config.file_picker.max_files or 0
-    local files = {}
+
+    -- Fast first pass: bucket raw paths by depth (pure Lua, no vimscript calls)
+    local buckets = {} --- @type table<integer, string[]>
+    local max_seen_depth = 0
     for line in stdout:gmatch("[^\n]+") do
         if line ~= "" then
-            table.insert(files, { path = FileSystem.to_smart_path(line) })
-            if max > 0 and #files >= max then
-                return files, true
+            local d = path_depth(line)
+            if not buckets[d] then
+                buckets[d] = {}
+            end
+            table.insert(buckets[d], line)
+            if d > max_seen_depth then
+                max_seen_depth = d
+            end
+        end
+    end
+
+    -- Second pass: collect level by level, calling fnamemodify only on kept files
+    local files = {}
+    for depth = 0, max_seen_depth do
+        local bucket = buckets[depth]
+        if bucket then
+            for _, line in ipairs(bucket) do
+                table.insert(files, { path = FileSystem.to_smart_path(line) })
+                if max > 0 and #files >= max then
+                    return files, true
+                end
             end
         end
     end
