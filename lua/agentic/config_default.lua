@@ -197,6 +197,8 @@ local ConfigDefault = {
                     mode = { "i", "n", "v" },
                 },
             },
+            continue = "<localLeader>C",
+            refresh = "<localLeader>r",
             switch_provider = "<localLeader>s",
             switch_model = "<localLeader>m",
         },
@@ -223,7 +225,6 @@ local ConfigDefault = {
         chat = {
             prev_prompt = "[[",
             next_prompt = "]]",
-            refresh = "<localLeader>r",
         },
 
         --- Keys bindings for diff preview navigation

@@ -349,17 +349,6 @@ function ChatWidget:_setup_prompt_signs()
         end,
         { desc = "Agentic: Next prompt" }
     )
-
-    -- Refresh: scroll to bottom and redraw
-    BufHelpers.multi_keymap_set(
-        Config.keymaps.chat and Config.keymaps.chat.refresh or "gr",
-        chat_buf,
-        function()
-            vim.cmd("normal! G0zb")
-            vim.cmd.redraw()
-        end,
-        { desc = "Agentic: Refresh chat (scroll to bottom)" }
-    )
 end
 
 function ChatWidget:_bind_keymaps()
@@ -415,6 +404,31 @@ function ChatWidget:_bind_keymaps()
                 require("agentic").stop_generation()
             end,
             { desc = "Agentic: Stop generation" }
+        )
+
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.continue,
+            bufnr,
+            function()
+                self.on_submit_input("Continue")
+                self:move_cursor_to(self.win_nrs.chat)
+            end,
+            { desc = "Agentic: Send 'Continue' prompt" }
+        )
+
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.refresh,
+            bufnr,
+            function()
+                local chat_win = self.win_nrs.chat
+                if chat_win and vim.api.nvim_win_is_valid(chat_win) then
+                    vim.api.nvim_win_call(chat_win, function()
+                        vim.cmd("normal! G0zb")
+                    end)
+                    vim.cmd.redraw()
+                end
+            end,
+            { desc = "Agentic: Refresh chat (scroll to bottom)" }
         )
     end
 
