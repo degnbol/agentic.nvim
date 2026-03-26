@@ -64,6 +64,7 @@ end
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
+--- @field _pending_load_cwd? string CWD for the deferred session/load
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _last_prompt? string
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
@@ -115,8 +116,10 @@ function SessionManager:new(tab_page_id)
                 -- Deferred load_acp_session: agent is now ready
                 --- @type string
                 local sid = self._pending_load_session_id
+                local pending_cwd = self._pending_load_cwd
                 self._pending_load_session_id = nil
-                self:_do_load_acp_session(sid)
+                self._pending_load_cwd = nil
+                self:_do_load_acp_session(sid, pending_cwd)
             elseif not self._restoring then
                 -- Skip auto-new_session if restore_from_history was called
                 self:new_session()
@@ -942,20 +945,24 @@ end
 --- If the agent isn't ready yet (fresh SessionManager), the load is deferred
 --- until the on_ready callback fires.
 --- @param session_id string Full UUID of the session to load
-function SessionManager:load_acp_session(session_id)
+--- @param cwd? string Original working directory for the session.
+---   Falls back to vim.fn.getcwd() if nil.
+function SessionManager:load_acp_session(session_id, cwd)
     if self.agent and self.agent.agent_capabilities then
         -- Agent is already initialised, load immediately
-        self:_do_load_acp_session(session_id)
+        self:_do_load_acp_session(session_id, cwd)
     else
         -- Agent still starting — defer until on_ready fires
         self._restoring = true
         self._pending_load_session_id = session_id
+        self._pending_load_cwd = cwd
     end
 end
 
 --- Internal: actually send session/load after the agent is ready.
 --- @param session_id string
-function SessionManager:_do_load_acp_session(session_id)
+--- @param cwd? string Original working directory for the session.
+function SessionManager:_do_load_acp_session(session_id, cwd)
     self:_cancel_session()
     self.status_animation:start("busy")
 
@@ -1039,10 +1046,10 @@ function SessionManager:_do_load_acp_session(session_id)
         end,
     }
 
-    local cwd = vim.fn.getcwd()
+    local effective_cwd = cwd or vim.fn.getcwd()
     self.agent:load_session(
         session_id,
-        cwd,
+        effective_cwd,
         {},
         handlers,
         function(_result, err)

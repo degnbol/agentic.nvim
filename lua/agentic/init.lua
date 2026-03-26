@@ -243,9 +243,11 @@ end
 --- Load an existing ACP session by full UUID.
 --- Opens the chat widget and sends session/load to the agent.
 --- @param session_id string
-function Agentic.load_acp_session(session_id)
+--- @param cwd? string Original working directory for the session (from JSONL).
+---   Falls back to vim.fn.getcwd() if nil.
+function Agentic.load_acp_session(session_id, cwd)
     SessionRegistry.get_session_for_tab_page(nil, function(session)
-        session:load_acp_session(session_id)
+        session:load_acp_session(session_id, cwd)
         session.widget:show()
     end)
 end
