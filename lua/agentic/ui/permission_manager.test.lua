@@ -92,7 +92,7 @@ describe("agentic.ui.PermissionManager", function()
         })
 
         writer = MessageWriter:new(bufnr)
-        pm = PermissionManager:new(writer)
+        pm = PermissionManager:new(writer, { chat = bufnr })
     end)
 
     after_each(function()

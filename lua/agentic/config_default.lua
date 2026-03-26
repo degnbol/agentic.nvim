@@ -41,6 +41,7 @@
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
 --- @field chat table<string, agentic.UserConfig.KeymapValue>
 --- @field diff_preview table<string, string>
+--- @field permission string[] Keys for permission responses (position maps to option index)
 
 --- Window options passed to nvim_set_option_value
 --- Overrides default options (wrap, linebreak, winfixbuf, winfixheight)
@@ -233,6 +234,11 @@ local ConfigDefault = {
             next_hunk = "]c",
             prev_hunk = "[c",
         },
+
+        --- Keys for permission responses (Allow once, Allow always, etc.)
+        --- Position maps to option index: permission[1] selects option 1, etc.
+        --- Applied to all widget buffers while a permission prompt is active.
+        permission = { "1", "2", "3", "4", "5" },
     },
 
     -- stylua: ignore start

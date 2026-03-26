@@ -1,4 +1,5 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
+local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 
 -- Priority order for permission option kinds.
@@ -12,18 +13,21 @@ local PERMISSION_KIND_PRIORITY = {
 
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Reference to MessageWriter instance
+--- @field _buf_nrs agentic.ui.ChatWidget.BufNrs All widget buffer numbers for keymap application
 --- @field queue table[] Queue of pending requests {toolCallId, request, callback}
 --- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
---- @field keymap_info table[] Keymap info for cleanup {mode, lhs}
+--- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
 --- @field _reanchoring boolean Guard flag to prevent recursive on_content_changed during reanchor
 local PermissionManager = {}
 PermissionManager.__index = PermissionManager
 
 --- @param message_writer agentic.ui.MessageWriter
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @return agentic.ui.PermissionManager
-function PermissionManager:new(message_writer)
+function PermissionManager:new(message_writer, buf_nrs)
     local instance = setmetatable({
         message_writer = message_writer,
+        _buf_nrs = buf_nrs or { chat = message_writer.bufnr },
         queue = {},
         current_request = nil,
         keymap_info = {},
@@ -229,8 +233,10 @@ end
 function PermissionManager:_setup_keymaps(option_mapping)
     self:_remove_keymaps()
 
+    local permission_keys = Config.keymaps.permission or {}
+
     for number, option_id in pairs(option_mapping) do
-        local lhs = tostring(number)
+        local lhs = permission_keys[number] or tostring(number)
         local callback
         if option_id == "__reject_all__" then
             callback = function()
@@ -242,26 +248,25 @@ function PermissionManager:_setup_keymaps(option_mapping)
             end
         end
 
-        BufHelpers.keymap_set(self.message_writer.bufnr, "n", lhs, callback, {
-            desc = "Select permission option " .. tostring(number),
-        })
-
-        table.insert(self.keymap_info, { mode = "n", lhs = lhs })
+        for _, bufnr in pairs(self._buf_nrs) do
+            if vim.api.nvim_buf_is_valid(bufnr) then
+                BufHelpers.keymap_set(bufnr, "n", lhs, callback, {
+                    desc = "Select permission option " .. tostring(number),
+                })
+                table.insert(
+                    self.keymap_info,
+                    { mode = "n", lhs = lhs, bufnr = bufnr }
+                )
+            end
+        end
     end
 end
 
 function PermissionManager:_remove_keymaps()
-    if not vim.api.nvim_buf_is_valid(self.message_writer.bufnr) then
-        return
-    end
-
     for _, info in ipairs(self.keymap_info) do
-        pcall(
-            vim.keymap.del,
-            info.mode,
-            info.lhs,
-            { buffer = self.message_writer.bufnr }
-        )
+        if vim.api.nvim_buf_is_valid(info.bufnr) then
+            pcall(vim.keymap.del, info.mode, info.lhs, { buffer = info.bufnr })
+        end
     end
     self.keymap_info = {}
 end

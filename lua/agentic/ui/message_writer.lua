@@ -1545,12 +1545,15 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         })
     end
 
+    local permission_keys = Config.keymaps.permission or {}
+
     for i, option in ipairs(merged_options) do
+        local key_label = permission_keys[i] or tostring(i)
         table.insert(
             lines_to_append,
             string.format(
-                "%d. %s %s",
-                i,
+                "%s. %s %s",
+                key_label,
                 Config.permission_icons[option.kind] or "",
                 option.name
             )
