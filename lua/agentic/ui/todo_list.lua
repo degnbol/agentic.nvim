@@ -1,5 +1,7 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 
+local NS_CHECKBOX = vim.api.nvim_create_namespace("agentic_todo_checkbox")
+
 --- @class agentic.ui.TodoList
 --- @field _bufnr integer
 --- @field _on_change fun(todoList: agentic.ui.TodoList)
@@ -66,7 +68,33 @@ function TodoList:render(entries)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     end)
 
-    -- Header removed — the checkbox list is self-explanatory
+    -- Treesitter markdown parses [~] as shortcut_link (only [x]/[ ] are
+    -- recognised as task_list_marker), so the brackets get concealed.
+    -- Override with conceal extmarks at priority > treesitter's 100.
+    vim.api.nvim_buf_clear_namespace(self._bufnr, NS_CHECKBOX, 0, -1)
+    for i, line in ipairs(lines) do
+        local col = line:find("%[~%]")
+        if col then
+            local row = i - 1
+            local c = col - 1 -- 0-indexed
+            local hl = "@markup.list.unchecked"
+            for offset = 0, 2 do
+                local char = line:sub(col + offset, col + offset)
+                vim.api.nvim_buf_set_extmark(
+                    self._bufnr,
+                    NS_CHECKBOX,
+                    row,
+                    c + offset,
+                    {
+                        end_col = c + offset + 1,
+                        conceal = char,
+                        hl_group = hl,
+                        priority = 200,
+                    }
+                )
+            end
+        end
+    end
 
     self._on_change(self)
     self:_scroll_to_non_completed(entries)
