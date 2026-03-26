@@ -280,8 +280,11 @@ local ConfigDefault = {
     },
 
     --- @class agentic.UserConfig.FilePicker
+    --- @field enabled boolean Enable @-mention file completion
+    --- @field max_files integer Cap file list to avoid freezing in huge directories (0 = unlimited)
     file_picker = {
         enabled = true,
+        max_files = 20000,
     },
 
     --- @class agentic.UserConfig.ImagePaste

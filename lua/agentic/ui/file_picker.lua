@@ -90,14 +90,15 @@ function FilePicker:scan_files()
         )
 
         if vim.v.shell_error == 0 and output ~= "" then
-            local files = {}
-            for line in output:gmatch("[^\n]+") do
-                if line ~= "" then
-                    local relative_path = FileSystem.to_smart_path(line)
-                    table.insert(files, { path = relative_path })
-                end
+            local files, truncated = self:_parse_file_output(output)
+            if truncated then
+                Logger.debug(
+                    string.format(
+                        "[FilePicker] Truncated to %d files (max_files limit)",
+                        #files
+                    )
+                )
             end
-
             table.sort(files, function(a, b)
                 return a.path < b.path
             end)
@@ -120,12 +121,22 @@ function FilePicker:scan_files()
     vim.list_extend(glob_files, files_in_hidden)
     Logger.debug("[FilePicker] Glob returned", #glob_files, "paths")
 
+    local max = Config.file_picker.max_files or 0
     for _, path in ipairs(glob_files) do
         if vim.fn.isdirectory(path) == 0 and not self:_should_exclude(path) then
             local relative_path = FileSystem.to_smart_path(path)
             if not seen[relative_path] then
                 seen[relative_path] = true
                 table.insert(files, { path = relative_path })
+                if max > 0 and #files >= max then
+                    Logger.debug(
+                        string.format(
+                            "[FilePicker] Glob truncated to %d files (max_files limit)",
+                            max
+                        )
+                    )
+                    break
+                end
             end
         end
     end
@@ -156,6 +167,24 @@ function FilePicker:scan_files_async()
     self:_try_async_command(commands, 1)
 end
 
+--- Parse stdout text into file list, respecting max_files limit.
+--- @param stdout string
+--- @return agentic.ui.FilePickerFile[]
+--- @return boolean truncated
+function FilePicker:_parse_file_output(stdout)
+    local max = Config.file_picker.max_files or 0
+    local files = {}
+    for line in stdout:gmatch("[^\n]+") do
+        if line ~= "" then
+            table.insert(files, { path = FileSystem.to_smart_path(line) })
+            if max > 0 and #files >= max then
+                return files, true
+            end
+        end
+    end
+    return files, false
+end
+
 --- Try command at index `idx`; on failure, try the next one.
 --- @param commands table[]
 --- @param idx integer
@@ -178,12 +207,14 @@ function FilePicker:_try_async_command(commands, idx)
             )
 
             if result.code == 0 and result.stdout and result.stdout ~= "" then
-                local files = {}
-                for line in result.stdout:gmatch("[^\n]+") do
-                    if line ~= "" then
-                        local relative_path = FileSystem.to_smart_path(line)
-                        table.insert(files, { path = relative_path })
-                    end
+                local files, truncated = self:_parse_file_output(result.stdout)
+                if truncated then
+                    Logger.debug(
+                        string.format(
+                            "[FilePicker] Truncated to %d files (max_files limit)",
+                            #files
+                        )
+                    )
                 end
                 table.sort(files, function(a, b)
                     return a.path < b.path
