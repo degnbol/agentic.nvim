@@ -26,9 +26,16 @@
 --- @field success boolean Whether response completed without error
 --- @field error? table Error details if failed
 
+--- Data passed to the on_permission_request hook
+--- @class agentic.UserConfig.PermissionRequestData
+--- @field session_id string The ACP session ID
+--- @field tab_page_id number The tabpage ID
+--- @field tool_call_id string The tool call ID requesting permission
+
 --- @class agentic.UserConfig.Hooks
 --- @field on_prompt_submit? fun(data: agentic.UserConfig.PromptSubmitData): nil
 --- @field on_response_complete? fun(data: agentic.UserConfig.ResponseCompleteData): nil
+--- @field on_permission_request? fun(data: agentic.UserConfig.PermissionRequestData): nil
 
 --- @class agentic.UserConfig.KeymapEntry
 --- @field [1] string The key binding
@@ -321,6 +328,7 @@ local ConfigDefault = {
     hooks = {
         on_prompt_submit = nil,
         on_response_complete = nil,
+        on_permission_request = nil,
     },
 
     --- Customize window headers for each panel in the chat widget.
@@ -351,6 +359,13 @@ local ConfigDefault = {
         search_max_lines = 8,
         execute_max_lines = 25,
         execute_formatter = "shfmt",
+    },
+
+    --- Notification settings
+    --- @class agentic.UserConfig.Notifications
+    --- @field bell boolean Ring vim bell on response complete and permission request
+    notifications = {
+        bell = false,
     },
 
     --- Control various behaviors and features of the plugin

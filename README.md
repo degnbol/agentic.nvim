@@ -789,7 +789,32 @@ integrating with other plugins.
           vim.notify("Agent error: " .. vim.inspect(data.error), vim.log.levels.ERROR)
         end
       end,
+
+      -- Called when the agent requests permission (e.g. before file edits)
+      on_permission_request = function(data)
+        -- data.session_id: string - The ACP session ID
+        -- data.tab_page_id: number - The tabpage ID
+        -- data.tool_call_id: string - The tool call requesting permission
+      end,
     }
+  }
+}
+```
+
+### Notifications
+
+Built-in notification support, useful for getting alerted when the agent needs
+attention.
+
+```lua
+{
+  "carlos-algms/agentic.nvim",
+  opts = {
+    notifications = {
+      -- Ring vim bell on response complete and permission request.
+      -- Respects 'belloff' and 'visualbell' settings.
+      bell = false,
+    },
   }
 }
 ```

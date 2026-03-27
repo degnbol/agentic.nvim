@@ -28,7 +28,7 @@ local FILE_MUTATING_KINDS = {
 }
 
 --- Safely invoke a user-configured hook
---- @param hook_name "on_prompt_submit" | "on_response_complete"
+--- @param hook_name "on_prompt_submit" | "on_response_complete" | "on_permission_request"
 --- @param data table
 function P.invoke_hook(hook_name, data)
     local hook = Config.hooks and Config.hooks[hook_name]
@@ -74,6 +74,14 @@ end
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 local SessionManager = {}
 SessionManager.__index = SessionManager
+
+--- Ring terminal bell if notifications.bell is enabled.
+--- Static method (stubbable in tests).
+function SessionManager._ring_bell()
+    if Config.notifications and Config.notifications.bell then
+        io.stderr:write("\a")
+    end
+end
 
 --- Generate the welcome header for a new session
 --- @param session_id string|nil
@@ -759,6 +767,8 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
             self.status_animation:stop()
 
+            SessionManager._ring_bell()
+
             P.invoke_hook("on_response_complete", {
                 session_id = session_id,
                 tab_page_id = tab_page_id,
@@ -874,6 +884,15 @@ function SessionManager:new_session(opts)
             end
 
             self:_show_diff_in_buffer(request.toolCall.toolCallId)
+
+            SessionManager._ring_bell()
+
+            P.invoke_hook("on_permission_request", {
+                session_id = self.session_id,
+                tab_page_id = self.tab_page_id,
+                tool_call_id = request.toolCall.toolCallId,
+            })
+
             self.permission_manager:add_request(request, wrapped_callback)
         end,
     }
@@ -1042,6 +1061,15 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
             end
 
             self:_show_diff_in_buffer(request.toolCall.toolCallId)
+
+            SessionManager._ring_bell()
+
+            P.invoke_hook("on_permission_request", {
+                session_id = self.session_id,
+                tab_page_id = self.tab_page_id,
+                tool_call_id = request.toolCall.toolCallId,
+            })
+
             self.permission_manager:add_request(request, wrapped_callback)
         end,
     }

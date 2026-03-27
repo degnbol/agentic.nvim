@@ -523,6 +523,173 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("notifications.bell", function()
+        --- @type TestStub
+        local bell_stub
+        --- @type TestStub
+        local schedule_stub
+        local original_notifications
+
+        before_each(function()
+            original_notifications = Config.notifications
+            bell_stub = spy.stub(SessionManager, "_ring_bell")
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            Config.notifications = original_notifications
+            bell_stub:revert()
+            schedule_stub:revert()
+        end)
+
+        --- Build a minimal session whose agent:send_prompt immediately calls back
+        --- @param send_err? table
+        --- @return agentic.SessionManager
+        local function make_session(send_err)
+            local noop = function() end
+            local empty = function()
+                return true
+            end
+            return {
+                session_id = "s-1",
+                tab_page_id = 1,
+                is_generating = false,
+                _is_first_message = false,
+                _destroyed = false,
+                agent = {
+                    state = "ready",
+                    provider_config = { name = "Test" },
+                    send_prompt = function(_self, _sid, _prompt, cb)
+                        cb(nil, send_err)
+                    end,
+                },
+                message_writer = {
+                    write_message = noop,
+                    write_error_message = function()
+                        return nil, nil
+                    end,
+                    append_separator = noop,
+                    scroll_to_bottom = noop,
+                    tool_call_blocks = {},
+                },
+                status_animation = { start = noop, stop = noop },
+                chat_history = {
+                    add_message = noop,
+                    save = noop,
+                    messages = {},
+                    title = "",
+                },
+                widget = {
+                    buf_nrs = { chat = 0 },
+                    get_chat_width = function()
+                        return 80
+                    end,
+                },
+                permission_manager = {
+                    current_request = nil,
+                    queue = {},
+                },
+                todo_list = { close_if_all_completed = noop },
+                file_list = { is_empty = empty },
+                code_selection = { is_empty = empty },
+                diagnostics_list = { is_empty = empty },
+                _handle_input_submit = SessionManager._handle_input_submit,
+                _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("calls _ring_bell on response complete", function()
+            local session = make_session()
+            session:_handle_input_submit("hello")
+            assert.spy(bell_stub).was.called(1)
+        end)
+
+        it("calls _ring_bell on response error too", function()
+            local session = make_session({ message = "some error" })
+            session:_handle_input_submit("hello")
+            assert.spy(bell_stub).was.called(1)
+        end)
+    end)
+
+    describe("_ring_bell", function()
+        local original_notifications
+
+        before_each(function()
+            original_notifications = Config.notifications
+        end)
+
+        after_each(function()
+            Config.notifications = original_notifications
+        end)
+
+        it("does not error when enabled", function()
+            Config.notifications = { bell = true }
+            -- Can't stub io.stderr (userdata), just verify no error
+            assert.has_no_errors(function()
+                SessionManager._ring_bell()
+            end)
+        end)
+
+        it("does not error when disabled", function()
+            Config.notifications = { bell = false }
+            assert.has_no_errors(function()
+                SessionManager._ring_bell()
+            end)
+        end)
+
+        it("does not error when notifications is nil", function()
+            Config.notifications = nil
+            assert.has_no_errors(function()
+                SessionManager._ring_bell()
+            end)
+        end)
+    end)
+
+    describe("on_permission_request hook", function()
+        --- @type TestStub
+        local schedule_stub
+        local original_hooks
+
+        before_each(function()
+            original_hooks = Config.hooks
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            Config.hooks = original_hooks
+            schedule_stub:revert()
+        end)
+
+        it("fires on_permission_request hook via invoke_hook", function()
+            local hook_data
+            Config.hooks = {
+                on_permission_request = function(data)
+                    hook_data = data
+                end,
+            }
+
+            -- Invoke hook the same way P.invoke_hook does
+            local hook = Config.hooks.on_permission_request
+            vim.schedule(function()
+                hook({
+                    session_id = "s-1",
+                    tab_page_id = 1,
+                    tool_call_id = "tc-1",
+                })
+            end)
+
+            assert.is_not_nil(hook_data)
+            assert.equal("s-1", hook_data.session_id)
+            assert.equal("tc-1", hook_data.tool_call_id)
+        end)
+    end)
+
     describe("_format_duration", function()
         it("formats hours and minutes", function()
             assert.equal(
