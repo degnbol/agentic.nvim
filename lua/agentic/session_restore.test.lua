@@ -75,13 +75,21 @@ describe("SessionRestore", function()
         end)
     end
 
+    local original_loaded = {}
+    local niled_modules = {
+        "agentic.session_restore",
+        "agentic.session_restore_builtin",
+        "agentic.ui.chat_history",
+        "agentic.session_registry",
+        "agentic.utils.logger",
+        "agentic.config",
+    }
+
     before_each(function()
-        package.loaded["agentic.session_restore"] = nil
-        package.loaded["agentic.session_restore_builtin"] = nil
-        package.loaded["agentic.ui.chat_history"] = nil
-        package.loaded["agentic.session_registry"] = nil
-        package.loaded["agentic.utils.logger"] = nil
-        package.loaded["agentic.config"] = nil
+        for _, mod in ipairs(niled_modules) do
+            original_loaded[mod] = package.loaded[mod]
+            package.loaded[mod] = nil
+        end
 
         SessionRestore = require("agentic.session_restore")
         ChatHistory = require("agentic.ui.chat_history")
@@ -106,6 +114,10 @@ describe("SessionRestore", function()
         session_registry_stub:revert()
         logger_notify_stub:revert()
         vim_ui_select_stub:revert()
+
+        for _, mod in ipairs(niled_modules) do
+            package.loaded[mod] = original_loaded[mod]
+        end
     end)
 
     describe("build_items", function()
@@ -155,10 +167,8 @@ describe("SessionRestore", function()
         end)
 
         it("truncates long thought blocks", function()
-            local long_thought = table.concat(
-                vim.fn["repeat"]({ "line" }, 10),
-                "\n"
-            )
+            local long_thought =
+                table.concat(vim.fn["repeat"]({ "line" }, 10), "\n")
             local lines = SessionRestore.format_preview({
                 { type = "thought", text = long_thought },
             })
@@ -336,8 +346,7 @@ describe("SessionRestore", function()
                 assert.spy(mock_session.agent.cancel_session).was.called(1)
                 assert.spy(mock_session.widget.clear).was.called(1)
 
-                local restore_call =
-                    mock_session.restore_from_history.calls[1]
+                local restore_call = mock_session.restore_from_history.calls[1]
                 assert.is_false(restore_call[3].reuse_session)
             end
         )

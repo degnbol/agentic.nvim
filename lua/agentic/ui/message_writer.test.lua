@@ -18,6 +18,8 @@ describe("agentic.ui.MessageWriter", function()
     local original_tool_call_display
 
     before_each(function()
+        -- Re-acquire in case a prior test replaced the module in package.loaded
+        Config = require("agentic.config")
         original_auto_scroll = Config.auto_scroll
         original_tool_call_display = vim.deepcopy(Config.tool_call_display)
         -- Disable external formatter for deterministic fallback tests
@@ -29,8 +31,8 @@ describe("agentic.ui.MessageWriter", function()
 
         winid = vim.api.nvim_open_win(bufnr, true, {
             relative = "editor",
-            width = 80,
-            height = 40,
+            width = 60,
+            height = 20,
             row = 0,
             col = 0,
         })

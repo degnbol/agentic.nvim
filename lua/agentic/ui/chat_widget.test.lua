@@ -29,7 +29,13 @@ describe("agentic.ui.ChatWidget", function()
             local widget
             local original_position
 
+            local original_lines
+
             before_each(function()
+                original_lines = vim.o.lines
+                -- Ensure enough vertical space for layout calculations
+                vim.o.lines = 100
+
                 original_position = Config.windows.position
                 Config.windows.position = position
 
@@ -54,6 +60,7 @@ describe("agentic.ui.ChatWidget", function()
                 end)
 
                 Config.windows.position = original_position
+                vim.o.lines = original_lines
             end)
 
             it("creates widget with valid buffer IDs", function()
