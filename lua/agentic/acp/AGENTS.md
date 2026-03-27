@@ -257,6 +257,13 @@ matching: when forward matching fails, try matching `new_lines` against the file
 If that succeeds, the edit is already applied and the diff is reconstructed by
 reversing the match. Any new diff-related code must account for both orderings.
 
+**Buffer/disk divergence:** `read_from_buffer_or_disk` returns buffer content
+when the buffer is loaded, but the provider operates on the disk version. When
+the buffer has unsaved user edits or hasn't reloaded after a provider edit, both
+forward and reverse matching against buffer content fail. Both diff modules fall
+back to `FileSystem.read_from_disk()` (bypasses loaded buffers) when
+buffer-based matching fails. New diff code must include this disk fallback.
+
 ### Slash commands intercepted locally
 
 Some slash commands are handled entirely inside the provider process (TUI) and
