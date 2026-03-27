@@ -33,6 +33,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field on_submit_input fun(prompt: string) external callback to be called when user submits the input
 --- @field on_hide? fun() external callback called after the widget is hidden
+--- @field _hiding boolean re-entrancy guard for hide()
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -132,6 +133,11 @@ end
 
 --- Closes all windows but keeps buffers in memory
 function ChatWidget:hide()
+    if self._hiding then
+        return
+    end
+    self._hiding = true
+
     vim.cmd("stopinsert")
 
     -- Check if we're on the correct tabpage before trying to find/create fallback window
@@ -149,6 +155,7 @@ function ChatWidget:hide()
                     "Failed to create fallback window; cannot hide widget safely, run `:tabclose` to close the tab instead.",
                     vim.log.levels.ERROR
                 )
+                self._hiding = false
                 return
             end
         end
@@ -157,6 +164,8 @@ function ChatWidget:hide()
     local was_open = self:is_open()
 
     WidgetLayout.close(self.win_nrs)
+
+    self._hiding = false
 
     if was_open and self.on_hide then
         self.on_hide()
