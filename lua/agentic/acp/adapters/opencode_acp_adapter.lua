@@ -3,21 +3,7 @@ local FileSystem = require("agentic.utils.file_system")
 
 --- OpenCode-specific adapter that extends ACPClient with OpenCode-specific behaviors
 --- @class agentic.acp.OpenCodeACPAdapter : agentic.acp.ACPClient
-local OpenCodeACPAdapter = setmetatable({}, { __index = ACPClient })
-OpenCodeACPAdapter.__index = OpenCodeACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.OpenCodeACPAdapter
-function OpenCodeACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, OpenCodeACPAdapter) --[[@as agentic.acp.OpenCodeACPAdapter]]
-
-    return self
-end
+local OpenCodeACPAdapter = ACPClient.extend()
 
 --- @protected
 --- @param session_id string

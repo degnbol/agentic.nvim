@@ -26,21 +26,7 @@ local FileSystem = require("agentic.utils.file_system")
 
 --- Codex-specific adapter that extends ACPClient with Codex-specific behaviors
 --- @class agentic.acp.CodexACPAdapter : agentic.acp.ACPClient
-local CodexACPAdapter = setmetatable({}, { __index = ACPClient })
-CodexACPAdapter.__index = CodexACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.CodexACPAdapter
-function CodexACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, CodexACPAdapter) --[[@as agentic.acp.CodexACPAdapter]]
-
-    return self
-end
+local CodexACPAdapter = ACPClient.extend()
 
 --- @protected
 --- @param session_id string
@@ -77,12 +63,8 @@ function CodexACPAdapter:__handle_tool_call(session_id, update)
         if update.rawInput.parsed_cmd and update.rawInput.parsed_cmd[1] then
             message.argument = update.rawInput.parsed_cmd[1].cmd or ""
         else
-            local command = update.rawInput.command
-            if type(command) == "table" then
-                command = table.concat(command, " ")
-            end
-
-            message.argument = command
+            message.argument =
+                self:__ensure_command_string(update.rawInput.command)
                 or update.title
                 or "unknown codex command"
         end

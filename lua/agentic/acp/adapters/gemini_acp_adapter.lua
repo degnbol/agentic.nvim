@@ -3,21 +3,7 @@ local FileSystem = require("agentic.utils.file_system")
 
 --- Gemini-specific adapter that extends ACPClient with Gemini-specific behaviors
 --- @class agentic.acp.GeminiACPAdapter : agentic.acp.ACPClient
-local GeminiACPAdapter = setmetatable({}, { __index = ACPClient })
-GeminiACPAdapter.__index = GeminiACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.GeminiACPAdapter
-function GeminiACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, GeminiACPAdapter) --[[@as agentic.acp.GeminiACPAdapter]]
-
-    return self
-end
+local GeminiACPAdapter = ACPClient.extend()
 
 --- @protected
 --- @param session_id string

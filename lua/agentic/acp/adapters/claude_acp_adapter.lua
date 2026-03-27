@@ -1,31 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
-
---- Mode-switching tools: maps ACP tool_call title to a short display label.
---- Body contains internal instructions, not user-facing content.
-local MODE_SWITCH_TOOLS = {
-    EnterPlanMode = "Plan",
-    ExitPlanMode = "Normal",
-    EnterWorktree = "Normal",
-}
-
---- Resolve mode-switch label from a tool_call title.
---- ACP has no stable tool-name field — `title` is the only identifier, and
---- the provider may send a user-facing string (e.g. "Ready to code?",
---- "Ready for implementation") instead of the internal tool name.
---- @param title string
---- @return string|nil label "Plan" or "Normal", or nil if not a mode switch
-local function mode_switch_label(title)
-    local label = MODE_SWITCH_TOOLS[title]
-    if label then
-        return label
-    end
-    -- Provider exit-plan titles start with "Ready" (e.g. "Ready to code?")
-    if title:match("^Ready%s") then
-        return "Normal"
-    end
-    return nil
-end
+local ClaudeShared = require("agentic.acp.adapters.claude_shared")
 
 --- @class agentic.acp.ClaudeRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -39,21 +14,7 @@ end
 
 --- Claude-specific adapter that extends ACPClient with Claude-specific behaviors
 --- @class agentic.acp.ClaudeACPAdapter : agentic.acp.ACPClient
-local ClaudeACPAdapter = setmetatable({}, { __index = ACPClient })
-ClaudeACPAdapter.__index = ClaudeACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.ClaudeACPAdapter
-function ClaudeACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, ClaudeACPAdapter) --[[@as agentic.acp.ClaudeACPAdapter]]
-
-    return self
-end
+local ClaudeACPAdapter = ACPClient.extend()
 
 --- @protected
 --- @param session_id string
@@ -95,23 +56,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
             }
         end
     elseif kind == "fetch" then
-        if update.rawInput.query then
-            -- To keep consistency with all other ACP providers
-            message.kind = "WebSearch"
-            message.argument = update.rawInput.query
-        elseif update.rawInput.url then
-            message.argument = update.rawInput.url
-
-            if update.rawInput.prompt then
-                message.argument = string.format(
-                    "%s %s",
-                    message.argument,
-                    update.rawInput.prompt
-                )
-            end
-        else
-            message.argument = "unknown fetch"
-        end
+        self:__resolve_fetch_fields(message, update.rawInput)
     elseif kind == "SubAgent" then
         message.argument = string.format(
             "%s, %s: %s",
@@ -125,30 +70,25 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         end
     elseif kind == "other" or kind == "switch_mode" then
         if update.title == "SlashCommand" then
-            -- Override kind to increase UX, `other` doesn't say much
             message.kind = "SlashCommand"
             message.argument = update.rawInput.command or ""
         elseif update.title == "Skill" then
             message.kind = "Skill"
             message.argument = update.rawInput.skill or "unknown skill"
-
             if update.rawInput.args then
                 message.body = self:safe_split(update.rawInput.args)
             end
         else
-            local ml = mode_switch_label(update.title)
+            local ml = ClaudeShared.mode_switch_label(update.title)
             if ml then
                 message.kind = "switch_mode"
                 message.argument = ml
             end
         end
     else
-        local command = update.rawInput.command
-        if type(command) == "table" then
-            command = table.concat(command, " ")
-        end
-
-        message.argument = command or update.title or ""
+        message.argument = self:__ensure_command_string(update.rawInput.command)
+            or update.title
+            or ""
         message.body = self:extract_content_body(update)
 
         if kind == "search" and update.rawInput.pattern then

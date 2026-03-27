@@ -3,21 +3,7 @@ local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
 
 --- @class agentic.acp.MistralVibeACPAdapter : agentic.acp.ACPClient
-local MistralVibeACPAdapter = setmetatable({}, { __index = ACPClient })
-MistralVibeACPAdapter.__index = MistralVibeACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.MistralVibeACPAdapter
-function MistralVibeACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, MistralVibeACPAdapter) --[[@as agentic.acp.MistralVibeACPAdapter]]
-
-    return self
-end
+local MistralVibeACPAdapter = ACPClient.extend()
 
 --- @param json_str string|nil
 --- @return any decoded_json

@@ -3,21 +3,7 @@ local FileSystem = require("agentic.utils.file_system")
 
 --- Auggie-specific adapter that extends ACPClient with Auggie-specific behaviors
 --- @class agentic.acp.AuggieACPAdapter : agentic.acp.ACPClient
-local AuggieACPAdapter = setmetatable({}, { __index = ACPClient })
-AuggieACPAdapter.__index = AuggieACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.AuggieACPAdapter
-function AuggieACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, AuggieACPAdapter) --[[@as agentic.acp.AuggieACPAdapter]]
-
-    return self
-end
+local AuggieACPAdapter = ACPClient.extend()
 
 --- @protected
 --- @param session_id string
@@ -47,34 +33,18 @@ function AuggieACPAdapter:__handle_tool_call(session_id, update)
         end
 
         if kind == "edit" then
-            local new_string = update.rawInput.new_string
-            local old_string = update.rawInput.old_string
-
             message.diff = {
-                new = self:safe_split(new_string),
-                old = self:safe_split(old_string),
+                new = self:safe_split(update.rawInput.new_string),
+                old = self:safe_split(update.rawInput.old_string),
                 all = update.rawInput.replace_all or false,
             }
         end
     elseif kind == "fetch" then
-        if update.rawInput.query then
-            -- Web search
-            message.kind = "WebSearch"
-            message.argument = update.rawInput.query
-        elseif update.rawInput.url then
-            -- URL fetch
-            message.argument = update.rawInput.url
-        else
-            message.argument = "unknown fetch"
-        end
+        self:__resolve_fetch_fields(message, update.rawInput)
     else
-        -- Handle other tool types
-        local command = update.rawInput.command
-        if type(command) == "table" then
-            command = table.concat(command, " ")
-        end
-
-        message.argument = command or update.title or ""
+        message.argument = self:__ensure_command_string(update.rawInput.command)
+            or update.title
+            or ""
     end
 
     self:__with_subscriber(session_id, function(subscriber)

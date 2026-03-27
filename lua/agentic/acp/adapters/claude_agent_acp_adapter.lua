@@ -1,5 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
+local ClaudeShared = require("agentic.acp.adapters.claude_shared")
 
 --- @class agentic.acp.ClaudeAgentRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -17,43 +18,7 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field kind? agentic.acp.ToolKind
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
-local ClaudeAgentACPAdapter = setmetatable({}, { __index = ACPClient })
-ClaudeAgentACPAdapter.__index = ClaudeAgentACPAdapter
-
---- @param config agentic.acp.ACPProviderConfig
---- @param on_ready fun(client: agentic.acp.ACPClient)
---- @return agentic.acp.ClaudeAgentACPAdapter
-function ClaudeAgentACPAdapter:new(config, on_ready)
-    self = ACPClient.new(ACPClient, config, on_ready)
-    self = setmetatable(self, ClaudeAgentACPAdapter) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
-    return self
-end
-
---- Mode-switching tools: maps ACP tool_call title to a short display label.
---- Body contains internal instructions, not user-facing content.
-local MODE_SWITCH_TOOLS = {
-    EnterPlanMode = "Plan",
-    ExitPlanMode = "Normal",
-    EnterWorktree = "Normal",
-}
-
---- Resolve mode-switch label from a tool_call title.
---- ACP has no stable tool-name field — `title` is the only identifier, and
---- the provider may send a user-facing string (e.g. "Ready to code?",
---- "Ready for implementation") instead of the internal tool name.
---- @param title string
---- @return string|nil label "Plan" or "Normal", or nil if not a mode switch
-local function mode_switch_label(title)
-    local label = MODE_SWITCH_TOOLS[title]
-    if label then
-        return label
-    end
-    -- Provider exit-plan titles start with "Ready" (e.g. "Ready to code?")
-    if title:match("^Ready%s") then
-        return "Normal"
-    end
-    return nil
-end
+local ClaudeAgentACPAdapter = ACPClient.extend()
 
 --- Intercept mode-switching tools at the initial tool_call level before the
 --- base class renders the body (which contains internal instructions).
@@ -64,7 +29,7 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
     -- Provider sends kind="other" for EnterPlanMode but kind="switch_mode"
     -- for ExitPlanMode ("Ready to code?"). Check both.
     local mode_label = (update.kind == "other" or update.kind == "switch_mode")
-        and mode_switch_label(update.title)
+        and ClaudeShared.mode_switch_label(update.title)
     if mode_label then
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local message = {
@@ -140,19 +105,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             }
         end
     elseif kind == "fetch" then
-        if rawInput.query then
-            message.kind = "WebSearch"
-            message.argument = rawInput.query
-        elseif rawInput.url then
-            message.argument = rawInput.url
-
-            if rawInput.prompt then
-                message.argument =
-                    string.format("%s %s", message.argument, rawInput.prompt)
-            end
-        else
-            message.argument = "unknown fetch"
-        end
+        self:__resolve_fetch_fields(message, rawInput)
     elseif kind == "think" and rawInput.subagent_type then
         message.kind = "SubAgent"
         message.argument = rawInput.description or rawInput.subagent_type
@@ -177,24 +130,20 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         elseif update.title == "Skill" then
             message.kind = "Skill"
             message.argument = rawInput.skill or "unknown skill"
-
             if rawInput.args then
                 message.body = self:safe_split(rawInput.args)
             end
         else
-            local ml = mode_switch_label(update.title)
+            local ml = ClaudeShared.mode_switch_label(update.title)
             if ml then
                 message.kind = "switch_mode"
                 message.argument = ml
             end
         end
     else
-        local command = rawInput.command
-        if type(command) == "table" then
-            command = table.concat(command, " ")
-        end
-
-        message.argument = command or update.title or ""
+        message.argument = self:__ensure_command_string(rawInput.command)
+            or update.title
+            or ""
 
         if not message.body then
             message.body = self:extract_content_body(update)

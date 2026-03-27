@@ -55,6 +55,17 @@ ACPClient.ERROR_CODES = {
     INVALID_REQUEST = -32006,
 }
 
+--- Set up a child adapter class with proper ACPClient inheritance chain.
+--- Returns a new class table with __index set for method lookup.
+--- The child inherits ACPClient:new() — no need to override unless adding
+--- extra instance fields (e.g. CursorACPAdapter).
+--- @return table child_class
+function ACPClient.extend()
+    local Child = setmetatable({}, { __index = ACPClient })
+    Child.__index = Child
+    return Child
+end
+
 --- @param config agentic.acp.ACPProviderConfig
 --- @param on_ready fun(client: agentic.acp.ACPClient)
 --- @return agentic.acp.ACPClient
@@ -392,6 +403,37 @@ function ACPClient:__handle_session_update(params)
             subscriber.on_session_update(update)
         end)
     end
+end
+
+--- Resolve fetch/WebSearch fields from rawInput.
+--- Sets kind and argument on the given message table.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBlock|agentic.ui.MessageWriter.ToolCallBase
+--- @param rawInput agentic.acp.RawInput
+function ACPClient:__resolve_fetch_fields(message, rawInput)
+    if rawInput.query then
+        message.kind = "WebSearch"
+        message.argument = rawInput.query
+    elseif rawInput.url then
+        message.argument = rawInput.url
+        if rawInput.prompt then
+            message.argument =
+                string.format("%s %s", message.argument, rawInput.prompt)
+        end
+    else
+        message.argument = "unknown fetch"
+    end
+end
+
+--- Coerce a command value to a string (providers may send a table of args).
+--- @protected
+--- @param command string|string[]|nil
+--- @return string|nil
+function ACPClient:__ensure_command_string(command)
+    if type(command) == "table" then
+        return table.concat(command, " ")
+    end
+    return command
 end
 
 --- Extract body text from standard ACP content field.

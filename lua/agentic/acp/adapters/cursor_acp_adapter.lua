@@ -4,23 +4,15 @@ local Logger = require("agentic.utils.logger")
 --- Cursor-specific adapter that extends ACPClient with Cursor-specific behaviors
 --- @class agentic.acp.CursorACPAdapter : agentic.acp.ACPClient
 --- @field _available_commands_updates table<string, table> Cursor sends available commands before session starts, indexed by session ID, to be processed after session creation
-local CursorACPAdapter = setmetatable({}, { __index = ACPClient })
-CursorACPAdapter.__index = CursorACPAdapter
+local CursorACPAdapter = ACPClient.extend()
 
 --- @param config agentic.acp.ACPProviderConfig
 --- @param on_ready fun(client: agentic.acp.ACPClient)
 --- @return agentic.acp.CursorACPAdapter
 function CursorACPAdapter:new(config, on_ready)
-    -- Call parent constructor with parent class
-    self = ACPClient.new(ACPClient, config, on_ready)
-
-    -- Re-metatable to child class for proper inheritance chain
-    self = setmetatable(self, CursorACPAdapter) --[[@as agentic.acp.CursorACPAdapter]]
-
-    -- Initialize session-indexed storage for available commands
-    self._available_commands_updates = {}
-
-    return self
+    local instance = ACPClient.new(ACPClient, config, on_ready)
+    instance._available_commands_updates = {}
+    return setmetatable(instance, CursorACPAdapter) --[[@as agentic.acp.CursorACPAdapter]]
 end
 
 --- Overloading create_session to handle slash commands, as cursor sends them before session starts
