@@ -70,6 +70,7 @@ end
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
 --- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
+--- @field _pending_input? string Prompt queued before the ACP session is ready
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 local SessionManager = {}
@@ -517,58 +518,22 @@ end
 
 --- @param input_text string
 function SessionManager:_handle_input_submit(input_text)
-    -- Defer until agent is ready (avoids error on early submit before session exists)
     if not (self.session_id and self.agent and self.agent.state == "ready") then
-        local timer = vim.uv.new_timer()
-        if not timer then
-            Logger.notify(
-                "Agent not ready — input discarded. Try again.",
-                vim.log.levels.WARN
-            )
-            return
-        end
-        local attempts = 0
-        timer:start(
-            100,
-            100,
-            vim.schedule_wrap(function()
-                if self._destroyed then
-                    timer:stop()
-                    timer:close()
-                    return
-                end
-
-                attempts = attempts + 1
-                if
-                    self.session_id
-                    and self.agent
-                    and self.agent.state == "ready"
-                then
-                    timer:stop()
-                    timer:close()
-                    self:_handle_input_submit_inner(input_text)
-                elseif
-                    attempts >= 100
-                    or (
-                        self.agent
-                        and (
-                            self.agent.state == "error"
-                            or self.agent.state == "disconnected"
-                        )
-                    )
-                then
-                    timer:stop()
-                    timer:close()
-                    Logger.notify(
-                        "Agent not ready — input discarded. Try again.",
-                        vim.log.levels.WARN
-                    )
-                end
-            end)
-        )
+        -- Store for _flush_pending_input when session becomes ready
+        self._pending_input = input_text
         return
     end
     self:_handle_input_submit_inner(input_text)
+end
+
+--- Send any prompt that was queued before the ACP session was ready.
+function SessionManager:_flush_pending_input()
+    local text = self._pending_input
+    if not text then
+        return
+    end
+    self._pending_input = nil
+    self:_handle_input_submit_inner(text)
 end
 
 --- @param input_text string
@@ -971,6 +936,8 @@ function SessionManager:new_session(opts)
             if on_created then
                 on_created()
             end
+
+            self:_flush_pending_input()
         end)
     end)
 end
@@ -1339,6 +1306,7 @@ function SessionManager:_cancel_session()
 
     self.chat_history = ChatHistory:new()
     self._history_to_send = nil
+    self._pending_input = nil
     self._usage = nil
 end
 

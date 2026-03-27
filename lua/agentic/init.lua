@@ -22,12 +22,42 @@ function Agentic.open(opts)
     end)
 end
 
---- Closes the chat widget for the current tab page
---- Safe to call multiple times
-function Agentic.close()
-    SessionRegistry.get_session_for_tab_page(nil, function(session)
+--- Closes any open chat widget and cleans up the dedicated tab if applicable.
+--- Safe to call multiple times or when no session exists.
+--- @param tab_page_id? integer Tabpage to close. Nil = current tabpage.
+function Agentic.close(tab_page_id)
+    local tab = tab_page_id or vim.api.nvim_get_current_tabpage()
+    local session = SessionRegistry.sessions[tab]
+    if not session or not session.widget:is_open() then
+        return
+    end
+
+    -- Check if this is a dedicated tab (no non-widget, non-floating windows).
+    -- If so, destroy session + tabclose — avoids E444 from trying to close
+    -- widget windows one-by-one when there's no real fallback window.
+    local has_user_window = false
+    local widget_win_set = {}
+    for _, winid in pairs(session.widget.win_nrs) do
+        widget_win_set[winid] = true
+    end
+    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+        if
+            not widget_win_set[winid]
+            and vim.api.nvim_win_get_config(winid).relative == ""
+        then
+            has_user_window = true
+            break
+        end
+    end
+
+    if has_user_window then
         session.widget:hide()
-    end)
+    else
+        SessionRegistry.destroy_session(tab)
+        if vim.api.nvim_tabpage_is_valid(tab) then
+            pcall(vim.cmd, "tabclose")
+        end
+    end
 end
 
 --- Toggles the chat widget for the current tab page

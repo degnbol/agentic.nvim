@@ -149,8 +149,8 @@ function ChatWidget:hide()
 
         if not fallback_winid then
             -- Fallback: create a new left window to avoid closing the last window error
-            local created_winid = self:open_left_window()
-            if not created_winid then
+            fallback_winid = self:open_left_window()
+            if not fallback_winid then
                 Logger.notify(
                     "Failed to create fallback window; cannot hide widget safely, run `:tabclose` to close the tab instead.",
                     vim.log.levels.ERROR
@@ -159,9 +159,17 @@ function ChatWidget:hide()
                 return
             end
         end
+
+        -- Focus fallback so closing widget windows doesn't trigger E444
+        vim.api.nvim_set_current_win(fallback_winid)
     end
 
     local was_open = self:is_open()
+
+    -- Clear modified flag on input buffer so hidden buffer doesn't block :q
+    if self.buf_nrs.input and vim.api.nvim_buf_is_valid(self.buf_nrs.input) then
+        vim.bo[self.buf_nrs.input].modified = false
+    end
 
     WidgetLayout.close(self.win_nrs)
 
@@ -400,7 +408,7 @@ function ChatWidget:_bind_keymaps()
             Config.keymaps.widget.close,
             bufnr,
             function()
-                self:hide()
+                require("agentic").close(self.tab_page_id)
             end,
             { desc = "Agentic: Close Chat widget" }
         )
