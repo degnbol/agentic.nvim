@@ -1451,7 +1451,12 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
                 return nil
             end
             local winid = wins[1]
+            -- Suppress autocommands to prevent BufNewFile -> FileType -> LSP
+            -- detach errors on buffers without LSP state
+            local saved = vim.o.eventignore
+            vim.o.eventignore = "all"
             vim.api.nvim_win_set_buf(winid, bufnr)
+            vim.o.eventignore = saved
             return winid
         end,
     })
