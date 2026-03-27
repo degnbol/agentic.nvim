@@ -1705,6 +1705,13 @@ function MessageWriter:_apply_block_highlights(
     search_matches,
     search_ansi
 )
+    -- This runs via vim.schedule — buffer may have changed since the
+    -- caller captured start_row/end_row. Bail if rows are now out of range.
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    if start_row >= line_count or end_row > line_count then
+        return
+    end
+
     if #highlight_ranges > 0 then
         self:_apply_diff_highlights(start_row, highlight_ranges)
     elseif kind ~= "edit" and kind ~= "switch_mode" then
@@ -1783,17 +1790,27 @@ function MessageWriter:_apply_block_highlights(
         )
     elseif search_matches then
         for _, match in ipairs(search_matches) do
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                NS_DIFF_HIGHLIGHTS,
-                start_row + match.line_index,
-                match.col_start,
-                {
-                    end_col = match.col_end,
-                    hl_group = "AgenticSearchMatch",
-                    priority = 200,
-                }
-            )
+            local row = start_row + match.line_index
+            if row < line_count then
+                local line_len = #(
+                    vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+                    or ""
+                )
+                if match.col_start <= line_len then
+                    local end_col = math.min(match.col_end, line_len)
+                    vim.api.nvim_buf_set_extmark(
+                        bufnr,
+                        NS_DIFF_HIGHLIGHTS,
+                        row,
+                        match.col_start,
+                        {
+                            end_col = end_col,
+                            hl_group = "AgenticSearchMatch",
+                            priority = 200,
+                        }
+                    )
+                end
+            end
         end
     end
 
