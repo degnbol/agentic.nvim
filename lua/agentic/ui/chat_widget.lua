@@ -111,7 +111,10 @@ function ChatWidget:rotate_layout(layouts)
     local previous_mode = vim.fn.mode()
     local previous_buf = vim.api.nvim_get_current_buf()
 
+    local saved_on_hide = self.on_hide
+    self.on_hide = nil
     self:hide()
+    self.on_hide = saved_on_hide
     self:show({
         focus_prompt = false,
     })
@@ -151,9 +154,11 @@ function ChatWidget:hide()
         end
     end
 
+    local was_open = self:is_open()
+
     WidgetLayout.close(self.win_nrs)
 
-    if self.on_hide then
+    if was_open and self.on_hide then
         self.on_hide()
     end
 end
