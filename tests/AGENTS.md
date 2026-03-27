@@ -373,7 +373,40 @@ stub:invokes(function(_sid, callback)
 end)
 ```
 
-#### 5. Type Mismatches with Mocked Objects
+#### 5. Niling `package.loaded` Without Restoring
+
+When tests nil out `package.loaded["agentic.config"]` (or any shared module) to
+force a fresh `require()`, subsequent test files that captured the module at
+file-load time hold a stale reference. Mutations to their `Config` local are
+invisible to code that re-requires the module.
+
+```lua
+-- ❌ WRONG: Nils out without restoring — poisons subsequent test files
+before_each(function()
+    package.loaded["agentic.config"] = nil
+    Config = require("agentic.config")
+end)
+
+-- ✅ CORRECT: Save and restore in after_each
+local original_loaded = {}
+local niled_modules = { "agentic.config", "agentic.other_module" }
+
+before_each(function()
+    for _, mod in ipairs(niled_modules) do
+        original_loaded[mod] = package.loaded[mod]
+        package.loaded[mod] = nil
+    end
+    Config = require("agentic.config")
+end)
+
+after_each(function()
+    for _, mod in ipairs(niled_modules) do
+        package.loaded[mod] = original_loaded[mod]
+    end
+end)
+```
+
+#### 6. Type Mismatches with Mocked Objects
 
 Use type casts when passing incomplete mock objects:
 
