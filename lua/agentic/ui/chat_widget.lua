@@ -32,6 +32,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field on_submit_input fun(prompt: string) external callback to be called when user submits the input
+--- @field on_hide? fun() external callback called after the widget is hidden
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -151,6 +152,10 @@ function ChatWidget:hide()
     end
 
     WidgetLayout.close(self.win_nrs)
+
+    if self.on_hide then
+        self.on_hide()
+    end
 end
 
 --- Cleans up all buffers content without destroying them

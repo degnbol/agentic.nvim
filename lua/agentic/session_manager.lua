@@ -148,6 +148,13 @@ function SessionManager:new(tab_page_id)
         self:_handle_input_submit(input_text)
     end)
 
+    self.widget.on_hide = function()
+        if self.session_id then
+            local short_id = self.session_id:sub(1, 8)
+            Logger.notify("Session " .. short_id)
+        end
+    end
+
     self.status_animation = StatusAnimation:new(self.widget.buf_nrs.chat)
     self.message_writer =
         MessageWriter:new(self.widget.buf_nrs.chat, self.status_animation)

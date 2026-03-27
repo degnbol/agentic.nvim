@@ -192,7 +192,7 @@ local ConfigDefault = {
     keymaps = {
         --- Keys bindings for ALL buffers in the widget
         widget = {
-            close = "q",
+            close = "<localLeader>q",
             stop_generation = {
                 {
                     "<C-c>",
