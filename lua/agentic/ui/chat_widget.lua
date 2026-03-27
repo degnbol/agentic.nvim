@@ -618,6 +618,31 @@ local EXCLUDED_FILETYPES = {
     ["mason"] = true, -- Mason installer
 }
 
+--- Close non-widget windows on the tabpage that hold empty unnamed buffers.
+--- Mirrors the cleanup in Agentic.toggle_tab so the widget fills the tab
+--- when restoring a session on a dedicated tab.
+function ChatWidget:close_empty_non_widget_windows()
+    local widget_win_ids = {}
+    for _, winid in pairs(self.win_nrs) do
+        if winid then
+            widget_win_ids[winid] = true
+        end
+    end
+
+    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(self.tab_page_id)) do
+        if not widget_win_ids[winid] then
+            local bufnr = vim.api.nvim_win_get_buf(winid)
+            local ft = vim.bo[bufnr].filetype
+            local is_empty = (ft == "" or ft == "dashboard")
+                and vim.fn.bufname(bufnr) == ""
+            if is_empty then
+                pcall(vim.api.nvim_win_close, winid, true)
+                pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+            end
+        end
+    end
+end
+
 --- Finds the first window on the current tabpage that is NOT part of the chat widget
 --- @return number|nil winid The first non-widget window ID, or nil if none found
 function ChatWidget:find_first_non_widget_window()

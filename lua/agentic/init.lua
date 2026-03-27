@@ -249,6 +249,7 @@ function Agentic.load_acp_session(session_id, cwd)
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:load_acp_session(session_id, cwd)
         session.widget:show()
+        session.widget:close_empty_non_widget_windows()
     end)
 end
 

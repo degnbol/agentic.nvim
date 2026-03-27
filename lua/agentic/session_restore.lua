@@ -58,6 +58,7 @@ local function do_restore(session_id, tab_page_id, has_conflict)
         end
 
         session.widget:show()
+        session.widget:close_empty_non_widget_windows()
     end)
 end
 
