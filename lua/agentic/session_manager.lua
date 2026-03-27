@@ -149,6 +149,15 @@ function SessionManager:new(tab_page_id)
     end)
 
     self.widget.on_hide = function()
+        if #self.chat_history.messages == 0 then
+            -- Trivial session (no prompts sent) — destroy without a trace.
+            -- Schedule to avoid re-entering widget:destroy() from inside hide().
+            vim.schedule(function()
+                local SessionRegistry = require("agentic.session_registry")
+                SessionRegistry.destroy_session(self.tab_page_id)
+            end)
+            return
+        end
         if self.session_id then
             local short_id = self.session_id:sub(1, 8)
             Logger.notify("Session " .. short_id)
