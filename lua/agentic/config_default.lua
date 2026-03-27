@@ -378,8 +378,10 @@ local ConfigDefault = {
 
     --- @class agentic.UserConfig.SessionRestore
     --- @field storage_path? string Path to store session data; if nil, default path is used: ~/.cache/nvim/agentic/sessions/
+    --- @field picker? "fzf-lua"|"builtin" Session picker backend. "fzf-lua" (default) uses fzf-lua with preview, falls back to builtin if not installed. "builtin" uses vim.ui.select (no preview).
     session_restore = {
         storage_path = nil,
+        picker = "fzf-lua",
     },
 }
 

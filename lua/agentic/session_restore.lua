@@ -1,7 +1,13 @@
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local ChatHistory = require("agentic.ui.chat_history")
+local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
+
+--- @class agentic.SessionRestore.PickerItem
+--- @field display string
+--- @field session_id string
+--- @field timestamp integer
 
 --- @class agentic.SessionRestore
 local SessionRestore = {}
@@ -31,11 +37,8 @@ end
 local function do_restore(session_id, tab_page_id, has_conflict)
     SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
         if agent_supports_load(session) then
-            -- Provider can resume server-side; load_acp_session handles
-            -- its own cancel, replay, and fallback to local history.
             session:load_acp_session(session_id)
         else
-            -- Provider doesn't support session/load — replay from disk.
             if has_conflict and session.session_id then
                 session.agent:cancel_session(session.session_id)
                 session.widget:clear()
@@ -62,6 +65,14 @@ local function do_restore(session_id, tab_page_id, has_conflict)
     end)
 end
 
+--- Restore a session in a new tabpage.
+--- @param session_id string
+local function restore_in_new_tab(session_id)
+    vim.cmd("tabnew")
+    local new_tab = vim.api.nvim_get_current_tabpage()
+    do_restore(session_id, new_tab, false)
+end
+
 --- @param session_id string
 --- @param tab_page_id integer
 --- @param has_conflict boolean
@@ -72,18 +83,96 @@ local function restore_with_conflict_check(
 )
     if has_conflict then
         vim.ui.select({
-            "Cancel",
-            "Clear current session and restore",
+            "Restore here (replace current)",
+            "Open in new tab",
         }, {
-            prompt = "Current session has messages. What would you like to do?",
+            prompt = "Current session has messages:",
         }, function(choice)
-            if choice == "Clear current session and restore" then
+            if choice == "Restore here (replace current)" then
                 do_restore(session_id, tab_page_id, has_conflict)
+            elseif choice == "Open in new tab" then
+                restore_in_new_tab(session_id)
             end
         end)
     else
         do_restore(session_id, tab_page_id, has_conflict)
     end
+end
+
+--- Build the list of picker items from session metadata.
+--- Sorted by timestamp descending (newest first).
+--- Display format: "title (YYYY-MM-DD HH:MM)"
+--- @param sessions agentic.ui.ChatHistory.SessionMeta[]
+--- @return agentic.SessionRestore.PickerItem[]
+function SessionRestore.build_items(sessions)
+    local items = {} --- @type agentic.SessionRestore.PickerItem[]
+    for _, s in ipairs(sessions) do
+        local date = os.date("%Y-%m-%d %H:%M", s.timestamp or 0)
+        -- Use first line only; titles can be multi-line prompts
+        local title = (s.title or "(no title)"):match("^([^\n]+)") or "(no title)"
+
+        table.insert(items, {
+            display = string.format("%s (%s)", title, date),
+            session_id = s.session_id,
+            timestamp = s.timestamp or 0,
+        })
+    end
+    return items
+end
+
+--- Format a session's messages as preview lines for the picker.
+--- @param messages agentic.ui.ChatHistory.Message[]
+--- @return string[]
+function SessionRestore.format_preview(messages)
+    local lines = {}
+    for _, msg in ipairs(messages) do
+        if msg.type == "user" then
+            table.insert(lines, "## You")
+            for line in msg.text:gmatch("[^\n]+") do
+                table.insert(lines, line)
+            end
+            table.insert(lines, "")
+        elseif msg.type == "agent" then
+            table.insert(lines, "## Agent")
+            for line in msg.text:gmatch("[^\n]+") do
+                table.insert(lines, line)
+            end
+            table.insert(lines, "")
+        elseif msg.type == "thought" then
+            table.insert(lines, "> *thinking...*")
+            local thought_lines = {}
+            for line in msg.text:gmatch("[^\n]+") do
+                table.insert(thought_lines, line)
+            end
+            -- Show only first 3 lines of thought
+            for i = 1, math.min(3, #thought_lines) do
+                table.insert(lines, "> " .. thought_lines[i])
+            end
+            if #thought_lines > 3 then
+                table.insert(
+                    lines,
+                    string.format("> ... (%d more lines)", #thought_lines - 3)
+                )
+            end
+            table.insert(lines, "")
+        elseif msg.type == "tool_call" then
+            local status_icon = msg.status == "completed" and "✔"
+                or msg.status == "failed" and "✖"
+                or "…"
+            local arg = (msg.argument or ""):match("^([^\n]+)") or ""
+            table.insert(
+                lines,
+                string.format(
+                    "**%s** `%s` %s",
+                    msg.kind or "tool",
+                    arg,
+                    status_icon
+                )
+            )
+            table.insert(lines, "")
+        end
+    end
+    return lines
 end
 
 --- Show session picker and restore selected session
@@ -96,31 +185,31 @@ function SessionRestore.show_picker(tab_page_id, current_session)
             return
         end
 
-        local items = {}
-        for _, s in ipairs(sessions) do
-            local date = os.date("%Y-%m-%d %H:%M", s.timestamp or 0)
-            local title = s.title or "(no title)"
+        local items = SessionRestore.build_items(sessions)
+        local has_conflict = check_conflict(current_session)
 
-            table.insert(items, {
-                display = string.format("%s - %s", date, title),
-                session_id = s.session_id,
-            })
+        --- @param session_id string
+        local function on_select(session_id)
+            restore_with_conflict_check(session_id, tab_page_id, has_conflict)
         end
 
-        vim.ui.select(items, {
-            prompt = "Select session to restore:",
-            format_item = function(item)
-                return item.display
-            end,
-        }, function(choice)
-            if choice then
-                restore_with_conflict_check(
-                    choice.session_id,
-                    tab_page_id,
-                    check_conflict(current_session)
+        local picker_name = Config.session_restore.picker or "fzf-lua"
+
+        if picker_name == "fzf-lua" then
+            local fzf_picker = require("agentic.session_restore_fzf")
+            if fzf_picker.show(items, on_select) then
+                return
+            end
+            if Config.session_restore.picker == "fzf-lua" then
+                Logger.notify(
+                    "fzf-lua not installed, falling back to builtin picker",
+                    vim.log.levels.WARN
                 )
             end
-        end)
+        end
+
+        local builtin_picker = require("agentic.session_restore_builtin")
+        builtin_picker.show(items, on_select)
     end)
 end
 

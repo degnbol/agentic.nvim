@@ -703,23 +703,39 @@ The hash is to avoid collisions with projects with similar paths.
 
 **Restoring sessions:**
 
-Call `require("agentic").restore_session()` to:
-
-1. See a list of all saved sessions for the current project
-2. Sessions are displayed as: `YYYY-MM-DD HH:MM - <first user message>`
-3. Select a session to restore the full conversation history
+Call `require("agentic").restore_session()` to open a session picker with a
+preview pane showing the conversation history. Sessions are displayed as
+`<first user message> (YYYY-MM-DD HH:MM)`, sorted by most recent first. The
+preview shows the end of the conversation by default.
 
 **Conflict handling:**
 
 If you try to restore a session when the current tab already has an active
 conversation, you'll be prompted to:
 
-- Cancel the restoration (keep current session)
-- Clear current session and restore the selected one
+- **Restore here (replace current)** — clear the current session and restore the
+  selected one
+- **Open in new tab** — keep the current session and restore in a new tabpage
+
+**Picker backends:**
+
+The default picker uses [fzf-lua](https://github.com/ibhagwan/fzf-lua) with a
+preview pane showing the conversation history. If fzf-lua is not installed, it
+falls back to `vim.ui.select` automatically.
+
+```lua
+{
+  "carlos-algms/agentic.nvim",
+  opts = {
+    session_restore = {
+      picker = "fzf-lua",  -- default, with preview (requires fzf-lua)
+      -- picker = "builtin", -- vim.ui.select fallback (no preview, no deps)
+    },
+  },
+}
+```
 
 **Customizing storage location:**
-
-You can change where sessions are stored:
 
 ```lua
 {
@@ -727,7 +743,7 @@ You can change where sessions are stored:
   opts = {
     session_restore = {
       -- Custom storage path (default: nil uses ~/.cache/nvim/agentic/sessions/)
-      storage_path = vim.fn.expand("~/OneDrive/agentic_sessions/"), -- for a cloud-synced folder for example
+      storage_path = vim.fn.expand("~/OneDrive/agentic_sessions/"),
     },
   },
 }
