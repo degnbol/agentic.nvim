@@ -271,6 +271,51 @@ function M.show_split_diff(opts)
         )
     end
 
+    -- Buffer content may differ from disk (unsaved changes, autoread lag).
+    -- The provider operates on disk, so retry matching against disk content.
+    local disk_lines = FileSystem.read_from_disk(abs_path)
+    if disk_lines then
+        local disk_modified = reconstruct_modified_file(
+            disk_lines,
+            old_lines,
+            new_lines,
+            opts.diff.all
+        )
+        if disk_modified then
+            local bufnr, target_winid =
+                resolve_buf_and_win(abs_path, opts.get_winid)
+            if not bufnr or not target_winid then
+                return false
+            end
+            return open_split_view(
+                abs_path,
+                bufnr,
+                target_winid,
+                disk_modified
+            )
+        end
+
+        local disk_reconstructed = reconstruct_modified_file(
+            disk_lines,
+            new_lines,
+            old_lines,
+            opts.diff.all
+        )
+        if disk_reconstructed then
+            local bufnr, target_winid =
+                resolve_buf_and_win(abs_path, opts.get_winid)
+            if not bufnr or not target_winid then
+                return false
+            end
+            return open_split_view(
+                abs_path,
+                bufnr,
+                target_winid,
+                disk_reconstructed
+            )
+        end
+    end
+
     Logger.notify(
         "show_split_diff: could not match diff in file, the agent will most likely fail and retry"
     )

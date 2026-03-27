@@ -34,19 +34,12 @@ FileSystem.AUDIO_MIMES = {
     ape = "audio/ape",
 }
 
---- Read the file content from a buffer if loaded, to get unsaved changes,
---- or from disk otherwise
+--- Read the file content directly from disk, bypassing any loaded buffer.
+--- Use when the on-disk version is authoritative (e.g. provider edits).
 --- @param abs_path string
 --- @return string[]|nil lines
 --- @return string|nil error
-function FileSystem.read_from_buffer_or_disk(abs_path)
-    local bufnr = vim.fn.bufnr(abs_path)
-
-    if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
-        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-        return lines, nil
-    end
-
+function FileSystem.read_from_disk(abs_path)
     local stat = vim.uv.fs_stat(abs_path)
     if stat and stat.type == "directory" then
         return nil, "Cannot read a directory as file: " .. abs_path
@@ -61,6 +54,22 @@ function FileSystem.read_from_buffer_or_disk(abs_path)
     end
 
     return nil, (open_err or ("Failed to open file: " .. abs_path))
+end
+
+--- Read the file content from a buffer if loaded, to get unsaved changes,
+--- or from disk otherwise
+--- @param abs_path string
+--- @return string[]|nil lines
+--- @return string|nil error
+function FileSystem.read_from_buffer_or_disk(abs_path)
+    local bufnr = vim.fn.bufnr(abs_path)
+
+    if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        return lines, nil
+    end
+
+    return FileSystem.read_from_disk(abs_path)
 end
 
 --- Save content to disk at the given absolute path

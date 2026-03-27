@@ -89,6 +89,33 @@ function M.extract_diff_blocks(opts)
             end
         end
 
+        -- Buffer content may differ from disk (unsaved changes, autoread lag).
+        -- The provider operates on disk, so retry against disk content.
+        if not blocks then
+            local disk_lines = FileSystem.read_from_disk(abs_path)
+            if disk_lines and #disk_lines > 0 then
+                blocks =
+                    M.match_or_substring_fallback(disk_lines, old_lines, new_lines)
+                if not blocks then
+                    local reverse_disk = M.match_or_substring_fallback(
+                        disk_lines,
+                        new_lines,
+                        old_lines
+                    )
+                    if reverse_disk then
+                        blocks = vim.tbl_map(function(b)
+                            return {
+                                start_line = b.start_line,
+                                end_line = b.end_line,
+                                old_lines = new_lines,
+                                new_lines = old_lines,
+                            }
+                        end, reverse_disk)
+                    end
+                end
+            end
+        end
+
         if blocks then
             if opts.replace_all then
                 vim.list_extend(diff_blocks, blocks)
