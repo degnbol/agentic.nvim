@@ -1,4 +1,5 @@
 local ChatHistory = require("agentic.ui.chat_history")
+local Logger = require("agentic.utils.logger")
 local SessionRestore = require("agentic.session_restore")
 
 --- @class agentic.SessionRestoreFzf
@@ -14,16 +15,23 @@ function M.show(items, on_select)
         return false
     end
 
-    -- Map display string -> item for lookup after selection
+    -- Map display string -> item for lookup after selection.
+    -- Rebuilt on reload via the content function.
     local display_to_item = {}
-    local display_lines = {}
-    for _, item in ipairs(items) do
-        display_to_item[item.display] = item
-        table.insert(display_lines, item.display)
-    end
 
     --- @type table<string, string>
     local preview_cache = {}
+
+    --- Build display lines and lookup map from current items.
+    --- Uses fzf-lua's callback pattern for compatibility with reload.
+    local function build_content(fzf_cb)
+        display_to_item = {}
+        for _, item in ipairs(items) do
+            display_to_item[item.display] = item
+            fzf_cb(item.display)
+        end
+        fzf_cb()
+    end
 
     local previewer = fzf.shell.stringify_data(function(selected)
         if type(selected) == "table" then
@@ -59,12 +67,13 @@ function M.show(items, on_select)
         return result
     end, {}, "{}") --[[@as string]]
 
-    fzf.fzf_exec(display_lines, {
+    fzf.fzf_exec(build_content, {
         prompt = "Sessions> ",
         fzf_opts = {
             ["--preview"] = previewer,
             ["--preview-window"] = "down:60%",
             ["--no-multi"] = "",
+            ["--header"] = "ctrl-x: delete session",
         },
         actions = {
             ["enter"] = function(selected)
@@ -76,6 +85,40 @@ function M.show(items, on_select)
                     on_select(item.session_id)
                 end
             end,
+            ["ctrl-x"] = {
+                fn = function(selected)
+                    if not selected or #selected == 0 then
+                        return
+                    end
+                    local item = display_to_item[selected[1]]
+                    if not item then
+                        return
+                    end
+                    local ok, err =
+                        ChatHistory.delete_session(item.session_id)
+                    if ok then
+                        -- Remove from items so reload reflects the change
+                        for i, it in ipairs(items) do
+                            if it.session_id == item.session_id then
+                                table.remove(items, i)
+                                break
+                            end
+                        end
+                        preview_cache[item.session_id] = nil
+                        Logger.notify(
+                            "Deleted session",
+                            vim.log.levels.INFO
+                        )
+                    else
+                        Logger.notify(
+                            "Failed to delete: " .. (err or "unknown"),
+                            vim.log.levels.WARN
+                        )
+                    end
+                end,
+                reload = true,
+                noclose = true,
+            },
         },
     })
 

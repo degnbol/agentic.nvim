@@ -237,6 +237,20 @@ function ChatHistory.load(session_id, callback)
     end)
 end
 
+--- Delete a session file from disk.
+--- @param session_id string
+--- @return boolean success
+--- @return string|nil error
+function ChatHistory.delete_session(session_id)
+    local file_path = ChatHistory.get_file_path(session_id)
+    local ok, err = os.remove(file_path)
+    if not ok then
+        Logger.debug("Failed to delete session file:", file_path, err)
+        return false, err
+    end
+    return true, nil
+end
+
 --- List all sessions for the current project, sorted by timestamp descending
 --- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
 function ChatHistory.list_sessions(callback)
