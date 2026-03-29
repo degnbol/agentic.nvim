@@ -86,6 +86,14 @@ or regex fallback that extracts the pattern from the command string and
 re-matches against body lines. Highlights use `AgenticSearchMatch` extmark
 with priority 200.
 
+Grep-format line highlighting: lines matching `path:linenum:` get per-component
+extmark highlights — `AgenticGrepPath` (file path), `AgenticGrepLineNr` (line
+number), `AgenticGrepSeparator` (colons/dashes). These fire for all search
+blocks and for execute blocks where the command is a grep-family tool (`grep`,
+`rg`, `ag`, `ack`, `git grep`, `ugrep`). Grep-line highlights coexist with
+search-term highlights in the same `search_matches` array via the optional
+`hl_group` field on `SearchMatch`.
+
 ## Tool call body folding
 
 Long tool call output uses vim-native folds (`foldmethod=marker`) instead of

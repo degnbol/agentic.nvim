@@ -22,6 +22,9 @@ Theme.HL_GROUPS = {
     TOOL_KIND = "AgenticToolKind",
     TOOL_ARGUMENT = "AgenticToolArgument",
     SEARCH_MATCH = "AgenticSearchMatch",
+    GREP_PATH = "AgenticGrepPath",
+    GREP_LINE_NR = "AgenticGrepLineNr",
+    GREP_SEPARATOR = "AgenticGrepSeparator",
     SLASH_COMMAND_PREFIX = "AgenticSlashCommandPrefix",
     SLASH_COMMAND = "AgenticSlashCommand",
     MENTION_PREFIX = "AgenticMentionPrefix",
@@ -80,6 +83,11 @@ function Theme.setup()
 
         -- Search match highlight
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },
+
+        -- Grep output component highlights
+        { Theme.HL_GROUPS.GREP_PATH, { link = "@string.special.path" } },
+        { Theme.HL_GROUPS.GREP_LINE_NR, { link = "LineNr" } },
+        { Theme.HL_GROUPS.GREP_SEPARATOR, { link = "Delimiter" } },
 
         -- Input buffer highlights
         { Theme.HL_GROUPS.SLASH_COMMAND_PREFIX, { link = "@punctuation.special" } },

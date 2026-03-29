@@ -52,6 +52,88 @@ local function safe_fence(body_lines)
     return fence
 end
 
+--- Check if a command string starts with a grep-family tool.
+--- Handles leading env vars (VAR=val) and common pipe patterns.
+--- @param argument string Shell command string
+--- @return boolean
+local function is_grep_command(argument)
+    -- Strip leading env var assignments (e.g. "LANG=C grep ...")
+    local cmd = argument:gsub("^%s*[%w_]+=[^%s]*%s+", "")
+    -- Extract first word
+    local first = cmd:match("^%s*(%S+)")
+    if not first then
+        return false
+    end
+    -- Check grep-family tools
+    if
+        first == "grep"
+        or first == "rg"
+        or first == "ag"
+        or first == "ack"
+        or first == "ugrep"
+    then
+        return true
+    end
+    -- "git grep"
+    if first == "git" then
+        local second = cmd:match("^%s*git%s+(%S+)")
+        if second == "grep" then
+            return true
+        end
+    end
+    return false
+end
+
+--- Parse grep-format lines (path:linenum: or path:linenum-) and return
+--- SearchMatch entries for the path, line number, and separator characters.
+--- @param body string[] Raw body lines
+--- @param line_index_offset integer Offset added to each line_index (accounts for fences/headers)
+--- @return agentic.ui.MessageWriter.SearchMatch[]
+local function extract_grep_line_highlights(body, line_index_offset)
+    --- @type agentic.ui.MessageWriter.SearchMatch[]
+    local matches = {}
+    for i, line in ipairs(body) do
+        -- Match path:linenum: or path:linenum- (context lines from grep -C)
+        local path, sep1, linenum, sep2 = line:match("^([^:]+)(:)(%d+)([:-])")
+        if path then
+            local idx = line_index_offset + i - 1
+            local col = 0
+            -- File path
+            table.insert(matches, {
+                line_index = idx,
+                col_start = col,
+                col_end = col + #path,
+                hl_group = Theme.HL_GROUPS.GREP_PATH,
+            })
+            col = col + #path
+            -- First separator (:)
+            table.insert(matches, {
+                line_index = idx,
+                col_start = col,
+                col_end = col + #sep1,
+                hl_group = Theme.HL_GROUPS.GREP_SEPARATOR,
+            })
+            col = col + #sep1
+            -- Line number
+            table.insert(matches, {
+                line_index = idx,
+                col_start = col,
+                col_end = col + #linenum,
+                hl_group = Theme.HL_GROUPS.GREP_LINE_NR,
+            })
+            col = col + #linenum
+            -- Second separator (: or -)
+            table.insert(matches, {
+                line_index = idx,
+                col_start = col,
+                col_end = col + #sep2,
+                hl_group = Theme.HL_GROUPS.GREP_SEPARATOR,
+            })
+        end
+    end
+    return matches
+end
+
 --- Fallback formatter: split a long single-line shell command at top-level
 --- operators (&&, ||, ;, |) outside of quotes and subshells. Does not indent
 --- control structures. Already-multiline or short commands are returned as-is.
@@ -188,6 +270,7 @@ local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- @field line_index integer Line index relative to block lines (0-based)
 --- @field col_start integer Start column (byte offset)
 --- @field col_end integer End column (byte offset)
+--- @field hl_group? string Highlight group override (default: AgenticSearchMatch)
 
 --- @class agentic.ui.MessageWriter.ToolCallDiff
 --- @field new string[]
@@ -1288,6 +1371,18 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
                 end
             end
 
+            -- Highlight grep-format path:linenum: prefixes on each body line.
+            -- Body lines occupy indices [#lines - count .. #lines - 1] in the
+            -- lines array (0-based).
+            local grep_hl = extract_grep_line_highlights(body, #lines - count)
+            if #grep_hl > 0 then
+                if tool_call_block.search_matches then
+                    vim.list_extend(tool_call_block.search_matches, grep_hl)
+                else
+                    tool_call_block.search_matches = grep_hl
+                end
+            end
+
             if use_fold then
                 table.insert(lines, "}}}")
             end
@@ -1488,6 +1583,55 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
             ansi_highlights = {}
             for i = 1, body_count do
                 ansi_highlights[i] = result.highlights[i]
+            end
+        end
+    end
+
+    -- Grep-format highlighting for execute tool calls.
+    -- Detect grep-family commands and highlight path:linenum: prefixes + search term.
+    if
+        kind == "execute"
+        and tool_call_block.body
+        and is_grep_command(argument)
+    then
+        --- @type string[]
+        local body = tool_call_block.body
+        local body_count = #body
+        -- Locate body lines in the lines array (same logic as ANSI processing above)
+        local bend = #lines
+        if lines[bend] == "}}}" then
+            bend = bend - 1
+        end
+        local bstart = bend - body_count -- 1-indexed offset before first body line
+
+        local grep_hl = extract_grep_line_highlights(body, bstart)
+        if #grep_hl > 0 then
+            tool_call_block.search_matches = grep_hl
+        end
+
+        -- Also highlight the search term itself
+        local pattern = argument:match('"([^"]+)"')
+            or argument:match("'([^']+)'")
+        if pattern and pattern ~= "" then
+            local ok, regex = pcall(vim.regex, "\\v" .. pattern)
+            if ok then
+                for i = 1, body_count do
+                    local line = body[i]
+                    local line_index = bstart + i - 1
+                    local off = 0
+                    while off < #line do
+                        local s, e = regex:match_str(line:sub(off + 1))
+                        if not s then
+                            break
+                        end
+                        table.insert(tool_call_block.search_matches, {
+                            line_index = line_index,
+                            col_start = off + s,
+                            col_end = off + e,
+                        })
+                        off = off + math.max(e --[[@as integer]], 1)
+                    end
+                end
             end
         end
     end
@@ -1737,34 +1881,33 @@ function MessageWriter:_apply_block_highlights(
                 body_start,
                 ansi_highlights
             )
-            return
-        end
-
-        -- Apply Comment highlight for body lines outside code fences.
-        -- Content inside ```markdown fences is dimmed by treesitter via
-        -- AgenticDimmedBlock (ftplugin/AgenticChat.lua). Other fences
-        -- (zsh, console) keep their injected syntax highlights.
-        local in_fence = false
-        for line_idx = body_start, end_row - 1 do
-            local line = vim.api.nvim_buf_get_lines(
-                bufnr,
-                line_idx,
-                line_idx + 1,
-                false
-            )[1]
-            if line and vim.startswith(line, "`") then
-                in_fence = not in_fence
-            elseif not in_fence and line and #line > 0 then
-                vim.api.nvim_buf_set_extmark(
+        else
+            -- Apply Comment highlight for body lines outside code fences.
+            -- Content inside ```markdown fences is dimmed by treesitter via
+            -- AgenticDimmedBlock (ftplugin/AgenticChat.lua). Other fences
+            -- (zsh, console) keep their injected syntax highlights.
+            local in_fence = false
+            for line_idx = body_start, end_row - 1 do
+                local line = vim.api.nvim_buf_get_lines(
                     bufnr,
-                    NS_DIFF_HIGHLIGHTS,
                     line_idx,
-                    0,
-                    {
-                        end_col = #line,
-                        hl_group = "Comment",
-                    }
-                )
+                    line_idx + 1,
+                    false
+                )[1]
+                if line and vim.startswith(line, "`") then
+                    in_fence = not in_fence
+                elseif not in_fence and line and #line > 0 then
+                    vim.api.nvim_buf_set_extmark(
+                        bufnr,
+                        NS_DIFF_HIGHLIGHTS,
+                        line_idx,
+                        0,
+                        {
+                            end_col = #line,
+                            hl_group = "Comment",
+                        }
+                    )
+                end
             end
         end
     end
@@ -1805,7 +1948,7 @@ function MessageWriter:_apply_block_highlights(
                         match.col_start,
                         {
                             end_col = end_col,
-                            hl_group = "AgenticSearchMatch",
+                            hl_group = match.hl_group or "AgenticSearchMatch",
                             priority = 200,
                         }
                     )
