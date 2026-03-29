@@ -558,4 +558,79 @@ describe("agentic.ui.ChatWidget", function()
             assert.equal(false, call_args[2].focus_prompt)
         end)
     end)
+
+    describe(":wq and :x safeguard", function()
+        local widget
+        local submit_spy
+        local hide_spy
+
+        before_each(function()
+            vim.cmd("tabnew")
+            local on_submit_spy = spy.new(function() end)
+            widget = ChatWidget:new(
+                vim.api.nvim_get_current_tabpage(),
+                on_submit_spy --[[@as function]]
+            )
+            widget:show()
+            submit_spy = spy.on(widget, "_submit_input")
+            hide_spy = spy.on(widget, "hide")
+        end)
+
+        after_each(function()
+            submit_spy:revert()
+            hide_spy:revert()
+            pcall(function()
+                widget:destroy()
+            end)
+            pcall(function()
+                vim.cmd("tabclose")
+            end)
+        end)
+
+        it(":Wq submits but does not hide", function()
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                { "hello" }
+            )
+            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+            vim.cmd("Wq")
+
+            assert.spy(submit_spy).was.called(1)
+            assert.spy(hide_spy).was.called(0)
+        end)
+
+        it(":Wq! submits and hides", function()
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                { "hello" }
+            )
+            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+            vim.cmd("Wq!")
+
+            assert.spy(submit_spy).was.called(1)
+            assert.is_true(hide_spy.call_count >= 1)
+        end)
+
+        it(":X submits but does not hide", function()
+            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+            vim.cmd("X")
+
+            assert.spy(submit_spy).was.called(1)
+            assert.spy(hide_spy).was.called(0)
+        end)
+
+        it(":X! submits and hides", function()
+            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+            vim.cmd("X!")
+
+            assert.spy(submit_spy).was.called(1)
+            assert.is_true(hide_spy.call_count >= 1)
+        end)
+    end)
 end)

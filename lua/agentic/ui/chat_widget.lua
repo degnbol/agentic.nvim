@@ -316,6 +316,27 @@ function ChatWidget:_setup_write_submit()
             )
         end,
     })
+
+    -- Intercept :wq/:x — submit like :w, warn about closing. :wq!/:x! force-closes.
+    -- User commands require uppercase, so abbreviate lowercase forms.
+    for _, pair in ipairs({ { "Wq", "wq" }, { "X", "x" } }) do
+        vim.api.nvim_buf_create_user_command(input_buf, pair[1], function(opts)
+            self:_submit_input()
+            if opts.bang then
+                self:hide()
+            else
+                Logger.notify(
+                    "Use :" .. pair[2] .. "! to close the session",
+                    vim.log.levels.WARN
+                )
+            end
+        end, { bang = true })
+        vim.api.nvim_buf_call(input_buf, function()
+            vim.cmd(
+                string.format("cnoreabbrev <buffer> %s %s", pair[2], pair[1])
+            )
+        end)
+    end
 end
 
 --- Mark user prompts with signs and [[ / ]] navigation in the chat buffer
