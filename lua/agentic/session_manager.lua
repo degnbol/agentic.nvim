@@ -151,6 +151,10 @@ function SessionManager:new(tab_page_id)
         self:_handle_input_submit(input_text)
     end)
 
+    self.widget.on_refresh = function()
+        self:_refresh()
+    end
+
     self.widget.on_hide = function()
         if #self.chat_history.messages == 0 then
             -- Trivial session (no prompts sent) — destroy without a trace.
@@ -316,6 +320,21 @@ function SessionManager:_on_session_update(update)
             { title = "⚠️ Unknown session update" }
         )
     end
+end
+
+--- Manual refresh: reset stale generating state and scroll to bottom.
+--- Workaround for when the display gets out of sync (e.g. background task
+--- completion, or the prompt response callback racing with a new turn).
+function SessionManager:_refresh()
+    if self.is_generating then
+        -- If nothing is actually streaming, the state is stale — reset it.
+        -- If a turn IS active, this is harmless: the next response callback
+        -- will set is_generating = false anyway.
+        self.is_generating = false
+        self.status_animation:stop()
+    end
+
+    self.message_writer:scroll_to_bottom()
 end
 
 --- Display context usage info locally (intercepted /context command)
@@ -732,46 +751,49 @@ function SessionManager:_handle_input_submit_inner(input_text)
     self.is_generating = true
 
     self.agent:send_prompt(self.session_id, prompt, function(_response, err)
-        vim.schedule(function()
-            self.is_generating = false
+        -- This callback already runs inside vim.schedule (from _handle_message).
+        -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
+        -- creating a race where a fast follow-up prompt sets is_generating=true
+        -- before the previous turn's cleanup sets it back to false, permanently
+        -- desynchronising the generating state ("stuck 1 message behind").
+        self.is_generating = false
 
-            if err then
-                local error_type, reset_epoch =
-                    self.message_writer:write_error_message(err)
-                if error_type == "authentication_error" then
-                    self:_offer_reauth()
-                elseif error_type == "usage_limit" and reset_epoch then
-                    self:_offer_auto_continue(reset_epoch)
-                else
-                    self._retry_attempt = 0
-                end
+        if err then
+            local error_type, reset_epoch =
+                self.message_writer:write_error_message(err)
+            if error_type == "authentication_error" then
+                self:_offer_reauth()
+            elseif error_type == "usage_limit" and reset_epoch then
+                self:_offer_auto_continue(reset_epoch)
             else
                 self._retry_attempt = 0
             end
+        else
+            self._retry_attempt = 0
+        end
 
-            self.message_writer:append_separator()
-            self.message_writer:scroll_to_bottom()
+        self.message_writer:append_separator()
+        self.message_writer:scroll_to_bottom()
 
-            self.status_animation:stop()
+        self.status_animation:stop()
 
-            SessionManager._ring_bell()
+        SessionManager._ring_bell()
 
-            P.invoke_hook("on_response_complete", {
-                session_id = session_id,
-                tab_page_id = tab_page_id,
-                success = err == nil,
-                error = err,
-            })
+        P.invoke_hook("on_response_complete", {
+            session_id = session_id,
+            tab_page_id = tab_page_id,
+            success = err == nil,
+            error = err,
+        })
 
-            -- Save chat history after successful turn completion
-            if not err then
-                chat_history:save(function(save_err)
-                    if save_err then
-                        Logger.debug("Chat history save error:", save_err)
-                    end
-                end)
-            end
-        end)
+        -- Save chat history after successful turn completion
+        if not err then
+            chat_history:save(function(save_err)
+                if save_err then
+                    Logger.debug("Chat history save error:", save_err)
+                end
+            end)
+        end
     end)
 end
 
