@@ -73,6 +73,7 @@ end
 --- @field _pending_input? string Prompt queued before the ACP session is ready
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
+--- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -113,6 +114,7 @@ function SessionManager:new(tab_page_id)
         is_generating = false,
         _restoring = false,
         _destroyed = false,
+        _retry_attempt = 0,
     }, self)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
@@ -740,7 +742,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
                     self:_offer_reauth()
                 elseif error_type == "usage_limit" and reset_epoch then
                     self:_offer_auto_continue(reset_epoch)
+                else
+                    self._retry_attempt = 0
                 end
+            else
+                self._retry_attempt = 0
             end
 
             self.message_writer:append_separator()
@@ -1192,7 +1198,8 @@ function SessionManager:_run_reauth()
 end
 
 --- Cancel a pending auto-continue timer and remove the cancel keymap.
-function SessionManager:_cancel_retry_timer()
+--- @param reset_attempts? boolean Also reset the retry attempt counter (default: true)
+function SessionManager:_cancel_retry_timer(reset_attempts)
     if self._retry_timer then
         self._retry_timer:stop()
         self._retry_timer:close()
@@ -1205,6 +1212,10 @@ function SessionManager:_cancel_retry_timer()
             pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
         end
         self._retry_keymap = nil
+    end
+
+    if reset_attempts ~= false then
+        self._retry_attempt = 0
     end
 end
 
@@ -1223,25 +1234,60 @@ local function format_duration(seconds)
 end
 
 --- Schedule auto-continue after a usage limit error.
+--- On the first attempt, waits until `reset_epoch + 2 min`. On subsequent
+--- attempts (provider's reset time was inaccurate), retries with a fixed
+--- 5-minute backoff. Gives up after 3 consecutive attempts.
 --- @param reset_epoch number Epoch seconds when usage resets
 function SessionManager:_offer_auto_continue(reset_epoch)
     if not Config.auto_continue_on_usage_limit then
         return
     end
 
-    self:_cancel_retry_timer()
+    local MAX_RETRIES = 3
+    local RETRY_BACKOFF_S = 5 * 60 -- 5 minutes
 
-    local delay_s = math.max(reset_epoch - os.time(), 10)
-    -- Add a small buffer to avoid racing the exact reset moment
-    delay_s = delay_s + 30
-    local reset_time = os.date("%H:%M", reset_epoch)
+    if self._retry_attempt >= MAX_RETRIES then
+        self.message_writer:write_error_action(
+            string.format(
+                "Auto-continue gave up after %d attempts. Send a message manually when usage resets.",
+                MAX_RETRIES
+            )
+        )
+        self._retry_attempt = 0
+        return
+    end
+
+    self:_cancel_retry_timer(false)
+
+    local delay_s
+    if self._retry_attempt > 0 then
+        -- Previous auto-continue got another usage limit error — the provider's
+        -- reset time was inaccurate. Use a fixed backoff instead.
+        delay_s = RETRY_BACKOFF_S
+    else
+        delay_s = math.max(reset_epoch - os.time(), 10)
+        -- Add buffer to avoid racing the exact reset moment
+        delay_s = delay_s + 120
+    end
+
+    self._retry_attempt = self._retry_attempt + 1
+
+    local reset_time = os.date("%H:%M", os.time() + delay_s)
     local duration = format_duration(delay_s)
+    local attempt_suffix = self._retry_attempt > 1
+            and string.format(
+                " (attempt %d/%d)",
+                self._retry_attempt,
+                MAX_RETRIES
+            )
+        or ""
 
     self.message_writer:write_error_action(
         string.format(
-            "Auto-continuing at %s (in %s). Press [c] to cancel.",
+            "Auto-continuing at %s (in %s)%s. Press [c] to cancel.",
             reset_time,
-            duration
+            duration,
+            attempt_suffix
         )
     )
 
@@ -1265,7 +1311,7 @@ function SessionManager:_offer_auto_continue(reset_epoch)
         delay_s * 1000,
         0,
         vim.schedule_wrap(function()
-            self:_cancel_retry_timer()
+            self:_cancel_retry_timer(false)
 
             if self._destroyed then
                 return
