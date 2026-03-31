@@ -96,12 +96,12 @@ local function parse_table_row(line)
     end
     -- Split on unescaped pipes — gives empty strings for leading/trailing delimiters
     local parts = split_on_pipes(inner)
+    -- Drop trailing empty part from the closing `|`
+    if #parts > 0 and vim.trim(parts[#parts]) == "" then
+        parts[#parts] = nil
+    end
     for _, cell in ipairs(parts) do
-        local trimmed = vim.trim(cell)
-        -- Skip empty parts from trailing pipe
-        if trimmed ~= "" then
-            cells[#cells + 1] = trimmed
-        end
+        cells[#cells + 1] = vim.trim(cell)
     end
     return cells
 end

@@ -336,6 +336,19 @@ describe("agentic.utils.TextWrap", function()
             end
         )
 
+        it("preserves empty cells in table rows", function()
+            local lines = {
+                "|       | birth | pers | death |",
+                "| ----- | ----- | ---- | ----- |",
+                "| 3 A25 | 0.30  | 1.19 | 1.49  |",
+                "| 2 A42 | 2.32  | 2.50 | 4.82  |",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            -- Header must keep the empty first cell — 4 columns, not 3
+            assert.equal("|       | birth | pers | death |", result[1])
+            assert.equal(4, #result)
+        end)
+
         it("handles table with uneven column counts", function()
             local lines = {
                 "| A | B | C |",
