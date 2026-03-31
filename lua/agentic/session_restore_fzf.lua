@@ -55,8 +55,7 @@ function M.show(items, on_select)
         if #content == 0 then
             return "Empty session file"
         end
-        local ok, parsed =
-            pcall(vim.json.decode, table.concat(content, "\n"))
+        local ok, parsed = pcall(vim.json.decode, table.concat(content, "\n"))
         if not ok or not parsed or not parsed.messages then
             return "Failed to parse session"
         end
@@ -94,8 +93,7 @@ function M.show(items, on_select)
                     if not item then
                         return
                     end
-                    local ok, err =
-                        ChatHistory.delete_session(item.session_id)
+                    local ok, err = ChatHistory.delete_session(item.session_id)
                     if ok then
                         -- Remove from items so reload reflects the change
                         for i, it in ipairs(items) do
@@ -105,10 +103,7 @@ function M.show(items, on_select)
                             end
                         end
                         preview_cache[item.session_id] = nil
-                        Logger.notify(
-                            "Deleted session",
-                            vim.log.levels.INFO
-                        )
+                        Logger.notify("Deleted session", vim.log.levels.INFO)
                     else
                         Logger.notify(
                             "Failed to delete: " .. (err or "unknown"),

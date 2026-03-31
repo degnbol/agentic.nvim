@@ -287,12 +287,7 @@ function M.show_split_diff(opts)
             if not bufnr or not target_winid then
                 return false
             end
-            return open_split_view(
-                abs_path,
-                bufnr,
-                target_winid,
-                disk_modified
-            )
+            return open_split_view(abs_path, bufnr, target_winid, disk_modified)
         end
 
         local disk_reconstructed = reconstruct_modified_file(

@@ -109,7 +109,8 @@ function SessionRestore.build_items(sessions)
     for _, s in ipairs(sessions) do
         local date = os.date("%Y-%m-%d %H:%M", s.timestamp or 0)
         -- Use first line only; titles can be multi-line prompts
-        local title = (s.title or "(no title)"):match("^([^\n]+)") or "(no title)"
+        local title = (s.title or "(no title)"):match("^([^\n]+)")
+            or "(no title)"
 
         table.insert(items, {
             display = string.format("%s (%s)", title, date),

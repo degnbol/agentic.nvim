@@ -94,8 +94,11 @@ function M.extract_diff_blocks(opts)
         if not blocks then
             local disk_lines = FileSystem.read_from_disk(abs_path)
             if disk_lines and #disk_lines > 0 then
-                blocks =
-                    M.match_or_substring_fallback(disk_lines, old_lines, new_lines)
+                blocks = M.match_or_substring_fallback(
+                    disk_lines,
+                    old_lines,
+                    new_lines
+                )
                 if not blocks then
                     local reverse_disk = M.match_or_substring_fallback(
                         disk_lines,

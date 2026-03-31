@@ -63,10 +63,9 @@ function CodexACPAdapter:__handle_tool_call(session_id, update)
         if update.rawInput.parsed_cmd and update.rawInput.parsed_cmd[1] then
             message.argument = update.rawInput.parsed_cmd[1].cmd or ""
         else
-            message.argument =
-                self:__ensure_command_string(update.rawInput.command)
-                or update.title
-                or "unknown codex command"
+            message.argument = self:__ensure_command_string(
+                update.rawInput.command
+            ) or update.title or "unknown codex command"
         end
     end
 
