@@ -13,8 +13,9 @@ local CompletionItemKind = {
     Text = 1,
     Function = 3,
     Field = 5,
-    File = 17,
     Keyword = 14,
+    File = 17,
+    Folder = 19,
 }
 
 --- Build slash command completion items from the stored commands.
@@ -117,13 +118,35 @@ local function get_slash_word_completions(
     return items
 end
 
---- Build file completion items from the FilePicker cache.
---- @param bufnr integer
+--- Entries to hide from @ directory listings.
+local DIR_EXCLUDE = {
+    [".git"] = true,
+    [".DS_Store"] = true,
+}
+
+--- Sort key: non-dot before dot, dirs before files, then alphabetical.
+--- @param name string
+--- @param is_dir boolean
+--- @return string
+local function file_sort_key(name, is_dir)
+    local dot = name:sub(1, 1) == "." and "1" or "0"
+    local kind = is_dir and "0" or "1"
+    return dot .. kind .. name:lower()
+end
+
+--- Build file completion items by listing one directory level at a time.
+--- Typing `@` lists cwd; picking a directory inserts `@dir/` which re-triggers
+--- via the `/` trigger character, listing the next level.
+---
+--- This deliberately reimplements directory listing (~30 lines) rather than
+--- delegating to blink.cmp's path source, so the plugin stays framework-agnostic
+--- (works with blink.cmp, nvim-cmp, or built-in completion via standard LSP).
+--- @param _bufnr integer
 --- @param line_text string
 --- @param cursor_col integer 0-indexed column
 --- @param cursor_line integer 0-indexed line
 --- @return table[]
-local function get_file_completions(bufnr, line_text, cursor_col, cursor_line)
+local function get_file_completions(_bufnr, line_text, cursor_col, cursor_line)
     if not Config.file_picker.enabled then
         return {}
     end
@@ -142,30 +165,58 @@ local function get_file_completions(bufnr, line_text, cursor_col, cursor_line)
     local at_byte_pos = before_cursor:reverse():find("@")
     local at_col = cursor_col - at_byte_pos
 
-    local FilePicker = require("agentic.ui.file_picker")
-    local files = FilePicker.get_files(bufnr)
-    if not files or #files == 0 then
+    -- Extract path typed after @, split into directory prefix and partial name
+    local typed = before_cursor:sub(at_col + 2) -- skip past @
+    local dir_prefix = typed:match("^(.*/)") or ""
+    local scan_dir = dir_prefix == "" and "." or dir_prefix
+
+    -- List one directory level
+    local handle = vim.uv.fs_scandir(scan_dir)
+    if not handle then
         return {}
     end
 
     --- @type table[]
     local items = {}
-    for _, file in ipairs(files) do
-        local path = file.path
-        table.insert(items, {
-            label = path,
-            kind = CompletionItemKind.File,
-            filterText = path,
-            score_offset = 5,
-            textEdit = {
-                range = {
-                    start = { line = cursor_line, character = at_col },
-                    ["end"] = { line = cursor_line, character = cursor_col },
+    while true do
+        local name, entry_type = vim.uv.fs_scandir_next(handle)
+        if not name then
+            break
+        end
+        if DIR_EXCLUDE[name] then
+            -- skip
+        else
+            -- Resolve symlinks to determine if directory
+            local is_dir = entry_type == "directory"
+            if entry_type == "link" then
+                local stat = vim.uv.fs_stat(scan_dir .. "/" .. name)
+                is_dir = stat and stat.type == "directory" or false
+            end
+
+            local full_path = dir_prefix .. name
+            local suffix = is_dir and "/" or ""
+
+            table.insert(items, {
+                label = name .. suffix,
+                kind = is_dir and CompletionItemKind.Folder
+                    or CompletionItemKind.File,
+                filterText = full_path .. suffix,
+                sortText = file_sort_key(name, is_dir),
+                score_offset = 5,
+                textEdit = {
+                    range = {
+                        start = { line = cursor_line, character = at_col },
+                        ["end"] = { line = cursor_line, character = cursor_col },
+                    },
+                    newText = "@" .. full_path .. suffix,
                 },
-                newText = "@" .. path,
-            },
-        })
+            })
+        end
     end
+
+    table.sort(items, function(a, b)
+        return a.sortText < b.sortText
+    end)
 
     return items
 end

@@ -143,8 +143,12 @@ plugin-specific keymaps needed.
   `agentic://prompt`)
 - `States.getSlashCommandsForBuffer(bufnr)` reads from specific buffer (not
   `vim.b[0]` which is unreliable in LSP handler context)
-- `FilePicker.get_files(bufnr)` provides cached file list; `SessionManager`
-  holds a strong reference to prevent GC of the weak-tabled FilePicker instance
+- `@` file completion lists one directory level at a time via `vim.uv.fs_scandir`,
+  not a pre-cached file list. Picking a directory inserts `@dir/` which re-triggers
+  completion via the `/` trigger character. This is a deliberate reimplementation
+  (~30 lines) to stay framework-agnostic (works with blink.cmp, nvim-cmp, or
+  built-in completion via standard LSP) rather than delegating to a specific
+  framework's path source
 
 ### Syntax highlighting for `/` and `@`
 

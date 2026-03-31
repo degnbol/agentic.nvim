@@ -245,34 +245,75 @@ describe("agentic.completion.LspServer", function()
     end)
 
     describe("file completion", function()
-        local file_picker_stub
+        local fs_scandir_stub
+        local fs_scandir_next_stub
+        local fs_stat_stub
+
+        --- Stub fs_scandir/fs_scandir_next to return controlled entries.
+        --- @param entries {[1]: string, [2]: string}[] name, type pairs
+        local function stub_dir_entries(entries)
+            local idx = 0
+            fs_scandir_stub:returns("handle")
+            fs_scandir_next_stub:invokes(function()
+                idx = idx + 1
+                if idx > #entries then
+                    return nil
+                end
+                return entries[idx][1], entries[idx][2]
+            end)
+        end
 
         before_each(function()
-            local FilePicker = require("agentic.ui.file_picker")
-            file_picker_stub = spy.stub(FilePicker, "get_files")
-            file_picker_stub:returns({
-                { path = "src/main.lua" },
-                { path = "src/utils.lua" },
-                { path = "README.md" },
-            })
+            fs_scandir_stub = spy.stub(vim.uv, "fs_scandir")
+            fs_scandir_next_stub = spy.stub(vim.uv, "fs_scandir_next")
+            fs_stat_stub = spy.stub(vim.uv, "fs_stat")
+            fs_stat_stub:returns({ type = "file" })
         end)
 
         after_each(function()
-            file_picker_stub:revert()
+            fs_scandir_stub:revert()
+            fs_scandir_next_stub:revert()
+            fs_stat_stub:revert()
         end)
 
-        it("returns file items when typing @ at line start", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@sr" })
-            vim.api.nvim_win_set_cursor(0, { 1, 3 })
+        it("lists cwd entries when typing @ at line start", function()
+            stub_dir_entries({
+                { "src", "directory" },
+                { "README.md", "file" },
+            })
 
-            local result = complete(handlers, bufnr, 0, 3, "@")
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
 
-            assert.is_true(#result.items > 0)
-            assert.equal(3, #result.items)
+            local result = complete(handlers, bufnr, 0, 1, "@")
+
+            assert.equal(2, #result.items)
+            -- Scanned "." (cwd)
+            assert.equal(".", fs_scandir_stub.calls[1][1])
         end)
 
-        it("returns file items when @ is after whitespace", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "add this @sr" })
+        it("lists subdirectory entries when path has trailing /", function()
+            stub_dir_entries({
+                { "main.lua", "file" },
+                { "utils.lua", "file" },
+            })
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@src/" })
+            vim.api.nvim_win_set_cursor(0, { 1, 5 })
+
+            local result = complete(handlers, bufnr, 0, 5, "/")
+
+            assert.equal(2, #result.items)
+            -- Scanned "src/" directory
+            assert.equal("src/", fs_scandir_stub.calls[1][1])
+            -- filterText includes directory prefix
+            assert.equal("src/main.lua", result.items[1].filterText)
+        end)
+
+        it("returns items when @ is after whitespace", function()
+            stub_dir_entries({ { "file.txt", "file" } })
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "add this @fi" })
             vim.api.nvim_win_set_cursor(0, { 1, 12 })
 
             local result = complete(handlers, bufnr, 0, 12, "@")
@@ -280,18 +321,113 @@ describe("agentic.completion.LspServer", function()
             assert.is_true(#result.items > 0)
         end)
 
-        it("returns items with textEdit from @ position", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@src" })
-            vim.api.nvim_win_set_cursor(0, { 1, 4 })
+        it("returns textEdit from @ position with @ prefix", function()
+            stub_dir_entries({ { "src", "directory" } })
 
-            local result = complete(handlers, bufnr, 0, 4, "@")
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@sr" })
+            vim.api.nvim_win_set_cursor(0, { 1, 3 })
+
+            local result = complete(handlers, bufnr, 0, 3, "@")
 
             local first = result.items[1]
             assert.is_not_nil(first.textEdit)
-            assert.equal(0, first.textEdit.range.start.character) -- @ is at col 0
-            assert.equal(4, first.textEdit.range["end"].character)
-            -- newText includes @ prefix
-            assert.is_true(first.textEdit.newText:match("^@") ~= nil)
+            assert.equal(0, first.textEdit.range.start.character)
+            assert.equal(3, first.textEdit.range["end"].character)
+            assert.equal("@src/", first.textEdit.newText)
+        end)
+
+        it("directories have trailing / and Folder kind", function()
+            stub_dir_entries({
+                { "src", "directory" },
+                { "README.md", "file" },
+            })
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+
+            local result = complete(handlers, bufnr, 0, 1, "@")
+
+            local dir_item, file_item
+            for _, item in ipairs(result.items) do
+                if item.label == "src/" then
+                    dir_item = item
+                elseif item.label == "README.md" then
+                    file_item = item
+                end
+            end
+
+            assert.is_not_nil(dir_item)
+            assert.equal(19, dir_item.kind) -- Folder
+            assert.equal("@src/", dir_item.textEdit.newText)
+
+            assert.is_not_nil(file_item)
+            assert.equal(17, file_item.kind) -- File
+            assert.equal("@README.md", file_item.textEdit.newText)
+        end)
+
+        it("sorts non-dot before dot, dirs before files", function()
+            stub_dir_entries({
+                { ".hidden", "file" },
+                { "visible.txt", "file" },
+                { ".config", "directory" },
+                { "src", "directory" },
+            })
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+
+            local result = complete(handlers, bufnr, 0, 1, "@")
+
+            local sort_keys = vim.tbl_map(function(item)
+                return item.sortText
+            end, result.items)
+
+            -- Non-dot dir < non-dot file < dot dir < dot file
+            local sorted = vim.deepcopy(sort_keys)
+            table.sort(sorted)
+            assert.are.same(sorted, sort_keys)
+
+            -- Verify order: src/ < visible.txt < .config/ < .hidden
+            assert.equal("src/", result.items[1].label)
+            assert.equal("visible.txt", result.items[2].label)
+            assert.equal(".config/", result.items[3].label)
+            assert.equal(".hidden", result.items[4].label)
+        end)
+
+        it("excludes .git entries", function()
+            stub_dir_entries({
+                { ".git", "directory" },
+                { "src", "directory" },
+                { ".gitignore", "file" },
+            })
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+
+            local result = complete(handlers, bufnr, 0, 1, "@")
+
+            assert.equal(2, #result.items)
+            local labels = vim.tbl_map(function(item)
+                return item.label
+            end, result.items)
+            assert.is_false(vim.tbl_contains(labels, ".git/"))
+            assert.is_true(vim.tbl_contains(labels, ".gitignore"))
+        end)
+
+        it("resolves symlinks to determine directory type", function()
+            stub_dir_entries({ { "link-to-dir", "link" } })
+            fs_stat_stub:invokes(function()
+                return { type = "directory" }
+            end)
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+
+            local result = complete(handlers, bufnr, 0, 1, "@")
+
+            assert.equal(1, #result.items)
+            assert.equal("link-to-dir/", result.items[1].label)
+            assert.equal(19, result.items[1].kind) -- Folder
         end)
 
         it("returns empty when @ is mid-word (no whitespace before)", function()
@@ -303,13 +439,13 @@ describe("agentic.completion.LspServer", function()
             assert.equal(0, #result.items)
         end)
 
-        it("returns empty when file picker returns no files", function()
-            file_picker_stub:returns({})
+        it("returns empty when directory doesn't exist", function()
+            fs_scandir_stub:returns(nil)
 
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@sr" })
-            vim.api.nvim_win_set_cursor(0, { 1, 3 })
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@nonexistent/" })
+            vim.api.nvim_win_set_cursor(0, { 1, 14 })
 
-            local result = complete(handlers, bufnr, 0, 3, "@")
+            local result = complete(handlers, bufnr, 0, 14, "/")
 
             assert.equal(0, #result.items)
         end)
