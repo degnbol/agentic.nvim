@@ -23,11 +23,9 @@
 
 - Investigate streaming performance — large tool call outputs (e.g. long file reads) can cause visible lag when writing to the chat buffer.
 
-- Slim down readme, and remove the contribution markdown file.
-  These are currently written for the project we forked from, our readme should 
-  reflect our project and how it differs, e.g. claude focus, added formatting and 
-  syntax hl.
-
 - Some sessions are more clearly completed than others. If user prompt is last in a session it's not completed. If the session ends in a commit etc. it's probably completed.
   When it is and isn't might be a bit of a heuristic to detect but we could use a specific close keymap (instead of :qa!) to close marking a session for archive.
   Why is this useful? For the resume functionality. So we can easily resume from just the unfinshed work (or choose to look at archive specifically.)
+
+- If I queue a message while a session is waiting to auto-continue the current back-off retry logic falsely thinks this means we are trying to continue so it starts the 5 min delay for sending "continue".
+  Add support for queueing messages while we are waiting to auto-continue.
