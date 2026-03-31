@@ -286,6 +286,7 @@ local ConfigDefault = {
 
     --- @class agentic.UserConfig.PermissionIcons
     permission_icons = {
+        plan_implement = "",
         allow_once = "",
         allow_always = "",
         reject_once = "",

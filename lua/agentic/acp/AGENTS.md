@@ -131,7 +131,11 @@ tracked after terminal status.
 ## Key design rules for adapters
 
 - **Updates are partial:** Only send what changed. MessageWriter merges onto the
-  existing tracker via `tbl_deep_extend`.
+  existing tracker via `tbl_deep_extend`. **Consumer-side implication:** fields
+  like `argument` (file path) arrive in an early update but are absent from the
+  `completed` status update. Code that inspects completed tool calls must read
+  from the accumulated `tracker` (`message_writer.tool_call_blocks[id]`), not
+  from the individual `tool_call_update` message.
 - **Diffs are immutable after first render:** Once a diff is written to the
   buffer, content is frozen. Only status/decorations refresh on subsequent
   updates.

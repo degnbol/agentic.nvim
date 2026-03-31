@@ -5,6 +5,7 @@ local Logger = require("agentic.utils.logger")
 -- Priority order for permission option kinds.
 -- Lower number = higher priority (appears first).
 local PERMISSION_KIND_PRIORITY = {
+    plan_implement = 0,
     allow_once = 1,
     allow_always = 2,
     reject_once = 3,

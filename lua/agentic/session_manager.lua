@@ -114,6 +114,10 @@ function SessionManager:new(tab_page_id)
         is_generating = false,
         _restoring = false,
         _destroyed = false,
+        --- @type string|nil Smart path of the most recently edited .md file (plan candidate)
+        _last_edited_md = nil,
+        --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
+        _plan_exit_pending = false,
         _retry_attempt = 0,
     }, self)
 
@@ -383,6 +387,177 @@ function SessionManager:_on_stdout_text(text)
     self.message_writer:write_message(ACPPayloads.generate_agent_message(text))
 end
 
+--- Handle initial tool_call: write to UI, store in history, track plan exit.
+--- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
+function SessionManager:_on_tool_call(tool_call)
+    self.message_writer:write_tool_call_block(tool_call)
+    self.status_animation:reposition()
+
+    -- Store full tool_call in chat history
+    --- @type agentic.ui.ChatHistory.ToolCall
+    local tool_msg = {
+        type = "tool_call",
+        tool_call_id = tool_call.tool_call_id,
+        kind = tool_call.kind,
+        status = tool_call.status,
+        argument = tool_call.argument,
+        body = tool_call.body,
+        diff = tool_call.diff,
+    }
+    self.chat_history:add_message(tool_msg)
+
+    self:_track_plan_exit(tool_call)
+end
+
+--- Detect Plan→Normal mode switch so the turn-end callback can offer
+--- context clearing and plan implementation.
+--- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
+function SessionManager:_track_plan_exit(tool_call)
+    if tool_call.kind == "switch_mode" and tool_call.argument == "Normal" then
+        self._plan_exit_pending = true
+    end
+end
+
+--- Find the most recently modified .md file in ~/.claude/plans/.
+--- Returns the path if modified within the last 5 minutes, nil otherwise.
+--- @return string|nil
+local function find_recent_plan_file()
+    local plans_dir = vim.fn.expand("~/.claude/plans")
+    local best_path, best_mtime = nil, 0
+    local cutoff = os.time() - 300 -- 5 minutes
+
+    local handle = vim.uv.fs_scandir(plans_dir)
+    if not handle then
+        return nil
+    end
+
+    while true do
+        local name, type = vim.uv.fs_scandir_next(handle)
+        if not name then
+            break
+        end
+        if type == "file" and name:match("%.md$") then
+            local full = plans_dir .. "/" .. name
+            local stat = vim.uv.fs_stat(full)
+            if stat and stat.mtime.sec > best_mtime then
+                best_mtime = stat.mtime.sec
+                best_path = full
+            end
+        end
+    end
+
+    if best_path and best_mtime >= cutoff then
+        return best_path
+    end
+    return nil
+end
+
+local PLAN_IMPLEMENT_ID = "__plan_implement__"
+
+--- Handle permission request: show diff preview, set up keymaps, queue request.
+--- For ExitPlanMode permissions, injects a "Clear context & implement plan"
+--- option that accepts the plan, cancels the session, and starts a fresh
+--- session with the plan file as the initial prompt.
+--- @param request agentic.acp.RequestPermission
+--- @param callback fun(option_id: string|nil)
+function SessionManager:_on_request_permission(request, callback)
+    self.status_animation:stop()
+
+    -- Detect ExitPlanMode permission via the tracked tool call block
+    local tracker =
+        self.message_writer.tool_call_blocks[request.toolCall.toolCallId]
+    local is_plan_exit = tracker
+        and tracker.kind == "switch_mode"
+        and tracker.argument == "Normal"
+
+    if is_plan_exit then
+        -- Inject "Clear context & implement plan" option.
+        -- It sorts first (priority 0 in PermissionManager).
+        table.insert(request.options, {
+            kind = "plan_implement",
+            name = "Clear context & implement plan",
+            optionId = PLAN_IMPLEMENT_ID,
+        })
+    end
+
+    local function wrapped_callback(option_id)
+        -- Handle the custom plan-implement option: accept the plan with
+        -- the provider, then cancel and start a fresh implementation session.
+        if option_id == PLAN_IMPLEMENT_ID then
+            -- Find the real allow_once option to accept the plan
+            local accept_id
+            for _, opt in ipairs(request.options) do
+                if opt.kind == "allow_once" then
+                    accept_id = opt.optionId
+                    break
+                end
+            end
+            callback(accept_id)
+
+            -- Discover the plan file before cancelling (clears tracking state)
+            local plan_path = self._last_edited_md or find_recent_plan_file()
+
+            -- Defer to avoid re-entrancy with PermissionManager cleanup
+            vim.schedule(function()
+                self:new_session({
+                    on_created = function()
+                        if plan_path then
+                            self:_handle_input_submit(
+                                "Initiate work on plan: " .. plan_path
+                            )
+                        end
+                    end,
+                })
+            end)
+            return
+        end
+
+        callback(option_id)
+
+        if self._destroyed then
+            return
+        end
+
+        -- Look up the option kind from the request options.
+        -- option_id is an opaque ACP identifier (e.g. "reject-once"),
+        -- not the kind string ("reject_once").
+        local option_kind
+        for _, opt in ipairs(request.options) do
+            if opt.optionId == option_id then
+                option_kind = opt.kind
+                break
+            end
+        end
+
+        local is_rejection = option_kind == "reject_once"
+            or option_kind == "reject_always"
+        self:_clear_diff_in_buffer(request.toolCall.toolCallId, is_rejection)
+
+        if is_rejection then
+            self.message_writer:suppress_next_rejection()
+        end
+
+        if
+            not self.permission_manager.current_request
+            and #self.permission_manager.queue == 0
+        then
+            self.status_animation:start("generating")
+        end
+    end
+
+    self:_show_diff_in_buffer(request.toolCall.toolCallId)
+
+    SessionManager._ring_bell()
+
+    P.invoke_hook("on_permission_request", {
+        session_id = self.session_id,
+        tab_page_id = self.tab_page_id,
+        tool_call_id = request.toolCall.toolCallId,
+    })
+
+    self.permission_manager:add_request(request, wrapped_callback)
+end
+
 --- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
@@ -417,6 +592,19 @@ function SessionManager:_on_tool_call_update(tool_call_update)
 
         if tracker and tracker.kind and FILE_MUTATING_KINDS[tracker.kind] then
             vim.cmd.checktime()
+        end
+
+        -- Track the most recently edited/written .md file as plan candidate.
+        -- The last .md mutation before a Plan→Normal switch is the plan file.
+        -- Use tracker.argument (accumulated from all updates) — the completed
+        -- update itself rarely carries the argument field.
+        if
+            tracker
+            and FILE_MUTATING_KINDS[tracker.kind]
+            and tracker.argument
+            and tracker.argument:match("%.md$")
+        then
+            self._last_edited_md = tracker.argument
         end
     end
 
@@ -827,20 +1015,7 @@ function SessionManager:new_session(opts)
         end,
 
         on_tool_call = function(tool_call)
-            self.message_writer:write_tool_call_block(tool_call)
-            self.status_animation:reposition()
-            -- Store full tool_call in chat history
-            --- @type agentic.ui.ChatHistory.ToolCall
-            local tool_msg = {
-                type = "tool_call",
-                tool_call_id = tool_call.tool_call_id,
-                kind = tool_call.kind,
-                status = tool_call.status,
-                argument = tool_call.argument,
-                body = tool_call.body,
-                diff = tool_call.diff,
-            }
-            self.chat_history:add_message(tool_msg)
+            self:_on_tool_call(tool_call)
         end,
 
         on_tool_call_update = function(tool_call_update)
@@ -853,56 +1028,7 @@ function SessionManager:new_session(opts)
         end,
 
         on_request_permission = function(request, callback)
-            self.status_animation:stop()
-
-            local function wrapped_callback(option_id)
-                callback(option_id)
-
-                if self._destroyed then
-                    return
-                end
-
-                -- Look up the option kind from the request options.
-                -- option_id is an opaque ACP identifier (e.g. "reject-once"),
-                -- not the kind string ("reject_once").
-                local option_kind
-                for _, opt in ipairs(request.options) do
-                    if opt.optionId == option_id then
-                        option_kind = opt.kind
-                        break
-                    end
-                end
-
-                local is_rejection = option_kind == "reject_once"
-                    or option_kind == "reject_always"
-                self:_clear_diff_in_buffer(
-                    request.toolCall.toolCallId,
-                    is_rejection
-                )
-
-                if is_rejection then
-                    self.message_writer:suppress_next_rejection()
-                end
-
-                if
-                    not self.permission_manager.current_request
-                    and #self.permission_manager.queue == 0
-                then
-                    self.status_animation:start("generating")
-                end
-            end
-
-            self:_show_diff_in_buffer(request.toolCall.toolCallId)
-
-            SessionManager._ring_bell()
-
-            P.invoke_hook("on_permission_request", {
-                session_id = self.session_id,
-                tab_page_id = self.tab_page_id,
-                tool_call_id = request.toolCall.toolCallId,
-            })
-
-            self.permission_manager:add_request(request, wrapped_callback)
+            self:_on_request_permission(request, callback)
         end,
     }
 
@@ -1020,6 +1146,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
         on_tool_call = function(tool_call)
             self.message_writer:write_tool_call_block(tool_call)
             self.status_animation:reposition()
+            self:_track_plan_exit(tool_call)
         end,
 
         on_tool_call_update = function(tool_call_update)
@@ -1032,56 +1159,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
         end,
 
         on_request_permission = function(request, callback)
-            self.status_animation:stop()
-
-            local function wrapped_callback(option_id)
-                callback(option_id)
-
-                if self._destroyed then
-                    return
-                end
-
-                -- Look up the option kind from the request options.
-                -- option_id is an opaque ACP identifier (e.g. "reject-once"),
-                -- not the kind string ("reject_once").
-                local option_kind
-                for _, opt in ipairs(request.options) do
-                    if opt.optionId == option_id then
-                        option_kind = opt.kind
-                        break
-                    end
-                end
-
-                local is_rejection = option_kind == "reject_once"
-                    or option_kind == "reject_always"
-                self:_clear_diff_in_buffer(
-                    request.toolCall.toolCallId,
-                    is_rejection
-                )
-
-                if is_rejection then
-                    self.message_writer:suppress_next_rejection()
-                end
-
-                if
-                    not self.permission_manager.current_request
-                    and #self.permission_manager.queue == 0
-                then
-                    self.status_animation:start("generating")
-                end
-            end
-
-            self:_show_diff_in_buffer(request.toolCall.toolCallId)
-
-            SessionManager._ring_bell()
-
-            P.invoke_hook("on_permission_request", {
-                session_id = self.session_id,
-                tab_page_id = self.tab_page_id,
-                tool_call_id = request.toolCall.toolCallId,
-            })
-
-            self.permission_manager:add_request(request, wrapped_callback)
+            self:_on_request_permission(request, callback)
         end,
     }
 
@@ -1371,6 +1449,8 @@ function SessionManager:_cancel_session()
     self:_cancel_retry_timer()
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
+    self._last_edited_md = nil
+    self._plan_exit_pending = false
 
     self.chat_history = ChatHistory:new()
     self._history_to_send = nil
