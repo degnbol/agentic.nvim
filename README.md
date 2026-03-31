@@ -1,1122 +1,155 @@
-# Agentic.nvim
+# agentic.nvim
 
-![PR Checks](https://github.com/carlos-algms/agentic.nvim/actions/workflows/pr-check.yml/badge.svg)
+A Claude-focused AI chat interface for Neovim via [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
 
-> ⚡ A Chat interface for Ai agents in Neovim that supports Claude, Gemini,
-> Codex, OpenCode, Cursor Agent, Auggie, and Mistral Vibe through the Agent
-> Client Protocol (ACP).
+Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim) with enhanced tool call formatting and syntax highlighting.
 
-**Agentic.nvim** brings your AI assistant to Neovim through the implementation
-of the [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
+## Fork differences
 
-You'll get the same results and performance as you would when using the ACP
-provider's official CLI directly from the terminal.
+What this fork adds over upstream:
 
-Agentic.nvim is the interface, your agent is the Brain. This plugin will use all
-the same configurations and authentication methods you already have set up on
-your terminal.
+- **Tool call formatting** -- execute blocks use markdown code fences with bash syntax highlighting, formatted via `shfmt` (configurable)
+- **Search match highlighting** -- pattern matches in search/grep output are highlighted (`AgenticSearchMatch`)
+- **Grep output colouring** -- file paths, line numbers, and separators in grep-format output get distinct highlight groups
+- **Fold markers for long output** -- search and execute output exceeding a threshold is auto-folded (vim-native `foldmethod=marker`), toggle with `zo`/`zc`/`za`
+- **Sign-column block decorations** -- tool call borders use `sign_text` extmarks instead of inline virtual text (more stable during edits)
+- **Slash command / `@` mention syntax** -- `/commands` and `@file` references are highlighted in both input and chat buffers
+- **Input buffer safeguards** -- `:wq`/`:x` in the prompt buffer are intercepted to prevent accidental session close
 
-Including your MCP servers, commands, SKILLs, and sub-agents, you don't have to
-recreate your configuration to use Agentic.nvim.
+## Requirements
 
-You can start your work in Neovim, close it, and continue from the terminal, or
-restore previous Neovim sessions using Agentic's built-in session persistence
-feature.
+- Neovim v0.11.0+
+- `claude-agent-acp` -- install via `pnpm add -g @zed-industries/claude-agent-acp` or [download a binary](https://github.com/zed-industries/claude-agent-acp/releases)
 
-There're no hidden prompts or magic happening behind the scenes. Just a Chat
-interface, your colors, and your keymaps.
+Other ACP providers (Gemini, Codex, OpenCode, Cursor Agent, Auggie, Mistral Vibe) also work -- see `config_default.lua` for the full list.
 
-## ✨ Features
+## Configuration
 
-- **⚡ Performance First** - Optimized for minimal overhead and fast response
-  times
-- **🔌 Multiple ACP Providers** - Support for Claude, Gemini, Codex, OpenCode,
-  and Cursor Agent 🥇
-- **🔑 Zero Config Authentication** - No API keys needed
-  - **Keep you secrets secret**: run `claude /login`, or `gemini auth login`
-    once and, if they're working on your Terminal, they will work automatically
-    on Agentic.
-- **🧠 Model Switcher** - Switch between available models mid-session
-  (`<localLeader>m` in the chat widget)
-- **🔀 Switch Providers** - Switch between ACP providers mid-conversation
-  without losing chat history (`<localLeader>s` in the chat widget)
-- **♻️ Session Restore** - Restore your session and chat history at any time,
-  for all providers
-- **📝 Context Control** - Add files and text selections to conversation context
-  with one keypress
-- **🏞️ Image Support** - Drag-and-drop or paste images and screenshots directly
-  into the chat
-- **🛡️ Permission System** - Interactive approval workflow for AI tool calls,
-  mimicking Claude-code's approach, with 1, 2, 3, ... one-key press for quick
-  responses
-- **🤖 🤖 Multiple agents** - Independent Chat sessions for each Neovim Tab let
-  you have multiple agents working simultaneously on different tasks
-- **🎯 Clean UI** - Sidebar interface with markdown rendering and syntax
-  highlighting
-- **⌨️ Slash Commands** - Native Neovim completion for ACP slash commands with
-  fuzzy filtering
-  - Every slash command your provider has access too will apear when you type
-    `/` in the prompt as the first character
-- **📁 File Picker** - Type `@` to trigger autocomplete for workspace files
-  - Reference multiple files: `@file1.lua @file2.lua`
-- **🔄 Agent Mode Switching** - Switch between ACP-supported agent modes with
-  Shift-Tab (Similar to Claude, Gemini, Cursor-agent, etc)
-  - `Default`, `Auto Accept`, `Plan mode`, etc... (depends on the provider)
-- **ℹ️ Smart Context** - Automatically includes system and project information
-  in the first message of each session, so the Agent don't spend time and tokens
-  gathering basic info
+All options with defaults: [`lua/agentic/config_default.lua`](lua/agentic/config_default.lua).
 
-## 🎥 Showcase
-
-### Simple replace with tool approval:
-
-https://github.com/user-attachments/assets/4b33bb18-95f7-4fea-bc12-9a9208823911
-
-### Rich diff preview
-
-When editing files, if your provider asks for permission, you can see a diff
-preview side-by-side or inline, set your preference in your options:
-
-| Side-by-side                                          | Inline                                    |
-| ----------------------------------------------------- | ----------------------------------------- |
-| ![Side-by-side diff][preview-diff-side-by-side-image] | ![Inline diff][preview-diff-inline-image] |
-
-### Dynamic layout rotation: right - bottom - left
-
-https://github.com/user-attachments/assets/000c5a9a-5469-44e3-b302-4074caa58fa9
-
-### Image and Screenshot support in the Chat
-
-Drag-n-Drop or paste an image from the Clipboard directly to the chat context:
-
-https://github.com/user-attachments/assets/6ae57136-9c08-4d71-bc8a-59babc49be4d
-
-### Session restoration
-
-Continue from where you left off, available for all providers!
-
-<img width="1274" height="716" alt="Agentic-session-restore" src="https://github.com/user-attachments/assets/736c514a-003a-4984-89f5-0107ede259ce" />
-
-### 🐣 NEW: Switch agent mode: Always ask, Accept Edits, Plan mode...
-
-https://github.com/user-attachments/assets/96a11aae-3095-46e7-86f1-ccc02d21c04f
-
-### Add files to the context:
-
-Add the current file to the Chat context or the selected text, let your agent
-know where you want it to work.
-
-https://github.com/user-attachments/assets/b6b43544-a91e-407f-834e-4b4de41259f8
-
-### Use `@` to fuzzy find any file:
-
-https://github.com/user-attachments/assets/c6653a8b-20ef-49c8-b644-db0df1b342f0
-
-## 📋 Requirements
-
-- **Neovim** v0.11.0 or higher
-- **ACP Provider CLI** - Chose your favorite ACP and install its CLI tool
-  - For security reasons, this plugin doesn't install or manage binaries for
-    you. You must install them manually.
-
-**We recommend using `pnpm`**  
-`pnpm` uses a constant, static global path, that's resilient to updates.  
-While `npm` loses global packages every time you change Node versions using
-tools like `nvm`, `fnm`, etc...
-
-**You are free to chose** any installation method you prefer!
-
-| Provider                             | Install                                                                                                                                                                                        |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [claude-agent-acp][claude-agent-acp] | `pnpm add -g @zed-industries/claude-agent-acp`<br/> **OR** `npm i -g @zed-industries/claude-agent-acp`<br/> **OR** [Download binary][claude-agent-acp-releases]                                |
-| [gemini-cli][gemini-cli]             | `pnpm add -g @google/gemini-cli`<br/> **OR** `npm i -g @google/gemini-cli`<br/> **OR** `brew install --cask gemini`                                                                            |
-| [codex-acp][codex-acp]               | `pnpm add -g @zed-industries/codex-acp`<br/> **OR** `npm i -g @zed-industries/codex-acp`<br/> **OR** [Download binary][codex-acp-releases]                                                     |
-| [opencode][opencode]                 | `pnpm add -g opencode-ai`<br/> **OR** `npm i -g opencode-ai`<br/> **OR** `brew install opencode`<br/> **OR** `curl -fsSL https://opencode.ai/install \| bash`                                  |
-| [cursor-agent][cursor-agent]         | `pnpm add -g @blowmage/cursor-agent-acp`<br/> **OR** `npm i -g @blowmage/cursor-agent-acp`                                                                                                     |
-| [auggie][auggie]                     | `pnpm add -g @augmentcode/auggie`<br/> **OR** `npm i -g @augmentcode/auggie`<br/> **OR** See [Auggie docs][auggie-docs]                                                                        |
-| [mistral-vibe][mistral-vibe]         | `curl -LsSf https://mistral.ai/vibe/install.sh \| bash`<br/> **OR** `uv tool install mistral-vibe`<br/> **OR** `pip install mistral-vibe`<br/> **OR** [Download binary][mistral-vibe-releases] |
-
-> [!WARNING]  
-> These install commands are here for convenience, please always refer to the
-> official installation instructions from the respective ACP provider.
-
-> [!NOTE]  
-> Why install ACP provider CLIs globally?
-> [shai-hulud](https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-chain-attack)
-> should be reason enough. 📌 Pin your versions!  
-> But frontend projects with strict package management policies will fail to
-> start when using `npx ...`
-
-## 📦 Installation
-
-### lazy.nvim
+Only override what you need:
 
 ```lua
-{
-  "carlos-algms/agentic.nvim",
-
-  opts = {
-    -- Available by default: "claude-agent-acp" | "gemini-acp" | "codex-acp" | "opencode-acp" | "cursor-acp" | "auggie-acp" | "mistral-vibe-acp"
-    provider = "claude-agent-acp", -- setting the name here is all you need to get started
-  },
-
-  -- these are just suggested keymaps; customize as desired
-  keys = {
-    {
-      "<C-\\>",
-      function() require("agentic").toggle() end,
-      mode = { "n", "v", "i" },
-      desc = "Toggle Agentic Chat"
-    },
-    {
-      "<C-'>",
-      function() require("agentic").add_selection_or_file_to_context() end,
-      mode = { "n", "v" },
-      desc = "Add file or selection to Agentic to Context"
-    },
-    {
-      "<C-,>",
-      function() require("agentic").new_session() end,
-      mode = { "n", "v", "i" },
-      desc = "New Agentic Session"
-    },
-    {
-      "<A-i>r", -- ai Restore
-      function()
-          require("agentic").restore_session()
-      end,
-      desc = "Agentic Restore session",
-      silent = true,
-      mode = { "n", "v", "i" },
-    },
-    {
-      "<leader>ad", -- ai Diagnostics
-      function()
-          require("agentic").add_current_line_diagnostics()
-      end,
-      desc = "Add current line diagnostic to Agentic",
-      mode = { "n" },
-    },
-    {
-      "<leader>aD", -- ai all Diagnostics
-      function()
-          require("agentic").add_buffer_diagnostics()
-      end,
-      desc = "Add all buffer diagnostics to Agentic",
-      mode = { "n" },
-    },
-  },
-}
-```
-
-## ⚙️ Configuration
-
-You don't have to copy and paste anything from the default config, linking it
-here for ease access and reference:
-[`lua/agentic/config_default.lua`](lua/agentic/config_default.lua).
-
-### Customizing ACP Providers
-
-You can customize the supported ACP providers by configuring the `acp_providers`
-property:
-
-> [!NOTE]  
-> You don't have to override anything or include these in your setup!  
-> These are just examples of how you can customize the commands, env, etc.
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    acp_providers = {
-      -- Override existing provider (e.g., add API key)
-      -- Agentic.nvim doesn't require API keys
-      -- Only add it if that's how you prefer to authenticate
-      ["claude-agent-acp"] = {
-        env = {
-          ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY"),
-        },
-      },
-
-      -- Example of how override the ACP command to suit your installation, if needed
-      ["codex-acp"] = {
-        command = "~/.local/bin/codex-acp",
-      },
-    },
-  },
-}
-```
-
-**Provider Configuration Fields:**
-
-- `command` (string) - The CLI command to execute (must be in PATH or absolute
-  path)
-- `args` (table, optional) - Array of command-line arguments
-- `env` (table, optional) - Environment variables to set for the process
-- `default_mode` (string, optional) - Default mode ID to set on session creation
-  (e.g., `"bypassPermissions"`, `"plan"`)
-
-> [!NOTE]  
-> Customizing a provider only requires specifying the fields you want to
-> override, not the entire configuration.
-
-#### Setting a Default Agent Mode
-
-If you prefer a specific agent mode other than the provider's default, you can
-configure it per provider:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    acp_providers = {
-      ["claude-agent-acp"] = {
-        -- Automatically switch to this mode when a new session starts
-        default_mode = "bypassPermissions",
-      },
-    },
-  },
-}
-```
-
-The mode will only be set if it's available from the provider. Use `<S-Tab>` to
-see available modes for your provider.
-
-### Window Layout
-
-Configure the widget layout position and sizing:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    windows = {
-      position = "right",  -- "right", "left", or "bottom"
-      width = "40%",       -- Sidebar width (position = "right" or "left")
-      height = "30%",      -- Panel height (position = "bottom")
-    },
-  },
-}
-```
-
-- `position` - Widget layout: `"right"` or `"left"` (vertical sidebar) or
-  `"bottom"` (horizontal panel)
-- `width` - Sidebar width when `position` is right or left (percentage, decimal,
-  or absolute)
-- `height` - Panel height when `position = "bottom"` (percentage, decimal, or
-  absolute)
-
-### Rotating Layouts dynamically at runtime
-
-You can rotate between layouts, dynamically, without closing Neovim with
-`rotate_layout()`:
-
-```lua
--- Rotates through all three layouts: right → bottom → left → right ...
-require("agentic").rotate_layout()
-
--- Rotates between right and bottom only
-require("agentic").rotate_layout({ "right", "bottom" })
-
--- Rotates between right and left only
-require("agentic").rotate_layout({ "right", "left" })
-```
-
-### Customizing Window Options
-
-You can customize the behavior of individual chat widget windows by configuring
-the `win_opts` property for each window. These options override the default
-window settings.
-
-### Text Wrapping
-
-By default, chat text is hard-wrapped to fit the window width (capped at
-`max_wrap_width` columns). This keeps lines readable without enabling Neovim's
-`wrap` option.
-
-If you prefer Neovim's native soft wrapping instead, enable `wrap` on the chat
-window — hard wrapping is automatically disabled:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    windows = {
-      max_wrap_width = 80, -- cap hard wrapping (default: 80, 0 = window width)
-      chat = {
-        win_opts = { wrap = true, linebreak = true }, -- soft wrap, no hard breaks
-      },
-    },
-  },
-}
-```
-
-### Customizing Window Headers
-
-You can customize the header text for each panel in the chat widget using either
-a table configuration or a custom render function.
-
-#### Table-Based Configuration
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    headers = {
-      chat = {
-        title = "󰻞 My Custom Chat Title",
-        suffix = "<S-Tab>: change mode",
-      },
-      -- ...
-    },
-  },
-}
-```
-
-#### Function-Based Configuration
-
-For complete control over header rendering, provide a function that receives the
-header parts:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    headers = {
-      chat = function(parts)
-        local header = parts.title
-        if parts.context then
-          header = header .. " [" .. parts.context .. "]"
-        end
-        if parts.suffix then
-          header = header .. " • " .. parts.suffix
-        end
-        return header
-      end,
-    },
-  },
-}
-```
-
-## 🚀 Usage (Public Lua API)
-
-### Commands
-
-| Function                                                     | Description                                                       |
-| ------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `:lua require("agentic").toggle()`                           | Toggle chat sidebar                                               |
-| `:lua require("agentic").toggle_tab()`                       | Toggle in a dedicated tab (creates/closes tab automatically)      |
-| `:lua require("agentic").open()`                             | Open chat sidebar (keep open if already visible)                  |
-| `:lua require("agentic").close()`                            | Close chat sidebar                                                |
-| `:lua require("agentic").send_prompt(text)`                  | Send arbitrary text as a prompt (for custom keymaps)              |
-| `:lua require("agentic").add_selection()`                    | Add visual selection to context                                   |
-| `:lua require("agentic").add_file()`                         | Add current file to context                                       |
-| `:lua require("agentic").add_selection_or_file_to_context()` | Add selection (if any) or file to the context                     |
-| `:lua require("agentic").add_current_line_diagnostics()`     | Add diagnostics at cursor line to context                         |
-| `:lua require("agentic").add_buffer_diagnostics()`           | Add all diagnostics from current buffer to context                |
-| `:lua require("agentic").new_session()`                      | Start new chat session, destroying and cleaning the current one   |
-| `:lua require("agentic").stop_generation()`                  | Stop current generation or tool execution (session stays active)  |
-| `:lua require("agentic").restore_session()`                  | Show session picker to restore a previous session and continue    |
-| `:lua require("agentic").switch_provider()`                  | Switch ACP provider mid-session (shows picker, preserves history) |
-| `:lua require("agentic").rotate_layout()`                    | Rotate window position through layouts (right → bottom → left)    |
-
-### Optional Parameters
-
-Open and Toggle supports optional parameter:
-
-- **auto_add_to_context** (boolean, default: `true`) - Whether to automatically
-  add the current visual selection or file to context when opening the Chat
-
-```lua
--- Open the chat without adding anything to context
-require("agentic").open({ auto_add_to_context = false })
-```
-
-When adding files or selections to context, you can also specify whether to
-focus the prompt input after opening the chat:
-
-- **focus_prompt** (boolean, default: `true`) - Whether to move cursor to prompt
-  input after opening the chat
-
-Available on: `add_selection(opts)`, `add_file(opts)`,
-`add_selection_or_file_to_context(opts)`, `add_current_line_diagnostics(opts)`,
-`add_buffer_diagnostics(opts)`
-
-```lua
--- Add selection without focusing the prompt
-require("agentic").add_selection({ focus_prompt = false })
-```
-
-### Built-in Keybindings
-
-These keybindings are automatically set in Agentic buffers:
-
-| Keybinding       | Mode  | Scope  | Description                                                     |
-| ---------------- | ----- | ------ | --------------------------------------------------------------- |
-| `<S-Tab>`        | n/v/i | widget | Switch agent mode (only available if provider supports modes)   |
-| `<C-c>`          | n/i   | widget | Stop current generation                                         |
-| `<localLeader>c` | n     | widget | Send "Continue" prompt                                          |
-| `<localLeader>R` | n     | widget | Restore a previous session (picker)                             |
-| `<localLeader>r` | n     | widget | Refresh chat (scroll to bottom)                                 |
-| `<localLeader>s` | n     | widget | Switch ACP provider (preserves chat history)                    |
-| `<localLeader>m` | n     | widget | Switch model (preserves chat history)                           |
-| `q`              | n     | widget | Close chat widget                                               |
-| `<CR>`           | n     | prompt | Submit prompt                                                   |
-| `<localLeader>p` | n     | prompt | Paste image from clipboard                                      |
-| `<C-v>`          | i     | prompt | Paste image from clipboard (same as Claude-code)                |
-| `[[`             | n     | chat   | Jump to previous user prompt                                    |
-| `]]`             | n     | chat   | Jump to next user prompt                                        |
-| `d`              | n     | panels | Remove file, code selection, or diagnostic at cursor            |
-| `d`              | v     | panels | Remove multiple selected files, code selections, or diagnostics |
-| `]c`             | n     | diff   | Navigate to next diff hunk (when diff preview is active)        |
-| `[c`             | n     | diff   | Navigate to previous diff hunk (when diff preview is active)    |
-
-#### Customizing Keybindings
-
-You can customize the default keybindings by configuring the `keymaps` option in
-your setup:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    keymaps = {
-      -- Keybindings for ALL buffers in the widget (chat, prompt, code, files)
-      widget = {
-        close = "q",  -- String for a single keybinding
-        change_mode = {
-          {
-            "<S-Tab>",
-            mode = { "i", "n", "v" },  -- Specify modes for this keybinding
-          },
-        },
-        continue = "<localLeader>c",          -- Send "Continue" prompt
-        restore_session = "<localLeader>R",   -- Restore previous session
-        refresh = "<localLeader>r",           -- Scroll chat to bottom
-        switch_provider = "<localLeader>s",   -- Switch ACP provider
-        switch_model = "<localLeader>m",      -- Switch model
-      },
-
-      -- Keybindings for the prompt buffer only
-      prompt = {
-        submit = {
-          "<CR>",  -- Normal mode, just Enter
-          {
-            "<C-s>",
-            mode = { "n", "v", "i" },
-          },
-        },
-
-        paste_image = {
-          {
-            "<localLeader>p",
-            mode = { "n" },
-          },
-          {
-            "<C-v>", -- Same as Claude-code in insert mode
-            mode = { "i" },
-          }
-        },
-      },
-
-      -- Keybindings for diff preview navigation
-      diff_preview = {
-        next_hunk = "]c",
-        prev_hunk = "[c",
-      },
-    },
-  },
-}
-```
-
-**Keymap Configuration Format:**
-
-- **String:** `close = "q"` - Simple keybinding (normal mode by default)
-- **Array:** `submit = { "<CR>", "<C-s>" }` - Multiple keybindings (normal mode
-  only)
-- **Table with mode:** `{ "<C-s>", mode = { "i", "v" } }` - Keybinding with
-  specific modes
-
-The header text in the chat and prompt buffers will automatically update to show
-the appropriate keybinding for the current mode.
-
-### Plug Mappings
-
-Agentic.nvim defines global `<Plug>` mappings for all public actions. These let
-you bind your preferred keys from any buffer without writing wrapper functions:
-
-```lua
--- Example lazy.nvim keys using <Plug> mappings
-keys = {
-    { "<leader>ii", "<Plug>(agentic-toggle-tab)", desc = "Toggle agent" },
-    { "<leader>if", "<Plug>(agentic-open)", desc = "Focus agent" },
-    { "<leader>iq", "<Plug>(agentic-close)", desc = "Close agent" },
-    { "<leader>in", "<Plug>(agentic-new-session)", desc = "New session" },
-    { "<leader>ib", "<Plug>(agentic-add-file)", desc = "Add current buffer" },
-    { "<leader>is", "<Plug>(agentic-send)", mode = "v", desc = "Send selection" },
-    { "<M-CR>", "<Plug>(agentic-send)", desc = "Agent send motion" },
-    { "<M-CR><M-CR>", "<Plug>(agentic-send-line)", desc = "Agent send line" },
-}
-```
-
-**Available `<Plug>` mappings:**
-
-| Mapping                              | Mode | Description                                   |
-| ------------------------------------ | ---- | --------------------------------------------- |
-| `<Plug>(agentic-toggle)`             | n    | Toggle chat sidebar                           |
-| `<Plug>(agentic-toggle-tab)`         | n    | Toggle in dedicated tab                       |
-| `<Plug>(agentic-open)`               | n    | Open chat sidebar                             |
-| `<Plug>(agentic-close)`              | n    | Close chat sidebar                            |
-| `<Plug>(agentic-send)`               | n    | Send motion to context (operator)             |
-| `<Plug>(agentic-send)`               | x    | Send visual selection to context              |
-| `<Plug>(agentic-send-line)`          | n    | Send current line to context                  |
-| `<Plug>(agentic-add-file)`           | n    | Add current file to context                   |
-| `<Plug>(agentic-add-selection)`      | x    | Add visual selection to context               |
-| `<Plug>(agentic-add-diagnostics)`    | n    | Add cursor line diagnostics to context        |
-| `<Plug>(agentic-add-buffer-diagnostics)` | n | Add all buffer diagnostics to context        |
-| `<Plug>(agentic-new-session)`        | n    | Start new session                             |
-| `<Plug>(agentic-new-session-provider)` | n  | New session with provider picker              |
-| `<Plug>(agentic-switch-provider)`    | n    | Switch provider mid-session                   |
-| `<Plug>(agentic-restore-session)`    | n    | Restore previous session (picker)             |
-| `<Plug>(agentic-stop)`               | n    | Stop current generation                       |
-| `<Plug>(agentic-rotate-layout)`      | n    | Rotate window layout                          |
-
-### Custom Prompt Keymaps
-
-Use `send_prompt()` to define keymaps that send predefined text to the agent.
-This is how the built-in `<localLeader>c` (continue) keymap works:
-
-```lua
--- Send "Continue" to nudge the agent to keep going
-vim.keymap.set("n", "<localLeader>c", function()
-    require("agentic").send_prompt("Continue")
-end)
-
--- Send a custom instruction
-vim.keymap.set("n", "<localLeader>e", function()
-    require("agentic").send_prompt("Explain the last error")
-end)
-```
-
-### Diff Preview
-
-When the agent makes file edits, agentic.nvim can show a preview of the changes
-before you accept or reject them. You can configure the diff preview layout:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    diff_preview = {
-      enabled = true,
-      layout = "split",  -- "split" or "inline"
-      center_on_navigate_hunks = true,
-    },
-  },
-}
-```
-
-**Layout Options:**
-
-- `"split"` (default) - Side-by-side diff view
-- `"inline"` - Unified diff view in a single buffer
-
-**Navigation:**
-
-Use `]c` and `[c` to navigate between diff hunks (configurable).
-
-**Note:** Changing the layout requires restarting Neovim.
-
-### Slash Commands
-
-Type `/` in the Prompt buffer to see available slash commands with
-auto-completion.
-
-The `/new` command is always available to start a new session, other commands
-are provided by your ACP provider.
-
-### File Picker
-
-You can reference and add files to the context by typing `@` in the Prompt.  
-It will trigger the native Neovim completion menu with a list of all files in
-the current workspace.
-
-- **Automatic scanning**: Uses `rg`, `fd`, `git ls-files`, or lua globs as
-  fallback
-- **Fuzzy filtering**: uses Neovim's native completion to filter results as you
-  type
-- **Multiple files**: You can reference multiple files in one prompt:
-  `@file1.lua @file2.lua`
-
-### Image and Screenshots support
-
-You can drag-and-drop images into the Prompt buffer or paste images and
-screenshots directly from your clipboard.
-
-The support still depends on the ACP provider capabilities, but most of them
-support images in the conversation.
-
-Drag-and-drop should work out of the box if your terminal supports it, no need
-for extra configuration or plugins.
-
-But, if you want to paste screenshots directly from your clipboard, you'll need
-to install the `img-clip.nvim` dependency:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-
-  dependencies = {
-    { "hakonharnes/img-clip.nvim", opts = {} }
-  }
-
-  -- ... rest of your config
-}
-```
-
-Please note img-clip.nvim, on Linux depends on `xclip` (x11) or `wl-clipboard`
-(wayland), or `pngpaste` on macOS, Windows requires no extra dependencies.
-
-Then just press `<localleader>p` in the Prompt buffer to paste the image from
-your clipboard.
-
-NOTE: Due to Terminal and Neovim limitations, when pasting an image from the
-Clipboard, there's no way of intercepting it, as it's considered binary and not
-text, so either your Terminal or Neovim will just ignore and do nothing with it,
-that's why we need the help of the external plugin. It's totally out of our
-control.
-
-### Session Persistence and Restoration
-
-Agentic automatically saves your conversation history to disk, allowing you to
-restore previous sessions across Neovim restarts at any time.
-
-**Storage location:**
-
-Default: `~/.cache/nvim/agentic/sessions/<normalized_project_path>/`
-
-For example, if your project is at `/Users/me/projects/myapp`, sessions will be
-stored in:  
-`~/.cache/nvim/agentic/sessions/Users_me_projects_myapp_abc12345/`
-
-The hash is to avoid collisions with projects with similar paths.
-
-**Restoring sessions:**
-
-Call `require("agentic").restore_session()` to open a session picker with a
-preview pane showing the conversation history. Sessions are displayed as
-`<first user message> (YYYY-MM-DD HH:MM)`, sorted by most recent first. The
-preview shows the end of the conversation by default.
-
-**Conflict handling:**
-
-If you try to restore a session when the current tab already has an active
-conversation, you'll be prompted to:
-
-- **Restore here (replace current)** — clear the current session and restore the
-  selected one
-- **Open in new tab** — keep the current session and restore in a new tabpage
-
-**Picker backends:**
-
-The default picker uses [fzf-lua](https://github.com/ibhagwan/fzf-lua) with a
-preview pane showing the conversation history. If fzf-lua is not installed, it
-falls back to `vim.ui.select` automatically.
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    session_restore = {
-      picker = "fzf-lua",  -- default, with preview (requires fzf-lua)
-      -- picker = "builtin", -- vim.ui.select fallback (no preview, no deps)
-    },
-  },
-}
-```
-
-**Customizing storage location:**
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    session_restore = {
-      -- Custom storage path (default: nil uses ~/.cache/nvim/agentic/sessions/)
-      storage_path = vim.fn.expand("~/OneDrive/agentic_sessions/"),
-    },
-  },
-}
-```
-
-**What gets saved:**
-
-- User prompts and agent responses
-- Tool calls with their arguments and results
-- Agent thinking/reasoning blocks
-- Session metadata (timestamp, title)
-
-### System Information
-
-Agentic automatically includes environment and project information in the first
-message of each session:
-
-- Platform information (OS, version, architecture)
-- Shell and Neovim version
-- Current date
-- Git repository status (if applicable):
-  - Current branch
-  - Changed files
-  - Recent commits (last 3)
-- Project root path
-
-This helps the AI Agent understand the context of the current project without
-having to run additional commands or grep through files, the goals is to reduce
-time for the first response.
-
-### Event Hooks
-
-Agentic.nvim provides hooks that let you respond to specific events during the
-chat lifecycle. These are useful for logging, notifications, analytics, or
-integrating with other plugins.
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    hooks = {
-      -- Called when the user submits a prompt
-      on_prompt_submit = function(data)
-        -- data.prompt: string - The user's prompt text
-        -- data.session_id: string - The ACP session ID
-        -- data.tab_page_id: number - The Neovim tabpage ID
-        vim.notify("Prompt submitted: " .. data.prompt:sub(1, 50))
-      end,
-
-      -- Called when the agent finishes responding
-      on_response_complete = function(data)
-        -- data.session_id: string - The ACP session ID
-        -- data.tab_page_id: number - The Neovim tabpage ID
-        -- data.success: boolean - Whether response completed without error
-        -- data.error: table|nil - Error details if failed
-        if data.success then
-          vim.notify("Agent finished!", vim.log.levels.INFO)
-        else
-          vim.notify("Agent error: " .. vim.inspect(data.error), vim.log.levels.ERROR)
-        end
-      end,
-
-      -- Called when the agent requests permission (e.g. before file edits)
-      on_permission_request = function(data)
-        -- data.session_id: string - The ACP session ID
-        -- data.tab_page_id: number - The tabpage ID
-        -- data.tool_call_id: string - The tool call requesting permission
-      end,
-    }
-  }
-}
-```
-
-### Notifications
-
-Built-in notification support, useful for getting alerted when the agent needs
-attention.
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    notifications = {
-      -- Ring vim bell on response complete and permission request.
-      -- Respects 'belloff' and 'visualbell' settings.
-      bell = false,
-    },
-  }
-}
-```
-
-## 🍚 Customization (Ricing)
-
-Agentic.nvim uses custom highlight groups that you can override to match your
-colorscheme.
-
-### Available Highlight Groups
-
-| Highlight Group          | Purpose                                  | Default                             |
-| ------------------------ | ---------------------------------------- | ----------------------------------- |
-| `AgenticDiffDelete`      | Deleted lines in diff view               | Links to `DiffDelete`               |
-| `AgenticDiffAdd`         | Added lines in diff view                 | Links to `DiffAdd`                  |
-| `AgenticDiffDeleteWord`  | Word-level deletions in diff             | `bg=#9a3c3c, bold=true`             |
-| `AgenticDiffAddWord`     | Word-level additions in diff             | `bg=#155729, bold=true`             |
-| `AgenticStatusPending`   | Pending tool call status indicator       | `bg=#5f4d8f`                        |
-| `AgenticStatusCompleted` | Completed tool call status indicator     | `bg=#2d5a3d`                        |
-| `AgenticStatusFailed`    | Failed tool call status indicator        | `bg=#7a2d2d`                        |
-| `AgenticCodeBlockFence`  | The left border decoration on tool calls | Links to `Directory`                |
-| `AgenticSearchMatch`     | Matched pattern text in search output    | Links to `Search`                   |
-| `AgenticGrepPath`        | File path in grep output lines           | Links to `@string.special.path`     |
-| `AgenticGrepLineNr`      | Line number in grep output lines         | Links to `LineNr`                   |
-| `AgenticGrepSeparator`   | Colon/dash separators in grep output     | Links to `Delimiter`                |
-| `AgenticErrorHeading`    | Error heading text                       | Links to `DiagnosticError`          |
-| `AgenticErrorBody`       | Error body/detail text                   | Links to `DiagnosticVirtualTextError` |
-| `AgenticTitle`           | Window titles in sidebar                 | `bg=#2787b0, fg=#000000, bold=true` |
-
-If any of these highlight exists, Agentic will use it instead of creating new
-ones.
-
-### Customizing Diagnostic Icons
-
-You can customize the icons used for diagnostics in the context panel:
-
-```lua
-{
-  "carlos-algms/agentic.nvim",
-  opts = {
-    diagnostic_icons = {
-      error = "❌",
-      warn = "⚠️",
-      info = "ℹ️",
-      hint = "✨",
-    },
-  },
-}
-```
-
-Default icons use emoji characters (❌, ⚠️, ℹ️, ✨) but you can use any string,
-including Nerd Font icons or plain text.
-
-## Integration with other Plugins
-
-### Prompt suggestions with Copilot
-
-To get Copilot suggestions while you are typing your prompt, you need to tell
-Copilot to attach to the `AgenticInput` filetype.
-
-#### copilot.vim
-
-```lua
-{
-  "github/copilot.vim",
-   -- ....
-  init = function()
-      vim.g.copilot_filetypes = {
-          AgenticInput = true,
-      }
-  end,
-}
-```
-
-#### copilot.lua
-
-```lua
-{
-  "zbirenbaum/copilot.lua",
-  -- ....
-  opts = {
-    -- Override should_attach to allow copilot in AgenticInput buffers
-    -- AgenticInput uses buftype = "nofile" which copilot.lua rejects by default
-    should_attach = function(bufnr, bufname)
-      local filetype = vim.bo[bufnr].filetype
-
-      if filetype == "AgenticInput" then
-          return true
-      end
-
-      -- Delegate to default behavior for all other buffers
-      local default_should_attach =
-          require("copilot.config.should_attach").default
-      return default_should_attach(bufnr, bufname)
-    end,
-  },
-}
-```
-
-### Lualine
-
-If you're using [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim) or
-similar statusline plugins, configure it to ignore Agentic windows to prevent
-conflicts with custom window decorations:
-
-```lua
-require('lualine').setup({
-  options = {
-    disabled_filetypes = {
-      statusline = { 'AgenticChat', 'AgenticInput', 'AgenticCode', 'AgenticFiles', 'AgenticDiagnostics' },
-      winbar = { 'AgenticChat', 'AgenticInput', 'AgenticCode', 'AgenticFiles', 'AgenticDiagnostics' },
-    }
-  }
+require("agentic").setup({
+    provider = "claude-agent-acp",
+    -- ... any overrides
 })
 ```
 
-This ensures that Agentic's custom window titles and statuslines render
-correctly without interference from your statusline plugin.
+## Lua API
 
-### Incline.nvim
+| Function | Description |
+|---|---|
+| `require("agentic").toggle()` | Toggle chat sidebar |
+| `require("agentic").toggle_tab()` | Toggle in dedicated tab |
+| `require("agentic").open()` | Open chat sidebar |
+| `require("agentic").close()` | Close chat sidebar |
+| `require("agentic").send_prompt(text)` | Send text as prompt |
+| `require("agentic").add_selection()` | Add visual selection to context |
+| `require("agentic").add_file()` | Add current file to context |
+| `require("agentic").add_selection_or_file_to_context()` | Add selection or file |
+| `require("agentic").add_current_line_diagnostics()` | Add cursor line diagnostics |
+| `require("agentic").add_buffer_diagnostics()` | Add all buffer diagnostics |
+| `require("agentic").new_session()` | Start new session |
+| `require("agentic").stop_generation()` | Stop current generation |
+| `require("agentic").restore_session()` | Restore previous session |
+| `require("agentic").switch_provider()` | Switch ACP provider |
+| `require("agentic").rotate_layout()` | Rotate window position |
 
-If you use [incline.nvim](https://github.com/b0o/incline.nvim) to show buffer
-names in the winbar and want to display Agentic's context percentage or mode in
-the label, read `vim.t.agentic_headers` in your render function and listen for
-the `AgenticHeadersChanged` User event to trigger re-renders:
+## Built-in keybindings
 
-```lua
--- In incline setup (render function):
-render = function(props)
-  if vim.bo[props.buf].filetype == "AgenticChat" then
-    local headers = vim.t.agentic_headers
-    local label = "󰻞 Claude"
-    if headers and headers.chat and headers.chat.context then
-      label = label .. " " .. headers.chat.context
-    end
-    return { { label } }
-  end
-  -- ... normal file rendering
-end
+Set automatically in Agentic buffers:
 
--- Refresh incline when header state changes (context %, mode, etc.)
-vim.api.nvim_create_autocmd("User", {
-  pattern = "AgenticHeadersChanged",
-  callback = function() require("incline").refresh() end,
-})
-```
+| Key | Mode | Scope | Description |
+|---|---|---|---|
+| `<S-Tab>` | n/v/i | widget | Switch agent mode |
+| `<C-c>` | n/i | widget | Stop generation |
+| `<localLeader>c` | n | widget | Send "Continue" |
+| `<localLeader>R` | n | widget | Restore session |
+| `<localLeader>r` | n | widget | Refresh (scroll to bottom) |
+| `<localLeader>s` | n | widget | Switch provider |
+| `<localLeader>m` | n | widget | Switch model |
+| `<localLeader>q` | n | widget | Close widget |
+| `<localLeader>!` | n | widget | Restart session |
+| `<CR>` | n | prompt | Submit |
+| `<localLeader>p` | n | prompt | Paste image |
+| `<C-v>` | i | prompt | Paste image |
+| `[[` / `]]` | n | chat | Prev/next user prompt |
+| `d` | n/v | panels | Remove item at cursor |
+| `]c` / `[c` | n | diff | Next/prev diff hunk |
+| `1`-`5` | n | widget | Permission responses (while prompt active) |
 
-### Markdown render plugins
+## Plug mappings
 
-Only the `AgenticChat` buffer is properly set as `markdown` and starts
-Treesitter parser, you only need to mention it in your markdown render plugin
-setup.
+Global `<Plug>` mappings for binding from any buffer:
 
-```lua
-{
-  "MeanderingProgrammer/render-markdown.nvim",
-  -- ...
-  opts = {
-    file_types = { "markdown", "md", "AgenticChat" },
-  }
-}
-```
+| Mapping | Mode | Description |
+|---|---|---|
+| `<Plug>(agentic-toggle)` | n | Toggle sidebar |
+| `<Plug>(agentic-toggle-tab)` | n | Toggle in tab |
+| `<Plug>(agentic-open)` | n | Open sidebar |
+| `<Plug>(agentic-close)` | n | Close sidebar |
+| `<Plug>(agentic-send)` | n/x | Send motion/selection |
+| `<Plug>(agentic-send-line)` | n | Send current line |
+| `<Plug>(agentic-add-file)` | n | Add file to context |
+| `<Plug>(agentic-add-selection)` | x | Add selection |
+| `<Plug>(agentic-add-diagnostics)` | n | Add cursor diagnostics |
+| `<Plug>(agentic-add-buffer-diagnostics)` | n | Add all buffer diagnostics |
+| `<Plug>(agentic-new-session)` | n | New session |
+| `<Plug>(agentic-new-session-provider)` | n | New session with provider picker |
+| `<Plug>(agentic-switch-provider)` | n | Switch provider |
+| `<Plug>(agentic-restore-session)` | n | Restore session |
+| `<Plug>(agentic-stop)` | n | Stop generation |
+| `<Plug>(agentic-rotate-layout)` | n | Rotate layout |
 
-### Blink.cmp
+## Highlight groups
 
-Agentic's `/` and `@` completions are served by an in-process LSP server that
-any LSP-aware completion framework picks up automatically. Since `/` is also a
-path separator, the `path` source may rank filesystem paths above slash commands.
-To control source priority for the prompt buffer, use `per_filetype`:
+Override these to match your colourscheme. All use `default = true`, so your definitions take priority.
 
-```lua
-require('blink.cmp').setup({
-  sources = {
-    per_filetype = {
-      -- Only LSP (slash commands, @ mentions) and buffer words in the prompt.
-      -- Add "path", "snippets", etc. if you want them alongside.
-      AgenticInput = { "lsp", "buffer" },
-    },
-  },
-})
-```
+| Group | Purpose | Default link |
+|---|---|---|
+| `AgenticDiffDelete` | Deleted lines in diff | `DiffDelete` |
+| `AgenticDiffAdd` | Added lines in diff | `DiffAdd` |
+| `AgenticDiffDeleteWord` | Word-level deletions | `DiffText` |
+| `AgenticDiffAddWord` | Word-level additions | `DiffText` |
+| `AgenticStatusPending` | Pending tool call | `DiagnosticVirtualTextHint` |
+| `AgenticStatusCompleted` | Completed tool call | `DiagnosticVirtualTextOk` |
+| `AgenticStatusFailed` | Failed tool call | `DiagnosticVirtualTextError` |
+| `AgenticCodeBlockFence` | Code block fences | `NonText` |
+| `AgenticToolKind` | Tool call kind heading | `Function` |
+| `AgenticToolArgument` | Tool call argument | `String` |
+| `AgenticSearchMatch` | Search pattern match | `Search` |
+| `AgenticGrepPath` | File path in grep output | `@string.special.path` |
+| `AgenticGrepLineNr` | Line number in grep output | `LineNr` |
+| `AgenticGrepSeparator` | Separators in grep output | `Delimiter` |
+| `AgenticSlashCommandPrefix` | `/` prefix | `@punctuation.special` |
+| `AgenticSlashCommand` | Slash command body | `@function.call` |
+| `AgenticMentionPrefix` | `@` prefix | `@punctuation.special` |
+| `AgenticMention` | Mention body | `@string.special.path` |
+| `AgenticErrorHeading` | Error heading | `DiagnosticError` |
+| `AgenticErrorBody` | Error body | `DiagnosticVirtualTextError` |
+| `AgenticSpinnerGenerating` | Generating spinner | `DiagnosticWarn` |
+| `AgenticSpinnerThinking` | Thinking spinner | `Special` |
+| `AgenticSpinnerSearching` | Searching spinner | `DiagnosticInfo` |
+| `AgenticSpinnerBusy` | Busy spinner | `Comment` |
+| `AgenticDimmedBlock` | Dimmed code fence lines | (set in ftplugin) |
 
-To disable `blink.cmp` on the prompt buffer entirely:
-
-```lua
-require('blink.cmp').setup({
-  enabled = function()
-    return not vim.tbl_contains({"AgenticInput"}, vim.bo.filetype)
-  end,
-})
-```
-
-### nvim-cmp
-
-You can disable `nvim-cmp` from attaching to Agentic prompt buffers by using
-filetype-specific setup or the `enabled` option:
-
-```lua
--- Option 1: Filetype-specific setup (disable all sources)
-require('cmp').setup.filetype('AgenticInput', {
-  sources = {}
-})
-
--- Option 2: Global enabled function
-require('cmp').setup({
-  enabled = function()
-    return not vim.tbl_contains({"AgenticInput"}, vim.bo.filetype)
-  end,
-})
-```
-
-## 🔧 Development
-
-### Health Check
-
-Verify your installation and dependencies:
+## Health check
 
 ```vim
 :checkhealth agentic
 ```
 
-This will check:
-
-- Neovim version (≥ 0.11.0 required)
-- Current ACP provider installation (We don't install them for security reasons)
-- Optional ACP providers (so you know which ones are available and can use at
-  any time)
-- Node.js and package managers (Most of the ACP CLIs require Node.js to install
-  and run, some have native binaries too, we don't have control over that, it up
-  to the Creators)
-
-### Debug Mode
-
-Enable debug logging to troubleshoot issues:
+## Debug mode
 
 ```lua
-{
-   "carlos-algms/agentic.nvim",
-    opts = {
-      debug = true,
-      -- ... rest of your options
-    }
-}
+require("agentic").setup({ debug = true })
 ```
 
-View debug logs with `:messages` (lost after restarting Neovim)
+View logs with `:messages` or in `~/.cache/nvim/agentic_debug.log`.
 
-View messages exchanged with the ACP provider in the log file at:  
-(persistent until you delete it)
+## Licence
 
-- `~/.cache/nvim/agentic_debug.log`
+[MIT](LICENSE.txt)
 
-## 📚 Resources
-
-- [Agent Client Protocol Documentation](https://agentclientprotocol.com)
-
-## 📄 License
-
-[MIT License](LICENSE.txt)  
-Feel free to copy, modify, and distribute, just be a good samaritan and include
-the the acknowledgments 😊.
-
-## 🙏 Acknowledgments
-
-- Built on top of the [Agent Client Protocol](https://agentclientprotocol.com)
-  specification
-- [CopilotChat.nvim](https://github.com/CopilotC-Nvim/CopilotChat.nvim) - for
-  being my entrance point of chatting with AI in Neovim
-- [codecompanion.nvim](https://github.com/olimorris/codecompanion.nvim) - for
-  the buffer writing inspiration
-- [avante.nvim](https://github.com/yetone/avante.nvim) - for the ACP client code
-  and sidebar structured with multiple panels
-
-[claude-agent-acp]: https://github.com/zed-industries/claude-agent-acp
-[claude-agent-acp-releases]:
-  https://github.com/zed-industries/claude-agent-acp/releases
-[gemini-cli]: https://github.com/gemini-cli/gemini-cli
-[codex-acp]: https://github.com/zed-industries/codex-acp
-[codex-acp-releases]: https://github.com/zed-industries/codex-acp/releases
-[opencode]: https://github.com/sst/opencode
-[cursor-agent]: https://github.com/blowmage/cursor-agent-acp-npm
-[auggie]: https://www.npmjs.com/package/@augmentcode/auggie
-[auggie-docs]: https://docs.augmentcode.com/cli/setup-auggie
-[mistral-vibe]: https://github.com/mistralai/mistral-vibe
-[mistral-vibe-releases]: https://github.com/mistralai/mistral-vibe/releases
-[preview-diff-side-by-side-image]:
-  https://github.com/user-attachments/assets/aef778af-815c-412b-a514-e3dec4280b6d
-[preview-diff-inline-image]:
-  https://github.com/user-attachments/assets/6f824ec9-023b-4cc4-aca6-647a6b191183
+Based on [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim). Built on the [Agent Client Protocol](https://agentclientprotocol.com).
