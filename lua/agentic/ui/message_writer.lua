@@ -1615,6 +1615,9 @@ function MessageWriter:_prepare_block_lines(tool_call_block)
         if pattern and pattern ~= "" then
             local ok, regex = pcall(vim.regex, "\\v" .. pattern)
             if ok then
+                if not tool_call_block.search_matches then
+                    tool_call_block.search_matches = {}
+                end
                 for i = 1, body_count do
                     local line = body[i]
                     local line_index = bstart + i - 1
