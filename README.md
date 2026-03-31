@@ -54,6 +54,7 @@ require("agentic").setup({
 | `require("agentic").stop_generation()` | Stop current generation |
 | `require("agentic").restore_session()` | Restore previous session |
 | `require("agentic").switch_provider()` | Switch ACP provider |
+| `require("agentic").load_acp_session(id, cwd)` | Load session by UUID |
 | `require("agentic").rotate_layout()` | Rotate window position |
 
 ## Built-in keybindings
@@ -101,6 +102,23 @@ Global `<Plug>` mappings for binding from any buffer:
 | `<Plug>(agentic-restore-session)` | n | Restore session |
 | `<Plug>(agentic-stop)` | n | Stop generation |
 | `<Plug>(agentic-rotate-layout)` | n | Rotate layout |
+
+## User autocmds
+
+| Pattern | Data | Fired when |
+|---|---|---|
+| `AgenticSessionChanged` | `{ session_id = "uuid" }` | Session ID assigned (new session, `/new`, `/clear`, session load) |
+
+Example: track the active session ID for external tooling (e.g. terminal session restore):
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+    pattern = "AgenticSessionChanged",
+    callback = function(ev)
+        vim.g.agentic_session_id = ev.data.session_id
+    end,
+})
+```
 
 ## Highlight groups
 

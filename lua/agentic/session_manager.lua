@@ -1044,6 +1044,10 @@ function SessionManager:new_session(opts)
         self.session_id = response.sessionId
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
+        vim.api.nvim_exec_autocmds("User", {
+            pattern = "AgenticSessionChanged",
+            data = { session_id = response.sessionId },
+        })
 
         if response.configOptions then
             Logger.debug("Provider announce configOptions")
@@ -1125,6 +1129,10 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
     self.session_id = session_id
     self.chat_history.session_id = session_id
     self.chat_history.timestamp = os.time()
+    vim.api.nvim_exec_autocmds("User", {
+        pattern = "AgenticSessionChanged",
+        data = { session_id = session_id },
+    })
 
     --- @type agentic.acp.ClientHandlers
     local handlers = {
