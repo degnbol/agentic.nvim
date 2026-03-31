@@ -32,6 +32,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field on_submit_input fun(prompt: string) external callback to be called when user submits the input
+--- @field on_refresh? fun() external callback for manual refresh (reset stale state, scroll)
 --- @field on_hide? fun() external callback called after the widget is hidden
 --- @field _hiding boolean re-entrancy guard for hide()
 local ChatWidget = {}
@@ -483,15 +484,13 @@ function ChatWidget:_bind_keymaps()
             Config.keymaps.widget.refresh,
             bufnr,
             function()
-                local chat_win = self.win_nrs.chat
-                if chat_win and vim.api.nvim_win_is_valid(chat_win) then
-                    vim.api.nvim_win_call(chat_win, function()
-                        vim.cmd("normal! G0zb")
-                    end)
-                    vim.cmd.redraw()
+                if self.on_refresh then
+                    self.on_refresh()
                 end
             end,
-            { desc = "Agentic: Refresh chat (scroll to bottom)" }
+            {
+                desc = "Agentic: Refresh chat (reset stale state, scroll to bottom)",
+            }
         )
     end
 

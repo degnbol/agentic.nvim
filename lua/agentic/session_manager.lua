@@ -73,6 +73,7 @@ end
 --- @field _pending_input? string Prompt queued before the ACP session is ready
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
+--- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -117,6 +118,7 @@ function SessionManager:new(tab_page_id)
         _last_edited_md = nil,
         --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
         _plan_exit_pending = false,
+        _retry_attempt = 0,
     }, self)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
@@ -152,6 +154,10 @@ function SessionManager:new(tab_page_id)
     self.widget = ChatWidget:new(tab_page_id, function(input_text)
         self:_handle_input_submit(input_text)
     end)
+
+    self.widget.on_refresh = function()
+        self:_refresh()
+    end
 
     self.widget.on_hide = function()
         if #self.chat_history.messages == 0 then
@@ -318,6 +324,21 @@ function SessionManager:_on_session_update(update)
             { title = "⚠️ Unknown session update" }
         )
     end
+end
+
+--- Manual refresh: reset stale generating state and scroll to bottom.
+--- Workaround for when the display gets out of sync (e.g. background task
+--- completion, or the prompt response callback racing with a new turn).
+function SessionManager:_refresh()
+    if self.is_generating then
+        -- If nothing is actually streaming, the state is stale — reset it.
+        -- If a turn IS active, this is harmless: the next response callback
+        -- will set is_generating = false anyway.
+        self.is_generating = false
+        self.status_animation:stop()
+    end
+
+    self.message_writer:scroll_to_bottom()
 end
 
 --- Display context usage info locally (intercepted /context command)
@@ -918,42 +939,49 @@ function SessionManager:_handle_input_submit_inner(input_text)
     self.is_generating = true
 
     self.agent:send_prompt(self.session_id, prompt, function(_response, err)
-        vim.schedule(function()
-            self.is_generating = false
+        -- This callback already runs inside vim.schedule (from _handle_message).
+        -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
+        -- creating a race where a fast follow-up prompt sets is_generating=true
+        -- before the previous turn's cleanup sets it back to false, permanently
+        -- desynchronising the generating state ("stuck 1 message behind").
+        self.is_generating = false
 
-            if err then
-                local error_type, reset_epoch =
-                    self.message_writer:write_error_message(err)
-                if error_type == "authentication_error" then
-                    self:_offer_reauth()
-                elseif error_type == "usage_limit" and reset_epoch then
-                    self:_offer_auto_continue(reset_epoch)
+        if err then
+            local error_type, reset_epoch =
+                self.message_writer:write_error_message(err)
+            if error_type == "authentication_error" then
+                self:_offer_reauth()
+            elseif error_type == "usage_limit" and reset_epoch then
+                self:_offer_auto_continue(reset_epoch)
+            else
+                self._retry_attempt = 0
+            end
+        else
+            self._retry_attempt = 0
+        end
+
+        self.message_writer:append_separator()
+        self.message_writer:scroll_to_bottom()
+
+        self.status_animation:stop()
+
+        SessionManager._ring_bell()
+
+        P.invoke_hook("on_response_complete", {
+            session_id = session_id,
+            tab_page_id = tab_page_id,
+            success = err == nil,
+            error = err,
+        })
+
+        -- Save chat history after successful turn completion
+        if not err then
+            chat_history:save(function(save_err)
+                if save_err then
+                    Logger.debug("Chat history save error:", save_err)
                 end
-            end
-
-            self.message_writer:append_separator()
-            self.message_writer:scroll_to_bottom()
-
-            self.status_animation:stop()
-
-            SessionManager._ring_bell()
-
-            P.invoke_hook("on_response_complete", {
-                session_id = session_id,
-                tab_page_id = tab_page_id,
-                success = err == nil,
-                error = err,
-            })
-
-            -- Save chat history after successful turn completion
-            if not err then
-                chat_history:save(function(save_err)
-                    if save_err then
-                        Logger.debug("Chat history save error:", save_err)
-                    end
-                end)
-            end
-        end)
+            end)
+        end
     end)
 end
 
@@ -1270,7 +1298,8 @@ function SessionManager:_run_reauth()
 end
 
 --- Cancel a pending auto-continue timer and remove the cancel keymap.
-function SessionManager:_cancel_retry_timer()
+--- @param reset_attempts? boolean Also reset the retry attempt counter (default: true)
+function SessionManager:_cancel_retry_timer(reset_attempts)
     if self._retry_timer then
         self._retry_timer:stop()
         self._retry_timer:close()
@@ -1283,6 +1312,10 @@ function SessionManager:_cancel_retry_timer()
             pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
         end
         self._retry_keymap = nil
+    end
+
+    if reset_attempts ~= false then
+        self._retry_attempt = 0
     end
 end
 
@@ -1301,25 +1334,60 @@ local function format_duration(seconds)
 end
 
 --- Schedule auto-continue after a usage limit error.
+--- On the first attempt, waits until `reset_epoch + 2 min`. On subsequent
+--- attempts (provider's reset time was inaccurate), retries with a fixed
+--- 5-minute backoff. Gives up after 3 consecutive attempts.
 --- @param reset_epoch number Epoch seconds when usage resets
 function SessionManager:_offer_auto_continue(reset_epoch)
     if not Config.auto_continue_on_usage_limit then
         return
     end
 
-    self:_cancel_retry_timer()
+    local MAX_RETRIES = 3
+    local RETRY_BACKOFF_S = 5 * 60 -- 5 minutes
 
-    local delay_s = math.max(reset_epoch - os.time(), 10)
-    -- Add a small buffer to avoid racing the exact reset moment
-    delay_s = delay_s + 30
-    local reset_time = os.date("%H:%M", reset_epoch)
+    if self._retry_attempt >= MAX_RETRIES then
+        self.message_writer:write_error_action(
+            string.format(
+                "Auto-continue gave up after %d attempts. Send a message manually when usage resets.",
+                MAX_RETRIES
+            )
+        )
+        self._retry_attempt = 0
+        return
+    end
+
+    self:_cancel_retry_timer(false)
+
+    local delay_s
+    if self._retry_attempt > 0 then
+        -- Previous auto-continue got another usage limit error — the provider's
+        -- reset time was inaccurate. Use a fixed backoff instead.
+        delay_s = RETRY_BACKOFF_S
+    else
+        delay_s = math.max(reset_epoch - os.time(), 10)
+        -- Add buffer to avoid racing the exact reset moment
+        delay_s = delay_s + 120
+    end
+
+    self._retry_attempt = self._retry_attempt + 1
+
+    local reset_time = os.date("%H:%M", os.time() + delay_s)
     local duration = format_duration(delay_s)
+    local attempt_suffix = self._retry_attempt > 1
+            and string.format(
+                " (attempt %d/%d)",
+                self._retry_attempt,
+                MAX_RETRIES
+            )
+        or ""
 
     self.message_writer:write_error_action(
         string.format(
-            "Auto-continuing at %s (in %s). Press [c] to cancel.",
+            "Auto-continuing at %s (in %s)%s. Press [c] to cancel.",
             reset_time,
-            duration
+            duration,
+            attempt_suffix
         )
     )
 
@@ -1343,7 +1411,7 @@ function SessionManager:_offer_auto_continue(reset_epoch)
         delay_s * 1000,
         0,
         vim.schedule_wrap(function()
-            self:_cancel_retry_timer()
+            self:_cancel_retry_timer(false)
 
             if self._destroyed then
                 return

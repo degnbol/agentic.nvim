@@ -186,6 +186,17 @@ describe("agentic.utils.TextWrap", function()
             end
         end)
 
+        --- Strip concealed markdown delimiters to compute visual width,
+        --- mirroring cell_visual_width logic.
+        local function visual_width(s)
+            s = s:gsub("`([^`]+)`", "%1")
+            s = s:gsub("%*%*%*(.-)%*%*%*", "%1")
+            s = s:gsub("%*%*(.-)%*%*", "%1")
+            s = s:gsub("%*(.-)%*", "%1")
+            s = s:gsub("~~(.-)~~", "%1")
+            return #s
+        end
+
         it("accounts for concealed backticks in table column widths", function()
             local lines = {
                 "| Name | Type |",
@@ -195,20 +206,83 @@ describe("agentic.utils.TextWrap", function()
             }
             local result = TextWrap.wrap_prose(lines, 80)
             assert.equal(4, #result)
-            -- All rows must have the same visual width (backtick pairs subtract 2 each)
-            local function visual_width(s)
-                local w = #s
-                for _ in s:gmatch("`[^`]+`") do
-                    w = w - 2
-                end
-                return w
-            end
             local vw1 = visual_width(result[1])
             for i = 2, #result do
                 assert.equal(vw1, visual_width(result[i]))
             end
             -- Rows with backticks have more bytes than rows without
             assert.is_true(#result[3] > #result[1])
+        end)
+
+        it(
+            "accounts for concealed bold markers in table column widths",
+            function()
+                local lines = {
+                    "| Name | Type |",
+                    "|---|---|",
+                    "| **foo** | string |",
+                    "| longname | **int** |",
+                }
+                local result = TextWrap.wrap_prose(lines, 80)
+                assert.equal(4, #result)
+                local vw1 = visual_width(result[1])
+                for i = 2, #result do
+                    assert.equal(vw1, visual_width(result[i]))
+                end
+                -- Rows with bold markers have more bytes than rows without
+                assert.is_true(#result[3] > #result[1])
+            end
+        )
+
+        it(
+            "accounts for concealed italic markers in table column widths",
+            function()
+                local lines = {
+                    "| Name | Type |",
+                    "|---|---|",
+                    "| *foo* | string |",
+                    "| longname | *int* |",
+                }
+                local result = TextWrap.wrap_prose(lines, 80)
+                assert.equal(4, #result)
+                local vw1 = visual_width(result[1])
+                for i = 2, #result do
+                    assert.equal(vw1, visual_width(result[i]))
+                end
+            end
+        )
+
+        it(
+            "accounts for concealed strikethrough markers in table column widths",
+            function()
+                local lines = {
+                    "| Name | Status |",
+                    "|---|---|",
+                    "| ~~removed~~ | old |",
+                    "| longername | current |",
+                }
+                local result = TextWrap.wrap_prose(lines, 80)
+                assert.equal(4, #result)
+                local vw1 = visual_width(result[1])
+                for i = 2, #result do
+                    assert.equal(vw1, visual_width(result[i]))
+                end
+            end
+        )
+
+        it("handles mixed concealed markers in table cells", function()
+            local lines = {
+                "| Name | Type | Note |",
+                "|---|---|---|",
+                "| **`foo`** | *string* | ~~old~~ |",
+                "| plain | plain | plain |",
+            }
+            local result = TextWrap.wrap_prose(lines, 80)
+            assert.equal(4, #result)
+            local vw1 = visual_width(result[1])
+            for i = 2, #result do
+                assert.equal(vw1, visual_width(result[i]))
+            end
         end)
 
         it("preserves escaped pipe characters in table cells", function()

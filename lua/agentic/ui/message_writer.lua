@@ -608,6 +608,16 @@ end
 --- Append trailing blank lines to separate from the next message.
 --- If streamed chunks preceded this call, reflow their prose first.
 function MessageWriter:append_separator()
+    -- Clear rejection suppression at turn boundary. Without this, a matched
+    -- rejection prefix leaves _suppressing_rejection=true and the old prefix
+    -- text in _rejection_buffer. The next turn's chunks are appended to that
+    -- buffer, so the prefix check always passes — permanently eating all
+    -- subsequent message content ("stuck 1 message behind").
+    if self._suppressing_rejection then
+        self._suppressing_rejection = false
+        self._rejection_buffer = ""
+    end
+
     self:_with_modifiable_and_notify_change(function(bufnr)
         self:_reflow_chunks(bufnr, true)
         self:_append_lines({ "" })

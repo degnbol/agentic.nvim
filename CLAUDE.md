@@ -109,6 +109,26 @@ Folding thresholds are configured per tool kind:
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
 
+## Cross-turn state hazards in MessageWriter
+
+MessageWriter carries mutable flags that persist across turns. Any flag set
+during a turn MUST be cleared at the turn boundary (`append_separator`) or on
+the next tool call — otherwise it silently corrupts all subsequent turns.
+
+Known hazards (and their reset points):
+
+| Flag | Set when | Reset in |
+|------|----------|----------|
+| `_suppressing_rejection` | Permission rejected | `append_separator`, `write_tool_call_block` |
+| `_rejection_buffer` | With above | With above |
+| `_last_wrote_tool_call` | Tool call block written | Next `write_message_chunk` |
+| `_chunk_start_line` | First streamed chunk | `_reflow_chunks(flush_all=true)` via `append_separator` |
+
+When adding new per-turn state to MessageWriter, always ensure it resets at the
+turn boundary. The `send_prompt` response callback (which calls
+`append_separator`) runs inside `vim.schedule` from `_handle_message` — do not
+add another `vim.schedule` wrapper or the cleanup races with the next turn.
+
 ## Input buffer completion
 
 Completion for `/` slash commands and `@` file references uses an in-process LSP

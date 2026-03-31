@@ -133,19 +133,23 @@ local function build_separator_cell(original, width)
 end
 
 --- Visual width of a table cell accounting for multibyte characters and
---- concealed backticks. At conceallevel=2 (the chat window default),
---- treesitter conceals the backtick delimiters of inline code spans, so each
---- `` `...` `` pair loses 2 visible columns. If a user changes conceallevel
+--- concealed markdown delimiters. At conceallevel=2 (the chat window default),
+--- treesitter conceals emphasis_delimiter and code_span_delimiter nodes, so
+--- delimiter characters are visually absent. If a user changes conceallevel
 --- after rendering, the table will look misaligned — that's acceptable.
 --- @param cell string
 --- @return integer
 local function cell_visual_width(cell)
-    local w = vim.api.nvim_strwidth(cell)
-    -- Subtract 2 per backtick-delimited inline code span (concealed at level 2)
-    for _ in cell:gmatch("`[^`]+`") do
-        w = w - 2
-    end
-    return w
+    -- Strip concealed delimiters to get visual content, then measure.
+    -- Order matters: code spans first (protects content), then longest
+    -- emphasis delimiters before shorter ones to avoid partial matches.
+    local s = cell
+    s = s:gsub("`([^`]+)`", "%1") -- code spans
+    s = s:gsub("%*%*%*(.-)%*%*%*", "%1") -- bold+italic ***
+    s = s:gsub("%*%*(.-)%*%*", "%1") -- bold **
+    s = s:gsub("%*(.-)%*", "%1") -- italic *
+    s = s:gsub("~~(.-)~~", "%1") -- strikethrough ~~
+    return vim.api.nvim_strwidth(s)
 end
 
 --- Format a contiguous block of markdown table lines with aligned columns.
