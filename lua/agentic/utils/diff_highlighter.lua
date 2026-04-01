@@ -119,15 +119,10 @@ end
 --- @param bufnr integer
 --- @param ns_id integer
 --- @param line_number integer
---- @param line_content string
-local function apply_add_line_highlight(bufnr, ns_id, line_number, line_content)
-    vim.highlight.range(
-        bufnr,
-        ns_id,
-        Theme.HL_GROUPS.DIFF_ADD,
-        { line_number, 0 },
-        { line_number, #line_content }
-    )
+local function apply_add_line_highlight(bufnr, ns_id, line_number)
+    vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_number, 0, {
+        line_hl_group = Theme.HL_GROUPS.DIFF_ADD,
+    })
 end
 
 --- Apply line-level and word-level highlights to a buffer using vim.highlight.range
@@ -144,16 +139,12 @@ function M.apply_diff_highlights(bufnr, ns_id, line_number, old_line, new_line)
     -- Apply line-level highlight for deleted lines
     if old_line and not new_line then
         -- Pure deletion - full line highlight
-        vim.highlight.range(
-            bufnr,
-            ns_id,
-            Theme.HL_GROUPS.DIFF_DELETE,
-            { line_number, 0 },
-            { line_number, #old_line }
-        )
+        vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_number, 0, {
+            line_hl_group = Theme.HL_GROUPS.DIFF_DELETE,
+        })
     elseif new_line and not old_line then
         -- Pure addition - full line highlight
-        apply_add_line_highlight(bufnr, ns_id, line_number, new_line)
+        apply_add_line_highlight(bufnr, ns_id, line_number)
     elseif old_line and new_line then
         -- Skip highlighting if lines are identical
         if old_line == new_line then
@@ -161,13 +152,9 @@ function M.apply_diff_highlights(bufnr, ns_id, line_number, old_line, new_line)
         end
 
         -- Modification: apply line-level highlight first
-        vim.highlight.range(
-            bufnr,
-            ns_id,
-            Theme.HL_GROUPS.DIFF_DELETE,
-            { line_number, 0 },
-            { line_number, #old_line }
-        )
+        vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_number, 0, {
+            line_hl_group = Theme.HL_GROUPS.DIFF_DELETE,
+        })
 
         -- Then apply word-level highlight on top for changed portion
         local change = M.find_inline_change(old_line, new_line)
@@ -218,7 +205,7 @@ function M.apply_new_line_word_highlights(
         )
     else
         -- Entire line changed, apply line-level highlight
-        apply_add_line_highlight(bufnr, ns_id, line_number, new_line)
+        apply_add_line_highlight(bufnr, ns_id, line_number)
     end
 end
 
