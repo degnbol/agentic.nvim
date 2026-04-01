@@ -94,30 +94,53 @@ function GeminiACPAdapter:__handle_request_permission(message_id, request)
 
     -- Gemini also don't send "cancel" tool_call_update, so I have to generate a synthetic one
     local session_id = request.sessionId
+    local Logger = require("agentic.utils.logger")
+    local subscriber = self.subscribers[session_id]
 
-    self:__with_subscriber(session_id, function(subscriber)
-        subscriber.on_request_permission(request, function(option_id)
-            if option_id == "cancel" then
-                --- @type agentic.acp.ToolCallUpdate
-                local update = {
-                    sessionUpdate = "tool_call_update",
-                    toolCallId = request.toolCall.toolCallId,
-                    status = "failed",
-                }
+    if not subscriber then
+        Logger.debug("No subscriber for Gemini permission request, cancelling")
+        self:__send_result(message_id, { outcome = { outcome = "cancelled" } })
+        return
+    end
 
-                self:__handle_tool_call_update(session_id, update)
+    vim.schedule(function()
+        local ok, err = pcall(
+            subscriber.on_request_permission,
+            request,
+            function(option_id)
+                if option_id == "cancel" then
+                    --- @type agentic.acp.ToolCallUpdate
+                    local update = {
+                        sessionUpdate = "tool_call_update",
+                        toolCallId = request.toolCall.toolCallId,
+                        status = "failed",
+                    }
+
+                    self:__handle_tool_call_update(session_id, update)
+                end
+
+                self:__send_result(
+                    message_id,
+                    { --- @type agentic.acp.RequestPermissionOutcome
+                        outcome = {
+                            outcome = "selected",
+                            optionId = option_id,
+                        },
+                    }
+                )
             end
-
+        )
+        if not ok then
+            Logger.notify(
+                "Gemini permission handler error, cancelling:\n"
+                    .. tostring(err),
+                vim.log.levels.ERROR
+            )
             self:__send_result(
                 message_id,
-                { --- @type agentic.acp.RequestPermissionOutcome
-                    outcome = {
-                        outcome = "selected",
-                        optionId = option_id,
-                    },
-                }
+                { outcome = { outcome = "cancelled" } }
             )
-        end)
+        end
     end)
 end
 

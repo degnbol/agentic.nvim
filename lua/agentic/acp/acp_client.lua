@@ -540,31 +540,54 @@ function ACPClient:__handle_request_permission(message_id, request)
     end
 
     local session_id = request.sessionId
+    local subscriber = self.subscribers[session_id]
 
-    self:__with_subscriber(session_id, function(subscriber)
+    if not subscriber then
+        -- No subscriber (session already cancelled) — send cancel immediately
+        -- so the provider doesn't wait forever for a permission response.
+        Logger.debug("No subscriber for permission request, cancelling")
+        self:__send_result(message_id, { outcome = { outcome = "cancelled" } })
+        return
+    end
+
+    vim.schedule(function()
         -- Every change to this block MUST be reflected in Gemini's ACP Adapter, as it has custom implementation @see gemini_acp_adapter.lua
-        subscriber.on_request_permission(request, function(option_id)
-            if option_id then
-                self:__send_result(
-                    message_id,
-                    { --- @type agentic.acp.RequestPermissionOutcome
-                        outcome = {
-                            outcome = "selected",
-                            optionId = option_id,
-                        },
-                    }
-                )
-            else
-                self:__send_result(
-                    message_id,
-                    { --- @type agentic.acp.RequestPermissionOutcome
-                        outcome = {
-                            outcome = "cancelled",
-                        },
-                    }
-                )
+        local ok, err = pcall(
+            subscriber.on_request_permission,
+            request,
+            function(option_id)
+                if option_id then
+                    self:__send_result(
+                        message_id,
+                        { --- @type agentic.acp.RequestPermissionOutcome
+                            outcome = {
+                                outcome = "selected",
+                                optionId = option_id,
+                            },
+                        }
+                    )
+                else
+                    self:__send_result(
+                        message_id,
+                        { --- @type agentic.acp.RequestPermissionOutcome
+                            outcome = {
+                                outcome = "cancelled",
+                            },
+                        }
+                    )
+                end
             end
-        end)
+        )
+        if not ok then
+            Logger.notify(
+                "Permission handler error, cancelling:\n" .. tostring(err),
+                vim.log.levels.ERROR
+            )
+            self:__send_result(
+                message_id,
+                { outcome = { outcome = "cancelled" } }
+            )
+        end
     end)
 end
 

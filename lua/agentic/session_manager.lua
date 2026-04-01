@@ -567,15 +567,29 @@ function SessionManager:_on_request_permission(request, callback)
         end
     end
 
-    self:_show_diff_in_buffer(request.toolCall.toolCallId)
+    -- Non-essential UI setup (diff preview, notifications, hooks) must not
+    -- prevent add_request from being called. If add_request never runs, the
+    -- ACP permission callback is lost — the provider waits forever for a
+    -- response, permanently locking the session.
+    local ok, err = pcall(function()
+        self:_show_diff_in_buffer(request.toolCall.toolCallId)
 
-    self:_notify_attention("[?]")
+        self:_notify_attention("[?]")
 
-    P.invoke_hook("on_permission_request", {
-        session_id = self.session_id,
-        tab_page_id = self.tab_page_id,
-        tool_call_id = request.toolCall.toolCallId,
-    })
+        P.invoke_hook("on_permission_request", {
+            session_id = self.session_id,
+            tab_page_id = self.tab_page_id,
+            tool_call_id = request.toolCall.toolCallId,
+        })
+    end)
+
+    if not ok then
+        Logger.notify(
+            "Error setting up permission UI (permission still queued): "
+                .. tostring(err),
+            vim.log.levels.WARN
+        )
+    end
 
     self.permission_manager:add_request(request, wrapped_callback)
 end
