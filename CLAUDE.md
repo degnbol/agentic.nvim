@@ -129,6 +129,25 @@ turn boundary. The `send_prompt` response callback (which calls
 `append_separator`) runs inside `vim.schedule` from `_handle_message` — do not
 add another `vim.schedule` wrapper or the cleanup races with the next turn.
 
+## Auto-scroll and attention notifications
+
+Auto-scroll is runtime-toggleable via `keymaps.widget.toggle_auto_scroll`
+(`<localLeader>a`). When disabled, `scroll_down_only()` returns early — no
+buffer content changes, just scroll suppression. State lives in
+`Config.auto_scroll.enabled` (mutated at runtime, not persisted across sessions).
+
+Attention notifications (`_notify_attention(badge)`) fire on two events:
+- **Response complete** — badge `"[done]"`
+- **Permission request** — badge `"[?]"`
+
+Behaviour depends on focus state:
+- **Chat window unfocused** → rings bell
+- **Scrolled up from bottom** → sets badge in buffer name (visible in `:ls`/tabline)
+
+Badge clears when:
+- User scrolls to within `auto_scroll.threshold` lines of bottom (`WinScrolled` autocmd)
+- User submits next prompt (`clear_unread_badge()`)
+
 ## Input buffer completion
 
 Completion for `/` slash commands and `@` file references uses an in-process LSP
