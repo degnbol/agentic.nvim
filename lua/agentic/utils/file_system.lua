@@ -107,7 +107,7 @@ function FileSystem.write_file(abs_path, content, callback)
         local bufnr = vim.fn.bufnr(FileSystem.to_absolute_path(abs_path))
 
         if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
-            pcall(function()
+            local reload_ok, reload_err = pcall(function()
                 BufHelpers.execute_on_buffer(bufnr, function()
                     local view = vim.fn.winsaveview()
                     -- Force reload to avoid W13 prompt (file created after buffer, usually for newly created files)
@@ -115,6 +115,9 @@ function FileSystem.write_file(abs_path, content, callback)
                     vim.fn.winrestview(view)
                 end)
             end)
+            if not reload_ok then
+                Logger.debug("Buffer reload error after write:", reload_err)
+            end
         end
 
         callback(nil)

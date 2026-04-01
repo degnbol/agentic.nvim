@@ -314,10 +314,24 @@ function Ansi.apply_highlights(bufnr, ns, start_row, highlights)
     for i, spans in ipairs(highlights) do
         local row = start_row + i - 1
         for _, span in ipairs(spans) do
-            pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, span[1], {
-                end_col = span[2],
-                hl_group = span[3],
-            })
+            local ok, err =
+                pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, span[1], {
+                    end_col = span[2],
+                    hl_group = span[3],
+                })
+            if not ok then
+                local Logger = require("agentic.utils.logger")
+                Logger.debug(
+                    "ANSI extmark error at row",
+                    row,
+                    "col",
+                    span[1],
+                    "-",
+                    span[2],
+                    ":",
+                    err
+                )
+            end
         end
     end
 end

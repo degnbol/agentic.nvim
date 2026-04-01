@@ -459,7 +459,7 @@ end
 --- @param button_start_row number Start row of button block
 --- @param hint_line_index number Index of hint line in appended lines
 function M.apply_hint_styling(bufnr, ns_id, button_start_row, hint_line_index)
-    pcall(function()
+    local ok, err = pcall(function()
         local hint_line_row = button_start_row + hint_line_index
         -- Get the actual line content to determine end column
         local hint_line_content = vim.api.nvim_buf_get_lines(
@@ -476,6 +476,9 @@ function M.apply_hint_styling(bufnr, ns_id, button_start_row, hint_line_index)
             hl_eol = false,
         })
     end)
+    if not ok then
+        Logger.debug("Hint styling error:", err)
+    end
 end
 
 --- Setup hunk navigation keymaps for widget buffers

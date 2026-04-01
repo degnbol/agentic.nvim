@@ -37,8 +37,9 @@ function P.invoke_hook(hook_name, data)
         vim.schedule(function()
             local ok, err = pcall(hook, data)
             if not ok then
-                Logger.debug(
-                    string.format("Hook '%s' error: %s", hook_name, err)
+                Logger.notify(
+                    string.format("Hook '%s' error: %s", hook_name, err),
+                    vim.log.levels.ERROR
                 )
             end
         end)

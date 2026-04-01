@@ -169,13 +169,19 @@ function PermissionManager:clear()
         self:_remove_keymaps()
         self.message_writer:set_on_content_changed(nil)
 
-        pcall(self.current_request.callback, nil)
+        local ok, err = pcall(self.current_request.callback, nil)
+        if not ok then
+            Logger.debug("Permission callback error during clear:", err)
+        end
         self.current_request = nil
     end
 
     for _, item in ipairs(self.queue) do
         local callback = item[3]
-        pcall(callback, nil)
+        local ok, err = pcall(callback, nil)
+        if not ok then
+            Logger.debug("Queued permission callback error during clear:", err)
+        end
     end
 
     self.queue = {}
@@ -204,12 +210,21 @@ function PermissionManager:reject_and_cancel_remaining()
     self.message_writer:set_on_content_changed(nil)
 
     -- Send reject_once for current, cancelled for the rest
-    pcall(self.current_request.callback, reject_option_id)
+    local ok, err = pcall(self.current_request.callback, reject_option_id)
+    if not ok then
+        Logger.debug("Permission callback error during reject:", err)
+    end
     self.current_request = nil
 
     for _, item in ipairs(self.queue) do
         local callback = item[3]
-        pcall(callback, nil)
+        local ok2, err2 = pcall(callback, nil)
+        if not ok2 then
+            Logger.debug(
+                "Queued permission callback error during reject:",
+                err2
+            )
+        end
     end
 
     self.queue = {}
