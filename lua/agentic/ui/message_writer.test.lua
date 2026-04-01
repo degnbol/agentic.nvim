@@ -99,10 +99,18 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_false(writer:_check_auto_scroll(bufnr))
         end)
 
+        it("still reports proximity when enabled is false", function()
+            setup_buffer(1, 1)
+            Config.auto_scroll = { enabled = false, threshold = 10 }
+            -- _check_auto_scroll is a pure proximity check;
+            -- scroll_down_only gates on Config.auto_scroll.enabled
+            assert.is_true(writer:_check_auto_scroll(bufnr))
+        end)
+
         it("returns false when threshold is disabled (zero or nil)", function()
             setup_buffer(1, 1)
 
-            Config.auto_scroll = { threshold = 0 }
+            Config.auto_scroll = { enabled = true, threshold = 0 }
             assert.is_false(writer:_check_auto_scroll(bufnr))
 
             Config.auto_scroll = nil

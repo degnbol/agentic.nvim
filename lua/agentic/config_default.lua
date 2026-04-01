@@ -209,6 +209,7 @@ local ConfigDefault = {
             restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
             refresh = "<localLeader>r",
+            toggle_auto_scroll = "<localLeader>a",
             switch_provider = "<localLeader>s",
             switch_model = "<localLeader>m",
         },
@@ -309,8 +310,10 @@ local ConfigDefault = {
     },
 
     --- @class agentic.UserConfig.AutoScroll
+    --- @field enabled boolean Whether auto-scroll is active (toggle at runtime with keymap)
     --- @field threshold integer Lines from bottom to trigger auto-scroll (default: 10)
     auto_scroll = {
+        enabled = true,
         threshold = 10,
     },
 

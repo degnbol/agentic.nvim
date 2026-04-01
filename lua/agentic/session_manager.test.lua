@@ -573,6 +573,7 @@ describe("agentic.SessionManager", function()
                     end,
                     append_separator = noop,
                     scroll_to_bottom = noop,
+                    is_near_bottom = empty,
                     tool_call_blocks = {},
                 },
                 status_animation = { start = noop, stop = noop },
@@ -584,9 +585,12 @@ describe("agentic.SessionManager", function()
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
+                    win_nrs = { chat = nil },
                     get_chat_width = function()
                         return 80
                     end,
+                    clear_unread_badge = noop,
+                    set_unread_badge = noop,
                 },
                 permission_manager = {
                     current_request = nil,
@@ -598,6 +602,7 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _notify_attention = SessionManager._notify_attention,
             } --[[@as agentic.SessionManager]]
         end
 

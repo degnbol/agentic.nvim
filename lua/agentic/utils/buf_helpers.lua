@@ -138,6 +138,12 @@ function BufHelpers.scroll_down_only(winid, has_virt_lines)
     if not vim.api.nvim_win_is_valid(winid) then
         return
     end
+
+    local Config = require("agentic.config")
+    if Config.auto_scroll and Config.auto_scroll.enabled == false then
+        return
+    end
+
     local old_topline = vim.fn.getwininfo(winid)[1].topline
     vim.api.nvim_win_call(winid, function()
         if has_virt_lines then

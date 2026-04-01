@@ -876,6 +876,13 @@ function MessageWriter:_check_auto_scroll(bufnr)
     return distance_from_bottom <= threshold
 end
 
+--- Whether the cursor is near the bottom of the chat buffer.
+--- Public wrapper for the threshold check used by auto-scroll.
+--- @return boolean
+function MessageWriter:is_near_bottom()
+    return self:_check_auto_scroll(self.bufnr)
+end
+
 --- Scroll the chat window to the bottom if the cursor is near the end.
 --- Respects the same proximity threshold as streaming auto-scroll so that
 --- users reading earlier content are not interrupted.

@@ -85,6 +85,31 @@ function SessionManager._ring_bell()
     end
 end
 
+--- Notify the user that the agent needs attention.
+--- Bell for unfocused windows, buffer-name badge when scrolled up in a focused window.
+--- @param badge string Badge text (e.g. "[done]", "[?]")
+function SessionManager:_notify_attention(badge)
+    local chat_win = self.widget.win_nrs.chat
+    local is_chat_focused = chat_win
+        and vim.api.nvim_win_is_valid(chat_win)
+        and vim.api.nvim_get_current_win() == chat_win
+
+    local near_bottom = self.message_writer:is_near_bottom()
+
+    if is_chat_focused then
+        -- Focused on chat: badge if scrolled up, no bell (can't dismiss easily)
+        if not near_bottom then
+            self.widget:set_unread_badge(badge)
+        end
+    else
+        -- Not focused on chat: bell + badge
+        SessionManager._ring_bell()
+        if not near_bottom then
+            self.widget:set_unread_badge(badge)
+        end
+    end
+end
+
 --- Generate the welcome header for a new session
 --- @param session_id string|nil
 --- @return string header
@@ -544,7 +569,7 @@ function SessionManager:_on_request_permission(request, callback)
 
     self:_show_diff_in_buffer(request.toolCall.toolCallId)
 
-    SessionManager._ring_bell()
+    self:_notify_attention("[?]")
 
     P.invoke_hook("on_permission_request", {
         session_id = self.session_id,
@@ -744,6 +769,7 @@ end
 
 --- @param input_text string
 function SessionManager:_handle_input_submit_inner(input_text)
+    self.widget:clear_unread_badge()
     self.todo_list:close_if_all_completed()
 
     -- Intercept /new and /clear to start new session locally, cancelling
@@ -962,7 +988,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         self.status_animation:stop()
 
-        SessionManager._ring_bell()
+        self:_notify_attention("[done]")
 
         P.invoke_hook("on_response_complete", {
             session_id = session_id,

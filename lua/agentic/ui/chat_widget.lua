@@ -35,6 +35,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state, scroll)
 --- @field on_hide? fun() external callback called after the widget is hidden
 --- @field _hiding boolean re-entrancy guard for hide()
+--- @field _unread_badge? string Badge appended to chat buffer name (e.g. "[done]", "[?]")
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -295,6 +296,29 @@ function ChatWidget:_initialize()
             end,
         })
     end
+
+    -- Clear unread badge when user scrolls chat to bottom
+    vim.api.nvim_create_autocmd("WinScrolled", {
+        buffer = self.buf_nrs.chat,
+        callback = function()
+            if not self._unread_badge then
+                return
+            end
+            local chat_win = self.win_nrs.chat
+            if not chat_win or not vim.api.nvim_win_is_valid(chat_win) then
+                return
+            end
+            local chat_buf = self.buf_nrs.chat
+            local cursor_line = vim.api.nvim_win_get_cursor(chat_win)[1]
+            local total_lines = vim.api.nvim_buf_line_count(chat_buf)
+            local threshold = Config.auto_scroll
+                    and Config.auto_scroll.threshold
+                or 10
+            if total_lines - cursor_line <= threshold then
+                self:clear_unread_badge()
+            end
+        end,
+    })
 end
 
 --- Make :w submit the prompt in the input buffer
@@ -492,6 +516,24 @@ function ChatWidget:_bind_keymaps()
                 desc = "Agentic: Refresh chat (reset stale state, scroll to bottom)",
             }
         )
+
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.toggle_auto_scroll,
+            bufnr,
+            function()
+                Config.auto_scroll.enabled = not Config.auto_scroll.enabled
+                Logger.notify(
+                    "Auto-scroll "
+                        .. (
+                            Config.auto_scroll.enabled and "enabled"
+                            or "disabled"
+                        ),
+                    vim.log.levels.INFO,
+                    { title = "Agentic" }
+                )
+            end,
+            { desc = "Agentic: Toggle auto-scroll" }
+        )
     end
 
     -- Add keybindings to chat, todos, code, and files buffers to jump back to input and start insert mode
@@ -609,6 +651,52 @@ function ChatWidget:render_header(window_name, context)
     end
 
     WindowDecoration.render_header(bufnr, window_name, context)
+
+    -- Re-apply unread badge to buffer name after header render resets it
+    if window_name == "chat" and self._unread_badge then
+        vim.schedule(function()
+            self:_apply_badge_to_buf_name()
+        end)
+    end
+end
+
+--- Set an unread badge on the chat buffer name (e.g. "[done]", "[?]").
+--- Cleared when the user scrolls to the bottom.
+--- @param badge string
+function ChatWidget:set_unread_badge(badge)
+    if self._unread_badge == badge then
+        return
+    end
+    self._unread_badge = badge
+    self:_apply_badge_to_buf_name()
+end
+
+--- Clear the unread badge from the chat buffer name.
+function ChatWidget:clear_unread_badge()
+    if not self._unread_badge then
+        return
+    end
+    self._unread_badge = nil
+    self:_apply_badge_to_buf_name()
+end
+
+--- Apply or remove the badge suffix on the chat buffer name.
+function ChatWidget:_apply_badge_to_buf_name()
+    local bufnr = self.buf_nrs.chat
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+    end
+
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    -- Strip any existing badge suffix
+    name = name:gsub(" %[.-%]$", "")
+
+    if self._unread_badge then
+        name = name .. " " .. self._unread_badge
+    end
+
+    pcall(vim.api.nvim_buf_set_name, bufnr, name)
+    vim.cmd.redrawstatus()
 end
 
 --- @param panel_name agentic.ui.ChatWidget.PanelNames
