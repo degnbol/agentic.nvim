@@ -20,3 +20,5 @@
 
 - If I queue a message while a session is waiting to auto-continue the current back-off retry logic falsely thinks this means we are trying to continue so it starts the 5 min delay for sending "continue".
   Add support for queueing messages while we are waiting to auto-continue.
+
+- Toggle keymap (<localLeader>a?) and config option to completely disable auto-scroll. We can instead get notified with bell when claude has completed a response and/or want interaction. New feature will be bell ringing/visual even for active window: I think currently it only activates the bell if we have focused another window?
