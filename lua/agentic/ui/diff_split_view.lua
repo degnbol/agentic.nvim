@@ -165,6 +165,9 @@ local function resolve_buf_and_win(abs_path, get_winid)
     if bufnr == -1 then
         bufnr = vim.fn.bufadd(abs_path)
     end
+    if not vim.api.nvim_buf_is_loaded(bufnr) then
+        vim.fn.bufload(bufnr)
+    end
 
     local winid = vim.fn.bufwinid(bufnr)
     local target_winid = winid ~= -1 and winid or get_winid(bufnr)

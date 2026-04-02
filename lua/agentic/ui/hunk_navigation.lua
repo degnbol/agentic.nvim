@@ -113,10 +113,13 @@ local function find_hunk(bufnr, direction)
         return nil
     end
 
-    local winid = vim.fn.bufwinid(bufnr)
-    if winid == -1 then
+    -- win_findbuf searches all tabpages (bufwinid only checks current tab,
+    -- but the diff buffer may live on a separate diff tab).
+    local wins = vim.fn.win_findbuf(bufnr) --[[@as integer[] ]]
+    if not wins or #wins == 0 then
         return nil
     end
+    local winid = wins[1]
 
     local cursor = vim.api.nvim_win_get_cursor(winid)
     local current_line = cursor[1] - 1 -- 0-indexed
@@ -185,8 +188,11 @@ end
 --- @param bufnr number
 --- @param direction "next"|"prev"
 local function navigate_hunk(bufnr, direction)
-    local target_winid = vim.fn.bufwinid(bufnr)
-    if target_winid == -1 then
+    -- win_findbuf searches all tabpages (bufwinid only checks current tab,
+    -- but the diff buffer may live on a separate diff tab).
+    local wins = vim.fn.win_findbuf(bufnr)
+    local target_winid = wins and wins[1] or nil
+    if not target_winid then
         Logger.notify("Buffer not visible in any window", vim.log.levels.WARN)
         return
     end

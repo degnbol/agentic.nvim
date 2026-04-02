@@ -1711,7 +1711,12 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
         file_path = tracker.argument,
         diff = tracker.diff,
         get_winid = function(bufnr)
-            -- Always create a fresh tabpage for each diff
+            -- Suppress all events during diff tab setup to prevent plugins
+            -- (incline, etc.) from reacting to intermediate state, and to
+            -- avoid BufNewFile -> FileType -> LSP detach errors.
+            local saved = vim.o.eventignore
+            vim.o.eventignore = "all"
+
             vim.cmd("tabnew")
             local diff_tab = vim.api.nvim_get_current_tabpage()
             tracker.diff_tab = diff_tab
@@ -1719,14 +1724,12 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
 
             local wins = vim.api.nvim_tabpage_list_wins(diff_tab)
             if #wins == 0 then
+                vim.o.eventignore = saved
                 return nil
             end
             local winid = wins[1]
-            -- Suppress autocommands to prevent BufNewFile -> FileType -> LSP
-            -- detach errors on buffers without LSP state
-            local saved = vim.o.eventignore
-            vim.o.eventignore = "all"
             vim.api.nvim_win_set_buf(winid, bufnr)
+
             vim.o.eventignore = saved
             return winid
         end,

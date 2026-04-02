@@ -267,6 +267,13 @@ function M.show_diff(opts)
     if bufnr == -1 then
         bufnr = vim.fn.bufadd(opts.file_path)
     end
+    -- Ensure buffer is fully loaded (triggers BufRead, FileType, etc.)
+    -- before eventignore suppresses events during window setup.
+    -- Without this, the buffer stays partially initialised and causes
+    -- prompts / crashes when the user later visits it.
+    if not vim.api.nvim_buf_is_loaded(bufnr) then
+        vim.fn.bufload(bufnr)
+    end
 
     -- Check if buffer is already visible, otherwise request a window
     local winid = vim.fn.bufwinid(bufnr)
