@@ -699,6 +699,33 @@ function ChatWidget:_apply_badge_to_buf_name()
     vim.cmd.redrawstatus()
 end
 
+--- Update the chat panel's base title (shown in buffer name and winbar).
+--- Truncates to keep the buffer name short.
+--- @param title string|nil New title, or nil to reset to default
+function ChatWidget:set_chat_title(title)
+    local headers = WindowDecoration.get_headers_state(self.tab_page_id)
+    if not headers.chat then
+        return
+    end
+
+    if title and title ~= "" then
+        -- Truncate long titles to keep buffer name short
+        local max_len = 30
+        local display = #title > max_len and title:sub(1, max_len) .. "…"
+            or title
+        headers.chat.title = "󰻞 " .. display
+        headers.chat.session_name = display
+    else
+        headers.chat.title = "󰻞 Agentic Chat"
+        headers.chat.session_name = nil
+    end
+
+    WindowDecoration.set_headers_state(self.tab_page_id, headers)
+
+    -- Re-render to apply the new title to buffer name and winbar
+    self:render_header("chat")
+end
+
 --- @param panel_name agentic.ui.ChatWidget.PanelNames
 function ChatWidget:close_optional_window(panel_name)
     WidgetLayout.close_optional_window(self.win_nrs, panel_name)

@@ -591,6 +591,7 @@ describe("agentic.SessionManager", function()
                     end,
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
+                    set_chat_title = noop,
                 },
                 permission_manager = {
                     current_request = nil,

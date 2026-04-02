@@ -38,6 +38,11 @@ function SlashCommands.setCommands(bufnr, available_commands)
             menu = "Clear conversation",
             info = "Clear conversation",
         },
+        rename = {
+            word = "rename",
+            menu = "Rename session",
+            info = "Rename session: /rename <new name>",
+        },
     }
 
     for _, cmd in ipairs(available_commands) do

@@ -437,6 +437,28 @@ function SessionManager:_display_context_usage()
     self.message_writer:append_separator()
 end
 
+--- Rename the current session and update buffer name.
+--- @param new_title string
+function SessionManager:_rename_session(new_title)
+    local trimmed = vim.trim(new_title)
+    if trimmed == "" then
+        return
+    end
+
+    self.chat_history.title = trimmed
+    self.widget:set_chat_title(trimmed)
+
+    self.message_writer:write_message(
+        ACPPayloads.generate_agent_message(
+            string.format("Session renamed to: **%s**", trimmed)
+        )
+    )
+    self.message_writer:append_separator()
+
+    -- Persist the updated title
+    self.chat_history:save()
+end
+
 --- Handle non-JSON text from the ACP process (stdout non-JSON or stderr).
 --- Used for local command output (e.g. /context) that bypasses JSON-RPC.
 --- Only displays when a prompt is actively generating to avoid noise.
@@ -842,16 +864,31 @@ function SessionManager:_handle_input_submit_inner(input_text)
         return
     end
 
+    -- Intercept /rename — rename the current session
+    local rename_arg = input_text:match("^/rename%s+(.+)$")
+    if rename_arg then
+        self:_rename_session(rename_arg)
+        return
+    elseif input_text:match("^/rename%s*$") then
+        self.message_writer:write_message(
+            ACPPayloads.generate_agent_message("Usage: `/rename <new name>`")
+        )
+        self.message_writer:append_separator()
+        return
+    end
+
     --- @type agentic.acp.Content[]
     local prompt = {}
 
     -- If restored/switched session, prepend history on first submit
     if self._history_to_send then
         self.chat_history.title = input_text -- Update title for restored session
+        self.widget:set_chat_title(input_text)
         ChatHistory.prepend_restored_messages(self._history_to_send, prompt)
         self._history_to_send = nil
     elseif self.chat_history.title == "" then
         self.chat_history.title = input_text -- Set title for new session
+        self.widget:set_chat_title(input_text)
     end
 
     table.insert(prompt, {
@@ -1538,6 +1575,7 @@ function SessionManager:_cancel_session()
     self._plan_exit_pending = false
 
     self.chat_history = ChatHistory:new()
+    self.widget:set_chat_title(nil) -- Reset buffer name to default
     self._history_to_send = nil
     self._pending_input = nil
     self._usage = nil
@@ -1826,6 +1864,12 @@ function SessionManager:restore_from_history(history, opts)
         self.chat_history.title = history.title or ""
     else
         self.chat_history = history
+    end
+
+    -- Show restored session title in buffer name
+    local restored_title = self.chat_history.title
+    if restored_title and restored_title ~= "" then
+        self.widget:set_chat_title(restored_title)
     end
 
     local SessionRestore = require("agentic.session_restore")
