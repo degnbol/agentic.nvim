@@ -308,6 +308,24 @@ determine the kind of a selected option, look up the option by `optionId` in the
 original `request.options` array and read its `kind` field. Never compare
 `optionId` directly against kind strings.
 
+### user_message_chunk contains full prompt content
+
+During `session/load` replay, the provider sends `user_message_chunk` events for
+each content block in the original `session/prompt` request — not just user-typed
+text. This includes system metadata (`<environment_info>`, `<command-name>`,
+`<local-command-stdout>`, `<selected_code>` etc.) and instruction text ("IMPORTANT:
+Focus and respect the line numbers…"). Only one chunk per turn contains actual
+user prose.
+
+`ACPClient` normally drops all `user_message_chunk` events (line 379) because the
+plugin writes user messages locally on prompt submit. During `session/load`, it
+forwards them instead (gated by `_loading_sessions[session_id]`). The
+`SessionManager` handler filters out system metadata by checking if the trimmed
+text starts with `<` or known instruction prefixes.
+
+Any new code that processes replayed user messages must account for this: expect
+multiple chunks per turn, most of which are system content.
+
 ### Non-JSON stdout/stderr forwarding
 
 The transport layer forwards non-JSON stdout lines and non-ignored stderr lines
