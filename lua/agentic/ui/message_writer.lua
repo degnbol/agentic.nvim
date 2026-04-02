@@ -346,6 +346,16 @@ function MessageWriter:suppress_next_rejection()
     self._rejection_buffer = ""
 end
 
+--- Reset all per-turn mutable state. Called by refresh to unstick a
+--- desynchronised display without restarting the session.
+function MessageWriter:reset_turn_state()
+    self._suppressing_rejection = false
+    self._rejection_buffer = ""
+    self._last_wrote_tool_call = false
+    self._last_message_type = nil
+    self._chunk_start_line = nil
+end
+
 --- @param callback fun()|nil
 function MessageWriter:set_on_content_changed(callback)
     self._on_content_changed = callback
@@ -608,15 +618,13 @@ end
 --- Append trailing blank lines to separate from the next message.
 --- If streamed chunks preceded this call, reflow their prose first.
 function MessageWriter:append_separator()
-    -- Clear rejection suppression at turn boundary. Without this, a matched
-    -- rejection prefix leaves _suppressing_rejection=true and the old prefix
-    -- text in _rejection_buffer. The next turn's chunks are appended to that
-    -- buffer, so the prefix check always passes — permanently eating all
-    -- subsequent message content ("stuck 1 message behind").
-    if self._suppressing_rejection then
-        self._suppressing_rejection = false
-        self._rejection_buffer = ""
-    end
+    -- Reset ALL per-turn state at the turn boundary. Any flag that was set
+    -- during the turn must be cleared here, otherwise it silently corrupts
+    -- subsequent turns (the "stuck 1 message behind" family of bugs).
+    self._suppressing_rejection = false
+    self._rejection_buffer = ""
+    self._last_wrote_tool_call = false
+    self._last_message_type = nil
 
     self:_with_modifiable_and_notify_change(function(bufnr)
         self:_reflow_chunks(bufnr, true)
@@ -638,6 +646,12 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
 
     local buf_end = vim.api.nvim_buf_line_count(bufnr)
     if start >= buf_end then
+        -- Nothing to reflow, but still clear the marker on flush so the
+        -- next turn recalculates from scratch. Without this, the stale
+        -- _chunk_start_line carries over and corrupts the next turn's reflow.
+        if flush_all then
+            self._chunk_start_line = nil
+        end
         return
     end
 

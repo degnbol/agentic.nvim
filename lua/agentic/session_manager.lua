@@ -361,6 +361,11 @@ function SessionManager:_refresh()
         self.status_animation:stop()
     end
 
+    -- Clear per-turn MessageWriter flags that can desynchronise the display
+    -- (rejection suppression, chunk tracking, etc.). Cosmetic-only effect
+    -- mid-turn; essential for recovering from a stuck state between turns.
+    self.message_writer:reset_turn_state()
+
     self.message_writer:scroll_to_bottom()
 end
 
