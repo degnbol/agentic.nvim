@@ -42,6 +42,7 @@ local lang_map = {
     kt = "kotlin",
     htm = "html",
     yml = "yaml",
+    jl = "julia",
     sh = "bash",
     typescriptreact = "tsx",
     javascriptreact = "jsx",
