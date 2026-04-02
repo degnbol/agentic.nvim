@@ -286,6 +286,9 @@ providers don't advertise them in `available_commands_update`):
 - **`/clear`**: Aliased to `/new`. Through ACP, `/clear` doesn't actually reset
   provider context (unlike the TUI where it clears the conversation). Starting a
   fresh session is the only reliable way to clear context via ACP.
+- **`/rename <name>`**: Updates `chat_history.title`, sets `session_name` in
+  headers state (for external UI plugins via `AgenticHeadersChanged`), persists
+  to the session JSON, and updates the buffer name. Resets on `/new`.
 
 ### Mode switch kind inconsistency (claude-agent-acp)
 

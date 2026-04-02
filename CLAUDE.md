@@ -129,6 +129,27 @@ turn boundary. The `send_prompt` response callback (which calls
 `append_separator`) runs inside `vim.schedule` from `_handle_message` — do not
 add another `vim.schedule` wrapper or the cleanup races with the next turn.
 
+## Header state and external UI plugins
+
+Runtime session data (mode, context %, session name) flows to external UI
+plugins (incline.nvim, tabline plugins) through the **headers state pipeline**,
+not through buffer names.
+
+**Pipeline:** `SessionManager` → `ChatWidget:render_header()` /
+`ChatWidget:set_chat_title()` → `WindowDecoration.set_headers_state()` →
+`vim.t[tab].agentic_headers` → `AgenticHeadersChanged` User autocmd → external
+plugin refresh.
+
+`vim.t.agentic_headers` is the single source of truth for header display data.
+Each panel has a `HeaderParts` table with `title`, `context`, and optional extra
+fields (e.g. `session_name`). External plugins read these fields in their render
+functions and refresh via the `AgenticHeadersChanged` autocmd.
+
+**Do not rely on buffer names for UI display.** `nvim_buf_set_name` sets neovim's
+internal buffer path (visible in `:ls`) but does not fire events that floating
+window plugins respond to. The buffer name is a secondary artifact — the headers
+state is the primary mechanism.
+
 ## Auto-scroll and attention notifications
 
 Auto-scroll is runtime-toggleable via `keymaps.widget.toggle_auto_scroll`
