@@ -78,5 +78,21 @@ describe("agentic.ui.WindowDecoration", function()
 
             assert.equal("Chat | Mode: plan", vim.wo[winid].winbar)
         end)
+
+        it("does not set winbar when Config.winbar is false", function()
+            local original_winbar = Config.winbar
+            Config.winbar = false
+
+            local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
+            WindowDecoration.set_headers_state(tab_page_id, {
+                chat = { title = "Chat" },
+            })
+
+            WindowDecoration.render_header(bufnr, "chat", "Mode: plan")
+
+            assert.equal("", vim.wo[winid].winbar)
+
+            Config.winbar = original_winbar
+        end)
     end)
 end)

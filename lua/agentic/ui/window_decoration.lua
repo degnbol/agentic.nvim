@@ -120,7 +120,12 @@ end
 --- @param header_text string|nil Resolved header text
 --- @param tab_page_id integer Tab page ID for suffix
 --- @param has_session_name boolean Whether a custom session name is set
-local function set_buffer_name(bufnr, header_text, tab_page_id, has_session_name)
+local function set_buffer_name(
+    bufnr,
+    header_text,
+    tab_page_id,
+    has_session_name
+)
     if not header_text or header_text == "" then
         return
     end
@@ -172,13 +177,21 @@ function WindowDecoration.render_header(bufnr, window_name, context)
             WindowDecoration.set_headers_state(tab_page_id, headers)
         end
 
-        local _, err = resolve_header_text(dynamic_header, window_name)
+        local header_text, err =
+            resolve_header_text(dynamic_header, window_name)
         if err then
             Logger.notify(err)
         end
 
+        -- Winbar: full header (title + context) for native per-window display.
+        -- Escape % to %% for statusline format.
+        if Config.winbar and header_text then
+            vim.wo[winid].winbar = header_text:gsub("%%", "%%%%")
+        end
+
         -- Buffer name uses the base title only (no context or suffix) so
         -- tabline/bufferline plugins show a clean, short name.
+        --- @type boolean
         local has_session_name = dynamic_header.session_name ~= nil
         set_buffer_name(
             bufnr,

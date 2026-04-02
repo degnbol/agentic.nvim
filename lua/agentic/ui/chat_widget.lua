@@ -11,6 +11,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @class agentic.ui.ChatWidget.HeaderParts
 --- @field title string Main header text
 --- @field context? string Dynamic info (managed internally)
+--- @field session_name? string Custom session name (set by /rename or first message)
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
 --- @alias agentic.ui.ChatWidget.WinNrs table<agentic.ui.ChatWidget.PanelNames, integer|nil>

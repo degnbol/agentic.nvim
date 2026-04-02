@@ -335,6 +335,11 @@ local ConfigDefault = {
         on_permission_request = nil,
     },
 
+    --- Set vim.wo.winbar on widget windows with the full header text
+    --- (title + context). Disable if using an external plugin (e.g.
+    --- incline.nvim) that renders its own per-window labels.
+    winbar = true,
+
     --- Customize window headers for each panel in the chat widget.
     --- Each header can be either:
     --- 1. A table with title field
