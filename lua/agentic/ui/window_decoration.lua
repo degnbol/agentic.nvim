@@ -113,21 +113,23 @@ local function resolve_header_text(dynamic_header, window_name)
         )
 end
 
---- Sets the buffer name based on header text and tab count
+--- Sets the buffer name based on header text and tab count.
+--- Appends "(Tab N)" only when multiple tabs exist AND the title is the
+--- default (no custom session name). Custom names are already unique.
 --- @param bufnr integer Buffer number
 --- @param header_text string|nil Resolved header text
 --- @param tab_page_id integer Tab page ID for suffix
-local function set_buffer_name(bufnr, header_text, tab_page_id)
+--- @param has_session_name boolean Whether a custom session name is set
+local function set_buffer_name(bufnr, header_text, tab_page_id, has_session_name)
     if not header_text or header_text == "" then
         return
     end
 
-    -- Determine if we should show tab suffix based on total tab count
     local total_tabs = #vim.api.nvim_list_tabpages()
 
     --- @type string|nil
     local buf_name
-    if total_tabs > 1 then
+    if total_tabs > 1 and not has_session_name then
         buf_name = string.format("%s (Tab %d)", header_text, tab_page_id)
     else
         buf_name = header_text
@@ -177,7 +179,13 @@ function WindowDecoration.render_header(bufnr, window_name, context)
 
         -- Buffer name uses the base title only (no context or suffix) so
         -- tabline/bufferline plugins show a clean, short name.
-        set_buffer_name(bufnr, dynamic_header.title, tab_page_id)
+        local has_session_name = dynamic_header.session_name ~= nil
+        set_buffer_name(
+            bufnr,
+            dynamic_header.title,
+            tab_page_id,
+            has_session_name
+        )
     end)
 end
 
