@@ -307,6 +307,40 @@ function SessionManager:_on_session_update(update)
                 provider_name = self.agent.provider_config.name,
             })
         end
+    elseif update.sessionUpdate == "user_message_chunk" then
+        -- Arrives during session/load replay (ACPClient filters it out in
+        -- normal operation). Format as a user heading and write to chat.
+        -- The provider sends each content block from the original prompt as
+        -- a separate event — including system metadata (environment_info,
+        -- slash command tags, selection instructions, etc.). Filter those
+        -- out: real user text is plain prose, system blocks start with `<`.
+        local text = update.content and update.content.text
+        if text and text ~= "" then
+            local trimmed = vim.trim(text)
+            -- Match XML-tagged system blocks: <tag_name> ... </tag_name>
+            -- Requires both opening and closing tags to avoid false positives
+            -- on user text that happens to start with '<'.
+            local tag = trimmed:match("^<(%w[%w_-]*)[ >]")
+            if
+                (tag and trimmed:match("</" .. tag .. ">%s*$"))
+                or trimmed:match("^IMPORTANT: Focus")
+            then
+                -- System metadata injected into the prompt — skip
+            else
+                local user_message = ACPPayloads.generate_user_message({
+                    "##",
+                    text,
+                    "\n---\n",
+                })
+                self.message_writer:write_message(user_message)
+                self.chat_history:add_message({
+                    type = "user",
+                    text = text,
+                    timestamp = os.time(),
+                    provider_name = self.agent.provider_config.name,
+                })
+            end
+        end
     elseif update.sessionUpdate == "available_commands_update" then
         SlashCommands.setCommands(
             self.widget.buf_nrs.input,

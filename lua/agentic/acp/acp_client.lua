@@ -41,6 +41,7 @@ local KNOWN_ACP_KINDS = {
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field _on_ready fun(client: agentic.acp.ACPClient)
 --- @field _broadcast_stdout_text fun(self: agentic.acp.ACPClient, text: string)
+--- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -95,6 +96,7 @@ function ACPClient:new(config, on_ready)
 
     local client = setmetatable(instance, self) --[[@as agentic.acp.ACPClient]]
     client._on_ready = on_ready
+    client._loading_sessions = {}
 
     client:_setup_transport()
     client:_connect()
@@ -377,7 +379,15 @@ function ACPClient:__handle_session_update(params)
     local session_update_type = update.sessionUpdate
 
     if session_update_type == "user_message_chunk" then
-        -- Ignore user message chunks, Agentic writes its own user messages and these can cause duplication
+        if self._loading_sessions[session_id] then
+            -- During session/load replay, the provider sends user messages
+            -- that we don't have locally — forward them to the subscriber.
+            self:__with_subscriber(session_id, function(subscriber)
+                subscriber.on_session_update(update)
+            end)
+        end
+        -- During normal operation, ignore — Agentic writes its own user
+        -- messages on prompt submit and these would cause duplication.
         return
     end
 
@@ -726,12 +736,16 @@ function ACPClient:load_session(
     end
 
     self:_subscribe(session_id, handlers)
+    self._loading_sessions[session_id] = true
 
     self:_send_request("session/load", {
         sessionId = session_id,
         cwd = cwd,
         mcpServers = mcp_servers or {},
-    }, callback)
+    }, function(result, err)
+        self._loading_sessions[session_id] = nil
+        callback(result, err)
+    end)
 end
 
 --- @param session_id string
