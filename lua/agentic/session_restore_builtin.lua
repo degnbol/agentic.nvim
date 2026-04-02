@@ -105,14 +105,17 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         vim.api.nvim_set_option_value("statuscolumn", "", { win = win })
         vim.api.nvim_set_option_value("number", false, { win = win })
         vim.api.nvim_set_option_value("relativenumber", false, { win = win })
+        vim.api.nvim_set_option_value("wrap", false, { win = win })
     end
 
     local function open_qf()
         set_qf_items(items, scope)
+        -- Suppress FileType qf so quicker.nvim (and other qf plugins) don't fire
+        local ei = vim.o.eventignore
+        vim.o.eventignore = "FileType"
         vim.cmd("botright copen")
+        vim.o.eventignore = ei
         setup_qf_win()
-        -- Flag for quicker.nvim on_qf to skip this buffer
-        vim.b.agentic_picker = true
     end
 
     open_qf()
