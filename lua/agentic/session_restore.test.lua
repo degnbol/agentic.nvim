@@ -121,11 +121,11 @@ describe("SessionRestore", function()
     end)
 
     describe("build_items", function()
-        it("formats as title (date)", function()
+        it("formats as date │ title", function()
             local items = SessionRestore.build_items(test_sessions)
             assert.equal(2, #items)
-            assert.truthy(items[1].display:match("^First chat"))
-            assert.truthy(items[1].display:match("%(.*%)$"))
+            assert.truthy(items[1].display:match("│ First chat"))
+            assert.truthy(items[1].display:match("^%d%d%d%d%-%d%d%-%d%d"))
             assert.equal("session-1", items[1].session_id)
         end)
 
@@ -144,7 +144,7 @@ describe("SessionRestore", function()
                 },
             })
             assert.is_nil(items[1].display:find("\n"))
-            assert.truthy(items[1].display:match("^First line"))
+            assert.truthy(items[1].display:match("│ First line"))
         end)
     end)
 
@@ -248,8 +248,8 @@ describe("SessionRestore", function()
             setup_registry_stub(mock_session)
 
             -- Stub builtin.show to immediately call on_select
-            builtin_show_stub:invokes(function(_items, on_select)
-                on_select("session-1")
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
             end)
 
             SessionRestore.show_picker(1, nil)
@@ -288,8 +288,8 @@ describe("SessionRestore", function()
             local mock_session = session_with_messages()
             setup_list_stub()
 
-            builtin_show_stub:invokes(function(_items, on_select)
-                on_select("session-1")
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
             end)
 
             SessionRestore.show_picker(
@@ -308,8 +308,8 @@ describe("SessionRestore", function()
             local mock_session = session_with_messages()
             setup_list_stub()
 
-            builtin_show_stub:invokes(function(_items, on_select)
-                on_select("session-1")
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
             end)
 
             SessionRestore.show_picker(
@@ -331,8 +331,8 @@ describe("SessionRestore", function()
                 setup_load_stub(mock_history)
                 setup_registry_stub(mock_session)
 
-                builtin_show_stub:invokes(function(_items, on_select)
-                    on_select("session-1")
+                builtin_show_stub:invokes(function(picker_items, on_select)
+                    on_select(picker_items[1])
                 end)
 
                 SessionRestore.show_picker(
@@ -359,8 +359,8 @@ describe("SessionRestore", function()
             package.loaded["agentic.session_restore_builtin"] = nil
             local builtin = require("agentic.session_restore_builtin")
             builtin_show_stub = spy.stub(builtin, "show")
-            builtin_show_stub:invokes(function(_items, on_select)
-                on_select("session-1")
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
             end)
         end)
 
@@ -403,8 +403,8 @@ describe("SessionRestore", function()
             package.loaded["agentic.session_restore_builtin"] = nil
             local builtin = require("agentic.session_restore_builtin")
             builtin_show_stub = spy.stub(builtin, "show")
-            builtin_show_stub:invokes(function(_items, on_select)
-                on_select("session-1")
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
             end)
         end)
 
@@ -480,8 +480,8 @@ describe("SessionRestore", function()
             package.loaded["agentic.session_restore_builtin"] = nil
             local builtin = require("agentic.session_restore_builtin")
             builtin_show_stub = spy.stub(builtin, "show")
-            builtin_show_stub:invokes(function(_items, on_select)
-                on_select("session-1")
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
             end)
         end)
 

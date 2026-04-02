@@ -30,6 +30,9 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field session_id string
 --- @field title string
 --- @field timestamp integer
+--- @field last_activity? integer Unix timestamp of most recent save
+--- @field cwd? string Working directory the session was created in
+--- @field file_path? string Full path to JSON file (set by list_all_sessions)
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
@@ -180,6 +183,8 @@ function ChatHistory:save(callback)
         session_id = self.session_id,
         title = self.title,
         timestamp = self.timestamp,
+        last_activity = os.time(),
+        cwd = vim.uv.cwd(),
         messages = self.messages,
     }
 
@@ -203,8 +208,9 @@ end
 
 --- @param session_id string
 --- @param callback fun(history: agentic.ui.ChatHistory|nil, err: string|nil)
-function ChatHistory.load(session_id, callback)
-    local path = ChatHistory.get_file_path(session_id)
+--- @param file_path? string Override path (for cross-project sessions)
+function ChatHistory.load(session_id, callback, file_path)
+    local path = file_path or ChatHistory.get_file_path(session_id)
 
     FileSystem.read_file(path, nil, nil, function(content)
         if not content then
@@ -251,17 +257,22 @@ function ChatHistory.delete_session(session_id)
     return true, nil
 end
 
---- List all sessions for the current project, sorted by timestamp descending
---- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
-function ChatHistory.list_sessions(callback)
-    local folder = ChatHistory.get_sessions_folder()
-    local sessions = {}
+--- Get the base storage path for all session folders.
+--- @return string
+function ChatHistory.get_base_storage_path()
+    return Config.session_restore.storage_path
+        or vim.fs.joinpath(
+            vim.fn.stdpath("cache") --[[@as string]],
+            "agentic",
+            "sessions"
+        )
+end
 
-    if vim.fn.isdirectory(folder) == 0 then
-        Logger.debug("Session folder does not exist:", folder)
-        callback(sessions)
-        return
-    end
+--- Read session metadata from all JSON files in a folder.
+--- @param folder string
+--- @return agentic.ui.ChatHistory.SessionMeta[]
+local function read_sessions_from_folder(folder)
+    local sessions = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
 
     for filename, file_type in vim.fs.dir(folder) do
         if file_type == "file" and filename:match("%.json$") then
@@ -275,6 +286,9 @@ function ChatHistory.list_sessions(callback)
                         session_id = filename:gsub("%.json$", ""),
                         title = parsed.title or "",
                         timestamp = parsed.timestamp or 0,
+                        last_activity = parsed.last_activity,
+                        cwd = parsed.cwd,
+                        file_path = file_path,
                     })
                 else
                     Logger.debug(
@@ -287,11 +301,58 @@ function ChatHistory.list_sessions(callback)
         end
     end
 
+    return sessions
+end
+
+--- List all sessions for the current project, sorted by last activity descending.
+--- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
+function ChatHistory.list_sessions(callback)
+    local folder = ChatHistory.get_sessions_folder()
+
+    if vim.fn.isdirectory(folder) == 0 then
+        Logger.debug("Session folder does not exist:", folder)
+        callback({})
+        return
+    end
+
+    local sessions = read_sessions_from_folder(folder)
+
     table.sort(sessions, function(a, b)
-        return a.timestamp > b.timestamp
+        return (a.last_activity or a.timestamp)
+            > (b.last_activity or b.timestamp)
     end)
 
     callback(sessions)
+end
+
+--- List sessions from ALL projects, sorted by last activity descending.
+--- Each session includes cwd and file_path for cross-project access.
+--- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
+function ChatHistory.list_all_sessions(callback)
+    local base = ChatHistory.get_base_storage_path()
+
+    if vim.fn.isdirectory(base) == 0 then
+        Logger.debug("Base session folder does not exist:", base)
+        callback({})
+        return
+    end
+
+    local all_sessions = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+
+    for dirname, dir_type in vim.fs.dir(base) do
+        if dir_type == "directory" then
+            local folder = vim.fs.joinpath(base, dirname)
+            local sessions = read_sessions_from_folder(folder)
+            vim.list_extend(all_sessions, sessions)
+        end
+    end
+
+    table.sort(all_sessions, function(a, b)
+        return (a.last_activity or a.timestamp)
+            > (b.last_activity or b.timestamp)
+    end)
+
+    callback(all_sessions)
 end
 
 return ChatHistory

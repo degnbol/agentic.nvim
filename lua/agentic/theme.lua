@@ -31,6 +31,8 @@ Theme.HL_GROUPS = {
     MENTION = "AgenticMention",
     ERROR_HEADING = "AgenticErrorHeading",
     ERROR_BODY = "AgenticErrorBody",
+    PICKER_DATE = "AgenticPickerDate",
+    PICKER_DELIM = "AgenticPickerDelim",
 }
 
 --- A lang map of extension to language identifier for markdown code fences
@@ -124,6 +126,10 @@ function Theme.setup()
         -- Error highlights
         { Theme.HL_GROUPS.ERROR_HEADING, { link = "DiagnosticError" } },
         { Theme.HL_GROUPS.ERROR_BODY, { link = "DiagnosticVirtualTextError" } },
+
+        -- Picker highlights (session restore quickfix)
+        { Theme.HL_GROUPS.PICKER_DATE, { link = "Comment" } },
+        { Theme.HL_GROUPS.PICKER_DELIM, { link = "Delimiter" } },
 
         -- Spinner highlights
         { Theme.HL_GROUPS.SPINNER_GENERATING, { link = "DiagnosticWarn" } },

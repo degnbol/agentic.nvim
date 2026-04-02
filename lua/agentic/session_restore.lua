@@ -8,6 +8,9 @@ local SessionRegistry = require("agentic.session_registry")
 --- @field display string
 --- @field session_id string
 --- @field timestamp integer
+--- @field last_activity? integer
+--- @field cwd? string
+--- @field file_path? string Full path to session JSON (for cross-project access)
 
 --- @class agentic.SessionRestore
 local SessionRestore = {}
@@ -34,10 +37,12 @@ end
 --- @param session_id string
 --- @param tab_page_id integer
 --- @param has_conflict boolean
-local function do_restore(session_id, tab_page_id, has_conflict)
+--- @param cwd? string Original cwd for cross-project restore
+--- @param file_path? string Full path to session JSON (cross-project)
+local function do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
     SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
         if agent_supports_load(session) then
-            session:load_acp_session(session_id)
+            session:load_acp_session(session_id, cwd)
         else
             if has_conflict and session.session_id then
                 session.agent:cancel_session(session.session_id)
@@ -57,7 +62,7 @@ local function do_restore(session_id, tab_page_id, has_conflict)
                     history,
                     { reuse_session = not has_conflict }
                 )
-            end)
+            end, file_path)
         end
 
         session.widget:show()
@@ -67,19 +72,25 @@ end
 
 --- Restore a session in a new tabpage.
 --- @param session_id string
-local function restore_in_new_tab(session_id)
+--- @param cwd? string
+--- @param file_path? string
+local function restore_in_new_tab(session_id, cwd, file_path)
     vim.cmd("tabnew")
     local new_tab = vim.api.nvim_get_current_tabpage()
-    do_restore(session_id, new_tab, false)
+    do_restore(session_id, new_tab, false, cwd, file_path)
 end
 
 --- @param session_id string
 --- @param tab_page_id integer
 --- @param has_conflict boolean
+--- @param cwd? string Original cwd for cross-project restore
+--- @param file_path? string Full path to session JSON (cross-project)
 local function restore_with_conflict_check(
     session_id,
     tab_page_id,
-    has_conflict
+    has_conflict,
+    cwd,
+    file_path
 )
     if has_conflict then
         vim.ui.select({
@@ -89,33 +100,66 @@ local function restore_with_conflict_check(
             prompt = "Current session has messages:",
         }, function(choice)
             if choice == "Restore here (replace current)" then
-                do_restore(session_id, tab_page_id, has_conflict)
+                do_restore(
+                    session_id,
+                    tab_page_id,
+                    has_conflict,
+                    cwd,
+                    file_path
+                )
             elseif choice == "Open in new tab" then
-                restore_in_new_tab(session_id)
+                restore_in_new_tab(session_id, cwd, file_path)
             end
         end)
     else
-        do_restore(session_id, tab_page_id, has_conflict)
+        do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
     end
 end
 
+--- Shorten a cwd path for display (collapse home dir, keep last 2 components).
+--- @param cwd string
+--- @return string
+local function shorten_cwd(cwd)
+    local home = vim.uv.os_homedir() or ""
+    if home ~= "" and cwd:sub(1, #home) == home then
+        cwd = "~" .. cwd:sub(#home + 1)
+    end
+    -- Keep last 2 path components: ~/a/b/c/d → …/c/d
+    local parts = {}
+    for part in cwd:gmatch("[^/]+") do
+        table.insert(parts, part)
+    end
+    if #parts > 3 then
+        return "…/" .. parts[#parts - 1] .. "/" .. parts[#parts]
+    end
+    return cwd
+end
+
 --- Build the list of picker items from session metadata.
---- Sorted by timestamp descending (newest first).
---- Display format: "title (YYYY-MM-DD HH:MM)"
 --- @param sessions agentic.ui.ChatHistory.SessionMeta[]
+--- @param opts? { show_cwd?: boolean }
 --- @return agentic.SessionRestore.PickerItem[]
-function SessionRestore.build_items(sessions)
+function SessionRestore.build_items(sessions, opts)
+    local show_cwd = opts and opts.show_cwd or false
     local items = {} --- @type agentic.SessionRestore.PickerItem[]
     for _, s in ipairs(sessions) do
-        local date = os.date("%Y-%m-%d %H:%M", s.timestamp or 0)
-        -- Use first line only; titles can be multi-line prompts
+        local ts = s.last_activity or s.timestamp or 0
+        local date_str = os.date("%Y-%m-%d %H:%M", ts) --[[@as string]]
         local title = (s.title or "(no title)"):match("^([^\n]+)")
             or "(no title)"
 
+        local display = string.format("%s │ %s", date_str, title)
+        if show_cwd and s.cwd then
+            display = string.format("%s  [%s]", display, shorten_cwd(s.cwd))
+        end
+
         table.insert(items, {
-            display = string.format("%s (%s)", title, date),
+            display = display,
             session_id = s.session_id,
             timestamp = s.timestamp or 0,
+            last_activity = s.last_activity,
+            cwd = s.cwd,
+            file_path = s.file_path,
         })
     end
     return items
@@ -176,41 +220,74 @@ function SessionRestore.format_preview(messages)
     return lines
 end
 
+--- @alias agentic.SessionRestore.Scope "local"|"all"
+
 --- Show session picker and restore selected session
 --- @param tab_page_id integer
 --- @param current_session agentic.SessionManager|nil
-function SessionRestore.show_picker(tab_page_id, current_session)
-    ChatHistory.list_sessions(function(sessions)
+--- @param scope? agentic.SessionRestore.Scope "local" (default) or "all"
+function SessionRestore.show_picker(tab_page_id, current_session, scope)
+    scope = scope or "local"
+    local list_fn = scope == "all" and ChatHistory.list_all_sessions
+        or ChatHistory.list_sessions
+
+    list_fn(function(sessions)
         if #sessions == 0 then
             Logger.notify("No saved sessions found", vim.log.levels.INFO)
             return
         end
 
-        local items = SessionRestore.build_items(sessions)
+        local show_cwd = scope == "all"
+        local items =
+            SessionRestore.build_items(sessions, { show_cwd = show_cwd })
         local has_conflict = check_conflict(current_session)
 
-        --- @param session_id string
-        local function on_select(session_id)
-            restore_with_conflict_check(session_id, tab_page_id, has_conflict)
+        --- @param item agentic.SessionRestore.PickerItem
+        local function on_select(item)
+            restore_with_conflict_check(
+                item.session_id,
+                tab_page_id,
+                has_conflict,
+                item.cwd,
+                item.file_path
+            )
         end
 
-        local picker_name = Config.session_restore.picker or "fzf-lua"
+        local picker_name = Config.session_restore.picker or "quickfix"
+        local picker_opts = {
+            scope = scope,
+            tab_page_id = tab_page_id,
+            current_session = current_session,
+        }
 
         if picker_name == "fzf-lua" then
             local fzf_picker = require("agentic.session_restore_fzf")
-            if fzf_picker.show(items, on_select) then
+            if fzf_picker.show(items, on_select, picker_opts) then
                 return
             end
-            if Config.session_restore.picker == "fzf-lua" then
-                Logger.notify(
-                    "fzf-lua not installed, falling back to builtin picker",
-                    vim.log.levels.WARN
-                )
-            end
+            Logger.notify(
+                "fzf-lua not installed, falling back to quickfix picker",
+                vim.log.levels.WARN
+            )
+            picker_name = "quickfix"
         end
 
-        local builtin_picker = require("agentic.session_restore_builtin")
-        builtin_picker.show(items, on_select)
+        if picker_name == "select" then
+            vim.ui.select(items, {
+                prompt = "Sessions:",
+                format_item = function(item)
+                    return item.display
+                end,
+            }, function(item)
+                if item then
+                    on_select(item)
+                end
+            end)
+            return
+        end
+
+        local qf_picker = require("agentic.session_restore_builtin")
+        qf_picker.show(items, on_select, picker_opts)
     end)
 end
 

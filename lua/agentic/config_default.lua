@@ -382,10 +382,13 @@ local ConfigDefault = {
 
     --- @class agentic.UserConfig.SessionRestore
     --- @field storage_path? string Path to store session data; if nil, default path is used: ~/.cache/nvim/agentic/sessions/
-    --- @field picker? "fzf-lua"|"builtin" Session picker backend. "fzf-lua" (default) uses fzf-lua with preview, falls back to builtin if not installed. "builtin" uses vim.ui.select (no preview).
+    --- @field picker? "quickfix"|"fzf-lua"|"select" Session picker backend.
+    --- "quickfix" (default) — quickfix window with delete/undo/scope toggle keymaps.
+    --- "fzf-lua" — fzf-lua with preview and scope toggle; falls back to quickfix if not installed.
+    --- "select" — delegates to vim.ui.select (works with dressing.nvim, etc; no scope toggle or delete).
     session_restore = {
         storage_path = nil,
-        picker = "fzf-lua",
+        picker = "quickfix",
     },
 }
 
