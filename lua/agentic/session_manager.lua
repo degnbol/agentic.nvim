@@ -473,24 +473,68 @@ function SessionManager:_on_stdout_text(text)
     self.message_writer:write_message(ACPPayloads.generate_agent_message(text))
 end
 
+--- Build the ACP client handlers table.
+--- @param opts { skip_history?: boolean }|nil
+--- @return agentic.acp.ClientHandlers
+function SessionManager:_build_handlers(opts)
+    local skip_history = opts and opts.skip_history or false
+
+    --- @type agentic.acp.ClientHandlers
+    return {
+        on_error = function(err)
+            Logger.debug("Agent error: ", err)
+            local error_type, reset_epoch =
+                self.message_writer:write_error_message(err)
+            if error_type == "authentication_error" then
+                self:_offer_reauth()
+            elseif error_type == "usage_limit" and reset_epoch then
+                self:_offer_auto_continue(reset_epoch)
+            end
+        end,
+
+        on_session_update = function(update)
+            self:_on_session_update(update)
+        end,
+
+        on_tool_call = function(tool_call)
+            self:_on_tool_call(tool_call, skip_history)
+        end,
+
+        on_tool_call_update = function(tool_call_update)
+            self:_on_tool_call_update(tool_call_update)
+            self.status_animation:reposition()
+        end,
+
+        on_stdout_text = function(text)
+            self:_on_stdout_text(text)
+        end,
+
+        on_request_permission = function(request, callback)
+            self:_on_request_permission(request, callback)
+        end,
+    }
+end
+
 --- Handle initial tool_call: write to UI, store in history, track plan exit.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
-function SessionManager:_on_tool_call(tool_call)
+--- @param skip_history boolean|nil Skip chat history storage (e.g. during session/load replay)
+function SessionManager:_on_tool_call(tool_call, skip_history)
     self.message_writer:write_tool_call_block(tool_call)
     self.status_animation:reposition()
 
-    -- Store full tool_call in chat history
-    --- @type agentic.ui.ChatHistory.ToolCall
-    local tool_msg = {
-        type = "tool_call",
-        tool_call_id = tool_call.tool_call_id,
-        kind = tool_call.kind,
-        status = tool_call.status,
-        argument = tool_call.argument,
-        body = tool_call.body,
-        diff = tool_call.diff,
-    }
-    self.chat_history:add_message(tool_msg)
+    if not skip_history then
+        --- @type agentic.ui.ChatHistory.ToolCall
+        local tool_msg = {
+            type = "tool_call",
+            tool_call_id = tool_call.tool_call_id,
+            kind = tool_call.kind,
+            status = tool_call.status,
+            argument = tool_call.argument,
+            body = tool_call.body,
+            diff = tool_call.diff,
+        }
+        self.chat_history:add_message(tool_msg)
+    end
 
     self:_track_plan_exit(tool_call)
 end
@@ -1125,40 +1169,7 @@ function SessionManager:new_session(opts)
 
     self.status_animation:start("busy")
 
-    --- @type agentic.acp.ClientHandlers
-    local handlers = {
-        on_error = function(err)
-            Logger.debug("Agent error: ", err)
-            local error_type, reset_epoch =
-                self.message_writer:write_error_message(err)
-            if error_type == "authentication_error" then
-                self:_offer_reauth()
-            elseif error_type == "usage_limit" and reset_epoch then
-                self:_offer_auto_continue(reset_epoch)
-            end
-        end,
-
-        on_session_update = function(update)
-            self:_on_session_update(update)
-        end,
-
-        on_tool_call = function(tool_call)
-            self:_on_tool_call(tool_call)
-        end,
-
-        on_tool_call_update = function(tool_call_update)
-            self:_on_tool_call_update(tool_call_update)
-            self.status_animation:reposition()
-        end,
-
-        on_stdout_text = function(text)
-            self:_on_stdout_text(text)
-        end,
-
-        on_request_permission = function(request, callback)
-            self:_on_request_permission(request, callback)
-        end,
-    }
+    local handlers = self:_build_handlers()
 
     self.agent:create_session(handlers, function(response, err)
         self.status_animation:stop()
@@ -1262,44 +1273,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
         data = { session_id = session_id },
     })
 
-    --- @type agentic.acp.ClientHandlers
-    local handlers = {
-        on_error = function(err)
-            Logger.debug("Agent error: ", err)
-            local error_type, reset_epoch =
-                self.message_writer:write_error_message(err)
-            if error_type == "authentication_error" then
-                self:_offer_reauth()
-            elseif error_type == "usage_limit" and reset_epoch then
-                self:_offer_auto_continue(reset_epoch)
-            end
-        end,
+    local handlers = self:_build_handlers({ skip_history = true })
 
-        on_session_update = function(update)
-            self:_on_session_update(update)
-        end,
-
-        on_tool_call = function(tool_call)
-            self.message_writer:write_tool_call_block(tool_call)
-            self.status_animation:reposition()
-            self:_track_plan_exit(tool_call)
-        end,
-
-        on_tool_call_update = function(tool_call_update)
-            self:_on_tool_call_update(tool_call_update)
-            self.status_animation:reposition()
-        end,
-
-        on_stdout_text = function(text)
-            self:_on_stdout_text(text)
-        end,
-
-        on_request_permission = function(request, callback)
-            self:_on_request_permission(request, callback)
-        end,
-    }
-
-    local effective_cwd = cwd or vim.fn.getcwd()
+    local effective_cwd = cwd or vim.fn.getcwd() --[[@as string]]
     self.agent:load_session(
         session_id,
         effective_cwd,

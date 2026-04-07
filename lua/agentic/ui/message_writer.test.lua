@@ -2,6 +2,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local Config = require("agentic.config")
+local Renderer = require("agentic.ui.tool_call_renderer")
 
 describe("agentic.ui.MessageWriter", function()
     --- @type agentic.ui.MessageWriter
@@ -421,7 +422,7 @@ describe("agentic.ui.MessageWriter", function()
                 body = { "total 16" },
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("### Execute", lines[1])
             assert.equal("```bash", lines[2])
@@ -439,7 +440,7 @@ describe("agentic.ui.MessageWriter", function()
                 argument = "for i in 1 2 3; do\necho $i\ndone",
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("### Execute", lines[1])
             assert.equal("```bash", lines[2])
@@ -461,7 +462,7 @@ describe("agentic.ui.MessageWriter", function()
                     body = { "line1" },
                 }
 
-                local lines, _ = writer:_prepare_block_lines(block)
+                local lines, _ = Renderer.prepare_block_lines(block, 80)
 
                 assert.equal("### Read", lines[1])
                 assert.equal("`/tmp/file.txt`", lines[2])
@@ -478,7 +479,7 @@ describe("agentic.ui.MessageWriter", function()
                 body = { "line1" },
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("### Read", lines[1])
             assert.equal("`/tmp/file.txt`", lines[2])
@@ -494,7 +495,7 @@ describe("agentic.ui.MessageWriter", function()
                 body = { "a", "b", "c" },
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("### Read", lines[1])
             assert.equal("`/tmp/file.txt`", lines[2])
@@ -512,7 +513,7 @@ describe("agentic.ui.MessageWriter", function()
                 read_range = { offset = 10, limit = 3 },
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("### Read", lines[1])
             assert.equal("`/tmp/file.txt`", lines[2])
@@ -534,7 +535,8 @@ describe("agentic.ui.MessageWriter", function()
                 },
             }
 
-            local lines, highlight_ranges = writer:_prepare_block_lines(block)
+            local lines, highlight_ranges =
+                Renderer.prepare_block_lines(block, 80)
 
             local found_inserted = false
             for _, line in ipairs(lines) do
@@ -561,7 +563,7 @@ describe("agentic.ui.MessageWriter", function()
                 argument = "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test",
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("### Execute", lines[1])
             assert.equal("```bash", lines[2])
@@ -581,7 +583,7 @@ describe("agentic.ui.MessageWriter", function()
                 argument = "ls -la && echo done",
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("ls -la && echo done", lines[3])
         end)
@@ -595,7 +597,7 @@ describe("agentic.ui.MessageWriter", function()
                 argument = [[echo "this && that || other" && echo 'pipes | here ; too' && echo done with a very long command line]],
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("```bash", lines[2])
             assert.equal([[echo "this && that || other" &&]], lines[3])
@@ -612,7 +614,7 @@ describe("agentic.ui.MessageWriter", function()
                 argument = "result=$(cmd1 && cmd2 || cmd3) && echo $result && final_command with some extra arguments to be long",
             }
 
-            local lines, _ = writer:_prepare_block_lines(block)
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
 
             assert.equal("result=$(cmd1 && cmd2 || cmd3) &&", lines[3])
             assert.equal("echo $result &&", lines[4])
