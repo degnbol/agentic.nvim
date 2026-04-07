@@ -308,7 +308,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _should_auto_scroll? boolean
 --- @field _scroll_scheduled? boolean
 --- @field _on_content_changed? fun()
---- @field _redraw_scheduled? boolean
+
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
@@ -365,33 +365,6 @@ function MessageWriter:_notify_content_changed()
     if self._on_content_changed then
         self._on_content_changed()
     end
-    self:_schedule_redraw()
-end
-
---- Coalesce rapid buffer modifications into a single screen redraw.
---- Without this, parallel ACP notifications (tool calls, message chunks)
---- modify the buffer but the screen only repaints on the next user input.
---- Skips redraw during insert/replace mode to avoid disrupting typing,
---- completion popups, and pending message display that could trigger
---- "Press ENTER" prompts.
-function MessageWriter:_schedule_redraw()
-    if self._redraw_scheduled then
-        return
-    end
-    self._redraw_scheduled = true
-    vim.schedule(function()
-        self._redraw_scheduled = false
-        if not vim.api.nvim_buf_is_valid(self.bufnr) then
-            return
-        end
-        -- Skip redraw while user is actively typing — it can trigger
-        -- pending message prompts and interfere with completion popups.
-        local mode = vim.api.nvim_get_mode().mode
-        if mode:find("^i") or mode:find("^R") then
-            return
-        end
-        vim.cmd.redraw()
-    end)
 end
 
 --- Wraps BufHelpers.with_modifiable and fires _notify_content_changed after.
@@ -921,7 +894,6 @@ function MessageWriter:scroll_to_bottom()
     end
 
     BufHelpers.scroll_down_only(wins[1])
-    vim.cmd.redraw()
 end
 
 --- @param bufnr integer Buffer number to scroll
