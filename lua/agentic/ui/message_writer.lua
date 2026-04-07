@@ -371,6 +371,9 @@ end
 --- Coalesce rapid buffer modifications into a single screen redraw.
 --- Without this, parallel ACP notifications (tool calls, message chunks)
 --- modify the buffer but the screen only repaints on the next user input.
+--- Skips redraw during insert/replace mode to avoid disrupting typing,
+--- completion popups, and pending message display that could trigger
+--- "Press ENTER" prompts.
 function MessageWriter:_schedule_redraw()
     if self._redraw_scheduled then
         return
@@ -378,9 +381,16 @@ function MessageWriter:_schedule_redraw()
     self._redraw_scheduled = true
     vim.schedule(function()
         self._redraw_scheduled = false
-        if vim.api.nvim_buf_is_valid(self.bufnr) then
-            vim.cmd.redraw()
+        if not vim.api.nvim_buf_is_valid(self.bufnr) then
+            return
         end
+        -- Skip redraw while user is actively typing — it can trigger
+        -- pending message prompts and interfere with completion popups.
+        local mode = vim.api.nvim_get_mode().mode
+        if mode:find("^i") or mode:find("^R") then
+            return
+        end
+        vim.cmd.redraw()
     end)
 end
 

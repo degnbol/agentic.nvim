@@ -144,7 +144,19 @@ function BufHelpers.scroll_down_only(winid, has_virt_lines)
         return
     end
 
-    local old_topline = vim.fn.getwininfo(winid)[1].topline
+    -- Skip when user is in insert mode — executing normal! commands via
+    -- nvim_win_call during insert mode can corrupt input state and crash.
+    local mode = vim.api.nvim_get_mode().mode
+    if mode:find("^i") or mode:find("^R") then
+        return
+    end
+
+    local ok, old_info = pcall(vim.fn.getwininfo, winid)
+    if not ok or not old_info[1] then
+        return
+    end
+    local old_topline = old_info[1].topline
+
     vim.api.nvim_win_call(winid, function()
         if has_virt_lines then
             vim.cmd("normal! G0zb\5") -- \5 = <C-e>
@@ -152,7 +164,13 @@ function BufHelpers.scroll_down_only(winid, has_virt_lines)
             vim.cmd("normal! G0zb")
         end
     end)
-    local new_topline = vim.fn.getwininfo(winid)[1].topline
+
+    ok, old_info = pcall(vim.fn.getwininfo, winid)
+    if not ok or not old_info[1] then
+        return
+    end
+    local new_topline = old_info[1].topline
+
     if new_topline < old_topline then
         vim.api.nvim_win_call(winid, function()
             vim.fn.winrestview({ topline = old_topline })

@@ -75,6 +75,7 @@ end
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
+--- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -144,6 +145,7 @@ function SessionManager:new(tab_page_id)
         --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
         _plan_exit_pending = false,
         _retry_attempt = 0,
+        _checktime_scheduled = false,
     }, self)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
@@ -683,13 +685,25 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         )
     end
 
-    -- Reload buffers when file-mutating tool calls complete
+    -- Reload buffers when file-mutating tool calls complete.
+    -- Debounce: rapid tool_call_update completions (e.g. hook retry cycles)
+    -- coalesce into a single deferred checktime() to avoid cascading
+    -- autocmds (FileChangedShell → BufReadPost → LSP → treesitter) that
+    -- can overwhelm the event loop and crash neovim.
     if tool_call_update.status == "completed" then
         local tracker =
             self.message_writer.tool_call_blocks[tool_call_update.tool_call_id]
 
         if tracker and tracker.kind and FILE_MUTATING_KINDS[tracker.kind] then
-            vim.cmd.checktime()
+            if not self._checktime_scheduled then
+                self._checktime_scheduled = true
+                vim.schedule(function()
+                    self._checktime_scheduled = false
+                    if not self._destroyed then
+                        vim.cmd.checktime()
+                    end
+                end)
+            end
         end
 
         -- Track the most recently edited/written .md file as plan candidate.

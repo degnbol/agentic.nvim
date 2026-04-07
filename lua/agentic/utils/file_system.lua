@@ -1,5 +1,4 @@
 local Logger = require("agentic.utils.logger")
-local BufHelpers = require("agentic.utils.buf_helpers")
 
 --- @class agentic.utils.FileSystem
 local FileSystem = {}
@@ -107,13 +106,34 @@ function FileSystem.write_file(abs_path, content, callback)
         local bufnr = vim.fn.bufnr(FileSystem.to_absolute_path(abs_path))
 
         if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
+            -- Reload buffer content from disk via API instead of :edit!
+            -- :edit! inside nvim_buf_call fires autocmds (BufReadPost,
+            -- FileType, swap file dialog) in wrong window context (curwin
+            -- doesn't match curbuf), causing crashes and [O]k prompts.
             local reload_ok, reload_err = pcall(function()
-                BufHelpers.execute_on_buffer(bufnr, function()
-                    local view = vim.fn.winsaveview()
-                    -- Force reload to avoid W13 prompt (file created after buffer, usually for newly created files)
-                    vim.cmd("silent! edit!")
-                    vim.fn.winrestview(view)
-                end)
+                local disk_lines = FileSystem.read_from_disk(abs_path)
+                if disk_lines then
+                    local was_modifiable = vim.api.nvim_get_option_value(
+                        "modifiable",
+                        { buf = bufnr }
+                    )
+                    vim.api.nvim_set_option_value(
+                        "modifiable",
+                        true,
+                        { buf = bufnr }
+                    )
+                    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, disk_lines)
+                    vim.api.nvim_set_option_value(
+                        "modifiable",
+                        was_modifiable,
+                        { buf = bufnr }
+                    )
+                    vim.api.nvim_set_option_value(
+                        "modified",
+                        false,
+                        { buf = bufnr }
+                    )
+                end
             end)
             if not reload_ok then
                 Logger.debug("Buffer reload error after write:", reload_err)
