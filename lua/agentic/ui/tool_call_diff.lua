@@ -148,13 +148,13 @@ end
 local function hunk_to_block(diff_block, hunk)
     local start_a, count_a, start_b, count_b = unpack(hunk)
 
-    --- @type number|nil
+    --- @type number
     local start_line
-    --- @type number|nil
+    --- @type number
     local end_line
-    --- @type string[]|nil
+    --- @type string[]
     local old_lines
-    --- @type string[]|nil
+    --- @type string[]
     local new_lines
 
     if count_a > 0 then
@@ -358,10 +358,11 @@ function M.normalize_to_lines(lines)
     if not lines or lines == vim.NIL then
         return {}
     end
+    --- @cast lines string[]
 
     -- Strip trailing "" from \n-terminated content split by adapters
     if #lines > 0 and lines[#lines] == "" then
-        lines = vim.list_slice(lines, 1, #lines - 1)
+        return vim.list_slice(lines, 1, #lines - 1) --[[@as string[] ]]
     end
 
     return lines

@@ -152,14 +152,14 @@ describe("agentic.ui.TodoList", function()
                 height = height,
             })
             assert.equal(height, vim.api.nvim_win_get_height(winid))
-            return winid
+            return winid --[[@as integer]]
         end
 
         --- @return integer
         local function get_topline()
             ---@cast winid integer
             return vim.api.nvim_win_call(winid, function()
-                return vim.fn.winsaveview().topline
+                return vim.fn.winsaveview().topline --[[@as integer]]
             end)
         end
 

@@ -58,7 +58,6 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _should_auto_scroll? boolean
 --- @field _scroll_scheduled? boolean
 --- @field _on_content_changed? fun()
-
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
@@ -1135,8 +1134,8 @@ function MessageWriter:remove_permission_buttons()
     -- Find the range extmark (has end_row)
     local start_row, end_row
     for _, mark in ipairs(extmarks) do
-        local details = mark[4]
-        if details.end_row then
+        local details = mark[4] --- @type table<string, any>
+        if details and details.end_row then
             start_row = mark[2]
             end_row = details.end_row
             break
