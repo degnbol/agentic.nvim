@@ -1397,7 +1397,8 @@ function SessionManager:_run_reauth()
                 end
 
                 if result.code == 0 then
-                    Logger.notify("Re-authenticated successfully.")
+                    Logger.notify("Re-authenticated. Restarting provider...")
+                    self:_restart_provider()
                 else
                     Logger.notify(
                         "Re-authentication failed. Try running 'claude auth login' manually.",
@@ -1407,6 +1408,31 @@ function SessionManager:_run_reauth()
             end)
         end
     )
+end
+
+--- Kill the dead cached agent, spawn a fresh provider subprocess,
+--- and create a new session. Used after re-authentication when the
+--- provider process has exited.
+function SessionManager:_restart_provider()
+    local AgentInstance = require("agentic.acp.agent_instance")
+
+    -- Remove the dead cached instance so get_instance spawns a fresh one
+    self.agent:stop()
+    AgentInstance._instances[Config.provider] = nil
+
+    local new_agent = AgentInstance.get_instance(
+        Config.provider,
+        function(client)
+            vim.schedule(function()
+                self.agent = client
+                self:new_session()
+            end)
+        end
+    )
+
+    if new_agent then
+        self.agent = new_agent
+    end
 end
 
 --- Cancel a pending auto-continue timer and remove the cancel keymap.

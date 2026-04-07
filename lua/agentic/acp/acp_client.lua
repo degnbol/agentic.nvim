@@ -195,6 +195,37 @@ end
 --- @param state agentic.acp.ClientConnectionState
 function ACPClient:_set_state(state)
     self.state = state
+
+    -- When the provider dies or errors, fail all pending request callbacks
+    -- so callers (e.g. SessionManager) can reset their state instead of
+    -- hanging forever with orphaned callbacks.
+    if state == "disconnected" or state == "error" then
+        self:_fail_pending_callbacks(state)
+    end
+end
+
+--- Fail all pending request callbacks with a transport error.
+--- Called when the provider subprocess exits or the connection breaks.
+--- @param state agentic.acp.ClientConnectionState
+function ACPClient:_fail_pending_callbacks(state)
+    local pending = self.callbacks
+    if not next(pending) then
+        return
+    end
+
+    -- Snapshot and clear before invoking — callbacks may trigger new sends
+    self.callbacks = {}
+
+    local err = self:__create_error(
+        self.ERROR_CODES.TRANSPORT_ERROR,
+        "Provider " .. state .. " — request lost"
+    )
+
+    for _, callback in pairs(pending) do
+        vim.schedule(function()
+            callback(nil, err)
+        end)
+    end
 end
 
 --- @protected
@@ -228,17 +259,40 @@ function ACPClient:_send_request(method, params, callback)
         params = params or {},
     }
 
-    self.callbacks[id] = callback
-
     local data = vim.json.encode(message)
 
     Logger.debug_to_file("request: ", message)
 
     if not self.transport then
         Logger.debug("Cannot send request: transport not initialised")
+        vim.schedule(function()
+            callback(
+                nil,
+                self:__create_error(
+                    self.ERROR_CODES.TRANSPORT_ERROR,
+                    "Cannot send request: transport not initialised"
+                )
+            )
+        end)
         return
     end
-    self.transport:send(data)
+
+    local sent = self.transport:send(data)
+    if not sent then
+        Logger.debug("Transport send failed for method: ", method)
+        vim.schedule(function()
+            callback(
+                nil,
+                self:__create_error(
+                    self.ERROR_CODES.TRANSPORT_ERROR,
+                    "Provider not connected — send failed"
+                )
+            )
+        end)
+        return
+    end
+
+    self.callbacks[id] = callback
 end
 
 --- @param method string
