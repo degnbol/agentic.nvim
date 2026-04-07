@@ -1325,7 +1325,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
                 self.status_animation:stop()
 
                 local welcome = string.format(
-                    "### Resumed session `%s`\n",
+                    "\n## Resumed session `%s`\n",
                     session_id:sub(1, 8)
                 )
                 self.message_writer:write_message(
