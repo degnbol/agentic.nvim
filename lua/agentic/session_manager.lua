@@ -1381,57 +1381,55 @@ function SessionManager:_check_server_then_offer_reauth(attempt)
         string.format("Checking server health (%s)...", HEALTH_CHECK_URL)
     )
 
-    vim.system(
-        {
-            "curl",
-            "-s",
-            "-o",
-            "/dev/null",
-            "--connect-timeout",
-            "5",
-            HEALTH_CHECK_URL,
-        },
-        {},
-        function(result)
-            vim.schedule(function()
-                if self._destroyed then
+    vim.system({
+        "curl",
+        "-s",
+        "-o",
+        "/dev/null",
+        "--connect-timeout",
+        "5",
+        HEALTH_CHECK_URL,
+    }, {}, function(result)
+        vim.schedule(function()
+            if self._destroyed then
+                return
+            end
+
+            if result.code == 0 then
+                -- Server reachable — offer login
+                self:_set_reauth_keymap()
+            else
+                -- Server unreachable — schedule retry with backoff
+                self.message_writer:write_error_action(
+                    string.format(
+                        "Server unreachable. Retrying in %ds... (attempt %d)",
+                        delay_s,
+                        attempt
+                    )
+                )
+
+                self:_cancel_health_check_timer()
+                local timer = vim.uv.new_timer()
+                if not timer then
                     return
                 end
-
-                if result.code == 0 then
-                    -- Server reachable — offer login
-                    self:_set_reauth_keymap()
-                else
-                    -- Server unreachable — schedule retry with backoff
-                    self.message_writer:write_error_action(
-                        string.format(
-                            "Server unreachable. Retrying in %ds... (attempt %d)",
-                            delay_s,
-                            attempt
-                        )
-                    )
-
-                    self:_cancel_health_check_timer()
-                    local timer = vim.uv.new_timer()
-                    if not timer then
-                        return
-                    end
-                    self._health_check_timer = timer
-                    timer:start(delay_s * 1000, 0, function()
-                        timer:stop()
-                        timer:close()
-                        vim.schedule(function()
-                            if self._destroyed then
-                                return
-                            end
-                            self._health_check_timer = nil
-                            self:_check_server_then_offer_reauth(attempt + 1)
-                        end)
+                self._health_check_timer = timer
+                timer:start(delay_s * 1000, 0, function()
+                    -- Nil out immediately so _cancel_health_check_timer
+                    -- won't call stop/close on an already-closed handle
+                    self._health_check_timer = nil
+                    timer:stop()
+                    timer:close()
+                    vim.schedule(function()
+                        if self._destroyed then
+                            return
+                        end
+                        self:_check_server_then_offer_reauth(attempt + 1)
                     end)
-                end
-            end)
-        end
-    )
+                end)
+            end
+        end)
+    end)
 end
 
 --- Stop and close the health check backoff timer if active.
