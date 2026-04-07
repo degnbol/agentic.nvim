@@ -71,6 +71,7 @@ end
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
 --- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
+--- @field _health_check_timer? uv.uv_timer_t Exponential backoff timer for server health checks
 --- @field _pending_input? string Prompt queued before the ACP session is ready
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
@@ -1338,13 +1339,18 @@ local function is_claude_provider()
 end
 
 --- Offer re-authentication after a Claude auth error.
---- Writes an action hint to the chat buffer and sets up a buffer-local
---- keymap to spawn `claude auth login`.
+--- Checks server health first — if unreachable, polls with exponential
+--- backoff until the server is back, then offers the `r` keymap.
 function SessionManager:_offer_reauth()
     if not is_claude_provider() then
         return
     end
 
+    self:_check_server_then_offer_reauth(1)
+end
+
+--- Set up the [r] keymap to trigger `claude auth login`.
+function SessionManager:_set_reauth_keymap()
     self.message_writer:write_error_action(
         "Press [r] to re-authenticate in browser."
     )
@@ -1357,6 +1363,84 @@ function SessionManager:_offer_reauth()
     end, { buffer = chat_bufnr, nowait = true })
 
     self._reauth_keymap = { bufnr = chat_bufnr, lhs = lhs }
+end
+
+--- Health check URL for Claude's API infrastructure.
+local HEALTH_CHECK_URL = "https://api.anthropic.com"
+
+--- Check if the Claude server is reachable before offering reauth.
+--- If unreachable, retries with exponential backoff (30s, 60s, 120s, ...).
+--- When reachable, sets up the [r] keymap so the user can authenticate.
+--- @param attempt number Current attempt number (1-based)
+function SessionManager:_check_server_then_offer_reauth(attempt)
+    local max_delay_s = 600 -- cap at 10 minutes
+    local base_delay_s = 30
+    local delay_s = math.min(base_delay_s * (2 ^ (attempt - 1)), max_delay_s)
+
+    self.message_writer:write_error_action(
+        string.format("Checking server health (%s)...", HEALTH_CHECK_URL)
+    )
+
+    vim.system(
+        {
+            "curl",
+            "-s",
+            "-o",
+            "/dev/null",
+            "--connect-timeout",
+            "5",
+            HEALTH_CHECK_URL,
+        },
+        {},
+        function(result)
+            vim.schedule(function()
+                if self._destroyed then
+                    return
+                end
+
+                if result.code == 0 then
+                    -- Server reachable — offer login
+                    self:_set_reauth_keymap()
+                else
+                    -- Server unreachable — schedule retry with backoff
+                    self.message_writer:write_error_action(
+                        string.format(
+                            "Server unreachable. Retrying in %ds... (attempt %d)",
+                            delay_s,
+                            attempt
+                        )
+                    )
+
+                    self:_cancel_health_check_timer()
+                    local timer = vim.uv.new_timer()
+                    if not timer then
+                        return
+                    end
+                    self._health_check_timer = timer
+                    timer:start(delay_s * 1000, 0, function()
+                        timer:stop()
+                        timer:close()
+                        vim.schedule(function()
+                            if self._destroyed then
+                                return
+                            end
+                            self._health_check_timer = nil
+                            self:_check_server_then_offer_reauth(attempt + 1)
+                        end)
+                    end)
+                end
+            end)
+        end
+    )
+end
+
+--- Stop and close the health check backoff timer if active.
+function SessionManager:_cancel_health_check_timer()
+    if self._health_check_timer then
+        self._health_check_timer:stop()
+        self._health_check_timer:close()
+        self._health_check_timer = nil
+    end
 end
 
 --- Remove the re-auth keymap if one is active.
@@ -1584,6 +1668,7 @@ function SessionManager:_cancel_session()
 
     self.session_id = nil
     self:_remove_reauth_keymap()
+    self:_cancel_health_check_timer()
     self:_cancel_retry_timer()
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
