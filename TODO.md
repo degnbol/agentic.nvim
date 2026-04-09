@@ -6,10 +6,6 @@
   the chat. Could be a config toggle (e.g.
   `error_display = "chat" | "notify" | "both"`).
 
-- **Extmark fragility**: Extmarks seem more fragile than other approaches. Still
-  need to fix when the chat is updated and all the extmarks get cleared, plus
-  some rare cases where a final gutter extmark is added twice.
-
 - **Streaming performance**: Large tool call outputs (e.g. long file reads) can
   cause visible lag when writing to the chat buffer. Investigate.
 
@@ -24,4 +20,12 @@
   session is waiting to auto-continue, the back-off retry logic falsely treats
   it as a continue attempt and starts the 5-minute delay. Add support for
   queueing messages while waiting to auto-continue.
+
+- **Fold marker not closed**: Rare issue where a fold marker (`{{{`) is inserted
+  but the closing marker (`}}}`) is missing, causing everything from that point
+  to the end of the chat buffer to be folded into a single fold.
+
+- **Syntax highlight overflow**: Rare issue where treesitter syntax highlighting
+  from a previous block bleeds into the permission prompt, colouring parts of it
+  incorrectly.
 
