@@ -676,13 +676,11 @@ function SessionManager:_on_request_permission(request, callback)
         end
     end
 
-    -- Non-essential UI setup (diff preview, notifications, hooks) must not
-    -- prevent add_request from being called. If add_request never runs, the
-    -- ACP permission callback is lost — the provider waits forever for a
+    -- Non-essential UI setup (notifications, hooks) must not prevent
+    -- add_request from being called. If add_request never runs, the ACP
+    -- permission callback is lost — the provider waits forever for a
     -- response, permanently locking the session.
     local ok, err = pcall(function()
-        self:_show_diff_in_buffer(request.toolCall.toolCallId)
-
         self:_notify_attention("[?]")
 
         P.invoke_hook("on_permission_request", {
@@ -1784,6 +1782,17 @@ function SessionManager:add_buffer_diagnostics_to_context(bufnr)
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local diagnostics = DiagnosticsList.get_buffer_diagnostics(bufnr)
     return self.diagnostics_list:add_many(diagnostics)
+end
+
+--- Open the diff for the current permission request's tool call in a new tab.
+--- No-op if there is no active permission request or it's not an edit tool call.
+function SessionManager:open_diff_in_tab()
+    local request = self.permission_manager.current_request
+    if not request then
+        Logger.notify("No active permission request", vim.log.levels.INFO)
+        return
+    end
+    self:_show_diff_in_buffer(request.toolCallId)
 end
 
 --- @param tool_call_id string

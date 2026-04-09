@@ -516,6 +516,16 @@ function M.setup_diff_navigation_keymaps(buf_nrs)
         end, {
             desc = "Go to previous hunk - Agentic DiffPreview",
         })
+
+        BufHelpers.keymap_set(bufnr, "n", diff_keymaps.open_in_tab, function()
+            local SessionRegistry = require("agentic.session_registry")
+            local session = SessionRegistry.get_session_for_tab_page()
+            if session then
+                session:open_diff_in_tab()
+            end
+        end, {
+            desc = "Open diff in new tab - Agentic DiffPreview",
+        })
     end
 end
 

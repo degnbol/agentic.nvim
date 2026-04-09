@@ -192,14 +192,15 @@ fence rather than escaped to literal `\n`.
 
 ```
 Provider sends "session/request_permission"
-  -> SessionManager: opens diff preview in editor window (if kind = "diff")
   -> PermissionManager:add_request(request, callback)
      -> Queues request (sequential — one prompt at a time)
      -> Renders permission buttons in chat buffer
      -> Sets up buffer-local keymaps (1,2,3,4,0)
-  -> User presses key
+  -> User optionally presses diff_preview.open_in_tab keymap
+     -> Opens diff preview in a new tabpage (opt-in)
+  -> User presses permission key
      -> Sends result back to provider via callback
-     -> Clears diff preview
+     -> Clears diff preview (if opened)
      -> Dequeues next permission if any
 ```
 
