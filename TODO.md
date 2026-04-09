@@ -1,24 +1,27 @@
-- When making new files a new tab is opened with that file, which is fine but I 
-  get a warning that a buffer with no window is created. When switching to it there's another warning with options [O]k, [L]oad, ...
+- **Error display**: Currently errors are shown inline in the chat buffer with
+  red highlighting (`AgenticErrorHeading`/`AgenticErrorBody`). A future option
+  could use neovim's native error display (`vim.notify`, `vim.diagnostic`, or a
+  floating window) instead of or in addition to the inline chat display. This is
+  a matter of user preference — some may want errors in the editor, others in
+  the chat. Could be a config toggle (e.g.
+  `error_display = "chat" | "notify" | "both"`).
 
-- Error display: currently errors are shown inline in the chat buffer with red
-  highlighting (AgenticErrorHeading/AgenticErrorBody). A future option could use
-  neovim's native error display (vim.notify, vim.diagnostic, or floating window)
-  instead of or in addition to the inline chat display. This is a matter of user
-  preference — some may want errors in the editor, others in the chat. Could be a
-  config toggle (e.g. `error_display = "chat" | "notify" | "both"`).
+- **Extmark fragility**: Extmarks seem more fragile than other approaches. Still
+  need to fix when the chat is updated and all the extmarks get cleared, plus
+  some rare cases where a final gutter extmark is added twice.
 
-- extmarks seem more fragile than other approaches. Still need to fix when the 
-  chat is updated and all the extmarks gets cleared, plus some rare cases where a 
-  final gutter extmark is added twice.
+- **Streaming performance**: Large tool call outputs (e.g. long file reads) can
+  cause visible lag when writing to the chat buffer. Investigate.
 
-- Investigate streaming performance — large tool call outputs (e.g. long file reads) can cause visible lag when writing to the chat buffer.
+- **Session completion heuristic**: Some sessions are more clearly completed
+  than others. If the user prompt is last, the session is not completed. If it
+  ends in a commit etc., it probably is. Detection is heuristic, but we could
+  use a specific close keymap (instead of `:qa!`) to mark a session for archive.
+  Useful for resume: easily resume only unfinished work (or browse the archive
+  specifically).
 
-- Some sessions are more clearly completed than others. If user prompt is last in a session it's not completed. If the session ends in a commit etc. it's probably completed.
-  When it is and isn't might be a bit of a heuristic to detect but we could use a specific close keymap (instead of :qa!) to close marking a session for archive.
-  Why is this useful? For the resume functionality. So we can easily resume from just the unfinshed work (or choose to look at archive specifically.)
+- **Queued message vs auto-continue conflict**: If a message is queued while a
+  session is waiting to auto-continue, the back-off retry logic falsely treats
+  it as a continue attempt and starts the 5-minute delay. Add support for
+  queueing messages while waiting to auto-continue.
 
-- If I queue a message while a session is waiting to auto-continue the current back-off retry logic falsely thinks this means we are trying to continue so it starts the 5 min delay for sending "continue".
-  Add support for queueing messages while we are waiting to auto-continue.
-
-- Toggle keymap (<localLeader>a?) and config option to completely disable auto-scroll. We can instead get notified with bell when claude has completed a response and/or want interaction. New feature will be bell ringing/visual even for active window: I think currently it only activates the bell if we have focused another window?
