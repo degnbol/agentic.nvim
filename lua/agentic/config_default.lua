@@ -242,6 +242,7 @@ local ConfigDefault = {
         diff_preview = {
             next_hunk = "]c",
             prev_hunk = "[c",
+            open_in_tab = "<localLeader>d",
         },
 
         --- Keys for permission responses (Allow once, Allow always, etc.)
@@ -376,6 +377,11 @@ local ConfigDefault = {
     notifications = {
         bell = false,
     },
+
+    --- Auto-approve Bash permission requests when every segment of a compound
+    --- command (split on |, &&, ||, ;) individually matches an allow pattern
+    --- from ~/.claude/settings.json. Supplements the provider's built-in check.
+    auto_approve_compound_commands = true,
 
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings

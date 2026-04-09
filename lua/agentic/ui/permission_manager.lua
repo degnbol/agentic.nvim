@@ -1,6 +1,7 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
+local PermissionRules = require("agentic.utils.permission_rules")
 
 -- Priority order for permission option kinds.
 -- Lower number = higher priority (appears first).
@@ -38,6 +39,40 @@ function PermissionManager:new(message_writer, buf_nrs)
     return instance
 end
 
+--- Try to auto-approve a Bash permission request where every segment of a
+--- compound command matches an existing settings.json allow pattern.
+--- @param request agentic.acp.RequestPermission
+--- @param callback fun(option_id: string|nil)
+--- @return boolean handled
+function PermissionManager:_try_auto_approve(request, callback)
+    if not Config.auto_approve_compound_commands then
+        return false
+    end
+
+    local raw_input = request.toolCall and request.toolCall.rawInput
+    if not raw_input or not raw_input.command then
+        return false
+    end
+
+    if not PermissionRules.should_auto_approve(raw_input.command) then
+        return false
+    end
+
+    -- Find the allow_once option
+    for _, option in ipairs(request.options) do
+        if option.kind == "allow_once" then
+            Logger.debug(
+                "PermissionManager: auto-approving compound command:",
+                raw_input.command
+            )
+            callback(option.optionId)
+            return true
+        end
+    end
+
+    return false
+end
+
 --- Add a new permission request to the queue to be processed sequentially
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
@@ -46,6 +81,10 @@ function PermissionManager:add_request(request, callback)
         Logger.debug(
             "PermissionManager: Invalid request - missing toolCall.toolCallId"
         )
+        return
+    end
+
+    if self:_try_auto_approve(request, callback) then
         return
     end
 
