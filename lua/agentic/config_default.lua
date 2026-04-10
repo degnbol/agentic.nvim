@@ -383,6 +383,11 @@ local ConfigDefault = {
     --- from ~/.claude/settings.json. Supplements the provider's built-in check.
     auto_approve_compound_commands = true,
 
+    --- Auto-approve read-only tool calls (Read, Grep, Glob — ACP kinds "read"
+    --- and "search") without prompting, regardless of target path. These tools
+    --- cannot mutate the filesystem.
+    auto_approve_read_only_tools = true,
+
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings
     settings = {

@@ -976,25 +976,9 @@ end
 function MessageWriter:display_permission_buttons(tool_call_id, options)
     local option_mapping = {}
 
-    local lines_to_append = {
-        "### Allow?",
-        "",
-    }
+    local lines_to_append = {}
 
     local tracker = self.tool_call_blocks[tool_call_id]
-
-    if tracker and tracker.kind ~= "execute" then
-        -- Sanitize argument to prevent newlines in the permission request, neovim throws error
-        local sanitized_argument =
-            Renderer.strip_kind_prefix(tracker.kind, tracker.argument)
-                :gsub("\n", "\\n")
-
-        vim.list_extend(lines_to_append, {
-            string.format("### %s", Renderer.display_kind(tracker.kind)),
-            string.format("`%s`", sanitized_argument),
-            "", -- Blank line prevents markdown inline markers from spanning to next content
-        })
-    end
 
     -- Insert "Reject all" before reject_always (permanent rule is stronger).
     -- Build a merged list of ACP options + our local reject-all entry.
@@ -1087,22 +1071,6 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
             button_start_row,
             hint_line_index
         )
-    end
-
-    -- Apply syntax highlighting to the tool call header line within the permission block
-    if tracker then
-        for row = button_start_row, button_end_row do
-            local row_line =
-                vim.api.nvim_buf_get_lines(self.bufnr, row, row + 1, false)[1]
-            if row_line and row_line:find("^### %a") then
-                Renderer.apply_tool_header_syntax(
-                    self.bufnr,
-                    row,
-                    NS_PERMISSION_BUTTONS
-                )
-                break
-            end
-        end
     end
 
     -- Create extmark to track button block

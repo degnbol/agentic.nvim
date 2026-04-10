@@ -992,6 +992,7 @@ return ACPClient
 
 --- @class agentic.acp.ToolCall
 --- @field toolCallId string
+--- @field kind? agentic.acp.ToolKind
 --- @field rawInput? agentic.acp.RawInput
 
 --- @class agentic.acp.ToolCallRegularContent

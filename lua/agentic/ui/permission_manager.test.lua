@@ -108,6 +108,96 @@ describe("agentic.ui.PermissionManager", function()
         end
     end)
 
+    describe("auto-approve read-only tools", function()
+        --- @type agentic.UserConfig
+        local Config
+
+        before_each(function()
+            Config = require("agentic.config")
+        end)
+
+        --- @param kind agentic.acp.ToolKind
+        --- @return agentic.acp.RequestPermission
+        local function make_request_with_kind(kind)
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = "tc-readonly-" .. kind,
+                    kind = kind,
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                },
+            }
+        end
+
+        it("auto-approves read kind", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request_with_kind("read"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("allow-once"))
+            assert.is_nil(pm.current_request)
+        end)
+
+        it("auto-approves search kind", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request_with_kind("search"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("allow-once"))
+        end)
+
+        it("does not auto-approve edit kind", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request_with_kind("edit"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("does not auto-approve execute kind", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request_with_kind("execute"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("respects config toggle", function()
+            local original = Config.auto_approve_read_only_tools
+            Config.auto_approve_read_only_tools = false
+
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request_with_kind("read"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            pm:_complete_request("reject-once")
+
+            Config.auto_approve_read_only_tools = original
+        end)
+    end)
+
     describe("reanchor permission prompt", function()
         it("moves buttons to buffer bottom and preserves keymaps", function()
             pm:add_request(

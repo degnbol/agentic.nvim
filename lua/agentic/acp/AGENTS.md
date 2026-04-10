@@ -193,6 +193,9 @@ fence rather than escaped to literal `\n`.
 ```
 Provider sends "session/request_permission"
   -> PermissionManager:add_request(request, callback)
+     -> _try_auto_approve() checks compound command against settings.json rules
+        -> If approved: callback(allow_once) immediately, skip UI entirely
+        -> If not: fall through to interactive prompt
      -> Queues request (sequential — one prompt at a time)
      -> Renders permission buttons in chat buffer
      -> Sets up buffer-local keymaps (1,2,3,4,0)
@@ -203,6 +206,50 @@ Provider sends "session/request_permission"
      -> Clears diff preview (if opened)
      -> Dequeues next permission if any
 ```
+
+### Client-side auto-approval
+
+`PermissionManager:_try_auto_approve()` runs two independent checks before
+falling through to the interactive prompt. Either check can approve a request.
+
+#### Read-only tools
+
+Permission requests for ACP tool kinds `"read"` and `"search"` are always
+approved without prompting. These cover Read, Grep, and Glob — tools that
+cannot mutate the filesystem, regardless of target path. This bypasses the
+provider's directory sandbox restriction, which otherwise prompts for paths
+outside `additionalDirectories` even for read-only operations.
+
+Controlled by `Config.auto_approve_read_only_tools` (default `true`).
+
+#### Compound Bash commands
+
+The ACP provider (e.g. claude-agent-acp) has its own permission rules, but its
+pattern matching is limited: compound commands like `grep foo | head -20` prompt
+even when both `Bash(grep *)` and `Bash(head *)` are in the user's allow list.
+The provider matches the full command string against each pattern, not individual
+segments.
+
+`PermissionRules` (`lua/agentic/utils/permission_rules.lua`) adds a client-side
+layer that fills this gap. When a Bash permission request arrives:
+
+1. **Split** the command on top-level shell operators (`|`, `||`, `&&`, `;`),
+   respecting quote boundaries
+2. **Reject** unsafe constructs outright (subshells `$(...)`, backticks, process
+   substitution `<(...)` / `>(...)`)
+3. **Strip** harmless wrappers before matching: `stdbuf -oL` prefixes (added by
+   hooks), `/dev/null` redirects (`2>/dev/null`, `&>/dev/null`, `2>&1`)
+4. **Check** each segment against compiled patterns from `~/.claude/settings.json`
+   and `.claude/settings.json` (project-local)
+5. **Auto-approve** only if every segment matches an allow pattern AND no segment
+   matches a deny/ask pattern
+
+Patterns are the same `Bash(...)` glob syntax from Claude Code's settings.json.
+`*` matches anything except shell operators. Deny/ask patterns always take
+precedence over allow patterns (same as upstream). Compiled patterns are cached
+with mtime-based invalidation (re-reads settings.json when it changes on disk).
+
+Controlled by `Config.auto_approve_compound_commands` (default `true`).
 
 ### Permission response keys
 

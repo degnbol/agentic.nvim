@@ -39,34 +39,68 @@ function PermissionManager:new(message_writer, buf_nrs)
     return instance
 end
 
---- Try to auto-approve a Bash permission request where every segment of a
---- compound command matches an existing settings.json allow pattern.
+--- ACP tool kinds that are guaranteed read-only (no filesystem mutations).
+local READ_ONLY_KINDS = {
+    read = true,
+    search = true,
+}
+
+--- Send allow_once for the given request. Returns true on success.
+--- @param request agentic.acp.RequestPermission
+--- @param callback fun(option_id: string|nil)
+--- @param reason string
+--- @return boolean
+local function auto_approve(request, callback, reason)
+    for _, option in ipairs(request.options) do
+        if option.kind == "allow_once" then
+            Logger.debug("PermissionManager: auto-approving:", reason)
+            callback(option.optionId)
+            return true
+        end
+    end
+    return false
+end
+
+--- Try to auto-approve a permission request without user interaction.
+---
+--- Two independent checks (either can approve):
+--- 1. Read-only tool kinds ("read", "search") — always safe regardless of path.
+--- 2. Compound Bash commands — every pipe/chain segment must match an allow
+---    pattern from settings.json with no deny/ask match.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 --- @return boolean handled
 function PermissionManager:_try_auto_approve(request, callback)
-    if not Config.auto_approve_compound_commands then
+    local tool_call = request.toolCall
+    if not tool_call then
         return false
     end
 
-    local raw_input = request.toolCall and request.toolCall.rawInput
-    if not raw_input or not raw_input.command then
-        return false
+    -- Read-only tools: always approve (no filesystem mutation possible)
+    if
+        Config.auto_approve_read_only_tools
+        and READ_ONLY_KINDS[tool_call.kind]
+    then
+        return auto_approve(
+            request,
+            callback,
+            "read-only tool kind: " .. tool_call.kind
+        )
     end
 
-    if not PermissionRules.should_auto_approve(raw_input.command) then
-        return false
-    end
-
-    -- Find the allow_once option
-    for _, option in ipairs(request.options) do
-        if option.kind == "allow_once" then
-            Logger.debug(
-                "PermissionManager: auto-approving compound command:",
-                raw_input.command
+    -- Compound Bash commands: check each segment against settings.json rules
+    if Config.auto_approve_compound_commands then
+        local raw_input = tool_call.rawInput
+        if
+            raw_input
+            and raw_input.command
+            and PermissionRules.should_auto_approve(raw_input.command)
+        then
+            return auto_approve(
+                request,
+                callback,
+                "compound command: " .. raw_input.command
             )
-            callback(option.optionId)
-            return true
         end
     end
 
@@ -83,6 +117,16 @@ function PermissionManager:add_request(request, callback)
         )
         return
     end
+
+    -- DEBUG: log incoming permission options
+    Logger.debug_to_file(
+        "PermissionManager:add_request options:",
+        vim.tbl_map(function(o)
+            return { optionId = o.optionId, kind = o.kind, name = o.name }
+        end, request.options),
+        "toolCall kind:",
+        request.toolCall.kind
+    )
 
     if self:_try_auto_approve(request, callback) then
         return
@@ -189,6 +233,19 @@ function PermissionManager:_complete_request(option_id)
     if not current then
         return
     end
+
+    -- DEBUG: log which option was selected
+    local selected_kind
+    for _, opt in ipairs(current.request.options) do
+        if opt.optionId == option_id then
+            selected_kind = opt.kind
+            break
+        end
+    end
+    Logger.debug_to_file(
+        "PermissionManager:_complete_request selected:",
+        { optionId = option_id, kind = selected_kind }
+    )
 
     self.message_writer:remove_permission_buttons()
 
