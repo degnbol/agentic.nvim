@@ -20,6 +20,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
 --- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
 --- @field _reanchoring boolean Guard flag to prevent recursive on_content_changed during reanchor
+--- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 local PermissionManager = {}
 PermissionManager.__index = PermissionManager
 
@@ -34,6 +35,7 @@ function PermissionManager:new(message_writer, buf_nrs)
         current_request = nil,
         keymap_info = {},
         _reanchoring = false,
+        _always_cache = {},
     }, self)
 
     return instance
@@ -45,18 +47,72 @@ local READ_ONLY_KINDS = {
     search = true,
 }
 
+--- File-scoped tool kinds where allow_always applies per file path.
+local FILE_SCOPED_KINDS = {
+    edit = true,
+    write = true,
+    create = true,
+    delete = true,
+    move = true,
+}
+
+--- Build a cache key for an allow_always/reject_always decision.
+--- File-scoped tools key on kind:path, others on kind alone.
+--- @param tool_call agentic.acp.ToolCall
+--- @return string|nil
+local function build_cache_key(tool_call)
+    local kind = tool_call.kind
+    if not kind then
+        return nil
+    end
+    if FILE_SCOPED_KINDS[kind] then
+        local path = tool_call.rawInput and tool_call.rawInput.file_path
+        if path then
+            return kind .. ":" .. path
+        end
+    end
+    return kind
+end
+
+--- Find an option by kind and return its optionId.
+--- @param options agentic.acp.PermissionOption[]
+--- @param kind string
+--- @return string|nil
+local function find_option_id(options, kind)
+    for _, option in ipairs(options) do
+        if option.kind == kind then
+            return option.optionId
+        end
+    end
+    return nil
+end
+
 --- Send allow_once for the given request. Returns true on success.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 --- @param reason string
 --- @return boolean
 local function auto_approve(request, callback, reason)
-    for _, option in ipairs(request.options) do
-        if option.kind == "allow_once" then
-            Logger.debug("PermissionManager: auto-approving:", reason)
-            callback(option.optionId)
-            return true
-        end
+    local option_id = find_option_id(request.options, "allow_once")
+    if option_id then
+        Logger.debug("PermissionManager: auto-approving:", reason)
+        callback(option_id)
+        return true
+    end
+    return false
+end
+
+--- Send reject_once for the given request. Returns true on success.
+--- @param request agentic.acp.RequestPermission
+--- @param callback fun(option_id: string|nil)
+--- @param reason string
+--- @return boolean
+local function auto_reject(request, callback, reason)
+    local option_id = find_option_id(request.options, "reject_once")
+    if option_id then
+        Logger.debug("PermissionManager: auto-rejecting:", reason)
+        callback(option_id)
+        return true
     end
     return false
 end
@@ -104,6 +160,25 @@ function PermissionManager:_try_auto_approve(request, callback)
         end
     end
 
+    -- Client-side allow_always/reject_always cache (provider persistence unreliable via ACP)
+    local cache_key = build_cache_key(tool_call)
+    if cache_key then
+        local cached = self._always_cache[cache_key]
+        if cached == "allow" then
+            return auto_approve(
+                request,
+                callback,
+                "cached allow_always: " .. cache_key
+            )
+        elseif cached == "reject" then
+            return auto_reject(
+                request,
+                callback,
+                "cached reject_always: " .. cache_key
+            )
+        end
+    end
+
     return false
 end
 
@@ -117,16 +192,6 @@ function PermissionManager:add_request(request, callback)
         )
         return
     end
-
-    -- DEBUG: log incoming permission options
-    Logger.debug_to_file(
-        "PermissionManager:add_request options:",
-        vim.tbl_map(function(o)
-            return { optionId = o.optionId, kind = o.kind, name = o.name }
-        end, request.options),
-        "toolCall kind:",
-        request.toolCall.kind
-    )
 
     if self:_try_auto_approve(request, callback) then
         return
@@ -234,7 +299,7 @@ function PermissionManager:_complete_request(option_id)
         return
     end
 
-    -- DEBUG: log which option was selected
+    -- Cache allow_always/reject_always decisions for client-side auto-approval
     local selected_kind
     for _, opt in ipairs(current.request.options) do
         if opt.optionId == option_id then
@@ -242,10 +307,15 @@ function PermissionManager:_complete_request(option_id)
             break
         end
     end
-    Logger.debug_to_file(
-        "PermissionManager:_complete_request selected:",
-        { optionId = option_id, kind = selected_kind }
-    )
+    if selected_kind == "allow_always" or selected_kind == "reject_always" then
+        local cache_key = build_cache_key(current.request.toolCall)
+        if cache_key then
+            local action = selected_kind == "allow_always" and "allow"
+                or "reject"
+            self._always_cache[cache_key] = action
+            Logger.debug("PermissionManager: cached", action, "for", cache_key)
+        end
+    end
 
     self.message_writer:remove_permission_buttons()
 
@@ -281,6 +351,7 @@ function PermissionManager:clear()
     end
 
     self.queue = {}
+    self._always_cache = {}
 end
 
 --- Reject the current request and cancel all remaining queued requests.

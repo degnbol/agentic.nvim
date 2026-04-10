@@ -266,6 +266,142 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
+    describe("allow_always client-side cache", function()
+        --- @param kind agentic.acp.ToolKind
+        --- @param file_path string|nil
+        --- @return agentic.acp.RequestPermission
+        local function make_edit_request(kind, file_path)
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = "tc-cache-"
+                        .. kind
+                        .. "-"
+                        .. (file_path or ""),
+                    kind = kind,
+                    rawInput = file_path and { file_path = file_path } or nil,
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "allow-always",
+                        name = "Allow always",
+                        kind = "allow_always",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                    {
+                        optionId = "reject-always",
+                        name = "Reject always",
+                        kind = "reject_always",
+                    },
+                },
+            }
+        end
+
+        it("auto-approves after allow_always for same file", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb1 --[[@as function]]
+            )
+            -- User presses allow_always
+            pm:_complete_request("allow-always")
+            assert.spy(cb1).was.called(1)
+
+            -- Next edit to same file should be auto-approved
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(1)
+            assert.is_true(cb2:called_with("allow-once"))
+            assert.is_nil(pm.current_request)
+        end)
+
+        it("does not auto-approve different file after allow_always", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            -- Different file should still prompt
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/bar.lua"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("auto-rejects after reject_always", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("reject-always")
+
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(1)
+            assert.is_true(cb2:called_with("reject-once"))
+        end)
+
+        it("clear() resets the cache", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            pm:clear()
+
+            -- Should prompt again after clear
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("edit", "/tmp/foo.lua"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("non-file-scoped kinds cache by kind alone", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("execute", nil),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_edit_request("execute", nil),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(1)
+            assert.is_true(cb2:called_with("allow-once"))
+        end)
+    end)
+
     describe("empty line accumulation during reanchor", function()
         --- @return string[]
         local function get_lines()
