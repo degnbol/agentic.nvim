@@ -314,6 +314,27 @@ rejection).
 
 ## Known ACP limitations
 
+### No permission rule management via ACP
+
+The Claude TUI has `/permissions` for viewing and editing persistent permission
+rules (allow/deny patterns for tools). ACP has no equivalent — no command, no
+schema, no API for querying, creating, or deleting permission rules
+programmatically. The protocol defines only the per-tool-call approval flow
+(`request_permission` with `allow_once`/`allow_always`/`reject_once`/
+`reject_always` options).
+
+When a user selects `allow_always` or `reject_always`, the provider may store
+that rule internally, but the ACP client cannot inspect or manage those rules.
+The protocol spec says only: "Clients MAY automatically allow or reject
+permission requests according to user settings" — delegating the mechanism
+entirely to the client.
+
+This is why agentic.nvim implements three independent client-side layers (see
+"Client-side auto-approval" above): read-only tool approval, compound Bash
+command matching against `settings.json`, and the per-session allow/reject
+always cache. For persistent rule management, users edit `~/.claude/settings.json`
+directly (or `.claude/settings.json` for project-local rules).
+
 ### Edit applied before permission request
 
 Providers (at least `claude-agent-acp`) write file edits to disk **before**
