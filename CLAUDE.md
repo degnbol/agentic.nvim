@@ -109,21 +109,36 @@ Folding thresholds are configured per tool kind:
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
 
-## Constructor on-ready callback and session load race
+## Session lifecycle races and the epoch guard
 
-`AgentInstance.get_instance()` calls `on_ready` synchronously when the instance
-already exists. The SessionManager constructor wraps the inner logic in
-`vim.schedule`, deferring it. When `load_acp_session()` is called immediately
-after construction (e.g. from the session picker), the deferred on-ready
-callback fires AFTER `_do_load_acp_session` and, without the `_restoring` guard,
-calls `new_session()` — replacing the loaded session with an empty one.
+Two race conditions can overwrite `self.session_id` during session restore:
 
-**Rule:** Any code path that sets `self.session_id` before the on-ready callback
-fires must also set `self._restoring = true` to prevent the deferred callback
-from creating a new session. Clear `_restoring` in the completion callback.
+1. **Constructor on-ready race:** `AgentInstance.get_instance()` calls `on_ready`
+   synchronously when the instance already exists. The constructor wraps the
+   inner logic in `vim.schedule`. When `load_acp_session()` is called immediately
+   after construction (from the session picker), the deferred callback fires
+   after `_do_load_acp_session` — without the `_restoring` guard it would call
+   `new_session()`, replacing the loaded session.
 
-The same pattern applies to `restore_from_history()` (already handled via its
-own `_restoring = true` assignment).
+2. **Stale create_session response race:** The constructor's `new_session()`
+   sends `session/new` (async RPC). The user then browses the session picker for
+   seconds/minutes. `_do_load_acp_session` sets `_restoring = true` and sends
+   `session/load`. The load completes and clears `_restoring = false`. The
+   `session/new` response then arrives — `_restoring` is false, so the callback
+   overwrites `session_id` with the stale new-session ID.
+
+**Guards:**
+
+- `_restoring` flag — prevents the deferred on-ready callback (race 1) and
+  catches in-flight create callbacks while load is active.
+- `_session_epoch` counter — monotonically incremented by both `new_session()`
+  and `_do_load_acp_session`. The `create_session` callback captures the epoch
+  at call time and rejects the response if the epoch has advanced (race 2).
+  This catches stale responses even after `_restoring` is cleared.
+
+**Rule:** Any code path that initiates a session transition must increment
+`_session_epoch`. Any async callback that sets `self.session_id` must check
+that its captured epoch matches `self._session_epoch`.
 
 ## Cross-turn state hazards in MessageWriter
 

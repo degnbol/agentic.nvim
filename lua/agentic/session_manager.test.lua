@@ -180,6 +180,7 @@ describe("agentic.SessionManager", function()
             return {
                 session_id = nil,
                 _restoring = false,
+                _session_epoch = 0,
                 _is_first_message = true,
                 agent = {
                     agent_capabilities = { loadSession = true },
@@ -286,6 +287,67 @@ describe("agentic.SessionManager", function()
             assert.is_false(session._restoring)
             notify_stub:revert()
         end)
+
+        it(
+            "increments _session_epoch to invalidate in-flight create_session",
+            function()
+                local session = make_load_session()
+
+                -- Simulate: a new_session() was called earlier, epoch is 1
+                session._session_epoch = 1
+
+                session:_do_load_acp_session("loaded-session-id", "/tmp")
+
+                -- _do_load must have incremented epoch beyond the
+                -- create_session's captured value of 1
+                assert.equal(2, session._session_epoch)
+                assert.equal("loaded-session-id", session.session_id)
+            end
+        )
+
+        it(
+            "epoch guard rejects stale create_session after load completes",
+            function()
+                local session = make_load_session()
+                --- @type fun(result: table|nil, err: table|nil)|nil
+                local captured_create_cb
+
+                -- Wire up create_session to capture its callback
+                session.agent.create_session = function(_self, _handlers, cb)
+                    captured_create_cb = cb
+                end
+
+                -- Also need new_session method
+                session.new_session = SessionManager.new_session
+                session._is_first_message = true
+                session.agent.cancel_session = function() end
+                session.agent.subscribers = {}
+
+                -- Step 1: new_session sends session/new (callback pending)
+                session:new_session()
+                assert.is_not_nil(captured_create_cb)
+                assert.equal(1, session._session_epoch)
+
+                -- Step 2: load_acp_session runs (increments epoch to 2)
+                session:_do_load_acp_session("loaded-sid-aaa", "/tmp")
+                assert.equal(2, session._session_epoch)
+                assert.equal("loaded-sid-aaa", session.session_id)
+
+                -- Step 3: load completes, _restoring cleared
+                assert.is_not_nil(captured_load_cb)
+                captured_load_cb(nil, nil) -- success
+                assert.is_false(session._restoring)
+
+                -- Step 4: stale create_session response arrives AFTER load
+                -- This is the race: _restoring=false, but epoch mismatch
+                captured_create_cb({ sessionId = "stale-new-sid-bbb" }, nil)
+
+                -- session_id must NOT have been overwritten
+                assert.equal("loaded-sid-aaa", session.session_id)
+                -- stale subscriber should be cleaned up
+                assert.is_nil(session.agent.subscribers["stale-new-sid-bbb"])
+            end
+        )
     end)
 
     describe("_generate_welcome_header", function()

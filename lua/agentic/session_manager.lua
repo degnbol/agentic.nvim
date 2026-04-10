@@ -64,6 +64,7 @@ end
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
+--- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _pending_load_cwd? string CWD for the deferred session/load
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
@@ -140,6 +141,7 @@ function SessionManager:new(tab_page_id)
         _is_first_message = true,
         is_generating = false,
         _restoring = false,
+        _session_epoch = 0,
         _destroyed = false,
         --- @type string|nil Smart path of the most recently edited .md file (plan candidate)
         _last_edited_md = nil,
@@ -1229,6 +1231,11 @@ function SessionManager:new_session(opts)
 
     local handlers = self:_build_handlers()
 
+    -- Capture epoch so the callback can detect if a load (or another
+    -- new_session) superseded this create while the RPC was in flight.
+    self._session_epoch = self._session_epoch + 1
+    local epoch = self._session_epoch
+
     self.agent:create_session(handlers, function(response, err)
         self.status_animation:stop()
 
@@ -1238,17 +1245,18 @@ function SessionManager:new_session(opts)
             return
         end
 
-        -- A session load may have started while this create was in flight
-        -- (e.g. user opened picker, on_ready fired new_session, then picker
-        -- callback called load_acp_session). The load already set session_id
-        -- and _restoring=true — don't clobber it with the stale create result.
+        -- A session load (or another new_session) may have started while
+        -- this create was in flight. The epoch counter detects this: if the
+        -- epoch has advanced, this response is stale and must be discarded.
+        -- The _restoring check is kept as a belt-and-braces guard for the
+        -- window between _do_load setting _restoring and incrementing epoch.
         --
         -- Only remove the subscriber — do NOT send session/cancel. Sending
         -- cancel for the stale session while session/load is active or just
         -- completed can confuse providers (observed: claude-agent-acp drops
         -- loaded session context when a cancel arrives for a different session
         -- around the same time).
-        if self._restoring then
+        if self._restoring or epoch ~= self._session_epoch then
             self.agent.subscribers[response.sessionId] = nil
             return
         end
@@ -1345,7 +1353,38 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
     -- the loaded one — destroying all restored context.
     self._restoring = true
 
-    self:_cancel_session()
+    -- Invalidate any in-flight create_session callback. The epoch check in
+    -- the create_session callback (new_session) rejects stale responses
+    -- even after _restoring is cleared by the load completion handler.
+    self._session_epoch = self._session_epoch + 1
+
+    -- Clean up the old session's UI state and subscriber, but do NOT send
+    -- session/cancel to the provider. Sending cancel immediately before
+    -- session/load disrupts some providers (claude-agent-acp loses loaded
+    -- session context). The old ACP session is orphaned — it will expire
+    -- on the provider side or be replaced by the loaded session's subscriber.
+    if self.session_id then
+        -- Remove subscriber to stop routing stale notifications
+        self.agent.subscribers[self.session_id] = nil
+        self.widget:clear()
+        self.todo_list:clear()
+        self.file_list:clear()
+        self.code_selection:clear()
+        self.diagnostics_list:clear()
+        self.config_options:clear()
+    end
+    self.session_id = nil
+    self:_remove_reauth_keymap()
+    self:_cancel_health_check_timer()
+    self:_cancel_retry_timer()
+    self.permission_manager:clear()
+    SlashCommands.setCommands(self.widget.buf_nrs.input, {})
+    self._last_edited_md = nil
+    self._plan_exit_pending = false
+    self.chat_history = ChatHistory:new()
+    self.widget:set_chat_title(nil)
+    self._history_to_send = nil
+
     self.status_animation:start("busy")
 
     self.session_id = session_id
