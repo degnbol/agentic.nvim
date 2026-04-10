@@ -109,6 +109,22 @@ Folding thresholds are configured per tool kind:
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
 
+## Constructor on-ready callback and session load race
+
+`AgentInstance.get_instance()` calls `on_ready` synchronously when the instance
+already exists. The SessionManager constructor wraps the inner logic in
+`vim.schedule`, deferring it. When `load_acp_session()` is called immediately
+after construction (e.g. from the session picker), the deferred on-ready
+callback fires AFTER `_do_load_acp_session` and, without the `_restoring` guard,
+calls `new_session()` — replacing the loaded session with an empty one.
+
+**Rule:** Any code path that sets `self.session_id` before the on-ready callback
+fires must also set `self._restoring = true` to prevent the deferred callback
+from creating a new session. Clear `_restoring` in the completion callback.
+
+The same pattern applies to `restore_from_history()` (already handled via its
+own `_restoring = true` assignment).
+
 ## Cross-turn state hazards in MessageWriter
 
 MessageWriter carries mutable flags that persist across turns. Any flag set
@@ -228,6 +244,28 @@ The plugin's `ftplugin/` directory holds filetype-specific setup (e.g.
 `AgenticChat.lua` for treesitter query overrides). Buffer filetypes are set in
 `ChatWidget:_create_buf_nrs`: `AgenticChat`, `AgenticInput`, `AgenticTodos`,
 `AgenticCode`, `AgenticFiles`, `AgenticDiagnostics`.
+
+## Client-side auto-approval
+
+The plugin extends the ACP provider's permission system with two client-side
+auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
+
+1. **Read-only tools** — ACP kinds `"read"` and `"search"` (covers Read, Grep,
+   Glob) are always approved regardless of target path. These tools cannot mutate
+   the filesystem. Controlled by `Config.auto_approve_read_only_tools` (default
+   `true`).
+
+2. **Compound Bash commands** — the upstream provider matches the full command
+   string against each `Bash(...)` pattern, so `grep foo | head -20` prompts
+   even when both `Bash(grep *)` and `Bash(head *)` are allowed. The plugin
+   splits on shell operators, strips harmless wrappers (stdbuf, /dev/null
+   redirects), and checks each segment independently against the user's
+   `~/.claude/settings.json` allow/deny/ask rules. Controlled by
+   `Config.auto_approve_compound_commands` (default `true`). Implementation in
+   `lua/agentic/utils/permission_rules.lua`.
+
+See "Client-side auto-approval" in @lua/agentic/acp/AGENTS.md for the full
+algorithm and safety rules.
 
 ## ACP details
 
