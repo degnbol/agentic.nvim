@@ -462,6 +462,57 @@ function SessionManager:_rename_session(new_title)
     self.chat_history:save()
 end
 
+--- Delete the current session from disk and clear the UI.
+--- With confirm_delete enabled (default), prompts before proceeding.
+function SessionManager:_delete_session()
+    if not self.session_id then
+        self.message_writer:write_message(
+            ACPPayloads.generate_agent_message("No active session to delete.")
+        )
+        self.message_writer:append_separator()
+        return
+    end
+
+    local session_id = self.session_id --[[@as string]]
+
+    local function do_delete()
+        local ok, err = ChatHistory.delete_session(session_id)
+        if ok then
+            self:_cancel_session()
+            Logger.notify(
+                "Session " .. session_id:sub(1, 8) .. " deleted.",
+                vim.log.levels.INFO
+            )
+        else
+            self.message_writer:write_message(
+                ACPPayloads.generate_agent_message(
+                    string.format(
+                        "Failed to delete session: %s",
+                        err or "unknown error"
+                    )
+                )
+            )
+            self.message_writer:append_separator()
+        end
+    end
+
+    if Config.session_restore.confirm_delete ~= false then
+        -- vim.fn.confirm uses the command line — reliable regardless of
+        -- window/buffer context (vim.ui.select floats can be invisible
+        -- when called from a nomodifiable scratch buffer).
+        local choice = vim.fn.confirm( -- no nvim_* equivalent
+            "Delete session " .. session_id:sub(1, 8) .. "?",
+            "&Yes\n&No",
+            2
+        )
+        if choice ~= 1 then
+            return
+        end
+    end
+
+    do_delete()
+end
+
 --- Handle non-JSON text from the ACP process (stdout non-JSON or stderr).
 --- Used for local command output (e.g. /context) that bypasses JSON-RPC.
 --- Only displays when a prompt is actively generating to avoid noise.
@@ -882,6 +933,13 @@ end
 
 --- @param input_text string
 function SessionManager:_handle_input_submit(input_text)
+    -- Intercept /delete before the ready-state guard — it's a local-only
+    -- command that doesn't need the ACP provider.
+    if input_text:match("^/delete%s*$") then
+        self:_delete_session()
+        return
+    end
+
     if not (self.session_id and self.agent and self.agent.state == "ready") then
         -- Store for _flush_pending_input when session becomes ready
         self._pending_input = input_text
@@ -1175,6 +1233,21 @@ function SessionManager:new_session(opts)
         if err or not response then
             -- no log here, already logged in create_session
             self.session_id = nil
+            return
+        end
+
+        -- A session load may have started while this create was in flight
+        -- (e.g. user opened picker, on_ready fired new_session, then picker
+        -- callback called load_acp_session). The load already set session_id
+        -- and _restoring=true — don't clobber it with the stale create result.
+        --
+        -- Only remove the subscriber — do NOT send session/cancel. Sending
+        -- cancel for the stale session while session/load is active or just
+        -- completed can confuse providers (observed: claude-agent-acp drops
+        -- loaded session context when a cancel arrives for a different session
+        -- around the same time).
+        if self._restoring then
+            self.agent.subscribers[response.sessionId] = nil
             return
         end
 

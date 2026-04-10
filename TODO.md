@@ -29,6 +29,6 @@
   from a previous block bleeds into the permission prompt, colouring parts of it
   incorrectly.
 
-- Should we consider an /exit command or a keymap to clear up? E.g. after 
-  commiting new work and a session is done, we could choose to delete session 
-  files and history. This could reduce clutter in resume list.
+- ~~Should we consider an /exit command or a keymap to clear up?~~ Done:
+  `/delete` slash command deletes the current session from disk and clears the
+  UI. Confirmation prompt by default (`session_restore.confirm_delete = true`).

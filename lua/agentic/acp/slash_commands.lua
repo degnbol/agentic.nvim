@@ -43,6 +43,11 @@ function SlashCommands.setCommands(bufnr, available_commands)
             menu = "Rename session",
             info = "Rename session: /rename <new name>",
         },
+        delete = {
+            word = "delete",
+            menu = "Delete current session",
+            info = "Delete the current session from disk and clear the UI",
+        },
     }
 
     for _, cmd in ipairs(available_commands) do

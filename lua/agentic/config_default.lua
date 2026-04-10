@@ -402,9 +402,11 @@ local ConfigDefault = {
     --- "quickfix" (default) — quickfix window with delete/undo/scope toggle keymaps.
     --- "fzf-lua" — fzf-lua with preview and scope toggle; falls back to quickfix if not installed.
     --- "select" — delegates to vim.ui.select (works with dressing.nvim, etc; no scope toggle or delete).
+    --- @field confirm_delete? boolean Prompt for confirmation before /delete (default: true)
     session_restore = {
         storage_path = nil,
         picker = "quickfix",
+        confirm_delete = true,
     },
 }
 
