@@ -18,13 +18,22 @@ local M = {}
 --- @field item agentic.SessionRestore.PickerItem
 
 --- Populate the quickfix list with session items.
+--- Uses standard qf fields (filename, lnum, text) so quicker.nvim and other qf
+--- plugins render aligned columns automatically.
 --- @param items agentic.SessionRestore.PickerItem[]
 --- @param scope agentic.SessionRestore.Scope
 local function set_qf_items(items, scope)
     local scope_label = scope == "all" and "all projects" or "this project"
     local qf_items = {}
     for _, item in ipairs(items) do
-        table.insert(qf_items, { text = item.display })
+        local ts = item.last_activity or item.timestamp or 0
+        local date_str = os.date("%Y-%m-%d %H:%M", ts) --[[@as string]]
+        local title = item.display:match("│ (.+)$") or item.display
+        table.insert(qf_items, {
+            filename = date_str,
+            lnum = item.prompt_count or 0,
+            text = title,
+        })
     end
     --- vim.fn.setqflist: no API equivalent; quickfixtextfunc must be a funcref
     vim.fn.setqflist({}, " ", {
@@ -33,15 +42,6 @@ local function set_qf_items(items, scope)
             scope_label
         ),
         items = qf_items,
-        quickfixtextfunc = function(info)
-            --- vim.fn.getqflist: no API equivalent for fetching qf items by id
-            local qf = vim.fn.getqflist({ id = info.id, items = 1 }).items
-            local lines = {}
-            for i = info.start_idx, info.end_idx do
-                lines[#lines + 1] = qf[i] and qf[i].text or ""
-            end
-            return lines
-        end,
     })
 end
 
@@ -97,7 +97,7 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         local win = vim.api.nvim_get_current_win()
         vim.api.nvim_set_option_value(
             "winhighlight",
-            "QuickFixLine:",
+            "QuickFixLine:,QuickFixFilename:AgenticPickerDate",
             { win = win }
         )
         vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
@@ -110,11 +110,7 @@ function M.show(items, on_select, opts) -- luacheck: ignore
 
     local function open_qf()
         set_qf_items(items, scope)
-        -- Suppress FileType qf so quicker.nvim (and other qf plugins) don't fire
-        local ei = vim.o.eventignore
-        vim.o.eventignore = "FileType"
         vim.cmd("botright copen")
-        vim.o.eventignore = ei
         setup_qf_win()
     end
 
@@ -123,21 +119,8 @@ function M.show(items, on_select, opts) -- luacheck: ignore
     local qf_buf = vim.api.nvim_get_current_buf()
     local map_opts = { buffer = qf_buf, nowait = true, silent = true }
 
-    local function apply_syntax()
-        vim.cmd("syntax clear")
-        vim.cmd(
-            [[syntax match AgenticPickerDate "^\d\{4}-\d\{2}-\d\{2} \d\{2}:\d\{2}"]]
-        )
-        vim.cmd([[syntax match AgenticPickerDelim "│"]])
-    end
-    apply_syntax()
     local augroup =
         vim.api.nvim_create_augroup("agentic_session_picker", { clear = true })
-    vim.api.nvim_create_autocmd("Syntax", {
-        group = augroup,
-        buffer = qf_buf,
-        callback = apply_syntax,
-    })
 
     -- Commit deletions when the qf buffer is closed by any means (:q, :cclose, q)
     vim.api.nvim_create_autocmd("BufUnload", {
@@ -187,8 +170,11 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         local item = items[idx]
         if item then
             commit_and_notify()
-            vim.cmd("cclose")
-            on_select(item)
+            -- on_select first (confirm dialog runs while qf is still visible),
+            -- then close qf only if the user chose an action (not cancel).
+            if on_select(item) ~= false then
+                vim.cmd("cclose")
+            end
         end
     end, map_opts)
 

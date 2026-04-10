@@ -18,7 +18,7 @@ describe("SessionRestore", function()
     --- @type TestStub
     local logger_notify_stub
     --- @type TestStub
-    local vim_ui_select_stub
+    local vim_fn_confirm_stub
 
     local test_sessions = {
         {
@@ -97,7 +97,7 @@ describe("SessionRestore", function()
         Logger = require("agentic.utils.logger")
         Config = require("agentic.config")
 
-        -- Force builtin picker which uses vim.ui.select for conflict dialogue
+        -- Force builtin picker which uses vim.fn.confirm for conflict dialogue
         Config.session_restore = { picker = "builtin" }
 
         chat_history_load_stub = spy.stub(ChatHistory, "load")
@@ -105,7 +105,8 @@ describe("SessionRestore", function()
         session_registry_stub =
             spy.stub(SessionRegistry, "get_session_for_tab_page")
         logger_notify_stub = spy.stub(Logger, "notify")
-        vim_ui_select_stub = spy.stub(vim.ui, "select")
+        vim_fn_confirm_stub = spy.stub(vim.fn, "confirm")
+        vim_fn_confirm_stub:returns(0) -- default: cancel (no choice)
     end)
 
     after_each(function()
@@ -113,7 +114,7 @@ describe("SessionRestore", function()
         chat_history_list_stub:revert()
         session_registry_stub:revert()
         logger_notify_stub:revert()
-        vim_ui_select_stub:revert()
+        vim_fn_confirm_stub:revert()
 
         for _, mod in ipairs(niled_modules) do
             package.loaded[mod] = original_loaded[mod]
@@ -133,6 +134,24 @@ describe("SessionRestore", function()
             --- @diagnostic disable-next-line: missing-fields
             local items = SessionRestore.build_items({ { session_id = "s1" } })
             assert.truthy(items[1].display:match("%(no title%)"))
+        end)
+
+        it("passes prompt_count through to items", function()
+            local items = SessionRestore.build_items({
+                {
+                    session_id = "s1",
+                    title = "With count",
+                    timestamp = 1704067200,
+                    prompt_count = 5,
+                },
+                {
+                    session_id = "s2",
+                    title = "No count",
+                    timestamp = 1704067200,
+                },
+            })
+            assert.equal(5, items[1].prompt_count)
+            assert.is_nil(items[2].prompt_count)
         end)
 
         it("strips newlines from multi-line titles", function()
@@ -297,16 +316,16 @@ describe("SessionRestore", function()
                 mock_session --[[@as agentic.SessionManager]]
             )
 
-            -- Conflict dialogue via vim.ui.select
-            assert.spy(vim_ui_select_stub).was.called(1)
-            local conflict_items = vim_ui_select_stub.calls[1][1]
-            assert.equal("Restore here (replace current)", conflict_items[1])
-            assert.equal("Open in new tab", conflict_items[2])
+            -- Conflict dialogue via vim.fn.confirm
+            assert.spy(vim_fn_confirm_stub).was.called(1)
+            local prompt = vim_fn_confirm_stub.calls[1][1]
+            assert.truthy(prompt:match("messages"))
         end)
 
         it("does nothing when user dismisses conflict prompt", function()
             local mock_session = session_with_messages()
             setup_list_stub()
+            -- confirm returns 0 on cancel/dismiss (default from stub)
 
             builtin_show_stub:invokes(function(picker_items, on_select)
                 on_select(picker_items[1])
@@ -316,9 +335,6 @@ describe("SessionRestore", function()
                 1,
                 mock_session --[[@as agentic.SessionManager]]
             )
-
-            local conflict_callback = vim_ui_select_stub.calls[1][3]
-            conflict_callback(nil)
 
             assert.spy(chat_history_load_stub).was.called(0)
         end)
@@ -330,6 +346,7 @@ describe("SessionRestore", function()
                 setup_list_stub()
                 setup_load_stub(mock_history)
                 setup_registry_stub(mock_session)
+                vim_fn_confirm_stub:returns(1) -- "Restore here"
 
                 builtin_show_stub:invokes(function(picker_items, on_select)
                     on_select(picker_items[1])
@@ -339,9 +356,6 @@ describe("SessionRestore", function()
                     1,
                     mock_session --[[@as agentic.SessionManager]]
                 )
-
-                local conflict_callback = vim_ui_select_stub.calls[1][3]
-                conflict_callback("Restore here (replace current)")
 
                 assert.spy(mock_session.agent.cancel_session).was.called(1)
                 assert.spy(mock_session.widget.clear).was.called(1)
@@ -442,14 +456,12 @@ describe("SessionRestore", function()
                 setup_list_stub()
                 setup_registry_stub(mock_session)
 
+                vim_fn_confirm_stub:returns(1) -- "Restore here"
+
                 SessionRestore.show_picker(
                     1,
                     mock_session --[[@as agentic.SessionManager]]
                 )
-
-                -- Conflict prompt via vim.ui.select
-                local conflict_callback = vim_ui_select_stub.calls[1][3]
-                conflict_callback("Restore here (replace current)")
 
                 assert.spy(mock_session.agent.cancel_session).was.called(0)
                 assert.spy(mock_session.widget.clear).was.called(0)
@@ -495,7 +507,7 @@ describe("SessionRestore", function()
             SessionRestore.show_picker(1, nil)
 
             -- No conflict dialogue
-            assert.spy(vim_ui_select_stub).was.called(0)
+            assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)
 
         it("detects no conflict when session_id is nil", function()
@@ -510,7 +522,7 @@ describe("SessionRestore", function()
                 session --[[@as agentic.SessionManager]]
             )
 
-            assert.spy(vim_ui_select_stub).was.called(0)
+            assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)
 
         it("detects no conflict when chat_history is nil", function()
@@ -522,7 +534,7 @@ describe("SessionRestore", function()
                 session --[[@as agentic.SessionManager]]
             )
 
-            assert.spy(vim_ui_select_stub).was.called(0)
+            assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)
 
         it("detects no conflict when messages array is empty", function()
@@ -535,7 +547,7 @@ describe("SessionRestore", function()
                 session --[[@as agentic.SessionManager]]
             )
 
-            assert.spy(vim_ui_select_stub).was.called(0)
+            assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)
     end)
 

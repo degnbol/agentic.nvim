@@ -11,6 +11,7 @@ local SessionRegistry = require("agentic.session_registry")
 --- @field last_activity? integer
 --- @field cwd? string
 --- @field file_path? string Full path to session JSON (for cross-project access)
+--- @field prompt_count? integer Number of user prompts
 
 --- @class agentic.SessionRestore
 local SessionRestore = {}
@@ -85,6 +86,7 @@ end
 --- @param has_conflict boolean
 --- @param cwd? string Original cwd for cross-project restore
 --- @param file_path? string Full path to session JSON (cross-project)
+--- @return boolean accepted true if user chose to restore (not cancelled)
 local function restore_with_conflict_check(
     session_id,
     tab_page_id,
@@ -93,27 +95,22 @@ local function restore_with_conflict_check(
     file_path
 )
     if has_conflict then
-        vim.ui.select({
-            "Restore here (replace current)",
-            "Open in new tab",
-        }, {
-            prompt = "Current session has messages:",
-        }, function(choice)
-            if choice == "Restore here (replace current)" then
-                do_restore(
-                    session_id,
-                    tab_page_id,
-                    has_conflict,
-                    cwd,
-                    file_path
-                )
-            elseif choice == "Open in new tab" then
-                restore_in_new_tab(session_id, cwd, file_path)
-            end
-        end)
+        local choice = vim.fn.confirm(
+            "Current session has messages:",
+            "&Replace here\n&Open in new tab\n&Cancel",
+            3
+        ) -- no nvim_* equivalent
+        if choice == 1 then
+            do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
+        elseif choice == 2 then
+            restore_in_new_tab(session_id, cwd, file_path)
+        else
+            return false
+        end
     else
         do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
     end
+    return true
 end
 
 --- Shorten a cwd path for display (collapse home dir, keep last 2 components).
@@ -160,6 +157,7 @@ function SessionRestore.build_items(sessions, opts)
             last_activity = s.last_activity,
             cwd = s.cwd,
             file_path = s.file_path,
+            prompt_count = s.prompt_count,
         })
     end
     return items
@@ -243,8 +241,9 @@ function SessionRestore.show_picker(tab_page_id, current_session, scope)
         local has_conflict = check_conflict(current_session)
 
         --- @param item agentic.SessionRestore.PickerItem
+        --- @return boolean accepted
         local function on_select(item)
-            restore_with_conflict_check(
+            return restore_with_conflict_check(
                 item.session_id,
                 tab_page_id,
                 has_conflict,

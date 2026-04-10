@@ -33,6 +33,7 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field last_activity? integer Unix timestamp of most recent save
 --- @field cwd? string Working directory the session was created in
 --- @field file_path? string Full path to JSON file (set by list_all_sessions)
+--- @field prompt_count? integer Number of user prompts in the session
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
@@ -282,6 +283,14 @@ local function read_sessions_from_folder(folder)
                 local ok, parsed =
                     pcall(vim.json.decode, table.concat(content, "\n"))
                 if ok and parsed then
+                    local prompt_count = 0
+                    if parsed.messages then
+                        for _, msg in ipairs(parsed.messages) do
+                            if msg.type == "user" then
+                                prompt_count = prompt_count + 1
+                            end
+                        end
+                    end
                     table.insert(sessions, {
                         session_id = filename:gsub("%.json$", ""),
                         title = parsed.title or "",
@@ -289,6 +298,7 @@ local function read_sessions_from_folder(folder)
                         last_activity = parsed.last_activity,
                         cwd = parsed.cwd,
                         file_path = file_path,
+                        prompt_count = prompt_count,
                     })
                 else
                     Logger.debug(
