@@ -1,4 +1,4 @@
---- @diagnostic disable: invisible, missing-fields, assign-type-mismatch, cast-local-type, param-type-mismatch
+--- @diagnostic disable: invisible, missing-fields, assign-type-mismatch, cast-local-type, param-type-mismatch, need-check-nil
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -160,6 +160,131 @@ describe("agentic.SessionManager", function()
             assert.equal("plan", session.config_options.mode.currentValue)
             assert.spy(render_header_spy).was.called(1)
             assert.equal("Mode: Plan", render_header_spy.calls[1][3])
+        end)
+    end)
+
+    describe("_do_load_acp_session: _restoring flag", function()
+        --- @type TestStub
+        local schedule_stub
+        --- @type TestStub
+        local exec_autocmds_stub
+
+        --- @type fun(result: table|nil, err: table|nil)|nil
+        local captured_load_cb
+
+        --- Build a minimal session for load_acp_session tests
+        --- @return agentic.SessionManager
+        local function make_load_session()
+            local noop = function() end
+            captured_load_cb = nil
+            return {
+                session_id = nil,
+                _restoring = false,
+                _is_first_message = true,
+                agent = {
+                    agent_capabilities = { loadSession = true },
+                    load_session = function(
+                        _self,
+                        _sid,
+                        _cwd,
+                        _mcp,
+                        _handlers,
+                        cb
+                    )
+                        captured_load_cb = cb
+                    end,
+                    cancel_session = noop,
+                },
+                message_writer = {
+                    write_message = noop,
+                    tool_call_blocks = {},
+                },
+                status_animation = { start = noop, stop = noop },
+                chat_history = {
+                    session_id = nil,
+                    timestamp = nil,
+                    messages = {},
+                },
+                widget = {
+                    clear = noop,
+                    set_chat_title = noop,
+                    buf_nrs = { chat = 0, input = 0 },
+                },
+                permission_manager = { clear = noop },
+                todo_list = { clear = noop },
+                file_list = { clear = noop },
+                code_selection = { clear = noop },
+                diagnostics_list = { clear = noop },
+                config_options = { clear = noop },
+                _cancel_health_check_timer = noop,
+                _cancel_retry_timer = noop,
+                _remove_reauth_keymap = noop,
+                _do_load_acp_session = SessionManager._do_load_acp_session,
+                _cancel_session = SessionManager._cancel_session,
+                _build_handlers = SessionManager._build_handlers,
+                _on_session_update = noop,
+                _on_tool_call = noop,
+                _on_tool_call_update = noop,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+            exec_autocmds_stub = spy.stub(vim.api, "nvim_exec_autocmds")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+            exec_autocmds_stub:revert()
+        end)
+
+        it(
+            "sets _restoring = true immediately to block deferred new_session",
+            function()
+                local session = make_load_session()
+
+                -- Simulate: agent.load_session does NOT call callback yet
+                session.agent.load_session = function()
+                    -- pending — callback not invoked
+                end
+
+                session:_do_load_acp_session("test-session-id", "/tmp")
+
+                -- _restoring must be true while load is in flight
+                assert.is_true(session._restoring)
+            end
+        )
+
+        it("clears _restoring on successful load", function()
+            local session = make_load_session()
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+
+            assert.is_not_nil(captured_load_cb)
+            -- Simulate successful completion
+            captured_load_cb(nil, nil)
+
+            assert.is_false(session._restoring)
+        end)
+
+        it("clears _restoring on failed load", function()
+            local session = make_load_session()
+            local notify_stub = spy.stub(Logger, "notify")
+
+            -- Stub _fallback_restore_from_local to avoid side effects
+            session._fallback_restore_from_local = function() end
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+
+            assert.is_not_nil(captured_load_cb)
+            -- Simulate failure
+            captured_load_cb(nil, { message = "not found" })
+
+            assert.is_false(session._restoring)
+            notify_stub:revert()
         end)
     end)
 

@@ -1162,6 +1162,7 @@ function SessionManager:new_session(opts)
     opts = opts or {}
     local restore_mode = opts.restore_mode or false
     local on_created = opts.on_created
+
     if not restore_mode then
         self:_cancel_session()
     end
@@ -1261,6 +1262,16 @@ end
 --- @param session_id string
 --- @param cwd? string Original working directory for the session.
 function SessionManager:_do_load_acp_session(session_id, cwd)
+    -- Prevent the constructor's deferred on-ready callback from calling
+    -- new_session() after we've already started loading.  When the agent
+    -- instance is already initialised, get_instance() fires on_ready
+    -- synchronously (which vim.schedule's the inner callback), then the
+    -- caller invokes load_acp_session() before the scheduled callback runs.
+    -- Without this flag the deferred callback sees _pending_load_session_id
+    -- = nil, _restoring = false and creates a fresh session that overwrites
+    -- the loaded one — destroying all restored context.
+    self._restoring = true
+
     self:_cancel_session()
     self.status_animation:start("busy")
 
@@ -1293,10 +1304,12 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
                         ),
                         vim.log.levels.WARN
                     )
+                    self._restoring = false
                     self:_fallback_restore_from_local(session_id)
                     return
                 end
 
+                self._restoring = false
                 self.status_animation:stop()
 
                 local welcome = string.format(
