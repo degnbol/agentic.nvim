@@ -264,6 +264,14 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
    `Config.auto_approve_compound_commands` (default `true`). Implementation in
    `lua/agentic/utils/permission_rules.lua`.
 
+3. **Allow/reject always cache** — when the user selects `allow_always` or
+   `reject_always`, the decision is cached in `PermissionManager._always_cache`
+   and subsequent matching requests are auto-approved/rejected without prompting.
+   This compensates for providers that don't reliably persist `allow_always`
+   decisions via ACP. File-scoped tool kinds (edit, write, create, delete, move)
+   cache per `kind:file_path`. Other kinds cache per `kind` alone. The cache
+   is cleared on `clear()` (session reset / `/new`).
+
 See "Client-side auto-approval" in @lua/agentic/acp/AGENTS.md for the full
 algorithm and safety rules.
 

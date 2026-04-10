@@ -209,7 +209,7 @@ Provider sends "session/request_permission"
 
 ### Client-side auto-approval
 
-`PermissionManager:_try_auto_approve()` runs two independent checks before
+`PermissionManager:_try_auto_approve()` runs three independent checks before
 falling through to the interactive prompt. Either check can approve a request.
 
 #### Read-only tools
@@ -250,6 +250,24 @@ precedence over allow patterns (same as upstream). Compiled patterns are cached
 with mtime-based invalidation (re-reads settings.json when it changes on disk).
 
 Controlled by `Config.auto_approve_compound_commands` (default `true`).
+
+#### Allow/reject always cache
+
+ACP providers don't reliably persist `allow_always`/`reject_always` decisions
+(the protocol leaves persistence as provider-specific behaviour). The plugin
+caches these decisions in `PermissionManager._always_cache` and auto-approves
+or auto-rejects subsequent matching requests.
+
+Cache keys are scoped by tool kind:
+- **File-scoped** (edit, write, create, delete, move): `kind:file_path`
+- **Other kinds**: `kind` alone
+
+When a cached `allow` entry matches, the plugin sends `allow_once` back to the
+provider (same as the other auto-approval checks). When a cached `reject` entry
+matches, it sends `reject_once`.
+
+The cache is per-session — cleared by `clear()` (called on `/new`, session
+cancel, and tabpage close).
 
 ### Permission response keys
 
