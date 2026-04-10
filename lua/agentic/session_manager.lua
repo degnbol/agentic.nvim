@@ -939,8 +939,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     -- If restored/switched session, prepend history on first submit
     if self._history_to_send then
-        self.chat_history.title = input_text -- Update title for restored session
-        self.widget:set_chat_title(input_text)
         ChatHistory.prepend_restored_messages(self._history_to_send, prompt)
         self._history_to_send = nil
     elseif self.chat_history.title == "" then
@@ -1311,6 +1309,14 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
 
                 self._restoring = false
                 self.status_animation:stop()
+
+                -- Restore title from local history (ACP doesn't return it)
+                ChatHistory.load(session_id, function(history)
+                    if history and history.title and history.title ~= "" then
+                        self.chat_history.title = history.title
+                        self.widget:set_chat_title(history.title)
+                    end
+                end)
 
                 local welcome = string.format(
                     "\n## Resumed session `%s`\n",

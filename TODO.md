@@ -29,3 +29,6 @@
   from a previous block bleeds into the permission prompt, colouring parts of it
   incorrectly.
 
+- Should we consider an /exit command or a keymap to clear up? E.g. after 
+  commiting new work and a session is done, we could choose to delete session 
+  files and history. This could reduce clutter in resume list.
