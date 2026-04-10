@@ -497,20 +497,22 @@ function SessionManager:_delete_session()
     end
 
     if Config.session_restore.confirm_delete ~= false then
-        -- vim.fn.confirm uses the command line — reliable regardless of
-        -- window/buffer context (vim.ui.select floats can be invisible
-        -- when called from a nomodifiable scratch buffer).
-        local choice = vim.fn.confirm( -- no nvim_* equivalent
-            "Delete session " .. session_id:sub(1, 8) .. "?",
-            "&Yes\n&No",
-            2
-        )
-        if choice ~= 1 then
-            return
-        end
+        -- Deferred to run after _submit_input completes its cleanup
+        -- (close_optional_window, move_cursor_to). Without the schedule,
+        -- vim.ui.select opens a float that immediately loses focus to the
+        -- scheduled move_cursor_to(chat) in _submit_input.
+        vim.schedule(function()
+            vim.ui.select({ "Yes", "No" }, {
+                prompt = "Delete session " .. session_id:sub(1, 8) .. "?",
+            }, function(choice)
+                if choice == "Yes" then
+                    do_delete()
+                end
+            end)
+        end)
+    else
+        do_delete()
     end
-
-    do_delete()
 end
 
 --- Handle non-JSON text from the ACP process (stdout non-JSON or stderr).
