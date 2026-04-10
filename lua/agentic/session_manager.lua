@@ -499,16 +499,16 @@ function SessionManager:_delete_session()
     if Config.session_restore.confirm_delete ~= false then
         -- Deferred to run after _submit_input completes its cleanup
         -- (close_optional_window, move_cursor_to). Without the schedule,
-        -- vim.ui.select opens a float that immediately loses focus to the
-        -- scheduled move_cursor_to(chat) in _submit_input.
+        -- confirm() races with the scheduled move_cursor_to(chat).
         vim.schedule(function()
-            vim.ui.select({ "Yes", "No" }, {
-                prompt = "Delete session " .. session_id:sub(1, 8) .. "?",
-            }, function(choice)
-                if choice == "Yes" then
-                    do_delete()
-                end
-            end)
+            local choice = vim.fn.confirm( -- no nvim_* equivalent
+                "Delete session " .. session_id:sub(1, 8) .. "?",
+                "&Yes\n&No",
+                2
+            )
+            if choice == 1 then
+                do_delete()
+            end
         end)
     else
         do_delete()
