@@ -38,7 +38,7 @@ local function set_qf_items(items, scope)
     --- vim.fn.setqflist: no API equivalent; quickfixtextfunc must be a funcref
     vim.fn.setqflist({}, " ", {
         title = string.format(
-            "Sessions (%s) │ <CR>:restore  dd:delete  u:undo  <Tab>:scope  q:close",
+            "Sessions (%s) │ date  #prompts  title │ <CR>:restore  dd:delete  u:undo  <Tab>:scope  q:close",
             scope_label
         ),
         items = qf_items,
