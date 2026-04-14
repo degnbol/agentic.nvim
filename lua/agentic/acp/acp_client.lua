@@ -1,4 +1,6 @@
+local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
+local PermissionRules = require("agentic.utils.permission_rules")
 local transport_module = require("agentic.acp.acp_transport")
 
 --[[
@@ -405,10 +407,10 @@ function ACPClient:_handle_notification(message_id, method, params)
     elseif method == "session/request_permission" then
         --- @diagnostic disable-next-line: param-type-mismatch
         self:__handle_request_permission(message_id, params)
-    elseif method == "fs/read_text_file" or method == "fs/write_text_file" then
-        Logger.debug(
-            string.format("Received '%s' notification, ignoring it", method)
-        )
+    elseif method == "fs/read_text_file" then
+        self:_handle_fs_read(message_id, params)
+    elseif method == "fs/write_text_file" then
+        self:_handle_fs_write(message_id, params)
     else
         Logger.notify("Unknown notification method: " .. method)
     end
@@ -594,6 +596,111 @@ function ACPClient:__handle_tool_call_update(session_id, update)
     end)
 end
 
+--- Handle fs/read_text_file request from the provider.
+--- Reads the file from disk and sends the content back. This lets the provider
+--- read files outside cwd without hitting the ignore library's ../ rejection.
+--- @param message_id number
+--- @param params table {sessionId, path, line?, limit?}
+function ACPClient:_handle_fs_read(message_id, params)
+    local path = params.path
+    if not path then
+        self:_send_error(message_id, "Missing 'path' parameter")
+        return
+    end
+
+    local lines, err = FileSystem.read_from_disk(path)
+    if not lines then
+        self:_send_error(message_id, err or ("Failed to read file: " .. path))
+        return
+    end
+
+    local start_line = 1
+    local end_line = #lines
+
+    if params.line and params.line > 1 then
+        start_line = math.min(params.line, #lines + 1)
+    end
+    if params.limit and params.limit > 0 then
+        end_line = math.min(start_line + params.limit - 1, #lines)
+    end
+
+    local selected = {}
+    for i = start_line, end_line do
+        selected[#selected + 1] = lines[i]
+    end
+
+    self:__send_result(message_id, { content = table.concat(selected, "\n") })
+end
+
+--- Handle fs/write_text_file request from the provider.
+--- Writes content to disk and sends an empty result back.
+--- @param message_id number
+--- @param params table {sessionId, path, content}
+function ACPClient:_handle_fs_write(message_id, params)
+    local path = params.path
+    local content = params.content
+
+    if not path or not content then
+        self:_send_error(message_id, "Missing 'path' or 'content' parameter")
+        return
+    end
+
+    local ok, err = FileSystem.save_to_disk(path, content)
+    if not ok then
+        self:_send_error(message_id, err or ("Failed to write file: " .. path))
+        return
+    end
+
+    self:__send_result(message_id, {})
+
+    -- Reload the buffer if loaded so the user sees the change.
+    -- Must schedule — this runs from a libuv read callback where vim APIs
+    -- are unsafe.
+    vim.schedule(function()
+        -- Use write_file's reload pattern (same as FileSystem.write_file)
+        local abs = FileSystem.to_absolute_path(path)
+        local bufnr = nil
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+            if
+                vim.api.nvim_buf_is_loaded(b)
+                and vim.api.nvim_buf_get_name(b) == abs
+            then
+                bufnr = b
+                break
+            end
+        end
+        if not bufnr then
+            return
+        end
+        local reload_ok, reload_err = pcall(function()
+            local disk_lines = FileSystem.read_from_disk(path)
+            if disk_lines then
+                local was_modifiable =
+                    vim.api.nvim_get_option_value("modifiable", { buf = bufnr })
+                vim.api.nvim_set_option_value(
+                    "modifiable",
+                    true,
+                    { buf = bufnr }
+                )
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, disk_lines)
+                vim.api.nvim_set_option_value(
+                    "modifiable",
+                    was_modifiable,
+                    { buf = bufnr }
+                )
+                vim.api.nvim_set_option_value(
+                    "modified",
+                    false,
+                    { buf = bufnr }
+                )
+            end
+        end)
+        if not reload_ok then
+            Logger.debug("Buffer reload error after fs/write:", reload_err)
+        end
+    end)
+end
+
 --- @protected
 --- @param message_id number
 --- @param request agentic.acp.RequestPermission
@@ -731,10 +838,18 @@ end
 --- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
 function ACPClient:create_session(handlers, callback)
     local cwd = vim.fn.getcwd()
+    local additional_dirs = PermissionRules.get_additional_directories()
 
     self:_send_request("session/new", {
         cwd = cwd,
         mcpServers = {},
+        _meta = {
+            claudeCode = {
+                options = {
+                    additionalDirectories = additional_dirs,
+                },
+            },
+        },
     }, function(result, err)
         if err then
             Logger.notify(
@@ -792,10 +907,19 @@ function ACPClient:load_session(
     self:_subscribe(session_id, handlers)
     self._loading_sessions[session_id] = true
 
+    local additional_dirs = PermissionRules.get_additional_directories()
+
     self:_send_request("session/load", {
         sessionId = session_id,
         cwd = cwd,
         mcpServers = mcp_servers or {},
+        _meta = {
+            claudeCode = {
+                options = {
+                    additionalDirectories = additional_dirs,
+                },
+            },
+        },
     }, function(result, err)
         self._loading_sessions[session_id] = nil
         callback(result, err)

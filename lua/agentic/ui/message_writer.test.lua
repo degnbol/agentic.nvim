@@ -1551,4 +1551,214 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(#body_extmarks > 0)
         end)
     end)
+
+    --- @diagnostic disable: missing-fields, redundant-parameter
+    describe("parallel tool calls", function()
+        it(
+            "all blocks remain in buffer after sequential write then update",
+            function()
+                -- Simulate parallel tool calls: 3 blocks written, then enriched, then completed
+                -- This mirrors the ACP event order for parallel tool calls
+
+                -- Phase 1: Initial tool_call events (pending, minimal)
+                local block1 = {
+                    tool_call_id = "par-1",
+                    status = "pending",
+                    kind = "execute",
+                    argument = nil,
+                    body = nil,
+                }
+                writer:write_tool_call_block(
+                    block1 --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+                )
+
+                local block2 = {
+                    tool_call_id = "par-2",
+                    status = "pending",
+                    kind = "execute",
+                    argument = nil,
+                    body = nil,
+                }
+                writer:write_tool_call_block(
+                    block2 --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+                )
+
+                local block3 = {
+                    tool_call_id = "par-3",
+                    status = "pending",
+                    kind = "execute",
+                    argument = nil,
+                    body = nil,
+                }
+                writer:write_tool_call_block(
+                    block3 --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+                )
+
+                -- All 3 blocks should be tracked
+                assert.is_not_nil(writer.tool_call_blocks["par-1"])
+                assert.is_not_nil(writer.tool_call_blocks["par-2"])
+                assert.is_not_nil(writer.tool_call_blocks["par-3"])
+
+                -- Phase 2: Enrichment updates (rawInput arrives, no status)
+                writer:update_tool_call_block({
+                    tool_call_id = "par-1",
+                    kind = "execute",
+                    argument = "rm /tmp/file1.txt",
+                    body = { "```bash", "rm /tmp/file1.txt", "```" },
+                } --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+
+                writer:update_tool_call_block({
+                    tool_call_id = "par-2",
+                    kind = "execute",
+                    argument = "rm /tmp/file2.txt",
+                    body = { "```bash", "rm /tmp/file2.txt", "```" },
+                } --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+
+                writer:update_tool_call_block({
+                    tool_call_id = "par-3",
+                    kind = "execute",
+                    argument = "rm /tmp/file3.txt",
+                    body = { "```bash", "rm /tmp/file3.txt", "```" },
+                } --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+
+                -- Phase 3: Completed updates
+                writer:update_tool_call_block({
+                    tool_call_id = "par-1",
+                    status = "completed",
+                })
+
+                writer:update_tool_call_block({
+                    tool_call_id = "par-2",
+                    status = "completed",
+                })
+
+                writer:update_tool_call_block({
+                    tool_call_id = "par-3",
+                    status = "completed",
+                })
+
+                -- Verify all 3 blocks still have valid extmarks
+                for _, id in ipairs({ "par-1", "par-2", "par-3" }) do
+                    local tracker = writer.tool_call_blocks[id]
+                    assert.is_not_nil(tracker, "tracker missing for " .. id)
+                    local pos = vim.api.nvim_buf_get_extmark_by_id(
+                        bufnr,
+                        Renderer.NS_TOOL_BLOCKS,
+                        tracker.extmark_id,
+                        { details = true }
+                    )
+                    assert.is_not_nil(pos[1], "extmark missing for " .. id)
+                    local start_row = pos[1]
+                    local end_row = pos[3].end_row
+                    assert.truthy(
+                        end_row > start_row,
+                        string.format(
+                            "collapsed extmark for %s: start=%d end=%d",
+                            id,
+                            start_row,
+                            end_row
+                        )
+                    )
+                end
+
+                -- Verify buffer content: search for each block's argument text
+                local all_lines =
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local content = table.concat(all_lines, "\n")
+                assert.truthy(
+                    content:find("file1", 1, true),
+                    "block 1 content missing from buffer"
+                )
+                assert.truthy(
+                    content:find("file2", 1, true),
+                    "block 2 content missing from buffer"
+                )
+                assert.truthy(
+                    content:find("file3", 1, true),
+                    "block 3 content missing from buffer"
+                )
+            end
+        )
+
+        it(
+            "blocks survive interleaved permission button reanchoring",
+            function()
+                -- Simulate: write 3 blocks, display permission buttons,
+                -- then enrichment triggers reanchor for each update
+
+                writer:write_tool_call_block({
+                    tool_call_id = "perm-1",
+                    status = "pending",
+                    kind = "execute",
+                } --[[@as agentic.ui.MessageWriter.ToolCallBlock]])
+
+                writer:write_tool_call_block({
+                    tool_call_id = "perm-2",
+                    status = "pending",
+                    kind = "execute",
+                } --[[@as agentic.ui.MessageWriter.ToolCallBlock]])
+
+                -- Display permission buttons (simulates request_permission)
+                local options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                }
+                writer:display_permission_buttons("perm-1", options)
+
+                -- Now write a third block (appends AFTER buttons)
+                writer:write_tool_call_block({
+                    tool_call_id = "perm-3",
+                    status = "pending",
+                    kind = "execute",
+                } --[[@as agentic.ui.MessageWriter.ToolCallBlock]])
+
+                -- Enrich block 2 (triggers _notify_content_changed → reanchor)
+                writer:update_tool_call_block({
+                    tool_call_id = "perm-2",
+                    kind = "execute",
+                    argument = "rm /tmp/file2.txt",
+                    body = { "```bash", "rm /tmp/file2.txt", "```" },
+                } --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+
+                -- Enrich block 3
+                writer:update_tool_call_block({
+                    tool_call_id = "perm-3",
+                    kind = "execute",
+                    argument = "rm /tmp/file3.txt",
+                    body = { "```bash", "rm /tmp/file3.txt", "```" },
+                } --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+
+                -- Remove buttons (simulates user pressing allow)
+                writer:remove_permission_buttons()
+
+                -- Verify all 3 blocks still exist
+                local all_lines =
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local content = table.concat(all_lines, "\n")
+
+                -- All 3 blocks must be present
+                for _, id in ipairs({ "perm-1", "perm-2", "perm-3" }) do
+                    local tracker = writer.tool_call_blocks[id]
+                    assert.is_not_nil(tracker, "tracker missing for " .. id)
+                end
+
+                assert.truthy(
+                    content:find("file2", 1, true),
+                    "block 2 content missing"
+                )
+                assert.truthy(
+                    content:find("file3", 1, true),
+                    "block 3 content missing"
+                )
+            end
+        )
+    end)
 end)

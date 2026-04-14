@@ -296,6 +296,16 @@ namespace, not stored row numbers. `remove_permission_buttons` queries the
 extmark to find the current position, making it robust against buffer shifts
 from concurrent tool call updates.
 
+**Extmark gravity is critical.** The button extmark must use `right_gravity=true`
+and `end_right_gravity=true`. Without this, `update_tool_call_block` can corrupt
+the extmark position: `nvim_buf_set_lines(buf, start, end, ...)` with an
+exclusive `end` that lands exactly on the button extmark's start row causes the
+extmark to collapse into the replacement range when `right_gravity=false`
+(default). `remove_permission_buttons` then deletes tool call block content
+instead of just the buttons. This manifests as parallel tool calls disappearing
+— only the first block survives because subsequent blocks are removed along with
+the buttons after the first block's update triggers a reanchor cycle.
+
 ## Adapter override points
 
 Each provider adapter can override these **protected** methods on `ACPClient`:

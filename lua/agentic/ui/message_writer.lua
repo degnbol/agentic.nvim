@@ -728,6 +728,11 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         tool_call_block.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, end_row)
 
+        -- right_gravity=true so the start moves past content inserted
+        -- at the boundary by a preceding block's update_tool_call_block.
+        -- set_lines(buf, prev_start, prev_end+1) has its exclusive end
+        -- at this block's start row — right_gravity=false would pull the
+        -- start into the replacement range, corrupting this extmark.
         tool_call_block.extmark_id = vim.api.nvim_buf_set_extmark(
             bufnr,
             Renderer.NS_TOOL_BLOCKS,
@@ -735,7 +740,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             0,
             {
                 end_row = end_row,
-                right_gravity = false,
+                right_gravity = true,
                 end_right_gravity = false,
             }
         )
@@ -955,7 +960,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             {
                 id = tracker.extmark_id,
                 end_row = new_end_row,
-                right_gravity = false,
+                right_gravity = true,
                 end_right_gravity = false,
             }
         )
@@ -1073,7 +1078,12 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         )
     end
 
-    -- Create extmark to track button block
+    -- Create extmark to track button block.
+    -- right_gravity=true so the start moves past content inserted at its
+    -- boundary — update_tool_call_block replaces lines immediately before
+    -- the buttons (end-exclusive range touches button_start_row), and
+    -- right_gravity=false would pull the start into the replacement range,
+    -- causing remove_permission_buttons to delete tool call block content.
     vim.api.nvim_buf_set_extmark(
         self.bufnr,
         NS_PERMISSION_BUTTONS,
@@ -1081,7 +1091,8 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
         0,
         {
             end_row = button_end_row,
-            right_gravity = false,
+            right_gravity = true,
+            end_right_gravity = true,
         }
     )
 

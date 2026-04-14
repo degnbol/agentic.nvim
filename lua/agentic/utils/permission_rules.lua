@@ -177,6 +177,31 @@ function M.load_patterns()
     end
 end
 
+--- Read additionalDirectories from ~/.claude/settings.json, expanding ~ to
+--- the home directory. Returns absolute paths suitable for the Claude SDK.
+--- @return string[]
+function M.get_additional_directories()
+    local global_path = M.settings_paths()
+    local settings = M.read_json(global_path)
+    if
+        not settings
+        or not settings.permissions
+        or not settings.permissions.additionalDirectories
+    then
+        return {}
+    end
+
+    local home = vim.uv.os_homedir() or os.getenv("HOME") or ""
+    local dirs = {}
+    for _, dir in ipairs(settings.permissions.additionalDirectories) do
+        if type(dir) == "string" and dir ~= "" then
+            local expanded = dir:gsub("^~/", home .. "/")
+            table.insert(dirs, expanded)
+        end
+    end
+    return dirs
+end
+
 --- Harmless command wrappers prepended by hooks (e.g. shell-guard.sh).
 --- Stripped before pattern matching so allow rules match the inner command.
 local HARMLESS_PREFIXES = {
