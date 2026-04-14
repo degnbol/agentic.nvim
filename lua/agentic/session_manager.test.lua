@@ -55,6 +55,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     render_header = render_header_spy,
                     buf_nrs = { chat = test_bufnr },
+                    tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 _on_session_update = SessionManager._on_session_update,
                 _update_chat_header = SessionManager._update_chat_header,
@@ -64,6 +65,7 @@ describe("agentic.SessionManager", function()
         after_each(function()
             notify_stub:revert()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
+            vim.t.agentic_headers = nil
         end)
 
         it("updates state, re-renders header, notifies user", function()
@@ -76,7 +78,10 @@ describe("agentic.SessionManager", function()
 
             assert.spy(render_header_spy).was.called(1)
             assert.equal("chat", render_header_spy.calls[1][2])
-            assert.equal("Code", render_header_spy.calls[1][3])
+
+            -- Context is set in vim.t.agentic_headers, not passed to render_header
+            local headers = vim.t.agentic_headers
+            assert.equal("Code", headers.chat.context)
 
             assert.spy(notify_stub).was.called(1)
             assert.equal("Mode changed to: code", notify_stub.calls[1][1])
@@ -127,6 +132,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     render_header = render_header_spy,
                     buf_nrs = { chat = test_bufnr },
+                    tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 _on_session_update = SessionManager._on_session_update,
                 _update_chat_header = SessionManager._update_chat_header,
@@ -136,6 +142,7 @@ describe("agentic.SessionManager", function()
 
         after_each(function()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
+            vim.t.agentic_headers = nil
         end)
 
         it("sets config options and updates header on mode", function()
@@ -165,7 +172,10 @@ describe("agentic.SessionManager", function()
             assert.is_not_nil(session.config_options.mode)
             assert.equal("plan", session.config_options.mode.currentValue)
             assert.spy(render_header_spy).was.called(1)
-            assert.equal("Plan", render_header_spy.calls[1][3])
+
+            -- Context is set in vim.t.agentic_headers, not passed to render_header
+            local headers = vim.t.agentic_headers
+            assert.equal("Plan", headers.chat.context)
         end)
     end)
 

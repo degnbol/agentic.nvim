@@ -13,6 +13,7 @@ local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
+local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic._SessionManagerPrivate
 local P = {}
@@ -957,7 +958,21 @@ function SessionManager:_update_chat_header()
     end
 
     local context = #parts > 0 and table.concat(parts, " · ") or nil
-    self.widget:render_header("chat", context)
+
+    -- Update headers state synchronously so external plugins (incline, tabline)
+    -- always see current data. render_header's vim.schedule callback also sets
+    -- this, but bails out when winid == -1 (widget hidden), losing the update.
+    local tab = self.widget.tab_page_id
+    if vim.api.nvim_tabpage_is_valid(tab) then
+        local headers = WindowDecoration.get_headers_state(tab)
+        if headers.chat then
+            headers.chat.context = context
+            WindowDecoration.set_headers_state(tab, headers)
+        end
+    end
+
+    -- Render winbar and buffer name (context is already in headers state)
+    self.widget:render_header("chat")
 end
 
 --- @param input_text string
