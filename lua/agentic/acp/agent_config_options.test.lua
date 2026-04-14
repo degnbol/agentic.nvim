@@ -545,25 +545,110 @@ describe("agentic.acp.AgentConfigOptions", function()
             end
         )
 
-        it("returns false and notifies when no model options exist", function()
-            local Logger = require("agentic.utils.logger")
-            local notify_stub = spy.stub(Logger, "notify")
+        it(
+            "queues pending select and notifies when no model options exist",
+            function()
+                local Logger = require("agentic.utils.logger")
+                local notify_stub = spy.stub(Logger, "notify")
 
+                local fresh = AgentConfigOptions:new(
+                    { chat = test_bufnr },
+                    function() end,
+                    function() end
+                )
+
+                assert.is_false(fresh:show_model_selector(function() end))
+                assert.stub(select_stub).was.called(0)
+                assert.stub(notify_stub).was.called(1)
+                assert.truthy(string.find(notify_stub.calls[1][1], "Waiting"))
+                assert.equal(vim.log.levels.INFO, notify_stub.calls[1][2])
+
+                notify_stub:revert()
+            end
+        )
+    end)
+
+    describe("pending model select", function()
+        --- @type TestStub
+        local select_stub
+        --- @type TestStub
+        local schedule_stub
+        --- @type TestStub
+        local notify_stub
+
+        before_each(function()
+            select_stub = spy.stub(vim.ui, "select")
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+            local Logger = require("agentic.utils.logger")
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            select_stub:revert()
+            schedule_stub:revert()
+            notify_stub:revert()
+        end)
+
+        it("shows model selector when set_options delivers models", function()
             local fresh = AgentConfigOptions:new(
                 { chat = test_bufnr },
                 function() end,
                 function() end
             )
 
-            assert.is_false(fresh:show_model_selector(function() end))
+            -- Trigger pending before models arrive
+            fresh:show_model_selector(function() end)
             assert.stub(select_stub).was.called(0)
-            assert.stub(notify_stub).was.called(1)
-            assert.truthy(
-                string.find(notify_stub.calls[1][1], "model switching")
-            )
-            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
 
-            notify_stub:revert()
+            -- Deliver models via set_options
+            fresh:set_options({ model_option })
+
+            -- Pending flush should have opened the selector
+            assert.stub(select_stub).was.called(1)
+        end)
+
+        it(
+            "shows model selector when set_legacy_models delivers models",
+            function()
+                local fresh = AgentConfigOptions:new(
+                    { chat = test_bufnr },
+                    function() end,
+                    function() end
+                )
+
+                fresh:show_model_selector(function() end)
+
+                fresh:set_legacy_models({
+                    availableModels = {
+                        {
+                            modelId = "opus",
+                            name = "Opus",
+                            description = "Most capable",
+                        },
+                    },
+                    currentModelId = "opus",
+                })
+
+                assert.stub(select_stub).was.called(1)
+            end
+        )
+
+        it("clear() prevents pending select from firing", function()
+            -- Trigger pending, then clear, then deliver models
+            config_options:show_model_selector(function() end)
+            config_options:clear()
+            config_options:set_options({ model_option })
+
+            -- No selector should have opened
+            assert.stub(select_stub).was.called(0)
+        end)
+
+        it("does not show selector on set_options when not pending", function()
+            config_options:set_options({ model_option })
+            assert.stub(select_stub).was.called(0)
         end)
     end)
 

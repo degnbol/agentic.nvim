@@ -32,8 +32,3 @@
 - In qf selection of resume session, if it lists current session that session 
   should be highlighted with qf line hl, which is standard for for qf listing 
   showing "current" entry.
-
-- If a user presses <localLeader>m to select model before the session is ready 
-  there's an error saying the agent doesn't support this. Instead, let's allow 
-  for selecting the model that is about to start. It's fine it this means 
-  blocking/stopping the startup of a wrong model.

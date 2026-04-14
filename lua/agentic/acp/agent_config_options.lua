@@ -8,6 +8,8 @@ local Logger = require("agentic.utils.logger")
 --- @field thought_level? agentic.acp.ConfigOption
 --- @field legacy_agent_modes agentic.acp.AgentModes
 --- @field legacy_agent_models agentic.acp.AgentModels
+--- @field _pending_model_select boolean
+--- @field _set_model_callback fun(model_id: string, is_legacy: boolean)
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
 
@@ -25,6 +27,8 @@ function AgentConfigOptions:new(buffers, set_mode_callback, set_model_callback)
         thought_level = nil,
         legacy_agent_modes = AgentModes:new(),
         legacy_agent_models = AgentModels:new(),
+        _pending_model_select = false,
+        _set_model_callback = set_model_callback,
     }, self)
 
     for _, bufnr in pairs(buffers) do
@@ -54,12 +58,14 @@ function AgentConfigOptions:clear()
     self.mode = nil
     self.model = nil
     self.thought_level = nil
+    self._pending_model_select = false
     self.legacy_agent_modes:clear()
     self.legacy_agent_models:clear()
 end
 
 --- @param configOptions agentic.acp.ConfigOption[]|nil
 function AgentConfigOptions:set_options(configOptions)
+    local was_pending = self._pending_model_select
     self:clear()
 
     if not configOptions then
@@ -77,6 +83,10 @@ function AgentConfigOptions:set_options(configOptions)
             Logger.debug("Unknown config option", option)
         end
     end
+
+    if was_pending then
+        self:_flush_pending_model_select()
+    end
 end
 
 --- Modes from providers that don't support the new Config Options
@@ -89,6 +99,10 @@ end
 --- @param models_info agentic.acp.ModelsInfo
 function AgentConfigOptions:set_legacy_models(models_info)
     self.legacy_agent_models:set_models(models_info)
+
+    if self._pending_model_select then
+        self:_flush_pending_model_select()
+    end
 end
 
 --- @param target_mode string|nil
@@ -244,15 +258,26 @@ function AgentConfigOptions:show_model_selector(handle_model_change)
         end
     )
 
-    if not legacy_shown then
-        Logger.notify(
-            "This provider does not support model switching",
-            vim.log.levels.WARN,
-            { title = "Agentic" }
-        )
+    if legacy_shown then
+        return true
     end
 
-    return legacy_shown
+    -- No models available yet — queue for when the session delivers them
+    self._pending_model_select = true
+    Logger.notify(
+        "Waiting for session to start...",
+        vim.log.levels.INFO,
+        { title = "Agentic" }
+    )
+    return false
+end
+
+--- Show the model selector if it was requested before models were available
+function AgentConfigOptions:_flush_pending_model_select()
+    self._pending_model_select = false
+    vim.schedule(function()
+        self:show_model_selector(self._set_model_callback)
+    end)
 end
 
 --- @param target agentic.acp.ConfigOption|nil
