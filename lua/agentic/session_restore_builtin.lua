@@ -22,10 +22,13 @@ local M = {}
 --- plugins render aligned columns automatically.
 --- @param items agentic.SessionRestore.PickerItem[]
 --- @param scope agentic.SessionRestore.Scope
-local function set_qf_items(items, scope)
+--- @param current_session_id string|nil
+--- @return integer|nil current_idx 1-based index of current session, if found
+local function set_qf_items(items, scope, current_session_id)
     local scope_label = scope == "all" and "all projects" or "this project"
     local qf_items = {}
-    for _, item in ipairs(items) do
+    local current_idx --- @type integer|nil
+    for i, item in ipairs(items) do
         local ts = item.last_activity or item.timestamp or 0
         local date_str = os.date("%Y-%m-%d %H:%M", ts) --[[@as string]]
         local title = item.display:match("│ (.+)$") or item.display
@@ -34,15 +37,23 @@ local function set_qf_items(items, scope)
             lnum = item.prompt_count or 0,
             text = title,
         })
+        if current_session_id and item.session_id == current_session_id then
+            current_idx = i
+        end
     end
     --- vim.fn.setqflist: no API equivalent; quickfixtextfunc must be a funcref
-    vim.fn.setqflist({}, " ", {
+    local qf_opts = {
         title = string.format(
             "Sessions (%s) │ date  #prompts  title │ <CR>:restore  dd:delete  u:undo  <Tab>:scope  q:close",
             scope_label
         ),
         items = qf_items,
-    })
+    }
+    if current_idx then
+        qf_opts.idx = current_idx
+    end
+    vim.fn.setqflist({}, " ", qf_opts)
+    return current_idx
 end
 
 --- Commit pending deletions to disk.
@@ -71,6 +82,8 @@ end
 --- @param opts agentic.SessionRestoreBuiltin.Opts
 function M.show(items, on_select, opts) -- luacheck: ignore
     local scope = opts.scope or "local"
+    local current_session_id = opts.current_session
+        and opts.current_session.session_id
     --- @type agentic.SessionRestoreBuiltin.DeleteEntry[]
     local pending_deletes = {}
     local committed = false
@@ -93,13 +106,14 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         end
     end
 
-    local function setup_qf_win()
+    --- @param has_current boolean Whether the current session was found in the list
+    local function setup_qf_win(has_current)
         local win = vim.api.nvim_get_current_win()
-        vim.api.nvim_set_option_value(
-            "winhighlight",
-            "QuickFixLine:,QuickFixFilename:AgenticPickerDate",
-            { win = win }
-        )
+        -- Show QuickFixLine only when the current session is in the list,
+        -- otherwise clear it to avoid implying the first entry is "current".
+        local whl = has_current and "QuickFixFilename:AgenticPickerDate"
+            or "QuickFixLine:,QuickFixFilename:AgenticPickerDate"
+        vim.api.nvim_set_option_value("winhighlight", whl, { win = win })
         vim.api.nvim_set_option_value("signcolumn", "no", { win = win })
         vim.api.nvim_set_option_value("conceallevel", 0, { win = win })
         vim.api.nvim_set_option_value("statuscolumn", "", { win = win })
@@ -109,9 +123,9 @@ function M.show(items, on_select, opts) -- luacheck: ignore
     end
 
     local function open_qf()
-        set_qf_items(items, scope)
+        local current_idx = set_qf_items(items, scope, current_session_id)
         vim.cmd("botright copen")
-        setup_qf_win()
+        setup_qf_win(current_idx ~= nil)
     end
 
     open_qf()
