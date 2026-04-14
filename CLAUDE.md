@@ -8,6 +8,23 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 - Never use `vim.notify` directly — use `Logger.notify`
 - Logger has only `debug()`, `debug_to_file()`, and `notify()` — no warn/error/info
 
+## Debugging at runtime
+
+`Logger.debug_to_file()` is gated by `Config.debug` (default `false`). For
+temporary diagnostics that must fire unconditionally, use `io.open` directly:
+
+```lua
+do
+    local f = io.open("/tmp/agentic_diag.log", "a")
+    if f then
+        f:write(string.format("%s %s\n", os.date("%H:%M:%S"), msg))
+        f:close()
+    end
+end
+```
+
+Remove before committing. Never leave `io.open` debug logging in production code.
+
 ## Multi-tabpage architecture
 
 One session instance per tabpage. `SessionRegistry` maps `tab_page_id -> SessionManager`.
@@ -294,6 +311,12 @@ algorithm and safety rules.
 
 See @lua/agentic/acp/AGENTS.md for event pipeline, tool call lifecycle,
 adapter override points, and permission flow.
+
+### Upstream issues (claude-agent-sdk)
+
+- **anthropics/claude-code#35298** — Skills with `paths` triggers crashed
+  Read/Write/Edit for files outside cwd. Fixed in SDK 0.2.104 / claude-agent-acp
+  0.27.0. See @.claude/skills/acp/references/claude-agent.md
 
 ## Testing
 
