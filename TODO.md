@@ -33,7 +33,7 @@
   should be highlighted with qf line hl, which is standard for for qf listing 
   showing "current" entry.
 
-- The model switch keymap shows a window for selecting model. This should use 
-  neovim's native vim.ui.select and set the width to fit contents if possible, 
-  and not wrap by default. If it's not already using vim.ui.select then maybe 
-  fixing that fixes the rest.
+- If a user presses <localLeader>m to select model before the session is ready 
+  there's an error saying the agent doesn't support this. Instead, let's allow 
+  for selecting the model that is about to start. It's fine it this means 
+  blocking/stopping the startup of a wrong model.
