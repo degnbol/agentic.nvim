@@ -156,7 +156,7 @@ end
 function MessageWriter:write_message(update)
     local text = update.content
         and update.content.type == "text"
-        and update.content.text
+        and update.content.text --[[@as string]]
 
     if not text or text == "" then
         return
@@ -432,7 +432,7 @@ function MessageWriter:write_message_chunk(update)
 
     local text = update.content
         and update.content.type == "text"
-        and update.content.text
+        and update.content.text --[[@as string]]
 
     if not text or text == "" then
         return
