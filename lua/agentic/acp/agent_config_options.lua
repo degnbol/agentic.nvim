@@ -177,6 +177,24 @@ function AgentConfigOptions:get_model(model_value)
     return getter(self.model, model_value)
 end
 
+--- @param model_value string
+--- @return string|nil model_name
+function AgentConfigOptions:get_model_name(model_value)
+    local model = self:get_model(model_value)
+
+    if model then
+        return model.name
+    end
+
+    local legacy_model = self.legacy_agent_models:get_model(model_value)
+
+    if legacy_model then
+        return legacy_model.name
+    end
+
+    return nil
+end
+
 --- @param handle_mode_change fun(mode: string, is_legacy: boolean): any
 --- @return boolean shown
 function AgentConfigOptions:show_mode_selector(handle_mode_change)

@@ -38,12 +38,18 @@ describe("agentic.SessionManager", function()
                 currentModeId = "plan",
             })
 
+            local AgentModels = require("agentic.acp.agent_models")
+
             session = {
                 config_options = {
                     legacy_agent_modes = legacy_modes,
+                    legacy_agent_models = AgentModels:new(),
                     get_mode_name = function(_self, mode_id)
                         local mode = legacy_modes:get_mode(mode_id)
                         return mode and mode.name or nil
+                    end,
+                    get_model_name = function()
+                        return nil
                     end,
                 },
                 widget = {
@@ -70,7 +76,7 @@ describe("agentic.SessionManager", function()
 
             assert.spy(render_header_spy).was.called(1)
             assert.equal("chat", render_header_spy.calls[1][2])
-            assert.equal("Mode: Code", render_header_spy.calls[1][3])
+            assert.equal("Code", render_header_spy.calls[1][3])
 
             assert.spy(notify_stub).was.called(1)
             assert.equal("Mode changed to: code", notify_stub.calls[1][1])
@@ -159,7 +165,7 @@ describe("agentic.SessionManager", function()
             assert.is_not_nil(session.config_options.mode)
             assert.equal("plan", session.config_options.mode.currentValue)
             assert.spy(render_header_spy).was.called(1)
-            assert.equal("Mode: Plan", render_header_spy.calls[1][3])
+            assert.equal("Plan", render_header_spy.calls[1][3])
         end)
     end)
 

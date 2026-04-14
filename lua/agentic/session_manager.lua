@@ -358,7 +358,7 @@ function SessionManager:_on_session_update(update)
                 update.currentModeId
             )
         then
-            self:_update_chat_header(update.currentModeId)
+            self:_update_chat_header()
         end
     elseif update.sessionUpdate == "config_option_update" then
         self:_handle_new_config_options(update.configOptions)
@@ -369,11 +369,7 @@ function SessionManager:_on_session_update(update)
             cost = update.cost,
         }
 
-        local current_mode = (
-            self.config_options.mode and self.config_options.mode.currentValue
-        )
-            or self.config_options.legacy_agent_modes.current_mode_id
-        self:_update_chat_header(current_mode)
+        self:_update_chat_header()
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
         Logger.notify(
@@ -853,7 +849,7 @@ function SessionManager:_handle_mode_change(mode_id, is_legacy)
                 self:_handle_new_config_options(result.configOptions)
             end
 
-            self:_update_chat_header(mode_id)
+            self:_update_chat_header()
 
             local mode_name = self.config_options:get_mode_name(mode_id)
             Logger.notify(
@@ -917,13 +913,42 @@ function SessionManager:_handle_model_change(model_id, is_legacy)
     end
 end
 
---- @param mode_id string|nil
-function SessionManager:_update_chat_header(mode_id)
+function SessionManager:_update_chat_header()
     local parts = {}
 
-    if mode_id then
-        local mode_name = self.config_options:get_mode_name(mode_id)
-        table.insert(parts, string.format("Mode: %s", mode_name or mode_id))
+    -- Model name (e.g. "Opus", "Haiku") — always show when available
+    local model_id = self.config_options.model
+            and self.config_options.model.currentValue
+        or self.config_options.legacy_agent_models.current_model_id
+    if model_id then
+        local model_opt = self.config_options:get_model(model_id)
+        local model_name
+        if model_opt then
+            model_name = model_opt.name
+            -- "Default (recommended)" → extract real model from description
+            -- e.g. "Opus 4.6 with 1M context" → "Opus"
+            if model_name:find("^Default") and model_opt.description then
+                model_name = model_opt.description:match("^(%S+)") or model_name
+            end
+        end
+        if not model_name then
+            -- Legacy path
+            local legacy =
+                self.config_options.legacy_agent_models:get_model(model_id)
+            model_name = legacy and legacy.name or model_id
+        end
+        -- Strip "Claude " prefix — redundant for anyone using the plugin
+        model_name = model_name:gsub("^Claude ", "")
+        table.insert(parts, model_name)
+    end
+
+    -- Mode — only show non-default modes (e.g. "Plan")
+    local mode_id = self.config_options.mode
+            and self.config_options.mode.currentValue
+        or self.config_options.legacy_agent_modes.current_mode_id
+    if mode_id and mode_id ~= "default" then
+        local mode_name = self.config_options:get_mode_name(mode_id) or mode_id
+        table.insert(parts, mode_name)
     end
 
     if self._usage and self._usage.size > 0 then
@@ -1276,7 +1301,7 @@ function SessionManager:new_session(opts)
             if response.modes then
                 Logger.debug("Provider announce legacy mode")
                 self.config_options:set_legacy_modes(response.modes)
-                self:_update_chat_header(response.modes.currentModeId)
+                self:_update_chat_header()
             end
 
             if response.models then
@@ -2008,9 +2033,7 @@ end
 function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
 
-    if self.config_options.mode and self.config_options.mode.currentValue then
-        self:_update_chat_header(self.config_options.mode.currentValue)
-    end
+    self:_update_chat_header()
 end
 
 function SessionManager:_get_system_info()
