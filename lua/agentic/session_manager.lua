@@ -949,6 +949,7 @@ function SessionManager:_update_chat_header()
         or self.config_options.legacy_agent_modes.current_mode_id
     if mode_id and mode_id ~= "default" then
         local mode_name = self.config_options:get_mode_name(mode_id) or mode_id
+        mode_name = mode_name:gsub(" Mode$", "")
         table.insert(parts, mode_name)
     end
 
