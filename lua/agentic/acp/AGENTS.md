@@ -387,6 +387,24 @@ providers don't advertise them in `available_commands_update`):
   headers state (for external UI plugins via `AgenticHeadersChanged`), persists
   to the session JSON, and updates the buffer name. Resets on `/new`.
 
+### `thought_level` ConfigOption not emitted (claude-agent-acp)
+
+The ACP schema reserves `thought_level` as a `SessionConfigOptionCategory`
+alongside `mode` and `model`, and the Anthropic SDK exposes per-model effort
+capability (`low | medium | high | max`). But `claude-agent-acp` 0.29.0 does not
+construct a `thought_level` ConfigOption — `buildConfigOptions` in
+`dist/acp-agent.js:1250-1279` returns only `mode` and `model`.
+
+The plugin's `AgentConfigOptions:set_options` already dispatches on
+`category == "thought_level"` (`agent_config_options.lua:80-81`), so the moment
+the bridge starts emitting it no adapter changes are needed. A
+`/effort`-equivalent selector is blocked on that upstream change — building it
+now against `_meta.claudeCode.options.maxThinkingTokens` would only work at
+session creation, which diverges from the TUI's dynamic `/effort` and is not
+recommended. See
+`@.claude/skills/acp/references/claude-agent.md` § "ConfigOptions —
+`thought_level` not emitted".
+
 ### Mode switch kind inconsistency (claude-agent-acp)
 
 The provider sends different `kind` values for plan mode entry vs exit:

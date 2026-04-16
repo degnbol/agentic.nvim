@@ -124,6 +124,34 @@ the time the client reads the file for diff preview, the new content is already
 on disk. See `CLAUDE.md` "Edit applied before permission request" for the
 reverse-matching workaround.
 
+## ConfigOptions — `thought_level` not emitted
+
+The ACP schema defines `SessionConfigOptionCategory` as `"mode" | "model" |
+"thought_level" | string`, and the Anthropic SDK exposes per-model effort
+capability with levels `low | medium | high | max`. The bridge does **not**
+expose this to clients: `buildConfigOptions` in `dist/acp-agent.js:1250-1279`
+returns a hardcoded array with only `mode` and `model` entries. `thought_level`
+is reserved in the schema but never populated.
+
+Confirmed in `@agentclientprotocol/claude-agent-acp` 0.29.0.
+
+**Client implication:** The equivalent of the TUI's `/effort` command cannot be
+offered as a runtime, ConfigOption-based selector until the bridge is extended
+to emit a `thought_level` option. The plugin's `AgentConfigOptions` class
+already dispatches on `category == "thought_level"`
+(`lua/agentic/acp/agent_config_options.lua:80-81`) — the code path is simply
+unreachable because the bridge never sends that category.
+
+**`maxThinkingTokens` is not a drop-in replacement.** It is a
+`_meta.claudeCode.options` passthrough spread into SDK options at session
+creation only. There is no ACP method to change it mid-session, so offering
+`/effort` backed by `maxThinkingTokens` would silently diverge from the TUI's
+dynamic behaviour (the TUI changes effort mid-turn).
+
+**Tracking:** No upstream issue filed. If emitted, the selector, keymap, and
+header display would be a ~30-line addition mirroring the existing model
+selector in `agent_config_options.lua`.
+
 ## Environment variables
 
 | Variable | Effect |
