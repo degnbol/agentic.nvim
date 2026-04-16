@@ -155,6 +155,29 @@ describe("agentic.completion.LspServer", function()
             end
         )
 
+        it("returns no slash items when typing a path (/tmp/)", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/tmp/" })
+            vim.api.nvim_win_set_cursor(0, { 1, 5 })
+
+            local result = complete(handlers, bufnr, 0, 5, "/")
+
+            -- Slash items insert "/" .. word; a path must produce none
+            for _, item in ipairs(result.items) do
+                assert.is_false(item.textEdit.newText:sub(1, 1) == "/")
+            end
+        end)
+
+        it("returns no slash items mid-line path (foo /tmp/bar)", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "foo /tmp/bar" })
+            vim.api.nvim_win_set_cursor(0, { 1, 12 })
+
+            local result = complete(handlers, bufnr, 0, 12, nil)
+
+            for _, item in ipairs(result.items) do
+                assert.is_false(item.textEdit.newText:sub(1, 1) == "/")
+            end
+        end)
+
         it("returns empty items when no commands stored", function()
             -- Use a fresh buffer with no commands
             local buf2 = vim.api.nvim_create_buf(false, true)

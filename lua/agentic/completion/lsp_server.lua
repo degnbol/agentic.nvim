@@ -27,9 +27,11 @@ local CompletionItemKind = {
 local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
     local before_cursor = line_text:sub(1, cursor_col)
 
-    -- Find `/` at line start or preceded by whitespace, no spaces after
-    local slash_match = before_cursor:match("^/[^%s]*$")
-        or before_cursor:match("[%s]/[^%s]*$")
+    -- Find `/` at line start or preceded by whitespace, no spaces and no
+    -- further `/` after — command names never contain `/`, so paths like
+    -- `/tmp/foo` must not trigger slash command completion.
+    local slash_match = before_cursor:match("^/[^%s/]*$")
+        or before_cursor:match("[%s]/[^%s/]*$")
 
     if not slash_match then
         return {}
