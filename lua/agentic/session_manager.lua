@@ -78,6 +78,7 @@ end
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
+--- @field _queued_prompts? string[] User messages queued while waiting for auto-continue timer
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
 local SessionManager = {}
 SessionManager.__index = SessionManager
@@ -1037,6 +1038,19 @@ function SessionManager:_handle_input_submit_inner(input_text)
         return
     end
 
+    -- Queue message if waiting for usage limit reset — sending now would
+    -- just hit the same limit. The timer callback drains the queue.
+    if self._retry_timer then
+        if not self._queued_prompts then
+            self._queued_prompts = {}
+        end
+        table.insert(self._queued_prompts, input_text)
+        self.message_writer:write_error_action(
+            "Message queued — will send when usage resets."
+        )
+        return
+    end
+
     --- @type agentic.acp.Content[]
     local prompt = {}
 
@@ -1706,6 +1720,8 @@ function SessionManager:_cancel_retry_timer(reset_attempts)
         self._retry_keymap = nil
     end
 
+    self._queued_prompts = nil
+
     if reset_attempts ~= false then
         self._retry_attempt = 0
     end
@@ -1817,8 +1833,16 @@ function SessionManager:_offer_auto_continue(reset_epoch)
                 return
             end
 
-            Logger.notify("Usage limit reset — auto-continuing...")
-            self:_handle_input_submit("continue")
+            local queued = self._queued_prompts
+            self._queued_prompts = nil
+
+            if queued then
+                Logger.notify("Usage limit reset — sending queued message...")
+                self:_handle_input_submit(table.concat(queued, "\n\n"))
+            else
+                Logger.notify("Usage limit reset — auto-continuing...")
+                self:_handle_input_submit("continue")
+            end
         end)
     )
 end
