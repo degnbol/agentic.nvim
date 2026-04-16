@@ -16,11 +16,6 @@
   Useful for resume: easily resume only unfinished work (or browse the archive
   specifically).
 
-- **Queued message vs auto-continue conflict**: If a message is queued while a
-  session is waiting to auto-continue, the back-off retry logic falsely treats
-  it as a continue attempt and starts the 5-minute delay. Add support for
-  queueing messages while waiting to auto-continue.
-
 - **Fold marker not closed**: Rare issue where a fold marker (`{{{`) is inserted
   but the closing marker (`}}}`) is missing, causing everything from that point
   to the end of the chat buffer to be folded into a single fold.
@@ -29,6 +24,16 @@
   from a previous block bleeds into the permission prompt, colouring parts of it
   incorrectly.
 
-- In qf selection of resume session, if it lists current session that session 
-  should be highlighted with qf line hl, which is standard for for qf listing 
-  showing "current" entry.
+- Support for the claude TUI `/effort`. E.g. a localLeader keymap opening a
+  select menu. Also showing effort somewhere on screen. Blocked:
+  claude-agent-acp 0.29.0 does not emit the `thought_level` ConfigOption.
+  See `lua/agentic/acp/AGENTS.md` § "`thought_level` ConfigOption not emitted
+  (claude-agent-acp)".
+
+- Slash commands `/stats` and `/usage` — intercepted locally and formatted to
+  match the TUI's output as closely as possible, for users moving between the
+  two seamlessly.
+
+- Info keymap opening a window with session info: model, context use, prompt
+  count, proximity to limits. Freer format than the slash commands since it's
+  not bound to TUI parity.
