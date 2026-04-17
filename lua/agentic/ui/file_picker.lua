@@ -132,10 +132,14 @@ function FilePicker:scan_files()
     vim.list_extend(glob_files, files_in_hidden)
     Logger.debug("[FilePicker] Glob returned", #glob_files, "paths")
 
-    -- Bucket by depth for breadth-first selection (cheap first pass)
+    -- Bucket by depth for breadth-first selection (cheap first pass).
+    -- Normalise paths up front: `**/.*/**/*` produces paths with embedded
+    -- `/./` segments (e.g. `doc/./tags`) that would bypass exclusion patterns
+    -- and then collapse later via `to_smart_path`, smuggling in duplicates.
     local buckets = {} --- @type table<integer, string[]>
     local max_seen_depth = 0
-    for _, path in ipairs(glob_files) do
+    for _, raw_path in ipairs(glob_files) do
+        local path = vim.fn.simplify(raw_path)
         if vim.fn.isdirectory(path) == 0 and not self:_should_exclude(path) then
             local d = path_depth(path)
             if not buckets[d] then
