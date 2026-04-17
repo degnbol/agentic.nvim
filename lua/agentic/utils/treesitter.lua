@@ -1,138 +1,42 @@
---- Treesitter walk helpers for reconstructing syntactic context.
+--- Treesitter helpers for reconstructing syntactic context.
 ---
---- These functions compute highlights for a snippet "as if" it were spliced
---- into a real file, so captures that depend on structural context
---- (strings, comments, docstrings, injections) come out right. The chat
---- buffer's markdown treesitter injection only sees the isolated diff lines
---- and can't know they live inside e.g. a Python triple-quoted string.
+--- `build_highlight_map` parses a snippet "as if" it were spliced into a
+--- real file, so captures that depend on structural context (strings,
+--- comments, docstrings, injections) come out right. The chat buffer's
+--- markdown treesitter injection only sees the isolated diff lines and
+--- can't know they live inside e.g. a Python triple-quoted string.
 ---
 --- @class agentic.utils.Treesitter
 local M = {}
 
---- Walk up from `node` until its parent is `root`, returning the direct child
---- of `root` that contains `node`. Returns `root` itself if `node == root`.
---- @param node TSNode
---- @param root TSNode
---- @return TSNode
-function M.top_level_ancestor(node, root)
-    if node:id() == root:id() then
-        return node
-    end
-    local current = node
-    local parent = current:parent()
-    while parent and parent:id() ~= root:id() do
-        current = parent
-        parent = current:parent()
-    end
-    return current
-end
-
---- Clamp a (start_row, end_row) range to the buffer's line count.
---- Returns nil if the range is unsalvageable (buffer empty, start past end).
---- @param bufnr integer
---- @param start_row integer
---- @param end_row integer
---- @return integer? start
---- @return integer? end_
-local function clamp_range(bufnr, start_row, end_row)
-    local line_count = vim.api.nvim_buf_line_count(bufnr)
-    if line_count == 0 then
-        return nil, nil
-    end
-    local s = math.max(0, math.min(start_row, line_count - 1))
-    local e = math.max(s, math.min(end_row, line_count - 1))
-    return s, e
-end
-
---- Find the union of top-level ancestors containing rows [splice_start, splice_end).
---- Uses `named_descendant_for_range` to locate a starting node, then walks up to
---- a direct child of the tree root. For edits spanning multiple top-level nodes,
---- returns the union of their row ranges.
---- @param bufnr integer
---- @param lang string Parser language (e.g. "python")
---- @param splice_start integer 0-indexed row (inclusive)
---- @param splice_end integer 0-indexed row (exclusive)
---- @return integer? ctx_start 0-indexed row (inclusive)
---- @return integer? ctx_end 0-indexed row (exclusive)
-function M.get_context_range(bufnr, lang, splice_start, splice_end)
-    local s, e = clamp_range(bufnr, splice_start, splice_end)
-    if not s or not e then
-        return nil, nil
-    end
-
-    local ok, parser = pcall(vim.treesitter.get_parser, bufnr, lang)
-    if not ok or not parser then
-        return nil, nil
-    end
-
-    local trees = parser:parse()
-    if not trees or not trees[1] then
-        return nil, nil
-    end
-    local root = trees[1]:root()
-
-    -- Zero-width range (pure insertion): widen end to start + 1 for descendant
-    -- lookup so we find the surrounding node.
-    local probe_end = e
-    if splice_start == splice_end then
-        probe_end = math.min(e + 1, vim.api.nvim_buf_line_count(bufnr))
-    end
-
-    local ctx_start, ctx_end
-    for probe_row = s, probe_end do
-        local line = vim.api.nvim_buf_get_lines(
-            bufnr,
-            probe_row,
-            probe_row + 1,
-            false
-        )[1] or ""
-        local probe_col_end = math.max(#line - 1, 0)
-        local node = root:named_descendant_for_range(
-            probe_row,
-            0,
-            probe_row,
-            probe_col_end
-        )
-        if node then
-            local ancestor = M.top_level_ancestor(node, root)
-            local a_start, _, a_end, _ = ancestor:range()
-            ctx_start = ctx_start and math.min(ctx_start, a_start) or a_start
-            ctx_end = ctx_end and math.max(ctx_end, a_end + 1) or (a_end + 1)
-        end
-    end
-
-    if not ctx_start then
-        return nil, nil
-    end
-    return ctx_start, ctx_end
-end
-
---- Parse `new_lines` spliced into the buffer's surrounding context, then
---- extract highlight captures for just the new_lines rows. The result maps
---- 0-indexed row-within-new_lines to a byte-col -> capture-name map.
+--- Parse `new_lines` spliced into the buffer's full content, then extract
+--- highlight captures for just the new_lines rows. The result maps
+--- 0-indexed row-within-new_lines to a byte-col → capture-name map.
+---
+--- Always parses the whole reconstructed file. Treesitter is fast enough
+--- that windowing the parse to a smaller ancestor isn't worth the
+--- correctness risk: a too-narrow window can drop the surrounding
+--- structure (string opener/closer, injection root) and yield bare-code
+--- captures for content that's actually inside a docstring.
 ---
 --- @param bufnr integer Source buffer containing the file
 --- @param lang string Parser language
 --- @param splice_start integer 0-indexed row where new_lines replaces content (inclusive)
 --- @param splice_end integer 0-indexed row (exclusive) — end of replaced range in bufnr
 --- @param new_lines string[] Lines to splice in and highlight
---- @return table<integer, table<integer, string>>? highlight_map
+--- @return table<integer, table<integer, string>>|nil highlight_map
 function M.build_highlight_map(bufnr, lang, splice_start, splice_end, new_lines)
     local ok_parser = pcall(vim.treesitter.get_parser, bufnr, lang)
     if not ok_parser then
         return nil
     end
 
-    local ctx_start, ctx_end =
-        M.get_context_range(bufnr, lang, splice_start, splice_end)
-    if not ctx_start or not ctx_end then
-        return nil
-    end
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    local s = math.max(0, math.min(splice_start, line_count))
+    local e = math.max(s, math.min(splice_end, line_count))
 
-    -- Build the reconstruction: context rows with new_lines spliced in.
-    local prefix =
-        vim.api.nvim_buf_get_lines(bufnr, ctx_start, splice_start, false)
-    local suffix = vim.api.nvim_buf_get_lines(bufnr, splice_end, ctx_end, false)
+    local prefix = vim.api.nvim_buf_get_lines(bufnr, 0, s, false)
+    local suffix = vim.api.nvim_buf_get_lines(bufnr, e, -1, false)
 
     local reconstructed = {}
     vim.list_extend(reconstructed, prefix)
@@ -150,18 +54,14 @@ function M.build_highlight_map(bufnr, lang, splice_start, splice_end, new_lines)
         return nil
     end
 
-    local query = vim.treesitter.query.get(lang, "highlights")
-    if not query then
-        return nil
-    end
-
     local target_start = #prefix
     local target_end = target_start + #new_lines
 
     --- @type table<integer, table<integer, string>>
     local map = {}
 
-    -- Iterate all trees to include injections (markdown inside docstrings, etc.).
+    -- Iterate all trees to include injections (markdown inside docstrings,
+    -- regex inside python strings, etc.).
     lang_tree:for_each_tree(function(tree, ltree)
         local tree_lang = ltree:lang()
         local q = vim.treesitter.query.get(tree_lang, "highlights")
@@ -170,7 +70,6 @@ function M.build_highlight_map(bufnr, lang, splice_start, splice_end, new_lines)
         end
         local root = tree:root()
         local r_start, _, r_end, _ = root:range()
-        -- Skip trees that can't overlap our target rows.
         if r_end < target_start or r_start > target_end then
             return
         end
@@ -178,7 +77,12 @@ function M.build_highlight_map(bufnr, lang, splice_start, splice_end, new_lines)
             q:iter_captures(root, source, target_start, target_end)
         do
             local name = q.captures[id]
-            if name and not name:match("^_") then
+            -- Skip private (`_`-prefixed) captures and `@spell` family —
+            -- the latter is a content marker for spellcheck integration
+            -- with no foreground colour, so writing it into the map would
+            -- shadow the parent `@string` capture and produce no visible
+            -- override over the markdown injection's keyword colours.
+            if name and not name:match("^_") and not name:match("^spell") then
                 local n_start_row, n_start_col, n_end_row, n_end_col =
                     node:range()
                 if n_start_row < target_end and n_end_row >= target_start then

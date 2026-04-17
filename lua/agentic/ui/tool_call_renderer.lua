@@ -3,8 +3,10 @@ local Ansi = require("agentic.utils.ansi")
 local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
+local FileSystem = require("agentic.utils.file_system")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
+local Treesitter = require("agentic.utils.treesitter")
 
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
 local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
@@ -508,6 +510,42 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             table.insert(lines, "```" .. lang)
         end
 
+        -- Load the target file buffer to enable context-aware syntax
+        -- highlighting. The injected markdown parser only sees the diff
+        -- lines in isolation, so structurally-dependent captures (strings,
+        -- comments, docstrings, language injections) come out wrong.
+        -- Reparsing the snippet inside its surrounding ancestor in the real
+        -- file reconstructs the correct captures. Falls back silently when
+        -- the file can't be loaded or no parser is available.
+        local target_bufnr, target_lang
+        local abs_path = FileSystem.to_absolute_path(argument)
+        local max_lines = Config.tool_call_display
+                and Config.tool_call_display.diff_context_max_lines
+            or 0
+        if max_lines > 0 and abs_path and abs_path ~= "" then
+            -- bufadd returns the existing buffer if one already has this
+            -- name, otherwise creates a new (unloaded) buffer.
+            local ok_add, b = pcall(vim.fn.bufadd, abs_path)
+            if ok_add and b and b ~= 0 and vim.api.nvim_buf_is_valid(b) then
+                if not vim.api.nvim_buf_is_loaded(b) then
+                    pcall(vim.fn.bufload, b)
+                end
+                if vim.api.nvim_buf_is_loaded(b) then
+                    -- Reparse cost grows with file length; skip the feature
+                    -- entirely above the configured threshold rather than
+                    -- block the render thread on huge files.
+                    local lc = vim.api.nvim_buf_line_count(b)
+                    if lc <= max_lines then
+                        local ok_p, parser = pcall(vim.treesitter.get_parser, b)
+                        if ok_p and parser then
+                            target_bufnr = b
+                            target_lang = parser:lang()
+                        end
+                    end
+                end
+            end
+        end
+
         -- For markdown diffs, wrap prose lines so they don't overflow the
         -- chat window. Code blocks (inside fences) stay untouched.
         local diff_wrap = is_markdown and wrap_width or 0
@@ -516,11 +554,20 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         --- Insert a diff line into `lines`, wrapping if markdown prose.
         --- Tracks fence state so lines inside code blocks are not wrapped.
         --- Creates a highlight_range entry for each resulting buffer line.
+        --- Wrapped sub-lines drop `col_hl` because the column positions
+        --- refer to the original unwrapped content.
         --- @param content string
         --- @param hl_type string
         --- @param old_line string|nil
         --- @param new_line string|nil
-        local function insert_diff_line(content, hl_type, old_line, new_line)
+        --- @param col_hl table<integer, string>|nil
+        local function insert_diff_line(
+            content,
+            hl_type,
+            old_line,
+            new_line,
+            col_hl
+        )
             if content:match("^%s*```") then
                 in_fence = not in_fence
             end
@@ -530,6 +577,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             else
                 sub_lines = { content }
             end
+            local single = #sub_lines == 1
             for _, sub in ipairs(sub_lines) do
                 local line_index = #lines
                 table.insert(lines, sub)
@@ -540,6 +588,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                     old_line = old_line,
                     new_line = new_line,
                 }
+                if single and col_hl then
+                    hl_range.block_col_hl = col_hl
+                end
                 table.insert(highlight_ranges, hl_range)
             end
         end
@@ -550,13 +601,40 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local is_new_file = old_count == 0
             local is_modification = old_count == new_count and old_count > 0
 
+            -- Compute context-aware highlight maps for this block. The same
+            -- splice range works for both old and new: splicing old_lines
+            -- back at the matched location reconstructs the pre-edit file
+            -- state; splicing new_lines gives the post-edit state.
+            local old_map, new_map
+            if target_bufnr and target_lang then
+                local splice_start = math.max(0, block.start_line - 1)
+                local splice_end = block.end_line
+                if not is_new_file then
+                    old_map = Treesitter.build_highlight_map(
+                        target_bufnr,
+                        target_lang,
+                        splice_start,
+                        splice_end,
+                        block.old_lines
+                    )
+                end
+                new_map = Treesitter.build_highlight_map(
+                    target_bufnr,
+                    target_lang,
+                    splice_start,
+                    splice_end,
+                    block.new_lines
+                )
+            end
+
             if is_new_file then
                 -- Format tables so they render with aligned columns
                 local fmt_new = is_markdown
                         and TextWrap.format_tables_in_lines(block.new_lines)
                     or block.new_lines
-                for _, new_line in ipairs(fmt_new) do
-                    insert_diff_line(new_line, "new", nil, new_line)
+                for ni, new_line in ipairs(fmt_new) do
+                    local col_hl = new_map and new_map[ni - 1] or nil
+                    insert_diff_line(new_line, "new", nil, new_line, col_hl)
                 end
             else
                 local filtered = ToolCallDiff.filter_unchanged_lines(
@@ -569,12 +647,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 -- old→new boundary.
                 local old_raw = {} ---@type string[]
                 local new_raw = {} ---@type string[]
+                local old_pair_idx = {} ---@type integer[]
+                local new_pair_idx = {} ---@type integer[]
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.old_line then
                         old_raw[#old_raw + 1] = pair.old_line
+                        old_pair_idx[#old_pair_idx + 1] = pair.old_idx
                     end
                     if pair.new_line then
                         new_raw[#new_raw + 1] = pair.new_line
+                        new_pair_idx[#new_pair_idx + 1] = pair.new_idx
                     end
                 end
 
@@ -590,11 +672,17 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.old_line then
                         oi = oi + 1
+                        local source_idx = old_pair_idx[oi]
+                        local col_hl = old_map
+                                and source_idx
+                                and old_map[source_idx - 1]
+                            or nil
                         insert_diff_line(
                             fmt_old[oi],
                             "old",
                             pair.old_line,
-                            is_modification and pair.new_line or nil
+                            is_modification and pair.new_line or nil,
+                            col_hl
                         )
                     end
                 end
@@ -606,11 +694,17 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                         ni = ni + 1
                         local hl_type = is_modification and "new_modification"
                             or "new"
+                        local source_idx = new_pair_idx[ni]
+                        local col_hl = new_map
+                                and source_idx
+                                and new_map[source_idx - 1]
+                            or nil
                         insert_diff_line(
                             fmt_new[ni],
                             hl_type,
                             is_modification and pair.old_line or nil,
-                            pair.new_line
+                            pair.new_line,
+                            col_hl
                         )
                     end
                 end
@@ -893,6 +987,95 @@ function M.apply_block_highlights(
     end
 end
 
+--- Cache of derived "clean" highlight groups: target capture name →
+--- generated group name with the same fg/bg as the target but typography
+--- attributes (bold/italic/underline/etc.) explicitly forced off. Cleared
+--- on `ColorScheme` since `:hi clear` wipes every group.
+--- @type table<string, string>
+local _clean_hl_cache = {}
+
+vim.api.nvim_create_autocmd("ColorScheme", {
+    callback = function()
+        _clean_hl_cache = {}
+    end,
+})
+
+--- Look up (and cache) a derived highlight group for `name` that inherits
+--- its fg/bg/sp from the original but with typography attributes
+--- explicitly set to false. This stops bold/italic from a lower-priority
+--- highlight (e.g. the markdown injection's `@keyword.python`) from
+--- bleeding through when our `fg`-only override sits at higher priority.
+--- Returns the original name as fallback when it resolves to nothing.
+--- @param name string
+--- @return string
+local function get_clean_hl_group(name)
+    local cached = _clean_hl_cache[name]
+    if cached then
+        return cached
+    end
+
+    local hl = vim.api.nvim_get_hl(0, { name = name, link = false }) or {}
+    if vim.tbl_isempty(hl) then
+        _clean_hl_cache[name] = name
+        return name
+    end
+
+    -- `nvim_set_hl` silently drops typography attributes assigned to
+    -- `false` (only `true` survives the roundtrip), so we cannot suppress
+    -- bold/italic per-attribute. The fix is `nocombine = true` — neovim's
+    -- screen renderer then fully replaces the lower-priority highlight at
+    -- this position rather than OR-merging boolean attributes. Verified
+    -- with a headless `nvim_set_hl` roundtrip: only `nocombine` survived.
+    hl.nocombine = true
+
+    local clean_name = "AgenticClean_" .. name:gsub("[^%w]", "_")
+    vim.api.nvim_set_hl(0, clean_name, hl --[[@as vim.api.keyset.highlight]])
+    _clean_hl_cache[name] = clean_name
+    return clean_name
+end
+
+--- Apply per-column treesitter capture highlights from a context-aware
+--- reparse. The col_hl map is byte-col → language-qualified capture name
+--- (e.g. `@string.python`). Adjacent cols with identical capture names are
+--- merged into a single extmark to keep the count bounded. Each capture
+--- is mapped through `get_clean_hl_group` so that typography attributes
+--- from the underlying markdown-injected highlights don't leak through.
+--- Priority 200 beats markdown's priority-100 injected highlights.
+--- @param bufnr integer
+--- @param buffer_line integer 0-indexed buffer row
+--- @param col_hl table<integer, string>
+local function apply_block_col_highlights(bufnr, buffer_line, col_hl)
+    local cols = {}
+    for c, _ in pairs(col_hl) do
+        cols[#cols + 1] = c
+    end
+    table.sort(cols)
+
+    local i = 1
+    while i <= #cols do
+        local start_col = cols[i]
+        local hl = col_hl[start_col]
+        local end_col = start_col + 1
+        local j = i + 1
+        while j <= #cols and cols[j] == end_col and col_hl[cols[j]] == hl do
+            end_col = end_col + 1
+            j = j + 1
+        end
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            NS_DIFF_HIGHLIGHTS,
+            buffer_line,
+            start_col,
+            {
+                end_col = end_col,
+                hl_group = get_clean_hl_group(hl),
+                priority = 200,
+            }
+        )
+        i = j
+    end
+end
+
 --- @param bufnr integer
 --- @param start_row integer
 --- @param highlight_ranges agentic.ui.MessageWriter.HighlightRange[]
@@ -900,6 +1083,8 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
     if not highlight_ranges or #highlight_ranges == 0 then
         return
     end
+
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
 
     for _, hl_range in ipairs(highlight_ranges) do
         local buffer_line = start_row + hl_range.line_index
@@ -948,6 +1133,14 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                     }
                 )
             end
+        end
+
+        if hl_range.block_col_hl and buffer_line < line_count then
+            apply_block_col_highlights(
+                bufnr,
+                buffer_line,
+                hl_range.block_col_hl
+            )
         end
     end
 end

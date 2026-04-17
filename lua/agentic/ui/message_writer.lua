@@ -15,6 +15,7 @@ local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- @field line_index integer Line index relative to returned lines (0-based)
 --- @field old_line? string Original line content (for diff types)
 --- @field new_line? string Modified line content (for diff types)
+--- @field block_col_hl? table<integer, string> Byte-col → language-qualified capture name from context-aware treesitter parse
 
 --- @class agentic.ui.MessageWriter.SearchMatch
 --- @field line_index integer Line index relative to block lines (0-based)
