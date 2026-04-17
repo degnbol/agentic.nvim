@@ -55,7 +55,7 @@ function Agentic.close(tab_page_id)
     else
         SessionRegistry.destroy_session(tab)
         if vim.api.nvim_tabpage_is_valid(tab) then
-            pcall(vim.cmd, "tabclose")
+            pcall(vim.cmd.tabclose)
         end
     end
 end

@@ -65,7 +65,7 @@ end
 --- @param opts vim.keymap.set.Opts|nil
 function BufHelpers.keymap_set(bufnr, mode, lhs, rhs, opts)
     opts = opts or {}
-    opts.buffer = bufnr
+    opts.buf = bufnr
     vim.keymap.set(mode, lhs, rhs, opts)
 end
 
