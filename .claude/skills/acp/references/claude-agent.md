@@ -117,12 +117,57 @@ auto-allowed in default mode). They do NOT fix the conditional skills bug above
 because that code path uses `path.relative(cwd, ...)` regardless of additional
 directories.
 
-### Edit applied before permission request
+### Edits are not applied before permission
 
-The SDK writes file edits to disk **before** sending `request_permission`. By
-the time the client reads the file for diff preview, the new content is already
-on disk. See `CLAUDE.md` "Edit applied before permission request" for the
-reverse-matching workaround.
+The SDK does NOT write file edits to disk before sending `request_permission`.
+Verified 2026-04-17 by inspecting disk contents while a pending Edit prompt
+was open. Earlier client docs incorrectly claimed otherwise.
+
+## Edit tool (`str_replace_based_edit_tool`)
+
+The formal Anthropic API name is `str_replace_based_edit_tool`
+(`text_editor_20250728` type). The April 2025 version note from the public docs
+states the rename was "to reflect its str_replace-based architecture." The tool
+is **string-based, not range-based** — no line numbers in the Edit payload.
+
+**Input schema** (`FileEditInput` in `sdk-tools.d.ts`):
+```ts
+{ file_path: string, old_string: string, new_string: string, replace_all?: boolean }
+```
+
+**Uniqueness is a tool-level contract.** The tool fails when `old_string`
+matches multiple locations and `replace_all` is false — error: `"matches of
+the string to replace, but replace_all is false. To replace all occurrences,
+set replace_all to true. To replace only one occurrence, please provide more
+context to uniquely identify..."`. Clients do not need to enforce uniqueness
+themselves; Claude will receive the error and retry with more context.
+
+**`replace_all` is a Claude Code extension.** The pure Anthropic API tool does
+not document it. The SDK's Zod schema adds it with default `false`.
+
+**Output carries line ranges.** `FileEditOutput.structuredPatch` is an array
+of unified-diff hunks with fields `oldStart`, `oldLines`, `newStart`,
+`newLines`, `lines` (line numbers in post-edit file). Defined near the
+`old_string`/`new_string` schema in `cli.js` as a Zod object with those five
+fields.
+
+**Client implication for provenance tracking:** `rawOutput.structuredPatch`
+is the authoritative source for "where did Claude's edit land" — prefer it
+over scanning for `diff.new` as a subsequence, which is ambiguous when the
+new content coincides with other file text (e.g. short replacements like
+`}`, `end`, blank lines). The ACP adapter currently records `diff.old` /
+`diff.new` from `rawInput` only; if you need post-edit line ranges (e.g. for
+auto-approval Claude-owned-range verification), capture `structuredPatch`
+from the `tool_call_update` that carries `status: "completed"`.
+
+**Sibling commands of the API tool** (not all exposed via Claude Code's
+`edit` kind):
+- `view` — takes `view_range` as `(start, end)` (1-indexed; `-1` = EOF).
+- `insert` — takes `insert_line` (integer; line *after* which to insert,
+  0 = BOF).
+- `create` — takes `file_text` (whole-file write).
+The Anthropic API `str_replace` is exposed via ACP as `kind: "edit"`;
+`create` is exposed as `kind: "create"`; `view` is `kind: "read"`.
 
 ## ConfigOptions — `thought_level` not emitted
 
