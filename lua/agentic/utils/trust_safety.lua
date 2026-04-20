@@ -94,17 +94,16 @@ end
 --- @param git_root? string Used for the display string when kind == "repo"
 --- @return agentic.utils.TrustSafety.Scope
 function M.build_reserved_scope(kind, cwd, git_root)
-    local display
+    local where
     if kind == "repo" then
-        display =
-            string.format("git-tracked files in %s", git_root or "<git root>")
+        where = git_root or "<git root>"
     else
-        display = string.format("git-tracked files under %s", cwd)
+        where = cwd
     end
     --- @type agentic.utils.TrustSafety.Scope
     local scope = {
         kind = kind,
-        display = display,
+        display = string.format("recoverable edits under %s", where),
         cwd = cwd,
     }
     return scope
