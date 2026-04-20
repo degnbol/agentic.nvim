@@ -1,4 +1,4 @@
---- @diagnostic disable: invisible, assign-type-mismatch
+--- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -219,5 +219,282 @@ describe("agentic.acp.ACPClient", function()
             -- Callback NOT invoked yet (waiting for response)
             assert.spy(cb).was.called(0)
         end)
+    end)
+
+    --- See .claude/skills/issues/references/chunk-flush.md and
+    --- tests/integration/auto_continue_chunk_flush.test.lua. This block
+    --- targets the ACPClient dispatch layer: after a prompt-response
+    --- cycle ends with an error, a subsequent prompt's session/update
+    --- notifications must reach the subscriber.
+    describe("dispatch after error response (auto-continue path)", function()
+        --- Build a minimal client wired to a stub transport. `id_counter`
+        --- counts up as `_send_request` is called; `_handle_message` is
+        --- used directly to simulate inbound traffic.
+        --- @return agentic.acp.ACPClient client
+        --- @return TestSpy send_stub
+        local function make_client()
+            local send_stub = spy.new(function()
+                return true
+            end)
+            --- @type agentic.acp.ACPClient
+            local client = setmetatable({
+                callbacks = {},
+                subscribers = {},
+                id_counter = 0,
+                state = "ready",
+                transport = { send = send_stub },
+                _loading_sessions = {},
+                provider_config = { name = "test-provider" },
+            }, { __index = ACPClient })
+            return client, send_stub
+        end
+
+        --- Recording subscriber for a single session_id.
+        local function make_recorder()
+            local recorded = {
+                session_updates = {},
+                tool_calls = {},
+                tool_call_updates = {},
+                permissions = 0,
+            }
+            --- @type agentic.acp.ClientHandlers
+            local handlers = {
+                on_error = function() end,
+                on_session_update = function(update)
+                    table.insert(recorded.session_updates, update)
+                end,
+                on_tool_call = function(tc)
+                    table.insert(recorded.tool_calls, tc)
+                end,
+                on_tool_call_update = function(tcu)
+                    table.insert(recorded.tool_call_updates, tcu)
+                end,
+                on_request_permission = function(_, cb)
+                    recorded.permissions = recorded.permissions + 1
+                    cb(nil)
+                end,
+                on_stdout_text = function() end,
+            }
+            return handlers, recorded
+        end
+
+        it(
+            "session/update notifications after a usage_limit error response still reach the subscriber",
+            function()
+                local client, send_stub = make_client()
+                local session_id = "sess-123"
+                local handlers, recorded = make_recorder()
+
+                client:_subscribe(session_id, handlers)
+
+                -- Prompt #1 — sent, reply is a usage_limit error.
+                local prompt_1_cb = spy.new(function() end)
+                client:_send_request(
+                    "session/prompt",
+                    { sessionId = session_id },
+                    prompt_1_cb --[[@as function]]
+                )
+
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    id = 1,
+                    error = {
+                        code = -32000,
+                        message = '{"type":"error","error":{"type":"usage_limit_error","message":"Claude AI usage limit reached|1800000000"}}',
+                    },
+                })
+
+                vim.wait(50, function()
+                    return prompt_1_cb.call_count > 0
+                end)
+
+                assert.spy(prompt_1_cb).was.called(1)
+
+                -- Prompt #2 — the auto-continue "continue" prompt.
+                local prompt_2_cb = spy.new(function() end)
+                client:_send_request(
+                    "session/prompt",
+                    { sessionId = session_id },
+                    prompt_2_cb --[[@as function]]
+                )
+
+                -- Provider streams: prose chunk, tool_call, tool_call_update,
+                -- then the final end-of-turn response to prompt #2.
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    method = "session/update",
+                    params = {
+                        sessionId = session_id,
+                        update = {
+                            sessionUpdate = "agent_message_chunk",
+                            content = {
+                                type = "text",
+                                text = "Picking up where I left off.",
+                            },
+                        },
+                    },
+                })
+
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    method = "session/update",
+                    params = {
+                        sessionId = session_id,
+                        update = {
+                            sessionUpdate = "tool_call",
+                            toolCallId = "tc-after-continue",
+                            kind = "read",
+                            title = "/tmp/file.txt",
+                            status = "pending",
+                        },
+                    },
+                })
+
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    method = "session/update",
+                    params = {
+                        sessionId = session_id,
+                        update = {
+                            sessionUpdate = "tool_call_update",
+                            toolCallId = "tc-after-continue",
+                            status = "completed",
+                        },
+                    },
+                })
+
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    id = 2,
+                    result = { stopReason = "end_turn" },
+                })
+
+                vim.wait(50, function()
+                    return prompt_2_cb.call_count > 0
+                        and #recorded.session_updates > 0
+                        and #recorded.tool_calls > 0
+                        and #recorded.tool_call_updates > 0
+                end)
+
+                assert.spy(prompt_2_cb).was.called(1)
+                -- agent_message_chunk must reach subscriber
+                assert.equal(1, #recorded.session_updates)
+                -- tool_call must reach subscriber
+                assert.equal(1, #recorded.tool_calls)
+                -- tool_call_update must reach subscriber
+                assert.equal(1, #recorded.tool_call_updates)
+
+                -- Transport received two outbound `session/prompt` sends
+                -- plus however many `_send_request` happens to issue; the
+                -- important invariant is that neither prompt clobbered
+                -- the subscriber table.
+                assert.is_not_nil(client.subscribers[session_id])
+                assert.is_true(send_stub.call_count >= 2)
+            end
+        )
+
+        it(
+            "permission request sandwiched between chunks still dispatches to subscriber",
+            function()
+                local client, _send_stub = make_client()
+                local session_id = "sess-456"
+                local handlers, recorded = make_recorder()
+
+                client:_subscribe(session_id, handlers)
+
+                -- Prompt hits usage_limit first.
+                local prompt_1_cb = spy.new(function() end)
+                client:_send_request(
+                    "session/prompt",
+                    { sessionId = session_id },
+                    prompt_1_cb --[[@as function]]
+                )
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    id = 1,
+                    error = {
+                        code = -32000,
+                        message = '{"type":"error","error":{"type":"usage_limit_error","message":"reset|1800000000"}}',
+                    },
+                })
+
+                vim.wait(50, function()
+                    return prompt_1_cb.call_count > 0
+                end)
+
+                -- Auto-continue prompt.
+                local prompt_2_cb = spy.new(function() end)
+                client:_send_request(
+                    "session/prompt",
+                    { sessionId = session_id },
+                    prompt_2_cb --[[@as function]]
+                )
+
+                -- Chunk before permission.
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    method = "session/update",
+                    params = {
+                        sessionId = session_id,
+                        update = {
+                            sessionUpdate = "agent_message_chunk",
+                            content = {
+                                type = "text",
+                                text = "Before permission.",
+                            },
+                        },
+                    },
+                })
+
+                -- Permission request mid-turn (id=99 so it doesn't
+                -- collide with the prompt-response id allocator).
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    id = 99,
+                    method = "session/request_permission",
+                    params = {
+                        sessionId = session_id,
+                        toolCall = {
+                            toolCallId = "tc-perm",
+                            kind = "edit",
+                            title = "/tmp/x.txt",
+                        },
+                        options = {
+                            {
+                                kind = "allow_once",
+                                name = "Allow",
+                                optionId = "allow-once",
+                            },
+                        },
+                    },
+                })
+
+                -- Chunk after permission.
+                client:_handle_message({
+                    jsonrpc = "2.0",
+                    method = "session/update",
+                    params = {
+                        sessionId = session_id,
+                        update = {
+                            sessionUpdate = "agent_message_chunk",
+                            content = {
+                                type = "text",
+                                text = "After permission.",
+                            },
+                        },
+                    },
+                })
+
+                vim.wait(50, function()
+                    return #recorded.session_updates >= 2
+                        and recorded.permissions > 0
+                end)
+
+                -- Both chunks must dispatch; permission must not swallow them
+                assert.equal(2, #recorded.session_updates)
+                -- Permission request must dispatch to subscriber
+                assert.equal(1, recorded.permissions)
+            end
+        )
     end)
 end)
