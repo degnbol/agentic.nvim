@@ -62,20 +62,40 @@ The multi-hour idle between `_offer_auto_continue` scheduling the timer and
 the timer firing is a strong trigger. Reproducibility gated by the once-a-day
 reset cycle, so live debugging is expensive.
 
-### Code-path asymmetry (useful for narrowing)
+### Dispatch paths are structurally identical
 
 `agent_message_chunk` and `tool_call` / `tool_call_update` route through
 `ACPClient:__handle_session_update` (`lua/agentic/acp/acp_client.lua`).
 Permission prompts route through `ACPClient:__handle_request_permission`
-(separate top-level RPC method). Both eventually `vim.schedule` on the
-subscriber callback, and both look up the same `self.subscribers[session_id]`.
+(separate top-level RPC method). Both `vim.schedule` on a callback that
+looks up the same `self.subscribers[session_id]`.
 
-Any hypothesis that depends on `vim.schedule` as a whole not firing, or on
-the subscriber table being empty, is falsified by "permission prompts work".
+There is **no meaningful dispatch-layer asymmetry**. Earlier revisions of
+this file framed this as a "useful narrowing clue" — that was wrong. The
+two paths are effectively the same shape. Any hypothesis has to explain
+why one stalls while the other doesn't despite identical machinery —
+likely from state in the receiver (SessionManager / MessageWriter) or
+from transport / subprocess behaviour, not from dispatch itself.
 
-Any new hypothesis MUST explain why `__handle_request_permission`'s path
-works while the `__handle_tool_call` / `__handle_tool_call_update` / `else →
-__with_subscriber` paths inside `__handle_session_update` do not.
+Any hypothesis that depends on `vim.schedule` as a whole not firing, or
+on the subscriber table being empty, is also falsified by "permission
+prompts work".
+
+### Ruled out by test
+
+`tests/integration/auto_continue_chunk_flush.test.lua` drives
+MessageWriter through the full auto-continue sequence (normal turn →
+usage-limit error → `append_separator` → "## continue" user message →
+streamed chunks + tool_call + tool_call_update, including the
+rejection-suppression edge case). Both cases pass — per-turn state
+(`_suppressing_rejection`, `_rejection_buffer`, `_chunk_start_line`)
+resets correctly and all streamed content lands in the buffer.
+
+**MessageWriter is not the source in isolation.** The bug is either
+upstream (ACPClient dispatch or transport) or depends on runtime
+interactions the test cannot simulate (window visibility, async
+scheduler behaviour after multi-hour idle, stdout buffering in the node
+subprocess, pipe-level timeouts).
 
 ### Do not "fix" this with
 
