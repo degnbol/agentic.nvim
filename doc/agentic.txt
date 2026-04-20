@@ -32,6 +32,11 @@ CONTENTS                                                    *agentic-contents*
     9. Autocmds .............................. |agentic-autocmds|
    10. Health check .......................... |agentic-health|
    11. Debug mode ............................ |agentic-debug|
+   12. Comparison with Claude TUI ............ |agentic-vs-tui|
+       12.1 Additions ........................ |agentic-vs-tui-additions|
+       12.2 ACP patches ...................... |agentic-vs-tui-patches|
+       12.3 Behaviour differences ............ |agentic-vs-tui-diffs|
+       12.4 Not available .................... |agentic-vs-tui-missing|
 
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
@@ -41,15 +46,9 @@ via the Agent Client Protocol (ACP). It provides a sidebar chat widget with
 tool call rendering, diff previews, permission management, and session
 persistence.
 
-This is a fork of carlos-algms/agentic.nvim with additional features:
-
-- Tool call formatting with `shfmt` and bash syntax highlighting
-- Search match and grep output highlighting
-- Fold markers for long tool output (|zo|/|zc|/|za|)
-- Sign-column block decorations via `sign_text` extmarks
-- Slash command and `@` mention syntax highlighting
-- Input buffer safeguards (`:wq`/`:x` interception)
-- Compound command auto-approval (|agentic-compound-commands|)
+This is a fork of carlos-algms/agentic.nvim. See |agentic-vs-tui| for a
+comparison with the native Claude Code TUI, covering plugin additions, ACP
+gap-fills, behaviour differences, and TUI features not available here.
 
 ==============================================================================
 2. REQUIREMENTS                                         *agentic-requirements*
@@ -511,6 +510,113 @@ User AgenticSessionChanged
 <
 
 View logs with |:messages| or in `~/.cache/nvim/agentic_debug.log`.
+
+==============================================================================
+12. COMPARISON WITH CLAUDE TUI                              *agentic-vs-tui*
+
+This section documents how agentic.nvim differs from the native `claude`
+CLI (the Claude Code TUI). The comparison is against the TUI as of Claude
+Code v2.1.x.
+
+------------------------------------------------------------------------------
+12.1 ADDITIONS                                    *agentic-vs-tui-additions*
+
+Features present here that the TUI does not have:
+
+Rendering ~
+- Bash-formatted shell commands via `shfmt` and treesitter injection.
+- Grep / search output colouring: file paths, line numbers, separators,
+  and match highlights.
+- Diff preview for Edit tool calls with hunk navigation (`]c` / `[c`).
+- Fold markers for long tool output, toggleable with `zo` / `zc` / `za`.
+- Sign-column decorations on tool-call blocks.
+- Slash-command and `@`-mention syntax highlighting in input and chat.
+
+Permissions ~
+- `/trust` per-session scope for file-scoped edits (edit, write, create,
+  delete, move). Layered with recoverability checks: pure addition,
+  tracked + clean, or a recorded Claude-owned line range whose content
+  still matches disk. Includes symlink resolution, mtime/size TOCTOU
+  revalidation, and a wide-scope warning.
+- Auto-approve read-only tools (Read / Grep / Glob) regardless of path.
+  The TUI's permission rules still scope these to the working directory
+  and `additionalDirectories`.
+- Compound Bash command auto-approval: splits on `|`, `&&`, `||`, `;`
+  and checks each segment against `settings.json` patterns. Fills
+  upstream gap tracked at anthropics/claude-code#16561.
+- Allow-always / reject-always cache: the ACP protocol leaves persistence
+  of these decisions to the provider, and claude-agent-acp does not
+  reliably persist them. The plugin caches per-session.
+- Permission keys `1`-`5` with escalating severity. `4` rejects all
+  currently-queued prompts for the turn without creating a persistent
+  rule; `5` installs a reject-always rule. See
+  |agentic-keymaps-permission|.
+
+Session & workflow ~
+- Multi-tabpage: one session per tabpage with fully isolated UI (chat,
+  panels, permission prompts). The TUI is single-session per process.
+- Auto-continue after usage-limit reset: detects the provider's
+  "out of extra usage · resets Xpm" message and schedules `continue` at
+  the reset time.
+- Attention notifications: rings the vim bell and/or sets a badge in
+  the chat buffer name when the widget is unfocused or scrolled away
+  from the bottom. The TUI offers a `Notification` hook event but no
+  built-in bell or badge.
+- Auto-scroll with runtime toggle (`<localLeader>a`).
+- Panels alongside chat: todos, code, files, diagnostics.
+- External UI integration: `AgenticHeadersChanged` autocmd plus
+  `vim.t.agentic_headers` state table for per-tab header consumers
+  (e.g. incline.nvim, custom tablines).
+
+------------------------------------------------------------------------------
+12.2 ACP PATCHES                                    *agentic-vs-tui-patches*
+
+The following commands exist in the TUI but are not forwarded through
+ACP by claude-agent-acp. The plugin intercepts them locally. These are
+gap-fills, not additions over the TUI:
+
+- `/clear` — TUI resets the conversation context. Over ACP the pass-through
+  is a no-op, so the plugin starts a fresh ACP session instead (aliased
+  to `/new`).
+- `/new` — start a fresh session.
+- `/rename <name>` — rename the session. The TUI has this natively; the
+  ACP bridge does not expose it. The plugin stores the name in session
+  history and in the header state.
+- `/context` — compact token-usage readout built from
+  `session/update` `usage_update` notifications. A strict subset of
+  the TUI's `/context`, which shows a coloured grid and optimisation
+  suggestions.
+
+------------------------------------------------------------------------------
+12.3 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
+
+Same feature, different behaviour:
+
+- Text wrapping and yanking: the TUI hard-wraps chat text to the terminal
+  width, which can corrupt pasted text on copy. This plugin uses neovim's
+  native soft-wrap, so yanks preserve the original text.
+- Scrolling: the TUI auto-scrolls aggressively during streaming. This
+  plugin's auto-scroll respects a configurable threshold from the bottom
+  and can be toggled off at runtime (|agentic-config-auto_scroll|).
+
+------------------------------------------------------------------------------
+12.4 NOT AVAILABLE                                  *agentic-vs-tui-missing*
+
+TUI features this plugin does not currently provide:
+
+- `/diff` interactive diff viewer across uncommitted changes and per-turn
+  diffs. The plugin only renders per-edit diffs at the tool-call level.
+- `/rewind` conversation checkpoints.
+- `/permissions` interactive rule editor. ACP has no protocol surface
+  for reading or writing persistent permission rules. Edit
+  `~/.claude/settings.json` (or `.claude/settings.json`) directly.
+- `/effort` dynamic thought-level control. The ACP schema reserves
+  `thought_level` as a config-option category but claude-agent-acp does
+  not emit it — the plugin's dispatch code path is ready but unreachable
+  until the bridge changes.
+- `/branch` to fork the current conversation.
+- `/teleport` to pull in a web session.
+- Background jobs.
 
 ==============================================================================
 vim:tw=78:ft=help:norl:
