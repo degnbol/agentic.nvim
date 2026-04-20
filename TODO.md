@@ -24,15 +24,16 @@
   from a previous block bleeds into the permission prompt, colouring parts of it
   incorrectly.
 
-- Support for the claude TUI `/effort`. E.g. a localLeader keymap opening a
-  select menu. Also showing effort somewhere on screen. Blocked:
-  claude-agent-acp 0.29.0 does not emit the `thought_level` ConfigOption.
-  See `lua/agentic/acp/AGENTS.md` § "`thought_level` ConfigOption not emitted
-  (claude-agent-acp)".
+- TUI parity: provide local intercepts or closest-match implementations for
+  TUI commands/features the ACP bridge doesn't expose. See
+  |agentic-vs-tui-missing| in `doc/agentic.txt` for the full list
+  (`/diff`, `/rewind`, `/branch`, `/teleport`, `/effort`, background jobs)
+  plus `/stats` and `/usage`. `/effort` is blocked upstream: claude-agent-acp
+  0.29.0 does not emit the `thought_level` ConfigOption; see
+  `lua/agentic/acp/AGENTS.md` § "`thought_level` ConfigOption not emitted
+  (claude-agent-acp)". `/permissions` has no ACP surface and is out of
+  scope.
 
-- Slash commands `/stats` and `/usage` — intercepted locally and formatted to
-  match the TUI's output as closely as possible, for users moving between the
-  two seamlessly.
 - Info keymap opening a window with session info: model, context use, prompt
   count, proximity to limits. Freer format than the slash commands since it's
   not bound to TUI parity.
@@ -53,8 +54,6 @@ chat and then protect more targeted.
 - We need gifs in the readme or elsewhere demoing the differences between this plugin and the stock TUI.
 
 - Manual code review, this repo is heavily vibe-coded.
-
-- Demo pure-addition auto-approval path.
 
 - Queing a message doesn't work while waiting for a slow resume.
 
@@ -78,3 +77,9 @@ chat and then protect more targeted.
   each file. A quickfix menu might be useful, but I wonder about having that 
   while we also use it for resume. And if there's multiple edits in a file the qf 
   would have to have multiple entries per file.
+
+- Opening a file in neovim allows for undo since we have persistent undo file.
+  Could we (optionally) integrate this plugin with that? So a user can go through the edit history from claude with u.
+
+- resume right after compacting doesn't show history from before compacting, just the compacting summary. Both would be ideal.
+
