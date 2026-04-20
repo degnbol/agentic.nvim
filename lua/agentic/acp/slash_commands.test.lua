@@ -53,9 +53,10 @@ describe("agentic.acp.SlashCommands", function()
             assert.is_not_nil(map["clear"])
             assert.is_not_nil(map["rename"])
             assert.is_not_nil(map["delete"])
+            assert.is_not_nil(map["trust"])
 
-            -- Total: 2 provider + 5 builtins
-            assert.equal(7, #commands)
+            -- Total: 2 provider + 6 builtins
+            assert.equal(8, #commands)
         end)
 
         it("does not duplicate builtin if already provided", function()
@@ -104,8 +105,8 @@ describe("agentic.acp.SlashCommands", function()
             for _, cmd in ipairs(commands) do
                 assert.is_false(cmd.word:match("%s") ~= nil)
             end
-            -- valid + 5 builtins (context, new, clear, rename, delete)
-            assert.equal(6, #commands)
+            -- valid + 6 builtins (context, new, clear, rename, delete, trust)
+            assert.equal(7, #commands)
         end)
 
         it("skips commands with missing name or description", function()
@@ -120,8 +121,8 @@ describe("agentic.acp.SlashCommands", function()
             SlashCommands.setCommands(bufnr, commands_mock)
             local commands = States.getSlashCommands()
 
-            -- valid + 5 builtins (context, new, clear, rename, delete)
-            assert.equal(6, #commands)
+            -- valid + 6 builtins (context, new, clear, rename, delete, trust)
+            assert.equal(7, #commands)
         end)
     end)
 

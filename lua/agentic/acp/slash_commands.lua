@@ -48,6 +48,11 @@ function SlashCommands.setCommands(bufnr, available_commands)
             menu = "Delete current session",
             info = "Delete the current session from disk and clear the UI",
         },
+        trust = {
+            word = "trust",
+            menu = "Set edit trust scope",
+            info = "Set scope for auto-approving edits. Subcommands: repo, here, off, or a path/glob",
+        },
     }
 
     for _, cmd in ipairs(available_commands) do

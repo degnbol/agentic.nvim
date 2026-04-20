@@ -390,6 +390,14 @@ local ConfigDefault = {
     --- cannot mutate the filesystem.
     auto_approve_read_only_tools = true,
 
+    --- Enable the /trust slash command and its client-side auto-approval
+    --- layer for file-scoped tool kinds (edit, write, create, delete, move).
+    --- When false, /trust is rejected and the trust check in
+    --- PermissionManager:_try_auto_approve is skipped entirely. Trust scope is
+    --- always per-session (cleared on /new and tabpage close); this option
+    --- only gates the feature.
+    auto_approve_trust_scope = true,
+
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings
     settings = {

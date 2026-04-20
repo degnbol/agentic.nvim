@@ -10,9 +10,11 @@ local Config = require("agentic.config")
 local DiffPreview = require("agentic.ui.diff_preview")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local FileSystem = require("agentic.utils.file_system")
+local GitFiles = require("agentic.utils.git_files")
 local Logger = require("agentic.utils.logger")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
+local TrustSafety = require("agentic.utils.trust_safety")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic._SessionManagerPrivate
@@ -460,6 +462,143 @@ function SessionManager:_rename_session(new_title)
 
     -- Persist the updated title
     self.chat_history:save()
+end
+
+--- Push the trust scope display into the chat panel headers state so
+--- external UI plugins (incline, tabline) can surface it.
+--- @param display? string Trust scope display string, or nil to clear
+function SessionManager:_push_trust_to_headers(display)
+    local headers = WindowDecoration.get_headers_state(self.tab_page_id)
+    if not headers.chat then
+        return
+    end
+    headers.chat.trust = display
+    WindowDecoration.set_headers_state(self.tab_page_id, headers)
+end
+
+--- Apply a compiled trust scope: store on PermissionManager, write a chat
+--- confirmation, push to headers, and emit a WARN notify when the scope is
+--- judged unusually wide.
+--- @param scope agentic.utils.TrustSafety.Scope
+function SessionManager:_apply_trust_scope(scope)
+    self.permission_manager:set_trust_scope(scope)
+    self:_push_trust_to_headers(scope.display)
+
+    self.message_writer:write_message(
+        ACPPayloads.generate_agent_message(
+            string.format("Trust scope set: **%s**", scope.display)
+        )
+    )
+    self.message_writer:append_separator()
+
+    local wide, reason = TrustSafety.is_wide_scope(scope)
+    if wide then
+        Logger.notify(
+            string.format(
+                "Wide trust scope (%s): %s — auto-approves edit/write/create/delete/move",
+                reason or "wide",
+                scope.display
+            ),
+            vim.log.levels.WARN,
+            { title = "Agentic /trust" }
+        )
+    end
+end
+
+--- Clear the active trust scope.
+function SessionManager:_clear_trust_scope()
+    self.permission_manager:clear_trust_scope()
+    self:_push_trust_to_headers(nil)
+
+    self.message_writer:write_message(
+        ACPPayloads.generate_agent_message("Trust scope cleared.")
+    )
+    self.message_writer:append_separator()
+end
+
+--- @param prompt string
+--- @param items table[]
+--- @param on_choice fun(item: any|nil)
+local function ui_select(prompt, items, on_choice, format_item)
+    vim.ui.select(items, {
+        prompt = prompt,
+        format_item = format_item,
+    }, on_choice)
+end
+
+--- Open the /trust selector menu (no argument form).
+function SessionManager:_show_trust_picker()
+    local cwd = vim.uv.cwd() or vim.fn.getcwd()
+    --- @type { kind: "repo"|"here"|"path"|"off", label: string }[]
+    local items = {
+        { kind = "repo", label = "Git-tracked files in repo" },
+        {
+            kind = "here",
+            label = string.format("Git-tracked files under %s", cwd),
+        },
+        { kind = "path", label = "Path or glob…" },
+        { kind = "off", label = "Off" },
+    }
+    ui_select("Agentic trust scope:", items, function(choice)
+        if not choice then
+            return
+        end
+        if choice.kind == "off" then
+            self:_clear_trust_scope()
+        elseif choice.kind == "path" then
+            vim.ui.input({ prompt = "Path or glob: " }, function(input)
+                if not input or vim.trim(input) == "" then
+                    return
+                end
+                self:_handle_trust_command(vim.trim(input))
+            end)
+        else
+            self:_handle_trust_command(choice.kind)
+        end
+    end, function(item)
+        return item.label
+    end)
+end
+
+--- Dispatch /trust subcommands. Empty arg opens the picker; the three
+--- reserved literals are handled directly; anything else is treated as a
+--- path or glob.
+--- @param arg string Trimmed argument
+function SessionManager:_handle_trust_command(arg)
+    if not Config.auto_approve_trust_scope then
+        self.message_writer:write_error_action(
+            "/trust is disabled (Config.auto_approve_trust_scope = false)."
+        )
+        return
+    end
+
+    if arg == "" then
+        self:_show_trust_picker()
+        return
+    end
+
+    if arg == "off" then
+        self:_clear_trust_scope()
+        return
+    end
+
+    local cwd = vim.uv.cwd() or vim.fn.getcwd()
+
+    if arg == "repo" or arg == "here" then
+        local git_root = GitFiles.get_git_root(cwd)
+        if not git_root then
+            self.message_writer:write_error_action(
+                string.format("/trust %s: no git repository at %s.", arg, cwd)
+            )
+            return
+        end
+        local scope = TrustSafety.build_reserved_scope(arg, cwd, git_root)
+        self:_apply_trust_scope(scope)
+        return
+    end
+
+    local scope = TrustSafety.compile_path_scope(arg, cwd)
+    self:_apply_trust_scope(scope)
 end
 
 --- Delete the current session from disk and clear the UI.
@@ -1035,6 +1174,13 @@ function SessionManager:_handle_input_submit_inner(input_text)
             ACPPayloads.generate_agent_message("Usage: `/rename <new name>`")
         )
         self.message_writer:append_separator()
+        return
+    end
+
+    -- Intercept /trust — set scoped auto-approval for file edits this session
+    local trust_arg = input_text:match("^/trust%s*(.*)$")
+    if trust_arg then
+        self:_handle_trust_command(vim.trim(trust_arg))
         return
     end
 

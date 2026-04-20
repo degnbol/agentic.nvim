@@ -1,4 +1,4 @@
---- @diagnostic disable: invisible
+--- @diagnostic disable: invisible, missing-fields
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -532,5 +532,357 @@ describe("agentic.ui.PermissionManager", function()
                 pm:_complete_request("allow-once")
             end
         )
+    end)
+
+    describe("trust scope", function()
+        --- @type agentic.utils.TrustSafety
+        local TrustSafety
+        --- @type agentic.utils.GitFiles
+        local GitFiles
+        --- @type agentic.utils.FileSystem
+        local FileSystem
+        --- @type TestStub
+        local fs_stat_stub
+        --- @type TestStub
+        local fs_lstat_stub
+        --- @type TestStub
+        local read_disk_stub
+        --- @type TestStub
+        local is_tracked_stub
+        --- @type TestStub
+        local diff_hunks_stub
+        --- @type TestStub
+        local get_git_root_stub
+
+        --- @param tool_call_id string
+        --- @param kind agentic.acp.ToolKind
+        --- @param file_path string
+        --- @return agentic.acp.RequestPermission
+        local function make_trust_request(tool_call_id, kind, file_path)
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = tool_call_id,
+                    kind = kind,
+                    rawInput = { file_path = file_path },
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                },
+            }
+        end
+
+        before_each(function()
+            TrustSafety = require("agentic.utils.trust_safety")
+            GitFiles = require("agentic.utils.git_files")
+            FileSystem = require("agentic.utils.file_system")
+
+            fs_stat_stub = spy.stub(vim.uv, "fs_stat")
+            fs_stat_stub:returns({
+                mtime = { sec = 1, nsec = 0 },
+                size = 100,
+                type = "file",
+            })
+
+            fs_lstat_stub = spy.stub(vim.uv, "fs_lstat")
+            fs_lstat_stub:returns({
+                mtime = { sec = 1, nsec = 0 },
+                size = 100,
+                type = "file",
+            })
+
+            read_disk_stub = spy.stub(FileSystem, "read_from_disk")
+            read_disk_stub:invokes(function(_)
+                return { "line 1", "line 2" }, nil
+            end)
+
+            is_tracked_stub = spy.stub(GitFiles, "is_tracked")
+            is_tracked_stub:returns(true)
+
+            diff_hunks_stub = spy.stub(GitFiles, "diff_hunks")
+            diff_hunks_stub:returns({})
+
+            get_git_root_stub = spy.stub(GitFiles, "get_git_root")
+            get_git_root_stub:returns("/repo")
+        end)
+
+        after_each(function()
+            fs_stat_stub:revert()
+            fs_lstat_stub:revert()
+            read_disk_stub:revert()
+            is_tracked_stub:revert()
+            diff_hunks_stub:revert()
+            get_git_root_stub:revert()
+        end)
+
+        it("falls through when no scope is set", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_trust_request("tc-no-scope", "edit", "/repo/a.lua"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("auto-approves edit on tracked clean file in scope", function()
+            pm:set_trust_scope(
+                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            )
+
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_trust_request("tc-clean", "edit", "/repo/a.lua"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("allow-once"))
+        end)
+
+        it("falls through when path is outside scope", function()
+            pm:set_trust_scope(
+                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            )
+            is_tracked_stub:returns(false)
+
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_trust_request("tc-outside", "edit", "/elsewhere/a.lua"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            pm:_complete_request("reject-once")
+        end)
+
+        it(
+            "falls through on dirty tracked file when edit overlaps non-Claude hunk",
+            function()
+                pm:set_trust_scope(
+                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+                )
+                diff_hunks_stub:returns({
+                    { start_line = 1, end_line = 1, count = 1 },
+                })
+                writer.tool_call_blocks["tc-dirty"] = {
+                    tool_call_id = "tc-dirty",
+                    status = "pending",
+                    kind = "edit",
+                    argument = "/repo/a.lua",
+                    diff = { old = { "line 1" }, new = { "modified" } },
+                }
+
+                local cb = spy.new(function() end)
+                pm:add_request(
+                    make_trust_request("tc-dirty", "edit", "/repo/a.lua"),
+                    cb --[[@as function]]
+                )
+                assert.spy(cb).was.called(0)
+                pm:_complete_request("reject-once")
+            end
+        )
+
+        it(
+            "auto-approves when overlapping dirty hunk is Claude-owned and intact",
+            function()
+                pm:set_trust_scope(
+                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+                )
+                read_disk_stub:invokes(function(_)
+                    return { "claude wrote", "claude wrote 2" }, nil
+                end)
+                diff_hunks_stub:returns({
+                    { start_line = 1, end_line = 2, count = 2 },
+                })
+                writer.tool_call_blocks["earlier-tc"] = {
+                    tool_call_id = "earlier-tc",
+                    status = "completed",
+                    kind = "edit",
+                    argument = "/repo/a.lua",
+                    diff = {
+                        old = { "before" },
+                        new = { "claude wrote", "claude wrote 2" },
+                    },
+                }
+                writer.tool_call_blocks["tc-claude-edit"] = {
+                    tool_call_id = "tc-claude-edit",
+                    status = "pending",
+                    kind = "edit",
+                    argument = "/repo/a.lua",
+                    diff = {
+                        old = { "claude wrote", "claude wrote 2" },
+                        new = { "next iter", "next iter 2" },
+                    },
+                }
+
+                local cb = spy.new(function() end)
+                pm:add_request(
+                    make_trust_request("tc-claude-edit", "edit", "/repo/a.lua"),
+                    cb --[[@as function]]
+                )
+                assert.spy(cb).was.called(1)
+                assert.is_true(cb:called_with("allow-once"))
+            end
+        )
+
+        it(
+            "falls through when Claude-owned range was modified by user",
+            function()
+                pm:set_trust_scope(
+                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+                )
+                read_disk_stub:invokes(function(_)
+                    return { "user changed this", "claude wrote 2" }, nil
+                end)
+                diff_hunks_stub:returns({
+                    { start_line = 1, end_line = 2, count = 2 },
+                })
+                writer.tool_call_blocks["earlier-tc"] = {
+                    tool_call_id = "earlier-tc",
+                    status = "completed",
+                    kind = "edit",
+                    argument = "/repo/a.lua",
+                    diff = {
+                        old = { "before" },
+                        new = { "claude wrote", "claude wrote 2" },
+                    },
+                }
+                writer.tool_call_blocks["tc-user-edit"] = {
+                    tool_call_id = "tc-user-edit",
+                    status = "pending",
+                    kind = "edit",
+                    argument = "/repo/a.lua",
+                    diff = {
+                        old = { "user changed this", "claude wrote 2" },
+                        new = { "next", "next 2" },
+                    },
+                }
+
+                local cb = spy.new(function() end)
+                pm:add_request(
+                    make_trust_request("tc-user-edit", "edit", "/repo/a.lua"),
+                    cb --[[@as function]]
+                )
+                assert.spy(cb).was.called(0)
+                pm:_complete_request("reject-once")
+            end
+        )
+
+        it(
+            "falls through when stat changes between snapshot and approval",
+            function()
+                pm:set_trust_scope(
+                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+                )
+                local call_count = 0
+                fs_stat_stub:invokes(function(_)
+                    call_count = call_count + 1
+                    if call_count <= 1 then
+                        return {
+                            mtime = { sec = 1, nsec = 0 },
+                            size = 100,
+                            type = "file",
+                        }
+                    end
+                    return {
+                        mtime = { sec = 2, nsec = 0 },
+                        size = 200,
+                        type = "file",
+                    }
+                end)
+
+                local cb = spy.new(function() end)
+                pm:add_request(
+                    make_trust_request("tc-toctou", "edit", "/repo/a.lua"),
+                    cb --[[@as function]]
+                )
+                assert.spy(cb).was.called(0)
+                pm:_complete_request("reject-once")
+            end
+        )
+
+        it(
+            "cached reject_always wins over a would-be-safe trust scope",
+            function()
+                pm:set_trust_scope(
+                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+                )
+                pm._always_cache["edit:/repo/a.lua"] = "reject"
+
+                local cb = spy.new(function() end)
+                pm:add_request(
+                    make_trust_request("tc-rej", "edit", "/repo/a.lua"),
+                    cb --[[@as function]]
+                )
+                assert.spy(cb).was.called(1)
+                assert.is_true(cb:called_with("reject-once"))
+            end
+        )
+
+        it("non-file-scoped kinds fall through even with trust set", function()
+            pm:set_trust_scope(
+                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            )
+
+            local cb = spy.new(function() end)
+            pm:add_request({
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = "tc-exec",
+                    kind = "execute",
+                    rawInput = { command = "ls" } --[[@as agentic.acp.RawInput]],
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                },
+            }, cb --[[@as function]])
+            assert.spy(cb).was.called(0)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("clear() wipes the trust scope", function()
+            pm:set_trust_scope(
+                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            )
+            pm:clear()
+            assert.is_nil(pm:get_trust_scope())
+        end)
+
+        it("respects auto_approve_trust_scope toggle", function()
+            local Config = require("agentic.config")
+            local original = Config.auto_approve_trust_scope
+            Config.auto_approve_trust_scope = false
+
+            pm:set_trust_scope(
+                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            )
+
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_trust_request("tc-toggle", "edit", "/repo/a.lua"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            pm:_complete_request("reject-once")
+
+            Config.auto_approve_trust_scope = original
+        end)
     end)
 end)

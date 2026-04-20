@@ -923,4 +923,151 @@ describe("agentic.SessionManager", function()
             assert.equal("0s", SessionManager._format_duration(0))
         end)
     end)
+
+    describe("/trust dispatch", function()
+        --- @type TestStub
+        local select_stub
+        --- @type TestStub
+        local input_stub
+        --- @type TestStub
+        local notify_stub
+        --- @type TestStub
+        local git_root_stub
+        --- @type agentic.SessionManager
+        local session
+        --- @type integer
+        local test_bufnr
+        --- @type table
+        local pm
+        --- @type any[][]
+        local writes
+        --- @type any[]
+        local errors
+
+        local SessionManagerModule
+        local GitFiles
+
+        before_each(function()
+            SessionManagerModule = require("agentic.session_manager")
+            GitFiles = require("agentic.utils.git_files")
+
+            select_stub = spy.stub(vim.ui, "select")
+            input_stub = spy.stub(vim.ui, "input")
+            notify_stub = spy.stub(Logger, "notify")
+            git_root_stub = spy.stub(GitFiles, "get_git_root")
+            git_root_stub:returns("/repo")
+
+            test_bufnr = vim.api.nvim_create_buf(false, true)
+
+            writes = {}
+            errors = {}
+
+            pm = {
+                set_trust_scope = spy.new(function() end),
+                clear_trust_scope = spy.new(function() end),
+            }
+
+            session = {
+                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                permission_manager = pm,
+                widget = {
+                    buf_nrs = { chat = test_bufnr },
+                    tab_page_id = vim.api.nvim_get_current_tabpage(),
+                },
+                message_writer = {
+                    write_message = spy.new(function(_, msg)
+                        table.insert(writes, msg)
+                    end),
+                    append_separator = spy.new(function() end),
+                    write_error_action = spy.new(function(_, msg)
+                        table.insert(errors, msg)
+                    end),
+                },
+                _push_trust_to_headers = SessionManagerModule._push_trust_to_headers,
+                _apply_trust_scope = SessionManagerModule._apply_trust_scope,
+                _clear_trust_scope = SessionManagerModule._clear_trust_scope,
+                _show_trust_picker = SessionManagerModule._show_trust_picker,
+                _handle_trust_command = SessionManagerModule._handle_trust_command,
+            } --[[@as agentic.SessionManager]]
+        end)
+
+        after_each(function()
+            select_stub:revert()
+            input_stub:revert()
+            notify_stub:revert()
+            git_root_stub:revert()
+            vim.api.nvim_buf_delete(test_bufnr, { force = true })
+            vim.t.agentic_headers = nil
+            Config.auto_approve_trust_scope = true
+        end)
+
+        it("repo subcommand sets a repo scope on the manager", function()
+            session:_handle_trust_command("repo")
+            assert.equal(1, pm.set_trust_scope.call_count)
+            local scope = pm.set_trust_scope.calls[1][2]
+            assert.equal("repo", scope.kind)
+        end)
+
+        it("here subcommand sets a here scope on the manager", function()
+            session:_handle_trust_command("here")
+            assert.equal(1, pm.set_trust_scope.call_count)
+            local scope = pm.set_trust_scope.calls[1][2]
+            assert.equal("here", scope.kind)
+        end)
+
+        it("off subcommand clears the scope", function()
+            session:_handle_trust_command("off")
+            assert.equal(1, pm.clear_trust_scope.call_count)
+        end)
+
+        it("path subcommand compiles a path scope", function()
+            session:_handle_trust_command("/repo/src/**/*.lua")
+            assert.equal(1, pm.set_trust_scope.call_count)
+            local scope = pm.set_trust_scope.calls[1][2]
+            assert.equal("path", scope.kind)
+            assert.equal("/repo/src/**/*.lua", scope.display)
+        end)
+
+        it("empty arg opens the picker", function()
+            session:_handle_trust_command("")
+            assert.equal(1, select_stub.call_count)
+        end)
+
+        it("repo subcommand without git root errors", function()
+            git_root_stub:returns(nil)
+            session:_handle_trust_command("repo")
+            assert.equal(0, pm.set_trust_scope.call_count)
+            assert.equal(1, #errors)
+        end)
+
+        it("disabled config rejects /trust", function()
+            Config.auto_approve_trust_scope = false
+            session:_handle_trust_command("repo")
+            assert.equal(0, pm.set_trust_scope.call_count)
+            assert.equal(1, #errors)
+        end)
+
+        it("emits a WARN for wide path scopes", function()
+            session:_handle_trust_command("/tmp")
+            assert.equal(1, pm.set_trust_scope.call_count)
+            local warn_count = 0
+            for _, c in ipairs(notify_stub.calls) do
+                if c[2] == vim.log.levels.WARN then
+                    warn_count = warn_count + 1
+                end
+            end
+            assert.equal(1, warn_count)
+        end)
+
+        it("does not emit a WARN for reserved literals", function()
+            session:_handle_trust_command("repo")
+            local warn_count = 0
+            for _, c in ipairs(notify_stub.calls) do
+                if c[2] == vim.log.levels.WARN then
+                    warn_count = warn_count + 1
+                end
+            end
+            assert.equal(0, warn_count)
+        end)
+    end)
 end)
