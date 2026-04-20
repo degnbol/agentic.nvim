@@ -658,6 +658,23 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
         end
 
+        -- No matching block and a non-empty old_text means the Edit's
+        -- old_string isn't in the file (the Edit will fail). Render a single
+        -- placeholder line where the diff would have appeared so the chat
+        -- still shows what was attempted.
+        if
+            #diff_blocks == 0
+            and tool_call_block.diff.old
+            and #tool_call_block.diff.old > 0
+        then
+            local first = tool_call_block.diff.old[1] or ""
+            local label = "Not found: " .. first
+            if #tool_call_block.diff.old > 1 then
+                label = label .. " ..."
+            end
+            table.insert(lines, label)
+        end
+
         for _, block in ipairs(diff_blocks) do
             local old_count = #block.old_lines
             local new_count = #block.new_lines

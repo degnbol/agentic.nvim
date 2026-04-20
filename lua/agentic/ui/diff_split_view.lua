@@ -247,33 +247,6 @@ function M.show_split_diff(opts)
         return open_split_view(abs_path, bufnr, target_winid, modified_lines)
     end
 
-    -- Reverse match: the provider may have already applied the edit to disk
-    -- before requesting permission. The file now contains new_lines, so match
-    -- those instead and reconstruct the original by reversing the diff.
-    local original_reconstructed = reconstruct_modified_file(
-        original_lines,
-        new_lines,
-        old_lines,
-        opts.diff.all
-    )
-
-    if original_reconstructed then
-        local bufnr, target_winid =
-            resolve_buf_and_win(abs_path, opts.get_winid)
-        if not bufnr or not target_winid then
-            return false
-        end
-        -- File buffer (left) = modified (as on disk).
-        -- Scratch buffer (right) = reconstructed original.
-        -- Vimdiff shows the changes regardless of side ordering.
-        return open_split_view(
-            abs_path,
-            bufnr,
-            target_winid,
-            original_reconstructed
-        )
-    end
-
     -- Buffer content may differ from disk (unsaved changes, autoread lag).
     -- The provider operates on disk, so retry matching against disk content.
     local disk_lines = FileSystem.read_from_disk(abs_path)
@@ -291,26 +264,6 @@ function M.show_split_diff(opts)
                 return false
             end
             return open_split_view(abs_path, bufnr, target_winid, disk_modified)
-        end
-
-        local disk_reconstructed = reconstruct_modified_file(
-            disk_lines,
-            new_lines,
-            old_lines,
-            opts.diff.all
-        )
-        if disk_reconstructed then
-            local bufnr, target_winid =
-                resolve_buf_and_win(abs_path, opts.get_winid)
-            if not bufnr or not target_winid then
-                return false
-            end
-            return open_split_view(
-                abs_path,
-                bufnr,
-                target_winid,
-                disk_reconstructed
-            )
         end
     end
 

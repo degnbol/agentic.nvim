@@ -27,7 +27,6 @@ local M = {}
 
 local TextMatcher = require("agentic.utils.text_matcher")
 local FileSystem = require("agentic.utils.file_system")
-local Logger = require("agentic.utils.logger")
 
 -- vim.diff was renamed to vim.text.diff (identical signature, just namespace move)
 -- Fallback needed for backward compatibility with Neovim < 0.12
@@ -71,26 +70,7 @@ function M.extract_diff_blocks(opts)
         local blocks =
             M.match_or_substring_fallback(file_lines, old_lines, new_lines)
 
-        if not blocks then
-            -- Reverse match: the provider may have already applied the edit
-            -- to disk before requesting permission. Match new_lines instead
-            -- and swap old/new so the diff still displays correctly.
-            local reverse_blocks =
-                M.match_or_substring_fallback(file_lines, new_lines, old_lines)
-            if reverse_blocks then
-                blocks = vim.tbl_map(function(b)
-                    return {
-                        start_line = b.start_line,
-                        end_line = b.end_line,
-                        old_lines = new_lines,
-                        new_lines = old_lines,
-                    }
-                end, reverse_blocks)
-            end
-        end
-
-        -- Buffer content may differ from disk (unsaved changes, autoread lag).
-        -- The provider operates on disk, so retry against disk content.
+        -- Buffer may lag disk (autoread). Retry once against fresh disk content.
         if not blocks then
             local disk_lines = FileSystem.read_from_disk(abs_path)
             if disk_lines and #disk_lines > 0 then
@@ -99,26 +79,12 @@ function M.extract_diff_blocks(opts)
                     old_lines,
                     new_lines
                 )
-                if not blocks then
-                    local reverse_disk = M.match_or_substring_fallback(
-                        disk_lines,
-                        new_lines,
-                        old_lines
-                    )
-                    if reverse_disk then
-                        blocks = vim.tbl_map(function(b)
-                            return {
-                                start_line = b.start_line,
-                                end_line = b.end_line,
-                                old_lines = new_lines,
-                                new_lines = old_lines,
-                            }
-                        end, reverse_disk)
-                    end
-                end
             end
         end
 
+        -- No match: return empty diff_blocks. Callers (tool_call_renderer)
+        -- handle the not-found case by emitting a single placeholder line in
+        -- place of the diff.
         if blocks then
             if opts.replace_all then
                 vim.list_extend(diff_blocks, blocks)
@@ -126,15 +92,6 @@ function M.extract_diff_blocks(opts)
                 -- Only use the first match if replace_all is false
                 table.insert(diff_blocks, blocks[1])
             end
-        elseif not opts.strict then
-            Logger.debug("[ACP diff] Failed to locate diff", opts.path)
-            -- Fallback: display the diff even if we can't match it
-            table.insert(diff_blocks, {
-                start_line = 1,
-                end_line = math.max(1, #old_lines),
-                old_lines = old_lines,
-                new_lines = new_lines,
-            })
         end
     end
 

@@ -203,6 +203,26 @@ describe("tool_call_diff", function()
             )
             assert.same({}, block.new_lines)
         end)
+
+        it(
+            "returns empty when old_string isn't in the file (caller emits Not-found marker)",
+            function()
+                local file_lines = { "alpha", "beta", "gamma" }
+                read_stub:returns(file_lines)
+                local disk_stub = spy.stub(FileSystem, "read_from_disk")
+                disk_stub:returns(file_lines)
+
+                local blocks = ToolCallDiff.extract_diff_blocks({
+                    path = "/test.lua",
+                    old_text = { "delta" },
+                    new_text = { "epsilon" },
+                })
+
+                assert.equal(0, #blocks)
+
+                disk_stub:revert()
+            end
+        )
     end)
 
     describe("filter_unchanged_lines", function()
