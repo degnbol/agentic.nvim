@@ -297,11 +297,28 @@ top before approving:
      hunks, OR every overlapping hunk is a verified Claude-owned range
    - `move` — source satisfies `edit`, destination satisfies `write`, both
      symlink endpoints in scope
-3. **Verified Claude-owned range.** For each unstaged hunk overlapping an
-   edit, locate the prior tool_call_blocks entries on the same path; if their
-   recorded `diff.new` lines still appear contiguously in the current on-disk
-   content (exact line-sequence equality), that range counts as Claude-owned
-   and unedited. Any divergence falls through.
+3. **Verified Claude-owned range.** Ranges are recorded at edit time, not
+   re-discovered at check time. At the initial `tool_call` notification
+   (before the SDK applies the edit — see "Edits are not applied before
+   permission"), `SessionManager:_record_pending_edit_range` reads the file
+   and finds `diff.old` as a unique line subsequence. The start line is
+   stashed in `PermissionManager._pending_edits`. When the matching
+   `tool_call_update` arrives with `status: "completed"`,
+   `finalize_edit_range` promotes it to `_edit_records` with
+   `end_line = start_line + #diff.new - 1` and the recorded `new_lines`.
+   At trust-check time, `TrustSafety.verify_edit_range` confirms the
+   on-disk content at the recorded range still equals `new_lines`. Any
+   divergence (user edit, or a later Claude edit that shifted those
+   lines) drops the record and falls through.
+
+   **Why range-based, not content-search:** Claude's Edit tool is
+   string-based (no line numbers in the payload, see acp skill's Edit tool
+   section), and the SDK's `FileEditOutput.structuredPatch` is **not
+   forwarded** by the claude-agent-acp bridge — `rawOutput` is flattened to
+   a plain success string. We synthesise ranges ourselves using the tool's
+   uniqueness contract on `old_string`. Searching for `diff.new` at check
+   time would be ambiguous when the new content coincides with other file
+   text (e.g. short replacements like `}`, `end`, blank lines).
 4. **TOCTOU revalidation.** Capture `mtime`/`size` (or non-existence) before
    the safety check, re-stat just before approving, and bail on any change.
    Closes the same-process race between our git snapshot and `callback`.

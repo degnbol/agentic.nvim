@@ -145,20 +145,47 @@ themselves; Claude will receive the error and retry with more context.
 **`replace_all` is a Claude Code extension.** The pure Anthropic API tool does
 not document it. The SDK's Zod schema adds it with default `false`.
 
-**Output carries line ranges.** `FileEditOutput.structuredPatch` is an array
-of unified-diff hunks with fields `oldStart`, `oldLines`, `newStart`,
-`newLines`, `lines` (line numbers in post-edit file). Defined near the
-`old_string`/`new_string` schema in `cli.js` as a Zod object with those five
-fields.
+**Output carries line ranges — but not via ACP.** The SDK's
+`FileEditOutput.structuredPatch` is an array of unified-diff hunks with
+fields `oldStart`, `oldLines`, `newStart`, `newLines`, `lines`. Documented in
+`sdk-tools.d.ts:2262-2288` and also visible in `cli.js` as a Zod object with
+those five fields.
 
-**Client implication for provenance tracking:** `rawOutput.structuredPatch`
-is the authoritative source for "where did Claude's edit land" — prefer it
-over scanning for `diff.new` as a subsequence, which is ambiguous when the
-new content coincides with other file text (e.g. short replacements like
-`}`, `end`, blank lines). The ACP adapter currently records `diff.old` /
-`diff.new` from `rawInput` only; if you need post-edit line ranges (e.g. for
-auto-approval Claude-owned-range verification), capture `structuredPatch`
-from the `tool_call_update` that carries `status: "completed"`.
+**But the ACP bridge does not forward it.** Verified 2026-04-20 by
+instrumenting `__build_tool_call_update` in the adapter and triggering an
+Edit: `rawOutput` for a completed Edit is a plain success string like
+`"The file X has been updated successfully."` — no `structuredPatch`, no
+`originalFile`, no line ranges. The SDK's tool result is flattened into a
+human-readable text block by the time `acp-agent.js:1694` sets
+`rawOutput: chunk.content`. The structured fields exist in the SDK but are
+not reachable through ACP.
+
+The completed `tool_call_update` for an Edit is minimal:
+```lua
+{
+    _meta = { claudeCode = { toolName = "Edit" } },
+    rawOutput = "The file ... has been updated successfully.",
+    sessionUpdate = "tool_call_update",
+    status = "completed",
+    toolCallId = "toolu_...",
+}
+```
+
+Note that `kind`, `rawInput`, `title`, `argument`, `diff` are all absent on
+completed updates (only the initial `tool_call` carries them) — another
+reason to read edit provenance from accumulated `tool_call_blocks`.
+
+**Client implication for provenance tracking.** If you need post-edit line
+ranges, you must synthesise them client-side from the initial `tool_call`
+payload: read the file at that moment (the SDK has NOT applied the edit
+yet — see "Edits are not applied before permission"), find `diff.old` by
+**unique** subsequence match (the tool enforces `old_string` uniqueness at
+execution time, so a non-unique match here means file state we can't
+reason about), and record the start line. On the matching
+`tool_call_update` with `status: "completed"`, compute the post-edit range
+as `{start, start + #diff.new - 1}`. The plugin's `/trust` layer uses this
+approach — see `lua/agentic/utils/trust_safety.lua` (`find_unique_subsequence`,
+`verify_edit_range`) and `SessionManager:_record_pending_edit_range`.
 
 **Sibling commands of the API tool** (not all exposed via Claude Code's
 `edit` kind):

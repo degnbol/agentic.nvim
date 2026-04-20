@@ -308,11 +308,16 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
    file-scoped tool kinds. The user picks a scope via `/trust` (with reserved
    literals `repo` / `here` / `off`, or any path/glob). For matching paths the
    plugin still requires git-recoverable safety: new file, tracked + clean, or
-   tracked + dirty hunks that exactly match a prior Claude `diff.new` written
-   in this session. Symlink endpoints, mtime TOCTOU revalidation, and a wide-
-   scope WARN are all enforced. Controlled by `Config.auto_approve_trust_scope`
-   (default `true`). Implementation in `lua/agentic/utils/trust_safety.lua`
-   and `lua/agentic/utils/git_files.lua`.
+   tracked + dirty hunks that overlap a **recorded Claude-owned line range**
+   whose content still matches disk. Ranges are captured at the initial
+   `tool_call` via unique-subsequence match of `diff.old` (Claude's Edit tool
+   enforces `old_string` uniqueness, so a non-unique match at recording time
+   means the file has shifted and we skip recording). Symlink endpoints, mtime
+   TOCTOU revalidation, and a wide-scope WARN are all enforced. Controlled by
+   `Config.auto_approve_trust_scope` (default `true`). Implementation in
+   `lua/agentic/utils/trust_safety.lua` and `lua/agentic/utils/git_files.lua`;
+   range capture in `SessionManager:_record_pending_edit_range` and
+   `PermissionManager:{record_pending_edit,finalize_edit_range}`.
 
 See "Client-side auto-approval" in @lua/agentic/acp/AGENTS.md for the full
 algorithm and safety rules (including the six trust-scope safety properties).
