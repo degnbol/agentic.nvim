@@ -2055,10 +2055,8 @@ function SessionManager:_offer_auto_continue(reset_epoch)
             self._queued_prompts = nil
 
             if queued then
-                Logger.notify("Usage limit reset — sending queued message...")
                 self:_handle_input_submit(table.concat(queued, "\n\n"))
             else
-                Logger.notify("Usage limit reset — auto-continuing...")
                 self:_handle_input_submit("continue")
             end
         end)
