@@ -279,7 +279,7 @@ The plugin's `ftplugin/` directory holds filetype-specific setup (e.g.
 
 ## Client-side auto-approval
 
-The plugin extends the ACP provider's permission system with two client-side
+The plugin extends the ACP provider's permission system with four client-side
 auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
 
 1. **Read-only tools** — ACP kinds `"read"` and `"search"` (covers Read, Grep,
@@ -304,8 +304,18 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
    cache per `kind:file_path`. Other kinds cache per `kind` alone. The cache
    is cleared on `clear()` (session reset / `/new`).
 
+4. **Trust scope (`/trust`)** — per-session scoped auto-approval for
+   file-scoped tool kinds. The user picks a scope via `/trust` (with reserved
+   literals `repo` / `here` / `off`, or any path/glob). For matching paths the
+   plugin still requires git-recoverable safety: new file, tracked + clean, or
+   tracked + dirty hunks that exactly match a prior Claude `diff.new` written
+   in this session. Symlink endpoints, mtime TOCTOU revalidation, and a wide-
+   scope WARN are all enforced. Controlled by `Config.auto_approve_trust_scope`
+   (default `true`). Implementation in `lua/agentic/utils/trust_safety.lua`
+   and `lua/agentic/utils/git_files.lua`.
+
 See "Client-side auto-approval" in @lua/agentic/acp/AGENTS.md for the full
-algorithm and safety rules.
+algorithm and safety rules (including the six trust-scope safety properties).
 
 ## ACP details
 

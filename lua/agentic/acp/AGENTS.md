@@ -209,8 +209,9 @@ Provider sends "session/request_permission"
 
 ### Client-side auto-approval
 
-`PermissionManager:_try_auto_approve()` runs three independent checks before
-falling through to the interactive prompt. Either check can approve a request.
+`PermissionManager:_try_auto_approve()` runs four independent checks before
+falling through to the interactive prompt. Any check can approve (or reject) a
+request.
 
 #### Read-only tools
 
@@ -268,6 +269,60 @@ matches, it sends `reject_once`.
 
 The cache is per-session — cleared by `clear()` (called on `/new`, session
 cancel, and tabpage close).
+
+#### Trust scope (`/trust`)
+
+The `/trust` slash command sets a per-session scope inside which file-scoped
+tool kinds (edit, write, create, delete, move) auto-approve when the change is
+safely recoverable. Three reserved literals plus any path/glob:
+
+- `repo` — any git-tracked file in the current repo
+- `here` — git-tracked files under the activation cwd
+- `off` — clear the scope
+- any other string — literal path or `vim.glob.to_lpeg` glob
+
+Scope membership is **necessary but not sufficient** — the orchestrator
+(`PermissionManager:_check_trust`) layers the following safety properties on
+top before approving:
+
+1. **Symlink resolution.** Both the original path AND its `vim.uv.fs_realpath`
+   must lie inside the scope. A tracked symlink pointing outside (e.g.
+   `~/.ssh/authorized_keys`) is rejected.
+2. **Per-kind recoverability** (see `safe_for_kind` in
+   `lua/agentic/utils/trust_safety.lua`):
+   - `create` — file does not exist
+   - `write` — new file, OR tracked + working tree clean
+   - `delete` — tracked + clean
+   - `edit` — new file, tracked + clean, edit range disjoint from unstaged
+     hunks, OR every overlapping hunk is a verified Claude-owned range
+   - `move` — source satisfies `edit`, destination satisfies `write`, both
+     symlink endpoints in scope
+3. **Verified Claude-owned range.** For each unstaged hunk overlapping an
+   edit, locate the prior tool_call_blocks entries on the same path; if their
+   recorded `diff.new` lines still appear contiguously in the current on-disk
+   content (exact line-sequence equality), that range counts as Claude-owned
+   and unedited. Any divergence falls through.
+4. **TOCTOU revalidation.** Capture `mtime`/`size` (or non-existence) before
+   the safety check, re-stat just before approving, and bail on any change.
+   Closes the same-process race between our git snapshot and `callback`.
+5. **Cache precedence.** A cached `reject_always` (`_always_cache`) wins over
+   a would-be-safe trust check — trust runs after the cache.
+6. **Wide-scope WARN.** When the user supplies a path scope that covers
+   `$HOME`, a top-level dir (`/`, `/tmp`, `/var`, …), or starts with an
+   unanchored `**`, `Logger.notify` fires a WARN with the affected kinds.
+
+Scope state lives on `PermissionManager._trust_scope` and is cleared by
+`clear()` (same lifecycle as `_always_cache`). The scope display string is
+also pushed into the chat panel's `vim.t.agentic_headers` so external UI
+plugins can surface it via the `AgenticHeadersChanged` autocmd.
+
+`git_files.lua` resolves the worktree's actual index path via
+`git rev-parse --git-path index` (`.git/worktrees/<name>/index` for worktree
+checkouts, plain `.git/index` otherwise) and uses that for mtime-based cache
+invalidation of the tracked-files set.
+
+Controlled by `Config.auto_approve_trust_scope` (default `true`). When false,
+`/trust` is rejected and the trust check is skipped entirely.
 
 ### Permission response keys
 
@@ -345,25 +400,24 @@ command matching against `settings.json`, and the per-session allow/reject
 always cache. For persistent rule management, users edit `~/.claude/settings.json`
 directly (or `.claude/settings.json` for project-local rules).
 
-### Edit applied before permission request
+### Buffer/disk divergence in diff matching
 
-Providers (at least `claude-agent-acp`) write file edits to disk **before**
-sending `request_permission`. By the time the plugin reads the file to show the
-diff preview, the file already contains the new content. Matching
-`rawInput.old_string` against the file fails because the old text is no longer
-present.
+`diff_split_view.lua` and `tool_call_diff.lua` match `rawInput.old_string`
+against file content to locate edit positions. If that fails, they fall
+back to reverse matching (locate `new_string` and invert the diff).
 
-Both `diff_split_view.lua` and `tool_call_diff.lua` handle this via reverse
-matching: when forward matching fails, try matching `new_lines` against the file.
-If that succeeds, the edit is already applied and the diff is reconstructed by
-reversing the match. Any new diff-related code must account for both orderings.
+Earlier docs attributed the reverse-match fallback to providers writing
+edits to disk before sending `request_permission`. This is not what
+happens — verified 2026-04-17 by inspecting disk contents while an Edit
+permission prompt was pending. Do not plan new features around a pre-apply
+race.
 
-**Buffer/disk divergence:** `read_from_buffer_or_disk` returns buffer content
-when the buffer is loaded, but the provider operates on the disk version. When
-the buffer has unsaved user edits or hasn't reloaded after a provider edit, both
-forward and reverse matching against buffer content fail. Both diff modules fall
-back to `FileSystem.read_from_disk()` (bypasses loaded buffers) when
-buffer-based matching fails. New diff code must include this disk fallback.
+The legitimate divergence `read_from_buffer_or_disk` and the reverse-match
+fallback actually guard against is buffer/disk skew: the buffer returns
+content when loaded, but the provider operates on disk. Unsaved user edits
+or autoread lag make both sides diverge. Both diff modules fall back to
+`FileSystem.read_from_disk()` (bypasses loaded buffers) when buffer-based
+matching fails. New diff code must include this disk fallback.
 
 ### Slash commands intercepted locally
 
