@@ -83,19 +83,33 @@ prompts work".
 
 ### Ruled out by test
 
-`tests/integration/auto_continue_chunk_flush.test.lua` drives
-MessageWriter through the full auto-continue sequence (normal turn →
-usage-limit error → `append_separator` → "## continue" user message →
-streamed chunks + tool_call + tool_call_update, including the
-rejection-suppression edge case). Both cases pass — per-turn state
-(`_suppressing_rejection`, `_rejection_buffer`, `_chunk_start_line`)
-resets correctly and all streamed content lands in the buffer.
+Two layers have been driven end-to-end through the auto-continue
+sequence and pass:
 
-**MessageWriter is not the source in isolation.** The bug is either
-upstream (ACPClient dispatch or transport) or depends on runtime
-interactions the test cannot simulate (window visibility, async
-scheduler behaviour after multi-hour idle, stdout buffering in the node
-subprocess, pipe-level timeouts).
+- **MessageWriter** —
+  `tests/integration/auto_continue_chunk_flush.test.lua`. Normal turn →
+  usage-limit error → `append_separator` → "## continue" → streamed
+  chunks + tool_call + tool_call_update, plus the
+  rejection-suppression edge case. Per-turn state
+  (`_suppressing_rejection`, `_rejection_buffer`, `_chunk_start_line`)
+  resets correctly and all streamed content lands in the buffer.
+- **ACPClient dispatch** —
+  `lua/agentic/acp/acp_client.test.lua` → `describe("dispatch after
+  error response (auto-continue path)")`. Drives `_handle_message`
+  through prompt #1 (usage_limit error response) + prompt #2 (streamed
+  session/update notifications + end_turn result), and separately
+  through a permission request sandwiched between chunks. All
+  notifications reach the subscriber.
+
+**Neither layer reproduces the bug in isolation.** Remaining suspects:
+transport / subprocess behaviour (node stdout buffering, multi-hour
+idle pipe effects), or runtime interactions the tests cannot simulate
+(window visibility, async scheduler state after very long idle). The
+next useful narrowing step is a runtime-state diagnostic command
+(option b in the session that wrote these tests) — one-shot snapshot
+of ACPClient `state`, transport subprocess PID liveness, pending-read
+buffer length, and `subscribers` table keys — runnable mid-wait when
+the symptom recurs.
 
 ### Do not "fix" this with
 
