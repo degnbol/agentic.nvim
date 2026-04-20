@@ -227,30 +227,77 @@ function M.any_overlap(target, ranges)
     return false
 end
 
---- For each prior tool_call_blocks entry on `path` (excluding `exclude_id`),
---- locate its `diff.new` lines as a contiguous subsequence in the current
---- on-disk content. Each successful match yields a range that the user has
---- demonstrably not modified since Claude wrote it.
+--- Locate `target_lines` as a contiguous subsequence in `file_lines`, but
+--- only return the match position if it is **unique**. If the sequence
+--- appears zero or multiple times, returns nil.
 ---
---- The check requires exact line-sequence equality. Any user edit to those
---- lines breaks the match and the range is omitted, fall-through-safe.
+--- Used for Claude's Edit tool: the tool enforces `old_string` uniqueness
+--- at execution time, so a non-unique match here means the surrounding
+--- file state has changed since we recorded the diff.
+---
+--- @param file_lines string[]
+--- @param target_lines string[]
+--- @return integer|nil start_line 1-based
+function M.find_unique_subsequence(file_lines, target_lines)
+    local first = M.find_subsequence(file_lines, target_lines, 1)
+    if not first then
+        return nil
+    end
+    local second = M.find_subsequence(file_lines, target_lines, first + 1)
+    if second then
+        return nil
+    end
+    return first
+end
+
+--- @class agentic.utils.TrustSafety.EditRecord
+--- @field path string Absolute file path
+--- @field start_line integer 1-based inclusive, position of new_lines[1]
+--- @field end_line integer 1-based inclusive, position of new_lines[#new_lines]
+--- @field new_lines string[] Expected content at start_line..end_line
+
+--- Verify that a recorded edit range still contains the exact content Claude
+--- wrote. Returns the range if intact, nil if the user or a later edit has
+--- shifted or modified that region. Line numbers in `record` must index into
+--- `file_lines` as they currently exist on disk.
+---
+--- @param record agentic.utils.TrustSafety.EditRecord
+--- @param file_lines string[]
+--- @return agentic.utils.TrustSafety.Range|nil
+function M.verify_edit_range(record, file_lines)
+    local expected = record.new_lines
+    if not expected or #expected == 0 then
+        return nil
+    end
+    if record.end_line > #file_lines then
+        return nil
+    end
+    for i = 1, #expected do
+        if file_lines[record.start_line + i - 1] ~= expected[i] then
+            return nil
+        end
+    end
+    return { record.start_line, record.end_line }
+end
+
+--- For each recorded Claude edit on `path` (excluding the in-flight call),
+--- return the range if the on-disk content at that range still equals the
+--- recorded `new_lines`. Any divergence (user edit, later Claude edit
+--- shifting lines) drops the record from the result, fall-through-safe.
 ---
 --- @param path string Absolute file path
---- @param tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
+--- @param records table<string, agentic.utils.TrustSafety.EditRecord>
 --- @param exclude_id string The in-flight tool call ID
 --- @param file_lines string[] Current on-disk content of `path`
 --- @return agentic.utils.TrustSafety.Range[]
-function M.claude_owned_ranges(path, tool_call_blocks, exclude_id, file_lines)
+function M.claude_owned_ranges(path, records, exclude_id, file_lines)
     --- @type agentic.utils.TrustSafety.Range[]
     local ranges = {}
-    for id, block in pairs(tool_call_blocks) do
-        if id ~= exclude_id and block.argument == path then
-            local new_lines = block.diff and block.diff.new
-            if new_lines and #new_lines > 0 then
-                local start = M.find_subsequence(file_lines, new_lines, 1)
-                if start then
-                    table.insert(ranges, { start, start + #new_lines - 1 })
-                end
+    for id, record in pairs(records) do
+        if id ~= exclude_id and record.path == path then
+            local range = M.verify_edit_range(record, file_lines)
+            if range then
+                table.insert(ranges, range)
             end
         end
     end

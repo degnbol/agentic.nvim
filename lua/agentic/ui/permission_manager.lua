@@ -25,6 +25,8 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field _reanchoring boolean Guard flag to prevent recursive on_content_changed during reanchor
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _trust_scope? agentic.utils.TrustSafety.Scope Active trust scope (set by /trust)
+--- @field _edit_records table<string, agentic.utils.TrustSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
+--- @field _pending_edits table<string, { path: string, start_line: integer, new_lines: string[] }> Range data captured at tool_call time, promoted to _edit_records on completion
 local PermissionManager = {}
 PermissionManager.__index = PermissionManager
 
@@ -41,6 +43,8 @@ function PermissionManager:new(message_writer, buf_nrs)
         _reanchoring = false,
         _always_cache = {},
         _trust_scope = nil,
+        _edit_records = {},
+        _pending_edits = {},
     }, self)
 
     return instance
@@ -296,7 +300,7 @@ function PermissionManager:_build_kind_args(tool_call, path, git_root)
     local edit_range = TrustSafety.edit_target_range(diff, file_lines)
     local owned = TrustSafety.claude_owned_ranges(
         path,
-        self.message_writer.tool_call_blocks,
+        self._edit_records,
         tool_call.toolCallId,
         file_lines
     )
@@ -404,6 +408,63 @@ function PermissionManager:_check_trust(tool_call)
     end
 
     return true, reason or "safe"
+end
+
+--- Record the pre-edit position of an Edit tool call. Called from
+--- SessionManager on the initial `tool_call` notification, before the SDK
+--- has applied the edit to disk. `start_line` is the 1-based line where
+--- `old_string` begins — the same line where `new_string` will land.
+--- @param tool_call_id string
+--- @param path string Absolute file path
+--- @param start_line integer 1-based
+--- @param new_lines string[] Expected post-edit content at the range
+function PermissionManager:record_pending_edit(
+    tool_call_id,
+    path,
+    start_line,
+    new_lines
+)
+    self._pending_edits[tool_call_id] = {
+        path = path,
+        start_line = start_line,
+        new_lines = new_lines,
+    }
+end
+
+--- Promote a pending edit to a finalized record once the tool call reaches
+--- `completed`. No-op if no pending record exists (edit failed, or was for a
+--- kind we don't track).
+--- @param tool_call_id string
+function PermissionManager:finalize_edit_range(tool_call_id)
+    local pending = self._pending_edits[tool_call_id]
+    if not pending then
+        return
+    end
+    self._pending_edits[tool_call_id] = nil
+    --- @type agentic.utils.TrustSafety.EditRecord
+    local record = {
+        path = pending.path,
+        start_line = pending.start_line,
+        end_line = pending.start_line + #pending.new_lines - 1,
+        new_lines = pending.new_lines,
+    }
+    self._edit_records[tool_call_id] = record
+end
+
+--- Drop a pending record (call on failed/rejected tool call).
+--- @param tool_call_id string
+function PermissionManager:drop_pending_edit(tool_call_id)
+    self._pending_edits[tool_call_id] = nil
+end
+
+--- True if this tool call already has a pending or finalized edit range.
+--- Used by SessionManager to avoid redundant disk reads when recording
+--- is attempted from multiple points in the tool-call lifecycle.
+--- @param tool_call_id string
+--- @return boolean
+function PermissionManager:has_edit_range(tool_call_id)
+    return self._pending_edits[tool_call_id] ~= nil
+        or self._edit_records[tool_call_id] ~= nil
 end
 
 --- Set the active trust scope. Replaces any existing scope.
@@ -594,6 +655,8 @@ function PermissionManager:clear()
     self.queue = {}
     self._always_cache = {}
     self._trust_scope = nil
+    self._edit_records = {}
+    self._pending_edits = {}
 end
 
 --- Reject the current request and cancel all remaining queued requests.

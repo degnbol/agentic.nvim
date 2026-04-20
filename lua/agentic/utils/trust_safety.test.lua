@@ -61,79 +61,184 @@ describe("agentic.utils.trust_safety", function()
         end)
     end)
 
-    describe("claude_owned_ranges", function()
-        it("returns ranges where diff.new still matches disk", function()
-            local file_lines = {
-                "untouched header",
-                "claude line 1",
-                "claude line 2",
-                "untouched footer",
-            }
-            local blocks = {
-                ["t1"] = {
-                    argument = "/repo/a.lua",
-                    diff = { new = { "claude line 1", "claude line 2" } },
-                },
-            }
-            local ranges = TrustSafety.claude_owned_ranges(
-                "/repo/a.lua",
-                blocks,
-                "in-flight",
-                file_lines
+    describe("find_unique_subsequence", function()
+        it("returns start when match is unique", function()
+            local idx = TrustSafety.find_unique_subsequence(
+                { "a", "b", "c", "d" },
+                { "b", "c" }
             )
-            assert.equal(1, #ranges)
-            assert.equal(2, ranges[1][1])
-            assert.equal(3, ranges[1][2])
+            assert.equal(2, idx)
         end)
 
-        it("omits ranges where the user has edited Claude's output", function()
-            local file_lines = {
-                "claude line 1",
-                "user-modified line",
+        it("returns nil when match appears more than once", function()
+            local idx = TrustSafety.find_unique_subsequence(
+                { "a", "b", "a", "b" },
+                { "a", "b" }
+            )
+            assert.is_nil(idx)
+        end)
+
+        it("returns nil when no match", function()
+            local idx = TrustSafety.find_unique_subsequence(
+                { "a", "b" },
+                { "x" }
+            )
+            assert.is_nil(idx)
+        end)
+    end)
+
+    describe("verify_edit_range", function()
+        it("returns range when content at range still matches", function()
+            local file_lines = { "untouched", "c1", "c2", "footer" }
+            local record = {
+                path = "/repo/a.lua",
+                start_line = 2,
+                end_line = 3,
+                new_lines = { "c1", "c2" },
             }
-            local blocks = {
+            local r = TrustSafety.verify_edit_range(record, file_lines) --[[@as agentic.utils.TrustSafety.Range]]
+            assert.is_not_nil(r)
+            assert.equal(2, r[1])
+            assert.equal(3, r[2])
+        end)
+
+        it("returns nil when user modified one of the lines", function()
+            local file_lines = { "c1", "user-edit" }
+            local record = {
+                path = "/repo/a.lua",
+                start_line = 1,
+                end_line = 2,
+                new_lines = { "c1", "c2" },
+            }
+            assert.is_nil(TrustSafety.verify_edit_range(record, file_lines))
+        end)
+
+        it("returns nil when range extends past end of file", function()
+            local file_lines = { "c1" }
+            local record = {
+                path = "/repo/a.lua",
+                start_line = 1,
+                end_line = 2,
+                new_lines = { "c1", "c2" },
+            }
+            assert.is_nil(TrustSafety.verify_edit_range(record, file_lines))
+        end)
+    end)
+
+    describe("claude_owned_ranges", function()
+        it(
+            "returns ranges whose recorded content still matches disk",
+            function()
+                local file_lines = { "header", "c1", "c2", "footer" }
+                local records = {
+                    ["t1"] = {
+                        path = "/repo/a.lua",
+                        start_line = 2,
+                        end_line = 3,
+                        new_lines = { "c1", "c2" },
+                    },
+                }
+                local ranges = TrustSafety.claude_owned_ranges(
+                    "/repo/a.lua",
+                    records,
+                    "in-flight",
+                    file_lines
+                )
+                assert.equal(1, #ranges)
+                assert.equal(2, ranges[1][1])
+                assert.equal(3, ranges[1][2])
+            end
+        )
+
+        it("omits ranges where the user modified Claude's output", function()
+            local file_lines = { "c1", "user-modified" }
+            local records = {
                 ["t1"] = {
-                    argument = "/repo/a.lua",
-                    diff = { new = { "claude line 1", "claude line 2" } },
+                    path = "/repo/a.lua",
+                    start_line = 1,
+                    end_line = 2,
+                    new_lines = { "c1", "c2" },
                 },
             }
             local ranges = TrustSafety.claude_owned_ranges(
                 "/repo/a.lua",
-                blocks,
+                records,
                 "in-flight",
                 file_lines
             )
             assert.equal(0, #ranges)
         end)
 
+        it(
+            "omits ranges shifted by a later edit (duplicate-content safe)",
+            function()
+                -- Early Claude edit recorded ["end"] at line 5. Later a user
+                -- hunk at line 10 happens to also contain "end". With the old
+                -- first-match semantics we would have mis-attributed line 10
+                -- to Claude. Now we verify the recorded range, so mismatch at
+                -- line 5 (where something else now sits) → correctly drops.
+                local file_lines = {
+                    "a",
+                    "b",
+                    "c",
+                    "d",
+                    "something_else",
+                    "f",
+                    "g",
+                    "h",
+                    "i",
+                    "end",
+                }
+                local records = {
+                    ["t1"] = {
+                        path = "/repo/a.lua",
+                        start_line = 5,
+                        end_line = 5,
+                        new_lines = { "end" },
+                    },
+                }
+                local ranges = TrustSafety.claude_owned_ranges(
+                    "/repo/a.lua",
+                    records,
+                    "in-flight",
+                    file_lines
+                )
+                assert.equal(0, #ranges)
+            end
+        )
+
         it("excludes the in-flight tool call", function()
             local file_lines = { "claude" }
-            local blocks = {
+            local records = {
                 ["self"] = {
-                    argument = "/repo/a.lua",
-                    diff = { new = { "claude" } },
+                    path = "/repo/a.lua",
+                    start_line = 1,
+                    end_line = 1,
+                    new_lines = { "claude" },
                 },
             }
             local ranges = TrustSafety.claude_owned_ranges(
                 "/repo/a.lua",
-                blocks,
+                records,
                 "self",
                 file_lines
             )
             assert.equal(0, #ranges)
         end)
 
-        it("filters out blocks for other paths", function()
+        it("filters out records for other paths", function()
             local file_lines = { "claude" }
-            local blocks = {
+            local records = {
                 ["t1"] = {
-                    argument = "/repo/other.lua",
-                    diff = { new = { "claude" } },
+                    path = "/repo/other.lua",
+                    start_line = 1,
+                    end_line = 1,
+                    new_lines = { "claude" },
                 },
             }
             local ranges = TrustSafety.claude_owned_ranges(
                 "/repo/a.lua",
-                blocks,
+                records,
                 "in-flight",
                 file_lines
             )

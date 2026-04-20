@@ -702,15 +702,11 @@ describe("agentic.ui.PermissionManager", function()
                 diff_hunks_stub:returns({
                     { start_line = 1, end_line = 2, count = 2 },
                 })
-                writer.tool_call_blocks["earlier-tc"] = {
-                    tool_call_id = "earlier-tc",
-                    status = "completed",
-                    kind = "edit",
-                    argument = "/repo/a.lua",
-                    diff = {
-                        old = { "before" },
-                        new = { "claude wrote", "claude wrote 2" },
-                    },
+                pm._edit_records["earlier-tc"] = {
+                    path = "/repo/a.lua",
+                    start_line = 1,
+                    end_line = 2,
+                    new_lines = { "claude wrote", "claude wrote 2" },
                 }
                 writer.tool_call_blocks["tc-claude-edit"] = {
                     tool_call_id = "tc-claude-edit",
@@ -745,15 +741,11 @@ describe("agentic.ui.PermissionManager", function()
                 diff_hunks_stub:returns({
                     { start_line = 1, end_line = 2, count = 2 },
                 })
-                writer.tool_call_blocks["earlier-tc"] = {
-                    tool_call_id = "earlier-tc",
-                    status = "completed",
-                    kind = "edit",
-                    argument = "/repo/a.lua",
-                    diff = {
-                        old = { "before" },
-                        new = { "claude wrote", "claude wrote 2" },
-                    },
+                pm._edit_records["earlier-tc"] = {
+                    path = "/repo/a.lua",
+                    start_line = 1,
+                    end_line = 2,
+                    new_lines = { "claude wrote", "claude wrote 2" },
                 }
                 writer.tool_call_blocks["tc-user-edit"] = {
                     tool_call_id = "tc-user-edit",
@@ -863,6 +855,41 @@ describe("agentic.ui.PermissionManager", function()
             )
             pm:clear()
             assert.is_nil(pm:get_trust_scope())
+        end)
+
+        it(
+            "record_pending_edit + finalize_edit_range produces a record",
+            function()
+                pm:record_pending_edit(
+                    "tc-42",
+                    "/repo/a.lua",
+                    10,
+                    { "new line 1", "new line 2" }
+                )
+                pm:finalize_edit_range("tc-42")
+                local rec = pm._edit_records["tc-42"]
+                assert.is_not_nil(rec)
+                assert.equal("/repo/a.lua", rec.path)
+                assert.equal(10, rec.start_line)
+                assert.equal(11, rec.end_line)
+                assert.equal(nil, pm._pending_edits["tc-42"])
+            end
+        )
+
+        it("drop_pending_edit removes pending without finalizing", function()
+            pm:record_pending_edit("tc-x", "/repo/a.lua", 1, { "x" })
+            pm:drop_pending_edit("tc-x")
+            assert.is_nil(pm._pending_edits["tc-x"])
+            assert.is_nil(pm._edit_records["tc-x"])
+        end)
+
+        it("clear() wipes edit records and pending", function()
+            pm:record_pending_edit("tc-a", "/repo/a.lua", 1, { "x" })
+            pm:finalize_edit_range("tc-a")
+            pm:record_pending_edit("tc-b", "/repo/a.lua", 5, { "y" })
+            pm:clear()
+            assert.is_nil(pm._edit_records["tc-a"])
+            assert.is_nil(pm._pending_edits["tc-b"])
         end)
 
         it("respects auto_approve_trust_scope toggle", function()

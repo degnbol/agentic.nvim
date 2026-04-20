@@ -729,7 +729,71 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
         self.chat_history:add_message(tool_msg)
     end
 
+    self:_try_record_edit_range(tool_call.tool_call_id)
     self:_track_plan_exit(tool_call)
+end
+
+--- Capture the pre-edit line position for an Edit, using the accumulated
+--- MessageWriter tracker. The base ACPClient builder does not forward
+--- `diff` on the initial `tool_call` notification; Claude's adapter
+--- populates `diff` only on the tool_call_update path. We therefore try
+--- to record from BOTH `_on_tool_call` and `_on_tool_call_update`, and
+--- use the merged tracker state instead of the partial update.
+---
+--- Idempotent (skips if already pending/finalized). Skips completed tool
+--- calls — disk is post-edit at that point and `diff.old` no longer
+--- matches.
+---
+--- The recorded path is canonicalised to match the shape
+--- `PermissionManager:_check_trust` uses for lookup (derived from
+--- `rawInput.file_path`, normalised via vim.fs.normalize).
+--- @param tool_call_id string
+function SessionManager:_try_record_edit_range(tool_call_id)
+    if not tool_call_id then
+        return
+    end
+    if self.permission_manager:has_edit_range(tool_call_id) then
+        return
+    end
+    local tracker = self.message_writer.tool_call_blocks[tool_call_id]
+    if not tracker or tracker.kind ~= "edit" then
+        return
+    end
+    if tracker.status == "completed" or tracker.status == "failed" then
+        return
+    end
+    local diff = tracker.diff
+    if not diff or diff.all then
+        return
+    end
+    local old_lines = diff.old
+    local new_lines = diff.new
+    if not old_lines or #old_lines == 0 or not new_lines then
+        return
+    end
+    if not tracker.argument then
+        return
+    end
+    local path = vim.fs.normalize(
+        vim.fn.fnamemodify(tracker.argument, ":p"),
+        { expand_env = false }
+    )
+    local file_lines, err = FileSystem.read_from_disk(path)
+    if not file_lines then
+        Logger.debug("trust: pre-edit read failed for", path, err)
+        return
+    end
+    local start_line =
+        TrustSafety.find_unique_subsequence(file_lines, old_lines)
+    if not start_line then
+        return
+    end
+    self.permission_manager:record_pending_edit(
+        tool_call_id,
+        path,
+        start_line,
+        new_lines
+    )
 end
 
 --- Detect Plan→Normal mode switch so the turn-end callback can offer
@@ -897,6 +961,7 @@ end
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
     self.message_writer:update_tool_call_block(tool_call_update)
+    self:_try_record_edit_range(tool_call_update.tool_call_id)
 
     --- @type agentic.ui.ChatHistory.ToolCall
     local tool_call = {
@@ -916,6 +981,13 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- Remove the permission request if the tool call failed before user granted it
     if tool_call_update.status == "failed" then
         self.permission_manager:remove_request_by_tool_call_id(
+            tool_call_update.tool_call_id
+        )
+        self.permission_manager:drop_pending_edit(tool_call_update.tool_call_id)
+    end
+
+    if tool_call_update.status == "completed" then
+        self.permission_manager:finalize_edit_range(
             tool_call_update.tool_call_id
         )
     end

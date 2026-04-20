@@ -643,7 +643,13 @@ describe("agentic.SessionManager", function()
                     current_request = nil,
                     queue = {},
                     remove_request_by_tool_call_id = function() end,
+                    finalize_edit_range = function() end,
+                    drop_pending_edit = function() end,
+                    has_edit_range = function()
+                        return true
+                    end,
                 },
+                _try_record_edit_range = function() end,
                 status_animation = { start = function() end },
                 _clear_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
