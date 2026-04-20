@@ -571,22 +571,85 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             if content:match("^%s*```") then
                 in_fence = not in_fence
             end
-            local sub_lines
+            local sub_lines, offsets
             if diff_wrap > 0 and not in_fence then
-                sub_lines = TextWrap.wrap_single_line(content, diff_wrap)
+                sub_lines, offsets =
+                    TextWrap.wrap_single_line_with_offsets(content, diff_wrap)
             else
                 sub_lines = { content }
+                offsets = { { orig_start = 0, indent_len = 0 } }
             end
             local single = #sub_lines == 1
-            for _, sub in ipairs(sub_lines) do
+
+            -- For a wrapped modification line (both old_line and new_line),
+            -- compute the inline change range ONCE on the unwrapped strings,
+            -- then map it onto each sub-line's local byte coords. Without
+            -- this, find_inline_change runs against the full unwrapped
+            -- line per sub-line and paints the highlight at original-line
+            -- offsets on every wrapped row regardless of overlap.
+            local change
+            local wrapped_mod = not single
+                and old_line ~= nil
+                and new_line ~= nil
+                and (hl_type == "new_modification" or hl_type == "old")
+            if wrapped_mod then
+                change = DiffHighlighter.find_inline_change(old_line, new_line)
+            end
+
+            for i, sub in ipairs(sub_lines) do
                 local line_index = #lines
                 table.insert(lines, sub)
+                local sub_old, sub_new = old_line, new_line
+                if wrapped_mod and change then
+                    local off = offsets[i]
+                    local change_start = hl_type == "old" and change.old_start
+                        or change.new_start
+                    local change_end = hl_type == "old" and change.old_end
+                        or change.new_end
+                    local orig_start = off.orig_start
+                    local orig_end = orig_start + (#sub - off.indent_len)
+                    local isect_start = math.max(change_start, orig_start)
+                    local isect_end = math.min(change_end, orig_end)
+                    if isect_start >= isect_end then
+                        -- No change overlaps this sub-line. For "old" keep
+                        -- the full-line DIFF_DELETE bg (pure-delete path);
+                        -- for "new_modification" emit nothing by making
+                        -- old == new so the highlighter returns early.
+                        if hl_type == "old" then
+                            sub_old, sub_new = sub, nil
+                        else
+                            sub_old, sub_new = sub, sub
+                        end
+                    else
+                        -- Map intersection into sub-line-local byte cols,
+                        -- accounting for the continuation indent that the
+                        -- wrapper prepended (indent bytes have no origin in
+                        -- the source line).
+                        local local_start = isect_start
+                            - orig_start
+                            + off.indent_len
+                        local local_end = isect_end
+                            - orig_start
+                            + off.indent_len
+                        -- Build a synthetic counterpart with a sentinel byte
+                        -- at the change position. find_inline_change then
+                        -- returns exactly [local_start, local_end).
+                        local synth = sub:sub(1, local_start)
+                            .. "\1"
+                            .. sub:sub(local_end + 1)
+                        if hl_type == "old" then
+                            sub_old, sub_new = sub, synth
+                        else
+                            sub_old, sub_new = synth, sub
+                        end
+                    end
+                end
                 --- @type agentic.ui.MessageWriter.HighlightRange
                 local hl_range = {
                     line_index = line_index,
                     type = hl_type,
-                    old_line = old_line,
-                    new_line = new_line,
+                    old_line = sub_old,
+                    new_line = sub_new,
                 }
                 if single and col_hl then
                     hl_range.block_col_hl = col_hl
