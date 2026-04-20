@@ -304,6 +304,30 @@ function M.claude_owned_ranges(path, records, exclude_id, file_lines)
     return ranges
 end
 
+--- True iff every line of `diff.old` is preserved verbatim inside `diff.new`
+--- as a contiguous line-level subsequence. For Claude's str_replace Edit tool
+--- that means the edit adds new lines around the user's captured block
+--- without removing any of the lines it was anchored against. Such edits are
+--- recoverable inside dirty hunks — the user's working-tree content (which
+--- must match `old_string` verbatim for the tool to succeed) is still present
+--- in the post-edit file.
+---
+--- Returns false for diff.all (whole-file write), missing diffs, and any
+--- shape where `#diff.new < #diff.old`.
+--- @param diff agentic.ui.MessageWriter.ToolCallDiff|nil
+--- @return boolean
+function M.is_pure_addition(diff)
+    if not diff or diff.all then
+        return false
+    end
+    local old = diff.old
+    local new = diff.new
+    if not old or #old == 0 or not new or #new < #old then
+        return false
+    end
+    return M.find_subsequence(new, old, 1) ~= nil
+end
+
 --- Locate the target range of an Edit / Write in the current file using the
 --- diff already attached to the in-flight tool call's tool_call_blocks entry.
 ---
@@ -382,6 +406,7 @@ end
 --- @field hunks agentic.utils.GitFiles.Hunk[] Unstaged hunk ranges in the new file
 --- @field edit_range? agentic.utils.TrustSafety.Range Target range of an Edit
 --- @field claude_owned_ranges agentic.utils.TrustSafety.Range[] Verified ranges
+--- @field is_pure_addition? boolean diff.old is a contiguous subsequence of diff.new
 --- @field write_all? boolean Write replaces the entire file (diff.all)
 --- @field dest? agentic.utils.TrustSafety.KindArgs Destination state for `move`
 
@@ -433,6 +458,9 @@ function M.safe_for_kind(kind, args)
         end
         if not args.has_unstaged_hunks then
             return true, "tracked + clean"
+        end
+        if args.is_pure_addition then
+            return true, "pure addition preserves user content"
         end
         if not args.edit_range then
             return false, "could not locate edit target range"

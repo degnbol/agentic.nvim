@@ -293,8 +293,11 @@ top before approving:
    - `create` — file does not exist
    - `write` — new file, OR tracked + working tree clean
    - `delete` — tracked + clean
-   - `edit` — new file, tracked + clean, edit range disjoint from unstaged
-     hunks, OR every overlapping hunk is a verified Claude-owned range
+   - `edit` — new file, tracked + clean, **pure addition** (diff.old is a
+     contiguous line subsequence of diff.new, so user content anchored by
+     old_string is preserved verbatim inside new_string), edit range
+     disjoint from unstaged hunks, OR every overlapping hunk is a verified
+     Claude-owned range
    - `move` — source satisfies `edit`, destination satisfies `write`, both
      symlink endpoints in scope
 3. **Verified Claude-owned range.** Ranges are recorded at edit time, not

@@ -246,6 +246,73 @@ describe("agentic.utils.trust_safety", function()
         end)
     end)
 
+    describe("is_pure_addition", function()
+        it("returns true when new prepends lines around old", function()
+            assert.is_true(TrustSafety.is_pure_addition({
+                old = { "foo", "bar" },
+                new = { "header", "foo", "bar" },
+            }))
+        end)
+
+        it("returns true when new appends lines around old", function()
+            assert.is_true(TrustSafety.is_pure_addition({
+                old = { "foo", "bar" },
+                new = { "foo", "bar", "footer" },
+            }))
+        end)
+
+        it("returns true for no-op (old == new)", function()
+            assert.is_true(TrustSafety.is_pure_addition({
+                old = { "foo" },
+                new = { "foo" },
+            }))
+        end)
+
+        it("returns false when old is split by inserted lines", function()
+            -- Non-contiguous: "foo" and "baz" separated by "bar" in new.
+            -- Safe in principle but narrower contiguous check rejects it.
+            assert.is_false(TrustSafety.is_pure_addition({
+                old = { "foo", "baz" },
+                new = { "foo", "bar", "baz" },
+            }))
+        end)
+
+        it("returns false when any line of old is missing from new", function()
+            assert.is_false(TrustSafety.is_pure_addition({
+                old = { "foo", "bar" },
+                new = { "foo", "baz" },
+            }))
+        end)
+
+        it("returns false when new is shorter than old", function()
+            assert.is_false(TrustSafety.is_pure_addition({
+                old = { "foo", "bar" },
+                new = { "foo" },
+            }))
+        end)
+
+        it("returns false for diff.all (whole-file write)", function()
+            assert.is_false(TrustSafety.is_pure_addition({
+                all = true,
+                old = {},
+                new = { "anything" },
+            }))
+        end)
+
+        it("returns false for nil diff", function()
+            assert.is_false(TrustSafety.is_pure_addition(nil))
+        end)
+
+        it("returns false when old is empty (pure insertion)", function()
+            -- Edit tool enforces non-empty old_string, so this shouldn't arise
+            -- in practice — but guard against it anyway.
+            assert.is_false(TrustSafety.is_pure_addition({
+                old = {},
+                new = { "new content" },
+            }))
+        end)
+    end)
+
     describe("edit_target_range", function()
         it("returns whole-file range for diff.all", function()
             local r = TrustSafety.edit_target_range(
@@ -441,6 +508,52 @@ describe("agentic.utils.trust_safety", function()
                 assert.is_false(ok)
             end
         )
+
+        it("pure addition overlapping a non-Claude hunk is safe", function()
+            local ok, reason = TrustSafety.safe_for_kind("edit", {
+                exists = true,
+                tracked = true,
+                has_unstaged_hunks = true,
+                hunks = { { start_line = 5, end_line = 8, count = 4 } },
+                edit_range = { 5, 8 },
+                claude_owned_ranges = {},
+                is_pure_addition = true,
+            })
+            assert.is_true(ok)
+            assert.equal("pure addition preserves user content", reason)
+        end)
+
+        it("pure addition overlapping a pure-deletion hunk is safe", function()
+            -- Without pure-addition, a count=0 hunk rejects outright.
+            -- Pure addition bypasses that because user content is
+            -- preserved inside diff.new regardless of hunk type.
+            local ok = TrustSafety.safe_for_kind("edit", {
+                exists = true,
+                tracked = true,
+                has_unstaged_hunks = true,
+                hunks = { { start_line = 5, end_line = 5, count = 0 } },
+                edit_range = { 4, 6 },
+                claude_owned_ranges = {},
+                is_pure_addition = true,
+            })
+            assert.is_true(ok)
+        end)
+
+        it("pure addition on dirty file without edit_range is safe", function()
+            -- Pure-addition recoverability is a property of diff alone;
+            -- an unlocatable edit_range just means the edit will fail at
+            -- tool level, which is still safe for the user.
+            local ok = TrustSafety.safe_for_kind("edit", {
+                exists = true,
+                tracked = true,
+                has_unstaged_hunks = true,
+                hunks = { { start_line = 5, end_line = 5, count = 1 } },
+                edit_range = nil,
+                claude_owned_ranges = {},
+                is_pure_addition = true,
+            })
+            assert.is_true(ok)
+        end)
 
         it("move requires both source and destination safe", function()
             local clean = {

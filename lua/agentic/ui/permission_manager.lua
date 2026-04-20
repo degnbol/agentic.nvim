@@ -313,6 +313,7 @@ function PermissionManager:_build_kind_args(tool_call, path, git_root)
         hunks = hunks,
         edit_range = edit_range,
         claude_owned_ranges = owned,
+        is_pure_addition = TrustSafety.is_pure_addition(diff),
         write_all = diff and diff.all or nil,
     }
     return args
