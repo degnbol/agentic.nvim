@@ -247,6 +247,27 @@ describe("PermissionRules", function()
                 PermissionRules.mask_quoted_operators('grep "a|b" | head')
             )
         end)
+
+        it("treats single quotes as literal inside double quotes", function()
+            assert.equal(
+                [["a 'bxc' d"]],
+                PermissionRules.mask_quoted_operators([["a 'b|c' d"]])
+            )
+        end)
+
+        it("treats double quotes as literal inside single quotes", function()
+            assert.equal(
+                [['a "bxc" d']],
+                PermissionRules.mask_quoted_operators([['a "b|c" d']])
+            )
+        end)
+
+        it("handles adjacent quoted regions of different types", function()
+            assert.equal(
+                [["axb"'cxd']],
+                PermissionRules.mask_quoted_operators([["a|b"'c|d']])
+            )
+        end)
     end)
 
     describe("matches_any_pattern", function()
@@ -577,6 +598,63 @@ describe("PermissionRules", function()
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
         end)
+
+        it(
+            "falls through when same-type escaped quote unbalances segment",
+            function()
+                -- Splitter doesn't model backslash-escapes, so `"a\"b|c"` looks
+                -- unbalanced — split_command returns nil and we don't auto-approve.
+                -- The `\` here must be a literal backslash char, not a lua escape.
+                local orig_read_json = PermissionRules.read_json
+                PermissionRules.read_json = function(path)
+                    if path:find("settings%.json$") then
+                        return {
+                            permissions = {
+                                allow = { "Bash(grep *)" },
+                            },
+                        }
+                    end
+                    return nil
+                end
+                PermissionRules.invalidate_cache()
+
+                local result =
+                    PermissionRules.should_auto_approve([[grep "a\"b|c" file]])
+                assert.is_false(result)
+
+                PermissionRules.read_json = orig_read_json
+                PermissionRules.invalidate_cache()
+            end
+        )
+
+        it(
+            "falls through on bash quote-reopening idiom with outer pipe",
+            function()
+                -- Bash 'can'\''t|x' would concatenate as can't|x (pipe quoted).
+                -- Our state machine (and the splitter) see the `|` as unquoted;
+                -- splitter fragments the command, no segment matches, fall through.
+                local orig_read_json = PermissionRules.read_json
+                PermissionRules.read_json = function(path)
+                    if path:find("settings%.json$") then
+                        return {
+                            permissions = {
+                                allow = { "Bash(echo *)" },
+                            },
+                        }
+                    end
+                    return nil
+                end
+                PermissionRules.invalidate_cache()
+
+                local result = PermissionRules.should_auto_approve(
+                    [[echo 'can'\''t|here']]
+                )
+                assert.is_false(result)
+
+                PermissionRules.read_json = orig_read_json
+                PermissionRules.invalidate_cache()
+            end
+        )
 
         it("approves pipeline with quoted pipe in grep pattern", function()
             local orig_read_json = PermissionRules.read_json
