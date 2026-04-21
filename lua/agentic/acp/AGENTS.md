@@ -209,6 +209,17 @@ Provider sends "session/request_permission"
 
 ### Client-side auto-approval
 
+**Why this exists.** The plugin is the ACP client, strictly downstream of the
+provider's own permission system — we can't override what the SDK silently
+approves or denies, only decide how to handle what it escalates as `ask`. Each
+layer below targets a specific provider/protocol gap that causes
+otherwise-authorised work to be re-prompted; together they reduce prompt
+fatigue without *adding* trust beyond what the user already wrote in
+`settings.json`. The one exception is `/trust`, which grants new authorisation
+and compensates by gating on git-recoverability (the user can undo any
+auto-approved edit). Every layer is disablable via `Config.auto_approve_*`,
+and state is per-session — nothing crosses `/new`.
+
 `PermissionManager:_try_auto_approve()` runs four independent checks before
 falling through to the interactive prompt. Any check can approve (or reject) a
 request.
