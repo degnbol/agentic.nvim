@@ -234,6 +234,39 @@ function M.strip_devnull_redirects(segment)
     return segment
 end
 
+--- Replace shell operators (`|`, `;`, `&`) that sit inside quoted regions
+--- with a safe placeholder. The splitter preserves quoted operators in a
+--- segment (test: "preserves operators inside single quotes"), but compiled
+--- allow patterns use `[^|;&]*` for `*`, which would reject the segment.
+--- Masking only the quoted occurrences lets the match succeed without
+--- weakening the operator exclusion against top-level operators (which the
+--- splitter has already removed).
+--- @param segment string
+--- @return string
+function M.mask_quoted_operators(segment)
+    local result = {}
+    local in_single = false
+    local in_double = false
+    for i = 1, #segment do
+        local ch = segment:sub(i, i)
+        if ch == "'" and not in_double then
+            in_single = not in_single
+            table.insert(result, ch)
+        elseif ch == '"' and not in_single then
+            in_double = not in_double
+            table.insert(result, ch)
+        elseif
+            (in_single or in_double)
+            and (ch == "|" or ch == ";" or ch == "&")
+        then
+            table.insert(result, "x")
+        else
+            table.insert(result, ch)
+        end
+    end
+    return table.concat(result)
+end
+
 --- Split a command string on top-level shell operators (|, ||, &&, ;).
 --- Returns nil if the command contains unsafe constructs (subshells, unbalanced
 --- quotes, process substitution).
@@ -313,8 +346,10 @@ function M.matches_any_pattern(segment, patterns)
         return false
     end
 
+    local masked = M.mask_quoted_operators(trimmed)
+
     for _, pat in ipairs(patterns) do
-        if trimmed:match(pat.lua_pattern) then
+        if masked:match(pat.lua_pattern) then
             return true
         end
     end

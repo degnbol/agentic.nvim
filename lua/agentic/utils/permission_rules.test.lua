@@ -212,6 +212,43 @@ describe("PermissionRules", function()
         end)
     end)
 
+    describe("mask_quoted_operators", function()
+        it("masks | inside double quotes", function()
+            assert.equal(
+                'grep "axb" file',
+                PermissionRules.mask_quoted_operators('grep "a|b" file')
+            )
+        end)
+
+        it("masks | inside single quotes", function()
+            assert.equal(
+                "grep 'axb' file",
+                PermissionRules.mask_quoted_operators("grep 'a|b' file")
+            )
+        end)
+
+        it("masks ; and & inside quotes", function()
+            assert.equal(
+                'echo "axbxc"',
+                PermissionRules.mask_quoted_operators('echo "a;b&c"')
+            )
+        end)
+
+        it("leaves unquoted operators alone", function()
+            assert.equal(
+                "grep foo | head",
+                PermissionRules.mask_quoted_operators("grep foo | head")
+            )
+        end)
+
+        it("handles mixed quoted and unquoted regions", function()
+            assert.equal(
+                'grep "axb" | head',
+                PermissionRules.mask_quoted_operators('grep "a|b" | head')
+            )
+        end)
+    end)
+
     describe("matches_any_pattern", function()
         it("matches simple command", function()
             local patterns = {
@@ -269,6 +306,21 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.matches_any_pattern(
                     "grep foo 2>/dev/null",
+                    patterns
+                )
+            )
+        end)
+
+        it("matches grep command with quoted alternation", function()
+            local patterns = {
+                {
+                    original = "grep *",
+                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
+                },
+            }
+            assert.is_true(
+                PermissionRules.matches_any_pattern(
+                    [[grep -n "export function query\|function query\|^export " /tmp/file.mjs]],
                     patterns
                 )
             )
@@ -519,6 +571,32 @@ describe("PermissionRules", function()
 
             local result = PermissionRules.should_auto_approve(
                 "stdbuf -oL ls /Users/cmadsen/dotfiles/shell/"
+            )
+            assert.is_true(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves pipeline with quoted pipe in grep pattern", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = {
+                                "Bash(grep *)",
+                                "Bash(head *)",
+                            },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            local result = PermissionRules.should_auto_approve(
+                [[grep -n "export function\|^export " /tmp/file.mjs | head -30]]
             )
             assert.is_true(result)
 
