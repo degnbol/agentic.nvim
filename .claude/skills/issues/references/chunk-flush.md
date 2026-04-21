@@ -58,64 +58,101 @@ leak, scheduler-wakeup, etc.), not a single underlying bug. The shared
 
 ## Currently open: auto-continue after usage-limit reset
 
-The multi-hour idle between `_offer_auto_continue` scheduling the timer and
-the timer firing is a strong trigger. Reproducibility gated by the once-a-day
-reset cycle, so live debugging is expensive.
+### Root cause: bridge-level generator stall
 
-### Dispatch paths are structurally identical
+**The bug lives in `claude-agent-acp` (the bridge) or its inner
+`@anthropic-ai/claude-agent-sdk`, not in the plugin.** Confirmed by
+code inspection against `claude-agent-acp` 0.29.0 and
+`@anthropic-ai/claude-agent-sdk` 0.2.111. See
+`@.claude/skills/acp/references/claude-agent.md` §
+"Prompt loop stall — silent notification loss with working
+permissions" for the full explanation.
 
-`agent_message_chunk` and `tool_call` / `tool_call_update` route through
-`ACPClient:__handle_session_update` (`lua/agentic/acp/acp_client.lua`).
-Permission prompts route through `ACPClient:__handle_request_permission`
-(separate top-level RPC method). Both `vim.schedule` on a callback that
-looks up the same `self.subscribers[session_id]`.
+Summary of the asymmetry (this IS real, just at the bridge layer, not
+the plugin's dispatch layer as an earlier revision of this file
+incorrectly framed it):
 
-There is **no meaningful dispatch-layer asymmetry**. Earlier revisions of
-this file framed this as a "useful narrowing clue" — that was wrong. The
-two paths are effectively the same shape. Any hypothesis has to explain
-why one stalls while the other doesn't despite identical machinery —
-likely from state in the receiver (SessionManager / MessageWriter) or
-from transport / subprocess behaviour, not from dispatch itself.
+- `session/request_permission` is triggered from the SDK's
+  `handleControlRequest` side-channel (`acp-agent.js:788, 865` →
+  `this.client.requestPermission(...)`), **independent** of whether
+  the bridge's prompt loop is making progress.
+- `session/update` notifications (`agent_message_chunk`, `tool_call`,
+  `tool_call_update`) are emitted *only* after each
+  `await session.query.next()` yields inside the bridge's `prompt()`
+  loop (`acp-agent.js:313`).
 
-Any hypothesis that depends on `vim.schedule` as a whole not firing, or
-on the subscriber table being empty, is also falsified by "permission
-prompts work".
+If the inner `claude` CLI subprocess's prompt generator stalls (e.g.
+its upstream SSE connection to the Anthropic API has gone half-open
+during the multi-hour idle, per
+[claude-code#33949](https://github.com/anthropics/claude-code/issues/33949)),
+notifications stop arriving while permission requests keep working.
+The generator is not closed on `RequestError.internalError`
+(`acp-agent.js:449-450, 600-609`), so the bridge reuses the stuck
+pipeline for the next prompt.
+
+The "flush on next user submit" shape matches
+[claude-agent-acp#551](https://github.com/agentclientprotocol/claude-agent-acp/issues/551)
+(after a cancelled turn, next prompt returns end_turn with zeroed
+usage and no chunks, prompt after that delivers in full). Related:
+[claude-agent-acp#497](https://github.com/agentclientprotocol/claude-agent-acp/issues/497)
+(`prompt()` blocks forever on `session.query.next()` when the binary
+stops emitting `idle`).
 
 ### Ruled out by test
 
-Two layers have been driven end-to-end through the auto-continue
-sequence and pass:
+Two plugin layers pass end-to-end integration tests for the
+auto-continue sequence:
 
 - **MessageWriter** —
-  `tests/integration/auto_continue_chunk_flush.test.lua`. Normal turn →
-  usage-limit error → `append_separator` → "## continue" → streamed
-  chunks + tool_call + tool_call_update, plus the
+  `tests/integration/auto_continue_chunk_flush.test.lua`. Normal turn
+  → usage-limit error → `append_separator` → "## continue" → streamed
+  chunks + tool_call + tool_call_update, including the
   rejection-suppression edge case. Per-turn state
-  (`_suppressing_rejection`, `_rejection_buffer`, `_chunk_start_line`)
-  resets correctly and all streamed content lands in the buffer.
+  (`_suppressing_rejection`, `_rejection_buffer`,
+  `_chunk_start_line`) resets correctly and all content lands in the
+  buffer.
 - **ACPClient dispatch** —
   `lua/agentic/acp/acp_client.test.lua` → `describe("dispatch after
   error response (auto-continue path)")`. Drives `_handle_message`
-  through prompt #1 (usage_limit error response) + prompt #2 (streamed
-  session/update notifications + end_turn result), and separately
-  through a permission request sandwiched between chunks. All
-  notifications reach the subscriber.
+  through prompt #1 (usage_limit error response) + prompt #2
+  (streamed session/update notifications + end_turn result), plus a
+  permission request sandwiched between chunks. All notifications
+  reach the subscriber.
 
-**Neither layer reproduces the bug in isolation.** Remaining suspects:
-transport / subprocess behaviour (node stdout buffering, multi-hour
-idle pipe effects), or runtime interactions the tests cannot simulate
-(window visibility, async scheduler state after very long idle). The
-next useful narrowing step is a runtime-state diagnostic command
-(option b in the session that wrote these tests) — one-shot snapshot
-of ACPClient `state`, transport subprocess PID liveness, pending-read
-buffer length, and `subscribers` table keys — runnable mid-wait when
-the symptom recurs.
+These tests cannot reproduce the production bug because the bytes
+never leave the bridge — there is nothing for MessageWriter or the
+dispatch layer to receive.
+
+### Viable workarounds
+
+Anything at the MessageWriter / dispatch / ACPClient layer is a dead
+end. The two approaches that can actually recover:
+
+1. **Respawn before auto-continue.** Before
+   `_offer_auto_continue`'s timer callback sends
+   `session/prompt("continue")`, tear down the current session via
+   `new_session({ on_created = ... })` and resend. This kills the
+   stuck claude-agent-acp subprocess, spawns a fresh one, and
+   re-establishes the ACP pipeline. Session state is lost unless
+   `chat_history` is re-prepended (the plugin already does this for
+   session restore). Cost: full subprocess restart per usage-limit
+   event, but auto-continue only fires once per reset cycle.
+2. **Report upstream and wait for a fix.** The root cause belongs in
+   claude-agent-acp / claude-agent-sdk / the `claude` CLI. A minimal
+   repro against `agentclientprotocol/claude-agent-acp` referencing
+   #551 / #497 would document the symptom and request
+   generator-close-on-error semantics (or an SSE idle watchdog
+   inside the CLI).
 
 ### Do not "fix" this with
 
-- `vim.cmd.redraw()` anywhere (ruled out by `<C-l>` not helping; history
-  above shows this path has been tried and reverted).
+- `vim.cmd.redraw()` anywhere (ruled out by `<C-l>` not helping;
+  history above shows this path has been tried and reverted).
 - Calling `reset_turn_state()` in the auto-continue timer callback
-  (speculative workaround, not a root-cause fix).
-- Restarting the subscriber or the agent (blast radius too large for a
-  symptom whose real cause in this context is unidentified).
+  (speculative workaround, does not touch the stalled bridge
+  generator).
+- Restarting just the ACPClient subscriber or re-subscribing the
+  same session (the stall is *inside* the bridge subprocess —
+  subscriber state is irrelevant).
+- Adding any state reset in MessageWriter or SessionManager
+  (disproven by the two integration tests above).

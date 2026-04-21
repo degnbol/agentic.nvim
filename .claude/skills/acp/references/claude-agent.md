@@ -123,6 +123,102 @@ The SDK does NOT write file edits to disk before sending `request_permission`.
 Verified 2026-04-17 by inspecting disk contents while a pending Edit prompt
 was open. Earlier client docs incorrectly claimed otherwise.
 
+## Prompt loop stall — silent notification loss with working permissions
+
+Known failure mode where `agent_message_chunk` / `tool_call` /
+`tool_call_update` silently fail to reach the client for one prompt turn,
+while `session/request_permission` continues to work normally. All missing
+content "flushes" on the *next* user-submitted prompt.
+
+### Why this happens — control channel vs prompt-loop asymmetry
+
+The bridge emits two kinds of outbound messages over the same stdio pipe:
+
+1. **`session/request_permission`** is an ACP *request* (has an `id`,
+   expects a response). It is triggered from the SDK's
+   `handleControlRequest` code path — a side-channel handler that runs as
+   part of `readMessages`, **independent** of whether anyone is iterating
+   the prompt generator. Call path:
+   `SDK control_request:can_use_tool` →
+   `canUseTool` callback
+   (`acp-agent.js:788, 865`) →
+   `this.client.requestPermission(...)`.
+2. **`session/update`** notifications (`agent_message_chunk`,
+   `tool_call`, `tool_call_update`, `plan`, `usage_update`, …) are
+   `sendNotification` calls emitted only *after* each
+   `await session.query.next()` yields a message
+   (`acp-agent.js:313` inside the `prompt()` loop).
+
+Both funnel through the same `Connection.#sendMessage` write queue
+(`acp.js:1146-1161` in the ACP SDK), so there is no write-side buffering
+asymmetry. The asymmetry is purely at the trigger: permissions come from
+the control channel; notifications come from the prompt generator.
+
+**If `session.query.next()` never yields for that turn, zero
+notifications flow even though permission requests still round-trip.**
+That is the entire symptom profile.
+
+### What can make the generator stall
+
+The inner `claude` CLI subprocess (spawned by `query()` in
+`@anthropic-ai/claude-agent-sdk`'s `ProcessTransport`) is *persistent*
+across prompts for a session — `acp-agent.js:1126` creates
+`session.query` once at session creation and holds it in
+`sessions[sessionId]` (`:1189-1210`). It is only closed on substrings
+like `"ProcessTransport"`, `"terminated process"`, or
+`"process exited with"` in the error message (`:600-609`). Generic
+`RequestError.internalError` thrown on e.g. a usage-limit result
+(`:449-450`) does **not** close the generator — the bridge's `finally`
+only resets `session.promptRunning = false` (`:615`).
+
+Known stall triggers (upstream issues):
+
+- [`agentclientprotocol/claude-agent-acp#551`](https://github.com/agentclientprotocol/claude-agent-acp/issues/551) —
+  after a cancelled turn, the next prompt returns `end_turn` with
+  zeroed usage and **no chunks**; the prompt after *that* delivers the
+  response in full. Symptom-shape match.
+- [`agentclientprotocol/claude-agent-acp#497`](https://github.com/agentclientprotocol/claude-agent-acp/issues/497) —
+  `prompt()` blocks forever on `session.query.next()` when the binary
+  stops emitting `session_state_changed(idle)`.
+- [`anthropics/claude-code#33949`](https://github.com/anthropics/claude-code/issues/33949) —
+  no SSE idle watchdog inside the CLI. TCP half-open (NAT drop,
+  load-balancer idle close) leaves the CLI's upstream streaming call
+  hung indefinitely. Would outlive any multi-hour idle.
+- [`anthropics/anthropic-sdk-typescript#867`](https://github.com/anthropics/anthropic-sdk-typescript/issues/867) —
+  `messages.stream()` has no idle timeout; `for await` blocks forever
+  if the server stops sending events.
+
+`keep_alive` messages over the SDK's inter-process channel **are**
+silently dropped in the SDK reader — a keepalive exists but is not
+observable from the bridge, so a stuck generator can't be detected
+from outside without polling for response absence.
+
+### Client implications
+
+- **There is nothing MessageWriter or ACPClient dispatch can do** —
+  the bytes never leave the bridge. Tests that drive those layers
+  (`tests/integration/auto_continue_chunk_flush.test.lua`,
+  `lua/agentic/acp/acp_client.test.lua` → "dispatch after error
+  response (auto-continue path)") correctly pass in isolation and
+  cannot reproduce the production symptom.
+- **Viable workarounds are upstream-level**: tear down and respawn the
+  claude-agent-acp subprocess before attempting auto-continue (losing
+  session state unless history is re-prepended, which the plugin
+  already does for session restore). `SessionManager:new_session()`
+  covers the tear-down + respawn; the auto-continue path could
+  optionally fall through to that instead of reusing the existing
+  session.
+- **Diagnostic from outside**: a stalled generator is indistinguishable
+  from a slow-but-working one without timing heuristics. The
+  subscriber sees no `session/update` between `session/prompt`
+  send and response. A watchdog (e.g. "if no `session/update` within
+  N seconds after `session/prompt`, assume stall") is possible but
+  heuristic — no protocol-level signal.
+- **Do not add vim.cmd.redraw(), reset_turn_state(), or any client-
+  side state reset as a "fix"** — these do not touch the bridge's
+  stalled generator and have been reverted before. See the plugin's
+  `.claude/skills/issues/references/chunk-flush.md`.
+
 ## Edit tool (`str_replace_based_edit_tool`)
 
 The formal Anthropic API name is `str_replace_based_edit_tool`
