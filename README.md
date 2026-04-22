@@ -38,7 +38,7 @@ See `:help agentic-vs-tui` for a full comparison — including which TUI-only co
 ## Requirements
 
 - Neovim v0.11.0+
-- `claude-agent-acp` -- install via `pnpm add -g @zed-industries/claude-agent-acp` or [download a binary](https://github.com/zed-industries/claude-agent-acp/releases)
+- `claude-agent-acp` -- install via `npm install -g @agentclientprotocol/claude-agent-acp` or [download a binary](https://github.com/agentclientprotocol/claude-agent-acp/releases)
 
 Other ACP providers (Gemini, Codex, OpenCode, Cursor Agent, Auggie, Mistral Vibe) also work -- see `config_default.lua` for the full list.
 
