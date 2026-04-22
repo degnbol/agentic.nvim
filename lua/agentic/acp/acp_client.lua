@@ -521,6 +521,39 @@ function ACPClient:extract_content_body(update)
     return nil
 end
 
+--- Extract plain text from a tool_call_update's rawOutput field.
+--- claude-agent-acp sets `rawOutput = chunk.content`, which per the Anthropic
+--- API is a string or an array of content blocks (`{type="text", text=...}`).
+--- For failed tool calls this is the unwrapped error/denial text — preferable
+--- to `content`, which `toAcpContentUpdate` wraps in ``` fences.
+--- @param raw_output any
+--- @return string[]|nil body
+function ACPClient:extract_failure_reason(raw_output)
+    if type(raw_output) == "string" then
+        if raw_output == "" then
+            return nil
+        end
+        return self:safe_split(raw_output)
+    end
+    if type(raw_output) == "table" then
+        local parts = {}
+        for _, block in ipairs(raw_output) do
+            if
+                type(block) == "table"
+                and block.type == "text"
+                and type(block.text) == "string"
+                and block.text ~= ""
+            then
+                table.insert(parts, block.text)
+            end
+        end
+        if #parts > 0 then
+            return self:safe_split(table.concat(parts, "\n"))
+        end
+    end
+    return nil
+end
+
 --- Safely split a string into an array of lines
 --- Some agents send `nil` other send `vim.NIL` for empty content
 --- @param possible_string string|nil|vim.NIL
@@ -577,6 +610,9 @@ function ACPClient:__build_tool_call_update(update)
         status = update.status,
         body = self:extract_content_body(update),
     }
+    if update.status == "failed" then
+        message.failure_reason = self:extract_failure_reason(update.rawOutput)
+    end
     return message
 end
 
@@ -1212,7 +1248,7 @@ return ACPClient
 --- @field toolCallId string
 --- @field status? agentic.acp.ToolCallStatus
 --- @field content? agentic.acp.ACPToolCallContent[]
---- @field rawOutput? table Not all providers are sending it, seems non standard
+--- @field rawOutput? string|table Plain string or array of content blocks (`{type="text",text=...}`). claude-agent-acp forwards `ToolResultBlockParam.content` here. Non-standard across providers.
 
 --- @class agentic.acp.PlanUpdate
 --- @field sessionUpdate "plan"

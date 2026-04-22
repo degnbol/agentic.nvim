@@ -11,7 +11,7 @@ local NS_PERMISSION_BUTTONS =
 local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
 --- @class agentic.ui.MessageWriter.HighlightRange
---- @field type "comment"|"old"|"new"|"new_modification" Type of highlight to apply
+--- @field type "comment"|"error"|"old"|"new"|"new_modification" Type of highlight to apply
 --- @field line_index integer Line index relative to returned lines (0-based)
 --- @field old_line? string Original line content (for diff types)
 --- @field new_line? string Modified line content (for diff types)
@@ -37,6 +37,7 @@ local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- @field argument? string
 --- @field search_pattern? string Regex pattern for highlighting matches in search output
 --- @field read_range? { offset: integer, limit?: integer } Line range for partial reads
+--- @field failure_reason? string[] Error message shown in place of kind-specific body when status == "failed" (e.g. hook-denial reason, tool error). Extracted from rawOutput, so no ``` fences.
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind

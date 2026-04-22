@@ -60,6 +60,9 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         status = update.status,
         body = self:extract_content_body(update),
     }
+    if update.status == "failed" then
+        message.failure_reason = self:extract_failure_reason(update.rawOutput)
+    end
 
     local rawInput = update.rawInput
     if not rawInput or vim.tbl_isempty(rawInput) then

@@ -228,4 +228,89 @@ describe("ToolCallRenderer", function()
             end
         end)
     end)
+
+    describe("failure_reason rendering", function()
+        it(
+            "replaces Read's 'Read N lines' summary with the failure reason",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-1",
+                    kind = "read",
+                    argument = "/tmp/foo.lua",
+                    status = "failed",
+                    body = { "```", "Read hooks.md first.", "```" },
+                    failure_reason = { "Read hooks.md first." },
+                }
+
+                local lines, _ = Renderer.prepare_block_lines(block, 0)
+
+                -- "Read N lines" must not appear when failed
+                for _, line in ipairs(lines) do
+                    assert.is_nil(line:match("^Read %d+ lines"))
+                end
+                -- Reason text must be in the rendered lines
+                local found = false
+                for _, line in ipairs(lines) do
+                    if line == "Read hooks.md first." then
+                        found = true
+                        break
+                    end
+                end
+                assert.is_true(found)
+            end
+        )
+
+        it("bypasses diff rendering when Edit fails", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-2",
+                kind = "edit",
+                argument = "/tmp/foo.lua",
+                status = "failed",
+                diff = {
+                    old = { "old content" },
+                    new = { "new content" },
+                },
+                failure_reason = { "Permission denied." },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+
+            for _, line in ipairs(lines) do
+                assert.is_nil(line:match("old content"))
+                assert.is_nil(line:match("new content"))
+            end
+            local found = false
+            for _, line in ipairs(lines) do
+                if line == "Permission denied." then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("keeps kind-specific rendering for non-failed status", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-3",
+                kind = "read",
+                argument = "/tmp/foo.lua",
+                status = "completed",
+                body = { "line a", "line b", "line c" },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+
+            local found = false
+            for _, line in ipairs(lines) do
+                if line == "Read 3 lines" then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+    end)
 end)

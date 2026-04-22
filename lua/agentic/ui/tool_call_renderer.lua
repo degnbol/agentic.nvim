@@ -393,7 +393,29 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     --- @type agentic.ui.MessageWriter.HighlightRange[]
     local highlight_ranges = {}
 
-    if kind == "read" then
+    -- When a tool call fails, render the failure reason in place of
+    -- kind-specific body/diff rendering. The summary a kind normally shows
+    -- ("Read N lines", search results, a diff, fetch body) describes what
+    -- the tool attempted — misleading when it never ran. `failure_reason`
+    -- comes from `rawOutput` (unwrapped by extract_failure_reason), so this
+    -- renders cleanly without the ``` fences that toAcpContentUpdate wraps
+    -- around `content` on is_error.
+    local failure_reason = tool_call_block.failure_reason
+    if
+        tool_call_block.status == "failed"
+        and failure_reason
+        and #failure_reason > 0
+    then
+        local fence = safe_fence(failure_reason)
+        table.insert(lines, fence .. "console")
+        for _, reason_line in ipairs(failure_reason) do
+            table.insert(lines, reason_line)
+            --- @type agentic.ui.MessageWriter.HighlightRange
+            local range = { type = "error", line_index = #lines - 1 }
+            table.insert(highlight_ranges, range)
+        end
+        table.insert(lines, fence)
+    elseif kind == "read" then
         -- Count lines from content, we don't want to show full content that was read
         local line_count = tool_call_block.body and #tool_call_block.body or 0
 
@@ -1193,7 +1215,7 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                 hl_range.old_line,
                 hl_range.new_line
             )
-        elseif hl_range.type == "comment" then
+        elseif hl_range.type == "comment" or hl_range.type == "error" then
             local line = vim.api.nvim_buf_get_lines(
                 bufnr,
                 buffer_line,
@@ -1202,6 +1224,9 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
             )[1]
 
             if line then
+                local hl_group = hl_range.type == "error"
+                        and Theme.HL_GROUPS.ERROR_BODY
+                    or "Comment"
                 vim.api.nvim_buf_set_extmark(
                     bufnr,
                     NS_DIFF_HIGHLIGHTS,
@@ -1209,7 +1234,7 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                     0,
                     {
                         end_col = #line,
-                        hl_group = "Comment",
+                        hl_group = hl_group,
                     }
                 )
             end

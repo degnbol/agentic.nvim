@@ -497,4 +497,68 @@ describe("agentic.acp.ACPClient", function()
             end
         )
     end)
+
+    describe("extract_failure_reason", function()
+        local client
+        before_each(function()
+            client = setmetatable({}, { __index = ACPClient })
+        end)
+
+        it("returns nil for nil, empty string, or empty table", function()
+            assert.is_nil(client:extract_failure_reason(nil))
+            assert.is_nil(client:extract_failure_reason(""))
+            assert.is_nil(client:extract_failure_reason({}))
+        end)
+
+        it("splits a plain string into lines", function()
+            local body = client:extract_failure_reason("line1\nline2")
+            assert.same({ "line1", "line2" }, body)
+        end)
+
+        it("joins text blocks from a content-block array", function()
+            local body = client:extract_failure_reason({
+                { type = "text", text = "Read hooks.md first." },
+            })
+            assert.same({ "Read hooks.md first." }, body)
+        end)
+
+        it("ignores non-text blocks in the array", function()
+            local body = client:extract_failure_reason({
+                { type = "image", data = "..." },
+                { type = "text", text = "denied" },
+            })
+            assert.same({ "denied" }, body)
+        end)
+    end)
+
+    describe("__build_tool_call_update", function()
+        local client
+        before_each(function()
+            client = setmetatable({}, { __index = ACPClient })
+        end)
+
+        it(
+            "populates failure_reason from rawOutput on status=failed",
+            function()
+                local msg = client:__build_tool_call_update({
+                    toolCallId = "tc-1",
+                    status = "failed",
+                    rawOutput = {
+                        { type = "text", text = "Read hooks.md first." },
+                    },
+                })
+                assert.equal("failed", msg.status)
+                assert.same({ "Read hooks.md first." }, msg.failure_reason)
+            end
+        )
+
+        it("leaves failure_reason nil for non-failed statuses", function()
+            local msg = client:__build_tool_call_update({
+                toolCallId = "tc-1",
+                status = "completed",
+                rawOutput = { { type = "text", text = "ok" } },
+            })
+            assert.is_nil(msg.failure_reason)
+        end)
+    end)
 end)
