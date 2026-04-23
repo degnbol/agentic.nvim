@@ -536,3 +536,34 @@ to subscribers via `on_stdout_text`. This is wired through `ACPClient` →
 `SessionManager` → `MessageWriter`, gated by `is_generating` to suppress noise.
 Currently no known ACP provider emits useful non-JSON stdout, but the
 infrastructure exists for future use.
+
+### Silent upstream failure — opencode + litellm
+
+Observed 2026-04-23 with opencode configured against a litellm backend using an
+invalid API key. `session/prompt` returned a **successful** response shape with
+no JSON-RPC error, no stderr, and no `agent_message_chunk` notifications:
+
+```lua
+response = {
+  stopReason = "end_turn",
+  usage = { inputTokens = 0, outputTokens = 0, totalTokens = 0 },
+  _meta = {},
+}
+err = nil
+```
+
+Same response shape as the claude-agent-acp stall (see "Prompt loop stall"
+above), but a different root cause: opencode swallows the upstream auth
+rejection and reports normal completion.
+
+**Detection signal.** `usage.totalTokens == 0` is unambiguous — the model was
+never invoked. "End turn with zero tokens" cannot be "model chose to say
+nothing" because that still costs input tokens to tokenise the prompt. Zero
+input tokens means the request was rejected before tokenisation.
+
+**Surfacing rule** (implemented in `SessionManager:_handle_input_submit_inner`):
+render `response.stopReason` + `response.usage` verbatim when
+`stopReason ~= "end_turn"` OR `usage` is all-zero. Render provider fields
+only — never synthesise "no response" messages or speculate about cause.
+Chat emptiness after the thinking indicator clears is self-evident and does
+not need a client-generated explanation.
