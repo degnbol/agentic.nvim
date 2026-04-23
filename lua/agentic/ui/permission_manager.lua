@@ -215,16 +215,31 @@ end
 
 --- Read the file path from a tool call's rawInput. Different ACP providers
 --- use slightly different field names; check the common ones in order.
+---
+--- Known field usage by provider:
+---   - claude-agent-acp, claude-acp, auggie-acp: `file_path` (snake_case)
+---   - opencode-acp: `filePath` (camelCase)
+---   - gemini-acp, codex-acp, mistral-vibe-acp: path arrives via
+---     `update.locations[]` or `update.content[]`, not `rawInput` — these
+---     providers will return nil here and rely on the adapter to surface
+---     the path through `tool_call.argument` instead.
 --- @param raw table|nil
 --- @return string|nil
 local function raw_input_path(raw)
     if not raw then
         return nil
     end
-    return raw.file_path or raw.path or raw.target or raw.source_path
+    return raw.file_path
+        or raw.filePath
+        or raw.path
+        or raw.target
+        or raw.source_path
+        or raw.sourcePath
 end
 
---- Read the destination path from a `move`'s rawInput.
+--- Read the destination path from a `move`'s rawInput. None of the surveyed
+--- providers currently send move/rename destinations via rawInput, so the
+--- camelCase aliases are defensive — if a future provider emits them.
 --- @param raw table|nil
 --- @return string|nil
 local function raw_input_destination(raw)
@@ -232,9 +247,12 @@ local function raw_input_destination(raw)
         return nil
     end
     return raw.destination_path
+        or raw.destinationPath
         or raw.destination
         or raw.new_path
+        or raw.newPath
         or raw.target_path
+        or raw.targetPath
 end
 
 --- Check whether `path` lies inside the active trust scope. The orchestrator
