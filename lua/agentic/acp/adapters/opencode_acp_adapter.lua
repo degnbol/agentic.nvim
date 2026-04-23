@@ -83,6 +83,24 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
         message.kind = "SubAgent"
     end
 
+    -- Opencode sends Edit diffs via the standard ACP content field
+    -- (type="diff", oldText, newText). The diff may not be at index [1] —
+    -- for writes, content[1] is a "Wrote file successfully." text entry and
+    -- content[2] is the diff. Scan the array. MessageWriter freezes the diff
+    -- after first render, so double-setting across updates is safe.
+    if update.content then
+        for _, entry in ipairs(update.content) do
+            if entry.type == "diff" then
+                message.argument = FileSystem.to_smart_path(entry.path or "")
+                message.diff = {
+                    new = self:safe_split(entry.newText),
+                    old = self:safe_split(entry.oldText),
+                }
+                break
+            end
+        end
+    end
+
     if update.status == "completed" or update.status == "failed" then
         if
             update.kind == "other"
@@ -90,7 +108,7 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
             and update.rawInput.name
         then
             message.body = { update.title or "" }
-        else
+        elseif not message.diff then
             message.body = self:extract_content_body(update)
         end
     else
