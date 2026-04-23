@@ -357,9 +357,18 @@ Applied to all buffers in the widget (chat, prompt, panels).
 6.2 PROMPT KEYMAPS                               *agentic-keymaps-prompt*
 
     Key              Mode    Description ~
-    `<CR>`             n       Submit prompt
+    `<CR><CR>`         n       Stash-send: send N lines (count1), delete them
+    `<CR>{motion}`     n       Stash-send: send motion range, delete
+    `<CR>`             x       Stash-send: send visual selection, delete
+    `:w`                        Submit whole buffer
     `<localLeader>p`   n       Paste image
     `<C-v>`            i       Paste image
+
+Stash-send deletes the sent text from the input buffer. Set
+`keymaps.prompt.submit = { "<CR>" }` and the stash bindings to `{}` to bind
+`<CR>` as whole-buffer submit instead. Set `settings.stash_register` to a
+register name (e.g. `"a"`) to copy the sent text into that register before
+deleting.
 
 ------------------------------------------------------------------------------
 6.3 CHAT KEYMAPS                                   *agentic-keymaps-chat*
