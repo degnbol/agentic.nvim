@@ -276,9 +276,10 @@ end
 --- @param session_id string
 --- @param cwd? string Original working directory for the session (from JSONL).
 ---   Falls back to vim.fn.getcwd() if nil.
-function Agentic.load_acp_session(session_id, cwd)
+--- @param model? string Model id saved with the session.
+function Agentic.load_acp_session(session_id, cwd, model)
     SessionRegistry.get_session_for_tab_page(nil, function(session)
-        session:load_acp_session(session_id, cwd)
+        session:load_acp_session(session_id, cwd, model)
         session.widget:show()
         session.widget:close_empty_non_widget_windows()
     end)

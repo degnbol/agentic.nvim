@@ -70,6 +70,7 @@ end
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _pending_load_cwd? string CWD for the deferred session/load
+--- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _last_prompt? string
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
@@ -127,6 +128,23 @@ function SessionManager._generate_welcome_header(_, session_id)
     return string.format("# %s · %s", ts, short_id)
 end
 
+--- Refresh chat_history.provider / model from current state so the next save
+--- records which provider and model produced the conversation.
+function SessionManager:_sync_history_context()
+    if not self.chat_history then
+        return
+    end
+    self.chat_history.provider = Config.provider
+    local opts = self.config_options
+    if opts then
+        self.chat_history.model = (opts.model and opts.model.currentValue)
+            or (
+                opts.legacy_agent_models
+                and opts.legacy_agent_models.current_model_id
+            )
+    end
+end
+
 --- @param tab_page_id integer
 function SessionManager:new(tab_page_id)
     local AgentInstance = require("agentic.acp.agent_instance")
@@ -166,9 +184,11 @@ function SessionManager:new(tab_page_id)
                 --- @type string
                 local sid = self._pending_load_session_id
                 local pending_cwd = self._pending_load_cwd
+                local pending_model = self._pending_load_model
                 self._pending_load_session_id = nil
                 self._pending_load_cwd = nil
-                self:_do_load_acp_session(sid, pending_cwd)
+                self._pending_load_model = nil
+                self:_do_load_acp_session(sid, pending_cwd, pending_model)
             elseif not self._restoring then
                 -- Skip auto-new_session if restore_from_history was called
                 self:new_session()
@@ -461,6 +481,7 @@ function SessionManager:_rename_session(new_title)
     self.message_writer:append_separator()
 
     -- Persist the updated title
+    self:_sync_history_context()
     self.chat_history:save()
 end
 
@@ -1287,6 +1308,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     })
 
     -- Add system info on first message only (after user text so resume picker shows the prompt)
+    local is_first_turn = self._is_first_message
     if self._is_first_message then
         self._is_first_message = false
 
@@ -1465,14 +1487,19 @@ function SessionManager:_handle_input_submit_inner(input_text)
             -- Surface response details when the provider's own fields show
             -- the turn did not complete normally:
             --   - stopReason != "end_turn" (refusal, max_tokens,
-            --     max_turn_requests, cancelled, or provider-specific)
-            --   - usage.totalTokens == 0 (the model was never invoked —
-            --     upstream rejected the request, e.g. bad API key, before
-            --     any inference happened)
+            --     max_turn_requests, cancelled, or provider-specific) — checked
+            --     every turn
+            --   - usage.totalTokens == 0 — only on the FIRST turn (catches the
+            --     opencode+litellm silent-auth-failure case where the upstream
+            --     rejected the request before any inference). Later turns can
+            --     legitimately report zero usage (e.g. stalled generators,
+            --     cancelled turns), so we don't treat mid-session zeros as
+            --     errors.
             -- Render the provider's fields verbatim, no interpretation.
             local stop_reason = response and response.stopReason
             local usage = response and response.usage
-            local zero_tokens = usage
+            local zero_tokens = is_first_turn
+                and usage
                 and (usage.totalTokens == 0 or usage.totalTokens == nil)
                 and (usage.inputTokens == 0 or usage.inputTokens == nil)
                 and (usage.outputTokens == 0 or usage.outputTokens == nil)
@@ -1520,6 +1547,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         -- Save chat history after successful turn completion
         if not err then
+            self:_sync_history_context()
             chat_history:save(function(save_err)
                 if save_err then
                     Logger.debug("Chat history save error:", save_err)
@@ -1550,6 +1578,20 @@ function SessionManager:new_session(opts)
     local epoch = self._session_epoch
 
     self.agent:create_session(handlers, function(response, err)
+        -- Provider-switch restore: this SessionManager may have been destroyed
+        -- (by align_provider_for_restore) while session/new was in flight on
+        -- the outgoing provider. Its agent/widget/tabpage state are gone but
+        -- the callback closure still holds a reference to self. Continuing
+        -- would stamp the destroyed session's config onto vim.t.agentic_headers
+        -- (or fall through to _handle_new_config_options etc.), stomping the
+        -- replacement session's UI on the same tab.
+        if self._destroyed then
+            if response and response.sessionId and self.agent then
+                self.agent.subscribers[response.sessionId] = nil
+            end
+            return
+        end
+
         self.status_animation:stop()
 
         if err or not response then
@@ -1640,22 +1682,25 @@ end
 --- @param session_id string Full UUID of the session to load
 --- @param cwd? string Original working directory for the session.
 ---   Falls back to vim.fn.getcwd() if nil.
-function SessionManager:load_acp_session(session_id, cwd)
+--- @param model? string Model id saved with the session, applied after load
+function SessionManager:load_acp_session(session_id, cwd, model)
     if self.agent and self.agent.agent_capabilities then
         -- Agent is already initialised, load immediately
-        self:_do_load_acp_session(session_id, cwd)
+        self:_do_load_acp_session(session_id, cwd, model)
     else
         -- Agent still starting — defer until on_ready fires
         self._restoring = true
         self._pending_load_session_id = session_id
         self._pending_load_cwd = cwd
+        self._pending_load_model = model
     end
 end
 
 --- Internal: actually send session/load after the agent is ready.
 --- @param session_id string
 --- @param cwd? string Original working directory for the session.
-function SessionManager:_do_load_acp_session(session_id, cwd)
+--- @param model? string Model id to reapply after load (queued until options arrive).
+function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- Prevent the constructor's deferred on-ready callback from calling
     -- new_session() after we've already started loading.  When the agent
     -- instance is already initialised, get_instance() fires on_ready
@@ -1716,7 +1761,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
         effective_cwd,
         {},
         handlers,
-        function(_result, err)
+        function(result, err)
             vim.schedule(function()
                 if err then
                     local details = err.data and err.data.details
@@ -1745,9 +1790,34 @@ function SessionManager:_do_load_acp_session(session_id, cwd)
                     end
                 end)
 
+                -- Apply configOptions the provider returned with session/load,
+                -- so the header reflects the restored session's mode/model
+                -- rather than stale state from a pre-switch session.
+                if result and result.configOptions then
+                    self:_handle_new_config_options(result.configOptions)
+                end
+
+                local opts = self.config_options
+                if model and opts and opts.set_pending_initial_model then
+                    opts:set_pending_initial_model(model)
+                end
+
+                local provider_label = self.agent
+                        and self.agent.provider_config
+                        and self.agent.provider_config.name
+                    or Config.provider
+                local model_label = model
+                    or (opts and opts.model and opts.model.currentValue)
+                    or (
+                        opts
+                        and opts.legacy_agent_models
+                        and opts.legacy_agent_models.current_model_id
+                    )
                 local welcome = string.format(
-                    "\n## Resumed session `%s`\n",
-                    session_id:sub(1, 8)
+                    "\n## Resumed session `%s`\nProvider: **%s** · Model: **%s**\n",
+                    session_id:sub(1, 8),
+                    provider_label,
+                    model_label or "unknown"
                 )
                 self.message_writer:write_message(
                     ACPPayloads.generate_user_message(welcome)
@@ -2404,8 +2474,21 @@ function SessionManager:destroy()
         self._reauth_job = nil
     end
 
+    -- widget:destroy() calls hide() which fires on_hide. That handler re-enters
+    -- SessionRegistry.destroy_session via vim.schedule when messages == 0. If
+    -- a replacement session has been installed on the same tab by then
+    -- (provider-switch restore path), the scheduled destroy would wipe the
+    -- replacement instead of a no-op. Disarm before tearing down the widget.
+    self.widget.on_hide = nil
+
     self:_cancel_session()
     self.widget:destroy()
+
+    -- Reset the per-tab headers state so a replacement session on the same
+    -- tab doesn't inherit the destroyed session's model/mode context.
+    if vim.api.nvim_tabpage_is_valid(self.tab_page_id) then
+        vim.t[self.tab_page_id].agentic_headers = nil
+    end
 end
 
 --- Restore session from loaded chat history

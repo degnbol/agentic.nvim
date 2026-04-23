@@ -12,6 +12,8 @@ local SessionRegistry = require("agentic.session_registry")
 --- @field cwd? string
 --- @field file_path? string Full path to session JSON (for cross-project access)
 --- @field prompt_count? integer Number of user prompts
+--- @field provider? agentic.UserConfig.ProviderName config key, nil on legacy sessions
+--- @field model? string model id
 
 --- @class agentic.SessionRestore
 local SessionRestore = {}
@@ -27,30 +29,75 @@ local function check_conflict(current_session)
 end
 
 --- Check whether the agent supports the session/load RPC.
+--- Returns true while capabilities are still being negotiated — the agent
+--- has just been spawned (first use of this provider), so
+--- `load_acp_session` will queue the load until on_ready fires, at which
+--- point the capability check inside ACPClient:load_session applies. All
+--- currently-supported providers advertise loadSession=true after init.
 --- @param session agentic.SessionManager
 --- @return boolean
 local function agent_supports_load(session)
-    return session.agent ~= nil
-        and session.agent.agent_capabilities ~= nil
-        and session.agent.agent_capabilities.loadSession == true
+    if not session.agent then
+        return false
+    end
+    if session.agent.agent_capabilities == nil then
+        return true
+    end
+    return session.agent.agent_capabilities.loadSession == true
 end
 
---- @param session_id string
+--- If the session's saved provider differs from the active one, destroy the
+--- current session on the tab and switch Config.provider so
+--- get_session_for_tab_page creates a fresh session bound to the right agent.
+--- @param tab_page_id integer
+--- @param provider? agentic.UserConfig.ProviderName config key from the saved session
+--- @return boolean changed true if Config.provider was updated
+local function align_provider_for_restore(tab_page_id, provider)
+    if not provider or provider == Config.provider then
+        return false
+    end
+
+    if not Config.acp_providers[provider] then
+        Logger.notify(
+            "Saved provider '"
+                .. provider
+                .. "' is not configured — restoring with current provider '"
+                .. Config.provider
+                .. "'.",
+            vim.log.levels.WARN
+        )
+        return false
+    end
+
+    SessionRegistry.destroy_session(tab_page_id)
+    Config.provider = provider
+    return true
+end
+
+--- @param item agentic.SessionRestore.PickerItem
 --- @param tab_page_id integer
 --- @param has_conflict boolean
---- @param cwd? string Original cwd for cross-project restore
---- @param file_path? string Full path to session JSON (cross-project)
-local function do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
+local function do_restore(item, tab_page_id, has_conflict)
+    align_provider_for_restore(tab_page_id, item.provider)
+
     SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
         if agent_supports_load(session) then
-            session:load_acp_session(session_id, cwd)
+            if not item.provider then
+                Logger.notify(
+                    "Session has no saved provider — restoring with current provider '"
+                        .. Config.provider
+                        .. "'. May fail if the session was created with a different provider.",
+                    vim.log.levels.WARN
+                )
+            end
+            session:load_acp_session(item.session_id, item.cwd, item.model)
         else
             if has_conflict and session.session_id then
                 session.agent:cancel_session(session.session_id)
                 session.widget:clear()
             end
 
-            ChatHistory.load(session_id, function(history, err)
+            ChatHistory.load(item.session_id, function(history, err)
                 if err or not history then
                     Logger.notify(
                         "Failed to load session: " .. (err or "unknown error"),
@@ -63,7 +110,7 @@ local function do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
                     history,
                     { reuse_session = not has_conflict }
                 )
-            end, file_path)
+            end, item.file_path)
         end
 
         session.widget:show()
@@ -72,28 +119,18 @@ local function do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
 end
 
 --- Restore a session in a new tabpage.
---- @param session_id string
---- @param cwd? string
---- @param file_path? string
-local function restore_in_new_tab(session_id, cwd, file_path)
+--- @param item agentic.SessionRestore.PickerItem
+local function restore_in_new_tab(item)
     vim.cmd("tabnew")
     local new_tab = vim.api.nvim_get_current_tabpage()
-    do_restore(session_id, new_tab, false, cwd, file_path)
+    do_restore(item, new_tab, false)
 end
 
---- @param session_id string
+--- @param item agentic.SessionRestore.PickerItem
 --- @param tab_page_id integer
 --- @param has_conflict boolean
---- @param cwd? string Original cwd for cross-project restore
---- @param file_path? string Full path to session JSON (cross-project)
 --- @return boolean accepted true if user chose to restore (not cancelled)
-local function restore_with_conflict_check(
-    session_id,
-    tab_page_id,
-    has_conflict,
-    cwd,
-    file_path
-)
+local function restore_with_conflict_check(item, tab_page_id, has_conflict)
     if has_conflict then
         local choice = vim.fn.confirm(
             "Current session has messages:",
@@ -101,14 +138,14 @@ local function restore_with_conflict_check(
             3
         ) -- no nvim_* equivalent
         if choice == 1 then
-            do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
+            do_restore(item, tab_page_id, has_conflict)
         elseif choice == 2 then
-            restore_in_new_tab(session_id, cwd, file_path)
+            restore_in_new_tab(item)
         else
             return false
         end
     else
-        do_restore(session_id, tab_page_id, has_conflict, cwd, file_path)
+        do_restore(item, tab_page_id, has_conflict)
     end
     return true
 end
@@ -158,6 +195,8 @@ function SessionRestore.build_items(sessions, opts)
             cwd = s.cwd,
             file_path = s.file_path,
             prompt_count = s.prompt_count,
+            provider = s.provider,
+            model = s.model,
         })
     end
     return items
@@ -243,13 +282,7 @@ function SessionRestore.show_picker(tab_page_id, current_session, scope)
         --- @param item agentic.SessionRestore.PickerItem
         --- @return boolean accepted
         local function on_select(item)
-            return restore_with_conflict_check(
-                item.session_id,
-                tab_page_id,
-                has_conflict,
-                item.cwd,
-                item.file_path
-            )
+            return restore_with_conflict_check(item, tab_page_id, has_conflict)
         end
 
         local picker_name = Config.session_restore.picker or "quickfix"

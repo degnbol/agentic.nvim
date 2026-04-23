@@ -34,6 +34,8 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field cwd? string Working directory the session was created in
 --- @field file_path? string Full path to JSON file (set by list_all_sessions)
 --- @field prompt_count? integer Number of user prompts in the session
+--- @field provider? agentic.UserConfig.ProviderName config key, absent on pre-2026-04-23 sessions
+--- @field model? string model id used at last save
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
@@ -43,6 +45,8 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field timestamp integer Unix timestamp when session was created
 --- @field messages agentic.ui.ChatHistory.Message[]
 --- @field title string
+--- @field provider? agentic.UserConfig.ProviderName config key
+--- @field model? string model id
 local ChatHistory = {}
 ChatHistory.__index = ChatHistory
 
@@ -54,6 +58,8 @@ function ChatHistory:new()
         timestamp = os.time(),
         messages = {},
         title = "",
+        provider = nil,
+        model = nil,
     }
 
     setmetatable(instance, self)
@@ -186,6 +192,8 @@ function ChatHistory:save(callback)
         timestamp = self.timestamp,
         last_activity = os.time(),
         cwd = vim.uv.cwd(),
+        provider = self.provider,
+        model = self.model,
         messages = self.messages,
     }
 
@@ -237,6 +245,8 @@ function ChatHistory.load(session_id, callback, file_path)
         instance.timestamp = parsed.timestamp
         instance.messages = parsed.messages
         instance.title = parsed.title
+        instance.provider = parsed.provider
+        instance.model = parsed.model
 
         vim.schedule(function()
             callback(instance, nil)
@@ -299,6 +309,8 @@ local function read_sessions_from_folder(folder)
                         cwd = parsed.cwd,
                         file_path = file_path,
                         prompt_count = prompt_count,
+                        provider = parsed.provider,
+                        model = parsed.model,
                     })
                 else
                     Logger.debug(

@@ -45,7 +45,10 @@ describe("SessionRestore", function()
             chat_history = opts.chat_history or { messages = {} },
             agent = {
                 cancel_session = spy.new(function() end),
-                agent_capabilities = opts.agent_capabilities,
+                -- Default to no-load support so tests that want the history
+                -- fallback work; tests that want the ACP load path override.
+                agent_capabilities = opts.agent_capabilities
+                    or { loadSession = false },
             },
             widget = {
                 clear = spy.new(function() end),
@@ -481,6 +484,85 @@ describe("SessionRestore", function()
 
                 assert.spy(mock_session.load_acp_session).was.called(0)
                 assert.spy(mock_session.restore_from_history).was.called(1)
+            end
+        )
+
+        it("forwards saved model to load_acp_session", function()
+            local mock_session = session_with_load_support()
+            chat_history_list_stub:invokes(function(callback)
+                callback({
+                    {
+                        session_id = "session-1",
+                        title = "With model",
+                        timestamp = 1704067200,
+                        provider = Config.provider,
+                        model = "sonnet-4-6",
+                    },
+                })
+            end)
+            setup_registry_stub(mock_session)
+
+            SessionRestore.show_picker(1, nil)
+
+            assert.spy(mock_session.load_acp_session).was.called(1)
+            assert.equal(
+                "sonnet-4-6",
+                mock_session.load_acp_session.calls[1][4]
+            )
+        end)
+
+        it(
+            "switches Config.provider and destroys existing session when saved provider differs",
+            function()
+                local mock_session = session_with_load_support()
+                chat_history_list_stub:invokes(function(callback)
+                    callback({
+                        {
+                            session_id = "session-1",
+                            title = "Other provider",
+                            timestamp = 1704067200,
+                            provider = "opencode-acp",
+                            model = "minimax",
+                        },
+                    })
+                end)
+                setup_registry_stub(mock_session)
+                local destroy_stub =
+                    spy.stub(SessionRegistry, "destroy_session")
+                local original_provider = Config.provider
+
+                SessionRestore.show_picker(1, nil)
+
+                assert.equal("opencode-acp", Config.provider)
+                assert.spy(destroy_stub).was.called(1)
+
+                Config.provider = original_provider
+                destroy_stub:revert()
+            end
+        )
+
+        it(
+            "warns but keeps current provider for sessions without provider",
+            function()
+                local mock_session = session_with_load_support()
+                setup_list_stub() -- default test_sessions have no provider field
+                setup_registry_stub(mock_session)
+
+                SessionRestore.show_picker(1, nil)
+
+                local messages = {}
+                for _, call in ipairs(logger_notify_stub.calls) do
+                    table.insert(messages, call[1])
+                end
+                local found = false
+                for _, msg in ipairs(messages) do
+                    if msg:match("no saved provider") then
+                        found = true
+                        break
+                    end
+                end
+                assert.is_true(found)
+                assert.spy(mock_session.load_acp_session).was.called(1)
             end
         )
     end)

@@ -11,6 +11,7 @@ local Logger = require("agentic.utils.logger")
 --- @field legacy_agent_modes agentic.acp.AgentModes
 --- @field legacy_agent_models agentic.acp.AgentModels
 --- @field _pending_model_select boolean
+--- @field _pending_initial_model? string model id to apply once options arrive (session restore)
 --- @field _set_model_callback fun(model_id: string, is_legacy: boolean)
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
@@ -30,6 +31,7 @@ function AgentConfigOptions:new(buffers, set_mode_callback, set_model_callback)
         legacy_agent_modes = AgentModes:new(),
         legacy_agent_models = AgentModels:new(),
         _pending_model_select = false,
+        _pending_initial_model = nil,
         _set_model_callback = set_model_callback,
     }, self)
 
@@ -61,6 +63,7 @@ function AgentConfigOptions:clear()
     self.model = nil
     self.thought_level = nil
     self._pending_model_select = false
+    self._pending_initial_model = nil
     self.legacy_agent_modes:clear()
     self.legacy_agent_models:clear()
 end
@@ -68,9 +71,11 @@ end
 --- @param configOptions agentic.acp.ConfigOption[]|nil
 function AgentConfigOptions:set_options(configOptions)
     local was_pending = self._pending_model_select
+    local pending_initial = self._pending_initial_model
     self:clear()
 
     if not configOptions then
+        self._pending_initial_model = pending_initial
         return
     end
 
@@ -89,6 +94,11 @@ function AgentConfigOptions:set_options(configOptions)
     if was_pending then
         self:_flush_pending_model_select()
     end
+
+    if pending_initial then
+        self._pending_initial_model = pending_initial
+        self:_flush_pending_initial_model()
+    end
 end
 
 --- Modes from providers that don't support the new Config Options
@@ -105,6 +115,50 @@ function AgentConfigOptions:set_legacy_models(models_info)
     if self._pending_model_select then
         self:_flush_pending_model_select()
     end
+
+    if self._pending_initial_model then
+        self:_flush_pending_initial_model()
+    end
+end
+
+--- Queue a model id to apply once configOptions (or legacy models) become
+--- available. Used by session restore to reapply the saved model.
+--- @param model_id string
+function AgentConfigOptions:set_pending_initial_model(model_id)
+    self._pending_initial_model = model_id
+    if
+        self:get_model(model_id) or self.legacy_agent_models:get_model(model_id)
+    then
+        self:_flush_pending_initial_model()
+    end
+end
+
+--- Apply a queued initial model if it's now available.
+function AgentConfigOptions:_flush_pending_initial_model()
+    local model_id = self._pending_initial_model
+    if not model_id then
+        return
+    end
+
+    local current = (self.model and self.model.currentValue)
+        or self.legacy_agent_models.current_model_id
+
+    if current == model_id then
+        self._pending_initial_model = nil
+        return
+    end
+
+    local is_legacy
+    if self:get_model(model_id) then
+        is_legacy = false
+    elseif self.legacy_agent_models:get_model(model_id) then
+        is_legacy = true
+    else
+        return
+    end
+
+    self._pending_initial_model = nil
+    self._set_model_callback(model_id, is_legacy)
 end
 
 --- @param target_mode string|nil

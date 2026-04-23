@@ -813,6 +813,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _notify_attention = SessionManager._notify_attention,
+                _sync_history_context = SessionManager._sync_history_context,
             } --[[@as agentic.SessionManager]]
         end
 
