@@ -567,3 +567,25 @@ render `response.stopReason` + `response.usage` verbatim when
 only — never synthesise "no response" messages or speculate about cause.
 Chat emptiness after the thinking indicator clears is self-evident and does
 not need a client-generated explanation.
+
+### opencode Edit diff not at content[1]
+
+Opencode follows the standard ACP diff layout (`content[]` array with
+`{type="diff", path, oldText, newText}`), but on write/edit completion the
+array contains the status-text entry **first** and the diff **second**:
+
+```lua
+content = {
+    { type = "content", content = { type = "text", text = "Wrote file successfully." } },
+    { type = "diff",    path = "...", oldText = "", newText = "..." },
+}
+```
+
+The base class's `extract_content_body` only inspects `content[1]`, so
+adapters that reuse the default need to scan the array themselves for the
+diff entry. The opencode adapter does this in `__handle_tool_call_update`
+and suppresses the status-text body when a diff is rendered, matching
+claude-agent-acp's Edit block shape.
+
+Codex/gemini/mistral adapters happen to work with `content[1]` because
+those providers place the diff there. Don't assume any particular index.
