@@ -42,6 +42,23 @@ See `:help agentic-vs-tui` for a full comparison — including which TUI-only co
 
 Other ACP providers (Gemini, Codex, OpenCode, Cursor Agent, Auggie, Mistral Vibe) also work -- see `config_default.lua` for the full list.
 
+### OpenCode permission caveat
+
+OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve unless you opt in via its config. To route permission prompts through this plugin, set in `~/.config/opencode/opencode.json` (or `config.json`):
+
+```json
+{
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  }
+}
+```
+
+If you want to guard against prompt injection through fetched web content (a returned page persuading the agent to execute follow-up actions), also set `"webfetch": "ask"`.
+
+Known caveats on the OpenCode side: [sst/opencode#4642](https://github.com/sst/opencode/issues/4642) reports the `permission` key is sometimes not respected, and [#2748](https://github.com/sst/opencode/issues/2748) notes MCP tools bypass the permission system entirely. This plugin can only surface prompts that OpenCode actually delegates via ACP.
+
 ## Setup
 
 ```lua
