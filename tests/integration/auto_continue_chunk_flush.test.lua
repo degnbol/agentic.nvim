@@ -150,7 +150,7 @@ describe("auto-continue chunk flush", function()
             writer:write_message(user_message("Second prompt."))
             writer:write_error_message(usage_limit_err())
             writer:write_error_action(
-                "Auto-continuing at 17:00 (in 5h 30m). Press [c] to cancel."
+                "Auto-continuing in 5h 30m. Press [c] to cancel."
             )
             writer:append_separator()
 

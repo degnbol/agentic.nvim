@@ -2113,7 +2113,6 @@ function SessionManager:_offer_auto_continue(reset_epoch)
 
     self._retry_attempt = self._retry_attempt + 1
 
-    local reset_time = os.date("%H:%M", os.time() + delay_s)
     local duration = format_duration(delay_s)
     local attempt_suffix = self._retry_attempt > 1
             and string.format(
@@ -2125,8 +2124,7 @@ function SessionManager:_offer_auto_continue(reset_epoch)
 
     self.message_writer:write_error_action(
         string.format(
-            "Auto-continuing at %s (in %s)%s. Press [c] to cancel.",
-            reset_time,
+            "Auto-continuing in %s%s. Press [c] to cancel.",
             duration,
             attempt_suffix
         )
