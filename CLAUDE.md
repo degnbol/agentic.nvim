@@ -144,6 +144,39 @@ Two race conditions can overwrite `self.session_id` during session restore:
    `session/new` response then arrives — `_restoring` is false, so the callback
    overwrites `session_id` with the stale new-session ID.
 
+3. **Cross-provider restore, three linked hazards.** Picking a saved session
+   whose provider differs from `Config.provider` requires destroying the
+   current tab's SessionManager, flipping `Config.provider`, and letting
+   `get_session_for_tab_page` spawn a replacement bound to the new agent.
+   This sequence surfaces three races that don't affect same-provider restore:
+
+   a. **Capability check during agent init.** `agent_supports_load` is called
+      synchronously inside the picker callback. A freshly-spawned agent has
+      `agent_capabilities == nil` (initialize RPC still in flight). Treating
+      nil as "no support" silently drops into the non-ACP fallback path.
+      Treat nil as "support-assumed" — `load_acp_session` already queues via
+      `_pending_load_session_id` until on_ready fires.
+
+   b. **Tab-id-based deferred destroy.** `ChatWidget.on_hide` schedules
+      `SessionRegistry.destroy_session(tab_page_id)` via `vim.schedule` when
+      `chat_history.messages` is empty. If a replacement session has been
+      installed on the same tab before that callback runs, the destroy wipes
+      the replacement by tab id. Disarm `on_hide` in `SessionManager:destroy`
+      before calling `widget:destroy()` (which triggers `hide()` → `on_hide`).
+
+   c. **Stale `session/new` callback from the outgoing provider.** The
+      original SessionManager's `create_session` RPC may still be in flight
+      when it's destroyed. The callback closure holds a reference to the
+      destroyed `self`. When the response arrives, the callback runs
+      `_handle_new_config_options` → `_update_chat_header` →
+      `WindowDecoration.set_headers_state(self.widget.tab_page_id, ...)`,
+      stomping the replacement session's headers with the outgoing
+      provider's model. Bail out at the top of the create_session callback
+      when `self._destroyed` is true. Also clear
+      `vim.t[tab_page_id].agentic_headers` in `SessionManager:destroy` so
+      the replacement starts from a clean slate — per-tab header state
+      outlives the session that wrote it.
+
 **Guards:**
 
 - `_restoring` flag — prevents the deferred on-ready callback (race 1) and
@@ -152,10 +185,23 @@ Two race conditions can overwrite `self.session_id` during session restore:
   and `_do_load_acp_session`. The `create_session` callback captures the epoch
   at call time and rejects the response if the epoch has advanced (race 2).
   This catches stale responses even after `_restoring` is cleared.
+- `_destroyed` flag — set in `SessionManager:destroy`. Checked at the top of
+  the `create_session` callback for race 3c (epoch/restoring can't catch it
+  because they track the *replacement's* state, not the destroyed sender's).
 
-**Rule:** Any code path that initiates a session transition must increment
-`_session_epoch`. Any async callback that sets `self.session_id` must check
-that its captured epoch matches `self._session_epoch`.
+**Rules:**
+
+- Any code path that initiates a session transition must increment
+  `_session_epoch`. Any async callback that sets `self.session_id` must check
+  that its captured epoch matches `self._session_epoch`.
+- Any async callback on a SessionManager that writes to tab-scoped state
+  (`vim.t[tab].agentic_headers`, `SessionRegistry.sessions[tab]`, etc.) must
+  check `self._destroyed` — the instance may have been replaced on the same
+  tab while the RPC was in flight.
+- `_do_load_acp_session` must feed `result.configOptions` through
+  `_handle_new_config_options` on success (mirrors the `new_session` path) —
+  otherwise the header stays on the previous provider's model after a
+  cross-provider restore.
 
 ## Cross-turn state hazards in MessageWriter
 
