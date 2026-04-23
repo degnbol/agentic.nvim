@@ -128,3 +128,18 @@
 
 - We wrote auto-switch provider and model code for resume because it fails otherwise.
   But would it be possible to resume a session with a different model and even a different provider?
+
+- `todowrite` from opencode (and not from claude) shows the todo operation in chat. Something like:
+```markdown
+[
+{
+"priority": "high",
+"content": "Rename config keys: stash_send_* → send_*, stash_register → send_register",
+"status": "in_progress"
+},
+...
+```
+This should be hidden, we can see the todo in the todo window. It does reveal 
+priority, which is interesting and could be considered for additional info for 
+the todo window. Regardless, the first step is making sure we don't get this 
+clutter in chat.
