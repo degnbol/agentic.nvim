@@ -109,7 +109,7 @@ function SessionRegistry.select_provider(on_selected)
     vim.list_extend(sorted_providers, not_installed)
 
     vim.ui.select(sorted_providers, {
-        prompt = "Select an ACP provider for the new session:",
+        prompt = "Select ACP provider (new session)",
         --- @param item _ProviderStatus
         format_item = function(item)
             local label = item.name
