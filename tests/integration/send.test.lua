@@ -1,7 +1,7 @@
 local assert = require("tests.helpers.assert")
 local Child = require("tests.helpers.child")
 
-describe("Stash-send", function()
+describe("Partial-send", function()
     local child = Child.new()
 
     before_each(function()
@@ -142,5 +142,47 @@ describe("Stash-send", function()
         child.flush()
 
         assert.same({}, sent_prompts())
+    end)
+
+    it("<CR>{motion} on a second tab dispatches to its own widget", function()
+        -- Regression for the operatorfunc singleton race: two widgets on
+        -- different tabpages must each see their own send dispatch, not
+        -- stomp a shared module-level reference.
+        child.lua([[
+            vim.cmd("tabnew")
+            require("agentic").toggle()
+            local tab_id_2 = vim.api.nvim_get_current_tabpage()
+            local session_2 =
+                require("agentic.session_registry").sessions[tab_id_2]
+            _G._sent_prompts_2 = {}
+            session_2.widget.on_submit_input = function(prompt)
+                table.insert(_G._sent_prompts_2, prompt)
+            end
+            _G._widget_2 = session_2.widget
+            vim.api.nvim_buf_set_lines(
+                _G._widget_2.buf_nrs.input,
+                0, -1, false, { "two-alpha", "two-beta", "two-gamma" }
+            )
+            vim.api.nvim_set_current_win(_G._widget_2.win_nrs.input)
+            vim.cmd("stopinsert")
+            vim.api.nvim_win_set_cursor(_G._widget_2.win_nrs.input, {1, 0})
+        ]])
+        set_input({ "one-alpha", "one-beta", "one-gamma" })
+
+        feed("<CR>j")
+        child.flush()
+
+        assert.same(
+            { "two-alpha\ntwo-beta" },
+            child.lua_get([[_G._sent_prompts_2]])
+        )
+        assert.same(
+            { "two-gamma" },
+            child.lua_get(
+                [[vim.api.nvim_buf_get_lines(_G._widget_2.buf_nrs.input, 0, -1, false)]]
+            )
+        )
+        assert.same({}, sent_prompts())
+        assert.same({ "one-alpha", "one-beta", "one-gamma" }, input_lines())
     end)
 end)

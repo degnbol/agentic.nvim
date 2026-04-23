@@ -119,13 +119,6 @@
   reproduce the issue unless we can do something more stable/clever in how that 
   task is presented in chat.
 
-- [feature] we could have a system for sending part of the input buffer to the model.
-  Similar to claude TUI's system for stashing the current input.
-  I think a nice solution is to change the enter key to behave like my usual kittyREPL approach:
-  <CR><CR> is send line, <CR>motion is send motion, and so on.
-  The text that is sent is cleared from the input buffer.
-  :w still just sends the whole input buffer.
-
 - We wrote auto-switch provider and model code for resume because it fails otherwise.
   But would it be possible to resume a session with a different model and even a different provider?
 
@@ -143,3 +136,38 @@ This should be hidden, we can see the todo in the todo window. It does reveal
 priority, which is interesting and could be considered for additional info for 
 the todo window. Regardless, the first step is making sure we don't get this 
 clutter in chat.
+I realise it also does this todowrite every time it makes a change, e.g. cross 
+out an item. The write seems to be whole todo list. We could do a diff in that 
+case and let the chat just mention the changed item so the chat will show clear 
+history of which item was crossed out when. Obviously we have to write this in 
+a robust way, e.g. what happens if it doesn't cross out, but edits by adding an 
+item? Or the edit is undoing a crossed out item?
+
+- While waiting for approval opencode shows the edit it's suggested with 
+in_progress where claude shows pending. It should show pending, the command is 
+not in progress.
+A few other things seems to be reported differently from opencode. E.g. I saw in chat:
+
+### Edit
+`lua/agentic/ui/chat_widget.lua`
+```lua
+Not found: function ChatWidget:_stash_send_visual() ...
+```
+ ✔ completed
+
+So the Not found doesn't have the expected error color and it implies the Edit failed, yet it shows "completed" status.
+I also see a Search that doesn't seem to show the term searched for:
+
+
+### Search
+```bash
+grep
+```
+```console
+Found 1 matches
+/Users/cmadsen/dotfiles/config/nvim/modules/agentic.nvim/lua/agentic/ui/chat_widget.lua:
+Line 672:     self:_bind_stash_keymaps()
+
+```
+ ✔ completed
+Also, the default mode for opencode is "build", so that mode should also be hidden from the text sent to incline and be implied.

@@ -572,7 +572,7 @@ describe("agentic.ui.ChatWidget", function()
                 on_submit_spy --[[@as function]]
             )
             widget:show()
-            submit_spy = spy.on(widget, "_submit_input")
+            submit_spy = spy.on(widget, "submit")
             hide_spy = spy.on(widget, "hide")
         end)
 
@@ -634,11 +634,11 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
-    describe("stash_send", function()
+    describe("partial_send", function()
         local widget
         local submit_spy
         local debug_spy
-        local original_stash_register
+        local original_send_register
 
         before_each(function()
             vim.cmd("tabnew")
@@ -650,12 +650,12 @@ describe("agentic.ui.ChatWidget", function()
             widget:show()
             vim.api.nvim_set_current_win(widget.win_nrs.input)
             debug_spy = spy.on(Logger, "debug")
-            original_stash_register = Config.settings.stash_register
-            Config.settings.stash_register = nil
+            original_send_register = Config.settings.send_register
+            Config.settings.send_register = nil
         end)
 
         after_each(function()
-            Config.settings.stash_register = original_stash_register
+            Config.settings.send_register = original_send_register
             debug_spy:revert()
             pcall(function()
                 widget:destroy()
@@ -684,12 +684,12 @@ describe("agentic.ui.ChatWidget", function()
             )
         end
 
-        describe("_stash_send_line", function()
+        describe("_send_line", function()
             it("sends current line and removes it from buffer", function()
                 set_input({ "alpha", "beta", "gamma" })
                 vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
 
-                widget:_stash_send_line()
+                widget:_send_line()
 
                 assert.spy(submit_spy).was.called(1)
                 assert.equal("alpha", submit_spy.calls[1][1])
@@ -700,7 +700,7 @@ describe("agentic.ui.ChatWidget", function()
                 set_input({ "" })
                 vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
 
-                widget:_stash_send_line()
+                widget:_send_line()
 
                 assert.spy(submit_spy).was.called(0)
             end)
@@ -709,20 +709,20 @@ describe("agentic.ui.ChatWidget", function()
                 set_input({ "   \t ", "beta" })
                 vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
 
-                widget:_stash_send_line()
+                widget:_send_line()
 
                 assert.spy(submit_spy).was.called(0)
                 assert.same({ "   \t ", "beta" }, input_lines())
             end)
         end)
 
-        describe("_stash_send_operator", function()
+        describe("_send_operator", function()
             it("linewise: sends line range and removes from buffer", function()
                 set_input({ "alpha", "beta", "gamma", "delta" })
                 vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 2, 0, {})
                 vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 3, 0, {})
 
-                widget:_stash_send_operator("line")
+                widget:_send_operator("line")
 
                 assert.spy(submit_spy).was.called(1)
                 assert.equal("beta\ngamma", submit_spy.calls[1][1])
@@ -735,7 +735,7 @@ describe("agentic.ui.ChatWidget", function()
                 vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 1, 6, {})
                 vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 1, 10, {})
 
-                widget:_stash_send_operator("char")
+                widget:_send_operator("char")
 
                 assert.spy(submit_spy).was.called(1)
                 assert.equal("world", submit_spy.calls[1][1])
@@ -745,18 +745,18 @@ describe("agentic.ui.ChatWidget", function()
             it("block: no-op with debug log", function()
                 set_input({ "alpha", "beta" })
 
-                widget:_stash_send_operator("block")
+                widget:_send_operator("block")
 
                 assert.spy(submit_spy).was.called(0)
                 assert.is_true(debug_spy.call_count >= 1)
             end)
         end)
 
-        describe("_submit_input regression", function()
+        describe("submit regression", function()
             it("no-arg path still sends whole buffer and clears it", function()
                 set_input({ "line1", "line2" })
 
-                widget:_submit_input()
+                widget:submit()
 
                 assert.spy(submit_spy).was.called(1)
                 assert.equal("line1\nline2", submit_spy.calls[1][1])
@@ -764,14 +764,14 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
 
-        describe("stash_register", function()
+        describe("send_register", function()
             it("writes sent text when configured (linewise)", function()
-                Config.settings.stash_register = "a"
+                Config.settings.send_register = "a"
                 vim.fn.setreg("a", "")
                 set_input({ "alpha", "beta" })
                 vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
 
-                widget:_stash_send_line()
+                widget:_send_line()
 
                 assert.equal("alpha\n", vim.fn.getreg("a"))
                 assert.equal("V", vim.fn.getregtype("a"))
@@ -782,19 +782,19 @@ describe("agentic.ui.ChatWidget", function()
                 set_input({ "alpha" })
                 vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
 
-                widget:_stash_send_line()
+                widget:_send_line()
 
                 assert.equal("preserved", vim.fn.getreg("a"))
             end)
 
             it("uses charwise regtype for char delete_range", function()
-                Config.settings.stash_register = "a"
+                Config.settings.send_register = "a"
                 vim.fn.setreg("a", "")
                 set_input({ "hello world" })
                 vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 1, 6, {})
                 vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 1, 10, {})
 
-                widget:_stash_send_operator("char")
+                widget:_send_operator("char")
 
                 assert.equal("world", vim.fn.getreg("a"))
                 assert.equal("v", vim.fn.getregtype("a"))

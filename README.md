@@ -32,7 +32,7 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 - Auto-scroll with runtime toggle (`<localLeader>a`)
 - Todos / code / files / diagnostics panels alongside chat
 - External UI hook (`AgenticHeadersChanged` autocmd + `vim.t.agentic_headers`) for plugins like incline.nvim
-- Partial prompt submit — `<CR><CR>` sends the current line (with count), `<CR>{motion}` sends the motion range, visual `<CR>` sends the selection. The sent text is cut from the input buffer. `:w` sends the whole buffer. Opt-in register copy via `settings.stash_register`. Set any `keymaps.prompt.stash_send_*` entry to `{}` to disable
+- Partial prompt submit — `<CR><CR>` sends the current line (with count), `<CR>{motion}` sends the motion range, visual `<CR>` sends the selection. The sent text is cut from the input buffer. `:w` sends the whole buffer. Opt-in register copy via `settings.send_register`. Set any `keymaps.prompt.send_*` entry to `{}` to disable
 
 See `:help agentic-vs-tui` for a full comparison — including which TUI-only commands are patched through ACP locally, and which TUI features aren't available here.
 

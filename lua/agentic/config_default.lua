@@ -216,25 +216,20 @@ local ConfigDefault = {
 
         --- Keys bindings for the prompt buffer
         prompt = {
-            --- Whole-buffer submit binding. Default empty because stash-send
+            --- Whole-buffer submit binding. Default empty because partial-send
             --- owns normal-mode <CR>. `:w` / `:Wq` / `:X` always submit the
             --- whole buffer regardless of this binding.
             submit = {},
 
             --- Send N lines (vim.v.count1) from cursor, then delete them.
-            stash_send_line = "<CR><CR>",
+            send_line = "<CR><CR>",
 
             --- Operator (g@). `<CR>{motion}` sends text covered by motion,
             --- linewise for linewise motions, charwise for charwise.
-            stash_send_operator = "<CR>",
+            send_operator = "<CR>",
 
             --- Visual-mode binding. Sends the selection, then deletes it.
-            stash_send_visual = {
-                {
-                    "<CR>",
-                    mode = { "x" },
-                },
-            },
+            send_visual = "<CR>",
 
             paste_image = {
                 {
@@ -417,15 +412,22 @@ local ConfigDefault = {
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings
     --- @field move_cursor_to_chat_on_submit boolean
-    --- @field stash_register? string
+    --- @field send_register? string
+    --- @field write_submit boolean
     settings = {
 
         --- Automatically move cursor to chat window after submitting a prompt
         move_cursor_to_chat_on_submit = true,
 
-        --- Register name to copy stashed text into before deleting on
-        --- stash-send. Nil writes no register.
-        stash_register = nil,
+        --- Register name to copy sent text into before deleting on
+        --- partial-send. Nil writes no register.
+        send_register = nil,
+
+        --- When true, `:w` in the input buffer submits the prompt. `:wq` and
+        --- `:x` submit and emit a warning instead of closing; `:wq!` and `:x!`
+        --- submit and close. When false, none of these are registered and the
+        --- input buffer remains a plain `nofile` buffer.
+        write_submit = true,
     },
 
     --- @class agentic.UserConfig.SessionRestore
