@@ -968,6 +968,19 @@ function M.apply_block_highlights(
             end
         end
 
+        -- Skip a fold-open marker line ("{{{") that sits between the fence
+        -- and the actual body lines. ANSI spans are computed against body
+        -- content, not the marker.
+        local marker = vim.api.nvim_buf_get_lines(
+            bufnr,
+            body_start,
+            body_start + 1,
+            false
+        )[1]
+        if marker == "{{{" then
+            body_start = body_start + 1
+        end
+
         -- Execute blocks with ANSI codes get per-character colour highlights
         if ansi_highlights then
             Ansi.apply_highlights(
@@ -1019,6 +1032,16 @@ function M.apply_block_highlights(
                 body_start = i + 1
                 break
             end
+        end
+        -- Skip a fold-open marker line ("{{{") between the fence and the body.
+        local marker = vim.api.nvim_buf_get_lines(
+            bufnr,
+            body_start,
+            body_start + 1,
+            false
+        )[1]
+        if marker == "{{{" then
+            body_start = body_start + 1
         end
         Ansi.apply_highlights(
             bufnr,
