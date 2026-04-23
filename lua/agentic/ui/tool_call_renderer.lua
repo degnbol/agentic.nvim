@@ -1166,10 +1166,27 @@ end
 --- is mapped through `get_clean_hl_group` so that typography attributes
 --- from the underlying markdown-injected highlights don't leak through.
 --- Priority 200 beats markdown's priority-100 injected highlights.
+---
+--- `col_hl` keys are byte offsets into the *unformatted* source line. When
+--- the caller reformats the line (e.g. `format_tables_in_lines` on markdown
+--- diffs) the buffer content at `buffer_line` can be shorter than the
+--- highest col_hl key, so bounds-check against the actual line length and
+--- drop extmarks that would exceed it.
 --- @param bufnr integer
 --- @param buffer_line integer 0-indexed buffer row
 --- @param col_hl table<integer, string>
 local function apply_block_col_highlights(bufnr, buffer_line, col_hl)
+    local line = vim.api.nvim_buf_get_lines(
+        bufnr,
+        buffer_line,
+        buffer_line + 1,
+        false
+    )[1]
+    if not line then
+        return
+    end
+    local line_len = #line
+
     local cols = {}
     for c, _ in pairs(col_hl) do
         cols[#cols + 1] = c
@@ -1186,17 +1203,22 @@ local function apply_block_col_highlights(bufnr, buffer_line, col_hl)
             end_col = end_col + 1
             j = j + 1
         end
-        vim.api.nvim_buf_set_extmark(
-            bufnr,
-            NS_DIFF_HIGHLIGHTS,
-            buffer_line,
-            start_col,
-            {
-                end_col = end_col,
-                hl_group = get_clean_hl_group(hl),
-                priority = 200,
-            }
-        )
+        if start_col < line_len then
+            if end_col > line_len then
+                end_col = line_len
+            end
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                NS_DIFF_HIGHLIGHTS,
+                buffer_line,
+                start_col,
+                {
+                    end_col = end_col,
+                    hl_group = get_clean_hl_group(hl),
+                    priority = 200,
+                }
+            )
+        end
         i = j
     end
 end
