@@ -1442,7 +1442,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     self.is_generating = true
 
-    self.agent:send_prompt(self.session_id, prompt, function(_response, err)
+    self.agent:send_prompt(self.session_id, prompt, function(response, err)
         -- This callback already runs inside vim.schedule (from _handle_message).
         -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
         -- creating a race where a fast follow-up prompt sets is_generating=true
@@ -1462,6 +1462,46 @@ function SessionManager:_handle_input_submit_inner(input_text)
             end
         else
             self._retry_attempt = 0
+            -- Surface response details when the provider's own fields show
+            -- the turn did not complete normally:
+            --   - stopReason != "end_turn" (refusal, max_tokens,
+            --     max_turn_requests, cancelled, or provider-specific)
+            --   - usage.totalTokens == 0 (the model was never invoked —
+            --     upstream rejected the request, e.g. bad API key, before
+            --     any inference happened)
+            -- Render the provider's fields verbatim, no interpretation.
+            local stop_reason = response and response.stopReason
+            local usage = response and response.usage
+            local zero_tokens = usage
+                and (usage.totalTokens == 0 or usage.totalTokens == nil)
+                and (usage.inputTokens == 0 or usage.inputTokens == nil)
+                and (usage.outputTokens == 0 or usage.outputTokens == nil)
+            if
+                response
+                and ((stop_reason and stop_reason ~= "end_turn") or zero_tokens)
+            then
+                local parts = {}
+                if stop_reason then
+                    table.insert(parts, "stopReason: " .. tostring(stop_reason))
+                end
+                if usage then
+                    table.insert(
+                        parts,
+                        string.format(
+                            "usage: input=%s output=%s total=%s",
+                            tostring(usage.inputTokens),
+                            tostring(usage.outputTokens),
+                            tostring(usage.totalTokens)
+                        )
+                    )
+                end
+                if #parts > 0 then
+                    self.message_writer:write_error_message({
+                        code = 0,
+                        message = table.concat(parts, "\n"),
+                    })
+                end
+            end
         end
 
         self.message_writer:append_separator()
