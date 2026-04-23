@@ -114,3 +114,17 @@
 
 - **Typo in /trust**: Writing `/trust heree` (typo) goes through. Maybe just
   adding completion would help?
+
+- [bug] Fetch sometimes shows the wrong title. The format varies. I probably need to 
+  reproduce the issue unless we can do something more stable/clever in how that 
+  task is presented in chat.
+
+- [feature] we could have a system for sending part of the input buffer to the model.
+  Similar to claude TUI's system for stashing the current input.
+  I think a nice solution is to change the enter key to behave like my usual kittyREPL approach:
+  <CR><CR> is send line, <CR>motion is send motion, and so on.
+  The text that is sent is cleared from the input buffer.
+  :w still just sends the whole input buffer.
+
+- We wrote auto-switch provider and model code for resume because it fails otherwise.
+  But would it be possible to resume a session with a different model and even a different provider?
