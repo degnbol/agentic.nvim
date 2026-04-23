@@ -633,4 +633,172 @@ describe("agentic.ui.ChatWidget", function()
             assert.is_true(hide_spy.call_count >= 1)
         end)
     end)
+
+    describe("stash_send", function()
+        local widget
+        local submit_spy
+        local debug_spy
+        local original_stash_register
+
+        before_each(function()
+            vim.cmd("tabnew")
+            submit_spy = spy.new(function() end)
+            widget = ChatWidget:new(
+                vim.api.nvim_get_current_tabpage(),
+                submit_spy --[[@as function]]
+            )
+            widget:show()
+            vim.api.nvim_set_current_win(widget.win_nrs.input)
+            debug_spy = spy.on(Logger, "debug")
+            original_stash_register = Config.settings.stash_register
+            Config.settings.stash_register = nil
+        end)
+
+        after_each(function()
+            Config.settings.stash_register = original_stash_register
+            debug_spy:revert()
+            pcall(function()
+                widget:destroy()
+            end)
+            pcall(function()
+                vim.cmd("tabclose")
+            end)
+        end)
+
+        local function set_input(lines)
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                lines
+            )
+        end
+
+        local function input_lines()
+            return vim.api.nvim_buf_get_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false
+            )
+        end
+
+        describe("_stash_send_line", function()
+            it("sends current line and removes it from buffer", function()
+                set_input({ "alpha", "beta", "gamma" })
+                vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+                widget:_stash_send_line()
+
+                assert.spy(submit_spy).was.called(1)
+                assert.equal("alpha", submit_spy.calls[1][1])
+                assert.same({ "beta", "gamma" }, input_lines())
+            end)
+
+            it("no-op on empty buffer", function()
+                set_input({ "" })
+                vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+                widget:_stash_send_line()
+
+                assert.spy(submit_spy).was.called(0)
+            end)
+
+            it("no-op on whitespace-only line", function()
+                set_input({ "   \t ", "beta" })
+                vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+                widget:_stash_send_line()
+
+                assert.spy(submit_spy).was.called(0)
+                assert.same({ "   \t ", "beta" }, input_lines())
+            end)
+        end)
+
+        describe("_stash_send_operator", function()
+            it("linewise: sends line range and removes from buffer", function()
+                set_input({ "alpha", "beta", "gamma", "delta" })
+                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 2, 0, {})
+                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 3, 0, {})
+
+                widget:_stash_send_operator("line")
+
+                assert.spy(submit_spy).was.called(1)
+                assert.equal("beta\ngamma", submit_spy.calls[1][1])
+                assert.same({ "alpha", "delta" }, input_lines())
+            end)
+
+            it("charwise: sends substring and splices it out", function()
+                set_input({ "hello world" })
+                -- Select "world" (chars 6..10 inclusive, 0-indexed cols)
+                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 1, 6, {})
+                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 1, 10, {})
+
+                widget:_stash_send_operator("char")
+
+                assert.spy(submit_spy).was.called(1)
+                assert.equal("world", submit_spy.calls[1][1])
+                assert.same({ "hello " }, input_lines())
+            end)
+
+            it("block: no-op with debug log", function()
+                set_input({ "alpha", "beta" })
+
+                widget:_stash_send_operator("block")
+
+                assert.spy(submit_spy).was.called(0)
+                assert.is_true(debug_spy.call_count >= 1)
+            end)
+        end)
+
+        describe("_submit_input regression", function()
+            it("no-arg path still sends whole buffer and clears it", function()
+                set_input({ "line1", "line2" })
+
+                widget:_submit_input()
+
+                assert.spy(submit_spy).was.called(1)
+                assert.equal("line1\nline2", submit_spy.calls[1][1])
+                assert.same({ "" }, input_lines())
+            end)
+        end)
+
+        describe("stash_register", function()
+            it("writes sent text when configured (linewise)", function()
+                Config.settings.stash_register = "a"
+                vim.fn.setreg("a", "")
+                set_input({ "alpha", "beta" })
+                vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+                widget:_stash_send_line()
+
+                assert.equal("alpha\n", vim.fn.getreg("a"))
+                assert.equal("V", vim.fn.getregtype("a"))
+            end)
+
+            it("leaves register untouched when nil", function()
+                vim.fn.setreg("a", "preserved")
+                set_input({ "alpha" })
+                vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+                widget:_stash_send_line()
+
+                assert.equal("preserved", vim.fn.getreg("a"))
+            end)
+
+            it("uses charwise regtype for char delete_range", function()
+                Config.settings.stash_register = "a"
+                vim.fn.setreg("a", "")
+                set_input({ "hello world" })
+                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 1, 6, {})
+                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 1, 10, {})
+
+                widget:_stash_send_operator("char")
+
+                assert.equal("world", vim.fn.getreg("a"))
+                assert.equal("v", vim.fn.getregtype("a"))
+            end)
+        end)
+    end)
 end)

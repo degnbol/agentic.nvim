@@ -216,8 +216,24 @@ local ConfigDefault = {
 
         --- Keys bindings for the prompt buffer
         prompt = {
-            submit = {
-                "<CR>",
+            --- Whole-buffer submit binding. Default empty because stash-send
+            --- owns normal-mode <CR>. `:w` / `:Wq` / `:X` always submit the
+            --- whole buffer regardless of this binding.
+            submit = {},
+
+            --- Send N lines (vim.v.count1) from cursor, then delete them.
+            stash_send_line = "<CR><CR>",
+
+            --- Operator (g@). `<CR>{motion}` sends text covered by motion,
+            --- linewise for linewise motions, charwise for charwise.
+            stash_send_operator = "<CR>",
+
+            --- Visual-mode binding. Sends the selection, then deletes it.
+            stash_send_visual = {
+                {
+                    "<CR>",
+                    mode = { "x" },
+                },
             },
 
             paste_image = {
@@ -400,10 +416,16 @@ local ConfigDefault = {
 
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings
+    --- @field move_cursor_to_chat_on_submit boolean
+    --- @field stash_register? string
     settings = {
 
         --- Automatically move cursor to chat window after submitting a prompt
         move_cursor_to_chat_on_submit = true,
+
+        --- Register name to copy stashed text into before deleting on
+        --- stash-send. Nil writes no register.
+        stash_register = nil,
     },
 
     --- @class agentic.UserConfig.SessionRestore

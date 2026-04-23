@@ -69,6 +69,18 @@ function BufHelpers.keymap_set(bufnr, mode, lhs, rhs, opts)
     vim.keymap.set(mode, lhs, rhs, opts)
 end
 
+--- @param keymaps agentic.UserConfig.KeymapValue|nil
+--- @return boolean
+function BufHelpers.is_keymap_disabled(keymaps)
+    if keymaps == nil or keymaps == false or keymaps == "" then
+        return true
+    end
+    if type(keymaps) == "table" and #keymaps == 0 then
+        return true
+    end
+    return false
+end
+
 --- Sets multiple keymaps from a KeymapValue config entry for a specific buffer.
 --- Normalizes the config value (string, string[], or array of string/KeymapEntry)
 --- and calls keymap_set for each binding.

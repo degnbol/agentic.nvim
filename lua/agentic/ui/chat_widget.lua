@@ -41,6 +41,18 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
+--- Dispatch target for `operatorfunc`. Invoked via v:lua after `g@{motion}`
+--- because `operatorfunc` must be a string option and can only reference a
+--- function by name or module path (Lua function refs are not accepted by the
+--- neovim core — see https://github.com/neovim/neovim/pull/20187).
+--- @param type "char"|"line"|"block"
+function ChatWidget._stash_operator_dispatch(type)
+    local widget = ChatWidget._current_stash_widget
+    if widget then
+        widget:_stash_send_operator(type)
+    end
+end
+
 --- @param tab_page_id integer
 --- @param on_submit_input fun(prompt: string)
 function ChatWidget:new(tab_page_id, on_submit_input)
@@ -223,19 +235,70 @@ function ChatWidget:destroy()
     end
 end
 
-function ChatWidget:_submit_input()
+--- @class agentic.ui.ChatWidget.StashDeleteRange
+--- @field sr integer 0-indexed start row
+--- @field sc integer 0-indexed start column (byte)
+--- @field er integer 0-indexed end row
+--- @field ec integer 0-indexed end column (byte, exclusive)
+--- @field mode "line"|"char"
+
+--- @class agentic.ui.ChatWidget.StashOpts
+--- @field text string
+--- @field delete_range agentic.ui.ChatWidget.StashDeleteRange
+
+--- Copy stashed text into `Config.settings.stash_register` if configured.
+--- @param opts agentic.ui.ChatWidget.StashOpts
+local function copy_to_stash_register(opts)
+    local reg = Config.settings and Config.settings.stash_register
+    if type(reg) ~= "string" or reg == "" then
+        return
+    end
+    local regtype = opts.delete_range.mode == "line" and "l" or "c"
+    vim.fn.setreg(reg, opts.text, regtype)
+end
+
+--- Delete the stashed range from the input buffer.
+--- @param bufnr integer
+--- @param range agentic.ui.ChatWidget.StashDeleteRange
+local function apply_stash_delete(bufnr, range)
+    if range.mode == "line" then
+        vim.api.nvim_buf_set_lines(bufnr, range.sr, range.er + 1, false, {})
+    else
+        vim.api.nvim_buf_set_text(
+            bufnr,
+            range.sr,
+            range.sc,
+            range.er,
+            range.ec,
+            {}
+        )
+    end
+end
+
+--- @param stash? agentic.ui.ChatWidget.StashOpts
+function ChatWidget:_submit_input(stash)
     vim.cmd("stopinsert")
 
-    local lines = vim.api.nvim_buf_get_lines(self.buf_nrs.input, 0, -1, false)
+    --- @type string
+    local prompt
+    if stash then
+        prompt = stash.text:match("^%s*(.-)%s*$")
+    else
+        local lines =
+            vim.api.nvim_buf_get_lines(self.buf_nrs.input, 0, -1, false)
+        prompt = table.concat(lines, "\n"):match("^%s*(.-)%s*$")
+    end
 
-    local prompt = table.concat(lines, "\n"):match("^%s*(.-)%s*$")
-
-    -- Check if prompt is empty or contains only whitespace
     if not prompt or prompt == "" or not prompt:match("%S") then
         return
     end
 
-    vim.api.nvim_buf_set_lines(self.buf_nrs.input, 0, -1, false, {})
+    if stash then
+        copy_to_stash_register(stash)
+        apply_stash_delete(self.buf_nrs.input, stash.delete_range)
+    else
+        vim.api.nvim_buf_set_lines(self.buf_nrs.input, 0, -1, false, {})
+    end
 
     BufHelpers.with_modifiable(self.buf_nrs.code, function(bufnr)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
@@ -256,6 +319,133 @@ function ChatWidget:_submit_input()
     self:close_optional_window("diagnostics")
     -- Move cursor to chat buffer after submit for easy access to permission requests
     self:move_cursor_to(self.win_nrs.chat)
+end
+
+--- Compute exclusive end column for a char-mode range given a 0-indexed end
+--- row and end-inclusive column. Handles `selection=exclusive` and clamps to
+--- the line length (handles INT_MAX sentinels from `'>` on empty/blank lines).
+--- @param bufnr integer
+--- @param er integer
+--- @param ec integer
+--- @return integer ec_ex
+local function exclusive_end_col(bufnr, er, ec)
+    local line = vim.api.nvim_buf_get_lines(bufnr, er, er + 1, false)[1] or ""
+    local ec_ex = (vim.o.selection == "exclusive") and ec or (ec + 1)
+    if ec_ex > #line then
+        ec_ex = #line
+    end
+    return ec_ex
+end
+
+function ChatWidget:_stash_send_line()
+    local count = vim.v.count1
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local sr = cursor[1] - 1
+    local er = sr + count - 1
+    local lines =
+        vim.api.nvim_buf_get_lines(self.buf_nrs.input, sr, er + 1, false)
+    if #lines == 0 then
+        return
+    end
+    local text = table.concat(lines, "\n")
+    if not text:match("%S") then
+        return
+    end
+    self:_submit_input({
+        text = text,
+        delete_range = { sr = sr, sc = 0, er = er, ec = 0, mode = "line" },
+    })
+end
+
+--- Operatorfunc callback for stash-send. Called by neovim after `g@{motion}`.
+--- @param type "char"|"line"|"block"
+function ChatWidget:_stash_send_operator(type)
+    if type == "block" then
+        Logger.debug("stash-send: blockwise motion ignored")
+        return
+    end
+    local buf = self.buf_nrs.input
+    local start_mark = vim.api.nvim_buf_get_mark(buf, "[")
+    local end_mark = vim.api.nvim_buf_get_mark(buf, "]")
+    local sr = start_mark[1] - 1
+    local sc = start_mark[2]
+    local er = end_mark[1] - 1
+    local ec = end_mark[2]
+    if sr < 0 or er < 0 then
+        return
+    end
+    --- @type string
+    local text
+    --- @type agentic.ui.ChatWidget.StashDeleteRange
+    local delete_range
+    if type == "line" then
+        local lines = vim.api.nvim_buf_get_lines(buf, sr, er + 1, false)
+        text = table.concat(lines, "\n")
+        delete_range = { sr = sr, sc = 0, er = er, ec = 0, mode = "line" }
+    else
+        local ec_ex = exclusive_end_col(buf, er, ec)
+        local parts = vim.api.nvim_buf_get_text(buf, sr, sc, er, ec_ex, {})
+        text = table.concat(parts, "\n")
+        delete_range = { sr = sr, sc = sc, er = er, ec = ec_ex, mode = "char" }
+    end
+    if not text:match("%S") then
+        return
+    end
+    self:_submit_input({ text = text, delete_range = delete_range })
+end
+
+function ChatWidget:_stash_send_visual()
+    -- `'<`/`'>` marks only update when visual mode exits, so they are stale
+    -- inside an x-mode mapping callback. `getpos("v")` returns the anchor
+    -- (opposite end from cursor) and is live during visual mode.
+    local mode = vim.api.nvim_get_mode().mode
+    if mode == "\22" then
+        Logger.debug("stash-send: blockwise visual ignored")
+        return
+    end
+    if mode ~= "v" and mode ~= "V" then
+        return
+    end
+
+    local buf = self.buf_nrs.input
+    local anchor = vim.fn.getpos("v")
+    local cursor = vim.fn.getpos(".")
+    local anchor_r, anchor_c = anchor[2] - 1, anchor[3] - 1
+    local cursor_r, cursor_c = cursor[2] - 1, cursor[3] - 1
+
+    local sr, sc, er, ec
+    if
+        anchor_r < cursor_r
+        or (anchor_r == cursor_r and anchor_c <= cursor_c)
+    then
+        sr, sc, er, ec = anchor_r, anchor_c, cursor_r, cursor_c
+    else
+        sr, sc, er, ec = cursor_r, cursor_c, anchor_r, anchor_c
+    end
+
+    --- @type string
+    local text
+    --- @type agentic.ui.ChatWidget.StashDeleteRange
+    local delete_range
+    if mode == "V" then
+        local lines = vim.api.nvim_buf_get_lines(buf, sr, er + 1, false)
+        text = table.concat(lines, "\n")
+        delete_range = { sr = sr, sc = 0, er = er, ec = 0, mode = "line" }
+    else
+        local ec_ex = exclusive_end_col(buf, er, ec)
+        local parts = vim.api.nvim_buf_get_text(buf, sr, sc, er, ec_ex, {})
+        text = table.concat(parts, "\n")
+        delete_range = { sr = sr, sc = sc, er = er, ec = ec_ex, mode = "char" }
+    end
+    if not text:match("%S") then
+        return
+    end
+
+    -- Exit visual so the buffer mutation doesn't happen inside an active
+    -- selection (which would otherwise trigger vim's own selection edit).
+    vim.cmd("normal! \27")
+
+    self:_submit_input({ text = text, delete_range = delete_range })
 end
 
 --- @param winid integer|nil
@@ -336,11 +526,7 @@ function ChatWidget:_setup_write_submit()
         buffer = input_buf,
         callback = function()
             vim.bo[input_buf].modified = false
-            vim.api.nvim_feedkeys(
-                vim.api.nvim_replace_termcodes("<CR>", true, false, true),
-                "m",
-                false
-            )
+            self:_submit_input()
         end,
     })
 
@@ -425,14 +611,18 @@ function ChatWidget:_setup_prompt_signs()
 end
 
 function ChatWidget:_bind_keymaps()
-    BufHelpers.multi_keymap_set(
-        Config.keymaps.prompt.submit,
-        self.buf_nrs.input,
-        function()
-            self:_submit_input()
-        end,
-        { desc = "Agentic: Submit prompt" }
-    )
+    if not BufHelpers.is_keymap_disabled(Config.keymaps.prompt.submit) then
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.prompt.submit,
+            self.buf_nrs.input,
+            function()
+                self:_submit_input()
+            end,
+            { desc = "Agentic: Submit prompt" }
+        )
+    end
+
+    self:_bind_stash_keymaps()
 
     BufHelpers.multi_keymap_set(
         Config.keymaps.prompt.paste_image,
@@ -575,6 +765,50 @@ function ChatWidget:_bind_keymaps()
     end
 
     DiffPreview.setup_diff_navigation_keymaps(self.buf_nrs)
+end
+
+function ChatWidget:_bind_stash_keymaps()
+    local keymaps = Config.keymaps.prompt
+
+    if not BufHelpers.is_keymap_disabled(keymaps.stash_send_line) then
+        BufHelpers.multi_keymap_set(
+            keymaps.stash_send_line,
+            self.buf_nrs.input,
+            function()
+                self:_stash_send_line()
+            end,
+            { desc = "Agentic: Stash-send line" }
+        )
+    end
+
+    if not BufHelpers.is_keymap_disabled(keymaps.stash_send_operator) then
+        BufHelpers.multi_keymap_set(
+            keymaps.stash_send_operator,
+            self.buf_nrs.input,
+            function()
+                ChatWidget._current_stash_widget = self
+                vim.o.operatorfunc =
+                    "v:lua.require'agentic.ui.chat_widget'._stash_operator_dispatch"
+                return "g@"
+            end,
+            {
+                desc = "Agentic: Stash-send motion",
+                expr = true,
+                silent = true,
+            }
+        )
+    end
+
+    if not BufHelpers.is_keymap_disabled(keymaps.stash_send_visual) then
+        BufHelpers.multi_keymap_set(
+            keymaps.stash_send_visual,
+            self.buf_nrs.input,
+            function()
+                self:_stash_send_visual()
+            end,
+            { desc = "Agentic: Stash-send visual" }
+        )
+    end
 end
 
 --- @return agentic.ui.ChatWidget.BufNrs
