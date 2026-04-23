@@ -160,9 +160,12 @@ Two race conditions can overwrite `self.session_id` during session restore:
    b. **Tab-id-based deferred destroy.** `ChatWidget.on_hide` schedules
       `SessionRegistry.destroy_session(tab_page_id)` via `vim.schedule` when
       `chat_history.messages` is empty. If a replacement session has been
-      installed on the same tab before that callback runs, the destroy wipes
-      the replacement by tab id. Disarm `on_hide` in `SessionManager:destroy`
-      before calling `widget:destroy()` (which triggers `hide()` → `on_hide`).
+      installed on the same tab before that callback runs, a naive
+      destroy-by-tab-id would wipe the replacement. The scheduled closure
+      captures the session instance (`this`) and only destroys when
+      `SessionRegistry.sessions[this.tab_page_id] == this` — so the replacement
+      survives. `SessionManager:destroy` also disarms `on_hide` before
+      `widget:destroy()` as belt-and-braces.
 
    c. **Stale `session/new` callback from the outgoing provider.** The
       original SessionManager's `create_session` RPC may still be in flight

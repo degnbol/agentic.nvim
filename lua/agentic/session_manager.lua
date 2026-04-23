@@ -217,9 +217,14 @@ function SessionManager:new(tab_page_id)
         if #self.chat_history.messages == 0 then
             -- Trivial session (no prompts sent) — destroy without a trace.
             -- Schedule to avoid re-entering widget:destroy() from inside hide().
+            -- Capture self so a replacement session installed on the same tab
+            -- during the schedule delay isn't wiped by destroy-by-tab-id.
+            local this = self
             vim.schedule(function()
                 local SessionRegistry = require("agentic.session_registry")
-                SessionRegistry.destroy_session(self.tab_page_id)
+                if SessionRegistry.sessions[this.tab_page_id] == this then
+                    SessionRegistry.destroy_session(this.tab_page_id)
+                end
             end)
             return
         end
@@ -2474,11 +2479,11 @@ function SessionManager:destroy()
         self._reauth_job = nil
     end
 
-    -- widget:destroy() calls hide() which fires on_hide. That handler re-enters
-    -- SessionRegistry.destroy_session via vim.schedule when messages == 0. If
-    -- a replacement session has been installed on the same tab by then
-    -- (provider-switch restore path), the scheduled destroy would wipe the
-    -- replacement instead of a no-op. Disarm before tearing down the widget.
+    -- widget:destroy() calls hide() which fires on_hide. The scheduled destroy
+    -- inside on_hide already guards against wiping a replacement session (it
+    -- checks the registry still points at `this`), but disarming is belt and
+    -- braces: avoids the schedule entirely once we know we're already
+    -- destroying, and keeps the call graph one step simpler to reason about.
     self.widget.on_hide = nil
 
     self:_cancel_session()
