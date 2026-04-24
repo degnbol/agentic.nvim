@@ -1,3 +1,4 @@
+--- List of supported ACP providers
 --- @alias agentic.UserConfig.ProviderName
 --- | "claude-acp"
 --- | "claude-agent-acp"
@@ -160,7 +161,10 @@ local ConfigDefault = {
     --- @field max_height number
     --- @field win_opts? agentic.UserConfig.WinOpts
 
-    --- @alias agentic.UserConfig.Windows.Position "right"|"left"|"bottom"
+    --- `"tab"` opens the widget in a dedicated tabpage (no file window),
+    --- closes the tab on hide. `"right"`, `"left"`, `"bottom"` split in the
+    --- current tab next to the existing windows.
+    --- @alias agentic.UserConfig.Windows.Position "right"|"left"|"bottom"|"tab"
 
     --- @class agentic.UserConfig.Windows
     --- @field position agentic.UserConfig.Windows.Position

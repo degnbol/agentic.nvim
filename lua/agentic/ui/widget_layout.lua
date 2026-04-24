@@ -9,6 +9,7 @@ local Logger = require("agentic.utils.logger")
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field focus_prompt? boolean
+--- @field position? agentic.UserConfig.Windows.Position Override `Config.windows.position` for this open. `"tab"` is handled at the `Agentic.*` dispatch level and never reaches here.
 
 --- @class agentic.ui.WidgetLayout
 local WidgetLayout = {}
@@ -233,10 +234,12 @@ local function show_layout(params, position)
         conceallevel = 0,
     })
 
+    local padding = is_bottom and 2 or 1
+
     open_or_resize_dynamic_window(buf_nrs, win_nrs, "code", {
         win = is_bottom and win_nrs.input or win_nrs.chat,
         split = "below",
-    }, Config.windows.code.max_height)
+    }, Config.windows.code.max_height, padding)
 
     local ref_win = is_bottom and (win_nrs.code or win_nrs.input)
         or win_nrs.input
@@ -244,7 +247,7 @@ local function show_layout(params, position)
     open_or_resize_dynamic_window(buf_nrs, win_nrs, "files", {
         win = ref_win,
         split = is_bottom and "below" or "above",
-    }, Config.windows.files.max_height)
+    }, Config.windows.files.max_height, padding)
 
     ref_win = is_bottom and (win_nrs.files or win_nrs.code or win_nrs.input)
         or win_nrs.input
@@ -252,7 +255,7 @@ local function show_layout(params, position)
     open_or_resize_dynamic_window(buf_nrs, win_nrs, "diagnostics", {
         win = ref_win,
         split = is_bottom and "below" or "above",
-    }, Config.windows.diagnostics.max_height)
+    }, Config.windows.diagnostics.max_height, padding)
 
     if Config.windows.todos.display then
         ref_win = is_bottom
@@ -290,9 +293,15 @@ function WidgetLayout.open(params)
         return
     end
 
-    local position = Config.windows.position
+    local position = params.position or Config.windows.position
 
-    if position ~= "right" and position ~= "left" and position ~= "bottom" then
+    if position == "tab" then
+        position = "right"
+    elseif
+        position ~= "right"
+        and position ~= "left"
+        and position ~= "bottom"
+    then
         Logger.notify(
             "Invalid windows.position config: "
                 .. tostring(position)

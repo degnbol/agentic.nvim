@@ -26,6 +26,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- Options for showing the widget
 --- @class agentic.ui.ChatWidget.ShowOpts : agentic.ui.ChatWidget.AddToContextOpts
 --- @field auto_add_to_context? boolean Automatically add current selection or file to context when opening
+--- @field position? agentic.UserConfig.Windows.Position Override `windows.position` for this call only
 
 --- A sidebar-style chat widget with multiple windows stacked vertically
 --- The main chat window is the first, and contains the width, the below ones adapt to its size
@@ -97,6 +98,7 @@ function ChatWidget:show(opts)
         buf_nrs = self.buf_nrs,
         win_nrs = self.win_nrs,
         focus_prompt = opts.focus_prompt,
+        position = opts.position,
     })
 end
 

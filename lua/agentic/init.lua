@@ -9,10 +9,78 @@ local Logger = require("agentic.utils.logger")
 --- @class agentic.Agentic
 local Agentic = {}
 
+--- Resolves the effective window position for a call.
+--- @param opts agentic.ui.ChatWidget.ShowOpts|nil
+--- @return agentic.UserConfig.Windows.Position
+local function effective_position(opts)
+    return (opts and opts.position) or Config.windows.position
+end
+
+--- Opens the widget inside a dedicated tab, creating/reusing a tab as needed.
+--- Never closes. Used by the `"tab"` position dispatch.
+--- @param opts agentic.ui.ChatWidget.ShowOpts|nil
+local function open_in_tab(opts)
+    local tab = vim.api.nvim_get_current_tabpage()
+    local existing = SessionRegistry.sessions[tab]
+    if existing and existing.widget:is_open() then
+        SessionRegistry.get_session_for_tab_page(nil, function(session)
+            session.widget:show(opts)
+        end)
+        return
+    end
+
+    local wins = vim.fn.filter(
+        vim.api.nvim_tabpage_list_wins(tab),
+        function(_, w)
+            return vim.api.nvim_win_get_config(w).relative == ""
+        end
+    )
+    local fresh = false
+    if #wins == 1 then
+        local buf = vim.api.nvim_win_get_buf(wins[1])
+        local ft = vim.bo[buf].filetype
+        fresh = ft == "dashboard"
+            or (ft == "" and vim.api.nvim_buf_get_name(buf) == "")
+    end
+    if not fresh then
+        vim.cmd("tabnew")
+    end
+    local empty_win = vim.api.nvim_get_current_win()
+
+    SessionRegistry.get_session_for_tab_page(nil, function(session)
+        local show_opts = vim.deepcopy(opts or {})
+        show_opts.auto_add_to_context = false
+        show_opts.position = nil
+        session.widget:show(show_opts)
+        if vim.api.nvim_win_is_valid(empty_win) then
+            local ebuf = vim.api.nvim_win_get_buf(empty_win)
+            pcall(vim.api.nvim_win_close, empty_win, true)
+            pcall(vim.api.nvim_buf_delete, ebuf, { force = true })
+        end
+    end)
+end
+
+--- Hides the widget on the current tab and closes the tab if no other
+--- windows remain.
+local function close_tab()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local session = SessionRegistry.sessions[tab]
+    if session and session.widget:is_open() then
+        session.widget:hide()
+        if #vim.api.nvim_tabpage_list_wins(tab) <= 1 then
+            vim.cmd("tabclose")
+        end
+    end
+end
+
 --- Opens the chat widget for the current tab page
 --- Safe to call multiple times
 --- @param opts agentic.ui.ChatWidget.ShowOpts|nil
 function Agentic.open(opts)
+    if effective_position(opts) == "tab" then
+        return open_in_tab(opts)
+    end
+
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         if not opts or opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()
@@ -64,6 +132,10 @@ end
 --- Safe to call multiple times
 --- @param opts agentic.ui.ChatWidget.ShowOpts|nil
 function Agentic.toggle(opts)
+    if effective_position(opts) == "tab" then
+        return Agentic.toggle_tab(opts)
+    end
+
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         if session.widget:is_open() then
             session.widget:hide()
@@ -79,38 +151,14 @@ end
 
 --- Toggle in a dedicated tab: opens a new tab for agentic, closes the tab on
 --- toggle-off when only the agentic window remains. Reuses dashboard/empty tabs.
-function Agentic.toggle_tab()
+--- @param opts agentic.ui.ChatWidget.ShowOpts|nil
+function Agentic.toggle_tab(opts)
     local tab = vim.api.nvim_get_current_tabpage()
     local session = SessionRegistry.sessions[tab]
     if session and session.widget:is_open() then
-        session.widget:hide()
-        -- Close the tab if only 1 window remains (the empty one after hiding)
-        if #vim.api.nvim_tabpage_list_wins(tab) <= 1 then
-            vim.cmd("tabclose")
-        end
+        close_tab()
     else
-        -- Reuse current tab if it's just a dashboard or empty buffer
-        local wins = vim.fn.filter(
-            vim.api.nvim_tabpage_list_wins(tab),
-            function(_, w)
-                return vim.api.nvim_win_get_config(w).relative == ""
-            end
-        )
-        local buf = vim.api.nvim_win_get_buf(wins[1])
-        local ft = vim.bo[buf].filetype
-        local fresh = #wins == 1
-            and (ft == "dashboard" or (ft == "" and vim.fn.bufname(buf) == ""))
-        if not fresh then
-            vim.cmd("tabnew")
-        end
-        local empty_win = vim.api.nvim_get_current_win()
-        Agentic.open({ auto_add_to_context = false })
-        -- Close the leftover empty window so agentic fills the tab
-        if vim.api.nvim_win_is_valid(empty_win) then
-            local ebuf = vim.api.nvim_win_get_buf(empty_win)
-            pcall(vim.api.nvim_win_close, empty_win, true)
-            pcall(vim.api.nvim_buf_delete, ebuf, { force = true })
-        end
+        open_in_tab(opts)
     end
 end
 
@@ -193,6 +241,10 @@ function Agentic.new_session(opts)
 
     local session = SessionRegistry.new_session()
     if session then
+        if effective_position(opts) == "tab" then
+            open_in_tab(opts)
+            return
+        end
         if not opts or opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()
         end

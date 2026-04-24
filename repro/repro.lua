@@ -8,16 +8,17 @@ local plugin_root =
     vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h")
 vim.opt.rtp:prepend(plugin_root)
 
-require("agentic").setup({})
+require("agentic").setup({
+    windows = { position = "tab" },
+})
 
-vim.keymap.set({ "n", "v", "i" }, "<C-\\>", function()
-    require("agentic").toggle()
-end, { desc = "Agentic toggle", silent = true })
-
-vim.keymap.set({ "n", "v" }, "<C-'>", function()
-    require("agentic").add_selection_or_file_to_context()
-end, { desc = "Agentic add selection/file", silent = true })
-
-vim.keymap.set({ "n", "v", "i" }, "<C-,>", function()
-    require("agentic").new_session()
-end, { desc = "Agentic new session", silent = true })
+-- Defer via vim.schedule: plain VimEnter fires before the rest of startup
+-- completes, and windows opened there race with neovim's post-VimEnter tail.
+vim.api.nvim_create_autocmd("VimEnter", {
+    once = true,
+    callback = function()
+        vim.schedule(function()
+            require("agentic").open({ auto_add_to_context = false })
+        end)
+    end,
+})
