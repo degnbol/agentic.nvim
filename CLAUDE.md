@@ -55,6 +55,11 @@ Log paths: `.local/agentic_{format,luals,selene,test}_output.log`
 - `lua/agentic/theme.lua` — highlight groups (update README.md when adding new ones)
 - `lua/agentic/acp/adapters/` — provider-specific adapters
 
+## Session cache location
+
+Persisted chat sessions: `~/.cache/nvim/agentic/sessions/<normalized-cwd>_<hash>/<session-id>.json`.
+Grep by `"title":"<name>"` to find a session renamed via `/rename` across all projects.
+
 ## Tool call block rendering
 
 Border decorations (╭─ │ ╰─) use `sign_text` extmarks in the sign column, not
