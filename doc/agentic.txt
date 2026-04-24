@@ -617,19 +617,43 @@ Same feature, different behaviour:
 
 TUI features this plugin does not currently provide:
 
+Workflow commands ~
 - `/diff` interactive diff viewer across uncommitted changes and per-turn
   diffs. The plugin only renders per-edit diffs at the tool-call level.
 - `/rewind` conversation checkpoints.
+- `/branch` forks the current conversation.
+- `/teleport` pulls in a web session.
+- `/review` pull-request review.
+- `/security-review` security review of pending changes.
+- `/init` generates a project `CLAUDE.md`.
+- Background jobs.
+- Queued messages while generating. Text typed into the input buffer
+  during a response is not sent when the current turn completes. See
+  `TODO.md` for the known limitation around resume.
+
+Interactive management UIs ~
 - `/permissions` interactive rule editor. ACP has no protocol surface
   for reading or writing persistent permission rules. Edit
   `~/.claude/settings.json` (or `.claude/settings.json`) directly.
+- `/agents` subagent management (list, create, edit, delete).
+- `/skills` skill management.
+- `/mcp` MCP-server management.
+- `/config` interactive config editor.
+- `/doctor` installation health check.
+- `/login`, `/logout` authentication flow.
+- `/status` session status display.
+- `/cost`, `/stats`, `/usage` usage and cost readouts.
+- `/bug` bug reporter.
+
+Runtime controls ~
 - `/effort` dynamic thought-level control. The ACP schema reserves
   `thought_level` as a config-option category but claude-agent-acp does
   not emit it — the plugin's dispatch code path is ready but unreachable
   until the bridge changes.
-- `/branch` to fork the current conversation.
-- `/teleport` to pull in a web session.
-- Background jobs.
+
+Input ~
+- PDF attachments. The plugin supports image drag-and-drop (see
+  |agentic-config-image_paste|) but not PDF uploads.
 
 ==============================================================================
 vim:tw=78:ft=help:norl:
