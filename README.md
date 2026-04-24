@@ -10,6 +10,7 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 
 - Bash-formatted shell commands (`shfmt` + treesitter injection)
 - Grep/search output colouring — paths, line numbers, separators, match highlights
+- Markdown tables aligned column-by-column
 - Diff preview for edits (inline or split, `]c`/`[c` to navigate hunks)
 - Fold markers for long tool output (`zo`/`zc`/`za`)
 - Sign-column block decorations
