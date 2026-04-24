@@ -1,173 +1,259 @@
-- **Error display**: Currently errors are shown inline in the chat buffer with
-  red highlighting (`AgenticErrorHeading`/`AgenticErrorBody`). A future option
-  could use neovim's native error display (`vim.notify`, `vim.diagnostic`, or a
-  floating window) instead of or in addition to the inline chat display. This is
-  a matter of user preference — some may want errors in the editor, others in
-  the chat. Could be a config toggle (e.g.
-  `error_display = "chat" | "notify" | "both"`).
+# TODO
 
-- **Streaming performance**: Large tool call outputs (e.g. long file reads) can
-  cause visible lag when writing to the chat buffer. Investigate.
+## Bugs
 
-- **Session completion heuristic**: Some sessions are more clearly completed
-  than others. If the user prompt is last, the session is not completed. If it
-  ends in a commit etc., it probably is. Detection is heuristic, but we could
-  use a specific close keymap (instead of `:qa!`) to mark a session for archive.
-  Useful for resume: easily resume only unfinished work (or browse the archive
-  specifically).
+### Rendering
 
-- **Fold marker not closed**: Rare issue where a fold marker (`{{{`) is inserted
-  but the closing marker (`}}}`) is missing, causing everything from that point
-  to the end of the chat buffer to be folded into a single fold.
+- **Markdown formatting leak**: md formatting leaks from chat blocks since we
+  often write directly to chat without protection. E.g. `##` in a prompt
+  injects a heading. Same happens with colours breaking in rare cases from the
+  ACP's side. Fix: always put contents in a protected block, or detect special
+  characters before pasting and protect more targeted.
 
-- **Syntax highlighting overflow**: Rare issue where treesitter syntax highlighting
-  from a previous block bleeds into the permission prompt, colouring parts of it
-  incorrectly.
+- **Markdown table column alignment**: subtle misalignment when the table is
+  wider than the chat buffer *and* there's conceal involved on a row, visible
+  as we scroll. `conceallevel=2` hides e.g. ticks `` ``` ``, but when scrolled
+  out of view they are not concealed anymore. A fix besides `conceallevel=1`
+  might be extmark/virtual text tricks, or an autocommand updating visuals on
+  scroll (probably overkill).
 
-- **TUI parity**: Provide local intercepts or closest-match implementations for
-  TUI commands/features the ACP bridge doesn't expose. See
-  `|agentic-vs-tui-missing|` in `doc/agentic.txt` for the full list
-  (`/diff`, `/rewind`, `/branch`, `/teleport`, `/effort`, background jobs)
-  plus `/stats` and `/usage`. `/effort` is blocked upstream: claude-agent-acp
-  0.29.0 does not emit the `thought_level` ConfigOption; see
-  `lua/agentic/acp/AGENTS.md` § "`thought_level` ConfigOption not emitted
-  (claude-agent-acp)". `/permissions` has no ACP surface and is out of scope.
+- **Fold marker not closed**: rare issue where a fold marker (`{{{`) is
+  inserted but the closing marker (`}}}`) is missing, causing everything from
+  that point to the end of the chat buffer to be folded into a single fold.
 
-- **Info keymap**: Opening a window with session info: model, context use,
-  prompt count, proximity to limits. Freer format than the slash commands since
-  it's not bound to TUI parity.
+- **Syntax highlighting overflow**: rare issue where treesitter syntax
+  highlighting from a previous block bleeds into the permission prompt,
+  colouring parts of it incorrectly.
 
-- **Shebang/modeline detection for Edit tool previews**: In some cases with the
-  Edit tool used on a script the script might not have a file extension but still
-  has a shebang (or even a vim modeline) indicating filetype. Should we support
-  this as well in chat when displaying the code injection preview? It's not a
-  common case.
+- **Fetch shows wrong title**: the format varies. Probably need to reproduce
+  the issue unless we can do something more stable/clever in how that task is
+  presented in chat.
 
-- **Markdown formatting leak**: In some cases md formatting leaks from chat
-  blocks since we are often writing directly to chat without protection, e.g. I
-  can write `##` in a prompt and that way inject a block directly. Same happens
-  with colors breaking in rare cases from the ACP's side. So the fix: I think we
-  need to either always put the contents in a protected block, or detect special
-  characters before pasting in chat and then protect more targeted.
+### Streaming / performance
 
-- **Clean environment testing**: For proper sharing of this plugin we need to see
-  it in action with `nvim --clean` plus plugin.
+- **Large tool call outputs** (e.g. long file reads) can cause visible lag
+  when writing to the chat buffer. Investigate.
 
-- **README demos**: We need gifs in the readme or elsewhere demoing the
-  differences between this plugin and the stock TUI.
+### Interactions
 
-- **Manual code review**: This repo is heavily vibe-coded.
+- **Ctrl-c behaviour**: while claude is writing prose, ctrl-c works — it
+  stops claude completely. While claude prompts for allow for editing a file,
+  ctrl-c rejects, but then claude starts thinking and gives a response like
+  "I was trying to do x and since I couldn't here's the instructions for you
+  to do it". Intended behaviour: ctrl-c stops and blocks claude fully in all
+  scenarios (but not persistent stopping based on task etc.). The numbered
+  options are for other reject behaviours.
 
-- **Message queuing during resume**: Queuing a message doesn't work while waiting
-  for a slow resume.
+- **Message queuing during resume**: queuing a message doesn't work while
+  waiting for a slow resume.
 
-- **Edit tool preview folding**: Long Edit tool previews need folding mechanism.
-  E.g. not folded by default but `zc` works.
+- **Command queuing**: `/compact\nContinue` should fire `/compact` correctly
+  (it doesn't), and then fire `Continue` when compaction is complete.
+  Essentially work as if the user prompts `/compact` and then a moment later
+  the rest.
 
-- **Ctrl-c behaviour**: Ctrl-c doesn't work as intended. While claude is
-  writing prose to chat it works great: it stops claude completely. While claude
-  prompts for allow for editing a file, ctrl-c rejects, but then claude will
-  start thinking and does a dumb response saying "I was trying to do x and
-  since I couldn't here's the instructions for you to do it". Intended behaviour:
-  ctrl-c stops and blocks claude fully in all scenarios (but not persistent
-  stopping based on task etc.). The numbered options are for other reject
-  behaviours.
-
-- **Edited files window**: In the original agentic.nvim before forking there was
-  a window for listing edited files. I removed this to save screen space, there
-  might be relevant code still around, otherwise there would be code for
-  inspiration in the forked repo. To still save space it can be removed with the
-  usual `:q` and accessed with a localLeader keymap. I think it could be useful
-  to have an improved version, by taking advantage of other work we have done
-  for tracking line range edits by claude vs other for each file. A quickfix
-  menu might be useful, but I wonder about having that while we also use it for
-  resume. And if there's multiple edits in a file the qf would have to have
-  multiple entries per file.
-
-- **Persistent undo integration**: Opening a file in neovim allows for undo
-  since we have persistent undo file. Could we (optionally) integrate this
-  plugin with that? So a user can go through the edit history from claude with
-  `u`.
-
-- **Resume after compacting**: Resume right after compacting doesn't show
+- **Resume after compacting**: resume right after compacting doesn't show
   history from before compacting, just the compacting summary. Both would be
   ideal.
 
-- **Trust system glob patterns**: Does the `/trust` system work with the glob
-  pattern using `~/`, relative and abs folders?
+### OpenCode adapter
 
-- **Command queuing**: Allow for queing commands, e.g. `/compact\nContinue`
-  should fire `/compact` correctly (it doesn't), and then fire `Continue` when
-  compaction is complete. Essentially work as if user prompts `/compact` and
-  then a moment later the rest.
+Several issues cluster here; suggests work done for claude wasn't generalised
+to all ACPs.
 
-- **Markdown table column alignment**: Markdown table column alignment has a
-  subtle misalignment issue. If the whole table is visible in the width of the
-  chat buffer it looks fine, but if the table is wider and we scroll sideways
-  only showing part of the table AND there's conceal involved on a row the
-  columns gets slightly misaligned *as we scroll* since the conceal with
-  `conceallevel=2` hides e.g. ticks `...`, but when we scroll and they are out
-  of view they are not concealed (removed) anymore. I'm not sure if there is a
-  fix besides using `conceallevel=1`. Have some elaborate autocommand that
-  updates the visual on scroll events would be overkill. There might be some
-  extmark/virtual text tricks that can help.
+- **`todowrite` shown in chat**: opencode (not claude) shows the todo
+  operation in chat as raw JSON:
+  ```json
+  [
+    {
+      "priority": "high",
+      "content": "Rename config keys: stash_send_* → send_*, stash_register → send_register",
+      "status": "in_progress"
+    }
+  ]
+  ```
+  Should be hidden — the todo window already shows this. The JSON does reveal
+  `priority`, which could be added to the todo window. Opencode also writes
+  the whole todo list on every change; we could diff and have chat mention
+  only the changed item so the history shows which items were crossed out
+  when. Robust corner cases: what if the edit adds an item, or undoes a
+  crossed-out item.
 
-- **Typo in /trust**: Writing `/trust heree` (typo) goes through. Maybe just
-  adding completion would help?
+- **Pending vs `in_progress`**: while waiting for approval opencode shows
+  the suggested edit with `in_progress` where claude shows `pending`. Should
+  be pending — the command is not in progress.
 
-- [bug] Fetch sometimes shows the wrong title. The format varies. I probably need to 
-  reproduce the issue unless we can do something more stable/clever in how that 
-  task is presented in chat.
+- **Failed edit reported as completed**: an Edit that fails with `Not
+  found: function …` doesn't have the expected error colour and shows
+  `completed` status:
+  ```
+  ### Edit
+  `lua/agentic/ui/chat_widget.lua`
+  ```lua
+  Not found: function ChatWidget:_stash_send_visual() ...
+  ```
+   ✔ completed
+  ```
 
-- We wrote auto-switch provider and model code for resume because it fails otherwise.
-  But would it be possible to resume a session with a different model and even a different provider?
+- **Search command doesn't show the term**:
+  ```
+  ### Search
+  ```bash
+  grep
+  ```
+  ```
+  No search pattern visible in the argument.
 
-- `todowrite` from opencode (and not from claude) shows the todo operation in chat. Something like:
-```markdown
-[
-{
-"priority": "high",
-"content": "Rename config keys: stash_send_* → send_*, stash_register → send_register",
-"status": "in_progress"
-},
-...
-```
-This should be hidden, we can see the todo in the todo window. It does reveal 
-priority, which is interesting and could be considered for additional info for 
-the todo window. Regardless, the first step is making sure we don't get this 
-clutter in chat.
-I realise it also does this todowrite every time it makes a change, e.g. cross 
-out an item. The write seems to be whole todo list. We could do a diff in that 
-case and let the chat just mention the changed item so the chat will show clear 
-history of which item was crossed out when. Obviously we have to write this in 
-a robust way, e.g. what happens if it doesn't cross out, but edits by adding an 
-item? Or the edit is undoing a crossed out item?
+- **Default mode leaks to incline**: opencode's default mode is `build`.
+  It should be hidden from the header state pushed to incline and be implied.
 
-- While waiting for approval opencode shows the edit it's suggested with 
-in_progress where claude shows pending. It should show pending, the command is 
-not in progress.
-A few other things seems to be reported differently from opencode. E.g. I saw in chat:
+- **Ctrl-c adds an error block**: interrupting shows this in chat:
+  ```markdown
+  ### Error
 
-### Edit
-`lua/agentic/ui/chat_widget.lua`
-```lua
-Not found: function ChatWidget:_stash_send_visual() ...
-```
- ✔ completed
+  stopReason: end_turn
+  usage: input=0 output=0 total=0
+  ```
+  Shouldn't appear after a manual interrupt.
 
-So the Not found doesn't have the expected error color and it implies the Edit failed, yet it shows "completed" status.
-I also see a Search that doesn't seem to show the term searched for:
+- **Compound command splitting not applied**: opencode doesn't get the
+  benefit of our compound-command matching (or its settings don't reach the
+  ACP side). E.g.:
+  ```bash
+  cd /tmp/opencode && \
+  grep -r "rawInput" --include="*.ts" --include="*.tsx" |
+  grep -v test |
+  grep -v node_modules |
+  head -20
+  ```
+  Doesn't auto-allow.
+
+- **Parallel tasks not showing in chat**: previously fixed for claude, now
+  reappearing for opencode. Audit claude-specific fixes for ones that should
+  have been general across adapters.
 
 
-### Search
-```bash
-grep
-```
-```console
-Found 1 matches
-/Users/cmadsen/dotfiles/config/nvim/modules/agentic.nvim/lua/agentic/ui/chat_widget.lua:
-Line 672:     self:_bind_stash_keymaps()
+## Feature ideas
 
-```
- ✔ completed
-Also, the default mode for opencode is "build", so that mode should also be hidden from the text sent to incline and be implied.
+### TUI parity — missing slash commands
+
+Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
+
+**Worth doing**
+
+- **`/init`, `/review`, `/security-review`**: if claude-agent-acp forwards
+  these via `available_commands_update`, they work today; verify before
+  implementing. If not, add as local intercepts that inject the canned
+  prompt text.
+
+- **Queued messages while generating**: the TUI lets you type during a
+  response; on turn completion the next prompt fires automatically. Bugs
+  section has the resume-specific failure; the general feature is absent.
+
+- **Info window** (merges with **`/status`**, **`/cost`**, **`/stats`**,
+  **`/usage`**): session info showing model, provider, mode, context %,
+  prompt count, accumulated token usage, proximity to limits. Data is
+  already in `usage_update` notifications plus local state. Freer format
+  than the TUI commands since not bound to parity — one window, multiple
+  views.
+
+**Maybe**
+
+- **`/bug`**: open a browser to the upstream issue tracker with environment
+  info prefilled. Trivial if we settle on one URL per provider.
+
+- **PDF attachments**: the plugin supports image paste (see `image_paste`
+  config). PDF support depends on provider capability advertised through
+  ACP.
+
+- **Background jobs**: requires a way to surface background state in the
+  UI. Revisit if a concrete use case emerges.
+
+**Blocked or out of scope**
+
+- **`/effort`**: claude-agent-acp 0.29.0 does not emit the `thought_level`
+  ConfigOption. Dispatch code is ready, unreachable until the bridge
+  changes. See `lua/agentic/acp/AGENTS.md §
+  "thought_level ConfigOption not emitted (claude-agent-acp)"`.
+
+- **`/permissions`**: no ACP surface for reading or writing persistent
+  rules. Users edit `settings.json` directly.
+
+- **`/agents`, `/skills`**: management UIs for files on disk. Users edit
+  directly.
+
+- **`/mcp`, `/config`, `/doctor`, `/login`, `/logout`**: TUI infrastructure
+  without ACP surface.
+
+- **`/diff`, `/rewind`, `/branch`, `/teleport`**: provider-level features
+  or conversation state primitives not exposed through ACP.
+
+### Rendering
+
+- **Shebang/modeline detection for Edit tool previews**: scripts without a
+  file extension but with a shebang (or vim modeline) should infer filetype
+  for code injection preview in chat. Not a common case.
+
+- **Edit tool preview folding**: long Edit tool previews need a folding
+  mechanism — not folded by default but `zc` works.
+
+- **Strike-through for completed todo items**: opt-out config option.
+
+### Session / workflow
+
+- **Edited files window**: the original agentic.nvim had a window listing
+  edited files; removed to save screen space. Could reinstate with `:q`
+  closing and a `<localLeader>` keymap to reopen. Improved version: use
+  the line-range edit tracking (claude-owned vs other) we already have per
+  file. A quickfix menu could work (multiple entries per file for multiple
+  edits) but conflicts with resume's quickfix use.
+
+- **Persistent undo integration**: opening a file in neovim allows for undo
+  via the persistent undo file. Optionally integrate so a user can step
+  through the edit history from claude with `u`.
+
+- **Session completion heuristic**: some sessions are more clearly completed
+  than others. If the user prompt is last, the session is not completed.
+  If it ends in a commit etc., it probably is. Detection is heuristic;
+  alternatively a specific close keymap (instead of `:qa!`) could mark a
+  session for archive. For resume: list only unfinished work, or browse
+  the archive specifically.
+
+- **Cross-model / cross-provider resume**: auto-switch on resume is
+  implemented because resume fails otherwise. Is it possible to resume a
+  session with a different model, and even a different provider, on
+  purpose?
+
+### Permissions
+
+- **`/trust` completion and typo tolerance**: `/trust heree` goes through.
+  Completion for subcommands (`repo`, `here`, `off`) would prevent typos.
+
+- **`/trust` glob coverage**: verify the `/trust` system works with glob
+  patterns using `~/`, relative paths, and absolute folders.
+
+### Error display
+
+- Errors are currently shown inline in the chat buffer with red highlighting
+  (`AgenticErrorHeading`/`AgenticErrorBody`). A future option could use
+  neovim's native error display (`vim.notify`, `vim.diagnostic`, or a
+  floating window) instead of or in addition. Config toggle:
+  `error_display = "chat" | "notify" | "both"`.
+
+
+## Investigations
+
+- **Claude internals reference**: use the claude leak shared by Matteo on
+  gdrive so we do less guessing about claude internals for dev of this
+  plugin.
+
+- **Manual code review**: this repo is heavily vibe-coded.
+
+
+## Housekeeping
+
+- **Clean environment testing**: for proper sharing of this plugin we need
+  to see it in action with `nvim --clean` plus plugin.
+
+- **README demos**: gifs in the readme or elsewhere demoing the differences
+  between this plugin and the stock TUI.
