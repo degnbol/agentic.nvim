@@ -141,35 +141,38 @@ Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
 
 **Worth doing**
 
-- **`/init`, `/review`, `/security-review`**: if claude-agent-acp forwards
-  these via `available_commands_update`, they work today; verify before
-  implementing. If not, add as local intercepts that inject the canned
-  prompt text.
+- **Session dashboard** — a dedicated window (*not* `:checkhealth`,
+  which is reserved for setup validation) showing live session runtime
+  state: model, provider, mode, context %, prompt count, accumulated
+  input/output token usage, proximity to limits. Data is already in
+  `usage_update` notifications plus local session state. Subsumes the
+  TUI's `/status`, `/cost`, `/stats`, `/usage` — none of which are
+  forwarded over ACP.
 
-- **Queued messages while generating**: the TUI lets you type during a
-  response; on turn completion the next prompt fires automatically. Bugs
-  section has the resume-specific failure; the general feature is absent.
+**Already works — just undocumented**
 
-- **Info window** (merges with **`/status`**, **`/cost`**, **`/stats`**,
-  **`/usage`**): session info showing model, provider, mode, context %,
-  prompt count, accumulated token usage, proximity to limits. Data is
-  already in `usage_update` notifications plus local state. Freer format
-  than the TUI commands since not bound to parity — one window, multiple
-  views.
+Verified via a live `available_commands_update` probe of claude-agent-acp:
+these commands forward through and the plugin does not intercept them,
+so typing them in the input buffer runs the TUI flow via the LLM.
+
+- **`/init`** — generates a project `CLAUDE.md`.
+- **`/review`** — pull-request review.
+- **`/security-review`** — security review of pending changes.
+- **`/compact`**, **`/extra-usage`**, **`/insights`**,
+  **`/team-onboarding`**, **`/heapdump`** — all forwarded.
+
+Action: mention these in README/docs so users know they work.
 
 **Maybe**
-
-- **`/bug`**: open a browser to the upstream issue tracker with environment
-  info prefilled. Trivial if we settle on one URL per provider.
 
 - **PDF attachments**: the plugin supports image paste (see `image_paste`
   config). PDF support depends on provider capability advertised through
   ACP.
 
-- **Background jobs**: requires a way to surface background state in the
+- **Background jobs**: would require surfacing background state in the
   UI. Revisit if a concrete use case emerges.
 
-**Blocked or out of scope**
+**Blocked upstream or out of scope**
 
 - **`/effort`**: claude-agent-acp 0.29.0 does not emit the `thought_level`
   ConfigOption. Dispatch code is ready, unreachable until the bridge
@@ -179,14 +182,18 @@ Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
 - **`/permissions`**: no ACP surface for reading or writing persistent
   rules. Users edit `settings.json` directly.
 
-- **`/agents`, `/skills`**: management UIs for files on disk. Users edit
-  directly.
+- **`/cost`, `/login`, `/logout`**: explicitly filtered out by the bridge
+  (`UNSUPPORTED_COMMANDS` in `getAvailableSlashCommands`).
 
-- **`/mcp`, `/config`, `/doctor`, `/login`, `/logout`**: TUI infrastructure
-  without ACP surface.
+- **`/status`, `/stats`, `/usage`, `/doctor`, `/mcp`, `/agents`,
+  `/skills`, `/config`, `/bug`, `/memory`, `/hooks`, `/bashes`,
+  `/pr-comments`, `/vim`, `/ide`**: not advertised by the bridge at all
+  (verified absent from `available_commands_update`). These rely on TUI
+  interactive I/O that doesn't map to the ACP chat stream. A **Session
+  dashboard** (above) would cover the runtime-state subset.
 
 - **`/diff`, `/rewind`, `/branch`, `/teleport`**: provider-level features
-  or conversation state primitives not exposed through ACP.
+  or conversation-state primitives not exposed through ACP.
 
 ### Rendering
 
@@ -200,6 +207,9 @@ Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
 - **Strike-through for completed todo items**: opt-out config option.
 
 ### Session / workflow
+
+- **Session dashboard**: see TUI parity above — runtime state (model,
+  provider, mode, context %, token usage, limit proximity) in one window.
 
 - **Edited files window**: the original agentic.nvim had a window listing
   edited files; removed to save screen space. Could reinstate with `:q`

@@ -18,6 +18,35 @@ claude-agent-acp (acp-agent.js)
        +-- Skills system (conditional/unconditional)
 ```
 
+## Probing advertised slash commands
+
+The bridge's `getAvailableSlashCommands` (`dist/acp-agent.js`) filters the
+SDK's command list through a hardcoded `UNSUPPORTED_COMMANDS` block list
+(`cost`, `keybindings-help`, `login`, `logout`, `output-style:new`,
+`release-notes`, `todos`) before emitting `available_commands_update`.
+Many TUI commands (`/doctor`, `/mcp`, `/agents`, `/skills`, `/status`,
+`/config`, `/bug`, `/stats`, `/usage`, `/memory`, `/hooks`, `/bashes`,
+`/pr-comments`, `/vim`, `/ide`) are not advertised to ACP at all — the
+SDK's `supportedCommands()` simply does not return them in this context.
+
+To list what's actually forwarded in the current `claude-agent-acp`
+version, pipe an `initialize` + `session/new` pair into the bridge and
+parse the first `available_commands_update` notification:
+
+```sh
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}'
+  sleep 0.8
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}'
+  sleep 6
+} | claude-agent-acp
+```
+
+Each line is a JSON-RPC message. The `available_commands_update` entry
+contains `params.update.availableCommands` — a list of `{name,
+description, input}` objects. Re-run after bumping the bridge to catch
+newly added or removed commands.
+
 ## Session creation via _meta passthrough
 
 `session/new` and `session/load` accept `_meta.claudeCode.options` which is

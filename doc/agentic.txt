@@ -623,13 +623,12 @@ Workflow commands ~
 - `/rewind` conversation checkpoints.
 - `/branch` forks the current conversation.
 - `/teleport` pulls in a web session.
-- `/review` pull-request review.
-- `/security-review` security review of pending changes.
-- `/init` generates a project `CLAUDE.md`.
 - Background jobs.
-- Queued messages while generating. Text typed into the input buffer
-  during a response is not sent when the current turn completes. See
-  `TODO.md` for the known limitation around resume.
+
+`/init`, `/review`, `/security-review`, `/compact`, `/extra-usage`,
+`/insights`, and `/team-onboarding` are forwarded by claude-agent-acp
+via `available_commands_update` and work transparently — type them in
+the input buffer. They appear in slash-command completion.
 
 Interactive management UIs ~
 - `/permissions` interactive rule editor. ACP has no protocol surface
@@ -644,6 +643,11 @@ Interactive management UIs ~
 - `/status` session status display.
 - `/cost`, `/stats`, `/usage` usage and cost readouts.
 - `/bug` bug reporter.
+- `/memory`, `/hooks`, `/bashes`, `/pr-comments`, `/vim`, `/ide`.
+
+All of the above are either filtered out by the bridge
+(`/cost`, `/login`, `/logout`) or simply not advertised by it,
+verified via `available_commands_update` probe.
 
 Runtime controls ~
 - `/effort` dynamic thought-level control. The ACP schema reserves
