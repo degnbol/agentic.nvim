@@ -88,14 +88,23 @@ end
 --- @param bufnr integer
 --- @param callback fun():any
 --- @param opts vim.keymap.set.Opts|nil
-function BufHelpers.multi_keymap_set(keymaps, bufnr, callback, opts)
+--- @param default_mode? string|string[] Mode for bare-string entries when no explicit mode (default "n")
+function BufHelpers.multi_keymap_set(
+    keymaps,
+    bufnr,
+    callback,
+    opts,
+    default_mode
+)
     if type(keymaps) == "string" then
         keymaps = { keymaps }
     end
 
+    default_mode = default_mode or "n"
+
     for _, key in ipairs(keymaps) do
         --- @type string|string[]
-        local modes = "n"
+        local modes = default_mode
         --- @type string
         local keymap
 
