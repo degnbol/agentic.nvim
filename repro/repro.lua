@@ -1,50 +1,23 @@
-vim.env.LAZY_STDPATH = "../lazy_repro"
+-- Minimal config to reproduce agentic.nvim bugs on a clean neovim.
+-- Run from the agentic.nvim repo root:
+--   nvim --clean -u repro/repro.lua
+-- `--clean` excludes user dirs from 'runtimepath' so your own config
+-- does not interfere.
 
-load(
-    vim.fn.system(
-        "curl -s https://raw.githubusercontent.com/folke/lazy.nvim/main/bootstrap.lua"
-    )
-)()
+local plugin_root =
+    vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h")
+vim.opt.rtp:prepend(plugin_root)
 
-require("lazy.minit").repro({
-    spec = {
-        {
-            name = "agentic.nvim",
-            dir = vim.fn.fnamemodify(vim.uv.cwd() or "", ":h"),
+require("agentic").setup({})
 
-            opts = {},
+vim.keymap.set({ "n", "v", "i" }, "<C-\\>", function()
+    require("agentic").toggle()
+end, { desc = "Agentic toggle", silent = true })
 
-            keys = {
-                {
-                    "<C-\\>",
-                    function()
-                        require("agentic").toggle()
-                    end,
-                    desc = "Agentic Open",
-                    silent = true,
-                    mode = { "n", "v", "i" },
-                },
+vim.keymap.set({ "n", "v" }, "<C-'>", function()
+    require("agentic").add_selection_or_file_to_context()
+end, { desc = "Agentic add selection/file", silent = true })
 
-                {
-                    "<C-'>",
-                    function()
-                        require("agentic").add_selection_or_file_to_context()
-                    end,
-                    desc = "Agentic Add Selection to context",
-                    silent = true,
-                    mode = { "n", "v" },
-                },
-
-                {
-                    "<C-,>",
-                    function()
-                        require("agentic").new_session()
-                    end,
-                    desc = "Agentic New Session",
-                    silent = true,
-                    mode = { "n", "v", "i" },
-                },
-            },
-        },
-    },
-})
+vim.keymap.set({ "n", "v", "i" }, "<C-,>", function()
+    require("agentic").new_session()
+end, { desc = "Agentic new session", silent = true })
