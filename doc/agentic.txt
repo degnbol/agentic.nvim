@@ -35,8 +35,9 @@ CONTENTS                                                    *agentic-contents*
    12. Comparison with Claude TUI ............ |agentic-vs-tui|
        12.1 Additions ........................ |agentic-vs-tui-additions|
        12.2 ACP patches ...................... |agentic-vs-tui-patches|
-       12.3 Behaviour differences ............ |agentic-vs-tui-diffs|
-       12.4 Not available .................... |agentic-vs-tui-missing|
+       12.3 Forwarded transparently .......... |agentic-vs-tui-forwarded|
+       12.4 Behaviour differences ............ |agentic-vs-tui-diffs|
+       12.5 Not available .................... |agentic-vs-tui-missing|
 
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
@@ -601,7 +602,26 @@ gap-fills, not additions over the TUI:
   suggestions.
 
 ------------------------------------------------------------------------------
-12.3 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
+12.3 FORWARDED TRANSPARENTLY                     *agentic-vs-tui-forwarded*
+
+Claude TUI commands advertised by claude-agent-acp via
+`available_commands_update` and not intercepted by the plugin. Type them
+in the input buffer; they appear in slash-command completion.
+
+- `/init` — generate a project `CLAUDE.md`.
+- `/review` — pull-request review.
+- `/security-review` — security review of pending changes.
+- `/compact` — summarise and compact conversation history.
+- `/extra-usage` — configure extra usage when limits hit.
+- `/insights` — session analysis report.
+- `/team-onboarding` — teammate-ramp guide.
+- `/heapdump` — dump JS heap for bridge debugging.
+
+Provider-specific. Re-verify with the probe in
+`.claude/skills/acp/references/claude-agent.md` after bridge upgrades.
+
+------------------------------------------------------------------------------
+12.4 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
 
 Same feature, different behaviour:
 
@@ -613,7 +633,7 @@ Same feature, different behaviour:
   and can be toggled off at runtime (|agentic-config-auto_scroll|).
 
 ------------------------------------------------------------------------------
-12.4 NOT AVAILABLE                                  *agentic-vs-tui-missing*
+12.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*
 
 TUI features this plugin does not currently provide:
 
@@ -624,11 +644,6 @@ Workflow commands ~
 - `/branch` forks the current conversation.
 - `/teleport` pulls in a web session.
 - Background jobs.
-
-`/init`, `/review`, `/security-review`, `/compact`, `/extra-usage`,
-`/insights`, and `/team-onboarding` are forwarded by claude-agent-acp
-via `available_commands_update` and work transparently — type them in
-the input buffer. They appear in slash-command completion.
 
 Interactive management UIs ~
 - `/permissions` interactive rule editor. ACP has no protocol surface
