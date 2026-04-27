@@ -305,47 +305,52 @@ function M._make_handlers()
                     },
                 })
             elseif method == "textDocument/completion" then
-                local bufnr = vim.api.nvim_get_current_buf()
-                local line = params.position.line
-                local col = params.position.character
-                local lines =
-                    vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)
+                -- Defer the callback so the client handler (e.g. vim's
+                -- built-in vim.lsp.completion → complete()) runs outside
+                -- the <C-x><C-o> textlock that would otherwise raise E565.
+                vim.schedule(function()
+                    local bufnr = vim.api.nvim_get_current_buf()
+                    local line = params.position.line
+                    local col = params.position.character
+                    local lines =
+                        vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)
 
-                if #lines == 0 then
-                    callback(nil, { isIncomplete = false, items = {} })
-                    return
-                end
+                    if #lines == 0 then
+                        callback(nil, { isIncomplete = false, items = {} })
+                        return
+                    end
 
-                local line_text = lines[1]
-                local trigger = params.context
-                    and params.context.triggerCharacter
+                    local line_text = lines[1]
+                    local trigger = params.context
+                        and params.context.triggerCharacter
 
-                local items = {}
+                    local items = {}
 
-                local before_cursor = line_text:sub(1, col)
+                    local before_cursor = line_text:sub(1, col)
 
-                if trigger == "/" or before_cursor:find("/") then
-                    items = get_slash_completions(bufnr, line_text, col, line)
-                end
+                    if trigger == "/" or before_cursor:find("/") then
+                        items =
+                            get_slash_completions(bufnr, line_text, col, line)
+                    end
 
-                if
-                    #items == 0
-                    and (trigger == "@" or before_cursor:find("@"))
-                then
-                    items = get_file_completions(bufnr, line_text, col, line)
-                end
+                    if
+                        #items == 0
+                        and (trigger == "@" or before_cursor:find("@"))
+                    then
+                        items =
+                            get_file_completions(bufnr, line_text, col, line)
+                    end
 
-                -- Always append bare word items so blink.cmp can filter
-                -- them client-side (handler only runs on trigger chars)
-                local word_items =
-                    get_slash_word_completions(bufnr, line_text, col, line)
-                vim.list_extend(items, word_items)
+                    local word_items =
+                        get_slash_word_completions(bufnr, line_text, col, line)
+                    vim.list_extend(items, word_items)
 
-                local buf_items =
-                    get_buffer_word_completions(bufnr, line_text, col, line)
-                vim.list_extend(items, buf_items)
+                    local buf_items =
+                        get_buffer_word_completions(bufnr, line_text, col, line)
+                    vim.list_extend(items, buf_items)
 
-                callback(nil, { isIncomplete = true, items = items })
+                    callback(nil, { isIncomplete = true, items = items })
+                end)
             elseif method == "shutdown" then
                 callback(nil, nil)
             end

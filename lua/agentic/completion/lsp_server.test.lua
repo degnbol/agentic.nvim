@@ -21,6 +21,9 @@ local function complete(handlers, bufnr, line, col, trigger_char)
     }, function(_err, res)
         result = res
     end)
+    vim.wait(100, function()
+        return result ~= nil
+    end)
     return result
 end
 
