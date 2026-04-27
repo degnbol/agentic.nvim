@@ -1,51 +1,61 @@
 # agentic.nvim
 
-A Claude-focused AI chat interface for Neovim via [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
+An AI chat interface via [Agent Client Protocol (ACP)](https://agentclientprotocol.com) in neovim.
+Experimental support for other models through opencode.
 
 Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim).
 
 ## Features
+
+See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
+
+### Session & workflow
+
+- One session per tabpage
+- Auto-continue scheduled after usage-limit reset (WIP)
+- Attention bell/badge when chat is unfocused or scrolled up
+- Auto-scroll toggle (default: `<localLeader>a`)
+- Todos / code / files / diagnostics panels alongside chat
+- External UI hook (`AgenticHeadersChanged` autocmd + `vim.t.agentic_headers`) for plugins like [incline.nvim](https://github.com/b0o/incline.nvim)
+- `:w[rite]` of your input prompt submits it (by default).
+  - Opt-in register copy via `settings.send_register`.
+  - Partial prompt submit (similar to Claude Code stash functionality.
+    - `<CR><CR>` sends the current line (with count), `<CR>{motion}` sends the motion range, visual `<CR>` sends the selection.
+  - Set new keymaps for the submission of common custom prompts. Comes with `<localLeader>c` to send "Continue"
+- Completion of any terms mentioned in chat
+- Navigation keymap (default: `[[` and `]]`) for cursor jump between prompts.
 
 ### Rendering
 
 - Bash-formatted shell commands (`shfmt` + treesitter injection)
 - Grep/search output colouring — paths, line numbers, separators, match highlights
 - Markdown tables aligned column-by-column
-- Diff preview for edits (inline or split, `]c`/`[c` to navigate hunks)
-- Fold markers for long tool output (`zo`/`zc`/`za`)
+- Diff preview for edits (inline and side-by-side split view)
+- Native vim folding for long tool output
 - Sign-column block decorations
-- Slash-command and `@`-mention syntax highlighting
-- Native neovim text wrapping and yanking — no hard-wraps, no copy-paste surprises
+- Prose stream formatting when using nowrap.
 
 ### Permissions
 
+- Compound Bash command auto-approval — splits `foo | bar && baz` and checks each segment against Claude's `settings.json`.
 - `/trust` — per-session auto-approval scope for file-scoped edits, layered with git-recoverability, symlink, and TOCTOU safety
 - Auto-approve read-only tools (Read/Grep/Glob) regardless of target path
-- Compound Bash command auto-approval — splits `foo | bar && baz` and checks each segment against `settings.json`. Works around upstream [anthropics/claude-code#16561](https://github.com/anthropics/claude-code/issues/16561)
-- Allow/reject-always cache — ACP does not reliably persist these
-- Permission keys `1`-`5` with escalating severity (reject-all-queued vs reject-always)
-
-### Session & workflow
-
-- Multi-tabpage — one session per tabpage, fully isolated
-- Auto-continue scheduled after usage-limit reset
-- Attention bell/badge when chat is unfocused or scrolled up
-- Auto-scroll with runtime toggle (`<localLeader>a`)
-- Todos / code / files / diagnostics panels alongside chat
-- External UI hook (`AgenticHeadersChanged` autocmd + `vim.t.agentic_headers`) for plugins like incline.nvim
-- Partial prompt submit — `<CR><CR>` sends the current line (with count), `<CR>{motion}` sends the motion range, visual `<CR>` sends the selection. The sent text is cut from the input buffer. `:w` sends the whole buffer. Opt-in register copy via `settings.send_register`. Set any `keymaps.prompt.send_*` entry to `{}` to disable
-- Set new keymaps for the submission of common custom prompts
-- Completion of any terms mentioned in chat
-- Navigation keymap (`[[` and `]]` by default) for cursor jump between prompts.
-
-See `:help agentic-vs-tui` for a full comparison — including which TUI-only commands are patched through ACP locally, and which TUI features aren't available here.
+- A cache for selection of "Always allow/reject"
 
 ## Requirements
 
 - Neovim v0.11.0+
-- `claude-agent-acp` -- install via `npm install -g @agentclientprotocol/claude-agent-acp` or [download a binary](https://github.com/agentclientprotocol/claude-agent-acp/releases)
+- ACP provider(s)
+  - Claude: [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp). install via e.g.
+    - `npm install -g @agentclientprotocol/claude-agent-acp` or
+    - `pnpm add -g @agentclientprotocol/claude-agent-acp` or
+    - [download](https://github.com/agentclientprotocol/claude-agent-acp/releases)
+  - opencode
+  - ...
 
-Other ACP providers (Gemini, Codex, OpenCode, Cursor Agent, Auggie, Mistral Vibe) also work -- see `config_default.lua` for the full list.
+### Treesitter parsers
+
+Install the `bash` or `zsh` parser for shell command highlighting in chat. See `:help agentic-requirements-parsers`.
 
 ### OpenCode permission caveat
 
@@ -62,8 +72,6 @@ OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve 
 
 If you want to guard against prompt injection through fetched web content (a returned page persuading the agent to execute follow-up actions), also set `"webfetch": "ask"`.
 
-Known caveats on the OpenCode side: [sst/opencode#4642](https://github.com/sst/opencode/issues/4642) reports the `permission` key is sometimes not respected, and [#2748](https://github.com/sst/opencode/issues/2748) notes MCP tools bypass the permission system entirely. This plugin can only surface prompts that OpenCode actually delegates via ACP.
-
 ## Setup
 
 ```lua
@@ -78,14 +86,6 @@ All options with defaults: [`lua/agentic/config_default.lua`](lua/agentic/config
 ## Documentation
 
 Full reference: `:help agentic`
-
-## Debug mode
-
-```lua
-require("agentic").setup({ debug = true })
-```
-
-View logs with `:messages` or in `~/.cache/nvim/agentic_debug.log`.
 
 ## Licence
 

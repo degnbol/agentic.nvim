@@ -72,6 +72,24 @@ Install claude-agent-acp:
 <
 Or download a binary from the releases page.
 
+TREESITTER PARSERS                              *agentic-requirements-parsers*
+
+The chat buffer enables the `markdown` treesitter parser and relies on its
+language injection for fenced code blocks. `markdown` and `markdown_inline`
+ship bundled with Neovim 0.12+.
+
+Shell command blocks (execute tool calls, Bash tool output) are emitted
+inside ```bash code fences. For syntax highlighting inside those fences,
+install either the `bash` or `zsh` parser. The plugin registers `zsh` as an
+alias for `bash`, so either works. The `zsh` grammar is currently the more
+actively maintained of the two.
+
+Parser installers are not shipped with Neovim core. Install via
+nvim-treesitter (https://github.com/nvim-treesitter/nvim-treesitter) with
+`:TSInstall bash` or `:TSInstall zsh`, or compile a parser manually with
+`tree-sitter generate` and a C compiler. Without a shell parser installed,
+shell commands render as plain text inside the fence.
+
 ==============================================================================
 3. SETUP                                                      *agentic-setup*
 
