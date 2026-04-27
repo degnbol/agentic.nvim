@@ -250,20 +250,19 @@ Action: mention these in README/docs so users know they work.
   floating window) instead of or in addition. Config toggle:
   `error_display = "chat" | "notify" | "both"`.
 
+### LSP
+
+If claude is refactoring, e.g. renaming all occurances of a variable it essentially does a search/replace plus looking at context around word to understand.
+Why not rename like I would in the editor using the LSP?
+The LSP is often a program that can be run from the shell, it's almost a CLI, but not quite.
+I think we should be able to write some thin wrapper around LSPs to call them like CLIs (like `lsp rename <old name, row and col?> <new name> <filename>`) that then writes a bit of json(?) boilerplate and sends it to based-pyright if `<filename>` is python etc.
 
 ## Investigations
-
-- **Claude internals reference**: use the claude leak shared by Matteo on
-  gdrive so we do less guessing about claude internals for dev of this
-  plugin.
 
 - **Manual code review**: this repo is heavily vibe-coded.
 
 
 ## Housekeeping
 
-- **Clean environment testing**: for proper sharing of this plugin we need
-  to see it in action with `nvim --clean` plus plugin.
-
-- **README demos**: gifs in the readme or elsewhere demoing the differences
+- **README demos**: images or gifs in the readme or elsewhere demoing the differences
   between this plugin and the stock TUI.
