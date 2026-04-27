@@ -257,6 +257,11 @@ Why not rename like I would in the editor using the LSP?
 The LSP is often a program that can be run from the shell, it's almost a CLI, but not quite.
 I think we should be able to write some thin wrapper around LSPs to call them like CLIs (like `lsp rename <old name, row and col?> <new name> <filename>`) that then writes a bit of json(?) boilerplate and sends it to based-pyright if `<filename>` is python etc.
 
+### Quick resume
+
+When closing opencode or claude TUI there's a message left in the shell about the session id with a command hint to resume the session.
+We could consider an opt-out feature where something like this is written to stdout on nvim close with a session active.
+
 ## Investigations
 
 - **Manual code review**: this repo is heavily vibe-coded.
