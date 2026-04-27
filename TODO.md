@@ -61,39 +61,9 @@
 Several issues cluster here; suggests work done for claude wasn't generalised
 to all ACPs.
 
-- **`todowrite` shown in chat**: opencode (not claude) shows the todo
-  operation in chat as raw JSON:
-  ```json
-  [
-    {
-      "priority": "high",
-      "content": "Rename config keys: stash_send_* → send_*, stash_register → send_register",
-      "status": "in_progress"
-    }
-  ]
-  ```
-  Should be hidden — the todo window already shows this. The JSON does reveal
-  `priority`, which could be added to the todo window. Opencode also writes
-  the whole todo list on every change; we could diff and have chat mention
-  only the changed item so the history shows which items were crossed out
-  when. Robust corner cases: what if the edit adds an item, or undoes a
-  crossed-out item.
-
 - **Pending vs `in_progress`**: while waiting for approval opencode shows
   the suggested edit with `in_progress` where claude shows `pending`. Should
   be pending — the command is not in progress.
-
-- **Failed edit reported as completed**: an Edit that fails with `Not
-  found: function …` doesn't have the expected error colour and shows
-  `completed` status:
-  ```
-  ### Edit
-  `lua/agentic/ui/chat_widget.lua`
-  ```lua
-  Not found: function ChatWidget:_stash_send_visual() ...
-  ```
-   ✔ completed
-  ```
 
 - **Search command doesn't show the term**:
   ```
@@ -131,6 +101,24 @@ to all ACPs.
 - **Parallel tasks not showing in chat**: previously fixed for claude, now
   reappearing for opencode. Audit claude-specific fixes for ones that should
   have been general across adapters.
+
+- **Write tool shows minimal header**: opencode Write tool shows just
+  `### Edit` with the file path, not the file contents. Should show the
+  written content (folded) like other providers.
+
+- **Fetch tool output not folded**: Fetch/WebFetch output dumps full text
+  into chat without folding, causing clutter.
+
+#### Fixed
+
+- **`todowrite` shown in chat**: ~~opencode (not claude) shows the todo~~
+  ~~operation in chat as raw JSON~~. Fixed by mapping `title == "todowrite"`
+  to `kind = "todowrite"` and stripping the body in `MessageWriter`.
+
+- **Edit diff "Not found"**: ~~diff matching failed when opencode sends diff
+  data after the edit has been applied.~~ Fixed by rendering the diff
+  directly from `old`/`new` arrays when file matching fails, instead of
+  showing "Not found" placeholder.
 
 
 ## Feature ideas
