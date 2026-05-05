@@ -685,20 +685,20 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         end
 
         -- No matching block and a non-empty old_text means the Edit's
-        -- old_string isn't in the file (the Edit will fail). Render a single
-        -- placeholder line where the diff would have appeared so the chat
-        -- still shows what was attempted.
+        -- old_string isn't in the file. This happens with opencode when
+        -- the diff data arrives after the edit has been applied.
+        -- Render the diff directly from old/new arrays without file matching.
         if
             #diff_blocks == 0
             and tool_call_block.diff.old
             and #tool_call_block.diff.old > 0
         then
-            local first = tool_call_block.diff.old[1] or ""
-            local label = "Not found: " .. first
-            if #tool_call_block.diff.old > 1 then
-                label = label .. " ..."
-            end
-            table.insert(lines, label)
+            table.insert(diff_blocks, {
+                start_line = 1,
+                end_line = #tool_call_block.diff.old,
+                old_lines = tool_call_block.diff.old,
+                new_lines = tool_call_block.diff.new or {},
+            })
         end
 
         for _, block in ipairs(diff_blocks) do
@@ -740,6 +740,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                     or block.new_lines
                 for ni, new_line in ipairs(fmt_new) do
                     local col_hl = new_map and new_map[ni - 1] or nil
+                    -- col_hl is indexed against the unformatted source line.
+                    -- format_tables_in_lines pads cells, shifting columns onto
+                    -- the wrong characters; drop col_hl when the line was
+                    -- rewritten.
+                    if col_hl and new_line ~= block.new_lines[ni] then
+                        col_hl = nil
+                    end
                     insert_diff_line(new_line, "new", nil, new_line, col_hl)
                 end
             else
@@ -783,6 +790,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                                 and source_idx
                                 and old_map[source_idx - 1]
                             or nil
+                        if col_hl and fmt_old[oi] ~= old_raw[oi] then
+                            col_hl = nil
+                        end
                         insert_diff_line(
                             fmt_old[oi],
                             "old",
@@ -805,6 +815,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                                 and source_idx
                                 and new_map[source_idx - 1]
                             or nil
+                        if col_hl and fmt_new[ni] ~= new_raw[ni] then
+                            col_hl = nil
+                        end
                         insert_diff_line(
                             fmt_new[ni],
                             hl_type,
@@ -1171,11 +1184,11 @@ end
 --- from the underlying markdown-injected highlights don't leak through.
 --- Priority 200 beats markdown's priority-100 injected highlights.
 ---
---- `col_hl` keys are byte offsets into the *unformatted* source line. When
---- the caller reformats the line (e.g. `format_tables_in_lines` on markdown
---- diffs) the buffer content at `buffer_line` can be shorter than the
---- highest col_hl key, so bounds-check against the actual line length and
---- drop extmarks that would exceed it.
+--- `col_hl` keys are byte offsets into the *unformatted* source line.
+--- Callers that reformat lines (e.g. `format_tables_in_lines`) must drop
+--- col_hl for any rewritten line — column positions don't survive padding
+--- or wrapping. The bounds-check below is a final safety net for the case
+--- where a reformat produces a shorter line.
 --- @param bufnr integer
 --- @param buffer_line integer 0-indexed buffer row
 --- @param col_hl table<integer, string>
