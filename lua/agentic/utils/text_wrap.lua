@@ -173,8 +173,12 @@ end
 --- Visual width of a table cell accounting for multibyte characters and
 --- concealed markdown delimiters. At conceallevel=2 (the chat window default),
 --- treesitter conceals emphasis_delimiter and code_span_delimiter nodes, so
---- delimiter characters are visually absent. If a user changes conceallevel
---- after rendering, the table will look misaligned — that's acceptable.
+--- delimiter characters are visually absent. Strikethrough is special: the
+--- `~` chars only conceal for the genuine `~~double~~` case (which parses as
+--- a strikethrough nested in another strikethrough); stray single tildes
+--- stay visible because the parser pairs them spuriously (`~14 vs ~7`). The
+--- nested-only conceal lives in the parent config's
+--- `after/queries/markdown_inline/highlights.scm`.
 --- @param cell string
 --- @return integer
 local function cell_visual_width(cell)
@@ -186,7 +190,7 @@ local function cell_visual_width(cell)
     s = s:gsub("%*%*%*(.-)%*%*%*", "%1") -- bold+italic ***
     s = s:gsub("%*%*(.-)%*%*", "%1") -- bold **
     s = s:gsub("%*(.-)%*", "%1") -- italic *
-    s = s:gsub("~~(.-)~~", "%1") -- strikethrough ~~
+    s = s:gsub("~~(.-)~~", "%1") -- ~~double~~ only
     return vim.api.nvim_strwidth(s)
 end
 
