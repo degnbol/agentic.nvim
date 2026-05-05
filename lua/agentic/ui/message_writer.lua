@@ -687,7 +687,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     -- Mode-switch tool calls (EnterPlanMode, ExitPlanMode, EnterWorktree)
     -- carry internal instructions in their body — strip it so only the
     -- compact header renders (e.g. "Switch Mode `EnterPlanMode`").
-    if tool_call_block.kind == "switch_mode" then
+    -- TodoWrite body is the raw JSON request — hide it since the todo window
+    -- shows the rendered todos.
+    if
+        tool_call_block.kind == "switch_mode"
+        or tool_call_block.kind == "TodoWrite"
+    then
         tool_call_block.body = nil
     end
 
@@ -772,7 +777,9 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     end
 
     -- Strip internal instructions from switch_mode updates
-    if tracker.kind == "switch_mode" then
+    -- TodoWrite body is the raw JSON request — hide it since the todo window
+    -- shows the rendered todos.
+    if tracker.kind == "switch_mode" or tracker.kind == "TodoWrite" then
         tool_call_block.body = nil
     end
 

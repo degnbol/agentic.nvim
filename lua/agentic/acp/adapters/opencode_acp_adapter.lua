@@ -9,10 +9,6 @@ local OpenCodeACPAdapter = ACPClient.extend()
 --- @param session_id string
 --- @param update agentic.acp.OpenCodeToolCallMessage
 function OpenCodeACPAdapter:__handle_tool_call(session_id, update)
-    -- generating an empty tool call block on purpose,
-    -- all OpenCode's useful data comes in tool_call_update
-    -- having an empty tool call block helps unnecessary data conversions
-
     --- @type agentic.ui.MessageWriter.ToolCallBlock
     local message = {
         tool_call_id = update.toolCallId,
@@ -22,18 +18,17 @@ function OpenCodeACPAdapter:__handle_tool_call(session_id, update)
     }
 
     if update.title == "list" then
-        -- hack to keep consistency with other Providers
-        -- OpenCode uses `read`, and the message writer will omit it's output if we kept this as read.
         message.kind = "search"
     elseif update.title == "websearch" or update.title == "google_search" then
         message.kind = "WebSearch"
     elseif update.title == "task" then
-        -- rawInput is empty in tool_call, only populated in tool_call_update
         message.kind = "SubAgent"
     elseif update.title == "skill" then
         message.kind = "Skill"
         message.argument = update.rawInput and update.rawInput.name
             or "unknown skill"
+    elseif update.title == "todowrite" then
+        message.kind = "TodoWrite"
     end
 
     self:__with_subscriber(session_id, function(subscriber)

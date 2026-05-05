@@ -380,6 +380,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             argument = argument:gsub("\n", "\\n")
             lines = { header, string.format("`%s`", argument) }
         end
+    elseif argument == "" then
+        -- Argument hasn't streamed in yet (placeholder suppressed in adapter).
+        -- Render a blank line to hold the layout until the next update.
+        lines = { header, "" }
     else
         -- Sanitize argument to prevent newlines
         -- nvim_buf_set_lines doesn't accept array items with embedded newlines

@@ -45,6 +45,8 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
         return
     end
 
+    update.title = ClaudeShared.suppress_placeholder_title(update.title)
+
     ACPClient.__handle_tool_call(self, session_id, update)
 end
 
@@ -145,7 +147,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         end
     else
         message.argument = self:__ensure_command_string(rawInput.command)
-            or update.title
+            or ClaudeShared.suppress_placeholder_title(update.title)
             or ""
 
         if not message.body then

@@ -1120,6 +1120,7 @@ return ACPClient
 --- | "write"
 --- | "Skill"
 --- | "switch_mode"
+--- | "TodoWrite"
 
 --- @alias agentic.acp.ToolCallStatus
 --- | "pending"

@@ -37,7 +37,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         tool_call_id = update.toolCallId,
         kind = kind,
         status = update.status,
-        argument = update.title,
+        argument = ClaudeShared.suppress_placeholder_title(update.title) or "",
     }
 
     if kind == "read" or kind == "edit" then
@@ -87,7 +87,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         end
     else
         message.argument = self:__ensure_command_string(update.rawInput.command)
-            or update.title
+            or ClaudeShared.suppress_placeholder_title(update.title)
             or ""
         message.body = self:extract_content_body(update)
 
