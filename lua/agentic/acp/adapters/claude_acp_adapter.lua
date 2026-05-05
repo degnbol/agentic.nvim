@@ -91,8 +91,11 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
             or ""
         message.body = self:extract_content_body(update)
 
-        if kind == "search" and update.rawInput.pattern then
-            message.search_pattern = update.rawInput.pattern
+        if kind == "search" then
+            message.argument = ClaudeShared.rewrite_grep_to_rg(message.argument)
+            if update.rawInput.pattern then
+                message.search_pattern = update.rawInput.pattern
+            end
         end
     end
 

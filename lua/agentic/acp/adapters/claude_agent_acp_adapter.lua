@@ -152,8 +152,11 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             message.body = self:extract_content_body(update)
         end
 
-        if kind == "search" and rawInput.pattern then
-            message.search_pattern = rawInput.pattern
+        if kind == "search" then
+            message.argument = ClaudeShared.rewrite_grep_to_rg(message.argument)
+            if rawInput.pattern then
+                message.search_pattern = rawInput.pattern
+            end
         end
     end
 

@@ -27,4 +27,18 @@ function M.mode_switch_label(title)
     return nil
 end
 
+--- Rewrite a leading "grep " in a synthesised search command to "rg ".
+--- The Claude Code Grep tool is statically-linked ripgrep, but
+--- claude-agent-acp synthesises rawInput.command using "grep" as the program
+--- name. Flag set maps 1:1 to rg, so a prefix swap produces an accurate and
+--- copy-pasteable invocation.
+--- @param argument string|nil
+--- @return string|nil
+function M.rewrite_grep_to_rg(argument)
+    if argument and argument:sub(1, 5) == "grep " then
+        return "rg " .. argument:sub(6)
+    end
+    return argument
+end
+
 return M
