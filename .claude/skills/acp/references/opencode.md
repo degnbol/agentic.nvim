@@ -1,8 +1,12 @@
 # opencode ACP provider internals
 
 Reference for provider-specific behaviour of `opencode` (the CLI tool). This
-documents opencode-specific quirks that affect agentic.nvim — not the ACP
-protocol itself (see SKILL.md for that).
+documents opencode-specific quirks — not the ACP protocol itself (see
+SKILL.md for that).
+
+> Some sections illustrate consequences with concrete file paths from the
+> agentic.nvim plugin (e.g. `lua/agentic/...`). Treat those as concrete
+> examples; the surrounding analysis applies to any ACP frontend.
 
 ## Edit tool call sequence
 
@@ -31,9 +35,8 @@ Opencode sends Edit tool calls in a sequence that differs from other providers:
 - When edits are **auto-approved**, the file may already be modified by the
   time the diff data arrives for rendering, causing diff matching to fail
   ("Not found").
-- The adapter (`opencode_acp_adapter.lua`) extracts diff from both
-  `rawInput.newString` (in-progress status) and `content[].type="diff"` (completed
-  status).
+- Adapters need to extract diff from both `rawInput.newString` (in-progress
+  status) and `content[].type="diff"` (completed status).
 
 ### Example debug log
 
@@ -50,8 +53,8 @@ Opencode sends Edit tool calls in a sequence that differs from other providers:
 
 ## Tool kind detection
 
-Opencode uses `kind="other"` for several tool types. The adapter detects
-specific tool kinds by inspecting `rawInput` fields and `title`:
+Opencode uses `kind="other"` for several tool types. Adapters detect specific
+tool kinds by inspecting `rawInput` fields and `title`:
 
 | `title` value        | Mapped `kind`  | Detected by                    |
 | -------------------- | -------------- | ------------------------------ |
@@ -67,9 +70,6 @@ specific tool kinds by inspecting `rawInput` fields and `title`:
 
 The `todowrite` tool sends the full todo list as JSON in its body. This should
 be hidden from the chat display since the todo window shows the rendered todos.
-
-The adapter maps `title == "todowrite"` to `kind = "todowrite"`, and
-`MessageWriter` strips the body for this kind (similar to `switch_mode`).
 
 ## Status reporting
 
@@ -99,9 +99,8 @@ ACP spec says `pending` covers "awaiting approval" and `in_progress` means
 the call is "currently running" — the disk write hasn't started yet, so
 opencode's notification is mis-labelled. Clients that re-render the tool
 call on every status update can clobber the permission dialog they just
-showed (agent-shell did this; agentic.nvim renders permission prompts
-separately and isn't affected). Issue auto-closed after 60 days of
-inactivity, not fixed.
+showed; render permission prompts separately to avoid this. Issue
+auto-closed after 60 days of inactivity, not fixed.
 
 ### `external_directory: "allow"` silently bypasses `edit` rules ([#18441][2])
 
@@ -145,9 +144,8 @@ Each replacer yields the *text as it appears in the file* (not the LLM's
 that resolved string with `newString`.
 
 Contrast with claude-agent's `str_replace_based_edit_tool`, which requires a
-unique **exact** substring match (documented in
-`@.claude/skills/acp/references/claude-agent.md`). That's why literal matching
-works for claude and not opencode.
+unique **exact** substring match (documented in `claude-agent.md`). That's why
+literal matching works for claude and not opencode.
 
 ### 2. `completed` update arrives after the disk write
 
@@ -162,9 +160,8 @@ The mismatch appears in the **second** ACP notification. Opencode's
 emits a `tool_call_update` with `status: "completed"` and
 `content[type=diff]` — this fires after the tool returns, i.e. after the
 write. A client that re-renders the diff from this second notification
-(or retries `FileSystem.read_from_disk` after the first render failed)
-sees post-edit file content. Relevant only for code paths that match
-after the completed update.
+(or retries `read_from_disk` after the first render failed) sees post-edit
+file content.
 
 ### 3. ACP payload carries the LLM's verbatim params, not the resolved text
 
@@ -182,10 +179,10 @@ the real pre-edit content from `rawInput` or `content[type=diff]`.
 
 ### Client mitigation
 
-`tool_call_renderer.lua` falls back to rendering the raw `diff.old`/`diff.new`
-arrays directly (no file-position lookup) when `extract_diff_blocks` returns
-empty. Line numbers aren't real, but the before/after content is visible.
-This is the best we can do from the ACP message alone.
+Fall back to rendering the raw `diff.old`/`diff.new` arrays directly (no
+file-position lookup) when the file-position extraction returns empty. Line
+numbers won't be real, but the before/after content stays visible. This is
+the best one can do from the ACP message alone.
 
 ### Possible upgrade: parse `rawOutput.metadata.diff`
 
@@ -195,4 +192,24 @@ the real pre/post file content via `createTwoFilesPatch`. `agent.ts:411-415`
 forwards this as `rawOutput.metadata` on the `completed` update. Parsing
 that unified diff would recover the actual resolved content with real line
 numbers. Only available for `completed` (not `in_progress`), and only for
-edit tool calls that populate `metadata.diff`. Not currently implemented.
+edit tool calls that populate `metadata.diff`.
+
+## Diff content position
+
+Opencode follows the standard ACP diff layout (`content[]` array with
+`{type="diff", path, oldText, newText}`), but on write/edit completion the
+array contains the status-text entry **first** and the diff **second**:
+
+```lua
+content = {
+    { type = "content", content = { type = "text", text = "Wrote file successfully." } },
+    { type = "diff",    path = "...", oldText = "", newText = "..." },
+}
+```
+
+A naive `content[1]` extractor misses the diff entirely. Scan the array for
+the diff entry; suppress the redundant status-text body when a diff is
+rendered (matching claude-agent-acp's Edit block shape).
+
+Codex / gemini / mistral happen to place the diff at `content[1]`. Don't
+assume any particular index.

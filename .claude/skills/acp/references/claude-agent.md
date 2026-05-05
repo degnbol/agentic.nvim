@@ -1,8 +1,12 @@
 # claude-agent-acp SDK internals
 
 Reference for provider-specific behaviour of `claude-agent-acp` (Zed's ACP
-bridge wrapping `@anthropic-ai/claude-agent-sdk`). This documents SDK internals
-that affect agentic.nvim — not the ACP protocol itself (see SKILL.md for that).
+bridge wrapping `@anthropic-ai/claude-agent-sdk`). This documents bridge/SDK
+internals — not the ACP protocol itself (see SKILL.md for that).
+
+> Some sections illustrate consequences with concrete file paths from the
+> agentic.nvim plugin (e.g. `lua/agentic/...`). Treat those as concrete
+> examples; the surrounding analysis applies to any ACP frontend.
 
 Installed at `/opt/homebrew/lib/node_modules/@zed-industries/claude-agent-acp/`.
 Package renamed to `@agentclientprotocol/claude-agent-acp` from v0.24+.
@@ -11,7 +15,7 @@ Package renamed to `@agentclientprotocol/claude-agent-acp` from v0.24+.
 
 ```
 claude-agent-acp (acp-agent.js)
-  +-- ACP JSON-RPC transport (stdio) <-> agentic.nvim
+  +-- ACP JSON-RPC transport (stdio) <-> client (e.g. agentic.nvim)
   +-- @anthropic-ai/claude-agent-sdk (cli.js, sdk.mjs)
        +-- Tool implementations (Read, Write, Edit, Bash, Grep, Glob, etc.)
        +-- Permission system (checkPermissions, canUseTool)
@@ -224,29 +228,20 @@ from outside without polling for response absence.
 
 ### Client implications
 
-- **There is nothing MessageWriter or ACPClient dispatch can do** —
-  the bytes never leave the bridge. Tests that drive those layers
-  (`tests/integration/auto_continue_chunk_flush.test.lua`,
-  `lua/agentic/acp/acp_client.test.lua` → "dispatch after error
-  response (auto-continue path)") correctly pass in isolation and
-  cannot reproduce the production symptom.
+- **There is nothing in the client's MessageWriter / dispatch layer can
+  do** — the bytes never leave the bridge. Tests that drive client-side
+  layers in isolation cannot reproduce the production symptom.
 - **Viable workarounds are upstream-level**: tear down and respawn the
   claude-agent-acp subprocess before attempting auto-continue (losing
-  session state unless history is re-prepended, which the plugin
-  already does for session restore). `SessionManager:new_session()`
-  covers the tear-down + respawn; the auto-continue path could
-  optionally fall through to that instead of reusing the existing
-  session.
+  session state unless history is re-prepended for session restore).
 - **Diagnostic from outside**: a stalled generator is indistinguishable
   from a slow-but-working one without timing heuristics. The
   subscriber sees no `session/update` between `session/prompt`
   send and response. A watchdog (e.g. "if no `session/update` within
   N seconds after `session/prompt`, assume stall") is possible but
   heuristic — no protocol-level signal.
-- **Do not add vim.cmd.redraw(), reset_turn_state(), or any client-
-  side state reset as a "fix"** — these do not touch the bridge's
-  stalled generator and have been reverted before. See the plugin's
-  `.claude/skills/issues/references/chunk-flush.md`.
+- **Do not add client-side state resets ("redraw", reset turn state, etc.)
+  as a "fix"** — these do not touch the bridge's stalled generator.
 
 ## Edit tool (`str_replace_based_edit_tool`)
 
@@ -277,8 +272,8 @@ fields `oldStart`, `oldLines`, `newStart`, `newLines`, `lines`. Documented in
 those five fields.
 
 **But the ACP bridge does not forward it.** Verified 2026-04-20 by
-instrumenting `__build_tool_call_update` in the adapter and triggering an
-Edit: `rawOutput` for a completed Edit is a plain success string like
+instrumenting tool-call handling and triggering an Edit: `rawOutput` for a
+completed Edit is a plain success string like
 `"The file X has been updated successfully."` — no `structuredPatch`, no
 `originalFile`, no line ranges. The SDK's tool result is flattened into a
 human-readable text block by the time `acp-agent.js:1694` sets
@@ -298,7 +293,8 @@ The completed `tool_call_update` for an Edit is minimal:
 
 Note that `kind`, `rawInput`, `title`, `argument`, `diff` are all absent on
 completed updates (only the initial `tool_call` carries them) — another
-reason to read edit provenance from accumulated `tool_call_blocks`.
+reason to track edit provenance from the accumulated tool-call state across
+both phases.
 
 **Client implication for provenance tracking.** If you need post-edit line
 ranges, you must synthesise them client-side from the initial `tool_call`
@@ -308,9 +304,7 @@ yet — see "Edits are not applied before permission"), find `diff.old` by
 execution time, so a non-unique match here means file state we can't
 reason about), and record the start line. On the matching
 `tool_call_update` with `status: "completed"`, compute the post-edit range
-as `{start, start + #diff.new - 1}`. The plugin's `/trust` layer uses this
-approach — see `lua/agentic/utils/trust_safety.lua` (`find_unique_subsequence`,
-`verify_edit_range`) and `SessionManager:_record_pending_edit_range`.
+as `{start, start + #diff.new - 1}`.
 
 **Sibling commands of the API tool** (not all exposed via Claude Code's
 `edit` kind):
@@ -320,6 +314,18 @@ approach — see `lua/agentic/utils/trust_safety.lua` (`find_unique_subsequence`
 - `create` — takes `file_text` (whole-file write).
 The Anthropic API `str_replace` is exposed via ACP as `kind: "edit"`;
 `create` is exposed as `kind: "create"`; `view` is `kind: "read"`.
+
+## Search tools (`Grep`, `Glob`)
+
+The Grep tool's `rawInput.command` is synthesised by the bridge as a
+shell-form string with `grep` as the program name even though the
+implementation is statically-linked ripgrep. Flags map 1:1 to rg flags
+(`-A`, `-B`, `-C`, `--glob`, `--type`, `-U --multiline-dotall`), so the
+emitted string is a valid rg invocation with the wrong program name. ACP
+frontends rendering the command literally should rewrite a leading
+`grep ` to `rg ` for accuracy and copy-pasteability. (See the claude
+skill's `internals.md` for the rg-dispatch modes — `embedded`, `builtin`,
+`system`.)
 
 ## ConfigOptions — `thought_level` not emitted
 
@@ -334,20 +340,13 @@ Confirmed in `@agentclientprotocol/claude-agent-acp` 0.29.0.
 
 **Client implication:** The equivalent of the TUI's `/effort` command cannot be
 offered as a runtime, ConfigOption-based selector until the bridge is extended
-to emit a `thought_level` option. The plugin's `AgentConfigOptions` class
-already dispatches on `category == "thought_level"`
-(`lua/agentic/acp/agent_config_options.lua:80-81`) — the code path is simply
-unreachable because the bridge never sends that category.
+to emit a `thought_level` option.
 
 **`maxThinkingTokens` is not a drop-in replacement.** It is a
 `_meta.claudeCode.options` passthrough spread into SDK options at session
 creation only. There is no ACP method to change it mid-session, so offering
 `/effort` backed by `maxThinkingTokens` would silently diverge from the TUI's
 dynamic behaviour (the TUI changes effort mid-turn).
-
-**Tracking:** No upstream issue filed. If emitted, the selector, keymap, and
-header display would be a ~30-line addition mirroring the existing model
-selector in `agent_config_options.lua`.
 
 ## Environment variables
 

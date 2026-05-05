@@ -1,19 +1,29 @@
 ---
 name: acp
 description:
-  Use when ACP schema is necessary to clarify the work or when the user asks for
-  ACP data, rules, events, or documentation. Also use when working on adapters,
-  MessageWriter, SessionManager, PermissionManager, or any ACP event handling.
+  Agent Client Protocol — JSON-RPC over stdio between editor frontends and AI
+  agents (Claude Code via claude-agent-acp, Codex, Gemini, opencode, etc.). Use
+  when working with ACP message flow (initialize, session lifecycle, tool_call,
+  request_permission), debugging ACP frontends, or investigating
+  provider-specific bridge quirks. For Claude Code's own config and built-in
+  tool semantics, see the claude skill.
 ---
 
 # Agent Client Protocol (ACP)
 
 Reference for the ACP specification. Based on protocol version 1.
 
+> **Scope:** ACP protocol and external bridge/SDK behaviour only. Plugin-internal
+> patterns (MessageWriter, SessionManager, adapter base class, the `/trust` layer)
+> live in `@lua/agentic/acp/AGENTS.md` — don't add them here.
+
 Full spec: https://agentclientprotocol.com/protocol/overview.md
 
 For claude-agent-acp / claude-agent-sdk internals (session _meta passthrough,
-permission flow, known SDK bugs), see @references/claude-agent.md
+permission flow, known SDK bugs), see @references/claude-agent.md.
+
+For opencode-specific bridge behaviour (Edit tool sequence, fuzzy match cascade,
+permission timing), see @references/opencode.md.
 
 ## Communication model
 
