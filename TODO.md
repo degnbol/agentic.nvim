@@ -1,8 +1,14 @@
 # TODO
 
+Start doing some version tracking so we can separate bug fixes from feature releases.
+
 ## Bugs
 
 ### Rendering
+
+- AgenticClean__punctuation_special_markdown is showing up in seemingly random places in markdown tables.
+  My guess is it's placed correctly for the `|` delimiters before we do my custom auto-align of tables which then leaves it highlighting random letters.
+  The fix might simply be to remove the code adding AgenticClean__punctuation_special_markdown, what is it used for? We have proper hl of `|` in md tables already.
 
 - **Markdown formatting leak**: md formatting leaks from chat blocks since we
   often write directly to chat without protection. E.g. `##` in a prompt
@@ -157,8 +163,8 @@ Action: mention these in README/docs so users know they work.
   config). PDF support depends on provider capability advertised through
   ACP.
 
-- **Background jobs**: would require surfacing background state in the
-  UI. Revisit if a concrete use case emerges.
+- **Background jobs**: see "Background processes window" under
+  Session/workflow.
 
 **Blocked upstream or out of scope**
 
@@ -198,6 +204,22 @@ Action: mention these in README/docs so users know they work.
 
 - **Session dashboard**: see TUI parity above — runtime state (model,
   provider, mode, context %, token usage, limit proximity) in one window.
+
+- **Background processes window**: a panel listing currently-running
+  background tool calls (Bash with `run_in_background: true`,
+  auto-backgrounded long bashes, web fetches still in flight, etc.)
+  with status, elapsed time, command/argument, and a kill keymap.
+  Provider-agnostic — track by watching the ACP `tool_call` /
+  `tool_call_update` stream rather than asking the provider, since the
+  SDK task registry is internal and not exposed via ACP. Motivation:
+  Claude legitimately forgets about running `local_bash` shells
+  (post-compact re-injection in claude-agent-acp filters
+  `local_agent` only — see claude skill `references/internals.md` §
+  "Background tasks"), and a `nvim --headless` orphaned by a hung
+  command leaves the harness showing "generating" indefinitely with
+  no surface telling the user *what* is still running. The window
+  also lets the user terminate stuck procs without dropping to a
+  shell.
 
 - **Edited files window**: the original agentic.nvim had a window listing
   edited files; removed to save screen space. Could reinstate with `:q`
@@ -249,6 +271,11 @@ I think we should be able to write some thin wrapper around LSPs to call them li
 
 When closing opencode or claude TUI there's a message left in the shell about the session id with a command hint to resume the session.
 We could consider an opt-out feature where something like this is written to stdout on nvim close with a session active.
+
+### argument-hint
+
+Skills can have argument-hint field, currently e.g. `[message]` for /commit.
+Completion should show this, e.g. the menu entry and might need snippet.
 
 ## Investigations
 
