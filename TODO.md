@@ -42,6 +42,9 @@ Start doing some version tracking so we can separate bug fixes from feature rele
 
 ### Interactions
 
+- Insert mode in AgenticInput then mouse click in AgenticChat leaves cursor in input mode in chat which is never valid.
+  I think we should switch to normal mode automatically when changing window focus to AgenticChat (regardless of the way focus was changed).
+
 - **Ctrl-c behaviour**: while claude is writing prose, ctrl-c works — it
   stops claude completely. While claude prompts for allow for editing a file,
   ctrl-c rejects, but then claude starts thinking and gives a response like
