@@ -44,10 +44,10 @@ Run after ANY Lua file changes:
 make validate
 ```
 
-Outputs 5-6 lines (exit codes + log paths). Never redirect its output.
+Outputs 4-5 lines (exit codes + log paths). Never redirect its output.
 On failure, read the log file with `tail` or `rg`, never the Read tool.
 
-Log paths: `.local/agentic_{format,luals,selene,test}_output.log`
+Log paths: `.local/agentic_{luals,selene,test}_output.log`
 
 ## Key files
 

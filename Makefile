@@ -7,7 +7,7 @@ STYLUA   ?= $(shell which stylua 2>/dev/null || echo "$(HOME)/.local/share/nvim/
 PROJECT ?= .
 LOGDIR  ?= .luals-log
 
-.PHONY: luals selene selene-file format-check format format-file check test validate install-hooks
+.PHONY: luals selene selene-file format-check format format-file check test validate install-git-hooks
 
 # Each test file runs in a fresh nvim process so module-level state, stubs,
 # autocmds, and `vim.schedule`-queued callbacks cannot leak between files.
@@ -72,10 +72,6 @@ validate:
 	@mkdir -p .local; \
 	total_start=$$(date +%s); \
 	start=$$(date +%s); \
-	make format > .local/agentic_format_output.log 2>&1; \
-	rc_format=$$?; \
-	echo "format: $$rc_format (took $$(($$(date +%s) - start))s) - log: .local/agentic_format_output.log"; \
-	start=$$(date +%s); \
 	make luals > .local/agentic_luals_output.log 2>&1; \
 	rc_luals=$$?; \
 	echo "luals: $$rc_luals (took $$(($$(date +%s) - start))s) - log: .local/agentic_luals_output.log"; \
@@ -88,24 +84,21 @@ validate:
 	rc_test=$$?; \
 	echo "test: $$rc_test (took $$(($$(date +%s) - start))s) - log: .local/agentic_test_output.log"; \
 	echo "Total: $$(($$(date +%s) - total_start))s"; \
-	if [ $$rc_format -ne 0 ] || [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_test -ne 0 ]; then \
+	if [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_test -ne 0 ]; then \
 		echo "Validation failed! Check log files for details."; \
 		exit 1; \
 	fi
 
-# Install pre-commit hook locally
+# Install pre-commit hook that blocks the commit until `make validate` passes.
+# Uses `git rev-parse --git-path` so it works for both regular repos and
+# submodules (where .git is a file, not a directory).
 install-git-hooks:
-	@mkdir -p .git/hooks
-	@printf '%s\n' \
+	@HOOK=$$(git rev-parse --git-path hooks/pre-commit); \
+	mkdir -p "$$(dirname "$$HOOK")"; \
+	printf '%s\n' \
 		'#!/bin/sh' \
-		'set -e' \
-		'STYLUA=$$(which stylua 2>/dev/null || echo "$$HOME/.local/share/nvim/mason/bin/stylua")' \
-		'STAGED_LUA_FILES=$$(git diff --cached --name-only --diff-filter=ACM | grep "\.lua$$" || true)' \
-		'if [ -n "$$STAGED_LUA_FILES" ]; then' \
-		'  echo "Running stylua on staged files..."' \
-		'  "$$STYLUA" $$STAGED_LUA_FILES' \
-		'  git add $$STAGED_LUA_FILES' \
-		'fi' \
-		> .git/hooks/pre-commit
-	@chmod +x .git/hooks/pre-commit
-	@echo "Pre-commit hook installed successfully"
+		'cd "$$(git rev-parse --show-toplevel)" || exit 1' \
+		'exec make validate' \
+		> "$$HOOK"; \
+	chmod +x "$$HOOK"; \
+	echo "Pre-commit hook installed at $$HOOK"
