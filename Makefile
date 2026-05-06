@@ -9,11 +9,25 @@ LOGDIR  ?= .luals-log
 
 .PHONY: luals selene selene-file format-check format format-file check test validate install-hooks
 
-test:
-	$(NVIM) --headless -u tests/init.lua -c "lua require('tests.runner').run()"
+# Each test file runs in a fresh nvim process so module-level state, stubs,
+# autocmds, and `vim.schedule`-queued callbacks cannot leak between files.
+# mini.test schedules every case via `vim.schedule`, so a `vim.wait` in one
+# test pumps the loop and lets queued cases from other files run mid-test —
+# breaking isolation. Per-file processes prevent that.
+#
+# tests/init.lua additionally strips `$XDG_CONFIG_HOME/nvim` from rtp to keep
+# the user's outer nvim config out of the test environment, while leaving
+# other tools (git's core.excludesFile, etc.) intact.
+TEST_FILES := $(shell find lua -name "*.test.lua") $(shell find tests -name "*_test.lua" -o -name "test_*.lua" 2>/dev/null)
 
-test-verbose:
-	$(NVIM) --headless -u tests/init.lua -c "lua require('tests.runner').run({verbose = true})"
+test:
+	@rc=0; for f in $(TEST_FILES); do \
+		echo "=== $$f ==="; \
+		$(NVIM) --headless -u tests/init.lua -c "lua require('tests.runner').run_file('$$f')" || rc=1; \
+	done; \
+	exit $$rc
+
+test-verbose: test
 
 test-file:
 	$(NVIM) --headless -u tests/init.lua -c "lua require('tests.runner').run_file('$(FILE)')"

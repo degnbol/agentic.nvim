@@ -28,6 +28,21 @@ end
 vim.opt.rtp:prepend(mini_path)
 vim.opt.rtp:prepend(vim.fn.getcwd())
 
+-- Strip the user's outer nvim config from rtp so its plugin/, ftplugin/,
+-- and autocmd files don't auto-source into the test environment. Test
+-- runs must depend only on this project's code and mini.nvim.
+local xdg = os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")
+local user_nvim = xdg .. "/nvim"
+local user_nvim_after = xdg .. "/nvim/after"
+local rtp = vim.api.nvim_get_option_value("runtimepath", {})
+local cleaned = {}
+for entry in vim.gsplit(rtp, ",", { plain = true }) do
+    if entry ~= user_nvim and entry ~= user_nvim_after then
+        table.insert(cleaned, entry)
+    end
+end
+vim.api.nvim_set_option_value("runtimepath", table.concat(cleaned, ","), {})
+
 local MiniTest = require("mini.test")
 
 MiniTest.setup({

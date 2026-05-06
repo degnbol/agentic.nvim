@@ -480,21 +480,45 @@ end)
 
 **🚨 CRITICAL: Understanding mini.test's Execution Model**
 
-**Tests run sequentially in a single Neovim process:**
+**Each test FILE runs in its own Neovim process (per-file isolation):**
 
-- ✅ Tests execute **one after another** (not in parallel)
-- ⚠️ All tests share the **same Neovim instance**
-- ⚠️ Tests **CAN affect each other** through shared global state
-- ⚠️ Module caching means `require()` returns the same module instance
-- ⚠️ Neovim APIs operate on the same editor state
+- ✅ Cross-file pollution is impossible — `require()` cache, global state,
+  stubs, autocmds, and `vim.schedule`-queued callbacks are scoped to one file.
+- ⚠️ Within a file, tests still share the same Neovim instance (mini.test runs
+  cases sequentially via `vim.schedule`, so `vim.wait` in a test helper can
+  let queued cases re-enter — but only cases from the same file).
+- ⚠️ Module caching means `require()` returns the same module instance for
+  every test in a file.
 
-**Critical implications:**
+**Critical implications (within a file):**
 
-1. **Always clean up resources** - Buffers, windows, autocommands left behind
-   affect subsequent tests
-2. **Module-level state persists** - Variables retain values between tests
-3. **Global Neovim state persists** - Vim variables, options carry over
-4. **Always revert stubs/spies** - Failure to revert breaks subsequent tests
+1. **Always clean up resources** — buffers, windows, autocmds left behind
+   affect subsequent tests in the same file.
+2. **Module-level state persists** — variables retain values between tests.
+3. **Global Neovim state persists** — vim variables, options carry over.
+4. **Always revert stubs/spies** — failure to revert breaks subsequent tests.
+
+#### When per-file isolation isn't enough
+
+If tests within one file pollute each other (typically via `vim.wait` in a
+helper letting mini.test re-enter the next case mid-test), escalate to
+**per-test child-neovim isolation**:
+
+```lua
+local Child = require("tests.helpers.child")
+describe("MyModule", function()
+    local child = Child:new()
+    before_each(child.setup)
+    after_each(child.stop)
+    -- interact via child.lua / child.api / child.lua_get
+end)
+```
+
+This spawns a fresh nvim subprocess per test (~50ms overhead each). See
+`tests/integration/*` for working examples. Reach for it only when needed —
+file-level isolation is enough for the entire current suite, including all
+files that use `vim.wait` (`lsp_server.test.lua`, `chat_history.test.lua`,
+`acp_client.test.lua`).
 
 ### Multi-Tabpage Testing
 
