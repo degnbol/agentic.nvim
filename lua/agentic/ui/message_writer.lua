@@ -64,6 +64,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
+--- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -86,6 +87,7 @@ function MessageWriter:new(bufnr, status_animation)
         _suppressing_rejection = false,
         _rejection_buffer = "",
         _status_animation = status_animation,
+        _prose_anchor_line = nil,
     }, self)
 
     return instance
@@ -98,6 +100,14 @@ function MessageWriter:suppress_next_rejection()
     self._rejection_buffer = ""
 end
 
+--- Drop the prose-pin anchor so the next auto-scroll falls back to the
+--- cursor proximity threshold. Called at turn boundaries (tool call,
+--- separator, error, /new).
+--- @private
+function MessageWriter:_release_prose_pin()
+    self._prose_anchor_line = nil
+end
+
 --- Reset all per-turn mutable state. Called by refresh to unstick a
 --- desynchronised display without restarting the session.
 function MessageWriter:reset_turn_state()
@@ -106,6 +116,7 @@ function MessageWriter:reset_turn_state()
     self._last_wrote_tool_call = false
     self._last_message_type = nil
     self._chunk_start_line = nil
+    self:_release_prose_pin()
 end
 
 --- @param callback fun()|nil
@@ -290,6 +301,7 @@ function MessageWriter:write_error_message(err)
     local all_lines = { HEADING, "" }
     vim.list_extend(all_lines, body_lines)
 
+    self:_release_prose_pin()
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_and_notify_change(function(bufnr)
@@ -360,6 +372,7 @@ function MessageWriter:append_separator()
     self._rejection_buffer = ""
     self._last_wrote_tool_call = false
     self._last_message_type = nil
+    self:_release_prose_pin()
 
     self:_with_modifiable_and_notify_change(function(bufnr)
         self:_reflow_chunks(bufnr, true)
@@ -550,6 +563,23 @@ function MessageWriter:write_message_chunk(update)
             )
         end
 
+        -- Pin the start of the current prose run to the top of the viewport
+        -- once non-blank content lands. The line we wrote on can begin with a
+        -- "\n" prefix (added when prose follows a tool call), so scan forward
+        -- a few lines from chunk_start_line to skip the leading blank.
+        if self._prose_anchor_line == nil then
+            local total = vim.api.nvim_buf_line_count(bufnr)
+            local scan_end = math.min(self._chunk_start_line + 4, total - 1)
+            for line = self._chunk_start_line, scan_end do
+                local content =
+                    vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
+                if content and content:match("%S") then
+                    self._prose_anchor_line = line
+                    break
+                end
+            end
+        end
+
         -- Wrap the last line immediately if it overflows, so the user sees
         -- wrapping during streaming instead of after the line completes.
         -- Skip when wrap_width is 0 (soft wrap enabled on the window).
@@ -618,6 +648,22 @@ function MessageWriter:_check_auto_scroll(bufnr)
         return false
     end
 
+    -- During an active prose pin the cursor is parked inside the clamped
+    -- viewport, far from the buffer end, so the threshold below would
+    -- always fail and stop auto-scroll. Override while the view is still
+    -- where the last clamp left it; otherwise the user moved either the
+    -- cursor or the viewport and the pin should release.
+    -- While a prose anchor is set, keep auto-scrolling so the next
+    -- chunk re-clamps the topline. Don't try to detect user-initiated
+    -- scrolls by comparing topline or cursor to the last clamp: vim
+    -- couples them — when topline shifts (scrolloff, redraw, etc.)
+    -- the cursor is dragged along to stay on screen, so neither field
+    -- is a reliable user-intent signal. The pin instead releases on
+    -- the boundaries we control (tool call, separator, error, /new).
+    if self._prose_anchor_line then
+        return true
+    end
+
     local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
     local total_lines = vim.api.nvim_buf_line_count(bufnr)
     local distance_from_bottom = total_lines - cursor_line
@@ -668,7 +714,18 @@ function MessageWriter:_auto_scroll(bufnr)
                 if #wins > 0 then
                     local has_virt_lines = self._status_animation
                         and self._status_animation:is_active()
-                    BufHelpers.scroll_down_only(wins[1], has_virt_lines)
+                    -- topline is 1-indexed; _prose_anchor_line is 0-indexed.
+                    local pause = Config.auto_scroll
+                        and Config.auto_scroll.pause_on_prose ~= false
+                    local max_topline = (pause and self._prose_anchor_line)
+                            and (self._prose_anchor_line + 1)
+                        or nil
+
+                    BufHelpers.scroll_down_only(
+                        wins[1],
+                        has_virt_lines,
+                        max_topline
+                    )
                 end
             end
         end
@@ -684,6 +741,9 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self._suppressing_rejection = false
         self._rejection_buffer = ""
     end
+
+    -- A tool call ends the current prose run, so auto-scroll resumes.
+    self:_release_prose_pin()
 
     -- Mode-switch tool calls (EnterPlanMode, ExitPlanMode, EnterWorktree)
     -- carry internal instructions in their body — strip it so only the
@@ -936,6 +996,20 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 -- Chunk start was inside the old block range — push it
                 -- past the new block so reflow never touches block lines.
                 self._chunk_start_line = new_end_row + 1
+            end
+        end
+
+        -- Same shift for the prose run anchor: prose is written after the
+        -- most recent tool call, but updates can resize *older* blocks above
+        -- it. The anchor must move with the lines it points to so the pin
+        -- stays on the same content.
+        if line_delta ~= 0 and self._prose_anchor_line then
+            if self._prose_anchor_line > old_end_row then
+                self._prose_anchor_line = self._prose_anchor_line + line_delta
+            elseif self._prose_anchor_line >= start_row then
+                -- Block ate the anchor line (shouldn't happen for prose
+                -- written after this block, but bail out safely).
+                self:_release_prose_pin()
             end
         end
 

@@ -153,9 +153,16 @@ end
 
 --- Scroll a window to the bottom, but only if it wouldn't scroll upward.
 --- Prevents the jarring jump when `G0zb` overshoots on short buffers.
+--- When `max_topline` is provided and the natural scroll would push the view
+--- past that buffer line, the topline is clamped to it. This pins a target
+--- line at the top of the viewport (e.g. the start of a prose run) instead
+--- of letting auto-scroll drag it off-screen. The clamp only applies when
+--- `old_topline <= max_topline` — if the user has manually scrolled past
+--- the anchor, normal scroll resumes.
 --- @param winid integer
 --- @param has_virt_lines? boolean Whether virtual lines (status animation) are active
-function BufHelpers.scroll_down_only(winid, has_virt_lines)
+--- @param max_topline? integer Buffer line (0-indexed in the API but 1-indexed here to match `topline`) above which the viewport must not scroll
+function BufHelpers.scroll_down_only(winid, has_virt_lines, max_topline)
     if not vim.api.nvim_win_is_valid(winid) then
         return
     end
@@ -192,9 +199,60 @@ function BufHelpers.scroll_down_only(winid, has_virt_lines)
     end
     local new_topline = old_info[1].topline
 
-    if new_topline < old_topline then
+    -- "Don't scroll backward" only applies when we don't have a pin.
+    -- With max_topline set, the caller wants the topline at exactly that
+    -- line whenever it would otherwise drift past — preserving the
+    -- pre-scroll view here would silently bypass the pin in cases where
+    -- vim's view management has already shifted the topline.
+    if not max_topline and new_topline < old_topline then
         vim.api.nvim_win_call(winid, function()
             vim.fn.winrestview({ topline = old_topline })
+        end)
+        return
+    end
+
+    if max_topline and new_topline > max_topline then
+        -- Always clamp when the natural scroll would overflow the anchor.
+        -- The previous `old_topline <= max_topline` precondition broke the
+        -- common case: in interactive mode, vim redraws between chunks and
+        -- continuously auto-corrects topline as the buffer grows past the
+        -- viewport (cursor was parked at last_line by the prior G0zb). By
+        -- the time the deferred scroll fires, `old_topline` is already
+        -- past the anchor, so the precondition silently bailed and the
+        -- pin never engaged at all. The "user scrolled past anchor" case
+        -- the precondition guarded against is now handled at the caller
+        -- by detecting a pin-state mismatch and releasing the pin (so
+        -- max_topline arrives nil here).
+        --
+        -- `G0zb` above moved cursor to the last buffer line. Restoring
+        -- only `topline` leaves the cursor off-screen, and vim re-corrects
+        -- topline back to last_line - winheight + 1 on the next redraw.
+        -- Park cursor inside the pinned viewport so the clamp survives.
+        --
+        -- `scrolloff` matters: vim insists on that many context lines
+        -- between cursor and the top/bottom edge of the WINDOW. Park the
+        -- cursor at `max_topline + winheight - 1 - scrolloff` so the
+        -- below-cursor margin is already satisfied; otherwise vim shifts
+        -- topline forward by `scrolloff` to honour it, breaking the pin
+        -- by exactly that many lines. Default scrolloff is 0 — but users
+        -- often set it globally (e.g. 4 or 8) and the chat window
+        -- inherits that.
+        local winheight = vim.api.nvim_win_get_height(winid)
+        local last_line =
+            vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+        local scrolloff = vim.api.nvim_get_option_value("scrolloff", {
+            win = winid,
+        })
+        local cursor_lnum = math.min(
+            last_line,
+            math.max(max_topline, max_topline + winheight - 1 - scrolloff)
+        )
+        vim.api.nvim_win_call(winid, function()
+            vim.fn.winrestview({
+                topline = max_topline,
+                lnum = cursor_lnum,
+                col = 0,
+            })
         end)
     end
 end

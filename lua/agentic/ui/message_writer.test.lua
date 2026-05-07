@@ -102,7 +102,8 @@ describe("agentic.ui.MessageWriter", function()
 
         it("still reports proximity when enabled is false", function()
             setup_buffer(1, 1)
-            Config.auto_scroll = { enabled = false, threshold = 10 }
+            Config.auto_scroll =
+                { enabled = false, threshold = 10, pause_on_prose = true }
             -- _check_auto_scroll is a pure proximity check;
             -- scroll_down_only gates on Config.auto_scroll.enabled
             assert.is_true(writer:_check_auto_scroll(bufnr))
@@ -111,7 +112,8 @@ describe("agentic.ui.MessageWriter", function()
         it("returns false when threshold is disabled (zero or nil)", function()
             setup_buffer(1, 1)
 
-            Config.auto_scroll = { enabled = true, threshold = 0 }
+            Config.auto_scroll =
+                { enabled = true, threshold = 0, pause_on_prose = true }
             assert.is_false(writer:_check_auto_scroll(bufnr))
 
             Config.auto_scroll = nil
@@ -325,6 +327,247 @@ describe("agentic.ui.MessageWriter", function()
 
             assert.is_false(writer._should_auto_scroll)
         end)
+    end)
+
+    describe("prose anchor pin", function()
+        it("sets anchor on first prose chunk", function()
+            writer:write_message_chunk(
+                make_message_update("Hello, here is some prose.")
+            )
+
+            assert.is_not_nil(writer._prose_anchor_line)
+        end)
+
+        it("clears anchor when a tool call follows", function()
+            writer:write_message_chunk(make_message_update("first prose"))
+            assert.is_not_nil(writer._prose_anchor_line)
+
+            writer:write_tool_call_block(make_tool_call_block("t1", "pending"))
+
+            assert.is_nil(writer._prose_anchor_line)
+        end)
+
+        it("re-anchors on prose after a tool call", function()
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(
+                make_message_update("Now writing the summary.")
+            )
+
+            assert.is_not_nil(writer._prose_anchor_line)
+            local anchor_line = writer._prose_anchor_line --[[@as integer]]
+            local content = vim.api.nvim_buf_get_lines(
+                bufnr,
+                anchor_line,
+                anchor_line + 1,
+                false
+            )[1]
+            -- Anchor must land on actual prose, not the leading blank line
+            -- the writer inserts after a tool call.
+            assert.is_not_nil(content)
+            assert.is_true(content:match("%S") ~= nil)
+        end)
+
+        it("clears anchor on append_separator (turn end)", function()
+            writer:write_message_chunk(make_message_update("final answer"))
+            assert.is_not_nil(writer._prose_anchor_line)
+
+            writer:append_separator()
+
+            assert.is_nil(writer._prose_anchor_line)
+        end)
+
+        it("clears anchor on reset_turn_state", function()
+            writer:write_message_chunk(make_message_update("some prose"))
+            assert.is_not_nil(writer._prose_anchor_line)
+
+            writer:reset_turn_state()
+
+            assert.is_nil(writer._prose_anchor_line)
+        end)
+
+        it("clears anchor on write_error_message", function()
+            writer:write_message_chunk(make_message_update("interrupted"))
+            assert.is_not_nil(writer._prose_anchor_line)
+
+            writer:write_error_message({
+                code = -32603,
+                message = "Internal error: something went wrong",
+            })
+
+            assert.is_nil(writer._prose_anchor_line)
+        end)
+
+        it("keeps anchor pinned when scrolloff is non-zero", function()
+            -- scrolloff = 4 (a common user setting) was breaking the pin:
+            -- vim insists on `scrolloff` lines between cursor and the
+            -- window bottom, so parking the cursor at the last visible
+            -- row caused vim to scroll topline forward by `scrolloff`
+            -- lines, defeating the clamp.
+            vim.wo[winid].scrolloff = 4
+
+            for i = 1, 30 do
+                writer:write_message_chunk(
+                    make_message_update("line " .. i .. "\n")
+                )
+                vim.cmd("redraw")
+            end
+            vim.wait(50, function()
+                return false
+            end)
+            vim.cmd("redraw")
+
+            local info = vim.fn.getwininfo(winid)[1]
+            assert.equal(1, info.topline)
+        end)
+
+        it(
+            "keeps anchor pinned across streaming chunks past the viewport",
+            function()
+                -- Window height = 20. Stream 25 chunks of one line each.
+                -- The prose anchor lands at row 0; once total > winheight
+                -- the natural scroll would push the anchor off-screen.
+                -- The pin must keep topline at row 1 (anchor + 1 in
+                -- 1-indexed terms) for every subsequent chunk.
+                --
+                -- Regression: nvim_buf_set_text moves the chat cursor to
+                -- the end of inserted text; vim then auto-corrects topline
+                -- to keep the cursor visible. That happens between
+                -- _check_auto_scroll (pre-write) and scroll_down_only
+                -- (scheduled, post-write), so the clamp's `old_topline <=
+                -- max_topline` precondition fails and the pin silently
+                -- breaks. Cannot stub vim.schedule synchronously here:
+                -- doing so runs scroll_down_only *before* the write, which
+                -- bypasses the bug entirely. Drain via vim.wait instead.
+                for i = 1, 25 do
+                    writer:write_message_chunk(
+                        make_message_update("line " .. i .. "\n")
+                    )
+                    vim.cmd("redraw")
+                    vim.wait(20, function()
+                        return false
+                    end)
+                end
+
+                local info = vim.fn.getwininfo(winid)[1]
+                assert.equal(1, info.topline)
+                -- Cursor parked inside the pinned viewport, not at last.
+                assert.is_true(
+                    vim.api.nvim_win_get_cursor(winid)[1] <= 20
+                )
+            end
+        )
+    end)
+
+    describe("scroll_down_only max_topline clamp", function()
+        --- @type agentic.utils.BufHelpers
+        local BufHelpers
+
+        before_each(function()
+            BufHelpers = require("agentic.utils.buf_helpers")
+        end)
+
+        it("clamps natural scroll to max_topline", function()
+            -- Window height = 20 (from before_each). Add 50 lines so a
+            -- natural G0zb would put topline at ~31. With max_topline=10,
+            -- the clamp keeps the viewport pinned at line 10 (1-indexed).
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+            -- Force topline to 1 so the clamp's `old_topline <= max_topline`
+            -- precondition holds.
+            vim.api.nvim_win_call(winid, function()
+                vim.fn.winrestview({ topline = 1 })
+            end)
+
+            BufHelpers.scroll_down_only(winid, false, 10)
+            -- Force a redraw — vim re-corrects topline if cursor is off
+            -- screen, which is exactly the behaviour the clamp must defeat.
+            vim.cmd("redraw")
+
+            local info = vim.fn.getwininfo(winid)[1]
+            assert.equal(10, info.topline)
+            -- Cursor must sit inside the pinned viewport so the clamp
+            -- survives the redraw.
+            local cursor = vim.api.nvim_win_get_cursor(winid)
+            assert.is_true(cursor[1] >= 10)
+            assert.is_true(cursor[1] <= 10 + 20 - 1)
+        end)
+
+        it(
+            "clamps even when current topline is past max_topline",
+            function()
+                -- Vim auto-corrects topline on redraw whenever cursor is
+                -- off-screen, so by the time the deferred scroll runs the
+                -- topline is typically already past max_topline. The clamp
+                -- must still engage; the "user deliberately scrolled past
+                -- anchor" case is detected and handled by MessageWriter via
+                -- pin-state mismatch (which then passes max_topline=nil
+                -- here, skipping the clamp entirely).
+                local lines = {}
+                for i = 1, 50 do
+                    lines[i] = "line " .. i
+                end
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+                vim.api.nvim_win_set_cursor(winid, { 50, 0 })
+                vim.api.nvim_win_call(winid, function()
+                    vim.fn.winrestview({ topline = 25 })
+                end)
+
+                BufHelpers.scroll_down_only(winid, false, 10)
+                vim.cmd("redraw")
+
+                local info = vim.fn.getwininfo(winid)[1]
+                assert.equal(10, info.topline)
+            end
+        )
+
+        it("scrolls normally when max_topline is nil", function()
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+            vim.api.nvim_win_call(winid, function()
+                vim.fn.winrestview({ topline = 1 })
+            end)
+
+            BufHelpers.scroll_down_only(winid, false, nil)
+
+            local info = vim.fn.getwininfo(winid)[1]
+            -- With 50 lines and a 20-line window, natural bottom-scroll puts
+            -- topline ~= 31. Without a clamp it should be much greater than 10.
+            assert.is_true(info.topline > 10)
+        end)
+    end)
+
+    describe("_check_auto_scroll prose-pin override", function()
+        it(
+            "returns true while a prose anchor is set, regardless of view",
+            function()
+                local lines = {}
+                for i = 1, 50 do
+                    lines[i] = "line " .. i
+                end
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+                -- Cursor far from buffer end — threshold would fail.
+                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+                writer._prose_anchor_line = 9
+
+                -- Pin overrides the proximity threshold. Vim is free to
+                -- drift topline (scrolloff, redraws) and drag the cursor
+                -- with it; neither field is a reliable user-intent signal,
+                -- so the pin stays armed until cleared by a turn boundary
+                -- (tool call, separator, error, /new).
+                assert.is_true(writer:_check_auto_scroll(bufnr))
+                assert.is_not_nil(writer._prose_anchor_line)
+            end
+        )
     end)
 
     describe("on_content_changed callback", function()
