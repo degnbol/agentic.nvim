@@ -527,6 +527,14 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             replace_all = tool_call_block.diff.all,
         })
 
+        -- Capture the matched blocks for diff_jump navigation. Re-extracting
+        -- at gf-press time can fail if the file's loaded buffer was refreshed
+        -- to post-edit content (e.g. after a tabedit reload), at which point
+        -- the OLD-based matcher no longer finds anything.
+        if #diff_blocks > 0 then
+            tool_call_block.cached_diff_blocks = diff_blocks
+        end
+
         local lang = Theme.get_language_from_path(argument)
 
         -- Hack to avoid triple backtick conflicts in markdown files

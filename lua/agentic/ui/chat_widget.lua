@@ -657,6 +657,36 @@ function ChatWidget:_setup_prompt_signs()
         end,
         { desc = "Agentic: Next prompt" }
     )
+
+    local open_diff_file = Config.keymaps.chat
+        and Config.keymaps.chat.open_diff_file
+    if
+        open_diff_file
+        and not BufHelpers.is_keymap_disabled(open_diff_file)
+    then
+        local status_messages = {
+            no_session = "No agentic session for this tab",
+            no_block = "No tool call block under cursor",
+            no_diff = "Tool call has no diff (not an Edit/Write)",
+            no_target = "Could not locate diff hunks",
+        }
+        BufHelpers.multi_keymap_set(
+            open_diff_file,
+            chat_buf,
+            function()
+                local DiffJump = require("agentic.ui.diff_jump")
+                local status = DiffJump.handle()
+                if status ~= "ok" then
+                    Logger.notify(
+                        status_messages[status] or status,
+                        vim.log.levels.INFO,
+                        { title = "Agentic" }
+                    )
+                end
+            end,
+            { desc = "Agentic: Open diff file in new tab" }
+        )
+    end
 end
 
 function ChatWidget:_bind_keymaps()

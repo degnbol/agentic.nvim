@@ -47,6 +47,7 @@ local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- @field search_matches? agentic.ui.MessageWriter.SearchMatch[] Pattern match positions (relative to block lines)
 --- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
 --- @field diff_tab? integer Tabpage ID of the diff preview tab (set by SessionManager)
+--- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
 
 --- Known prefix of the rejection boilerplate injected by the provider after
 --- a permission denial. Streamed as agent_message_chunk but meant for the
