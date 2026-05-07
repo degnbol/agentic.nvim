@@ -524,6 +524,17 @@ Adapters must check both `kind == "other"` and `kind == "switch_mode"` in any
 branch that handles mode switches. The `title` field is unstable — use pattern
 matching (e.g. `title:match("^Ready%s")`) rather than exact string comparison.
 
+### Tool kind casing varies by provider
+
+The ACP schema spells kinds in lowercase (`"read"`, `"search"`, `"execute"`,
+…), and most providers follow that. opencode emits capitalised kinds
+(`"Read"`, `"Search"`) — which still render correctly because
+`tool_call_renderer.display_kind` normalises case for the chat heading,
+but a case-sensitive lookup table (e.g. `READ_ONLY_KINDS["Read"]`) silently
+misses. Any kind-based dispatch must lowercase before lookup, or compose a
+table that includes both casings. The chat heading is not a reliable signal
+that the right `kind` arrived — `display_kind` hides the difference.
+
 ### Permission optionId is opaque
 
 `request.options[].optionId` is a provider-assigned opaque string (e.g.
