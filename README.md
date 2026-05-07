@@ -24,6 +24,11 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
   - Set new keymaps for the submission of common custom prompts. Comes with `<localLeader>c` to send "Continue"
 - Completion of any terms mentioned in chat
 - Navigation keymap (default: `[[` and `]]`) for cursor jump between prompts.
+- **Forwarded slash commands** (work via ACP, not intercepted locally):
+  - `/init` — generate a project `CLAUDE.md`
+  - `/review` — pull-request review
+  - `/security-review` — security review of pending changes
+  - `/compact`, `/extra-usage`, `/insights`, `/team-onboarding`, `/heapdump`
 
 ### Rendering
 

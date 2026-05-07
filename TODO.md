@@ -6,6 +6,27 @@ Start doing some version tracking so we can separate bug fixes from feature rele
 
 ### Rendering
 
+- After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
+  After closing the program (nvim), restarting and resuming the session a response is visible immidiately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
+  This is a long standing and difficult bug.
+
+- Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
+
+```markdown
+### Search
+```bash
+rg -n ""todowrite"|@alias|@class.*ToolCall" /Users/cmadsen/dotfiles/config/nvim/modules/agentic.nvim/lua/agentic/ui/message_writer.lua
+```
+```console
+26:--- @class agentic.ui.MessageWriter.ToolCallDiff
+31:--- @class agentic.ui.MessageWriter.ToolCallBase
+42:--- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
+694:        or tool_call_block.kind == "todowrite"
+782:    if tracker.kind == "switch_mode" or tracker.kind == "todowrite" then
+```
+ ✔ completed
+```
+
 - AgenticClean__punctuation_special_markdown is showing up in seemingly random places in markdown tables.
   My guess is it's placed correctly for the `|` delimiters before we do my custom auto-align of tables which then leaves it highlighting random letters.
   The fix might simply be to remove the code adding AgenticClean__punctuation_special_markdown, what is it used for? We have proper hl of `|` in md tables already.
@@ -70,6 +91,10 @@ Start doing some version tracking so we can separate bug fixes from feature rele
 Several issues cluster here; suggests work done for claude wasn't generalised
 to all ACPs.
 
+- **Write is empty**: it seems the chat block is empty on a new write and I 
+suspect it's because the diff is null for the "before" state and the code can't 
+find a match since there's no file yet. We don't have this problem for claude.
+
 - **Pending vs `in_progress`**: while waiting for approval opencode shows
   the suggested edit with `in_progress` where claude shows `pending`. Should
   be pending — the command is not in progress.
@@ -110,6 +135,13 @@ to all ACPs.
 - **Parallel tasks not showing in chat**: previously fixed for claude, now
   reappearing for opencode. Audit claude-specific fixes for ones that should
   have been general across adapters.
+
+- Asked for permission from Read tool and basic `ls`. We should consider 
+increasing the auto-allow system here to allow all read tools, and either reuse 
+the settings.json list from claude or have a local copy of all the basic 
+commands like `ls` that are read-only. The plugin opt-out setting should be 
+whether to allow all read-only commands and then have a config list of 
+read-only commands that we can populate from my claude settings.json.
 
 - **Write tool shows minimal header**: opencode Write tool shows just
   `### Edit` with the file path, not the file contents. Should show the
@@ -158,8 +190,6 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 - **`/compact`**, **`/extra-usage`**, **`/insights`**,
   **`/team-onboarding`**, **`/heapdump`** — all forwarded.
 
-Action: mention these in README/docs so users know they work.
-
 **Maybe**
 
 - **PDF attachments**: the plugin supports image paste (see `image_paste`
@@ -194,6 +224,12 @@ Action: mention these in README/docs so users know they work.
 
 ### Rendering
 
+- If we can distinguish text coming into chat from Stop event then maybe we 
+could stop scrolling when the model is writing a stop even block of text? Could 
+be useful to auto-scroll as the model goes through reading/exploration/etc but 
+have the scroll stop with the first line of a stop paragraph at the top of 
+screen so we can read it.
+
 - **Shebang/modeline detection for Edit tool previews**: scripts without a
   file extension but with a shebang (or vim modeline) should infer filetype
   for code injection preview in chat. Not a common case.
@@ -203,10 +239,28 @@ Action: mention these in README/docs so users know they work.
 
 - **Strike-through for completed todo items**: opt-out config option.
 
+- Read tool should show the filepath captured as @string.special.path. Is there any default way in markdown for formatting filepath?
+
 ### Session / workflow
 
 - **Session dashboard**: see TUI parity above — runtime state (model,
   provider, mode, context %, token usage, limit proximity) in one window.
+
+- **Per-message token cost & session profiler**: surface how expensive
+  each prompt/turn is and which messages dominate the running context.
+  Two views: (1) inline indication per user prompt or assistant turn
+  (delta input/output tokens, maybe a sparkline in the gutter); (2) a
+  profiler view ranking top offenders for the session — large tool
+  outputs, long file reads, verbose build/test logs. Goal: spot when a
+  single `cargo build` blows the budget so the user can adjust workflow
+  (output filtering, smaller scope, manual context pruning) before
+  hitting auto-compact. Data is in `usage_update` deltas; attribution
+  needs to associate the delta with the preceding tool call or message.
+  Worth piloting against the Bevy project where `cargo` output is
+  suspected to be the main context eater. (Related: [rtk-ai/rtk](https://github.com/rtk-ai/rtk)
+  is an external CLI proxy that compresses verbose dev-command output —
+  if a profiler confirms `cargo`/`pytest` are the offenders, an in-plugin
+  filter or rtk-style wrapper could be a follow-up.)
 
 - **Background processes window**: a panel listing currently-running
   background tool calls (Bash with `run_in_background: true`,
@@ -246,6 +300,8 @@ Action: mention these in README/docs so users know they work.
   implemented because resume fails otherwise. Is it possible to resume a
   session with a different model, and even a different provider, on
   purpose?
+
+- Consider benefits of supporting https://pi.dev/ and using it instead of opencode for the liteLLM models.
 
 ### Permissions
 
@@ -289,3 +345,5 @@ Completion should show this, e.g. the menu entry and might need snippet.
 
 - **README demos**: images or gifs in the readme or elsewhere demoing the differences
   between this plugin and the stock TUI.
+
+- Should we switch to `just` instead of `make`?
