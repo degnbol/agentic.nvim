@@ -9,22 +9,38 @@ local M = {}
 --- @field lua_pattern string
 
 --- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
-local cached_allow_patterns
+local cached_deny_patterns
 
 --- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
-local cached_deny_patterns
+local cached_ask_patterns
+
+--- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
+local cached_read_only_patterns
+
+--- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
+local cached_safe_write_patterns
 
 --- mtime of each settings.json at last load, keyed by path
 --- @type table<string, number>
 local cached_mtimes = {}
 
---- Compiled patterns from Config.read_only_commands, keyed by the table
---- reference at last compile so we recompile only when the user replaces
---- the list (rare).
+--- Cached config patterns, keyed by table reference
 --- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
-local cached_config_allow_ref, cached_config_allow_patterns = nil, {}
+local cached_config_read_only_ref, cached_config_read_only_patterns = nil, {}
+--- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
+local cached_config_safe_write_ref, cached_config_safe_write_patterns = nil, {}
 --- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
 local cached_config_deny_ref, cached_config_deny_patterns = nil, {}
+--- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
+local cached_config_ask_ref, cached_config_ask_patterns = nil, {}
+
+--- Path to bundled permissions.json
+--- @return string
+local function plugin_permissions_path()
+    local mod_path = debug.getinfo(1, "S").source:sub(2)
+    local mod_dir = vim.fn.fnamemodify(mod_path, ":h:h")
+    return mod_dir .. "/permissions.json"
+end
 
 --- Lua pattern magic characters that need escaping
 local MAGIC_CHARS = {
@@ -137,52 +153,82 @@ local function settings_changed()
         or get_mtime(project_path) ~= (cached_mtimes[project_path] or 0)
 end
 
---- Load and cache allow/deny patterns from ~/.claude/settings.json and
---- project-level .claude/settings.json. Re-reads automatically when file
---- mtimes change (handles both in-editor and external edits).
+--- Load and cache patterns from all sources:
+--- 1. Bundled permissions.json (if Config.permissions.use_plugin_defaults)
+--- 2. ~/.claude/settings.json and .claude/settings.json (if Config.permissions.use_claude_settings)
+--- 3. Config.permissions.read_only/safe_write/deny/ask (user additions)
+--- Re-reads automatically when file mtimes change.
 function M.load_patterns()
-    if cached_allow_patterns and not settings_changed() then
+    if cached_read_only_patterns and not settings_changed() then
         return
     end
 
-    cached_allow_patterns = {}
+    cached_read_only_patterns = {}
+    cached_safe_write_patterns = {}
     cached_deny_patterns = {}
+    cached_ask_patterns = {}
 
     local global_path, project_path = M.settings_paths()
-
     cached_mtimes[global_path] = get_mtime(global_path)
     cached_mtimes[project_path] = get_mtime(project_path)
 
-    local global = M.read_json(global_path)
-    if global and global.permissions then
-        vim.list_extend(
-            cached_allow_patterns,
-            M.extract_bash_patterns(global.permissions, "allow")
-        )
-        vim.list_extend(
-            cached_deny_patterns,
-            M.extract_bash_patterns(global.permissions, "deny")
-        )
-        vim.list_extend(
-            cached_deny_patterns,
-            M.extract_bash_patterns(global.permissions, "ask")
-        )
+    -- 1. Load bundled permissions.json
+    if Config.permissions.use_plugin_defaults then
+        local plugin_path = plugin_permissions_path()
+        local plugin_perms = M.read_json(plugin_path)
+        if plugin_perms then
+            vim.list_extend(
+                cached_read_only_patterns,
+                M.extract_bash_patterns(plugin_perms, "read_only")
+            )
+            vim.list_extend(
+                cached_safe_write_patterns,
+                M.extract_bash_patterns(plugin_perms, "safe_write")
+            )
+            vim.list_extend(
+                cached_deny_patterns,
+                M.extract_bash_patterns(plugin_perms, "deny")
+            )
+            vim.list_extend(
+                cached_ask_patterns,
+                M.extract_bash_patterns(plugin_perms, "ask")
+            )
+        end
     end
 
-    local project = M.read_json(project_path)
-    if project and project.permissions then
-        vim.list_extend(
-            cached_allow_patterns,
-            M.extract_bash_patterns(project.permissions, "allow")
-        )
-        vim.list_extend(
-            cached_deny_patterns,
-            M.extract_bash_patterns(project.permissions, "deny")
-        )
-        vim.list_extend(
-            cached_deny_patterns,
-            M.extract_bash_patterns(project.permissions, "ask")
-        )
+    -- 2. Load from Claude settings.json files (allow maps to read_only for compatibility)
+    if Config.permissions.use_claude_settings then
+        local global = M.read_json(global_path)
+        if global and global.permissions then
+            vim.list_extend(
+                cached_read_only_patterns,
+                M.extract_bash_patterns(global.permissions, "allow")
+            )
+            vim.list_extend(
+                cached_deny_patterns,
+                M.extract_bash_patterns(global.permissions, "deny")
+            )
+            vim.list_extend(
+                cached_ask_patterns,
+                M.extract_bash_patterns(global.permissions, "ask")
+            )
+        end
+
+        local project = M.read_json(project_path)
+        if project and project.permissions then
+            vim.list_extend(
+                cached_read_only_patterns,
+                M.extract_bash_patterns(project.permissions, "allow")
+            )
+            vim.list_extend(
+                cached_deny_patterns,
+                M.extract_bash_patterns(project.permissions, "deny")
+            )
+            vim.list_extend(
+                cached_ask_patterns,
+                M.extract_bash_patterns(project.permissions, "ask")
+            )
+        end
     end
 end
 
@@ -441,52 +487,94 @@ local function patterns_from_strings(strings)
     return out
 end
 
---- Resolve the merged allow-pattern list: settings.json patterns plus
---- Config.read_only_commands (when enabled). The config list is recompiled
---- only when its table reference changes.
+--- Resolve the merged read_only pattern list from all sources.
 --- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.get_allow_patterns()
+function M.get_read_only_patterns()
     M.load_patterns()
     local result = {}
-    vim.list_extend(result, cached_allow_patterns or {})
-    if Config.auto_approve_read_only_commands then
-        local list = Config.read_only_commands
-        if list ~= cached_config_allow_ref then
-            cached_config_allow_ref = list
-            cached_config_allow_patterns = patterns_from_strings(list)
-        end
-        vim.list_extend(result, cached_config_allow_patterns)
+    vim.list_extend(result, cached_read_only_patterns or {})
+    local list = Config.permissions.read_only
+    if list ~= cached_config_read_only_ref then
+        cached_config_read_only_ref = list
+        cached_config_read_only_patterns = patterns_from_strings(list)
     end
+    vim.list_extend(result, cached_config_read_only_patterns)
     return result
 end
 
---- Resolve the merged deny-pattern list: settings.json deny/ask plus
---- Config.read_only_commands_deny (when enabled).
+--- Resolve the merged safe_write pattern list from all sources.
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function M.get_safe_write_patterns()
+    M.load_patterns()
+    local result = {}
+    vim.list_extend(result, cached_safe_write_patterns or {})
+    local list = Config.permissions.safe_write
+    if list ~= cached_config_safe_write_ref then
+        cached_config_safe_write_ref = list
+        cached_config_safe_write_patterns = patterns_from_strings(list)
+    end
+    vim.list_extend(result, cached_config_safe_write_patterns)
+    return result
+end
+
+--- Resolve the merged allow-pattern list based on auto_approve setting.
+--- Returns read_only + safe_write if "allow", read_only only if "read-only".
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function M.get_allow_patterns()
+    local auto_approve = Config.permissions.auto_approve
+    if not auto_approve then
+        return {}
+    end
+
+    local result = M.get_read_only_patterns()
+
+    if auto_approve == "allow" then
+        vim.list_extend(result, M.get_safe_write_patterns())
+    end
+
+    return result
+end
+
+--- Resolve the merged deny-pattern list from all sources.
 --- @return agentic.utils.PermissionRules.CompiledPattern[]
 function M.get_deny_patterns()
     M.load_patterns()
     local result = {}
     vim.list_extend(result, cached_deny_patterns or {})
-    if Config.auto_approve_read_only_commands then
-        local list = Config.read_only_commands_deny
-        if list ~= cached_config_deny_ref then
-            cached_config_deny_ref = list
-            cached_config_deny_patterns = patterns_from_strings(list)
-        end
-        vim.list_extend(result, cached_config_deny_patterns)
+    local list = Config.permissions.deny
+    if list ~= cached_config_deny_ref then
+        cached_config_deny_ref = list
+        cached_config_deny_patterns = patterns_from_strings(list)
     end
+    vim.list_extend(result, cached_config_deny_patterns)
+    return result
+end
+
+--- Resolve the merged ask-pattern list from all sources.
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function M.get_ask_patterns()
+    M.load_patterns()
+    local result = {}
+    vim.list_extend(result, cached_ask_patterns or {})
+    local list = Config.permissions.ask
+    if list ~= cached_config_ask_ref then
+        cached_config_ask_ref = list
+        cached_config_ask_patterns = patterns_from_strings(list)
+    end
+    vim.list_extend(result, cached_config_ask_patterns)
     return result
 end
 
 --- Check if a compound Bash command should be auto-approved.
 --- Every segment must match an allow pattern, and no segment may match a
---- deny/ask pattern. Returns false for empty commands, unsafe constructs,
+--- deny or ask pattern. Returns false for empty commands, unsafe constructs,
 --- or any unmatched segment.
 --- @param command string
 --- @return boolean
 function M.should_auto_approve(command)
     local allow = M.get_allow_patterns()
     local deny = M.get_deny_patterns()
+    local ask = M.get_ask_patterns()
 
     if #allow == 0 then
         return false
@@ -511,8 +599,13 @@ function M.should_auto_approve(command)
             return false
         end
 
-        -- Deny/ask patterns take precedence
+        -- Deny patterns block immediately
         if #deny > 0 and M.matches_any_pattern(trimmed, deny) then
+            return false
+        end
+
+        -- Ask patterns trigger a prompt (not auto-approved)
+        if #ask > 0 and M.matches_any_pattern(trimmed, ask) then
             return false
         end
 
@@ -526,13 +619,19 @@ end
 
 --- Invalidate cached patterns (forces re-read on next check).
 function M.invalidate_cache()
-    cached_allow_patterns = nil
     cached_deny_patterns = nil
+    cached_ask_patterns = nil
+    cached_read_only_patterns = nil
+    cached_safe_write_patterns = nil
     cached_mtimes = {}
-    cached_config_allow_ref = nil
-    cached_config_allow_patterns = {}
+    cached_config_read_only_ref = nil
+    cached_config_read_only_patterns = {}
+    cached_config_safe_write_ref = nil
+    cached_config_safe_write_patterns = {}
     cached_config_deny_ref = nil
     cached_config_deny_patterns = {}
+    cached_config_ask_ref = nil
+    cached_config_ask_patterns = {}
 end
 
 return M

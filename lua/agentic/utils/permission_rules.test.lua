@@ -531,24 +531,21 @@ describe("PermissionRules", function()
         end)
 
         it("returns false with no allow patterns", function()
-            -- Disable Config.read_only_commands so settings.json is the
-            -- only source — the test verifies the empty-settings path.
+            -- Disable all sources so no patterns are loaded
             local Config = require("agentic.config")
-            local orig_flag = Config.auto_approve_read_only_commands
-            Config.auto_approve_read_only_commands = false
+            local orig_plugin = Config.permissions.use_plugin_defaults
+            local orig_claude = Config.permissions.use_claude_settings
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = false
 
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function()
-                return nil
-            end
             PermissionRules.invalidate_cache()
 
             local result = PermissionRules.should_auto_approve("ls -la")
             assert.is_false(result)
 
-            PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
-            Config.auto_approve_read_only_commands = orig_flag
+            Config.permissions.use_plugin_defaults = orig_plugin
+            Config.permissions.use_claude_settings = orig_claude
         end)
 
         it("handles newlines in compound commands", function()
@@ -791,23 +788,31 @@ describe("PermissionRules", function()
 
     describe("should_auto_approve with redirect", function()
         local Config
-        local orig_flag
+        local orig_plugin
+        local orig_claude
         local orig_read_json
 
         before_each(function()
             Config = require("agentic.config")
-            orig_flag = Config.auto_approve_read_only_commands
-            Config.auto_approve_read_only_commands = true
+            orig_plugin = Config.permissions.use_plugin_defaults
+            orig_claude = Config.permissions.use_claude_settings
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
 
             orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function()
-                return nil
+            -- Only stub settings.json paths, let plugin permissions.json load
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return nil
+                end
+                return orig_read_json(path)
             end
             PermissionRules.invalidate_cache()
         end)
 
         after_each(function()
-            Config.auto_approve_read_only_commands = orig_flag
+            Config.permissions.use_plugin_defaults = orig_plugin
+            Config.permissions.use_claude_settings = orig_claude
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
         end)
@@ -846,55 +851,95 @@ describe("PermissionRules", function()
         end)
     end)
 
-    describe("config read_only_commands", function()
+    describe("config permissions", function()
         --- @type agentic.UserConfig
         local Config
-        local orig_flag
-        local orig_allow
+        local orig_plugin
+        local orig_claude
+        local orig_read_only
+        local orig_safe_write
         local orig_deny
+        local orig_auto_approve
         local orig_read_json
 
         before_each(function()
             Config = require("agentic.config")
-            orig_flag = Config.auto_approve_read_only_commands
-            orig_allow = Config.read_only_commands
-            orig_deny = Config.read_only_commands_deny
+            orig_plugin = Config.permissions.use_plugin_defaults
+            orig_claude = Config.permissions.use_claude_settings
+            orig_read_only = Config.permissions.read_only
+            orig_safe_write = Config.permissions.safe_write
+            orig_deny = Config.permissions.deny
+            orig_auto_approve = Config.permissions.auto_approve
 
-            -- Stub settings.json to empty so only Config patterns apply
+            -- Stub settings.json to empty so only plugin defaults apply
             orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function()
-                return nil
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return nil
+                end
+                return orig_read_json(path)
             end
             PermissionRules.invalidate_cache()
         end)
 
         after_each(function()
-            Config.auto_approve_read_only_commands = orig_flag
-            Config.read_only_commands = orig_allow
-            Config.read_only_commands_deny = orig_deny
+            Config.permissions.use_plugin_defaults = orig_plugin
+            Config.permissions.use_claude_settings = orig_claude
+            Config.permissions.read_only = orig_read_only
+            Config.permissions.safe_write = orig_safe_write
+            Config.permissions.deny = orig_deny
+            Config.permissions.auto_approve = orig_auto_approve
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
         end)
 
-        it("approves command from default list when flag enabled", function()
-            Config.auto_approve_read_only_commands = true
+        it("approves command from plugin defaults when auto_approve=allow", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
             assert.is_true(PermissionRules.should_auto_approve("ls -la /tmp"))
         end)
 
-        it("rejects when flag disabled even with default match", function()
-            Config.auto_approve_read_only_commands = false
+        it("approves command from plugin defaults when auto_approve=read-only", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "read-only"
+            PermissionRules.invalidate_cache()
+            assert.is_true(PermissionRules.should_auto_approve("ls -la /tmp"))
+        end)
+
+        it("rejects when auto_approve is nil", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = nil
+            PermissionRules.invalidate_cache()
             assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
         end)
 
-        it("approves compound of two default-list commands", function()
-            Config.auto_approve_read_only_commands = true
+        it("rejects when both sources disabled", function()
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
+            assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
+        end)
+
+        it("approves compound of two plugin-default commands", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
             assert.is_true(
                 PermissionRules.should_auto_approve("cat foo.txt | head -5")
             )
         end)
 
-        it("rejects find -exec via default deny list", function()
-            Config.auto_approve_read_only_commands = true
+        it("rejects find -exec via plugin deny list", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "find . -name '*.lua' -exec rm {} +"
@@ -903,22 +948,31 @@ describe("PermissionRules", function()
         end)
 
         it("approves find without -exec", function()
-            Config.auto_approve_read_only_commands = true
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
             assert.is_true(
                 PermissionRules.should_auto_approve("find . -name '*.lua'")
             )
         end)
 
-        it("rejects command not in default list", function()
-            Config.auto_approve_read_only_commands = true
+        it("rejects command not in any allow list", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
             assert.is_false(
                 PermissionRules.should_auto_approve("rm -rf /tmp/foo")
             )
         end)
 
-        it("recompiles when Config.read_only_commands is replaced", function()
-            Config.auto_approve_read_only_commands = true
-            Config.read_only_commands = { "Bash(custom *)" }
+        it("recompiles when Config.permissions.read_only is replaced", function()
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "read-only"
+            Config.permissions.read_only = { "Bash(custom *)" }
+            PermissionRules.invalidate_cache()
             -- Default `ls` no longer in list
             assert.is_false(PermissionRules.should_auto_approve("ls -la"))
             assert.is_true(
@@ -927,9 +981,11 @@ describe("PermissionRules", function()
         end)
 
         it("merges Config patterns with settings.json patterns", function()
-            Config.auto_approve_read_only_commands = true
-            Config.read_only_commands = { "Bash(ls *)" }
-            Config.read_only_commands_deny = {}
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = true
+            Config.permissions.auto_approve = "read-only"
+            Config.permissions.read_only = { "Bash(ls *)" }
+            Config.permissions.deny = {}
 
             PermissionRules.read_json = function(path)
                 if path:find("settings%.json$") then
