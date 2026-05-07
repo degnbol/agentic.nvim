@@ -100,6 +100,27 @@ describe("PermissionRules", function()
                 PermissionRules.strip_devnull_redirects("cmd arg >/tmp/out")
             )
         end)
+
+        it("strips >&N fd duplication", function()
+            assert.equal(
+                "echo hi",
+                PermissionRules.strip_devnull_redirects("echo hi >&2")
+            )
+        end)
+
+        it("strips N>&M fd duplication", function()
+            assert.equal(
+                "cmd",
+                PermissionRules.strip_devnull_redirects("cmd 2>&1")
+            )
+        end)
+
+        it("does not strip >&filename (non-digit target)", function()
+            assert.equal(
+                "cmd >&output",
+                PermissionRules.strip_devnull_redirects("cmd >&output")
+            )
+        end)
     end)
 
     describe("strip_wrapper_prefixes", function()
@@ -510,6 +531,12 @@ describe("PermissionRules", function()
         end)
 
         it("returns false with no allow patterns", function()
+            -- Disable Config.read_only_commands so settings.json is the
+            -- only source — the test verifies the empty-settings path.
+            local Config = require("agentic.config")
+            local orig_flag = Config.auto_approve_read_only_commands
+            Config.auto_approve_read_only_commands = false
+
             local orig_read_json = PermissionRules.read_json
             PermissionRules.read_json = function()
                 return nil
@@ -521,6 +548,7 @@ describe("PermissionRules", function()
 
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
+            Config.auto_approve_read_only_commands = orig_flag
         end)
 
         it("handles newlines in compound commands", function()
@@ -706,6 +734,222 @@ describe("PermissionRules", function()
 
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
+        end)
+    end)
+
+    describe("has_unsafe_redirect", function()
+        it("detects > file", function()
+            assert.is_true(PermissionRules.has_unsafe_redirect("cat foo > bar"))
+        end)
+
+        it("detects >> file (append)", function()
+            assert.is_true(
+                PermissionRules.has_unsafe_redirect("echo x >> /tmp/log")
+            )
+        end)
+
+        it("detects 2> file", function()
+            assert.is_true(
+                PermissionRules.has_unsafe_redirect("cat foo 2>/tmp/err")
+            )
+        end)
+
+        it("detects &> file", function()
+            assert.is_true(
+                PermissionRules.has_unsafe_redirect("cat foo &>/tmp/all")
+            )
+        end)
+
+        it("allows >&N (fd duplication)", function()
+            assert.is_false(
+                PermissionRules.has_unsafe_redirect("echo error >&2")
+            )
+        end)
+
+        it("allows 2>&1", function()
+            assert.is_false(
+                PermissionRules.has_unsafe_redirect("cmd 2>&1")
+            )
+        end)
+
+        it("ignores > inside single quotes", function()
+            assert.is_false(
+                PermissionRules.has_unsafe_redirect("grep 'a > b' file")
+            )
+        end)
+
+        it("ignores > inside double quotes", function()
+            assert.is_false(
+                PermissionRules.has_unsafe_redirect([[grep "a > b" file]])
+            )
+        end)
+
+        it("returns false for plain command", function()
+            assert.is_false(PermissionRules.has_unsafe_redirect("ls -la /tmp"))
+        end)
+    end)
+
+    describe("should_auto_approve with redirect", function()
+        local Config
+        local orig_flag
+        local orig_read_json
+
+        before_each(function()
+            Config = require("agentic.config")
+            orig_flag = Config.auto_approve_read_only_commands
+            Config.auto_approve_read_only_commands = true
+
+            orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function()
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+        end)
+
+        after_each(function()
+            Config.auto_approve_read_only_commands = orig_flag
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("rejects allowed command with output redirect", function()
+            -- `cat *` is in the default allow list; redirect must override.
+            assert.is_false(
+                PermissionRules.should_auto_approve("cat /etc/hosts > /tmp/x")
+            )
+        end)
+
+        it("rejects allowed command with append redirect", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("echo x >> /tmp/log")
+            )
+        end)
+
+        it("approves allowed command with stderr fd dup", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("echo hi >&2")
+            )
+        end)
+
+        it("approves allowed command with /dev/null redirect", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("ls /tmp 2>/dev/null")
+            )
+        end)
+
+        it("rejects redirect in middle of pipeline", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "cat /etc/hosts | head -3 > /tmp/x"
+                )
+            )
+        end)
+    end)
+
+    describe("config read_only_commands", function()
+        --- @type agentic.UserConfig
+        local Config
+        local orig_flag
+        local orig_allow
+        local orig_deny
+        local orig_read_json
+
+        before_each(function()
+            Config = require("agentic.config")
+            orig_flag = Config.auto_approve_read_only_commands
+            orig_allow = Config.read_only_commands
+            orig_deny = Config.read_only_commands_deny
+
+            -- Stub settings.json to empty so only Config patterns apply
+            orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function()
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+        end)
+
+        after_each(function()
+            Config.auto_approve_read_only_commands = orig_flag
+            Config.read_only_commands = orig_allow
+            Config.read_only_commands_deny = orig_deny
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves command from default list when flag enabled", function()
+            Config.auto_approve_read_only_commands = true
+            assert.is_true(PermissionRules.should_auto_approve("ls -la /tmp"))
+        end)
+
+        it("rejects when flag disabled even with default match", function()
+            Config.auto_approve_read_only_commands = false
+            assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
+        end)
+
+        it("approves compound of two default-list commands", function()
+            Config.auto_approve_read_only_commands = true
+            assert.is_true(
+                PermissionRules.should_auto_approve("cat foo.txt | head -5")
+            )
+        end)
+
+        it("rejects find -exec via default deny list", function()
+            Config.auto_approve_read_only_commands = true
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "find . -name '*.lua' -exec rm {} +"
+                )
+            )
+        end)
+
+        it("approves find without -exec", function()
+            Config.auto_approve_read_only_commands = true
+            assert.is_true(
+                PermissionRules.should_auto_approve("find . -name '*.lua'")
+            )
+        end)
+
+        it("rejects command not in default list", function()
+            Config.auto_approve_read_only_commands = true
+            assert.is_false(
+                PermissionRules.should_auto_approve("rm -rf /tmp/foo")
+            )
+        end)
+
+        it("recompiles when Config.read_only_commands is replaced", function()
+            Config.auto_approve_read_only_commands = true
+            Config.read_only_commands = { "Bash(custom *)" }
+            -- Default `ls` no longer in list
+            assert.is_false(PermissionRules.should_auto_approve("ls -la"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("custom thing")
+            )
+        end)
+
+        it("merges Config patterns with settings.json patterns", function()
+            Config.auto_approve_read_only_commands = true
+            Config.read_only_commands = { "Bash(ls *)" }
+            Config.read_only_commands_deny = {}
+
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(make test*)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            assert.is_true(PermissionRules.should_auto_approve("ls -la"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("make test foo")
+            )
+            assert.is_true(
+                PermissionRules.should_auto_approve("ls /tmp && make test x")
+            )
         end)
     end)
 end)

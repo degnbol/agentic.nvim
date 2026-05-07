@@ -141,10 +141,14 @@ function PermissionManager:_try_auto_approve(request, callback)
         return false
     end
 
-    -- Read-only tools: always approve (no filesystem mutation possible)
+    -- Read-only tools: always approve (no filesystem mutation possible).
+    -- Match case-insensitively — providers vary on casing (e.g. opencode
+    -- emits "Read" while the ACP spec uses lowercase).
+    local kind_lc = tool_call.kind and tool_call.kind:lower() or nil
     if
         Config.auto_approve_read_only_tools
-        and READ_ONLY_KINDS[tool_call.kind]
+        and kind_lc
+        and READ_ONLY_KINDS[kind_lc]
     then
         return auto_approve(
             request,

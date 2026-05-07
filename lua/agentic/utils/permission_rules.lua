@@ -1,3 +1,4 @@
+local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.utils.PermissionRules
@@ -16,6 +17,14 @@ local cached_deny_patterns
 --- mtime of each settings.json at last load, keyed by path
 --- @type table<string, number>
 local cached_mtimes = {}
+
+--- Compiled patterns from Config.read_only_commands, keyed by the table
+--- reference at last compile so we recompile only when the user replaces
+--- the list (rare).
+--- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
+local cached_config_allow_ref, cached_config_allow_patterns = nil, {}
+--- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
+local cached_config_deny_ref, cached_config_deny_patterns = nil, {}
 
 --- Lua pattern magic characters that need escaping
 local MAGIC_CHARS = {
@@ -221,16 +230,69 @@ function M.strip_wrapper_prefixes(segment)
     return segment
 end
 
---- Strip harmless /dev/null redirects from a command segment.
---- Only strips redirects targeting /dev/null — other targets are left intact.
+--- Detect output redirection that would write to a file.
+--- Call AFTER `strip_devnull_redirects` so harmless `>/dev/null` and `2>&1`
+--- forms don't trigger. Recognises `>`, `>>`, `2>`, `&>` (write) and
+--- `>&N` where N is a digit (fd dup, not a file write — `>&2`, `2>&1`,
+--- etc. are allowed). Quoted `>` is ignored.
+---
+--- This is the safety net that lets the read-only command list stay
+--- focused on the COMMAND being read-only — without it, `cat foo > evil`
+--- would match `Bash(cat *)` because `[^|;&]*` lets `>` through, and
+--- silently write the file.
+--- @param segment string
+--- @return boolean
+function M.has_unsafe_redirect(segment)
+    local in_single = false
+    local in_double = false
+    local i = 1
+    local len = #segment
+    while i <= len do
+        local ch = segment:sub(i, i)
+        if ch == "'" and not in_double then
+            in_single = not in_single
+            i = i + 1
+        elseif ch == '"' and not in_single then
+            in_double = not in_double
+            i = i + 1
+        elseif not in_single and not in_double and ch == ">" then
+            local next_ch = segment:sub(i + 1, i + 1)
+            if next_ch == "&" then
+                local third_ch = segment:sub(i + 2, i + 2)
+                if third_ch:match("%d") then
+                    -- >&N where N is a digit = fd duplication, not a file write
+                    i = i + 3
+                else
+                    -- >&filename = combined output redirect (rare bash idiom)
+                    return true
+                end
+            else
+                -- > file, >> file, 2> file, &> file = file write
+                return true
+            end
+        else
+            i = i + 1
+        end
+    end
+    return false
+end
+
+--- Strip harmless redirects from a command segment: writes to /dev/null
+--- and file descriptor duplications (`2>&1`, `>&2`, `N>&M`). All of these
+--- are no-ops or terminal-only writes — never write to a user file. Run
+--- before pattern matching so `[^|;&]*` doesn't choke on the `&` in
+--- `>&N`. Other redirect targets are left intact for `has_unsafe_redirect`
+--- to detect.
 --- @param segment string
 --- @return string
 function M.strip_devnull_redirects(segment)
-    -- Order matters: &>/dev/null before >/dev/null to avoid partial match
+    -- Order matters: longer/combined patterns before shorter ones
     segment = segment:gsub("%s*&>/dev/null", "")
-    segment = segment:gsub("%s*2>&1", "")
     segment = segment:gsub("%s*2>/dev/null", "")
     segment = segment:gsub("%s*>/dev/null", "")
+    -- File descriptor duplications: N>&M and >&N (digit only)
+    segment = segment:gsub("%s*%d+>&%d+", "")
+    segment = segment:gsub("%s*>&%d+", "")
     return segment
 end
 
@@ -356,6 +418,66 @@ function M.matches_any_pattern(segment, patterns)
     return false
 end
 
+--- Compile a list of `Bash(...)` glob strings into matched patterns. Skips
+--- non-Bash entries and malformed strings.
+--- @param strings string[]|nil
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+local function patterns_from_strings(strings)
+    local out = {}
+    if type(strings) ~= "table" then
+        return out
+    end
+    for _, entry in ipairs(strings) do
+        if type(entry) == "string" then
+            local inner = entry:match("^Bash%((.+)%)$")
+            if inner then
+                table.insert(out, {
+                    original = inner,
+                    lua_pattern = M.glob_to_lua_pattern(inner),
+                })
+            end
+        end
+    end
+    return out
+end
+
+--- Resolve the merged allow-pattern list: settings.json patterns plus
+--- Config.read_only_commands (when enabled). The config list is recompiled
+--- only when its table reference changes.
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function M.get_allow_patterns()
+    M.load_patterns()
+    local result = {}
+    vim.list_extend(result, cached_allow_patterns or {})
+    if Config.auto_approve_read_only_commands then
+        local list = Config.read_only_commands
+        if list ~= cached_config_allow_ref then
+            cached_config_allow_ref = list
+            cached_config_allow_patterns = patterns_from_strings(list)
+        end
+        vim.list_extend(result, cached_config_allow_patterns)
+    end
+    return result
+end
+
+--- Resolve the merged deny-pattern list: settings.json deny/ask plus
+--- Config.read_only_commands_deny (when enabled).
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function M.get_deny_patterns()
+    M.load_patterns()
+    local result = {}
+    vim.list_extend(result, cached_deny_patterns or {})
+    if Config.auto_approve_read_only_commands then
+        local list = Config.read_only_commands_deny
+        if list ~= cached_config_deny_ref then
+            cached_config_deny_ref = list
+            cached_config_deny_patterns = patterns_from_strings(list)
+        end
+        vim.list_extend(result, cached_config_deny_patterns)
+    end
+    return result
+end
+
 --- Check if a compound Bash command should be auto-approved.
 --- Every segment must match an allow pattern, and no segment may match a
 --- deny/ask pattern. Returns false for empty commands, unsafe constructs,
@@ -363,9 +485,10 @@ end
 --- @param command string
 --- @return boolean
 function M.should_auto_approve(command)
-    M.load_patterns()
+    local allow = M.get_allow_patterns()
+    local deny = M.get_deny_patterns()
 
-    if not cached_allow_patterns or #cached_allow_patterns == 0 then
+    if #allow == 0 then
         return false
     end
 
@@ -380,15 +503,20 @@ function M.should_auto_approve(command)
             return false
         end
 
-        -- Deny/ask patterns take precedence
-        if
-            cached_deny_patterns
-            and M.matches_any_pattern(trimmed, cached_deny_patterns)
-        then
+        -- Output redirection is a write regardless of the command, so
+        -- reject before pattern matching. /dev/null forms are stripped
+        -- first because they're harmless.
+        local stripped = M.strip_devnull_redirects(trimmed)
+        if M.has_unsafe_redirect(stripped) then
             return false
         end
 
-        if not M.matches_any_pattern(trimmed, cached_allow_patterns) then
+        -- Deny/ask patterns take precedence
+        if #deny > 0 and M.matches_any_pattern(trimmed, deny) then
+            return false
+        end
+
+        if not M.matches_any_pattern(trimmed, allow) then
             return false
         end
     end
@@ -401,6 +529,10 @@ function M.invalidate_cache()
     cached_allow_patterns = nil
     cached_deny_patterns = nil
     cached_mtimes = {}
+    cached_config_allow_ref = nil
+    cached_config_allow_patterns = {}
+    cached_config_deny_ref = nil
+    cached_config_deny_patterns = {}
 end
 
 return M

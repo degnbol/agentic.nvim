@@ -830,7 +830,10 @@ describe("agentic.ui.PermissionManager", function()
                 toolCall = {
                     toolCallId = "tc-exec",
                     kind = "execute",
-                    rawInput = { command = "ls" } --[[@as agentic.acp.RawInput]],
+                    -- Command outside read_only_commands list so the
+                    -- read-only auto-approve layer doesn't fire — the test
+                    -- is about trust scope, not command matching.
+                    rawInput = { command = "make build" } --[[@as agentic.acp.RawInput]],
                 },
                 options = {
                     {

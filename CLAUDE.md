@@ -345,10 +345,15 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
    string against each `Bash(...)` pattern, so `grep foo | head -20` prompts
    even when both `Bash(grep *)` and `Bash(head *)` are allowed. The plugin
    splits on shell operators, strips harmless wrappers (stdbuf, /dev/null
-   redirects), and checks each segment independently against the user's
-   `~/.claude/settings.json` allow/deny/ask rules. Controlled by
-   `Config.auto_approve_compound_commands` (default `true`). Implementation in
-   `lua/agentic/utils/permission_rules.lua`.
+   redirects), and checks each segment independently against two merged
+   pattern sources: the user's `~/.claude/settings.json` allow/deny/ask rules
+   AND a curated built-in `Config.read_only_commands` /
+   `read_only_commands_deny` list (covers `ls`, `cat`, `head`, `tail`,
+   `find` minus `-exec`/`-delete`/`-ok`, etc.) that applies to every
+   provider, not just Claude. Master switch:
+   `Config.auto_approve_compound_commands` (default `true`); built-in list
+   opt-out: `Config.auto_approve_read_only_commands` (default `true`).
+   Implementation in `lua/agentic/utils/permission_rules.lua`.
 
 3. **Allow/reject always cache** — when the user selects `allow_always` or
    `reject_always`, the decision is cached in `PermissionManager._always_cache`

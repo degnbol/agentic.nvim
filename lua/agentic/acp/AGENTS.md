@@ -222,7 +222,9 @@ and state is per-session — nothing crosses `/new`.
 
 `PermissionManager:_try_auto_approve()` runs four independent checks before
 falling through to the interactive prompt. Any check can approve (or reject) a
-request.
+request. The compound-command check (#2) is itself fed by two pattern sources:
+the user's Claude settings.json and a built-in curated list of read-only Bash
+commands (described inline below).
 
 #### Read-only tools
 
@@ -250,18 +252,37 @@ layer that fills this gap. When a Bash permission request arrives:
 2. **Reject** unsafe constructs outright (subshells `$(...)`, backticks, process
    substitution `<(...)` / `>(...)`)
 3. **Strip** harmless wrappers before matching: `stdbuf -oL` prefixes (added by
-   hooks), `/dev/null` redirects (`2>/dev/null`, `&>/dev/null`, `2>&1`)
-4. **Check** each segment against compiled patterns from `~/.claude/settings.json`
-   and `.claude/settings.json` (project-local)
-5. **Auto-approve** only if every segment matches an allow pattern AND no segment
+   hooks), `/dev/null` redirects (`2>/dev/null`, `&>/dev/null`), and file
+   descriptor duplications (`2>&1`, `>&N`, `N>&M`) — none of these write
+   to user files
+4. **Reject** segments containing any other output redirection (`>`, `>>`,
+   `2>`, `&>` to a file). The redirect would write to a file regardless
+   of how innocent the source command looks, so allowing `cat foo > evil`
+   to slip through `Bash(cat *)` would silently write `evil`. In-place
+   modification flags (e.g. `sed -i`) are caught by the deny list rather
+   than by redirect detection.
+5. **Check** each segment against compiled patterns from two sources, merged:
+   - `~/.claude/settings.json` and `.claude/settings.json` (project-local) —
+     Claude-specific, mtime-cached.
+   - `Config.read_only_commands` / `Config.read_only_commands_deny` — a
+     curated built-in list of safe read-only Bash commands (`ls`, `cat`,
+     `head`, `find` minus `-exec`/`-delete`/`-ok`, etc.) that applies to
+     every provider, not just Claude. Gated by
+     `Config.auto_approve_read_only_commands` (default `true`).
+6. **Auto-approve** only if every segment matches an allow pattern AND no segment
    matches a deny/ask pattern
 
 Patterns are the same `Bash(...)` glob syntax from Claude Code's settings.json.
 `*` matches anything except shell operators. Deny/ask patterns always take
-precedence over allow patterns (same as upstream). Compiled patterns are cached
-with mtime-based invalidation (re-reads settings.json when it changes on disk).
+precedence over allow patterns (same as upstream). The settings.json patterns
+are cached with mtime-based invalidation; the Config-derived patterns are
+recompiled only when the user replaces the list (table-reference identity).
 
-Controlled by `Config.auto_approve_compound_commands` (default `true`).
+Controlled by `Config.auto_approve_compound_commands` (default `true`) — the
+master switch that gates the whole compound-command path. The built-in list
+has its own opt-out (`auto_approve_read_only_commands`) so users with no
+Claude settings.json still get a sensible baseline, and users who want only
+their own settings.json patterns can disable the built-ins independently.
 
 #### Allow/reject always cache
 
