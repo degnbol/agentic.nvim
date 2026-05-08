@@ -87,36 +87,19 @@ describe("agentic.ui.MessageWriter", function()
     end
 
     describe("_check_auto_scroll", function()
-        it(
-            "returns true when cursor is within threshold of buffer end",
-            function()
-                setup_buffer(20, 15)
-                assert.is_true(writer:_check_auto_scroll(bufnr))
-            end
-        )
+        it("returns true when cursor is on the last line", function()
+            setup_buffer(50, 50)
+            assert.is_true(writer:_check_auto_scroll(bufnr))
+        end)
 
-        it("returns false when cursor is far from buffer end", function()
+        it("returns false when cursor is not on the last line", function()
             setup_buffer(50, 1)
             assert.is_false(writer:_check_auto_scroll(bufnr))
         end)
 
-        it("still reports proximity when enabled is false", function()
-            setup_buffer(1, 1)
-            Config.auto_scroll =
-                { enabled = false, threshold = 10, pause_on_prose = true }
-            -- _check_auto_scroll is a pure proximity check;
-            -- scroll_down_only gates on Config.auto_scroll.enabled
-            assert.is_true(writer:_check_auto_scroll(bufnr))
-        end)
-
-        it("returns false when threshold is disabled (zero or nil)", function()
-            setup_buffer(1, 1)
-
-            Config.auto_scroll =
-                { enabled = true, threshold = 0, pause_on_prose = true }
-            assert.is_false(writer:_check_auto_scroll(bufnr))
-
-            Config.auto_scroll = nil
+        it("returns false when paused regardless of cursor", function()
+            setup_buffer(50, 50)
+            writer._auto_scroll_paused = true
             assert.is_false(writer:_check_auto_scroll(bufnr))
         end)
 
@@ -166,7 +149,7 @@ describe("agentic.ui.MessageWriter", function()
 
     describe("_should_auto_scroll sticky field", function()
         it(
-            "remains true after buffer growth despite cursor exceeding threshold",
+            "remains true after buffer growth despite cursor leaving the bottom band",
             function()
                 setup_buffer(20, 20)
                 writer:_auto_scroll(bufnr)
@@ -395,6 +378,78 @@ describe("agentic.ui.MessageWriter", function()
                 code = -32603,
                 message = "Internal error: something went wrong",
             })
+
+            assert.is_nil(writer._prose_anchor_line)
+        end)
+
+        it(
+            "user scrolls away from bottom: pauses and releases pin",
+            function()
+                writer:write_message_chunk(
+                    make_message_update("some prose")
+                )
+                assert.is_not_nil(writer._prose_anchor_line)
+                -- Grow the buffer and park cursor far from the end so the
+                -- threshold check sees a "scrolled away" state.
+                local lines = {}
+                for i = 1, 50 do
+                    lines[i] = "filler " .. i
+                end
+                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
+                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+
+                writer:on_user_scroll()
+
+                assert.is_nil(writer._prose_anchor_line)
+                assert.is_true(writer._auto_scroll_paused)
+            end
+        )
+
+        it(
+            "user scrolls to bottom: resumes auto-scroll",
+            function()
+                -- User had previously paused; now G or scroll-to-bottom.
+                writer._auto_scroll_paused = true
+                local lines = {}
+                for i = 1, 50 do
+                    lines[i] = "line " .. i
+                end
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+                vim.api.nvim_win_set_cursor(winid, { 50, 0 })
+
+                writer:on_user_scroll()
+
+                assert.is_false(writer._auto_scroll_paused)
+            end
+        )
+
+        it(
+            "ignores on_user_scroll while _suppress_pin_release is set",
+            function()
+                writer:write_message_chunk(make_message_update("some prose"))
+                assert.is_not_nil(writer._prose_anchor_line)
+                local lines = {}
+                for i = 1, 50 do
+                    lines[i] = "filler " .. i
+                end
+                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
+                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+
+                -- Our own programmatic scrolls/writes fire WinScrolled with
+                -- the suppression flag set; pause/pin must survive those.
+                writer._suppress_pin_release = true
+                writer:on_user_scroll()
+                writer._suppress_pin_release = false
+
+                assert.is_not_nil(writer._prose_anchor_line)
+                assert.is_false(writer._auto_scroll_paused)
+            end
+        )
+
+        it("does not set the pin while paused", function()
+            writer._auto_scroll_paused = true
+
+            writer:write_message_chunk(make_message_update("more prose"))
 
             assert.is_nil(writer._prose_anchor_line)
         end)

@@ -65,6 +65,8 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
+--- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
+--- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -88,9 +90,58 @@ function MessageWriter:new(bufnr, status_animation)
         _rejection_buffer = "",
         _status_animation = status_animation,
         _prose_anchor_line = nil,
+        _suppress_pin_release = false,
+        _auto_scroll_paused = false,
     }, self)
 
+    -- Listen for user scrolls. Our own programmatic scrolls and buffer
+    -- writes also fire WinScrolled, but they run synchronously inside a
+    -- `_suppress_pin_release` window so we ignore those. Vim is
+    -- single-threaded — user input cannot interleave during a synchronous
+    -- Lua chain — so the flag set/cleared around the writes/scrolls is
+    -- race-free for distinguishing the two. The autocmd is buffer-scoped
+    -- so it auto-cleans when the chat buffer is wiped.
+    vim.api.nvim_create_autocmd("WinScrolled", {
+        buffer = bufnr,
+        callback = function()
+            instance:on_user_scroll()
+        end,
+    })
+
     return instance
+end
+
+--- True when the cursor is on the last line of the buffer.
+--- @param winid integer
+--- @return boolean
+function MessageWriter:_is_at_bottom(winid)
+    local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
+    return cursor_line >= vim.api.nvim_buf_line_count(self.bufnr)
+end
+
+--- WinScrolled hook. Pauses or resumes auto-scroll based on whether the
+--- cursor is at the bottom of the buffer. Public so the autocmd closure
+--- can reach it without tripping LuaLS's invisible-field check.
+---
+--- - User scrolled away from bottom → pause auto-scroll, release any pin.
+--- - User reached bottom (G or scroll-to-bottom) → resume.
+---
+--- Programmatic scrolls/writes are filtered out via `_suppress_pin_release`.
+function MessageWriter:on_user_scroll()
+    if self._suppress_pin_release then
+        return
+    end
+    local wins = vim.fn.win_findbuf(self.bufnr)
+    if #wins == 0 then
+        return
+    end
+
+    if self:_is_at_bottom(wins[1]) then
+        self._auto_scroll_paused = false
+    else
+        self._auto_scroll_paused = true
+        self:_release_prose_pin()
+    end
 end
 
 --- Start buffering the next message chunks to detect and suppress the
@@ -101,7 +152,7 @@ function MessageWriter:suppress_next_rejection()
 end
 
 --- Drop the prose-pin anchor so the next auto-scroll falls back to the
---- cursor proximity threshold. Called at turn boundaries (tool call,
+--- normal scroll-to-bottom path. Called at turn boundaries (tool call,
 --- separator, error, /new).
 --- @private
 function MessageWriter:_release_prose_pin()
@@ -133,9 +184,19 @@ end
 --- Wraps BufHelpers.with_modifiable and fires _notify_content_changed after.
 --- The callback may return false to suppress the notification (e.g. on early-return without edits).
 --- with_modifiable returns false for invalid buffers, which also suppresses notification.
+---
+--- Buffer writes can incidentally shift topline (cursor at last line + buffer
+--- growth past viewport, or set_lines on a tool call block above the prose
+--- anchor pushing visible content). Those shifts fire WinScrolled, which
+--- the autocmd would otherwise interpret as user intent and release the
+--- prose pin. Suppress for the whole synchronous write — vim is
+--- single-threaded so user input cannot interleave.
 --- @param fn fun(bufnr: integer): boolean|nil
 function MessageWriter:_with_modifiable_and_notify_change(fn)
+    local prev_suppress = self._suppress_pin_release
+    self._suppress_pin_release = true
     local result = BufHelpers.with_modifiable(self.bufnr, fn)
+    self._suppress_pin_release = prev_suppress
     if result ~= false then
         self:_notify_content_changed()
     end
@@ -567,7 +628,11 @@ function MessageWriter:write_message_chunk(update)
         -- once non-blank content lands. The line we wrote on can begin with a
         -- "\n" prefix (added when prose follows a tool call), so scan forward
         -- a few lines from chunk_start_line to skip the leading blank.
-        if self._prose_anchor_line == nil then
+        -- Skip when the user has paused auto-scroll: pinning would require
+        -- scrolling the view, which is exactly what the user opted out of.
+        if
+            self._prose_anchor_line == nil and not self._auto_scroll_paused
+        then
             local total = vim.api.nvim_buf_line_count(bufnr)
             local scan_end = math.min(self._chunk_start_line + 4, total - 1)
             for line = self._chunk_start_line, scan_end do
@@ -637,50 +702,40 @@ end
 --- @param bufnr integer
 --- @return boolean
 function MessageWriter:_check_auto_scroll(bufnr)
+    -- The user explicitly disabled auto-scroll by scrolling away from the
+    -- bottom. They re-enable it by going back to the bottom (G or
+    -- scroll-to-bottom), which `on_user_scroll` detects and clears.
+    if self._auto_scroll_paused then
+        return false
+    end
+
     local wins = vim.fn.win_findbuf(bufnr)
     if #wins == 0 then
         return true
     end
     local winid = wins[1]
-    local threshold = Config.auto_scroll and Config.auto_scroll.threshold
-
-    if threshold == nil or threshold <= 0 then
-        return false
-    end
 
     -- During an active prose pin the cursor is parked inside the clamped
-    -- viewport, far from the buffer end, so the threshold below would
-    -- always fail and stop auto-scroll. Override while the view is still
-    -- where the last clamp left it; otherwise the user moved either the
-    -- cursor or the viewport and the pin should release.
-    -- While a prose anchor is set, keep auto-scrolling so the next
-    -- chunk re-clamps the topline. Don't try to detect user-initiated
-    -- scrolls by comparing topline or cursor to the last clamp: vim
-    -- couples them — when topline shifts (scrolloff, redraw, etc.)
-    -- the cursor is dragged along to stay on screen, so neither field
-    -- is a reliable user-intent signal. The pin instead releases on
-    -- the boundaries we control (tool call, separator, error, /new).
+    -- viewport, far from the buffer end, so the at-bottom check below
+    -- would always fail and stop auto-scroll. Override while the pin is
+    -- set — a user scroll would have cleared `_auto_scroll_paused` and
+    -- released the pin already, so reaching here means the pin is ours.
     if self._prose_anchor_line then
         return true
     end
 
-    local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-    local total_lines = vim.api.nvim_buf_line_count(bufnr)
-    local distance_from_bottom = total_lines - cursor_line
-
-    return distance_from_bottom <= threshold
+    return self:_is_at_bottom(winid)
 end
 
---- Whether the cursor is near the bottom of the chat buffer.
---- Public wrapper for the threshold check used by auto-scroll.
+--- Whether the cursor is at the bottom of the chat buffer.
 --- @return boolean
 function MessageWriter:is_near_bottom()
     return self:_check_auto_scroll(self.bufnr)
 end
 
---- Scroll the chat window to the bottom if the cursor is near the end.
---- Respects the same proximity threshold as streaming auto-scroll so that
---- users reading earlier content are not interrupted.
+--- Scroll the chat window to the bottom if the cursor is at the end.
+--- Same gate as streaming auto-scroll so users reading earlier content
+--- are not interrupted.
 function MessageWriter:scroll_to_bottom()
     if not self:_check_auto_scroll(self.bufnr) then
         return
@@ -721,11 +776,17 @@ function MessageWriter:_auto_scroll(bufnr)
                             and (self._prose_anchor_line + 1)
                         or nil
 
+                    -- Suppress the WinScrolled-driven pause for our own
+                    -- scroll commands. WinScrolled fires synchronously from
+                    -- G0zb and winrestview inside scroll_down_only, so a
+                    -- sync flag around the call is sufficient and race-free.
+                    self._suppress_pin_release = true
                     BufHelpers.scroll_down_only(
                         wins[1],
                         has_virt_lines,
                         max_topline
                     )
+                    self._suppress_pin_release = false
                 end
             end
         end

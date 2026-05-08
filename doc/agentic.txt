@@ -28,16 +28,17 @@ CONTENTS                                                    *agentic-contents*
        6.5 Permission keymaps ................ |agentic-keymaps-permission|
        6.6 Plug mappings ..................... |agentic-plug-mappings|
     7. Compound command auto-approval ........ |agentic-compound-commands|
-    8. Highlight groups ...................... |agentic-highlights|
-    9. Autocmds .............................. |agentic-autocmds|
-   10. Health check .......................... |agentic-health|
-   11. Debug mode ............................ |agentic-debug|
-   12. Comparison with Claude TUI ............ |agentic-vs-tui|
-       12.1 Additions ........................ |agentic-vs-tui-additions|
-       12.2 ACP patches ...................... |agentic-vs-tui-patches|
-       12.3 Forwarded transparently .......... |agentic-vs-tui-forwarded|
-       12.4 Behaviour differences ............ |agentic-vs-tui-diffs|
-       12.5 Not available .................... |agentic-vs-tui-missing|
+    8. Auto-scroll ........................... |agentic-auto-scroll|
+    9. Highlight groups ...................... |agentic-highlights|
+   10. Autocmds .............................. |agentic-autocmds|
+   11. Health check .......................... |agentic-health|
+   12. Debug mode ............................ |agentic-debug|
+   13. Comparison with Claude TUI ............ |agentic-vs-tui|
+       13.1 Additions ........................ |agentic-vs-tui-additions|
+       13.2 ACP patches ...................... |agentic-vs-tui-patches|
+       13.3 Forwarded transparently .......... |agentic-vs-tui-forwarded|
+       13.4 Behaviour differences ............ |agentic-vs-tui-diffs|
+       13.5 Not available .................... |agentic-vs-tui-missing|
 
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
@@ -255,8 +256,11 @@ override what you need.
 
                                                 *agentic-config-auto_scroll*
 `auto_scroll` table
-    `enabled`       boolean (default: true)
-    `threshold`     integer (default: 10)
+    `enabled`           boolean (default: true)
+        Master switch. When false, no programmatic scrolling.
+    `pause_on_prose`    boolean (default: true)
+        Pin the start of each prose run to the top of the viewport during
+        streaming. See |agentic-auto-scroll|.
 
                                                       *agentic-config-debug*
 `debug` boolean (default: false)
@@ -480,7 +484,20 @@ Disable with: >lua
 Implementation: `lua/agentic/utils/permission_rules.lua`
 
 ==============================================================================
-8. HIGHLIGHT GROUPS                                     *agentic-highlights*
+8. AUTO-SCROLL                                          *agentic-auto-scroll*
+
+While the agent streams, the start of each prose run is pinned to the top
+of the viewport so the response can be read from the beginning. The pin
+releases on user scroll or any non-prose appears in chat, so effectively is
+used for more conveniently pausing auto-scroll on final summary messages from
+the agent. To re-enable auto-scroll, e.g. after manually scrolling, return
+to the bottom of chat (e.g. press G).
+
+Toggle via `<localLeader>a` (|agentic-config-keymaps|). Disable the pin
+with `pause_on_prose = false` (|agentic-config-auto_scroll|).
+
+==============================================================================
+9. HIGHLIGHT GROUPS                                     *agentic-highlights*
 
 All groups use `default = true` so user definitions take priority.
 
@@ -646,9 +663,9 @@ Same feature, different behaviour:
 - Text wrapping and yanking: the TUI hard-wraps chat text to the terminal
   width, which can corrupt pasted text on copy. This plugin uses neovim's
   native soft-wrap, so yanks preserve the original text.
-- Scrolling: the TUI auto-scrolls aggressively during streaming. This
-  plugin's auto-scroll respects a configurable threshold from the bottom
-  and can be toggled off at runtime (|agentic-config-auto_scroll|).
+- Scrolling: the TUI auto-scrolls aggressively during streaming. See
+  |agentic-auto-scroll| for this plugin's pin + pause-on-user-scroll
+  behaviour.
 
 ------------------------------------------------------------------------------
 12.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*

@@ -334,11 +334,9 @@ local ConfigDefault = {
 
     --- @class agentic.UserConfig.AutoScroll
     --- @field enabled boolean Whether auto-scroll is active (toggle at runtime with keymap)
-    --- @field threshold integer Lines from bottom to trigger auto-scroll (default: 10)
     --- @field pause_on_prose boolean Pin the start of a prose run to the top of the viewport so the model's narrative stays readable; auto-scroll resumes when the next tool call begins
     auto_scroll = {
         enabled = true,
-        threshold = 10,
         pause_on_prose = true,
     },
 

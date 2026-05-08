@@ -259,6 +259,16 @@ Auto-scroll is runtime-toggleable via `keymaps.widget.toggle_auto_scroll`
 buffer content changes, just scroll suppression. State lives in
 `Config.auto_scroll.enabled` (mutated at runtime, not persisted across sessions).
 
+User-facing behaviour and the at-bottom rule (driven by the window's
+`scrolloff`, no separate threshold) are documented in
+[doc/agentic.txt § Auto-scroll](doc/agentic.txt) — keep that file as the
+source of truth. `MessageWriter._auto_scroll_paused` holds the runtime
+pause state and is set/cleared by `MessageWriter:on_user_scroll` from the
+buffer-scoped `WinScrolled` autocmd installed in `MessageWriter:new`.
+`MessageWriter._suppress_pin_release` filters out our own programmatic
+scrolls and buffer writes (set sync around `scroll_down_only` and inside
+`_with_modifiable_and_notify_change`).
+
 Attention notifications (`_notify_attention(badge)`) fire on two events:
 - **Response complete** — badge `"[done]"`
 - **Permission request** — badge `"[?]"`
@@ -268,7 +278,8 @@ Behaviour depends on focus state:
 - **Scrolled up from bottom** → sets badge in buffer name (visible in `:ls`/tabline)
 
 Badge clears when:
-- User scrolls to within `auto_scroll.threshold` lines of bottom (`WinScrolled` autocmd)
+- User scrolls to within `scrolloff` lines of bottom (`WinScrolled` autocmd
+  on the chat buffer in `chat_widget.lua`)
 - User submits next prompt (`clear_unread_badge()`)
 
 ## Input buffer completion

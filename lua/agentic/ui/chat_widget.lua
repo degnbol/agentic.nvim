@@ -524,7 +524,8 @@ function ChatWidget:_initialize()
         })
     end
 
-    -- Clear unread badge when user scrolls chat to bottom
+    -- Clear unread badge when the cursor reaches the last line of the
+    -- chat buffer.
     vim.api.nvim_create_autocmd("WinScrolled", {
         buffer = self.buf_nrs.chat,
         callback = function()
@@ -535,13 +536,9 @@ function ChatWidget:_initialize()
             if not chat_win or not vim.api.nvim_win_is_valid(chat_win) then
                 return
             end
-            local chat_buf = self.buf_nrs.chat
             local cursor_line = vim.api.nvim_win_get_cursor(chat_win)[1]
-            local total_lines = vim.api.nvim_buf_line_count(chat_buf)
-            local threshold = Config.auto_scroll
-                    and Config.auto_scroll.threshold
-                or 10
-            if total_lines - cursor_line <= threshold then
+            local total_lines = vim.api.nvim_buf_line_count(self.buf_nrs.chat)
+            if cursor_line >= total_lines then
                 self:clear_unread_badge()
             end
         end,
