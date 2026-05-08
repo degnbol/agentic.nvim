@@ -60,6 +60,12 @@ local ConfigDefault = {
     --- Enable printing debug messages which can be read via `:messages`
     debug = false,
 
+    --- Enable appending debug messages to a log file at
+    --- `vim.fn.stdpath("cache") .. "/agentic_debug.log"` (typically
+    --- `~/.cache/nvim/agentic_debug.log`). Independent of `debug` — set
+    --- this without `debug` to log without screen distraction.
+    log = false,
+
     --- @type agentic.UserConfig.ProviderName
     provider = "claude-agent-acp",
 

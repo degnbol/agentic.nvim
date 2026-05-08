@@ -12,10 +12,6 @@ function Logger.get_timestamp()
 end
 
 local function format_debug_message(...)
-    if not Config.debug then
-        return nil
-    end
-
     local args = { ... }
 
     if #args == 0 then
@@ -69,6 +65,10 @@ end
 
 --- Print a debug message that can be read by `:messages`
 function Logger.debug(...)
+    if not Config.debug then
+        return
+    end
+
     local formatted_message = format_debug_message(...)
 
     if formatted_message then
@@ -79,6 +79,10 @@ end
 --- Append a debug message to a log file in the cache directory
 --- Usually at `~/.cache/nvim/agentic_debug.log` on Mac/Linux
 function Logger.debug_to_file(...)
+    if not Config.log then
+        return
+    end
+
     local log_parts = format_debug_message(...)
     if not log_parts then
         return

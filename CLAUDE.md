@@ -10,8 +10,11 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 
 ## Debugging at runtime
 
-`Logger.debug_to_file()` is gated by `Config.debug` (default `false`). For
-temporary diagnostics that must fire unconditionally, use `io.open` directly:
+`Logger.debug()` (prints to `:messages`) is gated by `Config.debug`.
+`Logger.debug_to_file()` (appends to `~/.cache/nvim/agentic_debug.log`) is
+gated by `Config.log`. Both default to `false` and are independent — enable
+`log` alone for file logging without screen distraction. For temporary
+diagnostics that must fire unconditionally, use `io.open` directly:
 
 ```lua
 do
