@@ -109,12 +109,40 @@ The `sessionUpdate` field determines the update type:
 
 ### Stop reasons
 
-`session/prompt` response includes `stopReason`:
-- `end_turn` — LLM finished naturally
-- `max_tokens` — token limit reached
-- `max_turn_requests` — model request limit exceeded
-- `refusal` — agent refuses to continue
-- `cancelled` — client cancelled via `session/cancel`
+`session/prompt` resolves with a response carrying `stopReason` (required) and
+optional `usage`. The five reasons defined by the schema fall into two
+categories:
+
+| `stopReason`        | Origin            | Typical meaning                                          |
+| ------------------- | ----------------- | -------------------------------------------------------- |
+| `end_turn`          | provider (normal) | LLM finished its turn cleanly                            |
+| `max_tokens`        | provider          | Output token limit hit mid-stream                        |
+| `max_turn_requests` | provider          | Per-turn API request budget exhausted                    |
+| `refusal`           | provider          | Agent declined to continue (safety, policy)              |
+| `cancelled`         | **user**          | Resolution of an in-flight prompt after `session/cancel` |
+
+**`cancelled` is not a failure.** The protocol uses `cancelled` as the
+*expected acknowledgement* that the agent honoured a `session/cancel`
+notification and tore down the in-flight turn. It is the same resolution path
+the client triggers itself, so treating it as an error condition (logging,
+surfacing as a fault, retrying) misrepresents the user's action. Anything that
+distinguishes "successful turn" from "failed turn" should treat `cancelled`
+alongside `end_turn` — not alongside `refusal`/`max_*`.
+
+**Provider-initiated reasons are informational, not JSON-RPC errors.** They
+arrive on the success path (`result`, not `error`), so client code that only
+inspects `err` from `session/prompt` will silently miss them. Surface
+`max_tokens`, `max_turn_requests`, and `refusal` to the user explicitly,
+since the chat may otherwise look like a normal short reply.
+
+**`usage` is optional and provider-defined.** All-zero `usage` from a
+provider that normally populates it can signal upstream rejection before
+tokenisation (auth failure, quota wall) — but only on the *first* turn of
+a session. Mid-session, zero-usage responses appear in legitimate flows
+(cancelled turns, stalled generators reusing the prompt loop), so a client
+gate that fires every turn produces false positives. See
+`lua/agentic/acp/AGENTS.md` § "Silent upstream failure" and "Surfacing
+rule" for one client's gating policy.
 
 ### Cancellation
 

@@ -37,6 +37,12 @@ function M.surface_unexpected_response(sm, response, is_first_turn)
     end
 
     local stop_reason = response.stopReason
+    -- "cancelled" is a user action (Ctrl-C → session/cancel), not a
+    -- provider failure. Surfacing it as an error misrepresents intent.
+    if stop_reason == "cancelled" then
+        return
+    end
+
     local usage = type(response.usage) == "table" and response.usage or nil
     local total = usage and (usage.totalTokens or 0) or 0
 

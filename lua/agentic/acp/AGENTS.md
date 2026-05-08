@@ -611,6 +611,15 @@ only — never synthesise "no response" messages or speculate about cause.
 Chat emptiness after the thinking indicator clears is self-evident and does
 not need a client-generated explanation.
 
+**Exclude `cancelled`.** `stopReason: "cancelled"` is the protocol-level
+acknowledgement of the user pressing Ctrl-C (which fires `session/cancel`).
+It is the *expected* response shape for that user action, not a provider
+fault — surfacing it would render an "Error" block for every cancelled
+turn. Skip it before evaluating the non-terminal/zero-first-turn rule.
+Other non-`end_turn` reasons (`max_tokens`, `max_turn_requests`, `refusal`)
+are provider-initiated and remain surfaced. See SKILL.md §
+"Stop reasons" for the full enumeration and which are user-initiated.
+
 ### opencode Edit diff not at content[1]
 
 Opencode follows the standard ACP diff layout (`content[]` array with
