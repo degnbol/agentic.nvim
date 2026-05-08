@@ -600,11 +600,13 @@ generators per "Prompt loop stall", or cancelled turns reusing the prompt
 loop). Treating them as errors produces false positives that contradict the
 visible chat state.
 
-**Surfacing rule** (implemented in `SessionManager:_handle_input_submit_inner`):
-render `response.stopReason` + `response.usage` verbatim when `stopReason ~=
+**Surfacing rule** (implemented as `Recovery.surface_unexpected_response`
+in `session_recovery.lua`, called from the `send_prompt` success branch
+in `_handle_input_submit_inner`): render
+`response.stopReason` + `response.usage` verbatim when `stopReason ~=
 "end_turn"` every turn, OR when `usage` is all-zero **on the first turn
 only**. The first-turn gate uses `_is_first_message` captured as a local
-before it gets flipped for the system-info injection. Render provider fields
+before the system-info injection flips it. Render provider fields
 only — never synthesise "no response" messages or speculate about cause.
 Chat emptiness after the thinking indicator clears is self-evident and does
 not need a client-generated explanation.
