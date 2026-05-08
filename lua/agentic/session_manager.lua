@@ -12,6 +12,7 @@ local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local FileSystem = require("agentic.utils.file_system")
 local GitFiles = require("agentic.utils.git_files")
 local Logger = require("agentic.utils.logger")
+local Recovery = require("agentic.session_recovery")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local TrustSafety = require("agentic.utils.trust_safety")
@@ -254,6 +255,9 @@ function SessionManager:new(tab_page_id)
         end,
         function(model_id, is_legacy)
             self:_handle_model_change(model_id, is_legacy)
+        end,
+        function()
+            return self.agent ~= nil and self.agent.state == "ready"
         end
     )
 
@@ -705,9 +709,9 @@ function SessionManager:_build_handlers(opts)
             local error_type, reset_epoch =
                 self.message_writer:write_error_message(err)
             if error_type == "authentication_error" then
-                self:_offer_reauth()
+                Recovery.offer_reauth(self)
             elseif error_type == "usage_limit" and reset_epoch then
-                self:_offer_auto_continue(reset_epoch)
+                Recovery.offer_auto_continue(self, reset_epoch)
             end
         end,
 
@@ -1312,6 +1316,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
         text = input_text,
     })
 
+    -- Capture before the flip so the response callback can gate the
+    -- zero-usage surface on "first turn only" (see _handle_input_submit_inner
+    -- response handler and AGENTS.md § "Silent upstream failure").
+    local is_first_turn = self._is_first_message
+
     -- Add system info on first message only (after user text so resume picker shows the prompt)
     if self._is_first_message then
         self._is_first_message = false
@@ -1468,7 +1477,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     self.is_generating = true
 
-    self.agent:send_prompt(self.session_id, prompt, function(_response, err)
+    self.agent:send_prompt(self.session_id, prompt, function(response, err)
         -- This callback already runs inside vim.schedule (from _handle_message).
         -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
         -- creating a race where a fast follow-up prompt sets is_generating=true
@@ -1480,14 +1489,25 @@ function SessionManager:_handle_input_submit_inner(input_text)
             local error_type, reset_epoch =
                 self.message_writer:write_error_message(err)
             if error_type == "authentication_error" then
-                self:_offer_reauth()
-            elseif error_type == "usage_limit" and reset_epoch then
-                self:_offer_auto_continue(reset_epoch)
+                Recovery.offer_reauth(self)
+            elseif error_type == "usage_limit" then
+                -- claude-agent-acp's prompt generator does NOT close on
+                -- RequestError.internalError (acp-agent.js:449-450, 600-609),
+                -- so subsequent prompts to the same subprocess return
+                -- end_turn with zero usage — content silently lost. Respawn
+                -- the subprocess now so by the time auto-continue fires (or
+                -- the user submits manually), the next prompt hits a fresh
+                -- pipeline. See chunk-flush.md.
+                Recovery.respawn_after_usage_limit(self)
+                if reset_epoch then
+                    Recovery.offer_auto_continue(self, reset_epoch)
+                end
             else
                 self._retry_attempt = 0
             end
         else
             self._retry_attempt = 0
+            Recovery.surface_unexpected_response(self, response, is_first_turn)
         end
 
         self.message_writer:append_separator()
@@ -1517,10 +1537,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
 end
 
 --- Create a new session, optionally cancelling any existing one
---- @param opts {restore_mode?: boolean, on_created?: fun()}|nil
+--- @param opts {restore_mode?: boolean, quiet_welcome?: boolean, on_created?: fun()}|nil
 function SessionManager:new_session(opts)
     opts = opts or {}
     local restore_mode = opts.restore_mode or false
+    local quiet_welcome = opts.quiet_welcome or false
     local on_created = opts.on_created
 
     if not restore_mode then
@@ -1614,15 +1635,19 @@ function SessionManager:new_session(opts)
         -- Add initial welcome message after session is created
         -- Defer to avoid fast event context issues
         -- For restore: write welcome first, then replay via on_created
+        -- quiet_welcome is used by post-usage-limit subprocess respawn so
+        -- the chat does not get a session-header divider mid-conversation.
         vim.schedule(function()
-            local welcome_message = SessionManager._generate_welcome_header(
-                self.agent.provider_config.name,
-                self.session_id
-            )
+            if not quiet_welcome then
+                local welcome_message = SessionManager._generate_welcome_header(
+                    self.agent.provider_config.name,
+                    self.session_id
+                )
 
-            self.message_writer:write_message(
-                ACPPayloads.generate_user_message(welcome_message)
-            )
+                self.message_writer:write_message(
+                    ACPPayloads.generate_user_message(welcome_message)
+                )
+            end
 
             -- Invoke on_created callback after welcome message is written
             if on_created then
@@ -1691,9 +1716,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.config_options:clear()
     end
     self.session_id = nil
-    self:_remove_reauth_keymap()
-    self:_cancel_health_check_timer()
-    self:_cancel_retry_timer()
+    Recovery.remove_reauth_keymap(self)
+    Recovery.cancel_health_check_timer(self)
+    Recovery.cancel_retry_timer(self)
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
@@ -1805,331 +1830,6 @@ function SessionManager:_fallback_restore_from_local(session_id)
     end)
 end
 
---- Check if the current provider is Claude-based (supports `claude auth login`).
-local function is_claude_provider()
-    return Config.provider == "claude-acp"
-        or Config.provider == "claude-agent-acp"
-end
-
---- Offer re-authentication after a Claude auth error.
---- Checks server health first — if unreachable, polls with exponential
---- backoff until the server is back, then offers the `r` keymap.
-function SessionManager:_offer_reauth()
-    if not is_claude_provider() then
-        return
-    end
-
-    self:_check_server_then_offer_reauth(1)
-end
-
---- Set up the [r] keymap to trigger `claude auth login`.
-function SessionManager:_set_reauth_keymap()
-    self.message_writer:write_error_action(
-        "Press [r] to re-authenticate in browser."
-    )
-
-    local chat_bufnr = self.widget.buf_nrs.chat
-    local lhs = "r"
-
-    vim.keymap.set("n", lhs, function()
-        self:_run_reauth()
-    end, { buffer = chat_bufnr, nowait = true })
-
-    self._reauth_keymap = { bufnr = chat_bufnr, lhs = lhs }
-end
-
---- Health check URL for Claude's API infrastructure.
-local HEALTH_CHECK_URL = "https://api.anthropic.com"
-
---- Check if the Claude server is reachable before offering reauth.
---- If unreachable, retries with exponential backoff (30s, 60s, 120s, ...).
---- When reachable, sets up the [r] keymap so the user can authenticate.
---- @param attempt number Current attempt number (1-based)
-function SessionManager:_check_server_then_offer_reauth(attempt)
-    local max_delay_s = 600 -- cap at 10 minutes
-    local base_delay_s = 30
-    local delay_s = math.min(base_delay_s * (2 ^ (attempt - 1)), max_delay_s)
-
-    self.message_writer:write_error_action(
-        string.format("Checking server health (%s)...", HEALTH_CHECK_URL)
-    )
-
-    vim.system({
-        "curl",
-        "-s",
-        "-o",
-        "/dev/null",
-        "--connect-timeout",
-        "5",
-        HEALTH_CHECK_URL,
-    }, {}, function(result)
-        vim.schedule(function()
-            if self._destroyed then
-                return
-            end
-
-            if result.code == 0 then
-                -- Server reachable — offer login
-                self:_set_reauth_keymap()
-            else
-                -- Server unreachable — schedule retry with backoff
-                self.message_writer:write_error_action(
-                    string.format(
-                        "Server unreachable. Retrying in %ds... (attempt %d)",
-                        delay_s,
-                        attempt
-                    )
-                )
-
-                self:_cancel_health_check_timer()
-                local timer = vim.uv.new_timer()
-                if not timer then
-                    return
-                end
-                self._health_check_timer = timer
-                timer:start(delay_s * 1000, 0, function()
-                    -- Nil out immediately so _cancel_health_check_timer
-                    -- won't call stop/close on an already-closed handle
-                    self._health_check_timer = nil
-                    timer:stop()
-                    timer:close()
-                    vim.schedule(function()
-                        if self._destroyed then
-                            return
-                        end
-                        self:_check_server_then_offer_reauth(attempt + 1)
-                    end)
-                end)
-            end
-        end)
-    end)
-end
-
---- Stop and close the health check backoff timer if active.
-function SessionManager:_cancel_health_check_timer()
-    if self._health_check_timer then
-        self._health_check_timer:stop()
-        self._health_check_timer:close()
-        self._health_check_timer = nil
-    end
-end
-
---- Remove the re-auth keymap if one is active.
-function SessionManager:_remove_reauth_keymap()
-    local km = self._reauth_keymap
-    if not km then
-        return
-    end
-
-    if vim.api.nvim_buf_is_valid(km.bufnr) then
-        pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
-    end
-    self._reauth_keymap = nil
-end
-
---- Spawn `claude auth login` to re-authenticate via browser OAuth.
-function SessionManager:_run_reauth()
-    self:_remove_reauth_keymap()
-
-    if self._reauth_job then
-        Logger.notify("Re-authentication already in progress.")
-        return
-    end
-
-    local auth_type = Config.auth_type or "claudeai"
-    local flag = "--" .. auth_type
-
-    Logger.notify("Opening browser for re-authentication...")
-
-    self._reauth_job = vim.system(
-        { "claude", "auth", "login", flag },
-        {},
-        function(result)
-            vim.schedule(function()
-                self._reauth_job = nil
-                if self._destroyed then
-                    return
-                end
-
-                if result.code == 0 then
-                    Logger.notify("Re-authenticated. Restarting provider...")
-                    self:_restart_provider()
-                else
-                    Logger.notify(
-                        "Re-authentication failed. Try running 'claude auth login' manually.",
-                        vim.log.levels.WARN
-                    )
-                end
-            end)
-        end
-    )
-end
-
---- Kill the dead cached agent, spawn a fresh provider subprocess,
---- and create a new session. Used after re-authentication when the
---- provider process has exited.
-function SessionManager:_restart_provider()
-    local AgentInstance = require("agentic.acp.agent_instance")
-
-    -- Remove the dead cached instance so get_instance spawns a fresh one
-    self.agent:stop()
-    AgentInstance._instances[Config.provider] = nil
-
-    local new_agent = AgentInstance.get_instance(
-        Config.provider,
-        function(client)
-            vim.schedule(function()
-                self.agent = client
-                self:new_session()
-            end)
-        end
-    )
-
-    if new_agent then
-        self.agent = new_agent
-    end
-end
-
---- Cancel a pending auto-continue timer and remove the cancel keymap.
---- @param reset_attempts? boolean Also reset the retry attempt counter (default: true)
-function SessionManager:_cancel_retry_timer(reset_attempts)
-    if self._retry_timer then
-        self._retry_timer:stop()
-        self._retry_timer:close()
-        self._retry_timer = nil
-    end
-
-    local km = self._retry_keymap
-    if km then
-        if vim.api.nvim_buf_is_valid(km.bufnr) then
-            pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
-        end
-        self._retry_keymap = nil
-    end
-
-    self._queued_prompts = nil
-
-    if reset_attempts ~= false then
-        self._retry_attempt = 0
-    end
-end
-
---- Format seconds into a human-readable duration (e.g. "2h 15m", "45m", "30s").
---- @param seconds number
---- @return string
-local function format_duration(seconds)
-    local h = math.floor(seconds / 3600)
-    local m = math.floor((seconds % 3600) / 60)
-    if h > 0 then
-        return string.format("%dh %dm", h, m)
-    elseif m > 0 then
-        return string.format("%dm", m)
-    end
-    return string.format("%ds", seconds)
-end
-
---- Schedule auto-continue after a usage limit error.
---- On the first attempt, waits until `reset_epoch + 2 min`. On subsequent
---- attempts (provider's reset time was inaccurate), retries with a fixed
---- 5-minute backoff. Gives up after 3 consecutive attempts.
---- @param reset_epoch number Epoch seconds when usage resets
-function SessionManager:_offer_auto_continue(reset_epoch)
-    if not Config.auto_continue_on_usage_limit then
-        return
-    end
-
-    local MAX_RETRIES = 3
-    local RETRY_BACKOFF_S = 5 * 60 -- 5 minutes
-
-    if self._retry_attempt >= MAX_RETRIES then
-        self.message_writer:write_error_action(
-            string.format(
-                "Auto-continue gave up after %d attempts. Send a message manually when usage resets.",
-                MAX_RETRIES
-            )
-        )
-        self._retry_attempt = 0
-        return
-    end
-
-    self:_cancel_retry_timer(false)
-
-    local delay_s
-    if self._retry_attempt > 0 then
-        -- Previous auto-continue got another usage limit error — the provider's
-        -- reset time was inaccurate. Use a fixed backoff instead.
-        delay_s = RETRY_BACKOFF_S
-    else
-        delay_s = math.max(reset_epoch - os.time(), 10)
-        -- Add buffer to avoid racing the exact reset moment
-        delay_s = delay_s + 120
-    end
-
-    self._retry_attempt = self._retry_attempt + 1
-
-    local duration = format_duration(delay_s)
-    local attempt_suffix = self._retry_attempt > 1
-            and string.format(
-                " (attempt %d/%d)",
-                self._retry_attempt,
-                MAX_RETRIES
-            )
-        or ""
-
-    self.message_writer:write_error_action(
-        string.format(
-            "Auto-continuing in %s%s. Press [c] to cancel.",
-            duration,
-            attempt_suffix
-        )
-    )
-
-    local chat_bufnr = self.widget.buf_nrs.chat
-    local lhs = "c"
-
-    vim.keymap.set("n", lhs, function()
-        self:_cancel_retry_timer()
-        Logger.notify("Auto-continue cancelled.")
-    end, { buffer = chat_bufnr, nowait = true })
-
-    self._retry_keymap = { bufnr = chat_bufnr, lhs = lhs }
-
-    local timer = vim.uv.new_timer()
-    if not timer then
-        return
-    end
-    self._retry_timer = timer
-
-    timer:start(
-        delay_s * 1000,
-        0,
-        vim.schedule_wrap(function()
-            self:_cancel_retry_timer(false)
-
-            if self._destroyed then
-                return
-            end
-
-            if not self.session_id then
-                Logger.notify(
-                    "No active session for auto-continue.",
-                    vim.log.levels.WARN
-                )
-                return
-            end
-
-            local queued = self._queued_prompts
-            self._queued_prompts = nil
-
-            if queued then
-                self:_handle_input_submit(table.concat(queued, "\n\n"))
-            else
-                self:_handle_input_submit("continue")
-            end
-        end)
-    )
-end
-
 function SessionManager:_cancel_session()
     if self.session_id then
         -- only cancel and clear content if there was an session
@@ -2144,9 +1844,9 @@ function SessionManager:_cancel_session()
     end
 
     self.session_id = nil
-    self:_remove_reauth_keymap()
-    self:_cancel_health_check_timer()
-    self:_cancel_retry_timer()
+    Recovery.remove_reauth_keymap(self)
+    Recovery.cancel_health_check_timer(self)
+    Recovery.cancel_retry_timer(self)
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
@@ -2426,10 +2126,7 @@ end
 function SessionManager:destroy()
     self._destroyed = true
 
-    if self._reauth_job then
-        self._reauth_job:kill("sigterm") --- @diagnostic disable-line: undefined-field
-        self._reauth_job = nil
-    end
+    Recovery.kill_reauth_job(self)
 
     -- widget:destroy() calls hide() which fires on_hide. The scheduled destroy
     -- inside on_hide already guards against wiping a replacement session (it
@@ -2517,11 +2214,7 @@ function SessionManager:restart_session()
     self:restore_from_history(saved_history)
 end
 
---- @private
---- @param seconds number
---- @return string
-function SessionManager._format_duration(seconds)
-    return format_duration(seconds)
-end
+--- Static reference kept for the test suite (see session_manager.test.lua).
+SessionManager._format_duration = Recovery.format_duration
 
 return SessionManager

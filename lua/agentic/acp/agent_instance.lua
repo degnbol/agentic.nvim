@@ -83,6 +83,20 @@ function AgentInstance.get_instance(provider_name, on_ready)
     return client
 end
 
+--- Stop the cached instance for `provider_name` and remove it from the cache,
+--- so the next `get_instance` spawns a fresh subprocess. Used to recover from
+--- a stuck claude-agent-acp prompt generator after a usage_limit error.
+--- @param provider_name agentic.UserConfig.ProviderName
+function AgentInstance.invalidate(provider_name)
+    local client = AgentInstance._instances[provider_name]
+    if client then
+        pcall(function()
+            client:stop()
+        end)
+    end
+    AgentInstance._instances[provider_name] = nil
+end
+
 --- Cleanup all active instances and processes.
 --- Called automatically on VimLeavePre (covers :q, :qa, :qa!, :cq),
 --- SIGTERM, and SIGINT. Each transport is killed with SIGTERM then SIGKILL.
