@@ -254,20 +254,60 @@ state is the primary mechanism.
 
 ## Auto-scroll and attention notifications
 
-Auto-scroll is runtime-toggleable via `keymaps.widget.toggle_auto_scroll`
-(`<localLeader>a`). When disabled, `scroll_down_only()` returns early — no
-buffer content changes, just scroll suppression. State lives in
-`Config.auto_scroll.enabled` (mutated at runtime, not persisted across sessions).
+User-facing behaviour is in `doc/agentic.txt § Auto-scroll`. This section
+documents the control flow for future maintenance.
 
-User-facing behaviour and the at-bottom rule (driven by the window's
-`scrolloff`, no separate threshold) are documented in
-[doc/agentic.txt § Auto-scroll](doc/agentic.txt) — keep that file as the
-source of truth. `MessageWriter._auto_scroll_paused` holds the runtime
-pause state and is set/cleared by `MessageWriter:on_user_scroll` from the
-buffer-scoped `WinScrolled` autocmd installed in `MessageWriter:new`.
-`MessageWriter._suppress_pin_release` filters out our own programmatic
-scrolls and buffer writes (set sync around `scroll_down_only` and inside
-`_with_modifiable_and_notify_change`).
+**Master switches:**
+- `Config.auto_scroll.enabled` — runtime-toggleable via
+  `keymaps.widget.toggle_auto_scroll` (`<localLeader>a`). When false,
+  `BufHelpers.scroll_down_only` returns early. Mutated at runtime, not
+  persisted.
+- `Config.auto_scroll.pause_on_prose` — when false, no pin (auto-scroll
+  always tracks the trailing edge during streaming).
+
+**Per-instance state on `MessageWriter`:**
+| Field | Purpose |
+|---|---|
+| `_prose_anchor_line` | 0-indexed buffer line of the first non-blank line of the current prose run. Set on the first prose chunk of a run while not paused. Cleared at run boundaries (`write_tool_call_block`, `append_separator`, `write_error_message`, `reset_turn_state`) and on user-scroll-away. |
+| `_auto_scroll_paused` | True after the user scrolled away from the bottom; gates pin-setting and `_check_auto_scroll`. Survives turn boundaries — only `on_user_scroll` flips it back. |
+| `_suppress_pin_release` | True only while the plugin is synchronously executing its own scroll commands or buffer writes. The `WinScrolled` autocmd checks this before treating an event as user-initiated. |
+| `_should_auto_scroll`, `_scroll_scheduled` | Per-call coalescing. Captured by `_auto_scroll`, consumed by the deferred `vim.schedule` callback. |
+
+**Flow per streaming chunk** (`MessageWriter:write_message_chunk`):
+1. Sync: `_auto_scroll(bufnr)` records `_should_auto_scroll` from
+   `_check_auto_scroll` (gated on `_auto_scroll_paused`, with a pin
+   override) and queues a `vim.schedule` callback. `_scroll_scheduled`
+   coalesces.
+2. Sync: `_with_modifiable_and_notify_change` writes the chunk — the
+   suppress flag is set for this whole block so any `WinScrolled` that
+   fires from buffer-grow / topline auto-correct is filtered out.
+3. Sync (still inside the write): pin the start of the prose run if
+   `_prose_anchor_line` is nil **and** `_auto_scroll_paused` is false.
+4. Async: the scheduled callback flips suppress on, calls
+   `BufHelpers.scroll_down_only` with `max_topline = anchor + 1` (when
+   the pin is set), flips suppress off.
+
+**`scroll_down_only`** (`utils/buf_helpers.lua`) is the single point that
+does the scroll. It runs `normal! G0zb`, then if `max_topline` is set and
+the natural scroll would overflow it, parks the cursor inside the
+anchored viewport and `winrestview`s the topline back. Cursor-park
+position accounts for `scrolloff` so vim does not shift the topline
+back to honour it.
+
+**At-bottom rule** (`MessageWriter:_is_at_bottom`):
+- Chat window is the current window → `cursor_line >= line_count`. The
+  user can move the cursor; if they kept it off the last line, they're
+  not at the bottom regardless of viewport state.
+- Chat window is not focused → `getwininfo().botline >= line_count`. The
+  user can't move the chat cursor (focus elsewhere) but can still scroll
+  the chat with the OS pointer; viewport-reaches-end is the only signal.
+
+**`on_user_scroll`** (`MessageWriter:on_user_scroll`) is bound to
+`WinScrolled` on the chat buffer in `MessageWriter:new`. It returns
+immediately if `_suppress_pin_release` is set, then calls `_is_at_bottom`
+to either clear `_auto_scroll_paused` (resume) or set it and release the
+pin (pause). The chat-widget autocmd that clears the unread badge uses
+the same dual rule inline (see `chat_widget.lua` `_setup_autocommands`).
 
 Attention notifications (`_notify_attention(badge)`) fire on two events:
 - **Response complete** — badge `"[done]"`
@@ -278,8 +318,8 @@ Behaviour depends on focus state:
 - **Scrolled up from bottom** → sets badge in buffer name (visible in `:ls`/tabline)
 
 Badge clears when:
-- User scrolls to within `scrolloff` lines of bottom (`WinScrolled` autocmd
-  on the chat buffer in `chat_widget.lua`)
+- User reaches the bottom of the chat by the at-bottom rule above
+  (`WinScrolled` autocmd on the chat buffer in `chat_widget.lua`)
 - User submits next prompt (`clear_unread_badge()`)
 
 ## Input buffer completion
