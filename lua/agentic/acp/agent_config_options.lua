@@ -13,14 +13,16 @@ local Logger = require("agentic.utils.logger")
 --- @field _pending_model_select boolean
 --- @field _pending_initial_model? string model id to apply once options arrive (session restore)
 --- @field _set_model_callback fun(model_id: string, is_legacy: boolean)
+--- @field _is_agent_ready? fun(): boolean Returns true if an agent is attached and ready
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
 
 --- @param buffers agentic.ui.ChatWidget.BufNrs Same buffers as ChatWidget instance
 --- @param set_mode_callback fun(mode_id: string, is_legacy: boolean)
 --- @param set_model_callback fun(model_id: string, is_legacy: boolean)
+--- @param is_agent_ready fun(): boolean Returns true if an agent is attached and ready
 --- @return agentic.acp.AgentConfigOptions
-function AgentConfigOptions:new(buffers, set_mode_callback, set_model_callback)
+function AgentConfigOptions:new(buffers, set_mode_callback, set_model_callback, is_agent_ready)
     local AgentModes = require("agentic.acp.agent_modes")
     local AgentModels = require("agentic.acp.agent_models")
 
@@ -33,6 +35,7 @@ function AgentConfigOptions:new(buffers, set_mode_callback, set_model_callback)
         _pending_model_select = false,
         _pending_initial_model = nil,
         _set_model_callback = set_model_callback,
+        _is_agent_ready = is_agent_ready,
     }, self)
 
     for _, bufnr in pairs(buffers) do
@@ -298,6 +301,16 @@ end
 --- @param handle_model_change fun(model_id: string, is_legacy: boolean): any
 --- @return boolean shown
 function AgentConfigOptions:show_model_selector(handle_model_change)
+    if self._is_agent_ready and not self._is_agent_ready() then
+        self._pending_model_select = true
+        Logger.notify(
+            "Waiting for provider...",
+            vim.log.levels.INFO,
+            { title = "Agentic" }
+        )
+        return false
+    end
+
     local shown = self:_show_selector(
         self.model,
         "Select model to change:",
@@ -318,7 +331,6 @@ function AgentConfigOptions:show_model_selector(handle_model_change)
         return true
     end
 
-    -- No models available yet — queue for when the session delivers them
     self._pending_model_select = true
     Logger.notify(
         "Waiting for session to start...",
