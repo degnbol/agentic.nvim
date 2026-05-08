@@ -524,8 +524,10 @@ function ChatWidget:_initialize()
         })
     end
 
-    -- Clear unread badge when the cursor reaches the last line of the
-    -- chat buffer.
+    -- Clear unread badge when the user reaches the bottom of the chat —
+    -- either by moving the chat-window cursor to the last line or by
+    -- scrolling the viewport so the last line is visible (e.g. OS scroll
+    -- wheel while focused in another panel).
     vim.api.nvim_create_autocmd("WinScrolled", {
         buffer = self.buf_nrs.chat,
         callback = function()
@@ -536,9 +538,12 @@ function ChatWidget:_initialize()
             if not chat_win or not vim.api.nvim_win_is_valid(chat_win) then
                 return
             end
-            local cursor_line = vim.api.nvim_win_get_cursor(chat_win)[1]
             local total_lines = vim.api.nvim_buf_line_count(self.buf_nrs.chat)
-            if cursor_line >= total_lines then
+            local cursor_line = vim.api.nvim_win_get_cursor(chat_win)[1]
+            local info = vim.fn.getwininfo(chat_win)[1]
+            local at_bottom = cursor_line >= total_lines
+                or (info ~= nil and info.botline >= total_lines)
+            if at_bottom then
                 self:clear_unread_badge()
             end
         end,

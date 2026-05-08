@@ -103,6 +103,25 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_false(writer:_check_auto_scroll(bufnr))
         end)
 
+        it(
+            "returns true when viewport reaches end without cursor on last line",
+            function()
+                -- Cursor not on last line, but viewport is scrolled so the
+                -- last line is visible. Covers the case where the user
+                -- scrolls the chat via OS pointer while focused elsewhere.
+                -- Cursor must be inside the chosen viewport (vim won't
+                -- keep topline if cursor is off-screen).
+                setup_buffer(30, 15)
+                vim.api.nvim_win_call(winid, function()
+                    vim.fn.winrestview({ topline = 11 })
+                end)
+                vim.cmd("redraw")
+                local info = vim.fn.getwininfo(winid)[1]
+                assert.equal(30, info.botline)
+                assert.is_true(writer:_check_auto_scroll(bufnr))
+            end
+        )
+
         it("returns true when window is not visible", function()
             local hidden_buf = vim.api.nvim_create_buf(false, true)
             local hidden_writer = MessageWriter:new(hidden_buf)

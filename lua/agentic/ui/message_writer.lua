@@ -111,12 +111,23 @@ function MessageWriter:new(bufnr, status_animation)
     return instance
 end
 
---- True when the cursor is on the last line of the buffer.
+--- True when the user has reached the bottom of the chat. Either:
+--- - the chat-window cursor is on the last line (e.g. user pressed `G`
+---   while focused in chat), or
+--- - the chat viewport's bottom-most rendered line is the last line —
+---   covers the case where the user is focused in another window (input,
+---   todos, ...) and uses the OS scroll wheel hovering over the chat to
+---   scroll it to the end without ever moving the chat's nvim cursor.
 --- @param winid integer
 --- @return boolean
 function MessageWriter:_is_at_bottom(winid)
+    local total_lines = vim.api.nvim_buf_line_count(self.bufnr)
     local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-    return cursor_line >= vim.api.nvim_buf_line_count(self.bufnr)
+    if cursor_line >= total_lines then
+        return true
+    end
+    local info = vim.fn.getwininfo(winid)[1]
+    return info ~= nil and info.botline >= total_lines
 end
 
 --- WinScrolled hook. Pauses or resumes auto-scroll based on whether the
