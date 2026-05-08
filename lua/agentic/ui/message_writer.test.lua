@@ -104,21 +104,47 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "returns true when viewport reaches end without cursor on last line",
+            "returns true when viewport reaches end without cursor on last line, focus elsewhere",
             function()
-                -- Cursor not on last line, but viewport is scrolled so the
-                -- last line is visible. Covers the case where the user
-                -- scrolls the chat via OS pointer while focused elsewhere.
-                -- Cursor must be inside the chosen viewport (vim won't
-                -- keep topline if cursor is off-screen).
+                -- Cursor mid-buffer in chat, viewport scrolled so the
+                -- last line is visible, but focus is in another window.
+                -- The user can't move the chat cursor — the viewport is
+                -- the only signal. Mimics OS-scroll-wheel-hovering-on-chat
+                -- while focused in the input panel.
                 setup_buffer(30, 15)
                 vim.api.nvim_win_call(winid, function()
                     vim.fn.winrestview({ topline = 11 })
                 end)
                 vim.cmd("redraw")
-                local info = vim.fn.getwininfo(winid)[1]
-                assert.equal(30, info.botline)
+
+                -- Switch focus away from the chat window.
+                local other_buf = vim.api.nvim_create_buf(false, true)
+                local other_win = vim.api.nvim_open_win(other_buf, true, {
+                    relative = "editor",
+                    width = 20,
+                    height = 5,
+                    row = 25,
+                    col = 0,
+                })
+
                 assert.is_true(writer:_check_auto_scroll(bufnr))
+
+                vim.api.nvim_win_close(other_win, true)
+                vim.api.nvim_buf_delete(other_buf, { force = true })
+            end
+        )
+
+        it(
+            "returns false when chat is focused but cursor is not on last line, even if last line is visible",
+            function()
+                -- Short buffer that fits in winheight=20: botline reaches
+                -- end without any scrolling. Chat is focused. User is
+                -- reading mid-buffer with the cursor up — not "at bottom".
+                setup_buffer(10, 3)
+                vim.api.nvim_set_current_win(winid)
+                local info = vim.fn.getwininfo(winid)[1]
+                assert.is_true(info.botline >= 10) -- viewport shows last line
+                assert.is_false(writer:_check_auto_scroll(bufnr))
             end
         )
 
