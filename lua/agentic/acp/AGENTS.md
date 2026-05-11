@@ -234,6 +234,13 @@ cannot mutate the filesystem, regardless of target path. This bypasses the
 provider's directory sandbox restriction, which otherwise prompts for paths
 outside `additionalDirectories` even for read-only operations.
 
+The kind check has a fallback: if `request.toolCall.kind` does not match
+but the tracker entry created by the prior `tool_call` notification has a
+read-only kind, auto-approve anyway. This handles opencode's pattern of
+raising `external_directory` (kind="other") under the same `toolCallId`
+as the underlying read tool — see acp skill `references/opencode.md`
+§ "Permission request shape" finding 1.
+
 Controlled by `Config.auto_approve_read_only_tools` (default `true`).
 
 #### Compound Bash commands
@@ -283,6 +290,13 @@ master switch that gates the whole compound-command path. The built-in list
 has its own opt-out (`auto_approve_read_only_commands`) so users with no
 Claude settings.json still get a sensible baseline, and users who want only
 their own settings.json patterns can disable the built-ins independently.
+
+The command source has a fallback: if `request.toolCall.rawInput.command`
+is nil and the tracker's kind is `"execute"`, the check reads the command
+from `tracker.argument` instead. This handles opencode, which sends
+`metadata: {}` on shell permission requests but populates `rawInput.command`
+on the tool_call_update that fires just before — see acp skill
+`references/opencode.md` § "Permission request shape" finding 3.
 
 #### Allow/reject always cache
 

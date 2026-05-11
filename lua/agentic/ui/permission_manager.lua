@@ -142,33 +142,46 @@ function PermissionManager:_try_auto_approve(request, callback)
     end
 
     -- Read-only tools: always approve (no filesystem mutation possible).
-    -- Match case-insensitively — providers vary on casing (e.g. opencode
-    -- emits "Read" while the ACP spec uses lowercase).
+    -- Check the request kind first; fall back to the tracker's kind for
+    -- providers that raise secondary permissions under the same toolCallId
+    -- with a different kind. opencode raises `external_directory` with
+    -- kind="other" before the underlying tool's own permission, sharing
+    -- toolCallId — see acp skill `references/opencode.md` § "Permission
+    -- request shape" finding 1.
     local kind_lc = tool_call.kind and tool_call.kind:lower() or nil
+    local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
+    local tracker_kind_lc = tracker and tracker.kind and tracker.kind:lower()
+        or nil
     if
         Config.auto_approve_read_only_tools
-        and kind_lc
-        and READ_ONLY_KINDS[kind_lc]
+        and (
+            (kind_lc and READ_ONLY_KINDS[kind_lc])
+            or (tracker_kind_lc and READ_ONLY_KINDS[tracker_kind_lc])
+        )
     then
         return auto_approve(
             request,
             callback,
-            "read-only tool kind: " .. tool_call.kind
+            "read-only tool kind: " .. (tracker_kind_lc or kind_lc)
         )
     end
 
-    -- Compound Bash commands: check each segment against settings.json rules
+    -- Compound Bash commands: check each segment against settings.json rules.
+    -- Opencode sends `metadata: {}` for shell permissions, so the request's
+    -- rawInput.command is nil; the actual command lives in the prior
+    -- tool_call_update tracker as `argument` — see acp skill
+    -- `references/opencode.md` § "Permission request shape" finding 3.
     if Config.auto_approve_compound_commands then
         local raw_input = tool_call.rawInput
-        if
-            raw_input
-            and raw_input.command
-            and PermissionRules.should_auto_approve(raw_input.command)
-        then
+        local command = raw_input and raw_input.command
+        if not command and tracker and tracker.kind == "execute" then
+            command = tracker.argument
+        end
+        if command and PermissionRules.should_auto_approve(command) then
             return auto_approve(
                 request,
                 callback,
-                "compound command: " .. raw_input.command
+                "compound command: " .. command
             )
         end
     end

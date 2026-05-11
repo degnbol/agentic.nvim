@@ -317,6 +317,18 @@ screen so we can read it.
 - **`/trust` glob coverage**: verify the `/trust` system works with glob
   patterns using `~/`, relative paths, and absolute folders.
 
+- **Context-sensitive status label**: currently opencode's `in_progress`
+  is relabelled to `pending` in the opencode adapter (since opencode flips
+  status to `in_progress` *before* `execute()` runs and before raising the
+  permission ask — the tool is not actually executing). A more accurate
+  alternative is to drive the label from PermissionManager state: while a
+  pending permission request exists for a `toolCallId`, render the footer
+  as "pending"; once it resolves, render the real status. Works correctly
+  for any provider that interleaves `in_progress` with permission asks,
+  not just opencode. Requires PermissionManager → renderer plumbing or a
+  per-tracker `awaiting_permission` flag. See acp skill
+  `references/opencode.md` § "Premature `in_progress`".
+
 ### Error display
 
 - Errors are currently shown inline in the chat buffer with red highlighting

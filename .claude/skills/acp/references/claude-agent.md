@@ -8,8 +8,19 @@ internals — not the ACP protocol itself (see SKILL.md for that).
 > agentic.nvim plugin (e.g. `lua/agentic/...`). Treat those as concrete
 > examples; the surrounding analysis applies to any ACP frontend.
 
-Installed at `/opt/homebrew/lib/node_modules/@zed-industries/claude-agent-acp/`.
-Package renamed to `@agentclientprotocol/claude-agent-acp` from v0.24+.
+## Source locations
+
+- **claude-agent-acp bridge** (npm install, readable JS):
+  `/opt/homebrew/lib/node_modules/@zed-industries/claude-agent-acp/dist/acp-agent.js`.
+  Package renamed to `@agentclientprotocol/claude-agent-acp` from v0.24+.
+- **claude-agent-sdk** is bundled inside the bridge — same path,
+  `dist/` subtree. The SDK's own npm package
+  (`@anthropic-ai/claude-agent-sdk`) is at `node_modules/@anthropic-ai/`.
+- **Claude Code TUI source** (private + public): cloned at
+  `~/Documents/agentic/claude/` with `claude-code-private/src/` (TUI source,
+  including `services/`, `assistant/`, `bridge/`) and `claude-code-public/`
+  (changelog, plugins, scripts). Useful for understanding TUI-only behaviour
+  not visible through ACP.
 
 ## Architecture
 

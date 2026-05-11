@@ -1,6 +1,39 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
 
+--- Format opencode grep/glob arguments into an executable rg-equivalent
+--- command so search blocks show the actual pattern/path instead of the bare
+--- tool name ("grep"/"glob"). Returns nil when no pattern is set, signalling
+--- the caller to fall back to a placeholder.
+--- @param tool string "grep" or "glob"
+--- @param raw_input { pattern?: string, path?: string, include?: string }
+--- @return string|nil
+local function format_search_command(tool, raw_input)
+    local pattern = raw_input.pattern
+    if not pattern or pattern == "" then
+        return nil
+    end
+    local quoted = string.format('"%s"', pattern:gsub('"', '\\"'))
+    local parts = { "rg" }
+    if tool == "glob" then
+        table.insert(parts, "--files")
+        table.insert(parts, "--glob")
+        table.insert(parts, quoted)
+    else
+        if raw_input.include and raw_input.include ~= "" then
+            local q_include =
+                string.format('"%s"', raw_input.include:gsub('"', '\\"'))
+            table.insert(parts, "--glob")
+            table.insert(parts, q_include)
+        end
+        table.insert(parts, quoted)
+    end
+    if raw_input.path and raw_input.path ~= "" then
+        table.insert(parts, FileSystem.to_smart_path(raw_input.path))
+    end
+    return table.concat(parts, " ")
+end
+
 --- OpenCode-specific adapter that extends ACPClient with OpenCode-specific behaviors
 --- @class agentic.acp.OpenCodeACPAdapter : agentic.acp.ACPClient
 local OpenCodeACPAdapter = ACPClient.extend()
@@ -29,6 +62,17 @@ function OpenCodeACPAdapter:__handle_tool_call(session_id, update)
             or "unknown skill"
     elseif update.title == "todowrite" then
         message.kind = "TodoWrite"
+    elseif update.title == "grep" or update.title == "glob" then
+        -- rawInput is usually empty on the initial tool_call; the pattern
+        -- arrives in tool_call_update. Try to format here so the block
+        -- shows the real command immediately when rawInput is populated,
+        -- and fall back to "pending..." otherwise.
+        local cmd = update.rawInput
+            and format_search_command(update.title, update.rawInput)
+        message.argument = cmd or "pending..."
+        if update.rawInput and update.rawInput.pattern then
+            message.search_pattern = update.rawInput.pattern
+        end
     end
 
     self:__with_subscriber(session_id, function(subscriber)
@@ -51,6 +95,8 @@ end
 --- @field subagent_type? string For sub-agent tasks
 --- @field description? string For sub-agent tasks
 --- @field prompt? string For sub-agent tasks
+--- @field path? string Search directory for grep/glob
+--- @field include? string File pattern filter for grep
 
 --- @class agentic.acp.OpenCodeToolCallUpdate : agentic.acp.ToolCallUpdate
 --- @field kind? agentic.acp.ToolKind
@@ -67,10 +113,17 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
 
     ---@cast update agentic.acp.OpenCodeToolCallUpdate
 
+    -- Opencode flips status to "in_progress" the moment the LLM finishes
+    -- streaming tool args — before execute() runs and before the permission
+    -- ask. The tool is not actually executing. Relabel to "pending" so the
+    -- chat footer reflects the true state. See acp skill
+    -- `references/opencode.md` § "Premature `in_progress`".
+    local status = (update.status == "in_progress" and "pending" or update.status) --[[@as agentic.acp.ToolCallStatus]]
+
     --- @type agentic.ui.MessageWriter.ToolCallBase
     local message = {
         tool_call_id = update.toolCallId,
-        status = update.status,
+        status = status,
     }
 
     -- Detect SubAgent for ALL statuses (kind comes as "other" from OpenCode)
@@ -119,6 +172,21 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
                     old = self:safe_split(old_string),
                     all = update.rawInput.replaceAll or false,
                 }
+            elseif update.rawInput.pattern then -- grep/glob search
+                -- Only format the argument when we can identify the tool by
+                -- its in-progress title. On `completed`, opencode replaces
+                -- title with `part.state.title` (the pattern itself), so
+                -- treating that as a tool name would mis-format. Skipping
+                -- here lets MessageWriter's merge keep the argument written
+                -- during the earlier in_progress update.
+                if update.title == "grep" or update.title == "glob" then
+                    local cmd =
+                        format_search_command(update.title, update.rawInput)
+                    if cmd then
+                        message.argument = cmd
+                    end
+                end
+                message.search_pattern = update.rawInput.pattern
             elseif update.rawInput.url then -- fetch command
                 message.argument = update.rawInput.url
             elseif update.rawInput.query then -- WebSearch command

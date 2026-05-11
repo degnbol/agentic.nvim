@@ -8,6 +8,118 @@ SKILL.md for that).
 > agentic.nvim plugin (e.g. `lua/agentic/...`). Treat those as concrete
 > examples; the surrounding analysis applies to any ACP frontend.
 
+## Source location
+
+Cloned at `~/Documents/agentic/opencode/` (from `https://github.com/sst/opencode`).
+The homebrew install at `/opt/homebrew/bin/opencode` is a bun-bundled Mach-O
+binary — not readable as source. Use the clone for any logic inspection.
+
+Useful entry points:
+
+- `packages/opencode/src/acp/agent.ts` — ACP bridge: `handleEvent`,
+  `requestPermission`, `tool_call`/`tool_call_update` emitters, and the
+  `toToolKind` switch (around line 1605).
+- `packages/opencode/src/tool/` — tool implementations (`read.ts`, `edit.ts`,
+  `shell.ts`, `external-directory.ts`, …). Each calls
+  `ctx.ask({permission: "...", metadata: ...})` to raise a permission.
+- `packages/opencode/src/permission/index.ts` — permission engine.
+- `packages/opencode/src/tool/shell/id.ts` — `ShellID.ToolID = "bash"`.
+
+## Permission request shape (the kind/rawInput gap)
+
+`acp/agent.ts` `case "permission.asked"` builds the ACP `requestPermission`
+toolCall as:
+
+```ts
+toolCall: {
+    toolCallId: permission.tool?.callID ?? permission.id,
+    title:      permission.permission,          // e.g. "read", "bash", "external_directory"
+    rawInput:   permission.metadata,            // tool-supplied; often {}
+    kind:       toToolKind(permission.permission),
+    locations:  toLocations(permission.permission, permission.metadata),
+}
+```
+
+Three consequences a client-side auto-approval layer must handle. Other ACP
+providers (claude-agent-acp, gemini, codex, mistral, …) raise one
+permission per tool call with the right kind and a populated `rawInput`,
+so these mitigations are opencode-specific.
+
+### 1. Multiple permission requests share one `toolCallId`
+
+`session/prompt.ts:404-412` wires every `ctx.ask({...})` inside a tool's
+execution to receive `tool: { messageID, callID: options.toolCallId }`. So
+a single tool call can fire multiple `permission.asked` events, all
+carrying the *same* `toolCallId` in the resulting ACP request. The client
+sees:
+
+1. `tool_call` notification (initial) with the underlying tool's `kind`
+   and `toolCallId = X`.
+2. Possibly a `request_permission` for `external_directory` with
+   `toolCallId = X`, `kind: "other"`.
+3. The tool's own `request_permission` with `toolCallId = X` and the
+   correct kind (`"read"`, `"execute"`, …).
+
+Steps 2 and 3 render under the same chat block (the one created by step
+1). A client-side auto-approval that decides only from
+`request.toolCall.kind` will see `"other"` for step 2 and prompt the
+user even when the underlying tool was read-only.
+
+**Mitigation:** read the tracker entry created by the initial `tool_call`
+notification (`message_writer.tool_call_blocks[toolCallId].kind`) as the
+source of truth for the *underlying tool's* kind. The initial
+notification's `kind = toToolKind(part.tool)` reflects the actual tool
+(`"read"`, `"execute"`, …), independent of which permission key is
+currently being asked.
+
+### 2. `kind` is derived from the permission *string*, not the tool name
+
+`toToolKind` switches on the permission key (the first arg to `ctx.ask`),
+not the tool name:
+
+| Permission key (from `ctx.ask`)              | Resulting `kind`  |
+| -------------------------------------------- | ----------------- |
+| `"read"`                                     | `"read"`          |
+| `"grep"`, `"glob"`, `"context7_*"`           | `"search"`        |
+| `"bash"` (= `ShellID.ToolID`)                | `"execute"`       |
+| `"edit"`, `"patch"`, `"write"`               | `"edit"`          |
+| `"webfetch"`                                 | `"fetch"`         |
+| **anything else** (default branch)           | `"other"`         |
+
+The default branch is the trap. `"external_directory"`, `"skill"`,
+`"todowrite"`, `"workflow_tool_approval"`, `"plan_enter"`, etc. all
+collapse to `kind: "other"`. Combined with finding 1, this means a
+read-only tool can prompt under a `"Read"` chat block because the
+prompting permission was actually `external_directory` (kind `"other"`).
+The tracker-fallback above resolves it.
+
+### 3. `rawInput` is empty for shell permissions
+
+`shell.ts:267-288` calls `ctx.ask({permission: "bash", patterns,
+always, metadata: {}})` — `metadata` is `{}`. The ACP request's `rawInput`
+is therefore empty: there is no `command` field at permission time. The
+`tool_call` notification that fired immediately before also carries
+`rawInput: {}` (`agent.ts:1116`). The actual command only arrives in the
+**status-`in_progress`** `tool_call_update` (`agent.ts:309 / 337 / 851`),
+which is dispatched right *before* the permission ask — **despite the
+status label, the tool has not started executing yet**. See
+"Premature `in_progress` racing with `request_permission`" below for
+the full mislabelling story. The opencode adapter writes that command
+into the tracker's `argument` field for `kind == "execute"`.
+
+**Mitigation:** when `request.toolCall.rawInput.command` is nil and the
+tracker's kind is `"execute"`, fall back to `tracker.argument`. Other
+tools (`read.ts:208`, `edit.ts:102`, …) populate `metadata.filepath`,
+so file-scoped logic has data on the request directly.
+
+### 4. Kinds are lowercase
+
+`toToolKind` calls `toolName.toLocaleLowerCase()` and returns lowercase
+literals. Earlier docs claimed opencode emitted capitalised kinds
+(`"Read"`, `"Search"`); this is no longer true (verified against opencode
+source as of 2026-05). Case-insensitive matching is still defensive but
+not strictly required.
+
 ## Edit tool call sequence
 
 Opencode sends Edit tool calls in a sequence that differs from other providers:
@@ -88,19 +200,29 @@ client sees.
 
 ### Premature `in_progress` racing with `request_permission` ([#14301][1])
 
+**`status: "in_progress"` is a misnomer in opencode.** The label means
+"tool args have finished streaming" — *not* "tool is executing".
 `session/processor.ts:287-303` flips the part status from `pending` →
-`running` the moment the LLM emits its `tool-call` streaming event, *before*
-`execute()` runs. The ACP agent at `acp/agent.ts:323-339` translates that
-into `tool_call_update` with `status: "in_progress"`, dispatched in the same
-event-loop tick as the `session/request_permission` triggered by `ctx.ask`.
-Both arrive in the same TCP batch.
+`running` the moment the LLM emits its `tool-call` streaming event,
+*before* `execute()` runs. The ACP agent at `acp/agent.ts:323-339`
+translates that into `tool_call_update` with `status: "in_progress"`,
+dispatched in the same event-loop tick as the `session/request_permission`
+triggered by `ctx.ask`. Both arrive in the same TCP batch.
 
 ACP spec says `pending` covers "awaiting approval" and `in_progress` means
-the call is "currently running" — the disk write hasn't started yet, so
-opencode's notification is mis-labelled. Clients that re-render the tool
-call on every status update can clobber the permission dialog they just
-showed; render permission prompts separately to avoid this. Issue
-auto-closed after 60 days of inactivity, not fixed.
+the call is "currently running". The disk write hasn't started yet (and
+won't until permission resolves), so opencode's notification is mis-labelled
+per the spec. Clients that re-render the tool call on every status update
+can clobber the permission dialog they just showed; render permission
+prompts separately to avoid this. Issue auto-closed after 60 days of
+inactivity, not fixed.
+
+**Practical consequence for clients:** when a permission request is
+pending under the same `toolCallId`, treat the most recent `in_progress`
+update as semantically "pending" — both for UI labelling (e.g. show
+"pending" not "running" in the status footer) and for any logic that
+gates on tool-actually-executing. The status only becomes truthful
+once the permission is approved and `execute()` actually runs.
 
 ### `external_directory: "allow"` silently bypasses `edit` rules ([#18441][2])
 
