@@ -241,6 +241,12 @@ screen so we can read it.
 
 - Read tool should show the filepath captured as @string.special.path. Is there any default way in markdown for formatting filepath?
 
+### Input buffer
+
+- **Comment filtering**: HTML comments (`<!-- ... -->`) in the input buffer
+  should be rendered in the chat panel but stripped before sending to the
+  agent. Consider concealing the `<!--`/`-->` delimiters in both buffers.
+
 ### Session / workflow
 
 - **Session dashboard**: see TUI parity above — runtime state (model,
