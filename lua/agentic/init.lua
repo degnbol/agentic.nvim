@@ -330,10 +330,42 @@ end
 ---   Falls back to vim.fn.getcwd() if nil.
 --- @param model? string Model id saved with the session.
 function Agentic.load_acp_session(session_id, cwd, model)
+    if Config.session_restore.cd_on_load and cwd then
+        local st = vim.uv.fs_stat(cwd)
+        if st and st.type == "directory" then
+            vim.api.nvim_set_current_dir(cwd)
+        end
+    end
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:load_acp_session(session_id, cwd, model)
         session.widget:show()
         session.widget:close_empty_non_widget_windows()
+    end)
+end
+
+--- Resolve a session reference (session_id prefix or exact title) to a
+--- cached session. The callback receives `nil` when zero or multiple
+--- sessions match (multi-match emits a notification).
+--- @param query string
+--- @param callback fun(session_id?: string, cwd?: string, model?: string)
+function Agentic.resolve_session(query, callback)
+    SessionRestore.resolve_query(query, callback)
+end
+
+--- Resolve a session reference and open it in a new tab.
+--- No match: emits a notification, no UI change.
+--- @param query string
+function Agentic.resume_query(query)
+    Agentic.resolve_session(query, function(session_id, cwd, model)
+        if not session_id then
+            Logger.notify(
+                "No session found matching: " .. query,
+                vim.log.levels.ERROR
+            )
+            return
+        end
+        Agentic.toggle_tab()
+        Agentic.load_acp_session(session_id, cwd, model)
     end)
 end
 

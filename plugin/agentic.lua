@@ -53,3 +53,10 @@ map("x", "<Plug>(agentic-send)", agentic("add_selection"))
 
 -- Layout
 map("n", "<Plug>(agentic-rotate-layout)", agentic("rotate_layout"))
+
+vim.api.nvim_create_user_command("AgenticResume", function(args)
+    require("agentic").resume_query(args.args)
+end, {
+    nargs = 1,
+    desc = "Resume agentic session by session_id prefix or exact title (case-insensitive)",
+})
