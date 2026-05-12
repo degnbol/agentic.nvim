@@ -602,37 +602,27 @@ Same response shape as the claude-agent-acp stall (see "Prompt loop stall"
 above), but a different root cause: opencode swallows the upstream auth
 rejection and reports normal completion.
 
-**Detection signal on the first turn.** `usage.totalTokens == 0` on the first
-response of a session is an unambiguous auth-rejection signal — zero input
-tokens means the request was rejected before tokenisation, and on the first
-turn there is no prior state that could cause a legitimate zero (no stall, no
-cancelled turn, no re-use of a stale generator).
-
-**Not reliable mid-session.** Zero-usage responses do appear mid-session in
-otherwise-working sessions (cause not fully characterised — possibly stalled
-generators per "Prompt loop stall", or cancelled turns reusing the prompt
-loop). Treating them as errors produces false positives that contradict the
-visible chat state.
+**Zero-usage `end_turn` is not a reliable signal.** It can mean auth
+rejection (the documented opencode + litellm case) but it also appears in
+otherwise-working sessions — stalled generators per "Prompt loop stall",
+cancelled turns reusing the prompt loop, models that simply return
+nothing. There is no protocol-level way to distinguish these from a
+client. A first-turn-only gate was tried and removed: `_is_first_message`
+is also reset by `respawn_after_usage_limit`, so "first turn" doesn't
+correspond to "first user prompt to the live agent", and the heuristic
+produced false-positive Error blocks for normal empty responses.
 
 **Surfacing rule** (implemented as `Recovery.surface_unexpected_response`
 in `session_recovery.lua`, called from the `send_prompt` success branch
-in `_handle_input_submit_inner`): render
-`response.stopReason` + `response.usage` verbatim when `stopReason ~=
-"end_turn"` every turn, OR when `usage` is all-zero **on the first turn
-only**. The first-turn gate uses `_is_first_message` captured as a local
-before the system-info injection flips it. Render provider fields
-only — never synthesise "no response" messages or speculate about cause.
-Chat emptiness after the thinking indicator clears is self-evident and does
-not need a client-generated explanation.
-
-**Exclude `cancelled`.** `stopReason: "cancelled"` is the protocol-level
-acknowledgement of the user pressing Ctrl-C (which fires `session/cancel`).
-It is the *expected* response shape for that user action, not a provider
-fault — surfacing it would render an "Error" block for every cancelled
-turn. Skip it before evaluating the non-terminal/zero-first-turn rule.
-Other non-`end_turn` reasons (`max_tokens`, `max_turn_requests`, `refusal`)
-are provider-initiated and remain surfaced. See SKILL.md §
-"Stop reasons" for the full enumeration and which are user-initiated.
+in `_handle_input_submit_inner`): render `response.stopReason` +
+`response.usage` verbatim when `stopReason` is non-nil and not
+`end_turn` or `cancelled`. That covers the provider-initiated reasons
+(`max_tokens`, `max_turn_requests`, `refusal`) which arrive on the
+success path and would otherwise be silently dropped. `end_turn`
+(normal completion) and `cancelled` (user pressed Ctrl-C, see SKILL.md
+§ "Stop reasons") are skipped. Auth-rejection cases like opencode +
+litellm now manifest as an empty chat after the thinking indicator
+clears; the user resolves them by checking provider credentials.
 
 ### opencode Edit diff not at content[1]
 

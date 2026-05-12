@@ -1316,11 +1316,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
         text = input_text,
     })
 
-    -- Capture before the flip so the response callback can gate the
-    -- zero-usage surface on "first turn only" (see _handle_input_submit_inner
-    -- response handler and AGENTS.md § "Silent upstream failure").
-    local is_first_turn = self._is_first_message
-
     -- Add system info on first message only (after user text so resume picker shows the prompt)
     if self._is_first_message then
         self._is_first_message = false
@@ -1507,7 +1502,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
             end
         else
             self._retry_attempt = 0
-            Recovery.surface_unexpected_response(self, response, is_first_turn)
+            Recovery.surface_unexpected_response(self, response)
         end
 
         self.message_writer:append_separator()

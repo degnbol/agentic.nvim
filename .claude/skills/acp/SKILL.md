@@ -137,12 +137,12 @@ since the chat may otherwise look like a normal short reply.
 
 **`usage` is optional and provider-defined.** All-zero `usage` from a
 provider that normally populates it can signal upstream rejection before
-tokenisation (auth failure, quota wall) — but only on the *first* turn of
-a session. Mid-session, zero-usage responses appear in legitimate flows
-(cancelled turns, stalled generators reusing the prompt loop), so a client
-gate that fires every turn produces false positives. See
-`lua/agentic/acp/AGENTS.md` § "Silent upstream failure" and "Surfacing
-rule" for one client's gating policy.
+tokenisation (auth failure, quota wall), but it also appears in legitimate
+flows — stalled generators reusing the prompt loop, cancelled turns,
+models that returned nothing. Without a protocol-level distinguisher,
+treating zero usage as an error produces false positives. See
+`lua/agentic/acp/AGENTS.md` § "Silent upstream failure" for a documented
+provider example and one client's resulting surfacing rule.
 
 ### Cancellation
 

@@ -21,40 +21,27 @@ local function is_claude_provider()
         or Config.provider == "claude-agent-acp"
 end
 
---- Surface a successful prompt response that carries no agent content.
---- Some providers (e.g. opencode + litellm with bad credentials) report
---- success while silently swallowing the upstream rejection — see
---- AGENTS.md § "Silent upstream failure". Render the provider's
---- stopReason and usage verbatim so the user sees *something* when the
---- chat would otherwise stay empty after the thinking indicator clears.
---- Does not synthesise an explanation — the fields speak for themselves.
+--- Surface a successful prompt response with a non-terminal stopReason
+--- (`max_tokens`, `max_turn_requests`, `refusal`). These arrive on the
+--- success path of `session/prompt` — `err` is nil — so a chat that only
+--- inspects errors would silently miss them. `end_turn` and `cancelled`
+--- are the normal terminal/user-acknowledged reasons and are skipped.
 --- @param sm agentic.SessionManager
 --- @param response table|nil
---- @param is_first_turn boolean
-function M.surface_unexpected_response(sm, response, is_first_turn)
+function M.surface_unexpected_response(sm, response)
     if type(response) ~= "table" then
         return
     end
 
     local stop_reason = response.stopReason
-    -- "cancelled" is a user action (Ctrl-C → session/cancel), not a
-    -- provider failure. Surfacing it as an error misrepresents intent.
-    if stop_reason == "cancelled" then
-        return
-    end
-
-    local usage = type(response.usage) == "table" and response.usage or nil
-    local total = usage and (usage.totalTokens or 0) or 0
-
-    local non_terminal = stop_reason ~= nil and stop_reason ~= "end_turn"
-    local zero_first_turn = is_first_turn and total == 0
-    if not (non_terminal or zero_first_turn) then
+    if stop_reason == nil or stop_reason == "end_turn" or stop_reason == "cancelled" then
         return
     end
 
     local lines = {
         string.format("stopReason: %s", tostring(stop_reason)),
     }
+    local usage = type(response.usage) == "table" and response.usage or nil
     if usage then
         for _, key in ipairs({ "inputTokens", "outputTokens", "totalTokens" }) do
             if usage[key] ~= nil then
