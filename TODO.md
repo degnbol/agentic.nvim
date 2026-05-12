@@ -295,6 +295,23 @@ screen so we can read it.
   via the persistent undo file. Optionally integrate so a user can step
   through the edit history from claude with `u`.
 
+- **Archive pre-compaction sessions**: when the provider compacts and a new
+  session_id replaces the current one, the previous cache JSON keeps its
+  full message history but the new session inherits the same title (user
+  often `/rename`s the continuation to the same short name). Two cache
+  entries end up sharing a title; completion and the resume picker both
+  surface the older one. We usually don't want to resume a compacted
+  conversation — the provider only has the summary anyway. Idea: on
+  compaction, mark the pre-compaction session as archived (e.g. append
+  " (pre-compaction)" to its title, or move its JSON to an archive
+  subfolder) so the active session keeps the clean name. The full
+  pre-compaction history stays preserved as a record. Open questions:
+  how to detect the compaction event from ACP (session_update? title
+  change? new session_id under same tab?); cache filename uses
+  session_id, so archival requires a parallel naming scheme or a
+  marker field inside the JSON. Related to the "Resume after
+  compacting" bug above (showing full history alongside the summary).
+
 - **Session completion heuristic**: some sessions are more clearly completed
   than others. If the user prompt is last, the session is not completed.
   If it ends in a commit etc., it probably is. Detection is heuristic;
@@ -353,6 +370,11 @@ We could consider an opt-out feature where something like this is written to std
 
 Skills can have argument-hint field, currently e.g. `[message]` for /commit.
 Completion should show this, e.g. the menu entry and might need snippet.
+
+### better titles
+
+Do some processing on the first prompt to generate a title rather than just dumping the prompt.
+E.g. extract all non-basic words ("can", "let's", "this", ... are basic), convert to lowercase and chain together with some delimiter.
 
 ## Investigations
 
