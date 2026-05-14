@@ -369,12 +369,12 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<C-c>`            n/i     Stop generation
     `<localLeader>c`   n       Send "Continue"
     `<localLeader>R`   n       Restore session
-    `<localLeader>r`   n       Refresh (scroll to bottom)
     `<localLeader>s`   n       Switch provider
     `<localLeader>m`   n       Switch model
     `<localLeader>q`   n       Close widget
     `<localLeader>!`   n       Restart session
     `<localLeader>a`   n       Toggle auto-scroll
+    `<localLeader>G`   n       Scroll chat to bottom (keeps current window focused)
 
 ------------------------------------------------------------------------------
 6.2 PROMPT KEYMAPS                               *agentic-keymaps-prompt*

@@ -417,7 +417,7 @@ function SessionManager:_on_session_update(update)
     end
 end
 
---- Manual refresh: reset stale generating state and scroll to bottom.
+--- Manual refresh: reset stale generating state.
 --- Workaround for when the display gets out of sync (e.g. background task
 --- completion, or the prompt response callback racing with a new turn).
 function SessionManager:_refresh()
@@ -433,8 +433,6 @@ function SessionManager:_refresh()
     -- (rejection suppression, chunk tracking, etc.). Cosmetic-only effect
     -- mid-turn; essential for recovering from a stuck state between turns.
     self.message_writer:reset_turn_state()
-
-    self.message_writer:scroll_to_bottom()
 end
 
 --- Display context usage info locally (intercepted /context command)

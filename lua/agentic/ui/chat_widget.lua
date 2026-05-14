@@ -35,7 +35,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field on_submit_input fun(prompt: string) external callback to be called when user submits the input
---- @field on_refresh? fun() external callback for manual refresh (reset stale state, scroll)
+--- @field on_refresh? fun() external callback for manual refresh (reset stale state)
 --- @field on_hide? fun() external callback called after the widget is hidden
 --- @field _hiding boolean re-entrancy guard for hide()
 --- @field _unread_badge? string Badge appended to chat buffer name (e.g. "[done]", "[?]")
@@ -330,7 +330,6 @@ function ChatWidget:submit(send)
     self:close_optional_window("code")
     self:close_optional_window("files")
     self:close_optional_window("diagnostics")
-    -- Move cursor to chat buffer after submit for easy access to permission requests
     self:move_cursor_to(self.win_nrs.chat)
 end
 
@@ -782,18 +781,18 @@ function ChatWidget:_bind_keymaps()
             { desc = "Agentic: Restore previous session" }
         )
 
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.refresh,
-            bufnr,
-            function()
-                if self.on_refresh then
-                    self.on_refresh()
-                end
-            end,
-            {
-                desc = "Agentic: Refresh chat (reset stale state, scroll to bottom)",
-            }
-        )
+        if not BufHelpers.is_keymap_disabled(Config.keymaps.widget.refresh) then
+            BufHelpers.multi_keymap_set(
+                Config.keymaps.widget.refresh,
+                bufnr,
+                function()
+                    if self.on_refresh then
+                        self.on_refresh()
+                    end
+                end,
+                { desc = "Agentic: Refresh chat (reset stale state)" }
+            )
+        end
 
         BufHelpers.multi_keymap_set(
             Config.keymaps.widget.toggle_auto_scroll,
@@ -811,6 +810,20 @@ function ChatWidget:_bind_keymaps()
                 )
             end,
             { desc = "Agentic: Toggle auto-scroll" }
+        )
+
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.goto_chat_bottom,
+            bufnr,
+            function()
+                local chat_win = self.win_nrs.chat
+                if chat_win and vim.api.nvim_win_is_valid(chat_win) then
+                    vim.api.nvim_win_call(chat_win, function()
+                        vim.cmd("normal! G")
+                    end)
+                end
+            end,
+            { desc = "Agentic: Scroll chat to bottom" }
         )
     end
 

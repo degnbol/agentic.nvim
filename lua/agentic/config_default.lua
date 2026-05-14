@@ -218,8 +218,9 @@ local ConfigDefault = {
             continue = "<localLeader>c",
             restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
-            refresh = "<localLeader>r",
+            refresh = "",
             toggle_auto_scroll = "<localLeader>a",
+            goto_chat_bottom = "<localLeader>G",
             switch_provider = "<localLeader>s",
             switch_model = "<localLeader>m",
         },
@@ -448,8 +449,9 @@ local ConfigDefault = {
     --- @field write_submit boolean
     settings = {
 
-        --- Automatically move cursor to chat window after submitting a prompt
-        move_cursor_to_chat_on_submit = true,
+        --- When true, focus moves to the chat window after submitting a
+        --- prompt. When false, the input window keeps focus.
+        move_cursor_to_chat_on_submit = false,
 
         --- Register name to copy sent text into before deleting on
         --- partial-send. Nil writes no register.
