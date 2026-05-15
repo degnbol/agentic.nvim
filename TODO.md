@@ -362,12 +362,12 @@ screen so we can read it.
 
 ### Cross-provider rule loading
 
-The Claude provider (TUI and ACP, verified working in both —
+The Claude provider supports `~/.claude/rules/*.md` files with
+`paths:` frontmatter — content auto-attaches when the model Reads a
+matching file (mechanism in
 `.claude/skills/acp/references/claude-agent.md § "Path-scoped
-rules"`) supports `~/.claude/rules/*.md` files with `paths:`
-frontmatter — content auto-attaches when the model Reads a matching
-file. Non-Claude providers (Codex, Gemini, opencode, Mistral) inherit
-nothing from `~/.claude/` and get no rule loading.
+rules"`). Non-Claude providers (Codex, Gemini, opencode, Mistral)
+inherit nothing from `~/.claude/` and get no rule loading.
 
 Consider reimplementing client-side in agentic.nvim: watch
 `tool_call`/`tool_call_update` events for Read kinds across all

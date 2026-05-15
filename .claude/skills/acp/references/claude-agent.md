@@ -374,38 +374,19 @@ The SDK reads from these sources (in order, via `settingSources`):
 - **project**: `{cwd}/.claude/settings.json`
 - **local**: `{cwd}/.claude/settings.local.json`
 
-## Path-scoped rules (`.claude/rules/*.md`) under ACP
+## Path-scoped rules (`.claude/rules/*.md`)
 
-`paths`-conditional rule files **do load under ACP** — the SDK CLI
-spawned by the bridge runs the same trigger pipeline as the TUI. For
-mechanism details, see the global `claude` skill
+`paths`-conditional rule files load under ACP through the SDK CLI
+that the bridge spawns. The bridge passes
+`settingSources: ["user", "project", "local"]` (`acp-agent.js:1056`)
+and the SDK runs the same trigger/consumer pipeline as the TUI
+(`cli/print.ts:2147` → `ask()` → `QueryEngine.submitMessage`).
+
+For mechanism details — `nestedMemoryAttachmentTriggers`,
+`FileReadTool`-only population, mid-turn consumption, glob-match
+constraints, once-per-session dedup — see the global `claude` skill
 `references/internals.md` § "Memory and rule loading".
 
-The bridge spawns the SDK CLI (`--print --input-format stream-json`)
-which goes through `cli/print.ts:2147` → `ask()` →
-`QueryEngine.submitMessage` (`QueryEngine.ts:370`) — same
-`nestedMemoryAttachmentTriggers: new Set()` field as the TUI's
-`REPL.tsx:2480`. The bundled SDK contains the full trigger pipeline.
-The bridge sets `settingSources: ["user", "project", "local"]`
-(`acp-agent.js:1056`), satisfying `isSettingSourceEnabled('userSettings')`
-in `claudemd.ts:1223`.
-
-**Verified 2026-05-15** via sentinel-string test: a unique token in
-`~/.claude/rules/writing-docs.md` (`paths: "**/*.md"`), Read of a
-markdown file inside cwd, then a verbatim-quote prompt. Both TUI
-and agentic.nvim ACP returned the sentinel verbatim.
-
-### Caveat: introspection prompts mislead
-
-A prior round of testing concluded ACP had a regression of the
-rule-loading mechanism. The conclusion was wrong. The actual problem
-was test method: asking the model "is anything informing you about
-writing docs?" returned "not aware" *even when the rule content was
-attached*. Verbatim retrieval ("quote the line starting with
-SENTINEL-…") returned the sentinel correctly. Same session, same
-context, contradictory answers depending on prompt phrasing.
-
-**When testing whether ambient context reached the model,** prefer
-verbatim phrase recall over categorical introspection. See the
-`claude` skill `references/internals.md` § "Verifying rule fire" for
-the protocol.
+For verifying that a rule's content actually reached the model
+(introspective prompts return false negatives), see the same file
+§ "Verifying rule fire".
