@@ -373,3 +373,74 @@ The SDK reads from these sources (in order, via `settingSources`):
 - **user**: `~/.claude/settings.json`
 - **project**: `{cwd}/.claude/settings.json`
 - **local**: `{cwd}/.claude/settings.local.json`
+
+## Path-scoped rules (`.claude/rules/*.md`) — empirically broken under ACP
+
+For loading mechanism details, see the global `claude` skill,
+`references/internals.md` § "Memory and rule loading". Summary:
+`paths`-conditional rule files are designed to load when Claude Reads
+a file matching the rule's glob inside cwd. The `FileReadTool` adds
+the read path to `nestedMemoryAttachmentTriggers`; the trigger is
+consumed in the mid-turn agent loop (`query.ts:1580`), attaching the
+rule content same-turn.
+
+**Source-level equivalence between TUI and SDK:** the bridge spawns
+the SDK CLI with `--print --input-format stream-json`. That subprocess
+goes through `cli/print.ts:2147` → `ask()` → `QueryEngine.submitMessage`,
+which builds a `toolUseContext` with the same fresh
+`nestedMemoryAttachmentTriggers: new Set()` field as the TUI's
+`REPL.tsx:2480`. The bundled SDK
+(`@anthropic-ai/claude-agent-sdk/cli.js`) contains the full trigger
+pipeline (`processConditionedMdRules`, `nestedMemoryAttachmentTriggers`,
+`loadedNestedMemoryPaths` all present). The bridge sets
+`settingSources: ["user", "project", "local"]` (`acp-agent.js:1056`),
+which satisfies the `isSettingSourceEnabled('userSettings')` gate in
+`claudemd.ts:1223`.
+
+**Empirical finding (2026-05-15):** despite that source-level
+equivalence, user testing with `~/.claude/rules/writing-docs.md`
+(`paths: "**/*.md"`) under agentic.nvim + claude-agent-acp did not
+deliver the rule content to the model after a Read of a markdown
+file inside cwd. Verified semantically (asking the model to quote a
+unique phrase from the rule, the model could only list system-prompt
+content). Whether the TUI succeeds on the same rule has not yet been
+tested side-by-side; the gap remains unexplained.
+
+**Test protocol to bisect** (TUI vs ACP):
+
+1. Add a unique sentinel string to a user rule (e.g.
+   `SENTINEL-X9: only present in writing-docs.md`).
+2. Add a unique sentinel to a subdir CLAUDE.md
+   (`some/subdir/CLAUDE.md`) — exercises the same trigger pipeline
+   via a different code branch (nested CLAUDE.md walk rather than
+   conditional-rule glob match).
+3. Fresh session in the project. Prompt: "Use the Read tool to read
+   `some/subdir/<file>.md`."
+4. Prompt: "Quote the SENTINEL line exactly if you see it."
+5. Repeat in TUI and via agentic.nvim ACP. Record:
+   - quoted / did not quote, for the rule sentinel
+   - quoted / did not quote, for the subdir CLAUDE.md sentinel
+
+Outcome interpretation:
+
+| TUI rule | ACP rule | TUI claude.md | ACP claude.md | Diagnosis |
+|---|---|---|---|---|
+| ✓ | ✓ | ✓ | ✓ | Mechanism works; the earlier "no" was self-report noise. |
+| ✓ | ✗ | ✓ | ✗ | ACP regression of the full trigger pipeline (rule and CLAUDE.md both). |
+| ✓ | ✗ | ✓ | ✓ | ACP regression of the rule subsystem only. |
+| ✗ | * | ✗ | * | TUI doesn't fire either — invalid test setup or source-trace gap. |
+
+**Until empirically clarified:** treat path-scoped user rules as
+**not reliably delivered through ACP**. For content that must reach
+an ACP session, prefer:
+- skills (loaded via the Skill tool, supported by SDK)
+- CLAUDE.md at project root (eager-loaded by SDK regardless of path
+  triggers)
+- in-prompt @-mentions of the rule file
+
+A separate option is client-side reimplementation in agentic.nvim:
+watch tool-call events for Reads, match against `~/.claude/rules/*.md`
+frontmatter globs, inject matching content as system reminders. This
+would also extend the mechanism to non-Claude providers (Codex,
+Gemini, opencode, Mistral) which inherit nothing from the Claude
+config. See agentic.nvim `TODO.md` for the feature entry.

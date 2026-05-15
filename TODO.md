@@ -360,6 +360,41 @@ screen so we can read it.
   floating window) instead of or in addition. Config toggle:
   `error_display = "chat" | "notify" | "both"`.
 
+### Provider-agnostic rule loading
+
+The Claude TUI supports `~/.claude/rules/*.md` files with
+`paths:` frontmatter — content auto-attaches when Claude Reads a
+matching file. Empirically this **does not work through ACP** for the
+Claude provider despite source-level equivalence with the TUI path
+(see `.claude/skills/acp/references/claude-agent.md § "Path-scoped
+rules"`). Other providers (Codex, Gemini, opencode, Mistral) get
+nothing — the mechanism is Claude-Code-specific.
+
+Consider reimplementing client-side in agentic.nvim: watch
+`tool_call`/`tool_call_update` events for Read kinds, match the
+target path against `~/.claude/rules/*.md` frontmatter `paths:`
+globs, inject matching rule content as a system reminder (or user
+attachment) before the next API call. This would:
+
+- give consistent rule loading across all providers
+- close the empirical ACP gap without depending on an upstream fix
+- mirror how `~/.claude/skills/` is already extended to non-Claude
+  providers via the Skill tool
+
+Open questions:
+
+- frontmatter parsing: support `paths` CSV / YAML array, brace
+  expansion, `ignore`-style globs (gitignore semantics)
+- scope: user (`~/.claude/rules/`) only, or also project
+  (`.claude/rules/`)?
+- dedup: once-per-session per rule, matching Claude's behaviour
+- injection point: tool result, system reminder, or user message —
+  pick the one that survives compaction and isn't lost across
+  cross-model resume
+- interaction with the existing `read_only_commands` /
+  `read_only_commands_deny` config patterns: rules are content not
+  policy, so probably separate
+
 ### LSP
 
 If claude is refactoring, e.g. renaming all occurances of a variable it essentially does a search/replace plus looking at context around word to understand.
