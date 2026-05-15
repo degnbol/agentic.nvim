@@ -1,6 +1,8 @@
 # TODO
 
-Start doing some version tracking so we can separate bug fixes from feature releases.
+Release strategy and versioning: see [`RELEASING.md`](RELEASING.md). Path
+to `v0.1.0` is to drive the Bugs section below to empty (or "Known
+minor").
 
 ## Bugs
 
@@ -236,6 +238,10 @@ screen so we can read it.
 
 - **Edit tool preview folding**: long Edit tool previews need a folding
   mechanism — not folded by default but `zc` works.
+
+- **Line numbers in diff previews**: when an Edit moves a line within a
+  file the diff alone gives little context — there's no positional anchor.
+  See `notes/feature-diff-line-numbers.md`.
 
 - **Strike-through for completed todo items**: opt-out config option.
 
