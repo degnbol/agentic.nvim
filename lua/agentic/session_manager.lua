@@ -1537,6 +1537,17 @@ function SessionManager:new_session(opts)
     local quiet_welcome = opts.quiet_welcome or false
     local on_created = opts.on_created
 
+    -- Preserve the user-selected model across /new and /clear. The provider's
+    -- session/new response carries its default configOptions, which would
+    -- otherwise revert the model to the provider default. Restore flows have
+    -- their own model-restore path, so skip there.
+    local preserved_model
+    if not restore_mode and self.config_options then
+        local co = self.config_options
+        preserved_model = (co.model and co.model.currentValue)
+            or (co.legacy_agent_models and co.legacy_agent_models.current_model_id)
+    end
+
     if not restore_mode then
         self:_cancel_session()
     end
@@ -1611,6 +1622,10 @@ function SessionManager:new_session(opts)
                 Logger.debug("Provider announce legacy models")
                 self.config_options:set_legacy_models(response.models)
             end
+        end
+
+        if preserved_model then
+            self.config_options:set_pending_initial_model(preserved_model)
         end
 
         self.config_options:set_initial_mode(
