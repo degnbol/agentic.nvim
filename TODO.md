@@ -6,6 +6,11 @@ minor").
 
 ## Bugs
 
+### Compacting fails
+Sometimes calling `/compact` doesn't fire the compacting mechanism for some reason.
+Check why this would be inconsistent. Is it because newlines are accidentally included so `/compact\n` is sent and we just need to strip blank newlines, or is something else going on?
+Have a look at /claude, /acp, ~/Documents/agentic/claude/, etc. to consider if the /compact call is by-passing the agent or if the agent is making a decision to compact.
+
 ### Rendering
 
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
@@ -13,6 +18,8 @@ minor").
   This is a long standing and difficult bug.
 
 - Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
+
+- Context amount and percentage not showing.
 
 ```markdown
 ### Search
@@ -416,6 +423,16 @@ Completion should show this, e.g. the menu entry and might need snippet.
 
 Do some processing on the first prompt to generate a title rather than just dumping the prompt.
 E.g. extract all non-basic words ("can", "let's", "this", ... are basic), convert to lowercase and chain together with some delimiter.
+
+### Failed edits
+
+An edit may fail, e.g. due to search pattern not found, a hook blocking for 
+whatever reason (bad pattern detected, etc.) and then the agent may retry an 
+improved edit.
+Showing edits that are pending and edits that actually took place is more useful in chat than showing a large diff for an edit that never happened.
+Same applies to bash commands.
+Idea: if an edit fail, wrap the diff in folding markers to hide it. Similar could be done for failed bash commands.
+Both of these could be controlled by a threshold for min number of lines before a fold is warranted. Always folding could also be warranted, to clearly indicate that the hidden contents never happened. With a configurable threshold this could also be done by simply defaulting it to 0 (or 1).
 
 ## Investigations
 
