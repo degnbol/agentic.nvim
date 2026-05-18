@@ -330,7 +330,13 @@ function ChatWidget:submit(send)
     self:close_optional_window("code")
     self:close_optional_window("files")
     self:close_optional_window("diagnostics")
-    self:move_cursor_to(self.win_nrs.chat)
+    if Config.settings.move_cursor_to_chat_on_submit then
+        self:move_cursor_to(self.win_nrs.chat)
+    else
+        vim.schedule(function()
+            BufHelpers.scroll_down_only(self.win_nrs.chat)
+        end)
+    end
 end
 
 --- Clamp (sr, sc, er, ec) to a valid char-mode range for
@@ -487,9 +493,7 @@ end
 function ChatWidget:move_cursor_to(winid, callback)
     vim.schedule(function()
         if winid and vim.api.nvim_win_is_valid(winid) then
-            if Config.settings.move_cursor_to_chat_on_submit then
-                vim.api.nvim_set_current_win(winid)
-            end
+            vim.api.nvim_set_current_win(winid)
 
             -- Scroll to bottom so the user can see the new message and
             -- auto-scroll will engage again. Only scroll downward — if the
