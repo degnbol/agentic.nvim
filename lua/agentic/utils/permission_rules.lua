@@ -257,23 +257,68 @@ function M.get_additional_directories()
     return dirs
 end
 
---- Harmless command wrappers prepended by hooks (e.g. shell-guard.sh).
---- Stripped before pattern matching so allow rules match the inner command.
-local HARMLESS_PREFIXES = {
-    "^stdbuf%s+%-[a-zA-Z0-9]+%s+",
+--- Env-var names safe to strip as a leading `VAR=value` assignment.
+--- A name is safe only if setting it cannot change which binary runs or
+--- inject code into the inner command. Excludes anything that can hijack
+--- execution: PATH-likes (PATH, LD_*, DYLD_*), startup files (BASH_ENV,
+--- ENV, PYTHONSTARTUP), language module paths (PYTHONPATH, PERL5LIB,
+--- RUBYLIB, NODE_PATH), and tool-specific external hooks (GIT_EXTERNAL_*,
+--- GIT_PAGER, ...). Keep this list conservative — when in doubt, leave
+--- it out and let the command prompt.
+local SAFE_ENV_NAMES = {
+    PYTHONUNBUFFERED = true,
+    PYTHONIOENCODING = true,
+    PYTHONHASHSEED = true,
+    NODE_NO_WARNINGS = true,
+    LANG = true,
+    LANGUAGE = true,
+    TZ = true,
+    TERM = true,
+    NO_COLOR = true,
+    FORCE_COLOR = true,
+    CLICOLOR = true,
+    CLICOLOR_FORCE = true,
+    COLUMNS = true,
+    LINES = true,
+    GREP_COLOR = true,
+    GREP_COLORS = true,
 }
 
---- Strip known harmless wrapper prefixes from a command segment.
+--- @param name string
+--- @return boolean
+local function is_safe_env_name(name)
+    if SAFE_ENV_NAMES[name] then
+        return true
+    end
+    -- LC_ALL, LC_CTYPE, LC_NUMERIC, ... — locale categories, behaviour-only.
+    return name:match("^LC_[A-Z_]+$") ~= nil
+end
+
+--- Strip leading harmless prefixes (safe env-var assignments and the
+--- `stdbuf` line-buffering wrapper) from a command segment. Loops to
+--- handle chains like `LC_ALL=C TZ=UTC stdbuf -oL grep ...`. Hook
+--- injection (`shell-guard.sh` adds `PYTHONUNBUFFERED=1` to commands
+--- mentioning a `.py` file) is the main motivating case.
+---
+--- Only env-var names in `SAFE_ENV_NAMES` (or matching `LC_*`) are
+--- stripped — names like `PATH`, `LD_PRELOAD`, `BASH_ENV`, `PYTHONPATH`
+--- can hijack execution and must not be ignored.
 --- @param segment string
 --- @return string
 function M.strip_wrapper_prefixes(segment)
-    for _, prefix_pat in ipairs(HARMLESS_PREFIXES) do
-        local stripped = segment:gsub(prefix_pat, "", 1)
-        if stripped ~= segment then
-            return stripped
+    while true do
+        local name, value_end =
+            segment:match("^([A-Za-z_][A-Za-z0-9_]*)=[^|;&%s]*()%s+")
+        if name and is_safe_env_name(name) then
+            segment = segment:sub(value_end):gsub("^%s+", "")
+        else
+            local stripped = segment:gsub("^stdbuf%s+%-[a-zA-Z0-9]+%s+", "", 1)
+            if stripped == segment then
+                return segment
+            end
+            segment = stripped
         end
     end
-    return segment
 end
 
 --- Detect output redirection that would write to a file.

@@ -151,6 +151,54 @@ describe("PermissionRules", function()
                 PermissionRules.strip_wrapper_prefixes("grep -r 'foo' .")
             )
         end)
+
+        it("strips known-safe env-var assignment", function()
+            assert.equal(
+                "git log",
+                PermissionRules.strip_wrapper_prefixes(
+                    "PYTHONUNBUFFERED=1 git log"
+                )
+            )
+        end)
+
+        it("strips chained safe env-var assignments", function()
+            assert.equal(
+                "ls -la",
+                PermissionRules.strip_wrapper_prefixes("LC_ALL=C TZ=UTC ls -la")
+            )
+        end)
+
+        it("strips safe env-var followed by stdbuf", function()
+            assert.equal(
+                "grep foo",
+                PermissionRules.strip_wrapper_prefixes(
+                    "PYTHONUNBUFFERED=1 stdbuf -oL grep foo"
+                )
+            )
+        end)
+
+        it("does not strip execution-hijacking env vars", function()
+            -- These can change which binary runs or inject code, so the
+            -- inner command's pattern match must NOT auto-approve.
+            for _, cmd in ipairs({
+                "LD_PRELOAD=/tmp/evil.so cat foo",
+                "DYLD_INSERT_LIBRARIES=/tmp/x.dylib cat foo",
+                "PATH=/tmp/evil:/usr/bin cat foo",
+                "BASH_ENV=/tmp/payload cat foo",
+                "PYTHONPATH=/tmp/evil python -c x",
+                "PYTHONSTARTUP=/tmp/x.py python -c x",
+                "GIT_EXTERNAL_DIFF=/tmp/evil git diff",
+            }) do
+                assert.equal(cmd, PermissionRules.strip_wrapper_prefixes(cmd))
+            end
+        end)
+
+        it("does not strip non-assignment leading word", function()
+            assert.equal(
+                "FOO bar=baz ls",
+                PermissionRules.strip_wrapper_prefixes("FOO bar=baz ls")
+            )
+        end)
     end)
 
     describe("split_command", function()
@@ -617,6 +665,29 @@ describe("PermissionRules", function()
 
             local result = PermissionRules.should_auto_approve(
                 "stdbuf -oL ls /Users/cmadsen/dotfiles/shell/"
+            )
+            assert.is_true(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves env-var-prefixed compound command", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(cd *)", "Bash(git log *)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            local result = PermissionRules.should_auto_approve(
+                "PYTHONUNBUFFERED=1 cd /tmp && git log --oneline -- foo.py"
             )
             assert.is_true(result)
 
