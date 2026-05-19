@@ -816,7 +816,15 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.new_line then
                         ni = ni + 1
-                        local hl_type = is_modification and "new_modification"
+                        -- Block-level is_modification doesn't imply per-pair
+                        -- modification: filter_unchanged_lines can split a
+                        -- same-line-count block into pure insertions and
+                        -- pure deletions. Pure insertions have no old_line
+                        -- — emit as "new" so the highlighter doesn't run
+                        -- find_inline_change on nil.
+                        local is_paired_mod = is_modification
+                            and pair.old_line ~= nil
+                        local hl_type = is_paired_mod and "new_modification"
                             or "new"
                         local source_idx = new_pair_idx[ni]
                         local col_hl = new_map
@@ -829,7 +837,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                         insert_diff_line(
                             fmt_new[ni],
                             hl_type,
-                            is_modification and pair.old_line or nil,
+                            is_paired_mod and pair.old_line or nil,
                             pair.new_line,
                             col_hl
                         )
