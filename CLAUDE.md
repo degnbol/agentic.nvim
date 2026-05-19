@@ -263,7 +263,7 @@ documents the control flow for future maintenance.
 **Master switches:**
 - `Config.auto_scroll.enabled` — runtime-toggleable via
   `keymaps.widget.toggle_auto_scroll` (`<localLeader>a`). When false,
-  `BufHelpers.scroll_down_only` returns early. Mutated at runtime, not
+  `BufHelpers.scroll_down` returns early. Mutated at runtime, not
   persisted.
 - `Config.auto_scroll.pause_on_prose` — when false, no pin (auto-scroll
   always tracks the trailing edge during streaming).
@@ -287,15 +287,16 @@ documents the control flow for future maintenance.
 3. Sync (still inside the write): pin the start of the prose run if
    `_prose_anchor_line` is nil **and** `_auto_scroll_paused` is false.
 4. Async: the scheduled callback flips suppress on, calls
-   `BufHelpers.scroll_down_only` with `max_topline = anchor + 1` (when
+   `BufHelpers.scroll_down` with `max_topline = anchor + 1` (when
    the pin is set), flips suppress off.
 
-**`scroll_down_only`** (`utils/buf_helpers.lua`) is the single point that
-does the scroll. It runs `normal! G0zb`, then if `max_topline` is set and
-the natural scroll would overflow it, parks the cursor inside the
-anchored viewport and `winrestview`s the topline back. Cursor-park
-position accounts for `scrolloff` so vim does not shift the topline
-back to honour it.
+**`scroll_down`** (`utils/buf_helpers.lua`) only ever moves the viewport
+downward — calls whose target topline would not advance past the current
+one are no-ops, regardless of the pin. A single `winrestview` sets both
+topline and the cursor in one go: topline at
+`min(last_line - winheight + 1, max_topline)`, cursor parked at
+`target + winheight - 1 - scrolloff` so vim's keep-cursor-visible rule
+cannot later push the topline past the cap as the buffer grows.
 
 **At-bottom rule** (`MessageWriter:_is_at_bottom`):
 - Chat window is the current window → `cursor_line >= line_count`. The

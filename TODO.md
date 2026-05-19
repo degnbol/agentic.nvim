@@ -13,6 +13,8 @@ Have a look at /claude, /acp, ~/Documents/agentic/claude/, etc. to consider if t
 
 ### Rendering
 
+- opencode full write of file shows no in-chat view of all the new text added to the file.
+
 - **Auto-continue queued messages not shown in chat**: when
   `_handle_input_submit_inner` queues a message during the auto-continue
   wait period (line 1289-1297), only a generic "Message queued — will send

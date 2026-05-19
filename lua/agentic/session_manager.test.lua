@@ -712,7 +712,7 @@ describe("agentic.SessionManager", function()
                 },
                 _try_record_edit_range = function() end,
                 status_animation = { start = function() end },
-                _clear_diff_in_buffer = function() end,
+                _show_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
             } --[[@as agentic.SessionManager]]
         end

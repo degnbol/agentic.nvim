@@ -151,110 +151,58 @@ function BufHelpers.feed_ESC_key()
     )
 end
 
---- Scroll a window to the bottom, but only if it wouldn't scroll upward.
---- Prevents the jarring jump when `G0zb` overshoots on short buffers.
---- When `max_topline` is provided and the natural scroll would push the view
---- past that buffer line, the topline is clamped to it. This pins a target
---- line at the top of the viewport (e.g. the start of a prose run) instead
---- of letting auto-scroll drag it off-screen. The clamp only applies when
---- `old_topline <= max_topline` — if the user has manually scrolled past
---- the anchor, normal scroll resumes.
+--- Advance a window's viewport so the buffer's last line stays in view as
+--- new content streams in. Never scrolls upward — calls that would move the
+--- topline backward are no-ops.
+---
+--- `max_topline` caps how far down the topline can advance, holding the
+--- start of the currently-streaming prose block at the top of the viewport
+--- so the user can finish reading it before auto-scroll resumes. The cap is
+--- preserved across buffer growth by parking the cursor inside the resulting
+--- viewport (respecting scrolloff), so vim's keep-cursor-visible rule does
+--- not push the topline past it.
 --- @param winid integer
---- @param has_virt_lines? boolean Whether virtual lines (status animation) are active
---- @param max_topline? integer Buffer line (0-indexed in the API but 1-indexed here to match `topline`) above which the viewport must not scroll
-function BufHelpers.scroll_down_only(winid, has_virt_lines, max_topline)
+--- @param max_topline? integer 1-indexed buffer line; topline must not exceed it
+function BufHelpers.scroll_down(winid, max_topline)
     if not vim.api.nvim_win_is_valid(winid) then
         return
     end
-
     local Config = require("agentic.config")
     if Config.auto_scroll and Config.auto_scroll.enabled == false then
         return
     end
 
-    -- Skip when user is in insert mode — executing normal! commands via
-    -- nvim_win_call during insert mode can corrupt input state and crash.
-    local mode = vim.api.nvim_get_mode().mode
-    if mode:find("^i") or mode:find("^R") then
+    local ok, info = pcall(vim.fn.getwininfo, winid)
+    if not ok or not info[1] then
+        return
+    end
+    local old_topline = info[1].topline
+    local winheight = info[1].height
+    local last_line =
+        vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+
+    local target = math.max(1, last_line - winheight + 1)
+    if max_topline then
+        target = math.min(target, max_topline)
+    end
+    if target <= old_topline then
         return
     end
 
-    local ok, old_info = pcall(vim.fn.getwininfo, winid)
-    if not ok or not old_info[1] then
-        return
-    end
-    local old_topline = old_info[1].topline
-
+    local scrolloff = vim.api.nvim_get_option_value("scrolloff", {
+        win = winid,
+    })
+    local cursor_lnum = math.min(
+        last_line,
+        math.max(target, target + winheight - 1 - scrolloff)
+    )
     vim.api.nvim_win_call(winid, function()
-        if has_virt_lines then
-            vim.cmd("normal! G0zb\5") -- \5 = <C-e>
-        else
-            vim.cmd("normal! G0zb")
-        end
-    end)
-
-    ok, old_info = pcall(vim.fn.getwininfo, winid)
-    if not ok or not old_info[1] then
-        return
-    end
-    local new_topline = old_info[1].topline
-
-    -- "Don't scroll backward" only applies when we don't have a pin.
-    -- With max_topline set, the caller wants the topline at exactly that
-    -- line whenever it would otherwise drift past — preserving the
-    -- pre-scroll view here would silently bypass the pin in cases where
-    -- vim's view management has already shifted the topline.
-    if not max_topline and new_topline < old_topline then
-        vim.api.nvim_win_call(winid, function()
-            vim.fn.winrestview({ topline = old_topline })
-        end)
-        return
-    end
-
-    if max_topline and new_topline > max_topline then
-        -- Always clamp when the natural scroll would overflow the anchor.
-        -- The previous `old_topline <= max_topline` precondition broke the
-        -- common case: in interactive mode, vim redraws between chunks and
-        -- continuously auto-corrects topline as the buffer grows past the
-        -- viewport (cursor was parked at last_line by the prior G0zb). By
-        -- the time the deferred scroll fires, `old_topline` is already
-        -- past the anchor, so the precondition silently bailed and the
-        -- pin never engaged at all. The "user scrolled past anchor" case
-        -- the precondition guarded against is now handled at the caller
-        -- by detecting a pin-state mismatch and releasing the pin (so
-        -- max_topline arrives nil here).
-        --
-        -- `G0zb` above moved cursor to the last buffer line. Restoring
-        -- only `topline` leaves the cursor off-screen, and vim re-corrects
-        -- topline back to last_line - winheight + 1 on the next redraw.
-        -- Park cursor inside the pinned viewport so the clamp survives.
-        --
-        -- `scrolloff` matters: vim insists on that many context lines
-        -- between cursor and the top/bottom edge of the WINDOW. Park the
-        -- cursor at `max_topline + winheight - 1 - scrolloff` so the
-        -- below-cursor margin is already satisfied; otherwise vim shifts
-        -- topline forward by `scrolloff` to honour it, breaking the pin
-        -- by exactly that many lines. Default scrolloff is 0 — but users
-        -- often set it globally (e.g. 4 or 8) and the chat window
-        -- inherits that.
-        local winheight = vim.api.nvim_win_get_height(winid)
-        local last_line =
-            vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
-        local scrolloff = vim.api.nvim_get_option_value("scrolloff", {
-            win = winid,
+        vim.fn.winrestview({
+            topline = target,
+            lnum = cursor_lnum,
+            col = 0,
         })
-        local cursor_lnum = math.min(
-            last_line,
-            math.max(max_topline, max_topline + winheight - 1 - scrolloff)
-        )
-        vim.api.nvim_win_call(winid, function()
-            vim.fn.winrestview({
-                topline = max_topline,
-                lnum = cursor_lnum,
-                col = 0,
-            })
-        end)
-    end
+    end)
 end
 
 return BufHelpers

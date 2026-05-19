@@ -334,7 +334,7 @@ function ChatWidget:submit(send)
         self:move_cursor_to(self.win_nrs.chat)
     else
         vim.schedule(function()
-            BufHelpers.scroll_down_only(self.win_nrs.chat)
+            BufHelpers.scroll_down(self.win_nrs.chat)
         end)
     end
 end
@@ -496,9 +496,8 @@ function ChatWidget:move_cursor_to(winid, callback)
             vim.api.nvim_set_current_win(winid)
 
             -- Scroll to bottom so the user can see the new message and
-            -- auto-scroll will engage again. Only scroll downward — if the
-            -- buffer is short, G0zb can overshoot and jump the view up.
-            BufHelpers.scroll_down_only(winid)
+            -- auto-scroll will engage again.
+            BufHelpers.scroll_down(winid)
 
             if callback then
                 callback()

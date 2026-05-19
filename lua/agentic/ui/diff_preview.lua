@@ -27,6 +27,16 @@ local function set_diff_bufnr(tabpage, bufnr)
     vim.t[tabpage]._agentic_diff_preview_bufnr = bufnr
 end
 
+--- Normalise an ACP-sourced kind value: strip whitespace, lowercase.
+--- @param k string|nil
+--- @return string
+local function kind_key(k)
+    if not k then
+        return ""
+    end
+    return vim.trim(k):lower()
+end
+
 --- Get the buffer number with active diff preview for the current or specified tabpage
 --- @param tabpage number|nil Tabpage ID (defaults to current tabpage)
 --- @return number|nil bufnr Buffer number with active diff, or nil if none
@@ -439,7 +449,7 @@ function M.add_navigation_hint(tracker, lines_to_append)
     -- Only add hint for edit tools with diff preview enabled
     if
         not tracker
-        or tracker.kind ~= "edit"
+        or kind_key(tracker.kind) ~= "edit"
         or not Config.diff_preview
         or not Config.diff_preview.enabled
     then

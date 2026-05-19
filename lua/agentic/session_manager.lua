@@ -31,6 +31,16 @@ local FILE_MUTATING_KINDS = {
     move = true,
 }
 
+--- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
+--- @param k string|nil
+--- @return string
+local function kind_key(k)
+    if not k then
+        return ""
+    end
+    return vim.trim(k):lower()
+end
+
 --- Safely invoke a user-configured hook
 --- @param hook_name "on_prompt_submit" | "on_response_complete" | "on_permission_request"
 --- @param data table
@@ -784,7 +794,7 @@ function SessionManager:_try_record_edit_range(tool_call_id)
         return
     end
     local tracker = self.message_writer.tool_call_blocks[tool_call_id]
-    if not tracker or tracker.kind ~= "edit" then
+    if not tracker or kind_key(tracker.kind) ~= "edit" then
         return
     end
     if tracker.status == "completed" or tracker.status == "failed" then
@@ -828,7 +838,7 @@ end
 --- context clearing and plan implementation.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
 function SessionManager:_track_plan_exit(tool_call)
-    if tool_call.kind == "switch_mode" and tool_call.argument == "Normal" then
+    if kind_key(tool_call.kind) == "switch_mode" and tool_call.argument == "Normal" then
         self._plan_exit_pending = true
     end
 end
@@ -882,7 +892,7 @@ function SessionManager:_on_request_permission(request, callback)
     local tracker =
         self.message_writer.tool_call_blocks[request.toolCall.toolCallId]
     local is_plan_exit = tracker
-        and tracker.kind == "switch_mode"
+        and kind_key(tracker.kind) == "switch_mode"
         and tracker.argument == "Normal"
 
     if is_plan_exit then
@@ -902,7 +912,7 @@ function SessionManager:_on_request_permission(request, callback)
             -- Find the real allow_once option to accept the plan
             local accept_id
             for _, opt in ipairs(request.options) do
-                if opt.kind == "allow_once" then
+                if kind_key(opt.kind) == "allow_once" then
                     accept_id = opt.optionId
                     break
                 end
@@ -946,7 +956,7 @@ function SessionManager:_on_request_permission(request, callback)
 
         local is_rejection = option_kind == "reject_once"
             or option_kind == "reject_always"
-        self:_clear_diff_in_buffer(request.toolCall.toolCallId, is_rejection)
+        self:_show_diff_in_buffer(request.toolCall.toolCallId, is_rejection)
 
         if is_rejection then
             self.message_writer:suppress_next_rejection()
@@ -1004,7 +1014,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
 
     -- pre-emptively clear diff preview when tool call update is received, as it's either done or failed
     local is_rejection = tool_call_update.status == "failed"
-    self:_clear_diff_in_buffer(tool_call_update.tool_call_id, is_rejection)
+    self:_show_diff_in_buffer(tool_call_update.tool_call_id, is_rejection)
 
     -- Remove the permission request if the tool call failed before user granted it
     if tool_call_update.status == "failed" then
@@ -1028,8 +1038,8 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     if tool_call_update.status == "completed" then
         local tracker =
             self.message_writer.tool_call_blocks[tool_call_update.tool_call_id]
+        if tracker and tracker.kind and FILE_MUTATING_KINDS[kind_key(tracker.kind)] then
 
-        if tracker and tracker.kind and FILE_MUTATING_KINDS[tracker.kind] then
             if not self._checktime_scheduled then
                 self._checktime_scheduled = true
                 vim.schedule(function()
@@ -1047,7 +1057,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         -- update itself rarely carries the argument field.
         if
             tracker
-            and FILE_MUTATING_KINDS[tracker.kind]
+            and FILE_MUTATING_KINDS[kind_key(tracker.kind)]
             and tracker.argument
             and tracker.argument:match("%.md$")
         then
@@ -2006,7 +2016,8 @@ function SessionManager:open_diff_in_tab()
 end
 
 --- @param tool_call_id string
-function SessionManager:_show_diff_in_buffer(tool_call_id)
+--- @param is_rejection boolean|nil Whether this is clearing on rejection (true) or showing on approval (false)
+function SessionManager:_show_diff_in_buffer(tool_call_id, is_rejection)
     -- Only show diff if enabled by user config,
     -- and cursor is in the same tabpage as this session to avoid disruption
     if
@@ -2019,48 +2030,9 @@ function SessionManager:_show_diff_in_buffer(tool_call_id)
     local tracker = tool_call_id
         and self.message_writer.tool_call_blocks[tool_call_id]
 
-    if not tracker or tracker.kind ~= "edit" or tracker.diff == nil then
-        return
-    end
-
-    local agent_tab = self.tab_page_id
-
-    DiffPreview.show_diff({
-        file_path = tracker.argument,
-        diff = tracker.diff,
-        get_winid = function(bufnr)
-            -- Suppress all events during diff tab setup to prevent plugins
-            -- (incline, etc.) from reacting to intermediate state, and to
-            -- avoid BufNewFile -> FileType -> LSP detach errors.
-            local saved = vim.o.eventignore
-            vim.o.eventignore = "all"
-
-            vim.cmd("tabnew")
-            local diff_tab = vim.api.nvim_get_current_tabpage()
-            tracker.diff_tab = diff_tab
-            vim.api.nvim_set_current_tabpage(agent_tab)
-
-            local wins = vim.api.nvim_tabpage_list_wins(diff_tab)
-            if #wins == 0 then
-                vim.o.eventignore = saved
-                return nil
-            end
-            local winid = wins[1]
-            vim.api.nvim_win_set_buf(winid, bufnr)
-
-            vim.o.eventignore = saved
-            return winid
-        end,
-    })
-end
-
---- @param tool_call_id string
---- @param is_rejection boolean|nil
-function SessionManager:_clear_diff_in_buffer(tool_call_id, is_rejection)
-    local tracker = tool_call_id
-        and self.message_writer.tool_call_blocks[tool_call_id]
-
-    if not tracker or tracker.kind ~= "edit" or tracker.diff == nil then
+    -- Strip debounced diffs: when the user approves an edit, the provider
+    -- re-sends it instantly — the diff frame is identical.
+    if not tracker or kind_key(tracker.kind) ~= "edit" or tracker.diff == nil then
         return
     end
 

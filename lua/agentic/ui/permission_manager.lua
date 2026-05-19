@@ -99,6 +99,19 @@ local CACHE_NOISE_FIELDS = {
     timeout = true,
 }
 
+--- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
+--- Use at every ACP kind comparison/lookup site so providers with
+--- different casing conventions (opencode capitalises, claude lowercases)
+--- all map to the same canonical form.
+--- @param k string|nil
+--- @return string
+local function kind_key(k)
+    if not k then
+        return ""
+    end
+    return vim.trim(k):lower()
+end
+
 --- Stable string representation of a table for cache keying. Sorts top-level
 --- keys so two tables with the same content always produce the same string
 --- regardless of `pairs()` iteration order.
@@ -135,8 +148,8 @@ end
 --- @param tool_call agentic.acp.ToolCall
 --- @return string|nil
 function PermissionManager:_build_cache_key(tool_call)
-    local kind = tool_call.kind
-    if not kind then
+    local kind = kind_key(tool_call.kind)
+    if kind == "" then
         return nil
     end
 
@@ -146,7 +159,7 @@ function PermissionManager:_build_cache_key(tool_call)
     if kind == "execute" and not (raw_input and raw_input.command) then
         local tracker =
             self.message_writer.tool_call_blocks[tool_call.toolCallId]
-        if tracker and tracker.kind == "execute" and tracker.argument then
+        if tracker and kind_key(tracker.kind) == "execute" and tracker.argument then
             raw_input = vim.tbl_extend(
                 "force",
                 raw_input or {},
@@ -250,21 +263,20 @@ function PermissionManager:_try_auto_approve(request, callback)
     -- kind="other" before the underlying tool's own permission, sharing
     -- toolCallId — see acp skill `references/opencode.md` § "Permission
     -- request shape" finding 1.
-    local kind_lc = tool_call.kind and tool_call.kind:lower() or nil
+    local kind_lc = kind_key(tool_call.kind)
     local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
-    local tracker_kind_lc = tracker and tracker.kind and tracker.kind:lower()
-        or nil
+    local tracker_kind_lc = tracker and kind_key(tracker.kind) or ""
     if
         Config.auto_approve_read_only_tools
         and (
-            (kind_lc and READ_ONLY_KINDS[kind_lc])
-            or (tracker_kind_lc and READ_ONLY_KINDS[tracker_kind_lc])
+            (kind_lc ~= "" and READ_ONLY_KINDS[kind_lc])
+            or (tracker_kind_lc ~= "" and READ_ONLY_KINDS[tracker_kind_lc])
         )
     then
         return auto_approve(
             request,
             callback,
-            "read-only tool kind: " .. (tracker_kind_lc or kind_lc)
+            "read-only tool kind: " .. (tracker_kind_lc ~= "" and tracker_kind_lc or kind_lc)
         )
     end
 
@@ -276,7 +288,7 @@ function PermissionManager:_try_auto_approve(request, callback)
     if Config.auto_approve_compound_commands then
         local raw_input = tool_call.rawInput
         local command = raw_input and raw_input.command
-        if not command and tracker and tracker.kind == "execute" then
+        if not command and tracker and kind_key(tracker.kind) == "execute" then
             command = tracker.argument
         end
         if command and PermissionRules.should_auto_approve(command) then
@@ -313,7 +325,7 @@ function PermissionManager:_try_auto_approve(request, callback)
     if
         Config.auto_approve_trust_scope
         and self._trust_scope
-        and FILE_SCOPED_KINDS[tool_call.kind]
+        and FILE_SCOPED_KINDS[kind_lc]
     then
         local ok, reason = self:_check_trust(tool_call)
         if ok then
@@ -503,7 +515,7 @@ function PermissionManager:_check_trust(tool_call)
 
     --- @type agentic.utils.TrustSafety.StatSnapshot|nil
     local dest_snap = nil
-    if tool_call.kind == "move" then
+    if kind_key(tool_call.kind) == "move" then
         local dest = raw_input_destination(raw)
         if not dest then
             return false, "move missing destination"
@@ -529,7 +541,7 @@ function PermissionManager:_check_trust(tool_call)
         source_args.dest = dest_args
     end
 
-    local ok, reason = TrustSafety.safe_for_kind(tool_call.kind, source_args)
+    local ok, reason = TrustSafety.safe_for_kind(kind_key(tool_call.kind), source_args)
     if not ok then
         return false, reason or "unsafe"
     end
@@ -747,7 +759,7 @@ function PermissionManager:_complete_request(option_id)
             break
         end
     end
-    if selected_kind == "allow_always" or selected_kind == "reject_always" then
+    if kind_key(selected_kind) == "allow_always" or kind_key(selected_kind) == "reject_always" then
         local cache_key = self:_build_cache_key(current.request.toolCall)
         if cache_key then
             local action = selected_kind == "allow_always" and "allow"
@@ -808,7 +820,7 @@ function PermissionManager:reject_and_cancel_remaining()
     -- Find the reject_once option
     local reject_option_id
     for _, option in ipairs(self.current_request.request.options) do
-        if option.kind == "reject_once" then
+        if kind_key(option.kind) == "reject_once" then
             reject_option_id = option.optionId
             break
         end

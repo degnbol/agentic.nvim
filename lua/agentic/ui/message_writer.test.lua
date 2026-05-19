@@ -534,11 +534,9 @@ describe("agentic.ui.MessageWriter", function()
                 -- Regression: nvim_buf_set_text moves the chat cursor to
                 -- the end of inserted text; vim then auto-corrects topline
                 -- to keep the cursor visible. That happens between
-                -- _check_auto_scroll (pre-write) and scroll_down_only
-                -- (scheduled, post-write), so the clamp's `old_topline <=
-                -- max_topline` precondition fails and the pin silently
-                -- breaks. Cannot stub vim.schedule synchronously here:
-                -- doing so runs scroll_down_only *before* the write, which
+                -- _check_auto_scroll (pre-write) and scroll_down (scheduled,
+                -- post-write). Cannot stub vim.schedule synchronously here:
+                -- doing so runs scroll_down *before* the write, which
                 -- bypasses the bug entirely. Drain via vim.wait instead.
                 for i = 1, 25 do
                     writer:write_message_chunk(
@@ -560,7 +558,7 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
-    describe("scroll_down_only max_topline clamp", function()
+    describe("scroll_down max_topline cap", function()
         --- @type agentic.utils.BufHelpers
         local BufHelpers
 
@@ -568,63 +566,50 @@ describe("agentic.ui.MessageWriter", function()
             BufHelpers = require("agentic.utils.buf_helpers")
         end)
 
-        it("clamps natural scroll to max_topline", function()
-            -- Window height = 20 (from before_each). Add 50 lines so a
-            -- natural G0zb would put topline at ~31. With max_topline=10,
-            -- the clamp keeps the viewport pinned at line 10 (1-indexed).
+        it("caps natural scroll at max_topline", function()
+            -- Window height = 20. Add 50 lines so the natural target
+            -- topline is ~31; with max_topline=10 the viewport is held at
+            -- line 10.
             local lines = {}
             for i = 1, 50 do
                 lines[i] = "line " .. i
             end
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
             vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-            -- Force topline to 1 so the clamp's `old_topline <= max_topline`
-            -- precondition holds.
             vim.api.nvim_win_call(winid, function()
                 vim.fn.winrestview({ topline = 1 })
             end)
 
-            BufHelpers.scroll_down_only(winid, false, 10)
+            BufHelpers.scroll_down(winid, 10)
             -- Force a redraw — vim re-corrects topline if cursor is off
-            -- screen, which is exactly the behaviour the clamp must defeat.
+            -- screen, which the parked cursor inside the viewport prevents.
             vim.cmd("redraw")
 
             local info = vim.fn.getwininfo(winid)[1]
             assert.equal(10, info.topline)
-            -- Cursor must sit inside the pinned viewport so the clamp
-            -- survives the redraw.
             local cursor = vim.api.nvim_win_get_cursor(winid)
             assert.is_true(cursor[1] >= 10)
             assert.is_true(cursor[1] <= 10 + 20 - 1)
         end)
 
-        it(
-            "clamps even when current topline is past max_topline",
-            function()
-                -- Vim auto-corrects topline on redraw whenever cursor is
-                -- off-screen, so by the time the deferred scroll runs the
-                -- topline is typically already past max_topline. The clamp
-                -- must still engage; the "user deliberately scrolled past
-                -- anchor" case is detected and handled by MessageWriter via
-                -- pin-state mismatch (which then passes max_topline=nil
-                -- here, skipping the clamp entirely).
-                local lines = {}
-                for i = 1, 50 do
-                    lines[i] = "line " .. i
-                end
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-                vim.api.nvim_win_set_cursor(winid, { 50, 0 })
-                vim.api.nvim_win_call(winid, function()
-                    vim.fn.winrestview({ topline = 25 })
-                end)
-
-                BufHelpers.scroll_down_only(winid, false, 10)
-                vim.cmd("redraw")
-
-                local info = vim.fn.getwininfo(winid)[1]
-                assert.equal(10, info.topline)
+        it("is a no-op when target would scroll upward", function()
+            -- scroll_down never moves the viewport backward, even when
+            -- max_topline lies above the current topline.
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
             end
-        )
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 25, 0 })
+            vim.api.nvim_win_call(winid, function()
+                vim.fn.winrestview({ topline = 25 })
+            end)
+
+            BufHelpers.scroll_down(winid, 10)
+
+            local info = vim.fn.getwininfo(winid)[1]
+            assert.equal(25, info.topline)
+        end)
 
         it("scrolls normally when max_topline is nil", function()
             local lines = {}
@@ -637,7 +622,7 @@ describe("agentic.ui.MessageWriter", function()
                 vim.fn.winrestview({ topline = 1 })
             end)
 
-            BufHelpers.scroll_down_only(winid, false, nil)
+            BufHelpers.scroll_down(winid, nil)
 
             local info = vim.fn.getwininfo(winid)[1]
             -- With 50 lines and a 20-line window, natural bottom-scroll puts

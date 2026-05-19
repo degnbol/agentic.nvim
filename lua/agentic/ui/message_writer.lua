@@ -10,6 +10,16 @@ local NS_PERMISSION_BUTTONS =
     vim.api.nvim_create_namespace("agentic_permission_buttons")
 local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
+--- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
+--- @param k string|nil
+--- @return string
+local function kind_key(k)
+    if not k then
+        return ""
+    end
+    return vim.trim(k):lower()
+end
+
 --- @class agentic.ui.MessageWriter.HighlightRange
 --- @field type "comment"|"error"|"old"|"new"|"new_modification" Type of highlight to apply
 --- @field line_index integer Line index relative to returned lines (0-based)
@@ -757,7 +767,7 @@ function MessageWriter:scroll_to_bottom()
         return
     end
 
-    BufHelpers.scroll_down_only(wins[1])
+    BufHelpers.scroll_down(wins[1])
 end
 
 --- @param bufnr integer Buffer number to scroll
@@ -778,8 +788,6 @@ function MessageWriter:_auto_scroll(bufnr)
             if self._should_auto_scroll then
                 local wins = vim.fn.win_findbuf(bufnr)
                 if #wins > 0 then
-                    local has_virt_lines = self._status_animation
-                        and self._status_animation:is_active()
                     -- topline is 1-indexed; _prose_anchor_line is 0-indexed.
                     local pause = Config.auto_scroll
                         and Config.auto_scroll.pause_on_prose ~= false
@@ -788,15 +796,10 @@ function MessageWriter:_auto_scroll(bufnr)
                         or nil
 
                     -- Suppress the WinScrolled-driven pause for our own
-                    -- scroll commands. WinScrolled fires synchronously from
-                    -- G0zb and winrestview inside scroll_down_only, so a
-                    -- sync flag around the call is sufficient and race-free.
+                    -- scroll. winrestview fires WinScrolled synchronously,
+                    -- so a flag around the call is race-free.
                     self._suppress_pin_release = true
-                    BufHelpers.scroll_down_only(
-                        wins[1],
-                        has_virt_lines,
-                        max_topline
-                    )
+                    BufHelpers.scroll_down(wins[1], max_topline)
                     self._suppress_pin_release = false
                 end
             end
@@ -823,8 +826,8 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     -- TodoWrite body is the raw JSON request — hide it since the todo window
     -- shows the rendered todos.
     if
-        tool_call_block.kind == "switch_mode"
-        or tool_call_block.kind == "TodoWrite"
+        kind_key(tool_call_block.kind) == "switch_mode"
+        or kind_key(tool_call_block.kind) == "todowrite"
     then
         tool_call_block.body = nil
     end
@@ -912,14 +915,14 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     -- Strip internal instructions from switch_mode updates
     -- TodoWrite body is the raw JSON request — hide it since the todo window
     -- shows the rendered todos.
-    if tracker.kind == "switch_mode" or tracker.kind == "TodoWrite" then
+    if kind_key(tracker.kind) == "switch_mode" or kind_key(tracker.kind) == "todowrite" then
         tool_call_block.body = nil
     end
 
     -- For read blocks, extract range from the current argument before the merge
     -- overwrites it — the initial title may contain "(N - M)" that the adapter
     -- update replaces with just the file path.
-    if tracker.kind == "read" and not tracker.read_range then
+    if kind_key(tracker.kind) == "read" and not tracker.read_range then
         local _, range = Renderer.parse_read_range(tracker.argument)
         if range then
             tracker.read_range = range
@@ -1146,7 +1149,7 @@ function MessageWriter:display_permission_buttons(tool_call_id, options)
     local merged_options = {}
     local reject_all_inserted = false
     for _, option in ipairs(options) do
-        if option.kind == "reject_always" and not reject_all_inserted then
+        if kind_key(option.kind) == "reject_always" and not reject_all_inserted then
             table.insert(merged_options, {
                 kind = "__reject_all__",
                 name = "Reject all",
