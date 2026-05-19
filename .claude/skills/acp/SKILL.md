@@ -25,6 +25,10 @@ permission flow, known SDK bugs), see @references/claude-agent.md.
 For opencode-specific bridge behaviour (Edit tool sequence, fuzzy match cascade,
 permission timing), see @references/opencode.md.
 
+For opencode plugin/harness internals (Hooks API, trigger sites, channels for
+sending messages to the model, pi vs opencode disambiguation), see
+@~/dotfiles/config/opencode/references/plugin-hooks.md.
+
 ## Communication model
 
 JSON-RPC 2.0 over stdio (required) or streamable HTTP (optional). Two message
