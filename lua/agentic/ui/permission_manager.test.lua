@@ -384,21 +384,287 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
-        it("non-file-scoped kinds cache by kind alone", function()
+        --- @param command string|nil
+        --- @param tool_call_id string
+        --- @return agentic.acp.RequestPermission
+        local function make_execute_request(command, tool_call_id)
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = tool_call_id,
+                    kind = "execute",
+                    rawInput = command
+                            and { command = command } --[[@as agentic.acp.RawInput]]
+                        or nil,
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "allow-always",
+                        name = "Allow always",
+                        kind = "allow_always",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                    {
+                        optionId = "reject-always",
+                        name = "Reject always",
+                        kind = "reject_always",
+                    },
+                },
+            }
+        end
+
+        it("execute caches per exact command", function()
             local cb1 = spy.new(function() end)
             pm:add_request(
-                make_edit_request("execute", nil),
+                make_execute_request("ls -la /tmp", "tc-exec-1"),
                 cb1 --[[@as function]]
             )
             pm:_complete_request("allow-always")
 
             local cb2 = spy.new(function() end)
             pm:add_request(
-                make_edit_request("execute", nil),
+                make_execute_request("ls -la /tmp", "tc-exec-2"),
                 cb2 --[[@as function]]
             )
             assert.spy(cb2).was.called(1)
             assert.is_true(cb2:called_with("allow-once"))
+        end)
+
+        it("execute does not cross-approve different commands", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("ls -la /tmp", "tc-exec-3"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            -- A different command — git commit — must still prompt even
+            -- though both share kind="execute".
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("git commit -m foo", "tc-exec-4"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("execute reject_always scopes to the rejected command", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("rm -rf /tmp/junk", "tc-exec-5"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("reject-always")
+
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("rm -rf /tmp/junk", "tc-exec-6"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(1)
+            assert.is_true(cb2:called_with("reject-once"))
+
+            -- A different rm invocation is not cached, so it prompts.
+            local cb3 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("rm -rf /tmp/other", "tc-exec-7"),
+                cb3 --[[@as function]]
+            )
+            assert.spy(cb3).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("execute without a command is not cached", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request(nil, "tc-exec-8"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            -- Without a command we can't form a meaningful key, so the
+            -- next execute request must prompt rather than auto-approve.
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request(nil, "tc-exec-9"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        --- @param kind string
+        --- @param raw_input table|nil
+        --- @param tool_call_id string
+        --- @return agentic.acp.RequestPermission
+        local function make_kind_request(kind, raw_input, tool_call_id)
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = tool_call_id,
+                    kind = kind --[[@as agentic.acp.ToolKind]],
+                    rawInput = raw_input --[[@as agentic.acp.RawInput]],
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "allow-always",
+                        name = "Allow always",
+                        kind = "allow_always",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                    {
+                        optionId = "reject-always",
+                        name = "Reject always",
+                        kind = "reject_always",
+                    },
+                },
+            }
+        end
+
+        it("fetch caches per url, not per kind", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_kind_request(
+                    "fetch",
+                    { url = "https://example.com/a" },
+                    "tc-fetch-1"
+                ),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            local cb_same = spy.new(function() end)
+            pm:add_request(
+                make_kind_request(
+                    "fetch",
+                    { url = "https://example.com/a" },
+                    "tc-fetch-2"
+                ),
+                cb_same --[[@as function]]
+            )
+            assert.spy(cb_same).was.called(1)
+            assert.is_true(cb_same:called_with("allow-once"))
+
+            local cb_diff = spy.new(function() end)
+            pm:add_request(
+                make_kind_request(
+                    "fetch",
+                    { url = "https://other.example/" },
+                    "tc-fetch-3"
+                ),
+                cb_diff --[[@as function]]
+            )
+            assert.spy(cb_diff).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it(
+            "execute key ignores noise fields (description) across calls",
+            function()
+                -- claude-agent-acp sends rawInput.description as a human-
+                -- readable narration; it can vary between identical commands.
+                local cb1 = spy.new(function() end)
+                pm:add_request(
+                    make_kind_request("execute", {
+                        command = "make build",
+                        description = "Build the project",
+                    }, "tc-noise-1"),
+                    cb1 --[[@as function]]
+                )
+                pm:_complete_request("allow-always")
+
+                local cb2 = spy.new(function() end)
+                pm:add_request(
+                    make_kind_request("execute", {
+                        command = "make build",
+                        description = "Compile sources",
+                    }, "tc-noise-2"),
+                    cb2 --[[@as function]]
+                )
+                assert.spy(cb2).was.called(1)
+                assert.is_true(cb2:called_with("allow-once"))
+            end
+        )
+
+        it("unknown kinds cache via hybrid (rawInput minus noise)", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_kind_request(
+                    "other",
+                    { target = "/tmp/x", op = "rename" },
+                    "tc-other-1"
+                ),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            -- Same rawInput minus a noise field — should still match.
+            local cb_same = spy.new(function() end)
+            pm:add_request(
+                make_kind_request("other", {
+                    target = "/tmp/x",
+                    op = "rename",
+                    description = "Renaming a file",
+                }, "tc-other-2"),
+                cb_same --[[@as function]]
+            )
+            assert.spy(cb_same).was.called(1)
+            assert.is_true(cb_same:called_with("allow-once"))
+
+            -- Different identifying content — should prompt.
+            local cb_diff = spy.new(function() end)
+            pm:add_request(
+                make_kind_request(
+                    "other",
+                    { target = "/tmp/y", op = "rename" },
+                    "tc-other-3"
+                ),
+                cb_diff --[[@as function]]
+            )
+            assert.spy(cb_diff).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("unknown kind with no rawInput is not cached", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_kind_request("other", nil, "tc-other-noop-1"),
+                cb1 --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_kind_request("other", nil, "tc-other-noop-2"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
         end)
     end)
 

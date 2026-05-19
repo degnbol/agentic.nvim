@@ -46,7 +46,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 - Compound Bash command auto-approval — splits `foo | bar && baz` and checks each segment against Claude's `settings.json`.
 - `/trust` — per-session auto-approval scope for file-scoped edits, layered with git-recoverability, symlink, and TOCTOU safety
 - Auto-approve read-only tools (Read/Grep/Glob) regardless of target path
-- A cache for selection of "Always allow/reject"
+- A per-session cache for "Allow always" / "Reject always" decisions, scoped per resource (file path, command, URL, …) so one approval never silently approves a different call of the same kind
 
 ## Requirements
 

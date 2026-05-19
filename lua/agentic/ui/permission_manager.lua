@@ -65,22 +65,124 @@ local FILE_SCOPED_KINDS = {
     move = true,
 }
 
---- Build a cache key for an allow_always/reject_always decision.
---- File-scoped tools key on kind:path, others on kind alone.
+--- Per-kind identity fields used to build allow_always/reject_always cache
+--- keys. Listed in priority order; the first non-empty value is taken
+--- (handles cross-adapter casing like `file_path` vs `filePath`).
+---
+--- Kinds absent from this table fall back to the hybrid path in
+--- `_build_cache_key`: cache by the whole `rawInput` minus
+--- `CACHE_NOISE_FIELDS`. That lets unknown / provider-specific kinds
+--- (e.g. `"other"`) still scope correctly without per-tool maintenance.
+--- @type table<string, string[]>
+local CACHE_KEY_FIELDS = {
+    edit = { "file_path", "filePath" },
+    write = { "file_path", "filePath" },
+    create = { "file_path", "filePath" },
+    delete = { "file_path", "filePath" },
+    move = { "file_path", "filePath" },
+    execute = { "command" },
+    fetch = { "url" },
+    WebSearch = { "query" },
+    SlashCommand = { "command", "name" },
+    SubAgent = { "subagent_type" },
+    Skill = { "skill" },
+    switch_mode = { "mode" },
+}
+
+--- Fields that vary across "the same" operation and must not drive cache
+--- identity. `description` is Claude's natural-language narration on Bash
+--- commands ("List files in current directory"). `timeout` is transient.
+--- Used by the hybrid path; also skipped if listed in CACHE_KEY_FIELDS.
+--- @type table<string, true>
+local CACHE_NOISE_FIELDS = {
+    description = true,
+    timeout = true,
+}
+
+--- Stable string representation of a table for cache keying. Sorts top-level
+--- keys so two tables with the same content always produce the same string
+--- regardless of `pairs()` iteration order.
+--- @param t table
+--- @return string
+local function stable_repr(t)
+    local keys = vim.tbl_keys(t)
+    table.sort(keys)
+    local parts = {}
+    for _, k in ipairs(keys) do
+        local v = t[k]
+        if type(v) == "table" then
+            v = vim.inspect(v, { newline = "", indent = "" })
+        end
+        table.insert(parts, tostring(k) .. "=" .. tostring(v))
+    end
+    return table.concat(parts, "|")
+end
+
+--- Build a cache key for an allow_always/reject_always decision. The key
+--- represents "the same operation again" — approving one invocation must
+--- not silently approve a different one.
+---
+--- Two paths:
+--- 1. Known kinds (`CACHE_KEY_FIELDS`): key on the kind's identity fields
+---    (file_path / command / url / query / ...). Common case.
+--- 2. Unknown kinds: hybrid — key on the whole `rawInput` minus
+---    `CACHE_NOISE_FIELDS`. Lets new / provider-specific kinds (e.g.
+---    `"other"`) still scope per call without per-tool maintenance.
+---
+--- Returns `nil` when no identifying input is available. The cache then
+--- silently skips the decision and the next call prompts again — safer
+--- than under-scoping by caching on bare kind.
 --- @param tool_call agentic.acp.ToolCall
 --- @return string|nil
-local function build_cache_key(tool_call)
+function PermissionManager:_build_cache_key(tool_call)
     local kind = tool_call.kind
     if not kind then
         return nil
     end
-    if FILE_SCOPED_KINDS[kind] then
-        local path = tool_call.rawInput and tool_call.rawInput.file_path
-        if path then
-            return kind .. ":" .. path
+
+    -- For execute, fall back to `tracker.argument` when `rawInput.command`
+    -- is missing (opencode sends metadata:{} on shell permission requests).
+    local raw_input = tool_call.rawInput
+    if kind == "execute" and not (raw_input and raw_input.command) then
+        local tracker =
+            self.message_writer.tool_call_blocks[tool_call.toolCallId]
+        if tracker and tracker.kind == "execute" and tracker.argument then
+            raw_input = vim.tbl_extend(
+                "force",
+                raw_input or {},
+                { command = tracker.argument }
+            ) --[[@as agentic.acp.RawInput]]
         end
     end
-    return kind
+
+    local fields = CACHE_KEY_FIELDS[kind]
+    if fields then
+        local parts = { kind }
+        for _, name in ipairs(fields) do
+            local v = raw_input and raw_input[name]
+            if v ~= nil and v ~= "" then
+                table.insert(parts, tostring(v))
+            end
+        end
+        if #parts == 1 then
+            return nil
+        end
+        return table.concat(parts, ":")
+    end
+
+    if not raw_input or vim.tbl_isempty(raw_input) then
+        return nil
+    end
+    local key_data = {}
+    for k, v in pairs(raw_input) do
+        if not CACHE_NOISE_FIELDS[k] then
+            key_data[k] = v
+        end
+    end
+    if vim.tbl_isempty(key_data) then
+        return nil
+    end
+    return kind .. ":" .. stable_repr(key_data)
 end
 
 --- Find an option by kind and return its optionId.
@@ -187,7 +289,7 @@ function PermissionManager:_try_auto_approve(request, callback)
     end
 
     -- Client-side allow_always/reject_always cache (provider persistence unreliable via ACP)
-    local cache_key = build_cache_key(tool_call)
+    local cache_key = self:_build_cache_key(tool_call)
     if cache_key then
         local cached = self._always_cache[cache_key]
         if cached == "allow" then
@@ -646,7 +748,7 @@ function PermissionManager:_complete_request(option_id)
         end
     end
     if selected_kind == "allow_always" or selected_kind == "reject_always" then
-        local cache_key = build_cache_key(current.request.toolCall)
+        local cache_key = self:_build_cache_key(current.request.toolCall)
         if cache_key then
             local action = selected_kind == "allow_always" and "allow"
                 or "reject"

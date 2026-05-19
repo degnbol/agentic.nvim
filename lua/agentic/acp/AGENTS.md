@@ -305,9 +305,37 @@ ACP providers don't reliably persist `allow_always`/`reject_always` decisions
 caches these decisions in `PermissionManager._always_cache` and auto-approves
 or auto-rejects subsequent matching requests.
 
-Cache keys are scoped by tool kind:
-- **File-scoped** (edit, write, create, delete, move): `kind:file_path`
-- **Other kinds**: `kind` alone
+Cache keys are scoped to the specific resource being approved, so an
+`allow_always` on one invocation cannot silently approve unrelated calls
+of the same kind. Two paths in `_build_cache_key`:
+
+1. **Known kinds** — listed in `CACHE_KEY_FIELDS` with the field(s) that
+   identify the operation. The key is `kind:<value>:<value>...`, taking
+   the first non-empty value per slot (so cross-adapter casing like
+   `file_path` vs `filePath` collapses to the same key):
+
+   | Kind | Identity fields |
+   | --- | --- |
+   | edit / write / create / delete / move | `file_path`, `filePath` |
+   | execute | `command` (falls back to `tracker.argument` for opencode) |
+   | fetch | `url` |
+   | WebSearch | `query` |
+   | SlashCommand | `command`, `name` |
+   | SubAgent | `subagent_type` |
+   | Skill | `skill` |
+   | switch_mode | `mode` |
+
+2. **Unknown kinds** (e.g. `"other"`, future kinds) — hybrid: key on the
+   full `rawInput` minus `CACHE_NOISE_FIELDS` (`description`, `timeout`).
+   `description` is provider narration ("List files in current
+   directory") that varies across identical calls and would otherwise
+   fragment the cache. Top-level keys are sorted so two equivalent
+   `rawInput`s always produce the same key.
+
+In both paths the cache key is `nil` (decision not persisted) when no
+identifying input is available — the next matching request prompts
+again. That's the safer-but-pessimistic side of the trade-off: better
+to ask twice than to silently approve something the user did not see.
 
 When a cached `allow` entry matches, the plugin sends `allow_once` back to the
 provider (same as the other auto-approval checks). When a cached `reject` entry

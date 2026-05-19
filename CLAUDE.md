@@ -413,9 +413,15 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
    `reject_always`, the decision is cached in `PermissionManager._always_cache`
    and subsequent matching requests are auto-approved/rejected without prompting.
    This compensates for providers that don't reliably persist `allow_always`
-   decisions via ACP. File-scoped tool kinds (edit, write, create, delete, move)
-   cache per `kind:file_path`. Other kinds cache per `kind` alone. The cache
-   is cleared on `clear()` (session reset / `/new`).
+   decisions via ACP. Cache keys are scoped to the specific resource via a
+   two-path strategy in `_build_cache_key`: known kinds use a per-kind
+   identity table (file_path for file-scoped, command for execute, url for
+   fetch, query for WebSearch, etc.); unknown kinds key on the whole
+   `rawInput` minus a `description`/`timeout` noise filter. Missing
+   identifying input skips caching so the next call prompts again. The
+   cache clears on `clear()` (session reset / `/new`). See
+   `lua/agentic/acp/AGENTS.md § Allow/reject always cache` for the full
+   kind→field table.
 
 4. **Trust scope (`/trust`)** — per-session scoped auto-approval for
    file-scoped tool kinds. The user picks a scope via `/trust` (with reserved
