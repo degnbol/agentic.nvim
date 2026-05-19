@@ -13,6 +13,15 @@ Have a look at /claude, /acp, ~/Documents/agentic/claude/, etc. to consider if t
 
 ### Rendering
 
+- **Auto-continue queued messages not shown in chat**: when
+  `_handle_input_submit_inner` queues a message during the auto-continue
+  wait period (line 1289-1297), only a generic "Message queued — will send
+  when usage resets." line is written via `write_error_action`. The actual
+  user message should be rendered in the normal `## <text>` format so the
+  user can see what they typed, even if it hasn't been dispatched yet.
+  Should append "(queued)" or similar indicator to distinguish queued
+  messages from sent ones.
+
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
   After closing the program (nvim), restarting and resuming the session a response is visible immidiately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
   This is a long standing and difficult bug.

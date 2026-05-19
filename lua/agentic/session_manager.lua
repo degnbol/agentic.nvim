@@ -1869,6 +1869,8 @@ end
 
 --- Switch to a different ACP provider while preserving chat UI and history.
 --- Reads Config.provider (already set by caller) for the target provider.
+--- If an auto-continue timer is active (usage limit), cancels it and drains
+--- any queued prompts to the new provider after the session is created.
 function SessionManager:switch_provider()
     if self.is_generating then
         Logger.notify(
@@ -1879,6 +1881,14 @@ function SessionManager:switch_provider()
     end
 
     local AgentInstance = require("agentic.acp.agent_instance")
+
+    -- Capture any queued prompts from auto-continue before cancelling the
+    -- timer. These will be sent to the new provider after session creation.
+    local queued_prompts = self._queued_prompts
+
+    -- Cancel pending auto-continue timer — switching provider renders the
+    -- current provider's usage limit irrelevant.
+    Recovery.cancel_retry_timer(self)
 
     -- Save references before get_instance (on_ready may fire synchronously)
     local saved_history = self.chat_history
@@ -1905,6 +1915,17 @@ function SessionManager:switch_provider()
                         self.chat_history.timestamp = new_timestamp
                         self._history_to_send = saved_history.messages
                         self._is_first_message = true
+
+                        -- Drain any queued prompts to the new provider.
+                        -- These were queued while the auto-continue timer was
+                        -- active (previous provider hit usage limit). With the
+                        -- new provider, send them now instead of discarding.
+                        if queued_prompts and #queued_prompts > 0 then
+                            local combined = table.concat(queued_prompts, "\n\n")
+                            vim.schedule(function()
+                                self:_handle_input_submit(combined)
+                            end)
+                        end
                     end,
                 })
             end)

@@ -600,6 +600,67 @@ describe("agentic.SessionManager", function()
             assert.spy(session.todo_list.clear).was.called(1)
             assert.spy(session.new_session).was.called(1)
         end)
+
+        it("drains queued prompts to the new provider in on_created", function()
+            local AgentInstance = require("agentic.acp.agent_instance")
+            local mock_new_agent = {
+                provider_config = { name = "New Provider" },
+                create_session = spy.new(function() end),
+            }
+            get_instance_stub = spy.stub(AgentInstance, "get_instance")
+            get_instance_stub:invokes(function(_provider, on_ready)
+                on_ready(mock_new_agent)
+                return mock_new_agent
+            end)
+
+            local handle_input_spy = spy.new(function() end)
+            local captured_on_created
+            local new_session_spy = spy.new(function(_self, opts)
+                captured_on_created = opts.on_created
+            end)
+
+            Config.provider = "target-provider"
+
+            local session = {
+                is_generating = false,
+                session_id = "old-session",
+                _queued_prompts = { "message one", "message two" },
+
+                agent = {
+                    cancel_session = spy.new(function() end),
+                    provider_config = { name = "Old" },
+                },
+                permission_manager = { clear = function() end },
+                todo_list = { clear = function() end },
+                chat_history = { messages = {}, session_id = "old" },
+                _is_first_message = false,
+                _history_to_send = nil,
+                _handle_input_submit = handle_input_spy,
+                new_session = new_session_spy,
+                switch_provider = SessionManager.switch_provider,
+            } --[[@as agentic.SessionManager]]
+
+            session:switch_provider()
+
+            -- on_created should have been captured
+            assert.is_not_nil(captured_on_created)
+
+            -- Simulate the new session being created
+            session.chat_history = {
+                messages = {},
+                session_id = "new-session",
+                timestamp = os.time(),
+            }
+            captured_on_created()
+
+            -- Verify _handle_input_submit was called with combined prompts
+            -- calls[1] = {self, combined_text} (method call via `:` syntax)
+            assert.spy(handle_input_spy).was.called(1)
+            assert.equal("message one\n\nmessage two", handle_input_spy.calls[1][2])
+
+            -- Verify _queued_prompts was cleared by cancel_retry_timer
+            assert.is_nil(session._queued_prompts)
+        end)
     end)
 
     describe("FileChangedShell autocommand", function()
