@@ -341,6 +341,9 @@ screen so we can read it.
 
 ### Permissions
 
+- **Stale-read warning on Edit/Write**: see
+  `notes/feature-stale-read-warning.md`.
+
 - **`/trust` completion and typo tolerance**: `/trust heree` goes through.
   Completion for subcommands (`repo`, `here`, `off`) would prevent typos.
 
