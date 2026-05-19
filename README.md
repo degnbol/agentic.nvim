@@ -78,6 +78,14 @@ OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve 
 
 If you want to guard against prompt injection through fetched web content (a returned page persuading the agent to execute follow-up actions), also set `"webfetch": "ask"`.
 
+### OpenCode SubAgent limitation
+
+OpenCode's SubAgent tool (`task`) is broken through ACP — the subagent session's
+permission requests are filtered inside opencode's ACP bridge before reaching
+the plugin, causing the generating indicator to hang indefinitely. See
+`notes/opencode-subagent-fix.md` for the full analysis and upstream fix. This
+cannot be worked around from the plugin side.
+
 ## Setup
 
 ```lua
