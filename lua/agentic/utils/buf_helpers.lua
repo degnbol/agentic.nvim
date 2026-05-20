@@ -151,16 +151,13 @@ function BufHelpers.feed_ESC_key()
     )
 end
 
---- Advance a window's viewport so the buffer's last line stays in view as
---- new content streams in. Never scrolls upward — calls that would move the
---- topline backward are no-ops.
+--- Move the viewport forward to follow the buffer's last line as
+--- content streams in. Never scrolls upward.
 ---
---- `max_topline` caps how far down the topline can advance, holding the
---- start of the currently-streaming prose block at the top of the viewport
---- so the user can finish reading it before auto-scroll resumes. The cap is
---- preserved across buffer growth by parking the cursor inside the resulting
---- viewport (respecting scrolloff), so vim's keep-cursor-visible rule does
---- not push the topline past it.
+--- `max_topline` caps the forward target. Callers use this to hold
+--- the start of a prose run at the top of the viewport (passing the
+--- run's first line); the cap is in effect for as long as the caller
+--- keeps passing it.
 --- @param winid integer
 --- @param max_topline? integer 1-indexed buffer line; topline must not exceed it
 function BufHelpers.scroll_down(winid, max_topline)
@@ -181,21 +178,24 @@ function BufHelpers.scroll_down(winid, max_topline)
     local last_line =
         vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
 
-    local target = math.max(1, last_line - winheight + 1)
-    if max_topline then
-        target = math.min(target, max_topline)
-    end
-    if target <= old_topline then
+    -- Single decision: smallest topline that puts last_line at the bottom
+    -- row, clamped to a valid topline (≥ 1, ≤ max_topline), and never
+    -- below the current topline. When the buffer already fits in view
+    -- (`last_line - winheight + 1 ≤ 1`) the inner max collapses to 1,
+    -- and the outer max keeps us at `old_topline` — no jump.
+    local target = math.max(
+        old_topline,
+        math.min(max_topline or math.huge, math.max(1, last_line - winheight + 1))
+    )
+    if target == old_topline then
         return
     end
 
     local scrolloff = vim.api.nvim_get_option_value("scrolloff", {
         win = winid,
     })
-    local cursor_lnum = math.min(
-        last_line,
-        math.max(target, target + winheight - 1 - scrolloff)
-    )
+    local cursor_lnum =
+        math.min(last_line, target + winheight - 1 - scrolloff)
     vim.api.nvim_win_call(winid, function()
         vim.fn.winrestview({
             topline = target,

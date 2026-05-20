@@ -257,8 +257,24 @@ state is the primary mechanism.
 
 ## Auto-scroll and attention notifications
 
-User-facing behaviour is in `doc/agentic.txt § Auto-scroll`. This section
-documents the control flow for future maintenance.
+**Intent.** Auto-scroll follows streaming content. Two signals control it:
+
+- **Cursor at the chat's last line** is the user's request to follow
+  the stream (press G or similar to opt in). Cursor anywhere else
+  means "I'm reading earlier content, don't scroll".
+- **A pin caps the viewport at the start of the current prose run** so
+  a final summary can be read from the top. The pin is set on each
+  prose run and released by the next non-prose write (tool call,
+  separator, error). In practice only the final prose's pin sticks,
+  because intermediate runs are followed by more tool output that
+  releases the pin and following resumes.
+
+User-signal beats pin: if the user scrolls away during a pin, the pause
+persists across subsequent pin releases until the user returns to the
+bottom.
+
+User-facing behaviour summary is in `doc/agentic.txt § Auto-scroll`.
+The rest of this section documents the control flow for maintenance.
 
 **Master switches:**
 - `Config.auto_scroll.enabled` — runtime-toggleable via
@@ -290,13 +306,11 @@ documents the control flow for future maintenance.
    `BufHelpers.scroll_down` with `max_topline = anchor + 1` (when
    the pin is set), flips suppress off.
 
-**`scroll_down`** (`utils/buf_helpers.lua`) only ever moves the viewport
-downward — calls whose target topline would not advance past the current
-one are no-ops, regardless of the pin. A single `winrestview` sets both
-topline and the cursor in one go: topline at
-`min(last_line - winheight + 1, max_topline)`, cursor parked at
-`target + winheight - 1 - scrolloff` so vim's keep-cursor-visible rule
-cannot later push the topline past the cap as the buffer grows.
+**`scroll_down`** (`utils/buf_helpers.lua`) is the forward-only
+viewport move. It sets topline to the smallest value that puts the
+last buffer line at the bottom row, capped at `max_topline` if given,
+never below the current topline. A single `winrestview` sets topline
+and cursor together, leaving the window in a consistent state.
 
 **At-bottom rule** (`MessageWriter:_is_at_bottom`):
 - Chat window is the current window → `cursor_line >= line_count`. The
