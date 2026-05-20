@@ -486,12 +486,10 @@ Implementation: `lua/agentic/utils/permission_rules.lua`
 ==============================================================================
 8. AUTO-SCROLL                                          *agentic-auto-scroll*
 
-While the agent streams, the start of each prose run is pinned to the top
-of the viewport so the response can be read from the beginning. The pin
-releases on user scroll or any non-prose appears in chat, so effectively is
-used for more conveniently pausing auto-scroll on final summary messages from
-the agent. To re-enable auto-scroll, e.g. after manually scrolling, return
-to the bottom of chat (e.g. press G).
+While the agent streams, the start of each prose run is pinned to the
+top of the viewport so the response can be read from the beginning.
+The pin releases on the next write to chat. In practice only the
+final prose's pin persists, pausing the view on the agent's summary.
 
 Toggle via `<localLeader>a` (|agentic-config-keymaps|). Disable the pin
 with `pause_on_prose = false` (|agentic-config-auto_scroll|).

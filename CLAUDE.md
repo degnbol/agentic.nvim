@@ -257,21 +257,23 @@ state is the primary mechanism.
 
 ## Auto-scroll and attention notifications
 
-**Intent.** Auto-scroll follows streaming content. Two signals control it:
+**Intent.** Auto-scroll follows streaming content. Two independent
+mechanisms control it:
 
-- **Cursor at the chat's last line** is the user's request to follow
-  the stream (press G or similar to opt in). Cursor anywhere else
-  means "I'm reading earlier content, don't scroll".
-- **A pin caps the viewport at the start of the current prose run** so
-  a final summary can be read from the top. The pin is set on each
-  prose run and released by the next non-prose write (tool call,
-  separator, error). In practice only the final prose's pin sticks,
-  because intermediate runs are followed by more tool output that
-  releases the pin and following resumes.
+- **Don't fight the user.** Manual scroll pauses following — otherwise
+  auto-scroll would yank the view back while the user is reading
+  earlier content. The signal that the user wants to follow again is
+  the cursor returning to the chat's last line (e.g. press G).
+- **Pin for the final summary.** A pin caps the viewport at the start
+  of the current prose run so the response can be read from the top.
+  The pin is set on each prose run and released by the next write to
+  chat — so in practice only the final prose's pin sticks, since
+  intermediate runs are followed by more output that releases the pin
+  and following resumes.
 
-User-signal beats pin: if the user scrolls away during a pin, the pause
-persists across subsequent pin releases until the user returns to the
-bottom.
+The two are independent: if the user scrolls away during a pin, the
+manual-scroll pause persists across subsequent pin releases until the
+user returns to the bottom.
 
 User-facing behaviour summary is in `doc/agentic.txt § Auto-scroll`.
 The rest of this section documents the control flow for maintenance.
