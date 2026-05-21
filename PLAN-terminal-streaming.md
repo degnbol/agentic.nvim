@@ -119,7 +119,7 @@ This is the UX improvement. When a tool call block references a terminal:
 
    This is analogous to `write_message_chunk` which appends at the buffer end,
    but scoped to a specific tool call block's extmark range. The existing
-   `_with_modifiable_and_notify_change` wrapper handles the modifiable toggle.
+   `_with_modifiable_suppressed` wrapper handles the modifiable toggle.
 
 3. **Throttle** — stdout can be very fast. Batch line appends on a timer
    (e.g. 50-100ms) to avoid flooding the buffer with individual `set_lines`
