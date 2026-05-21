@@ -270,28 +270,40 @@ layer that fills this gap. When a Bash permission request arrives:
    to slip through `Bash(cat *)` would silently write `evil`. In-place
    modification flags (e.g. `sed -i`) are caught by the deny list rather
    than by redirect detection.
-5. **Check** each segment against compiled patterns from two sources, merged:
-   - `~/.claude/settings.json` and `.claude/settings.json` (project-local) —
-     Claude-specific, mtime-cached.
-   - `Config.read_only_commands` / `Config.read_only_commands_deny` — a
-     curated built-in list of safe read-only Bash commands (`ls`, `cat`,
-     `head`, `find` minus `-exec`/`-delete`/`-ok`, etc.) that applies to
-     every provider, not just Claude. Gated by
-     `Config.auto_approve_read_only_commands` (default `true`).
-6. **Auto-approve** only if every segment matches an allow pattern AND no segment
-   matches a deny/ask pattern
+5. **Check** each segment against compiled patterns from three sources,
+   merged in `PermissionRules.load_patterns`:
+   - Bundled `lua/agentic/permissions.json` (when
+     `Config.permissions.use_plugin_defaults` is true) — curated
+     plugin-defaults split into `read_only`, `safe_write`, `deny`, `ask`
+     buckets. Provider-agnostic baseline.
+   - `~/.claude/settings.json` and `.claude/settings.json` (when
+     `Config.permissions.use_claude_settings` is true) — Claude's
+     `allow` patterns merge into `read_only`, plus `deny` and `ask`.
+     Mtime-cached.
+   - `Config.permissions.{read_only, safe_write, deny, ask}` — user
+     additions per bucket.
+6. **Resolve the allow list** per `Config.permissions.auto_approve`:
+   - `"allow"` — `read_only` ∪ `safe_write` (commands that mutate but
+     in known-safe ways, e.g. `mkdir`, `touch`, `git add`).
+   - `"read-only"` — `read_only` only.
+   - `nil` — empty; the compound-command path will not auto-approve
+     anything (deny/ask still respected).
+7. **Auto-approve** only if every segment matches an allow pattern AND
+   no segment matches a deny/ask pattern.
 
-Patterns are the same `Bash(...)` glob syntax from Claude Code's settings.json.
-`*` matches anything except shell operators. Deny/ask patterns always take
-precedence over allow patterns (same as upstream). The settings.json patterns
-are cached with mtime-based invalidation; the Config-derived patterns are
-recompiled only when the user replaces the list (table-reference identity).
+Patterns use the same `Bash(...)` glob syntax as Claude Code's
+settings.json. `*` matches anything except shell operators. Deny/ask
+patterns always take precedence over allow patterns. Settings.json
+patterns are cached with mtime-based invalidation; the
+`Config.permissions.*` lists are recompiled only when the user
+replaces the list (table-reference identity).
 
-Controlled by `Config.auto_approve_compound_commands` (default `true`) — the
-master switch that gates the whole compound-command path. The built-in list
-has its own opt-out (`auto_approve_read_only_commands`) so users with no
-Claude settings.json still get a sensible baseline, and users who want only
-their own settings.json patterns can disable the built-ins independently.
+Controlled by `Config.auto_approve_compound_commands` (default `true`) —
+the master switch that gates the whole compound-command path. The
+individual sources have their own opt-outs
+(`Config.permissions.use_plugin_defaults`,
+`Config.permissions.use_claude_settings`) so users can independently
+disable the plugin baseline or the Claude settings merge.
 
 The command source has a fallback: if `request.toolCall.rawInput.command`
 is nil and the tracker's kind is `"execute"`, the check reads the command
@@ -596,6 +608,28 @@ that the right `kind` arrived — `display_kind` hides the difference.
 determine the kind of a selected option, look up the option by `optionId` in the
 original `request.options` array and read its `kind` field. Never compare
 `optionId` directly against kind strings.
+
+### Chat buffer is UI only — the model never reads it
+
+The chat buffer is a client-side rendering artefact. On `session/load`
+the provider replays its own conversation history (the SDK rebuilds
+context from session JSON it owns, not from anything the client
+stored), and on `session/prompt` the model only sees the prompt
+content the client sends.
+
+Consequence for feature design: anything that needs to reach the model
+must travel through `session/prompt` — either embedded in the next
+user prompt or via a synthetic prompt turn. Text rendered into the
+chat buffer (status footers, decorations, trailing annotations on
+tool-call blocks) is visible to the user only. It is not part of the
+agent's conversation history and does not survive session resume into
+the model's context.
+
+This is the inverse of the "user_message_chunk replay" point below:
+that section explains what the *client* receives on session/load (the
+provider's history); this point explains what the *model* receives
+(nothing the client wrote into its own buffer, only what the client
+sent via session/prompt).
 
 ### user_message_chunk contains full prompt content
 

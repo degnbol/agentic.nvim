@@ -416,14 +416,16 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
    string against each `Bash(...)` pattern, so `grep foo | head -20` prompts
    even when both `Bash(grep *)` and `Bash(head *)` are allowed. The plugin
    splits on shell operators, strips harmless wrappers (stdbuf, /dev/null
-   redirects), and checks each segment independently against two merged
-   pattern sources: the user's `~/.claude/settings.json` allow/deny/ask rules
-   AND a curated built-in `Config.read_only_commands` /
-   `read_only_commands_deny` list (covers `ls`, `cat`, `head`, `tail`,
-   `find` minus `-exec`/`-delete`/`-ok`, etc.) that applies to every
-   provider, not just Claude. Master switch:
-   `Config.auto_approve_compound_commands` (default `true`); built-in list
-   opt-out: `Config.auto_approve_read_only_commands` (default `true`).
+   redirects), and checks each segment independently against patterns
+   merged from three sources: the bundled `permissions.json` baseline
+   (`Config.permissions.use_plugin_defaults`), Claude
+   `settings.json` files (`Config.permissions.use_claude_settings`), and
+   `Config.permissions.{read_only, safe_write, deny, ask}` user additions.
+   `Config.permissions.auto_approve` selects the allow list: `"allow"`
+   enables `read_only` ∪ `safe_write` (mutates-but-safe commands like
+   `mkdir`, `git add`), `"read-only"` restricts to `read_only` only, `nil`
+   disables compound auto-approve entirely (deny/ask still respected).
+   Master switch: `Config.auto_approve_compound_commands` (default `true`).
    Implementation in `lua/agentic/utils/permission_rules.lua`.
 
 3. **Allow/reject always cache** — when the user selects `allow_always` or
