@@ -3,6 +3,7 @@ local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local GitFiles = require("agentic.utils.git_files")
 local Logger = require("agentic.utils.logger")
+local PermissionFloat = require("agentic.ui.permission_float")
 local PermissionRules = require("agentic.utils.permission_rules")
 local TrustSafety = require("agentic.utils.trust_safety")
 
@@ -22,7 +23,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field queue table[] Queue of pending requests {toolCallId, request, callback}
 --- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
 --- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
---- @field _reanchoring boolean Guard flag to prevent recursive on_content_changed during reanchor
+--- @field permission_float agentic.ui.PermissionFloat
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _trust_scope? agentic.utils.TrustSafety.Scope Active trust scope (set by /trust)
 --- @field _edit_records table<string, agentic.utils.TrustSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
@@ -32,15 +33,16 @@ PermissionManager.__index = PermissionManager
 
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+--- @param tab_page_id integer
 --- @return agentic.ui.PermissionManager
-function PermissionManager:new(message_writer, buf_nrs)
+function PermissionManager:new(message_writer, buf_nrs, tab_page_id)
     local instance = setmetatable({
         message_writer = message_writer,
         _buf_nrs = buf_nrs or { chat = message_writer.bufnr },
+        permission_float = PermissionFloat:new(message_writer, buf_nrs, tab_page_id),
         queue = {},
         current_request = nil,
         keymap_info = {},
-        _reanchoring = false,
         _always_cache = {},
         _trust_scope = nil,
         _edit_records = {},
@@ -668,10 +670,7 @@ function PermissionManager:_process_next()
     local callback = item[3]
     local sorted_options = self._sort_permission_options(request.options)
 
-    local _, _, option_mapping = self.message_writer:display_permission_buttons(
-        request.toolCall.toolCallId,
-        sorted_options
-    )
+    local option_mapping = self.permission_float:open(sorted_options)
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
     self.current_request = {
@@ -682,48 +681,6 @@ function PermissionManager:_process_next()
     }
 
     self:_setup_keymaps(option_mapping)
-
-    self.message_writer:set_on_content_changed(function()
-        self:_reanchor_permission_prompt()
-    end)
-end
-
-function PermissionManager:_reanchor_permission_prompt()
-    if self._reanchoring or not self.current_request then
-        return
-    end
-
-    self._reanchoring = true
-
-    --- @type agentic.ui.PermissionManager.PermissionRequest
-    local current = self.current_request
-
-    local ok, err = pcall(function()
-        self.message_writer:remove_permission_buttons()
-        self:_remove_keymaps()
-
-        local sorted_options =
-            self._sort_permission_options(current.request.options)
-
-        local _, _, option_mapping =
-            self.message_writer:display_permission_buttons(
-                current.request.toolCall.toolCallId,
-                sorted_options
-            )
-
-        current.option_mapping = option_mapping
-
-        self:_setup_keymaps(option_mapping)
-    end)
-
-    self._reanchoring = false
-
-    if not ok then
-        Logger.notify(
-            "Error during permission prompt reanchor: " .. vim.inspect(err),
-            vim.log.levels.ERROR
-        )
-    end
 end
 
 --- @param options agentic.acp.PermissionOption[]
@@ -769,10 +726,9 @@ function PermissionManager:_complete_request(option_id)
         end
     end
 
-    self.message_writer:remove_permission_buttons()
+    self.permission_float:close()
 
     self:_remove_keymaps()
-    self.message_writer:set_on_content_changed(nil)
     current.callback(option_id)
 
     self.current_request = nil
@@ -783,9 +739,8 @@ end
 --- Called when session ends or user cancels generation.
 function PermissionManager:clear()
     if self.current_request then
-        self.message_writer:remove_permission_buttons()
+        self.permission_float:close()
         self:_remove_keymaps()
-        self.message_writer:set_on_content_changed(nil)
 
         local ok, err = pcall(self.current_request.callback, nil)
         if not ok then
@@ -827,9 +782,8 @@ function PermissionManager:reject_and_cancel_remaining()
     end
 
     -- Remove UI and keymaps for current request
-    self.message_writer:remove_permission_buttons()
+    self.permission_float:close()
     self:_remove_keymaps()
-    self.message_writer:set_on_content_changed(nil)
 
     -- Send reject_once for current, cancelled for the rest
     local ok, err = pcall(self.current_request.callback, reject_option_id)
@@ -867,9 +821,13 @@ function PermissionManager:remove_request_by_tool_call_id(toolCallId)
     end
 end
 
---- @param option_mapping table<integer, string> Mapping from number (1-N) to option_id
+--- @param option_mapping table<integer, string>|nil Mapping from number (1-N) to option_id, or nil when float couldn't open
 function PermissionManager:_setup_keymaps(option_mapping)
     self:_remove_keymaps()
+
+    if not option_mapping then
+        return
+    end
 
     local permission_keys = Config.keymaps.permission or {}
 

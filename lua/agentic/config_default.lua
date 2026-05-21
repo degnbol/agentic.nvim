@@ -358,6 +358,25 @@ local ConfigDefault = {
         center_on_navigate_hunks = true,
     },
 
+    --- Floating window that renders permission prompts. Anchored to a corner
+    --- of the chat window so it stays in view regardless of where the
+    --- streaming content currently is.
+    --- @class agentic.UserConfig.PermissionFloat
+    --- @field anchor "NE"|"NW"|"SE"|"SW" Chat-window corner to anchor to
+    --- @field width integer Content width in columns (border drawn around)
+    --- @field row_offset integer Inset from the anchored corner (positive = down for N*, up for S*)
+    --- @field col_offset integer Inset from the anchored corner (positive = right for *W, left for *E)
+    --- @field border string|string[] nvim_open_win border style
+    --- @field winblend integer 0..100 transparency
+    permission_float = {
+        anchor = "NE",       -- chat-window corner to anchor to
+        width = 30,
+        row_offset = 1,      -- inset from anchored corner
+        col_offset = -1,
+        border = "rounded",
+        winblend = 0,
+    },
+
     --- @type agentic.UserConfig.Hooks
     hooks = {
         on_prompt_submit = nil,

@@ -193,16 +193,18 @@ fence rather than escaped to literal `\n`.
 ```
 Provider sends "session/request_permission"
   -> PermissionManager:add_request(request, callback)
-     -> _try_auto_approve() checks compound command against settings.json rules
-        -> If approved: callback(allow_once) immediately, skip UI entirely
-        -> If not: fall through to interactive prompt
+     -> _try_auto_approve() runs the auto-approval checks
+        -> If approved/rejected: callback fires immediately, skip UI
+        -> Otherwise: fall through to interactive prompt
      -> Queues request (sequential — one prompt at a time)
-     -> Renders permission buttons in chat buffer
-     -> Sets up buffer-local keymaps (1,2,3,4,0)
+     -> PermissionFloat:open renders prompt in a float anchored to the
+        chat window (NE corner, focusable=false)
+     -> Binds buffer-local keymaps (1..N) on all widget buffers
   -> User optionally presses diff_preview.open_in_tab keymap
      -> Opens diff preview in a new tabpage (opt-in)
   -> User presses permission key
      -> Sends result back to provider via callback
+     -> PermissionFloat:close removes the window
      -> Clears diff preview (if opened)
      -> Dequeues next permission if any
 ```
@@ -438,22 +440,32 @@ for the current tool call so the provider sees an active rejection and can adapt
 `session/cancel` — the provider gets no chance to react. Use `4` when you want
 to reject and provide follow-up feedback in the next turn.
 
-### Permission button positions
+### Permission float positions
 
-Button positions are tracked via an extmark in the `NS_PERMISSION_BUTTONS`
-namespace, not stored row numbers. `remove_permission_buttons` queries the
-extmark to find the current position, making it robust against buffer shifts
-from concurrent tool call updates.
+The prompt renders in a dedicated floating window owned by
+`PermissionFloat` (`lua/agentic/ui/permission_float.lua`) — one instance
+per tab, paired with the tab's `PermissionManager`. Streaming tool-call
+content and the prompt UI live in separate buffers, so updates to the
+chat buffer never displace the prompt.
 
-**Extmark gravity is critical.** The button extmark must use `right_gravity=true`
-and `end_right_gravity=true`. Without this, `update_tool_call_block` can corrupt
-the extmark position: `nvim_buf_set_lines(buf, start, end, ...)` with an
-exclusive `end` that lands exactly on the button extmark's start row causes the
-extmark to collapse into the replacement range when `right_gravity=false`
-(default). `remove_permission_buttons` then deletes tool call block content
-instead of just the buttons. This manifests as parallel tool calls disappearing
-— only the first block survives because subsequent blocks are removed along with
-the buttons after the first block's update triggers a reanchor cycle.
+**Anchor.** `relative = "win"` against the chat window of the owning
+tab, resolved from `message_writer.bufnr` via `vim.fn.win_findbuf`
+filtered by tab id. Corner and offsets come from `Config.permission_float`
+(default `NE`). A `WinResized` autocmd reapplies geometry; a `WinClosed`
+autocmd on the chat winid closes the float if the chat window goes away.
+
+**Focus.** `focusable = false` blocks `<C-w>w`, mouse focus, and
+programmatic focus. The float never holds the cursor. Number-key
+bindings (`1`..`N`) are installed on the widget buffers (chat, input,
+todos, code, files, diagnostics), not on the float buffer. The user
+must have focus on one of those to answer.
+
+**Hidden chat.** If `_find_chat_winid` returns nil (widget toggled
+away), `:open` is a no-op and returns nil. `_process_next` records
+`current_request` but `_setup_keymaps` short-circuits on a nil
+mapping, so the prompt cannot be answered until the widget reopens;
+the float does not auto-render on reopen. Niche edge case — the
+supported flow is to keep the chat visible while a prompt is pending.
 
 ## Adapter override points
 

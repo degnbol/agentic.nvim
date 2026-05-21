@@ -299,7 +299,7 @@ The rest of this section documents the control flow for maintenance.
    `_check_auto_scroll` (gated on `_auto_scroll_paused`, with a pin
    override) and queues a `vim.schedule` callback. `_scroll_scheduled`
    coalesces.
-2. Sync: `_with_modifiable_and_notify_change` writes the chunk — the
+2. Sync: `_with_modifiable_suppressed` writes the chunk — the
    suppress flag is set for this whole block so any `WinScrolled` that
    fires from buffer-grow / topline auto-correct is filtered out.
 3. Sync (still inside the write): pin the start of the prose run if

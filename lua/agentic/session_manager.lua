@@ -107,12 +107,22 @@ end
 
 --- Notify the user that the agent needs attention.
 --- Bell for unfocused windows, buffer-name badge when scrolled up in a focused window.
+--- When `skip_badge` is true (permission events), only bell when unfocused —
+--- the float is always visible so the scrolled-up badge is irrelevant.
 --- @param badge string Badge text (e.g. "[done]", "[?]")
-function SessionManager:_notify_attention(badge)
+--- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
+function SessionManager:_notify_attention(badge, skip_badge)
     local chat_win = self.widget.win_nrs.chat
     local is_chat_focused = chat_win
         and vim.api.nvim_win_is_valid(chat_win)
         and vim.api.nvim_get_current_win() == chat_win
+
+    if skip_badge then
+        if not is_chat_focused then
+            SessionManager._ring_bell()
+        end
+        return
+    end
 
     local near_bottom = self.message_writer:is_near_bottom()
 
@@ -249,7 +259,7 @@ function SessionManager:new(tab_page_id)
     self.message_writer =
         MessageWriter:new(self.widget.buf_nrs.chat, self.status_animation)
     self.permission_manager =
-        PermissionManager:new(self.message_writer, self.widget.buf_nrs)
+        PermissionManager:new(self.message_writer, self.widget.buf_nrs, tab_page_id)
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
 
@@ -975,7 +985,7 @@ function SessionManager:_on_request_permission(request, callback)
     -- permission callback is lost — the provider waits forever for a
     -- response, permanently locking the session.
     local ok, err = pcall(function()
-        self:_notify_attention("[?]")
+        self:_notify_attention("[?]", true)
 
         P.invoke_hook("on_permission_request", {
             session_id = self.session_id,

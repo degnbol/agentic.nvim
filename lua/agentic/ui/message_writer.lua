@@ -1,13 +1,10 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
-local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
 local Renderer = require("agentic.ui.tool_call_renderer")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
-local NS_PERMISSION_BUTTONS =
-    vim.api.nvim_create_namespace("agentic_permission_buttons")
 local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
 --- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
@@ -70,7 +67,6 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _last_message_type? string
 --- @field _should_auto_scroll? boolean
 --- @field _scroll_scheduled? boolean
---- @field _on_content_changed? fun()
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
@@ -191,20 +187,8 @@ function MessageWriter:reset_turn_state()
     self:_release_prose_pin()
 end
 
---- @param callback fun()|nil
-function MessageWriter:set_on_content_changed(callback)
-    self._on_content_changed = callback
-end
-
-function MessageWriter:_notify_content_changed()
-    if self._on_content_changed then
-        self._on_content_changed()
-    end
-end
-
---- Wraps BufHelpers.with_modifiable and fires _notify_content_changed after.
---- The callback may return false to suppress the notification (e.g. on early-return without edits).
---- with_modifiable returns false for invalid buffers, which also suppresses notification.
+--- Wraps BufHelpers.with_modifiable with scroll-suppression.
+--- with_modifiable returns false for invalid buffers.
 ---
 --- Buffer writes can incidentally shift topline (cursor at last line + buffer
 --- growth past viewport, or set_lines on a tool call block above the prose
@@ -213,14 +197,12 @@ end
 --- prose pin. Suppress for the whole synchronous write — vim is
 --- single-threaded so user input cannot interleave.
 --- @param fn fun(bufnr: integer): boolean|nil
-function MessageWriter:_with_modifiable_and_notify_change(fn)
+function MessageWriter:_with_modifiable_suppressed(fn)
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
     local result = BufHelpers.with_modifiable(self.bufnr, fn)
     self._suppress_pin_release = prev_suppress
-    if result ~= false then
-        self:_notify_content_changed()
-    end
+    return result
 end
 
 --- Returns the text area width of the chat window (excluding sign column), or 80.
@@ -263,7 +245,7 @@ function MessageWriter:write_message(update)
 
     self:_auto_scroll(self.bufnr)
 
-    self:_with_modifiable_and_notify_change(function()
+    self:_with_modifiable_suppressed(function()
         self:_append_lines(lines)
         self:_append_lines({ "" })
     end)
@@ -386,7 +368,7 @@ function MessageWriter:write_error_message(err)
     self:_release_prose_pin()
     self:_auto_scroll(self.bufnr)
 
-    self:_with_modifiable_and_notify_change(function(bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
         local was_empty = BufHelpers.is_buffer_empty(bufnr)
         self:_append_lines(all_lines)
 
@@ -433,7 +415,7 @@ end
 function MessageWriter:write_error_action(text)
     self:_auto_scroll(self.bufnr)
 
-    self:_with_modifiable_and_notify_change(function(bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
         self:_append_lines({ text, "" })
 
         local row = vim.api.nvim_buf_line_count(bufnr) - 2
@@ -456,7 +438,7 @@ function MessageWriter:append_separator()
     self._last_message_type = nil
     self:_release_prose_pin()
 
-    self:_with_modifiable_and_notify_change(function(bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
         self:_reflow_chunks(bufnr, true)
         self:_append_lines({ "" })
     end)
@@ -586,7 +568,7 @@ function MessageWriter:write_message_chunk(update)
 
     self:_auto_scroll(self.bufnr)
 
-    self:_with_modifiable_and_notify_change(function(bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
         local last_line = vim.api.nvim_buf_line_count(bufnr) - 1
 
         -- Record where streamed content starts (0-indexed)
@@ -834,7 +816,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
     self:_auto_scroll(self.bufnr)
 
-    self:_with_modifiable_and_notify_change(function(bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
         -- Flush any pending prose reflow before writing the tool call block.
         -- Without this, append_separator's _reflow_chunks would later process
         -- a range that includes these tool call lines, destroying extmarks
@@ -998,7 +980,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         return
     end
 
-    self:_with_modifiable_and_notify_change(function(bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
         -- Diff blocks don't change after the initial render
         -- only update status highlights - don't replace content
         if already_has_diff then
@@ -1129,174 +1111,6 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         Renderer.apply_tool_header_syntax(bufnr, start_row, Renderer.NS_STATUS)
         Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)
-    end)
-end
-
---- Display permission request buttons at the end of the buffer
---- @param options agentic.acp.PermissionOption[]
---- @return integer button_start_row Start row of button block
---- @return integer button_end_row End row of button block
---- @return table<integer, string> option_mapping Mapping from number (1-N) to option_id
-function MessageWriter:display_permission_buttons(tool_call_id, options)
-    local option_mapping = {}
-
-    local lines_to_append = {}
-
-    local tracker = self.tool_call_blocks[tool_call_id]
-
-    -- Insert "Reject all" before reject_always (permanent rule is stronger).
-    -- Build a merged list of ACP options + our local reject-all entry.
-    local merged_options = {}
-    local reject_all_inserted = false
-    for _, option in ipairs(options) do
-        if kind_key(option.kind) == "reject_always" and not reject_all_inserted then
-            table.insert(merged_options, {
-                kind = "__reject_all__",
-                name = "Reject all",
-                optionId = "__reject_all__",
-            })
-            reject_all_inserted = true
-        end
-        table.insert(merged_options, option)
-    end
-    if not reject_all_inserted then
-        table.insert(merged_options, {
-            kind = "__reject_all__",
-            name = "Reject all",
-            optionId = "__reject_all__",
-        })
-    end
-
-    local permission_keys = Config.keymaps.permission or {}
-
-    for i, option in ipairs(merged_options) do
-        local key_label = permission_keys[i] or tostring(i)
-        table.insert(
-            lines_to_append,
-            string.format(
-                "%s. %s %s",
-                key_label,
-                Config.permission_icons[option.kind] or "",
-                option.name
-            )
-        )
-        option_mapping[i] = option.optionId
-    end
-
-    table.insert(lines_to_append, "--- ---")
-
-    local hint_line_index =
-        DiffPreview.add_navigation_hint(tracker, lines_to_append)
-
-    table.insert(lines_to_append, "")
-
-    -- Ensure exactly one empty separator line before the permission block.
-    -- During reanchor, remove_permission_buttons leaves a trailing empty
-    -- line — reuse it instead of adding another one.
-    local line_count = vim.api.nvim_buf_line_count(self.bufnr)
-    local last_line = vim.api.nvim_buf_get_lines(
-        self.bufnr,
-        line_count - 1,
-        line_count,
-        false
-    )[1]
-
-    if last_line == "" then
-        -- Buffer already ends with an empty line (left by
-        -- remove_permission_buttons during reanchor). Reuse it as
-        -- separator — include it in the block range so it gets
-        -- cleaned up, but don't add another one.
-        line_count = line_count - 1
-    else
-        -- No trailing empty line — prepend one as separator
-        table.insert(lines_to_append, 1, "")
-    end
-
-    -- The separator line shifts hint position by 1 in both cases:
-    -- existing empty line included in block range, or prepended empty line.
-    if hint_line_index then
-        hint_line_index = hint_line_index + 1
-    end
-
-    local button_start_row = line_count
-
-    self:_auto_scroll(self.bufnr)
-
-    BufHelpers.with_modifiable(self.bufnr, function()
-        self:_append_lines(lines_to_append)
-    end)
-
-    local button_end_row = vim.api.nvim_buf_line_count(self.bufnr) - 1
-
-    if hint_line_index then
-        DiffPreview.apply_hint_styling(
-            self.bufnr,
-            NS_PERMISSION_BUTTONS,
-            button_start_row,
-            hint_line_index
-        )
-    end
-
-    -- Create extmark to track button block.
-    -- right_gravity=true so the start moves past content inserted at its
-    -- boundary — update_tool_call_block replaces lines immediately before
-    -- the buttons (end-exclusive range touches button_start_row), and
-    -- right_gravity=false would pull the start into the replacement range,
-    -- causing remove_permission_buttons to delete tool call block content.
-    vim.api.nvim_buf_set_extmark(
-        self.bufnr,
-        NS_PERMISSION_BUTTONS,
-        button_start_row,
-        0,
-        {
-            end_row = button_end_row,
-            right_gravity = true,
-            end_right_gravity = true,
-        }
-    )
-
-    return button_start_row, button_end_row, option_mapping
-end
-
---- Remove permission buttons by finding their extmark position.
---- Falls back to no-op if the extmark is missing (already removed).
-function MessageWriter:remove_permission_buttons()
-    local extmarks = vim.api.nvim_buf_get_extmarks(
-        self.bufnr,
-        NS_PERMISSION_BUTTONS,
-        0,
-        -1,
-        { details = true }
-    )
-
-    -- Find the range extmark (has end_row)
-    local start_row, end_row
-    for _, mark in ipairs(extmarks) do
-        local details = mark[4] --- @type table<string, any>
-        if details and details.end_row then
-            start_row = mark[2]
-            end_row = details.end_row
-            break
-        end
-    end
-
-    if not start_row then
-        return
-    end
-
-    vim.api.nvim_buf_clear_namespace(self.bufnr, NS_PERMISSION_BUTTONS, 0, -1)
-
-    BufHelpers.with_modifiable(self.bufnr, function(bufnr)
-        pcall(
-            vim.api.nvim_buf_set_lines,
-            bufnr,
-            start_row,
-            end_row + 1,
-            false,
-            {
-                "", -- a leading as separator from previous content
-            }
-        )
     end)
 end
 
