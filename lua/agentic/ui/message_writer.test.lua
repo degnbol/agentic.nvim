@@ -629,6 +629,42 @@ describe("agentic.ui.MessageWriter", function()
             -- topline ~= 31. Without a clamp it should be much greater than 10.
             assert.is_true(info.topline > 10)
         end)
+
+        it(
+            "stays put when closed folds collapse buffer to fit window",
+            function()
+                -- 30 buffer lines, but lines 2..16 are inside a closed fold
+                -- (1 fold line + 15 other lines = 16 screen rows ≤ winheight=20).
+                -- The whole content fits, so topline must remain at 1 — buffer-
+                -- line math would have set it to 30 - 20 + 1 = 11.
+                local lines = {}
+                for i = 1, 30 do
+                    if i == 2 then
+                        lines[i] = "tool output {{{"
+                    elseif i == 16 then
+                        lines[i] = "}}}"
+                    else
+                        lines[i] = "line " .. i
+                    end
+                end
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+                vim.wo[winid].foldmethod = "marker"
+                vim.wo[winid].foldlevel = 0
+                vim.wo[winid].foldenable = true
+                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+                vim.api.nvim_win_call(winid, function()
+                    vim.fn.winrestview({ topline = 1 })
+                end)
+                vim.cmd("redraw")
+
+                BufHelpers.scroll_down(winid, nil)
+                vim.cmd("redraw")
+
+                local info = vim.fn.getwininfo(winid)[1]
+                assert.equal(1, info.topline)
+                assert.equal(30, info.botline)
+            end
+        )
     end)
 
     describe("_check_auto_scroll prose-pin override", function()
