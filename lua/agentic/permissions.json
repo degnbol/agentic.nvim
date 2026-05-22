@@ -182,7 +182,7 @@
     "Bash(lscpu *)",
     "Bash(lspci)",
     "Bash(lspci *)",
-    "Bash(luac *)",
+    "Bash(luac -l*)",
     "Bash(mount)",
     "Bash(mount | grep *)",
     "Bash(ncdump *)",
@@ -291,6 +291,8 @@
     "Bash(curl *)",
     "Bash(uv lock)",
     "Bash(luarocks search *)",
+    "Bash(just lint)",
+    "Bash(just type)",
     "Bash(make test *)",
     "Bash(make validate)",
     "Bash(ruff *)",
@@ -335,6 +337,10 @@
     "Bash(stylua * --replace*)"
   ],
   "ask": [
+    "Bash(yq -i*)",
+    "Bash(yq * -i*)",
+    "Bash(awk * > *)",
+    "Bash(awk *>*)",
     "Bash(rm *)",
     "Bash(git checkout -- *)",
     "Bash(git checkout *)",
