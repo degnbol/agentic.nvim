@@ -1330,12 +1330,13 @@ function SessionManager:_handle_input_submit_inner(input_text)
         self.widget:set_chat_title(input_text)
     end
 
-    table.insert(prompt, {
-        type = "text",
-        text = input_text,
-    })
-
-    -- Add system info on first message only (after user text so resume picker shows the prompt)
+    -- Context blocks (system info, selected code, files, diagnostics) go
+    -- BEFORE the user text. The Claude Code SDK extracts its `inputString`
+    -- from the last text block of the user message and gates slash-command
+    -- parsing on `inputString.startsWith("/")` (see claude-code-private
+    -- processUserInput.ts), so anything following the user text would shadow
+    -- a /compact-style command. Context-first is also the conventional
+    -- prompt structure: set the scene, then ask.
     if self._is_first_message then
         self._is_first_message = false
 
@@ -1460,6 +1461,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
             table.insert(message_lines, summary_line)
         end
     end
+
+    table.insert(prompt, {
+        type = "text",
+        text = input_text,
+    })
 
     table.insert(message_lines, "\n---\n")
 

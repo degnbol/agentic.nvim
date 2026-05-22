@@ -6,11 +6,6 @@ minor").
 
 ## Bugs
 
-### Compacting fails
-Sometimes calling `/compact` doesn't fire the compacting mechanism for some reason.
-Check why this would be inconsistent. Is it because newlines are accidentally included so `/compact\n` is sent and we just need to strip blank newlines, or is something else going on?
-Have a look at /claude, /acp, ~/Documents/agentic/claude/, etc. to consider if the /compact call is by-passing the agent or if the agent is making a decision to compact.
-
 ### Rendering
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
