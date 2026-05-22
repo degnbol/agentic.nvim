@@ -254,6 +254,17 @@ from outside without polling for response absence.
 - **Do not add client-side state resets ("redraw", reset turn state, etc.)
   as a "fix"** — these do not touch the bridge's stalled generator.
 
+## Slash command recognition uses the last text block
+
+The SDK's `inputString` comes from the **last** `{type:"text"}` block of
+the user message; the slash-command path is gated on
+`inputString.startsWith("/")` (`processUserInput.ts:338, 536`). Frontends
+building multi-block prompts must put user text last or `/compact`/
+`/cost`/etc. is shadowed by trailing context and routed to the model as
+prose. The bridge does not reorder blocks (`promptToClaude`,
+`acp-agent.js:1422`); its own `LOCAL_ONLY_COMMANDS` check
+(`acp-agent.js:294`) covers only `/context`/`/heapdump`/`/extra-usage`.
+
 ## Edit tool (`str_replace_based_edit_tool`)
 
 The formal Anthropic API name is `str_replace_based_edit_tool`
