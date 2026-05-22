@@ -125,9 +125,6 @@ find a match since there's no file yet. We don't have this problem for claude.
   ```
   No search pattern visible in the argument.
 
-- **Default mode leaks to incline**: opencode's default mode is `build`.
-  It should be hidden from the header state pushed to incline and be implied.
-
 - **Ctrl-c adds an error block**: interrupting shows this in chat:
   ```markdown
   ### Error

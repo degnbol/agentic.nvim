@@ -1203,11 +1203,12 @@ function SessionManager:_update_chat_header()
         table.insert(parts, model_name)
     end
 
-    -- Mode — only show non-default modes (e.g. "Plan")
+    -- Mode — only show non-default modes (e.g. "Plan").
+    -- Hidden IDs: "default" (claude-agent-acp), "build" (opencode-acp).
     local mode_id = self.config_options.mode
             and self.config_options.mode.currentValue
         or self.config_options.legacy_agent_modes.current_mode_id
-    if mode_id and mode_id ~= "default" then
+    if mode_id and mode_id ~= "default" and mode_id ~= "build" then
         local mode_name = self.config_options:get_mode_name(mode_id) or mode_id
         mode_name = mode_name:gsub(" Mode$", "")
         table.insert(parts, mode_name)
