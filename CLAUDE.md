@@ -134,6 +134,10 @@ Folding thresholds are configured per tool kind:
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
 
+The chat buffer always has folds; any viewport, scroll, or cursor math in
+this codebase must be fold-aware (see neovim skill § "Common arithmetic
+pitfall").
+
 ## Session lifecycle races and the epoch guard
 
 Two race conditions can overwrite `self.session_id` during session restore:
