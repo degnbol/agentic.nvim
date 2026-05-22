@@ -980,6 +980,11 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         return
     end
 
+    -- Capture at-bottom state before the write. nvim_buf_set_lines below can
+    -- grow the block by many lines; a post-write check would see
+    -- botline < total_lines and gate the scroll off.
+    self:_auto_scroll(self.bufnr)
+
     self:_with_modifiable_suppressed(function(bufnr)
         -- Diff blocks don't change after the initial render
         -- only update status highlights - don't replace content

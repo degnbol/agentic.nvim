@@ -312,6 +312,12 @@ The rest of this section documents the control flow for maintenance.
    `BufHelpers.scroll_down` with `max_topline = anchor + 1` (when
    the pin is set), flips suppress off.
 
+The same pre-write `_auto_scroll(bufnr)` call appears in
+`write_tool_call_block`, `update_tool_call_block`, `write_error_message`,
+and `write_error_action`. Any new method that grows the chat buffer must
+call `_auto_scroll` *before* the write — checking `_is_at_bottom`
+afterwards would see `botline < total_lines` and gate the scroll off.
+
 **`scroll_down`** (`utils/buf_helpers.lua`) is the forward-only
 viewport move. It sets topline to the smallest value that puts the
 last buffer line at the bottom row, capped at `max_topline` if given,
