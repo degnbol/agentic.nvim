@@ -24,10 +24,9 @@ minor").
   After closing the program (nvim), restarting and resuming the session a response is visible immidiately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
   This is a long standing and difficult bug.
 
-- Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
-
 - Context amount and percentage not showing.
 
+- Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
 ```markdown
 ### Search
 ```bash
@@ -152,14 +151,6 @@ read-only commands that we can populate from my claude settings.json.
   "todowrite"` to `kind = "todowrite"` and stripping the body in
   `MessageWriter`. But the plan/todo list is shown in its dedicated panel,
   so the chat entry is redundant. Suppress it (claude doesn't emit one).
-
-#### Fixed
-
-- **Edit diff "Not found"**: ~~diff matching failed when opencode sends diff
-  data after the edit has been applied.~~ Fixed by rendering the diff
-  directly from `old`/`new` arrays when file matching fails, instead of
-  showing "Not found" placeholder.
-
 
 ## Feature ideas
 

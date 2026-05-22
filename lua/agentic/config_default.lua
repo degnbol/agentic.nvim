@@ -342,9 +342,11 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.AutoScroll
     --- @field enabled boolean Whether auto-scroll is active (toggle at runtime with keymap)
     --- @field pause_on_prose boolean Pin the start of a prose run to the top of the viewport so the model's narrative stays readable; auto-scroll resumes when the next tool call begins
+    --- @field bottom_padding integer Rows to reserve below the last buffer line so the thinking/generating indicator stays visible when it appears
     auto_scroll = {
         enabled = true,
         pause_on_prose = true,
+        bottom_padding = 1,
     },
 
     --- Show diff preview for edit tool calls in the buffer
@@ -369,7 +371,7 @@ local ConfigDefault = {
     --- @field border string|string[] nvim_open_win border style
     --- @field winblend integer 0..100 transparency
     permission_float = {
-        anchor = "NE",       -- chat-window corner to anchor to
+        anchor = "SE",       -- chat-window corner to anchor to
         width = 30,
         row_offset = 1,      -- inset from anchored corner
         col_offset = -1,

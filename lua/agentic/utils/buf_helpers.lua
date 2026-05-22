@@ -183,6 +183,12 @@ function BufHelpers.scroll_down(winid, max_topline)
     local last_line =
         vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
 
+    -- Reserve N rows below the last buffer line so virt_line indicators
+    -- (thinking/generating) have breathing room when they appear.
+    local bottom_padding = (Config.auto_scroll and Config.auto_scroll.bottom_padding)
+        or 0
+    local effective_winheight = math.max(1, winheight - bottom_padding)
+
     -- Fold-aware natural target: smallest topline t (1-indexed) such
     -- that the screen-line height of buffer lines [t..last_line] fits
     -- in winheight. `nvim_win_text_height` accounts for closed folds,
@@ -195,13 +201,13 @@ function BufHelpers.scroll_down(winid, max_topline)
         }).all
     end
     local natural_target
-    if height_to_last(1) <= winheight then
+    if height_to_last(1) <= effective_winheight then
         natural_target = 1
     else
         local lo, hi = 1, last_line
         while lo < hi do
             local mid = math.floor((lo + hi) / 2)
-            if height_to_last(mid) > winheight then
+            if height_to_last(mid) > effective_winheight then
                 lo = mid + 1
             else
                 hi = mid
