@@ -17,7 +17,8 @@ Have a look at /claude, /acp, ~/Documents/agentic/claude/, etc. to consider if t
 
 - **Auto-continue queued messages not shown in chat**: when
   `_handle_input_submit_inner` queues a message during the auto-continue
-  wait period (line 1289-1297), only a generic "Message queued — will send
+  wait period (the `self._retry_timer` branch that appends to
+  `self._queued_prompts`), only a generic "Message queued — will send
   when usage resets." line is written via `write_error_action`. The actual
   user message should be rendered in the normal `## <text>` format so the
   user can see what they typed, even if it hasn't been dispatched yet.
@@ -115,10 +116,6 @@ to all ACPs.
 suspect it's because the diff is null for the "before" state and the code can't 
 find a match since there's no file yet. We don't have this problem for claude.
 
-- **Pending vs `in_progress`**: while waiting for approval opencode shows
-  the suggested edit with `in_progress` where claude shows `pending`. Should
-  be pending — the command is not in progress.
-
 - **Search command doesn't show the term**:
   ```
   ### Search
@@ -140,18 +137,6 @@ find a match since there's no file yet. We don't have this problem for claude.
   ```
   Shouldn't appear after a manual interrupt.
 
-- **Compound command splitting not applied**: opencode doesn't get the
-  benefit of our compound-command matching (or its settings don't reach the
-  ACP side). E.g.:
-  ```bash
-  cd /tmp/opencode && \
-  grep -r "rawInput" --include="*.ts" --include="*.tsx" |
-  grep -v test |
-  grep -v node_modules |
-  head -20
-  ```
-  Doesn't auto-allow.
-
 - **Parallel tasks not showing in chat**: previously fixed for claude, now
   reappearing for opencode. Audit claude-specific fixes for ones that should
   have been general across adapters.
@@ -170,11 +155,13 @@ read-only commands that we can populate from my claude settings.json.
 - **Fetch tool output not folded**: Fetch/WebFetch output dumps full text
   into chat without folding, causing clutter.
 
-#### Fixed
+- **Hide `todowrite` tool call from chat**: not strictly a bug — opencode's
+  `todowrite` tool call already renders cleanly after mapping `title ==
+  "todowrite"` to `kind = "todowrite"` and stripping the body in
+  `MessageWriter`. But the plan/todo list is shown in its dedicated panel,
+  so the chat entry is redundant. Suppress it (claude doesn't emit one).
 
-- **`todowrite` shown in chat**: ~~opencode (not claude) shows the todo~~
-  ~~operation in chat as raw JSON~~. Fixed by mapping `title == "todowrite"`
-  to `kind = "todowrite"` and stripping the body in `MessageWriter`.
+#### Fixed
 
 - **Edit diff "Not found"**: ~~diff matching failed when opencode sends diff
   data after the edit has been applied.~~ Fixed by rendering the diff
