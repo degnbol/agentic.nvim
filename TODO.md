@@ -24,7 +24,15 @@ minor").
   After closing the program (nvim), restarting and resuming the session a response is visible immidiately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
   This is a long standing and difficult bug.
 
-- Context amount and percentage not showing.
+- Context amount and percentage occasionally missing or stale in incline,
+  with the float's area sometimes sized noticeably wider than the visible
+  text. Suspected cause: the incline render closure in
+  `~/dotfiles/config/nvim/lua/plugins/ui.lua` read `vim.t.agentic_headers`
+  (current tab) instead of the tab owning `props.win`, so the AgenticChat
+  float in a backgrounded tab could pick up another tab's headers state at
+  debounce-fire time. Fix applied: read from
+  `vim.t[nvim_win_get_tabpage(props.win)].agentic_headers`. Verify the
+  symptom is gone over normal multi-tab use before closing.
 
 - Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
 ```markdown
