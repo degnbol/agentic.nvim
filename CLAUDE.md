@@ -8,6 +8,18 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 - Never use `vim.notify` directly — use `Logger.notify`
 - Logger has only `debug()`, `debug_to_file()`, and `notify()` — no warn/error/info
 
+## You are running through this plugin
+
+When working in this repo, you (Claude) are hosted by agentic.nvim itself:
+spawned via `claude-agent-acp` wrapping `@anthropic-ai/claude-agent-sdk`. You
+are **not** the Claude CLI/TUI. Anything that depends on the host (slash
+command interception, permission flow, `environment_info`, what's forwarded
+in `available_commands_update`, which tools the SDK auto-approves vs
+escalates) follows the ACP path, not the TUI path. When a behaviour seems
+off, reason from @lua/agentic/acp/AGENTS.md and
+@.claude/skills/acp/references/claude-agent.md — not from how the CLI does
+it.
+
 ## Debugging at runtime
 
 `Logger.debug()` (prints to `:messages`) is gated by `Config.debug`.
