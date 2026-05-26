@@ -710,7 +710,7 @@ describe("agentic.ui.MessageWriter", function()
             path_stub:revert()
         end)
 
-        it("renders execute tool call as a zsh code fence", function()
+        it("renders execute tool call with bash and console fences", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "exec-fence",
@@ -726,7 +726,9 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("```bash", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
-            assert.equal("total 16", lines[5])
+            assert.equal("```console", lines[5])
+            assert.equal("total 16", lines[6])
+            assert.equal("```", lines[7])
         end)
 
         it("splits multi-line execute arguments into separate lines", function()

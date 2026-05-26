@@ -362,14 +362,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     if kind == "execute" then
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
-        lines = { header, "```bash" }
+        local fence = safe_fence(cmd_lines)
+        lines = { header, fence .. "bash" }
         vim.list_extend(lines, cmd_lines)
-        table.insert(lines, "```")
+        table.insert(lines, fence)
     elseif kind == "search" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
-        lines = { header, "```bash" }
+        local fence = safe_fence(cmd_lines)
+        lines = { header, fence .. "bash" }
         vim.list_extend(lines, cmd_lines)
-        table.insert(lines, "```")
+        table.insert(lines, fence)
     elseif kind == "fetch" then
         -- Fetch argument is "URL prompt" — show only the URL. The prompt
         -- is repeated in the body (model instructions to itself).
@@ -537,11 +539,21 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
         local lang = Theme.get_language_from_path(argument)
 
-        -- Hack to avoid triple backtick conflicts in markdown files
+        -- Markdown diffs render unfenced: the ```markdown info string is
+        -- linked to Comment via AgenticDimmedBlock (ftplugin/AgenticChat.lua)
+        -- for fetch/SubAgent informational text, and wrapping a diff in
+        -- that fence would inherit the dimming.
         local is_markdown = lang == "md" or lang == "markdown"
         local has_fences = not is_markdown
+        local fence
         if has_fences then
-            table.insert(lines, "```" .. lang)
+            local fence_content = {}
+            for _, block in ipairs(diff_blocks) do
+                vim.list_extend(fence_content, block.old_lines)
+                vim.list_extend(fence_content, block.new_lines)
+            end
+            fence = safe_fence(fence_content)
+            table.insert(lines, fence .. lang)
         end
 
         -- Load the target file buffer to enable context-aware syntax
@@ -846,9 +858,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
         end
 
-        -- Close code fences, if not markdown, to avoid conflicts
         if has_fences then
-            table.insert(lines, "```")
+            table.insert(lines, fence)
         end
     elseif kind == "fetch" or kind == "WebSearch" or kind == "SubAgent" then
         if tool_call_block.body then
@@ -877,6 +888,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local count = #body
             local use_fold = max_lines > 0 and count > max_lines
 
+            local fence = safe_fence(body)
+            table.insert(lines, fence .. "console")
             if use_fold then
                 table.insert(lines, "{{{")
             end
@@ -884,31 +897,35 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             if use_fold then
                 table.insert(lines, "}}}")
             end
+            table.insert(lines, fence)
         end
+    end
+
+    -- Locate the execute body's line range within `lines`. Layout is:
+    --   ..., fence..console, [{{{], body, [}}}], fence
+    -- so step past the closing fence and optional fold marker.
+    local body_start_offset
+    if kind == "execute" and tool_call_block.body then
+        local body_count = #tool_call_block.body
+        local i = #lines
+        if lines[i] and lines[i]:match("^`+$") then
+            i = i - 1
+        end
+        if lines[i] == "}}}" then
+            i = i - 1
+        end
+        body_start_offset = i - body_count
     end
 
     -- Process ANSI escape codes in execute block body output
     --- @type agentic.utils.Ansi.Span[][]|nil
     local ansi_highlights
-    if kind == "execute" and tool_call_block.body then
+    if kind == "execute" and tool_call_block.body and body_start_offset then
         local body_count = #tool_call_block.body
-        -- Body lines end just before the footer ("") and optional closing fold fence
-        local body_end_index = #lines -- last body line (1-indexed)
-        -- Check if the last line before footer is a fold closing marker
-        local has_fold_close = lines[body_end_index]
-            and lines[body_end_index] == "}}}"
-        if has_fold_close then
-            body_end_index = body_end_index - 1 -- skip }}}
-        end
-        local body_start_index = body_end_index - body_count
-        -- Check if a fold opening marker was inserted before body
-        if body_start_index >= 1 and lines[body_start_index] == "{{{" then
-            body_start_index = body_start_index -- fold marker line, body starts after
-        end
         local result = Ansi.process_lines(tool_call_block.body)
         if result.has_ansi then
             for i = 1, body_count do
-                lines[body_start_index + i] = result.lines[i]
+                lines[body_start_offset + i] = result.lines[i]
             end
             ansi_highlights = {}
             for i = 1, body_count do
@@ -922,24 +939,23 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     if
         kind == "execute"
         and tool_call_block.body
+        and body_start_offset
         and is_grep_command(argument)
     then
         --- @type string[]
         local body = tool_call_block.body
-        local body_count = #body
-        local bend = #lines
-        if lines[bend] == "}}}" then
-            bend = bend - 1
-        end
-        local bstart = bend - body_count
 
-        local grep_hl = extract_grep_line_highlights(body, bstart)
+        local grep_hl = extract_grep_line_highlights(body, body_start_offset)
         if #grep_hl > 0 then
             tool_call_block.search_matches = grep_hl
         end
 
-        local term_hl =
-            extract_search_term_highlights(body, bstart, nil, argument)
+        local term_hl = extract_search_term_highlights(
+            body,
+            body_start_offset,
+            nil,
+            argument
+        )
         if #term_hl > 0 then
             if tool_call_block.search_matches then
                 vim.list_extend(tool_call_block.search_matches, term_hl)
@@ -991,10 +1007,12 @@ function M.apply_block_highlights(
         -- "`argument`" (2 lines) for others. Skip both before body content.
         local body_start = start_row + 2
         if kind == "execute" or kind == "search" then
-            -- Find the closing ``` to skip the command code fence
+            -- Find the closing fence to skip the command code fence. The
+            -- fence width is dynamic (safe_fence bumps it past any backtick
+            -- runs in the command), so match any backtick-only line.
             for i = start_row + 2, end_row - 1 do
                 local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
-                if l and l == "```" then
+                if l and l:match("^`+$") then
                     body_start = i + 1
                     break
                 end

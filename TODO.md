@@ -232,6 +232,15 @@ screen so we can read it.
   file extension but with a shebang (or vim modeline) should infer filetype
   for code injection preview in chat. Not a common case.
 
+- **Nested fence treesitter injection**: tool output that contains its own
+  triple-backtick fences (e.g. `cat README.md`, edits to files with embedded
+  markdown samples) is wrapped in a `safe_fence` that bumps fence width to
+  avoid leakage, but the inner ` ```bash `/` ```python ` blocks lose
+  syntax injection because the outer fence is wider. Standard markdown
+  treesitter only injects on exact-width nested fences. Low priority since
+  the fenced content is usually `console`/code that the user mostly reads
+  raw.
+
 - **Edit tool preview folding**: long Edit tool previews need a folding
   mechanism — not folded by default but `zc` works.
 
@@ -425,6 +434,10 @@ Showing edits that are pending and edits that actually took place is more useful
 Same applies to bash commands.
 Idea: if an edit fail, wrap the diff in folding markers to hide it. Similar could be done for failed bash commands.
 Both of these could be controlled by a threshold for min number of lines before a fold is warranted. Always folding could also be warranted, to clearly indicate that the hidden contents never happened. With a configurable threshold this could also be done by simply defaulting it to 0 (or 1).
+
+## Folded Read block
+For reading parts of a file, e.g. a small number of lines, it could be nice to have a pre-folded block in the tool block to expand and see exactly the context claude read.
+We wouldn't want this if the whole file is read (since we can just <c-w>gf to it), and if it's a "large" number of lines it might be unnecessary bloat in the chat (would take longer to resume a session, bigger storage).
 
 ## Investigations
 

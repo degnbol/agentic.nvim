@@ -93,6 +93,43 @@ If a range extmark collapses (start >= end, indicating corruption),
 `update_tool_call_block` bails out and removes the block from tracking rather
 than proceeding with stale positions.
 
+## Code fence handling
+
+All tool-call command and body content is wrapped in a fenced code block.
+The fence width is computed by `safe_fence(content_lines)` in
+`tool_call_renderer.lua` — it returns a backtick run one longer than the
+longest backtick run inside the content, so embedded triple-backticks
+never close the outer fence. The same fence string is used for open and
+close.
+
+Sites that use `safe_fence`:
+
+| Site | Info string | Notes |
+| --- | --- | --- |
+| Execute command (argument) | `bash` | Command line(s) |
+| Search command (argument) | `bash` | Command line(s) |
+| Execute body (stdout/stderr) | `console` | Fold markers inside if `execute_max_lines` exceeded |
+| Search body | `console` | Fold markers inside if `search_max_lines` exceeded |
+| Fetch/WebSearch/SubAgent body | `markdown` | Always wrapped in fold markers (sidecar — see AgenticDimmedBlock note below) |
+| Diff content (edit/write) | language inferred from path | Markdown files are the exception — see below |
+| Failure reason | `console` | Replaces kind-specific body when `status == "failed"` |
+
+**Markdown diff exception.** When the edited file is markdown (`.md` /
+`.markdown`), the diff renders unfenced — content is parsed at the
+chat buffer's top level. This is because `AgenticDimmedBlock` in
+`ftplugin/AgenticChat.lua` links ` ```markdown ` fences to `Comment`
+(dimmed) so that fetch/WebSearch/SubAgent sidecar content is visually
+distinct from main conversation. A diff wrapped in ` ```markdown `
+would inherit that dimming, which is wrong for an edit preview. See
+`notes/feature-markdown-dim-by-fold-marker.md` for a planned
+refinement that ties dimming to fold-marker presence instead, so
+markdown diffs can use a normal fence.
+
+**Downstream code that consumes the fence must handle variable width.**
+Match `^\`+$` (any backtick-only line) instead of literal ` ``` `, and
+match `^\`+<lang>$` for typed fences. See `apply_block_highlights` and
+the body-range computation in `prepare_block_lines`.
+
 ## Search tool call rendering
 
 Search/grep results use two separate code fences in `_prepare_block_lines`:
