@@ -1331,19 +1331,23 @@ function SessionManager:_handle_input_submit_inner(input_text)
     end
 
     -- Context blocks (system info, selected code, files, diagnostics) go
-    -- BEFORE the user text. The Claude Code SDK extracts its `inputString`
-    -- from the last text block of the user message and gates slash-command
-    -- parsing on `inputString.startsWith("/")` (see claude-code-private
-    -- processUserInput.ts), so anything following the user text would shadow
-    -- a /compact-style command. Context-first is also the conventional
-    -- prompt structure: set the scene, then ask.
+    -- BEFORE the user text for regular messages. For slash commands (/compact,
+    -- /model, etc.), context blocks are omitted entirely because some providers
+    -- (e.g. opencode) join ALL text blocks to detect the leading `/`, and any
+    -- preceding text would shadow the command. The Claude Code SDK instead
+    -- extracts its `inputString` from the last text block only, so context
+    -- before user text works for claude-agent-acp.
+    local is_slash_command = input_text:match("^/")
+
     if self._is_first_message then
         self._is_first_message = false
 
-        table.insert(prompt, {
-            type = "text",
-            text = self:_get_system_info(),
-        })
+        if not is_slash_command then
+            table.insert(prompt, {
+                type = "text",
+                text = self:_get_system_info(),
+            })
+        end
     end
 
     --- The message to be written to the chat widget
@@ -1353,7 +1357,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     table.insert(message_lines, input_text)
 
-    if not self.code_selection:is_empty() then
+    if not is_slash_command and not self.code_selection:is_empty() then
         table.insert(message_lines, "\n- **Selected code**:\n")
 
         table.insert(prompt, {
@@ -1418,7 +1422,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    if not self.file_list:is_empty() then
+    if not is_slash_command and not self.file_list:is_empty() then
         table.insert(message_lines, "\n- **Referenced files**:")
 
         local files = self.file_list:get_files()
@@ -1434,7 +1438,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    if not self.diagnostics_list:is_empty() then
+    if not is_slash_command and not self.diagnostics_list:is_empty() then
         table.insert(message_lines, "\n- **Diagnostics**:")
 
         local diagnostics = self.diagnostics_list:get_diagnostics()
