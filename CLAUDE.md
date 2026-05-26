@@ -10,15 +10,13 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 
 ## You are running through this plugin
 
-When working in this repo, you (Claude) are hosted by agentic.nvim itself:
-spawned via `claude-agent-acp` wrapping `@anthropic-ai/claude-agent-sdk`. You
-are **not** the Claude CLI/TUI. Anything that depends on the host (slash
-command interception, permission flow, `environment_info`, what's forwarded
-in `available_commands_update`, which tools the SDK auto-approves vs
-escalates) follows the ACP path, not the TUI path. When a behaviour seems
-off, reason from @lua/agentic/acp/AGENTS.md and
-@.claude/skills/acp/references/claude-agent.md — not from how the CLI does
-it.
+When working in this repo, you are hosted by agentic.nvim itself via ACP
+(Agent Client Protocol). The provider is configured in `Config.provider` —
+not necessarily Claude. Anything that depends on the host (slash command
+interception, permission flow, `environment_info`, what's forwarded in
+`available_commands_update`) follows the ACP path, not the TUI path.
+Provider-specific behaviour (e.g. which tools the SDK auto-approves vs
+escalates) is adapter-dependent — see @lua/agentic/acp/AGENTS.md.
 
 ## Debugging at runtime
 
