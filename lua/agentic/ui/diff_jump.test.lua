@@ -185,18 +185,19 @@ describe("diff_jump", function()
             assert.equal(1, target.file_col)
         end)
 
-        it("accounts for absent fence on markdown files", function()
+        it("accounts for fence on markdown files (now fenced like others)", function()
             read_stub:returns({ "para1", "old md line", "para3" })
 
             local block = make_edit_block({ "old md line" }, { "new md line" })
             block.argument = "/notes.md"
 
-            -- Layout (markdown, no fences):
+            -- Layout (markdown, fenced like other languages):
             --   row 0: ### Edit
             --   row 1: `/notes.md`
-            --   row 2: old md line   ← old
-            --   row 3: new md line   ← new (cursor here)
-            local target = DiffJump.compute_target(block, 0, 3, 4)
+            --   row 2: ```md
+            --   row 3: old md line   ← old
+            --   row 4: new md line   ← new (cursor here)
+            local target = DiffJump.compute_target(block, 0, 4, 4)
 
             assert.is_not_nil(target)
             ---@cast target -nil

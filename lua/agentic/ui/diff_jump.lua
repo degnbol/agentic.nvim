@@ -2,7 +2,6 @@ local FileSystem = require("agentic.utils.file_system")
 local Renderer = require("agentic.ui.tool_call_renderer")
 local SessionRegistry = require("agentic.session_registry")
 local TextMatcher = require("agentic.utils.text_matcher")
-local Theme = require("agentic.theme")
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
 
 --- @class agentic.ui.DiffJump.Target
@@ -102,11 +101,8 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
         return nil
     end
 
-    local lang = Theme.get_language_from_path(block.argument)
-    local has_fences = lang ~= "md" and lang ~= "markdown"
-
-    -- Layout: header (1) + `argument` (1) + opening fence (0 or 1).
-    local body_offset = block_start_row + 2 + (has_fences and 1 or 0)
+    -- Layout: header (1) + `argument` (1) + opening fence (1).
+    local body_offset = block_start_row + 3
     local row_in_body = chat_row - body_offset
 
     local first_target = {

@@ -406,7 +406,15 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     -- comes from `rawOutput` (unwrapped by extract_failure_reason), so this
     -- renders cleanly without the ``` fences that toAcpContentUpdate wraps
     -- around `content` on is_error.
+    --
+    -- For execute, the failure reason is the bash stdout/stderr of a
+    -- non-zero exit — long, often informational, and painting it all red
+    -- creates more noise than signal. Render with folding and no error
+    -- tint (same shape as a successful execute body). Short denial
+    -- reasons from other kinds (hook denials, permission errors) keep the
+    -- red ERROR_BODY highlight.
     local failure_reason = tool_call_block.failure_reason
+
     if
         tool_call_block.status == "failed"
         and failure_reason
@@ -414,11 +422,25 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     then
         local fence = safe_fence(failure_reason)
         table.insert(lines, fence .. "console")
+        -- 0 means "never fold" (matches the success path at line 898).
+        local exec_max_lines = kind == "execute"
+                and Config.tool_call_display.execute_max_lines
+            or 0
+        local use_fold = exec_max_lines > 0
+            and #failure_reason > exec_max_lines
+        if use_fold then
+            table.insert(lines, "{{{")
+        end
         for _, reason_line in ipairs(failure_reason) do
             table.insert(lines, reason_line)
-            --- @type agentic.ui.MessageWriter.HighlightRange
-            local range = { type = "error", line_index = #lines - 1 }
-            table.insert(highlight_ranges, range)
+            if kind ~= "execute" then
+                --- @type agentic.ui.MessageWriter.HighlightRange
+                local range = { type = "error", line_index = #lines - 1 }
+                table.insert(highlight_ranges, range)
+            end
+        end
+        if use_fold then
+            table.insert(lines, "}}}")
         end
         table.insert(lines, fence)
     elseif kind == "read" then
@@ -538,23 +560,15 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         end
 
         local lang = Theme.get_language_from_path(argument)
+        local wrap_diff_prose = lang == "md" or lang == "markdown"
 
-        -- Markdown diffs render unfenced: the ```markdown info string is
-        -- linked to Comment via AgenticDimmedBlock (ftplugin/AgenticChat.lua)
-        -- for fetch/SubAgent informational text, and wrapping a diff in
-        -- that fence would inherit the dimming.
-        local is_markdown = lang == "md" or lang == "markdown"
-        local has_fences = not is_markdown
-        local fence
-        if has_fences then
-            local fence_content = {}
-            for _, block in ipairs(diff_blocks) do
-                vim.list_extend(fence_content, block.old_lines)
-                vim.list_extend(fence_content, block.new_lines)
-            end
-            fence = safe_fence(fence_content)
-            table.insert(lines, fence .. lang)
+        local fence_content = {}
+        for _, block in ipairs(diff_blocks) do
+            vim.list_extend(fence_content, block.old_lines)
+            vim.list_extend(fence_content, block.new_lines)
         end
+        local fence = safe_fence(fence_content)
+        table.insert(lines, fence .. lang)
 
         -- Load the target file buffer to enable context-aware syntax
         -- highlighting. The injected markdown parser only sees the diff
@@ -594,7 +608,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
         -- For markdown diffs, wrap prose lines so they don't overflow the
         -- chat window. Code blocks (inside fences) stay untouched.
-        local diff_wrap = is_markdown and wrap_width or 0
+        local diff_wrap = wrap_diff_prose and wrap_width or 0
         local in_fence = false
 
         --- Insert a diff line into `lines`, wrapping if markdown prose.
@@ -755,7 +769,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
             if is_new_file then
                 -- Format tables so they render with aligned columns
-                local fmt_new = is_markdown
+                local fmt_new = wrap_diff_prose
                         and TextWrap.format_tables_in_lines(block.new_lines)
                     or block.new_lines
                 for ni, new_line in ipairs(fmt_new) do
@@ -793,10 +807,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                     end
                 end
 
-                local fmt_old = is_markdown
+                local fmt_old = wrap_diff_prose
                         and TextWrap.format_tables_in_lines(old_raw)
                     or old_raw
-                local fmt_new = is_markdown
+                local fmt_new = wrap_diff_prose
                         and TextWrap.format_tables_in_lines(new_raw)
                     or new_raw
 
@@ -858,17 +872,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
         end
 
-        if has_fences then
-            table.insert(lines, fence)
-        end
+        table.insert(lines, fence)
     elseif kind == "fetch" or kind == "WebSearch" or kind == "SubAgent" then
         if tool_call_block.body then
             -- Fetch/WebSearch/SubAgent body is informational text that the
             -- agent wrote to itself. Wrap in a code fence to prevent markdown
             -- parsing artefacts and always fold since users rarely need it.
-            -- `markdown` info string dims the block via AgenticDimmedBlock
-            -- (priority 101, set in ftplugin/AgenticChat.lua) while keeping
-            -- injected bold/underline styling.
+            -- The `markdown` info string + leading `{{{` fold marker is what
+            -- AgenticDimmedBlock (ftplugin/AgenticChat.lua) keys off to dim
+            -- sidecar content; markdown file diffs use the same fence but
+            -- never fold, so they stay un-dimmed.
             local wrapped =
                 TextWrap.wrap_prose(tool_call_block.body, wrap_width)
             local fence = safe_fence(wrapped)

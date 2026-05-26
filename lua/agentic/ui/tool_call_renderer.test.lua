@@ -291,6 +291,110 @@ describe("ToolCallRenderer", function()
             assert.is_true(found)
         end)
 
+        it(
+            "renders execute failure as plain console without red tint",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-exec-1",
+                    kind = "execute",
+                    argument = "ls /missing",
+                    status = "failed",
+                    failure_reason = {
+                        "ls: /missing: No such file or directory",
+                    },
+                }
+
+                local lines, ranges = Renderer.prepare_block_lines(block, 0)
+
+                for _, range in ipairs(ranges) do
+                    assert.are_not.equal("error", range.type)
+                end
+                local found = false
+                for _, line in ipairs(lines) do
+                    if line == "ls: /missing: No such file or directory" then
+                        found = true
+                        break
+                    end
+                end
+                assert.is_true(found)
+            end
+        )
+
+        it("does not fold execute failure at the threshold", function()
+            local Config = require("agentic.config")
+            local reason = {}
+            for i = 1, Config.tool_call_display.execute_max_lines do
+                table.insert(reason, "err line " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-exec-2",
+                kind = "execute",
+                argument = "make build",
+                status = "failed",
+                failure_reason = reason,
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+
+            for _, line in ipairs(lines) do
+                assert.are_not.equal("{{{", line)
+                assert.are_not.equal("}}}", line)
+            end
+        end)
+
+        it("folds execute failure one line past the threshold", function()
+            local Config = require("agentic.config")
+            local reason = {}
+            for i = 1, Config.tool_call_display.execute_max_lines + 1 do
+                table.insert(reason, "err line " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-exec-3",
+                kind = "execute",
+                argument = "make build",
+                status = "failed",
+                failure_reason = reason,
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+
+            local has_open, has_close = false, false
+            for _, line in ipairs(lines) do
+                if line == "{{{" then
+                    has_open = true
+                elseif line == "}}}" then
+                    has_close = true
+                end
+            end
+            assert.is_true(has_open)
+            assert.is_true(has_close)
+        end)
+
+        it("keeps red error highlight on non-execute failures", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-edit-fail",
+                kind = "edit",
+                argument = "/tmp/foo.lua",
+                status = "failed",
+                failure_reason = { "Permission denied." },
+            }
+
+            local _, ranges = Renderer.prepare_block_lines(block, 0)
+
+            local has_error = false
+            for _, range in ipairs(ranges) do
+                if range.type == "error" then
+                    has_error = true
+                    break
+                end
+            end
+            assert.is_true(has_error)
+        end)
+
         it("keeps kind-specific rendering for non-failed status", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {

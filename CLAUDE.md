@@ -94,7 +94,8 @@ work regardless of `vim.bo.syntax` state — whether treesitter has disabled it
 `vim.bo.syntax = 'ON'`. This makes the highlighting robust against user
 configuration. Highlight group definitions are set in `theme.lua` via
 `nvim_set_hl`, which works independently of vim syntax state. The
-`AgenticDimmedBlock` group (dims ` ```markdown ` fences only) is defined in
+`AgenticDimmedBlock` group (dims ` ```markdown ` fences whose body starts
+with a `{{{` fold marker — i.e. sidecar content) is defined in
 `ftplugin/AgenticChat.lua` via a targeted treesitter query override.
 
 Content comparison in `update_tool_call_block` excludes the footer line (which
@@ -123,19 +124,8 @@ Sites that use `safe_fence`:
 | Execute body (stdout/stderr) | `console` | Fold markers inside if `execute_max_lines` exceeded |
 | Search body | `console` | Fold markers inside if `search_max_lines` exceeded |
 | Fetch/WebSearch/SubAgent body | `markdown` | Always wrapped in fold markers (sidecar — see AgenticDimmedBlock note below) |
-| Diff content (edit/write) | language inferred from path | Markdown files are the exception — see below |
+| Diff content (edit/write) | language inferred from path | Markdown diffs use a normal ` ```markdown ` fence; dimming is gated on a `{{{` fold marker (see AgenticDimmedBlock note below) |
 | Failure reason | `console` | Replaces kind-specific body when `status == "failed"` |
-
-**Markdown diff exception.** When the edited file is markdown (`.md` /
-`.markdown`), the diff renders unfenced — content is parsed at the
-chat buffer's top level. This is because `AgenticDimmedBlock` in
-`ftplugin/AgenticChat.lua` links ` ```markdown ` fences to `Comment`
-(dimmed) so that fetch/WebSearch/SubAgent sidecar content is visually
-distinct from main conversation. A diff wrapped in ` ```markdown `
-would inherit that dimming, which is wrong for an edit preview. See
-`notes/feature-markdown-dim-by-fold-marker.md` for a planned
-refinement that ties dimming to fold-marker presence instead, so
-markdown diffs can use a normal fence.
 
 **Downstream code that consumes the fence must handle variable width.**
 Match `^\`+$` (any backtick-only line) instead of literal ` ``` `, and

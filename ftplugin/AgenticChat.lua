@@ -86,13 +86,18 @@ if not vim.g._agentic_md_highlights_set then
         table.insert(parts, table.concat(filtered, "\n"))
     end
 
-    -- Only dim fenced code blocks whose info_string language is "markdown"
+    -- Dim ```markdown blocks whose body starts with a {{{ fold marker.
+    -- Fetch/WebSearch/SubAgent sidecar content inserts one unconditionally;
+    -- markdown file diffs use the same fence but never fold, so they stay
+    -- un-dimmed. The lua-match pattern anchors at the start of the capture
+    -- (the opening fence line) and checks for {{{ on the next line.
     table.insert(
         parts,
         table.concat({
             "((fenced_code_block",
-            "  (info_string (language) @_lang)",
-            '  (#eq? @_lang "markdown")) @AgenticDimmedBlock',
+            "  (info_string (language) @_lang)) @AgenticDimmedBlock",
+            '(#eq? @_lang "markdown")',
+            '(#lua-match? @AgenticDimmedBlock "^[^\\n]*\\n{{{\\n")',
             "(#set! priority 101))",
         }, "\n")
     )
