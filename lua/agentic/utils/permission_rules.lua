@@ -420,7 +420,22 @@ function M.mask_quoted_operators(segment)
     return table.concat(result)
 end
 
---- Split a command string on top-level shell operators (|, ||, &&, ;).
+--- Split a command string on top-level shell separators (|, ||, &&, ;, and
+--- newline). A bare newline terminates a command the way a semicolon does, so
+--- each statement of a multi-line command is checked independently. This both
+--- closes an over-approval hole (without it, `echo ok\nrm -rf x` is one
+--- segment whose `rm` hides inside `echo`'s trailing `*` wildcard and is
+--- auto-approved) and removes false prompts on multi-line read-only scripts.
+---
+--- Newlines are NOT separators inside quotes (preserved as literal data) or
+--- after a `\` line-continuation (the backslash+newline pair is elided). Empty
+--- and whitespace-only segments — produced by separator adjacency such as the
+--- `\n|\n` around an operator on its own line — are dropped.
+---
+--- Constructs we don't model (heredoc bodies, control-flow blocks) are not
+--- recognised as units. Their inner lines simply become segments that fail to
+--- match an allow pattern, so they fall through to a prompt (fail-closed).
+---
 --- Returns nil if the command contains unsafe constructs (subshells, unbalanced
 --- quotes, process substitution).
 --- @param command string
@@ -452,6 +467,14 @@ function M.split_command(command)
         elseif ch == '"' and not in_single then
             in_double = not in_double
             table.insert(current, ch)
+        elseif
+            ch == "\\"
+            and not in_single
+            and command:sub(i + 1, i + 1) == "\n"
+        then
+            -- Line continuation: backslash+newline joins the two lines (the
+            -- shell elides it). Literal inside single quotes, so only outside.
+            advance = 2
         elseif not in_single and not in_double then
             local next_ch = command:sub(i + 1, i + 1)
             if
@@ -459,7 +482,7 @@ function M.split_command(command)
             then
                 split = true
                 advance = 2
-            elseif ch == "|" or ch == ";" then
+            elseif ch == "|" or ch == ";" or ch == "\n" then
                 split = true
             else
                 table.insert(current, ch)
@@ -482,7 +505,18 @@ function M.split_command(command)
     end
 
     table.insert(segments, table.concat(current))
-    return segments
+
+    -- Drop empty / whitespace-only segments (e.g. from a `\n|\n` operator on
+    -- its own line, or a trailing separator). The downstream checks treat a
+    -- whitespace-only segment as a non-match anyway, so dropping keeps the
+    -- segment list aligned with the actual statements.
+    local result = {}
+    for _, seg in ipairs(segments) do
+        if vim.trim(seg) ~= "" then
+            table.insert(result, seg)
+        end
+    end
+    return result
 end
 
 --- Check if a single command segment matches any compiled pattern.

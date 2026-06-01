@@ -256,8 +256,12 @@ segments.
 `PermissionRules` (`lua/agentic/utils/permission_rules.lua`) adds a client-side
 layer that fills this gap. When a Bash permission request arrives:
 
-1. **Split** the command on top-level shell operators (`|`, `||`, `&&`, `;`),
-   respecting quote boundaries
+1. **Split** the command on top-level shell separators (`|`, `||`, `&&`, `;`,
+   and bare newline), respecting quote boundaries and `\`-newline line
+   continuations. A bare newline separates statements like `;` — without it a
+   write hidden on a later line (`echo ok\nrm -rf x`) is swallowed by the
+   preceding command's trailing `*` wildcard and auto-approved. Empty and
+   whitespace-only segments are dropped
 2. **Reject** unsafe constructs outright (subshells `$(...)`, backticks, process
    substitution `<(...)` / `>(...)`)
 3. **Strip** harmless wrappers before matching: `stdbuf -oL` prefixes (added by

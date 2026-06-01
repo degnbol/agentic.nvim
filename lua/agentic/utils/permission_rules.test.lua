@@ -279,6 +279,36 @@ describe("PermissionRules", function()
             assert.equal(1, #segs)
             assert.equal("ls -la /tmp", segs[1])
         end)
+
+        it("splits on bare newline", function()
+            local segs = PermissionRules.split_command("echo hi\nrm -rf bar")
+            assert.is_not_nil(segs)
+            assert.equal(2, #segs)
+            assert.equal("echo hi", segs[1])
+            assert.equal("rm -rf bar", segs[2])
+        end)
+
+        it("drops empty segments from a separator on its own line", function()
+            local segs = PermissionRules.split_command("grep foo .\n|\n head")
+            assert.is_not_nil(segs)
+            assert.equal(2, #segs)
+            assert.equal("grep foo .", segs[1])
+            assert.equal(" head", segs[2])
+        end)
+
+        it("joins a backslash line continuation", function()
+            local segs = PermissionRules.split_command("grep foo \\\n bar")
+            assert.is_not_nil(segs)
+            assert.equal(1, #segs)
+            assert.equal("grep foo  bar", segs[1])
+        end)
+
+        it("preserves a newline inside single quotes", function()
+            local segs = PermissionRules.split_command("sed '1p\n2p' file")
+            assert.is_not_nil(segs)
+            assert.equal(1, #segs)
+            assert.equal("sed '1p\n2p' file", segs[1])
+        end)
     end)
 
     describe("mask_quoted_operators", function()
@@ -615,6 +645,57 @@ describe("PermissionRules", function()
 
             local result = PermissionRules.should_auto_approve(
                 "grep -r 'pattern' src\n|\n  head -40"
+            )
+            assert.is_true(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("blocks a write hidden after a newline-joined safe command", function()
+            -- Without newline splitting, `rm -rf bar` would be swallowed by
+            -- echo's trailing `*` wildcard and silently auto-approved.
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(echo *)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            local result =
+                PermissionRules.should_auto_approve("echo hi\nrm -rf bar")
+            assert.is_false(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves newline-joined read-only statements", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = {
+                                "Bash(cd *)",
+                                "Bash(echo *)",
+                                "Bash(grep *)",
+                            },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            local result = PermissionRules.should_auto_approve(
+                "cd /tmp\necho looking\ngrep -rn foo src"
             )
             assert.is_true(result)
 

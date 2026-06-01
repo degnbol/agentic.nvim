@@ -28,6 +28,8 @@
     "Bash(readlink *)",
     "Bash(dirname *)",
     "Bash(basename *)",
+    "Bash(cd)",
+    "Bash(cd *)",
     "Bash(pwd)",
     "Bash(pwd *)",
     "Bash(pwd*)",

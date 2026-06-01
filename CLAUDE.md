@@ -462,8 +462,8 @@ auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
 2. **Compound Bash commands** — the upstream provider matches the full command
    string against each `Bash(...)` pattern, so `grep foo | head -20` prompts
    even when both `Bash(grep *)` and `Bash(head *)` are allowed. The plugin
-   splits on shell operators, strips harmless wrappers (stdbuf, /dev/null
-   redirects), and checks each segment independently against patterns
+   splits on shell operators and newlines, strips harmless wrappers (stdbuf,
+   /dev/null redirects), and checks each segment independently against patterns
    merged from three sources: the bundled `permissions.json` baseline
    (`Config.permissions.use_plugin_defaults`), Claude
    `settings.json` files (`Config.permissions.use_claude_settings`), and
