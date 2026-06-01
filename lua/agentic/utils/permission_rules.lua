@@ -294,22 +294,38 @@ local function is_safe_env_name(name)
     return name:match("^LC_[A-Z_]+$") ~= nil
 end
 
---- Strip leading harmless prefixes (safe env-var assignments and the
---- `stdbuf` line-buffering wrapper) from a command segment. Loops to
---- handle chains like `LC_ALL=C TZ=UTC stdbuf -oL grep ...`. Hook
---- injection (`shell-guard.sh` adds `PYTHONUNBUFFERED=1` to commands
---- mentioning a `.py` file) is the main motivating case.
+--- Whether a variable name is inert data rather than an execution-influencing
+--- env var. The hijacking vars (PATH, LD_PRELOAD, DYLD_INSERT_LIBRARIES, IFS,
+--- BASH_ENV, PYTHONPATH) are uppercase by convention, so a name starting with
+--- a lowercase letter or underscore cannot be one and is safe to strip or
+--- treat as data.
+--- @param name string
+--- @return boolean
+local function is_data_var_name(name)
+    return name:match("^[a-z_]") ~= nil
+end
+
+--- Strip leading harmless prefixes (variable assignments and the `stdbuf`
+--- line-buffering wrapper) from a command segment, so the inner command is
+--- matched on its own (`f=/path ls "$f"` becomes `ls "$f"`). Loops to handle
+--- chains like `LC_ALL=C TZ=UTC stdbuf -oL grep ...`. Hook injection
+--- (`shell-guard.sh` adds `PYTHONUNBUFFERED=1` to commands mentioning a `.py`
+--- file) is the main motivating case.
 ---
---- Only env-var names in `SAFE_ENV_NAMES` (or matching `LC_*`) are
---- stripped — names like `PATH`, `LD_PRELOAD`, `BASH_ENV`, `PYTHONPATH`
---- can hijack execution and must not be ignored.
+--- An assignment is stripped only when its name is a known-safe env var
+--- (`SAFE_ENV_NAMES` or `LC_*`) or a lowercase data var (`is_data_var_name`).
+--- Uppercase hijackers like `PATH`, `LD_PRELOAD`, `BASH_ENV`, `PYTHONPATH`
+--- are left in place so the inner command does not auto-approve.
+---
+--- A segment that is *only* prefixes with no command (a lone `f=path`)
+--- reduces to the empty string, which `is_inert_segment` treats as safe.
 --- @param segment string
 --- @return string
 function M.strip_wrapper_prefixes(segment)
     while true do
         local name, value_end =
-            segment:match("^([A-Za-z_][A-Za-z0-9_]*)=[^|;&%s]*()%s+")
-        if name and is_safe_env_name(name) then
+            segment:match("^([A-Za-z_][A-Za-z0-9_]*)=[^|;&%s]*()%s*")
+        if name and (is_safe_env_name(name) or is_data_var_name(name)) then
             segment = segment:sub(value_end):gsub("^%s+", "")
         else
             local stripped = segment:gsub("^stdbuf%s+%-[a-zA-Z0-9]+%s+", "", 1)
@@ -319,6 +335,48 @@ function M.strip_wrapper_prefixes(segment)
             segment = stripped
         end
     end
+end
+
+--- Fixed system binary directories. Restricted to non-arbitrary system
+--- locations so an absolute path into a writable directory
+--- (`/tmp/evil/grep`) cannot impersonate an allowed command.
+local SYSTEM_BIN_DIRS = {
+    "/usr/local/bin/",
+    "/opt/homebrew/bin/",
+    "/usr/bin/",
+    "/usr/sbin/",
+    "/bin/",
+    "/sbin/",
+}
+
+--- Strip a leading system binary directory from the command word, so an
+--- absolute invocation (`/usr/bin/grep foo`) matches the same allow pattern
+--- as the bare command (`grep foo`). Claude routinely uses full paths. Only
+--- the directories in `SYSTEM_BIN_DIRS` are stripped. Any other leading path
+--- is left intact, so it falls through to a prompt.
+--- @param segment string
+--- @return string
+function M.strip_command_path(segment)
+    for _, dir in ipairs(SYSTEM_BIN_DIRS) do
+        if segment:sub(1, #dir) == dir then
+            return segment:sub(#dir + 1)
+        end
+    end
+    return segment
+end
+
+--- Whether a segment is entirely safe prefixes with no command, e.g.
+--- `f=path/to/file`, `a=1 b=2`, or `LC_ALL=C` — one or more variable
+--- assignments (or `stdbuf` wrappers) and nothing after. It executes nothing,
+--- so it is safe regardless of the allow list. Detected by reducing it with
+--- `strip_wrapper_prefixes`: only safe-named or lowercase data vars are
+--- stripped, so an uppercase hijacker (`PATH=…`) leaves a non-empty remainder
+--- and falls through to a prompt. Dangerous values are excluded upstream
+--- (`split_command` rejects `$(...)`, `has_unsafe_redirect` rejects writes).
+--- @param segment string
+--- @return boolean
+function M.is_inert_segment(segment)
+    return vim.trim(M.strip_wrapper_prefixes(vim.trim(segment))) == ""
 end
 
 --- Detect output redirection that would write to a file.
@@ -526,6 +584,7 @@ end
 function M.matches_any_pattern(segment, patterns)
     local trimmed = vim.trim(segment)
     trimmed = M.strip_wrapper_prefixes(trimmed)
+    trimmed = M.strip_command_path(trimmed)
     trimmed = M.strip_devnull_redirects(trimmed)
     trimmed = vim.trim(trimmed)
 
@@ -645,9 +704,9 @@ function M.get_ask_patterns()
 end
 
 --- Check if a compound Bash command should be auto-approved.
---- Every segment must match an allow pattern, and no segment may match a
---- deny or ask pattern. Returns false for empty commands, unsafe constructs,
---- or any unmatched segment.
+--- Every segment must match an allow pattern (or be an inert assignment-only
+--- segment), and no segment may match a deny or ask pattern. Returns false
+--- for empty commands, unsafe constructs, or any unmatched segment.
 --- @param command string
 --- @return boolean
 function M.should_auto_approve(command)
@@ -688,7 +747,12 @@ function M.should_auto_approve(command)
             return false
         end
 
-        if not M.matches_any_pattern(trimmed, allow) then
+        -- An assignment-only segment executes nothing. The segment that uses
+        -- the variable is matched on its own.
+        if
+            not M.is_inert_segment(trimmed)
+            and not M.matches_any_pattern(trimmed, allow)
+        then
             return false
         end
     end

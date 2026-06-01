@@ -302,6 +302,7 @@
     "Bash(luarocks search *)",
     "Bash(just lint)",
     "Bash(just type)",
+    "Bash(make test)",
     "Bash(make test *)",
     "Bash(make validate)",
     "Bash(bun test)",

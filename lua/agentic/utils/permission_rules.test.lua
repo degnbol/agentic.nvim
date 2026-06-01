@@ -199,6 +199,84 @@ describe("PermissionRules", function()
                 PermissionRules.strip_wrapper_prefixes("FOO bar=baz ls")
             )
         end)
+
+        it("strips a lowercase data-var prefix", function()
+            assert.equal(
+                'ls "$f"',
+                PermissionRules.strip_wrapper_prefixes('f=/path/to/file ls "$f"')
+            )
+        end)
+    end)
+
+    describe("strip_command_path", function()
+        it("strips /usr/bin/ prefix", function()
+            assert.equal(
+                "grep foo",
+                PermissionRules.strip_command_path("/usr/bin/grep foo")
+            )
+        end)
+
+        it("strips /bin/ prefix", function()
+            assert.equal(
+                "ls -la",
+                PermissionRules.strip_command_path("/bin/ls -la")
+            )
+        end)
+
+        it("strips /opt/homebrew/bin/ prefix", function()
+            assert.equal(
+                "rg foo",
+                PermissionRules.strip_command_path("/opt/homebrew/bin/rg foo")
+            )
+        end)
+
+        it("leaves a non-system path intact", function()
+            assert.equal(
+                "/tmp/evil/grep foo",
+                PermissionRules.strip_command_path("/tmp/evil/grep foo")
+            )
+        end)
+
+        it("leaves a bare command unchanged", function()
+            assert.equal(
+                "grep foo",
+                PermissionRules.strip_command_path("grep foo")
+            )
+        end)
+    end)
+
+    describe("is_inert_segment", function()
+        it("accepts a lowercase assignment", function()
+            assert.is_true(
+                PermissionRules.is_inert_segment("f=path/to/file")
+            )
+        end)
+
+        it("accepts an empty value", function()
+            assert.is_true(PermissionRules.is_inert_segment("f="))
+        end)
+
+        it("accepts repeated assignments", function()
+            assert.is_true(PermissionRules.is_inert_segment("a=1 b=2"))
+        end)
+
+        it("accepts a safe-named env assignment", function()
+            assert.is_true(PermissionRules.is_inert_segment("LC_ALL=C"))
+        end)
+
+        it("rejects an uppercase hijacker assignment", function()
+            assert.is_false(PermissionRules.is_inert_segment("PATH=/evil/bin"))
+        end)
+
+        it("rejects the prefix-with-command form", function()
+            -- `f=foo bar` runs `bar`, which reduces to a non-empty command and
+            -- is matched on its own.
+            assert.is_false(PermissionRules.is_inert_segment("f=foo bar"))
+        end)
+
+        it("rejects a plain command", function()
+            assert.is_false(PermissionRules.is_inert_segment("ls -la"))
+        end)
     end)
 
     describe("split_command", function()
@@ -455,6 +533,36 @@ describe("PermissionRules", function()
             }
             assert.is_false(PermissionRules.matches_any_pattern("", patterns))
         end)
+
+        it("matches a system absolute-path invocation", function()
+            local patterns = {
+                {
+                    original = "grep *",
+                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
+                },
+            }
+            assert.is_true(
+                PermissionRules.matches_any_pattern(
+                    "/usr/bin/grep -r 'foo' .",
+                    patterns
+                )
+            )
+        end)
+
+        it("does not match a non-system absolute-path invocation", function()
+            local patterns = {
+                {
+                    original = "grep *",
+                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
+                },
+            }
+            assert.is_false(
+                PermissionRules.matches_any_pattern(
+                    "/tmp/evil/grep -r 'foo' .",
+                    patterns
+                )
+            )
+        end)
     end)
 
     describe("should_auto_approve", function()
@@ -480,6 +588,66 @@ describe("PermissionRules", function()
             local result =
                 PermissionRules.should_auto_approve("grep -r 'foo' . | head -5")
             assert.is_true(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves a lowercase assignment followed by a use", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = { allow = { "Bash(ls *)" } },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            assert.is_true(
+                PermissionRules.should_auto_approve('f=path/to/file; ls "$f"')
+            )
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves a lowercase env-prefix assignment", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = { allow = { "Bash(ls *)" } },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            assert.is_true(
+                PermissionRules.should_auto_approve('f=/path/to/file ls "$f"')
+            )
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("rejects an uppercase env assignment hijacking a use", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = { allow = { "Bash(grep *)" } },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            assert.is_false(
+                PermissionRules.should_auto_approve("PATH=/evil/bin; grep foo")
+            )
 
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
