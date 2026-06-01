@@ -704,5 +704,63 @@ describe("SessionRestore", function()
 
             assert.equal(1, write_tool_spy.call_count)
         end)
+
+        it(
+            "replays a foldable search tool call without emitting marker lines",
+            function()
+                -- Persisted bodies never contained markers, so a clean
+                -- re-render must register the fold via NS_FOLDS extmarks
+                -- rather than re-inserting markers into buffer content.
+                local MessageWriter = require("agentic.ui.message_writer")
+                Config = require("agentic.config")
+                local original_display =
+                    vim.deepcopy(Config.tool_call_display)
+                Config.tool_call_display.execute_formatter = false
+
+                local bufnr = vim.api.nvim_create_buf(false, true)
+                local writer = MessageWriter:new(bufnr)
+                local schedule_stub = spy.stub(vim, "schedule")
+
+                local body = {}
+                for i = 1, Config.tool_call_display.search_max_lines + 5 do
+                    table.insert(body, "match " .. i)
+                end
+
+                SessionRestore.replay_messages(
+                    writer --[[@as agentic.ui.MessageWriter]],
+                    {
+                        {
+                            type = "tool_call",
+                            tool_call_id = "replay-search",
+                            kind = "search",
+                            argument = "rg foo",
+                            status = "completed",
+                            body = body,
+                        },
+                    }
+                )
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                for _, line in ipairs(lines) do
+                    assert.are_not.equal("{{{", line)
+                    assert.are_not.equal("}}}", line)
+                end
+
+                local NS_FOLDS =
+                    vim.api.nvim_create_namespace("agentic_tool_folds")
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_FOLDS,
+                    0,
+                    -1,
+                    {}
+                )
+                assert.is_true(#marks > 0)
+
+                schedule_stub:revert()
+                Config.tool_call_display = original_display
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end
+        )
     end)
 end)

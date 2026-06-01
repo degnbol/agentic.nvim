@@ -269,4 +269,36 @@ function BufHelpers.scroll_down(winid, max_topline)
     end)
 end
 
+--- Force vim to recompute `foldmethod=expr` folds in every window showing a
+--- buffer. Vim invalidates expr folds only on buffer-text changes, never on
+--- extmark changes, so an NS_FOLDS extmark registered after the text write
+--- produces no fold until foldexpr is re-run (see `:help fold.txt` — "It may
+--- happen that folds are not updated properly"). Re-assigning 'foldmethod'
+--- recreates all folds without the insert-mode hazard of a `normal! zX`
+--- issued via nvim_win_call while the user types in another window.
+---
+--- Only windows already on `foldmethod=expr` are touched. Re-setting it on a
+--- window in a different fold method would clobber that window's fold state to
+--- no purpose.
+--- @param bufnr integer
+function BufHelpers.recompute_folds(bufnr)
+    for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+        if vim.api.nvim_win_is_valid(win) then
+            local ok, method = pcall(
+                vim.api.nvim_get_option_value,
+                "foldmethod",
+                { win = win }
+            )
+            if ok and method == "expr" then
+                pcall(
+                    vim.api.nvim_set_option_value,
+                    "foldmethod",
+                    "expr",
+                    { win = win }
+                )
+            end
+        end
+    end
+end
+
 return BufHelpers

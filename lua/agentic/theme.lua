@@ -21,6 +21,7 @@ Theme.HL_GROUPS = {
 
     TOOL_KIND = "AgenticToolKind",
     TOOL_ARGUMENT = "AgenticToolArgument",
+    DIMMED_BLOCK = "AgenticDimmedBlock",
     SEARCH_MATCH = "AgenticSearchMatch",
     GREP_PATH = "AgenticGrepPath",
     GREP_LINE_NR = "AgenticGrepLineNr",
@@ -108,6 +109,9 @@ function Theme.setup()
         -- Tool call header highlights
         { Theme.HL_GROUPS.TOOL_KIND, { link = "Function" } },
         { Theme.HL_GROUPS.TOOL_ARGUMENT, { link = "String" } },
+
+        -- Sidecar body dim (fetch/WebSearch/SubAgent output)
+        { Theme.HL_GROUPS.DIMMED_BLOCK, { link = "Comment" } },
 
         -- Search match highlight
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },

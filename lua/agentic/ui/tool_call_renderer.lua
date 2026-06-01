@@ -13,6 +13,7 @@ local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
 local NS_DIFF_HIGHLIGHTS =
     vim.api.nvim_create_namespace("agentic_diff_highlights")
 local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
+local NS_FOLDS = vim.api.nvim_create_namespace("agentic_tool_folds")
 
 --- @class agentic.ui.ToolCallRenderer
 local M = {}
@@ -21,6 +22,7 @@ M.NS_TOOL_BLOCKS = NS_TOOL_BLOCKS
 M.NS_DECORATIONS = NS_DECORATIONS
 M.NS_DIFF_HIGHLIGHTS = NS_DIFF_HIGHLIGHTS
 M.NS_STATUS = NS_STATUS
+M.NS_FOLDS = NS_FOLDS
 
 -- ---------------------------------------------------------------------------
 -- Helper functions
@@ -340,6 +342,8 @@ end
 --- @return string[] lines Array of lines to render
 --- @return agentic.ui.MessageWriter.HighlightRange[] highlight_ranges
 --- @return agentic.utils.Ansi.Span[][]|nil ansi_highlights Per-line ANSI highlight spans (execute blocks only)
+--- @return [integer, integer]|nil fold_range Body row range to fold, 0-indexed offsets within lines
+--- @return [integer, integer]|nil dim_range Body row range to dim with AgenticDimmedBlock, 0-indexed offsets within lines
 function M.prepare_block_lines(tool_call_block, wrap_width)
     local kind = tool_call_block.kind
     local argument = M.strip_kind_prefix(kind, tool_call_block.argument)
@@ -398,6 +402,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]
     local highlight_ranges = {}
+    --- @type [integer, integer]|nil
+    local fold_range
+    --- @type [integer, integer]|nil
+    local dim_range
 
     -- When a tool call fails, render the failure reason in place of
     -- kind-specific body/diff rendering. The summary a kind normally shows
@@ -422,15 +430,11 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     then
         local fence = safe_fence(failure_reason)
         table.insert(lines, fence .. "console")
-        -- 0 means "never fold" (matches the success path at line 898).
+        -- 0 means "never fold" (matches the success path).
         local exec_max_lines = kind == "execute"
                 and Config.tool_call_display.execute_max_lines
             or 0
-        local use_fold = exec_max_lines > 0
-            and #failure_reason > exec_max_lines
-        if use_fold then
-            table.insert(lines, "{{{")
-        end
+        local body_start_idx = #lines
         for _, reason_line in ipairs(failure_reason) do
             table.insert(lines, reason_line)
             if kind ~= "execute" then
@@ -439,8 +443,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 table.insert(highlight_ranges, range)
             end
         end
-        if use_fold then
-            table.insert(lines, "}}}")
+        local body_end_idx = #lines - 1
+        if exec_max_lines > 0 and #failure_reason > exec_max_lines then
+            fold_range = { body_start_idx, body_end_idx }
         end
         table.insert(lines, fence)
     elseif kind == "read" then
@@ -485,13 +490,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             -- headings from "--", emphasis from "*", etc.). Comment highlight
             -- is applied by the generic path in _apply_block_highlights which
             -- already skips ``` lines.
-            -- Add fold markers when body exceeds threshold.
             local use_fold = max_lines > 0 and count > max_lines
             local fence = safe_fence(body)
             table.insert(lines, fence .. "console")
-            if use_fold then
-                table.insert(lines, "{{{")
-            end
+            local body_start_idx = #lines
 
             -- Match highlighting strategy:
             -- 1. ANSI codes from grep --color (ideal — zero re-work). ACP
@@ -539,7 +541,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
 
             if use_fold then
-                table.insert(lines, "}}}")
+                fold_range = { body_start_idx, #lines - 1 }
             end
             table.insert(lines, fence)
         end
@@ -875,20 +877,20 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         table.insert(lines, fence)
     elseif kind == "fetch" or kind == "WebSearch" or kind == "SubAgent" then
         if tool_call_block.body then
-            -- Fetch/WebSearch/SubAgent body is informational text that the
-            -- agent wrote to itself. Wrap in a code fence to prevent markdown
-            -- parsing artefacts and always fold since users rarely need it.
-            -- The `markdown` info string + leading `{{{` fold marker is what
-            -- AgenticDimmedBlock (ftplugin/AgenticChat.lua) keys off to dim
-            -- sidecar content; markdown file diffs use the same fence but
-            -- never fold, so they stay un-dimmed.
+            -- Fetch/WebSearch/SubAgent body is informational text the agent
+            -- wrote to itself. Always fold (rarely needed by users) and dim
+            -- (visually de-emphasise as sidecar content).
             local wrapped =
                 TextWrap.wrap_prose(tool_call_block.body, wrap_width)
             local fence = safe_fence(wrapped)
             table.insert(lines, fence .. "markdown")
-            table.insert(lines, "{{{")
+            local body_start_idx = #lines
             vim.list_extend(lines, wrapped)
-            table.insert(lines, "}}}")
+            local body_end_idx = #lines - 1
+            if body_end_idx > body_start_idx then
+                fold_range = { body_start_idx, body_end_idx }
+            end
+            dim_range = { body_start_idx, body_end_idx }
             table.insert(lines, fence)
         end
     else
@@ -903,28 +905,24 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
             local fence = safe_fence(body)
             table.insert(lines, fence .. "console")
-            if use_fold then
-                table.insert(lines, "{{{")
-            end
+            local body_start_idx = #lines
             vim.list_extend(lines, body)
+            local body_end_idx = #lines - 1
             if use_fold then
-                table.insert(lines, "}}}")
+                fold_range = { body_start_idx, body_end_idx }
             end
             table.insert(lines, fence)
         end
     end
 
     -- Locate the execute body's line range within `lines`. Layout is:
-    --   ..., fence..console, [{{{], body, [}}}], fence
-    -- so step past the closing fence and optional fold marker.
+    --   ..., fence..console, body, fence
+    -- so step past the closing fence.
     local body_start_offset
     if kind == "execute" and tool_call_block.body then
         local body_count = #tool_call_block.body
         local i = #lines
         if lines[i] and lines[i]:match("^`+$") then
-            i = i - 1
-        end
-        if lines[i] == "}}}" then
             i = i - 1
         end
         body_start_offset = i - body_count
@@ -980,7 +978,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     table.insert(lines, "")
 
-    return lines, highlight_ranges, ansi_highlights
+    return lines, highlight_ranges, ansi_highlights, fold_range, dim_range
 end
 
 -- ---------------------------------------------------------------------------
@@ -1032,19 +1030,6 @@ function M.apply_block_highlights(
             end
         end
 
-        -- Skip a fold-open marker line ("{{{") that sits between the fence
-        -- and the actual body lines. ANSI spans are computed against body
-        -- content, not the marker.
-        local marker = vim.api.nvim_buf_get_lines(
-            bufnr,
-            body_start,
-            body_start + 1,
-            false
-        )[1]
-        if marker == "{{{" then
-            body_start = body_start + 1
-        end
-
         -- Execute blocks with ANSI codes get per-character colour highlights
         if ansi_highlights then
             Ansi.apply_highlights(
@@ -1055,9 +1040,9 @@ function M.apply_block_highlights(
             )
         else
             -- Apply Comment highlight for body lines outside code fences.
-            -- Content inside ```markdown fences is dimmed by treesitter via
-            -- AgenticDimmedBlock (ftplugin/AgenticChat.lua). Other fences
-            -- (zsh, console) keep their injected syntax highlights.
+            -- Sidecar markdown bodies (fetch/WebSearch/SubAgent) are dimmed by
+            -- a separate AgenticDimmedBlock extmark set in the writer. Other
+            -- fences (zsh, console) keep their injected syntax highlights.
             local in_fence = false
             for line_idx = body_start, end_row - 1 do
                 local line = vim.api.nvim_buf_get_lines(
@@ -1097,16 +1082,6 @@ function M.apply_block_highlights(
                 break
             end
         end
-        -- Skip a fold-open marker line ("{{{") between the fence and the body.
-        local marker = vim.api.nvim_buf_get_lines(
-            bufnr,
-            body_start,
-            body_start + 1,
-            false
-        )[1]
-        if marker == "{{{" then
-            body_start = body_start + 1
-        end
         Ansi.apply_highlights(
             bufnr,
             NS_DIFF_HIGHLIGHTS,
@@ -1139,41 +1114,6 @@ function M.apply_block_highlights(
         end
     end
 
-    -- Conceal fold markers ({{{ and }}}) embedded in code fence lines.
-    -- Treesitter is active on the chat buffer so vim syntax conceal rules
-    -- don't apply; extmark conceal works alongside treesitter.
-    for line_idx = start_row, end_row - 1 do
-        local line =
-            vim.api.nvim_buf_get_lines(bufnr, line_idx, line_idx + 1, false)[1]
-        if line then
-            local col = line:find("{{{", 1, true)
-            if col then
-                vim.api.nvim_buf_set_extmark(
-                    bufnr,
-                    NS_DECORATIONS,
-                    line_idx,
-                    col - 1,
-                    {
-                        end_col = col + 2,
-                        conceal = "",
-                    }
-                )
-            end
-            col = line:find("}}}", 1, true)
-            if col then
-                vim.api.nvim_buf_set_extmark(
-                    bufnr,
-                    NS_DECORATIONS,
-                    line_idx,
-                    col - 1,
-                    {
-                        end_col = col + 2,
-                        conceal = "",
-                    }
-                )
-            end
-        end
-    end
 end
 
 --- Cache of derived "clean" highlight groups: target capture name →
@@ -1473,6 +1413,52 @@ function M.render_decorations(bufnr, start_row, end_row)
         footer_line = end_row,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
     })
+end
+
+--- Register a fold extmark spanning a body range. Single-line ranges (where
+--- start == end) are rejected — a one-line fold is useless and the foldexpr
+--- rule table stays total without a special case.
+--- @param bufnr integer
+--- @param start_row integer Absolute buffer row (0-indexed)
+--- @param end_row integer Absolute buffer row (0-indexed), inclusive
+function M.set_fold_range(bufnr, start_row, end_row)
+    if end_row <= start_row then
+        return
+    end
+    vim.api.nvim_buf_set_extmark(bufnr, NS_FOLDS, start_row, 0, {
+        end_row = end_row,
+    })
+end
+
+--- Register a dim extmark spanning a body range. Lines are highlighted with
+--- AgenticDimmedBlock to de-emphasise sidecar content (fetch/WebSearch/SubAgent).
+--- Returns the extmark id so callers can track it for clearing alongside
+--- other decoration extmarks.
+--- @param bufnr integer
+--- @param start_row integer Absolute buffer row (0-indexed)
+--- @param end_row integer Absolute buffer row (0-indexed), inclusive
+--- @return integer extmark_id
+function M.set_dim_range(bufnr, start_row, end_row)
+    return vim.api.nvim_buf_set_extmark(bufnr, NS_DECORATIONS, start_row, 0, {
+        end_row = end_row + 1,
+        end_col = 0,
+        hl_group = "AgenticDimmedBlock",
+        hl_eol = true,
+    })
+end
+
+--- Clear all fold extmarks within a row range, inclusive.
+--- @param bufnr integer
+--- @param start_row integer
+--- @param end_row integer
+function M.clear_fold_range(bufnr, start_row, end_row)
+    pcall(
+        vim.api.nvim_buf_clear_namespace,
+        bufnr,
+        NS_FOLDS,
+        start_row,
+        end_row + 1
+    )
 end
 
 --- @param bufnr integer

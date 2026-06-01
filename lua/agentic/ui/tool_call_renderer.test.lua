@@ -344,34 +344,31 @@ describe("ToolCallRenderer", function()
             end
         end)
 
-        it("folds execute failure one line past the threshold", function()
-            local Config = require("agentic.config")
-            local reason = {}
-            for i = 1, Config.tool_call_display.execute_max_lines + 1 do
-                table.insert(reason, "err line " .. i)
-            end
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "tc-exec-3",
-                kind = "execute",
-                argument = "make build",
-                status = "failed",
-                failure_reason = reason,
-            }
+        it(
+            "emits no fold markers even past the fold threshold",
+            function()
+                local Config = require("agentic.config")
+                local reason = {}
+                for i = 1, Config.tool_call_display.execute_max_lines + 1 do
+                    table.insert(reason, "err line " .. i)
+                end
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-exec-3",
+                    kind = "execute",
+                    argument = "make build",
+                    status = "failed",
+                    failure_reason = reason,
+                }
 
-            local lines, _ = Renderer.prepare_block_lines(block, 0)
+                local lines, _ = Renderer.prepare_block_lines(block, 0)
 
-            local has_open, has_close = false, false
-            for _, line in ipairs(lines) do
-                if line == "{{{" then
-                    has_open = true
-                elseif line == "}}}" then
-                    has_close = true
+                for _, line in ipairs(lines) do
+                    assert.are_not.equal("{{{", line)
+                    assert.are_not.equal("}}}", line)
                 end
             end
-            assert.is_true(has_open)
-            assert.is_true(has_close)
-        end)
+        )
 
         it("keeps red error highlight on non-execute failures", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
@@ -415,6 +412,96 @@ describe("ToolCallRenderer", function()
                 end
             end
             assert.is_true(found)
+        end)
+    end)
+
+    describe("no fold markers in rendered output", function()
+        --- @param lines string[]
+        local function assert_no_markers(lines)
+            for _, line in ipairs(lines) do
+                assert.are_not.equal("{{{", line)
+                assert.are_not.equal("}}}", line)
+            end
+        end
+
+        it("execute body past the threshold has no markers", function()
+            local Config = require("agentic.config")
+            local body = {}
+            for i = 1, Config.tool_call_display.execute_max_lines + 5 do
+                table.insert(body, "out " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-fold",
+                kind = "execute",
+                argument = "ls",
+                status = "completed",
+                body = body,
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert_no_markers(lines)
+        end)
+
+        it("search body past the threshold has no markers", function()
+            local Config = require("agentic.config")
+            local body = {}
+            for i = 1, Config.tool_call_display.search_max_lines + 5 do
+                table.insert(body, "match " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "search-fold",
+                kind = "search",
+                argument = "rg foo",
+                status = "completed",
+                body = body,
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert_no_markers(lines)
+        end)
+
+        it("fetch body has no markers", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "fetch-fold",
+                kind = "fetch",
+                argument = "https://example.com prompt",
+                status = "completed",
+                body = { "page content line 1", "page content line 2" },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert_no_markers(lines)
+        end)
+
+        it("WebSearch body has no markers", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "websearch-fold",
+                kind = "WebSearch",
+                argument = "lua tables",
+                status = "completed",
+                body = { "result snippet" },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert_no_markers(lines)
+        end)
+
+        it("SubAgent body has no markers", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "subagent-fold",
+                kind = "SubAgent",
+                argument = "general-purpose",
+                status = "completed",
+                body = { "subagent output line" },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert_no_markers(lines)
         end)
     end)
 end)

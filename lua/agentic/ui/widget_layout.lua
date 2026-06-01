@@ -203,13 +203,14 @@ local function show_layout(params, position)
         winfixheight = is_bottom,
         winfixwidth = not is_bottom,
         signcolumn = "yes:1",
-        foldmethod = "marker",
+        foldmethod = "expr",
+        foldexpr = 'v:lua.require("agentic.ui.foldtext").foldexpr()',
         foldenable = true,
         foldlevel = 0,
         foldcolumn = "0",
         conceallevel = 2,
         concealcursor = "n",
-        foldtext = 'v:lua.require("agentic.ui.foldtext")()',
+        foldtext = 'v:lua.require("agentic.ui.foldtext").foldtext()',
     })
 
     -- Input window: right splits below chat with height, bottom splits right

@@ -73,6 +73,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
+--- @field _fold_recompute_gen? integer Monotonic generation for the debounced fold recompute. The deferred callback recomputes only when its captured generation is still current
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -791,6 +792,27 @@ function MessageWriter:_auto_scroll(bufnr)
     end)
 end
 
+--- Trailing-debounced wrapper around BufHelpers.recompute_folds.
+--- Re-assigning foldmethod=expr re-evaluates foldexpr for every line in the
+--- buffer (O(buffer length)), so calling it on every streaming body update
+--- saturates the main loop on long chats. A burst of updates collapses into
+--- one recompute, and the last update still recomputes after streaming stops.
+--- Folds appear up to the debounce interval late, which is invisible since
+--- they start closed.
+--- @param bufnr integer
+function MessageWriter:_schedule_fold_recompute(bufnr)
+    self._fold_recompute_gen = (self._fold_recompute_gen or 0) + 1
+    local gen = self._fold_recompute_gen
+    vim.defer_fn(function()
+        if gen ~= self._fold_recompute_gen then
+            return
+        end
+        if vim.api.nvim_buf_is_valid(bufnr) then
+            BufHelpers.recompute_folds(bufnr)
+        end
+    end, 80)
+end
+
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:write_tool_call_block(tool_call_block)
     -- A new tool call means any rejection boilerplate is over
@@ -825,7 +847,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         local kind = tool_call_block.kind
 
-        local lines, highlight_ranges, ansi_highlights =
+        local lines, highlight_ranges, ansi_highlights, fold_range, dim_range =
             Renderer.prepare_block_lines(
                 tool_call_block,
                 self:_get_wrap_width()
@@ -852,6 +874,23 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         tool_call_block.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, end_row)
+
+        if fold_range then
+            Renderer.set_fold_range(
+                bufnr,
+                start_row + fold_range[1],
+                start_row + fold_range[2]
+            )
+            self:_schedule_fold_recompute(bufnr)
+        end
+        if dim_range then
+            local dim_id = Renderer.set_dim_range(
+                bufnr,
+                start_row + dim_range[1],
+                start_row + dim_range[2]
+            )
+            table.insert(tool_call_block.decoration_extmark_ids, dim_id)
+        end
 
         -- right_gravity=true so the start moves past content inserted
         -- at the boundary by a preceding block's update_tool_call_block.
@@ -1009,7 +1048,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             return false
         end
 
-        local new_lines, highlight_ranges, ansi_highlights =
+        local new_lines, highlight_ranges, ansi_highlights, fold_range, dim_range =
             Renderer.prepare_block_lines(tracker, self:_get_wrap_width())
 
         -- Compare content lines excluding the footer — the buffer's footer
@@ -1036,6 +1075,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             tracker.decoration_extmark_ids
         )
         Renderer.clear_status_namespace(bufnr, start_row, old_end_row)
+        Renderer.clear_fold_range(bufnr, start_row, old_end_row)
 
         vim.api.nvim_buf_set_lines(
             bufnr,
@@ -1113,6 +1153,23 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         tracker.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, new_end_row)
+
+        if fold_range then
+            Renderer.set_fold_range(
+                bufnr,
+                start_row + fold_range[1],
+                start_row + fold_range[2]
+            )
+            self:_schedule_fold_recompute(bufnr)
+        end
+        if dim_range then
+            local dim_id = Renderer.set_dim_range(
+                bufnr,
+                start_row + dim_range[1],
+                start_row + dim_range[2]
+            )
+            table.insert(tracker.decoration_extmark_ids, dim_id)
+        end
 
         Renderer.apply_tool_header_syntax(bufnr, start_row, Renderer.NS_STATUS)
         Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)

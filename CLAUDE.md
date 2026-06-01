@@ -92,9 +92,9 @@ work regardless of `vim.bo.syntax` state — whether treesitter has disabled it
 `vim.bo.syntax = 'ON'`. This makes the highlighting robust against user
 configuration. Highlight group definitions are set in `theme.lua` via
 `nvim_set_hl`, which works independently of vim syntax state. The
-`AgenticDimmedBlock` group (dims ` ```markdown ` fences whose body starts
-with a `{{{` fold marker — i.e. sidecar content) is defined in
-`ftplugin/AgenticChat.lua` via a targeted treesitter query override.
+`AgenticDimmedBlock` group (dims sidecar bodies — fetch/WebSearch/SubAgent
+output) is applied via an extmark in the `NS_DECORATIONS` namespace, set by
+the writer at the same site that registers the fold range.
 
 Content comparison in `update_tool_call_block` excludes the footer line (which
 has status text in the buffer but `""` in `_prepare_block_lines` output), so
@@ -119,10 +119,10 @@ Sites that use `safe_fence`:
 | --- | --- | --- |
 | Execute command (argument) | `bash` | Command line(s) |
 | Search command (argument) | `bash` | Command line(s) |
-| Execute body (stdout/stderr) | `console` | Fold markers inside if `execute_max_lines` exceeded |
-| Search body | `console` | Fold markers inside if `search_max_lines` exceeded |
-| Fetch/WebSearch/SubAgent body | `markdown` | Always wrapped in fold markers (sidecar — see AgenticDimmedBlock note below) |
-| Diff content (edit/write) | language inferred from path | Markdown diffs use a normal ` ```markdown ` fence; dimming is gated on a `{{{` fold marker (see AgenticDimmedBlock note below) |
+| Execute body (stdout/stderr) | `console` | Folded via NS_FOLDS extmark when `execute_max_lines` exceeded |
+| Search body | `console` | Folded via NS_FOLDS extmark when `search_max_lines` exceeded |
+| Fetch/WebSearch/SubAgent body | `markdown` | Always folded + dimmed (sidecar — see AgenticDimmedBlock note above) |
+| Diff content (edit/write) | language inferred from path | No fold, no dim — file contents are the primary signal |
 | Failure reason | `console` | Replaces kind-specific body when `status == "failed"` |
 
 **Downstream code that consumes the fence must handle variable width.**
@@ -138,10 +138,10 @@ Search/grep results use two separate code fences in `_prepare_block_lines`:
 2. **Results body** — ` ```console ` fence around result lines
 
 The body always gets a `console` fence (prevents markdown parsing of `--`,
-`*`, etc.). Fold markers (`{{{`/`}}}`) go inside the console fence when line
-count exceeds `search_max_lines` (default 8). Never double-wrap — the body
-from the adapter is raw text lines (no fences), so the console fence is the
-only one.
+`*`, etc.). When line count exceeds `search_max_lines` (default 8), the
+writer registers a fold via `NS_FOLDS` extmark on the body rows — no
+markers in buffer text. Never double-wrap — the body from the adapter is
+raw text lines (no fences), so the console fence is the only one.
 
 Match highlighting: ANSI codes from the provider (preferred, rarely available)
 or regex fallback that extracts the pattern from the command string and
@@ -158,18 +158,28 @@ search-term highlights in the same `search_matches` array via the optional
 
 ## Tool call body folding
 
-Long tool call output uses vim-native folds (`foldmethod=marker`) instead of
-truncation. Fold markers (`{{{`/`}}}`) are embedded in the buffer content and
-concealed via extmarks (treesitter is active, so vim syntax `conceal` doesn't
-work). The chat buffer sets `foldlevel=0` so folds start closed.
+Long tool call output uses vim-native folds (`foldmethod=expr`) instead of
+truncation. The renderer never writes fold markers into buffer content.
+Instead the writer registers an `NS_FOLDS` extmark spanning the body row
+range, and `foldexpr` (in `lua/agentic/ui/foldtext.lua`) returns the fold
+state by querying that namespace. The fold state ignores buffer content,
+so coincidental `{{{` in search hits never trigger folds. The chat buffer
+sets `foldlevel=0` so folds start closed.
 
 Folding thresholds are configured per tool kind:
 - `search_max_lines` — search/grep tool output
-- `execute_max_lines` — shell command stdout
-- `fetch`/`WebSearch` — always folded (informational, rarely needed by users)
+- `execute_max_lines` — shell command stdout (and execute failure_reason)
+- `fetch`/`WebSearch`/`SubAgent` — always folded (informational, rarely
+  needed by users)
 
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
 Users toggle with standard fold commands (`zo`/`zc`/`za`).
+
+Diff blocks (edit/write/create) take the `already_has_diff` early-return
+path in `update_tool_call_block` on status updates. Content is frozen
+after the initial render, so any fold extmark set at initial write time
+must survive subsequent status-only updates. `NS_FOLDS` clears are
+therefore scoped to the rewrite branch, not the diff early-return.
 
 The chat buffer always has folds; any viewport, scroll, or cursor math in
 this codebase must be fold-aware (see neovim skill § "Common arithmetic
