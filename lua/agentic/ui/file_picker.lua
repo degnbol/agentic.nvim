@@ -327,6 +327,12 @@ FilePicker.GLOB_EXCLUDE_PATTERNS = {
     "%.pyc$",
     "%.swp$",
     "__pycache__/",
+    -- Python tool caches (gitignored by convention, not matched by %.cache/)
+    "%.ruff_cache/",
+    "%.mypy_cache/",
+    "%.pytest_cache/",
+    "%.tox/",
+    "%.hypothesis/",
     "dist/",
     "build/",
     "vendor/",
