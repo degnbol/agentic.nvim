@@ -3,12 +3,12 @@ local assert = require("tests.helpers.assert")
 
 describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     local ClaudeAgentACPAdapter
-    local ClaudeShared
+    local ClaudeUtils
 
     before_each(function()
         ClaudeAgentACPAdapter =
             require("agentic.acp.adapters.claude_agent_acp_adapter")
-        ClaudeShared = require("agentic.acp.adapters.claude_shared")
+        ClaudeUtils = require("agentic.acp.adapters.claude_utils")
     end)
 
     --- @return agentic.acp.ACPClient
@@ -18,7 +18,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
 
     describe("strip_console_fence", function()
         it("strips a ```console wrapper and reports it was fenced", function()
-            local inner, was_fenced = ClaudeShared.strip_console_fence({
+            local inner, was_fenced = ClaudeUtils.strip_console_fence({
                 "```console",
                 "line 01",
                 "line 02",
@@ -30,16 +30,16 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
 
         it("leaves unfenced content untouched and reports false", function()
             local inner, was_fenced =
-                ClaudeShared.strip_console_fence({ "plain", "text" })
+                ClaudeUtils.strip_console_fence({ "plain", "text" })
             assert.same({ "plain", "text" }, inner)
             assert.is_false(was_fenced)
         end)
 
         it("handles nil and too-short bodies", function()
-            local n, nf = ClaudeShared.strip_console_fence(nil)
+            local n, nf = ClaudeUtils.strip_console_fence(nil)
             assert.is_nil(n)
             assert.is_false(nf)
-            local s, sf = ClaudeShared.strip_console_fence({ "```console" })
+            local s, sf = ClaudeUtils.strip_console_fence({ "```console" })
             assert.same({ "```console" }, s)
             assert.is_false(sf)
         end)
