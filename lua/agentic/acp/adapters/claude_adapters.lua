@@ -1,4 +1,4 @@
---- Shared constants and helpers for Claude ACP adapters (claude_acp + claude_agent_acp).
+--- Constants and helpers for Claude ACP adapters (claude_acp + claude_agent_acp).
 local M = {}
 
 --- Mode-switching tools: maps ACP tool_call title to a short display label.
@@ -71,7 +71,7 @@ end
 
 --- Strip the ```console wrapper the bridge adds around Bash output. tools.js
 --- `toolUpdateFromToolResult` formats stdout/stderr as
---- `` `\`\`\`console\n${output}\n\`\`\`` ``, so the body arrives already fenced.
+--- `` `\`\`\`console\n${output}\n\`\`\` ``, so the body arrives already fenced.
 --- The chat renderer wraps the body in its own fence, so without stripping the
 --- output is double-fenced (an outer fence widened by `safe_fence` around the
 --- bridge's inner one). Returns the inner lines plus whether a fence was found,
