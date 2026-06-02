@@ -8,6 +8,10 @@ minor").
 
 ### Rendering
 
+- Apparently claude can run zsh, not always bash, and opencode defaults to zsh. This means the execute code block that is now the treesitter type `bash` should be `zsh` depending on the shell invocation from the adaptor. Since bash is using zsh treesitter this only makes a difference to which word is displayed in chat and is only visible with conceallevel=0.
+
+- cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
+
 - opencode full write of file shows no in-chat view of all the new text added to the file.
 
 - **Auto-continue queued messages not shown in chat**: when
@@ -197,12 +201,17 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 - **Background jobs**: see "Background processes window" under
   Session/workflow.
 
-**Blocked upstream or out of scope**
+**Worth doing**
 
-- **`/effort`**: claude-agent-acp 0.29.0 does not emit the `thought_level`
-  ConfigOption. Dispatch code is ready, unreachable until the bridge
-  changes. See `lua/agentic/acp/AGENTS.md §
-  "thought_level ConfigOption not emitted (claude-agent-acp)"`.
+- **`/effort`**: now unblocked. claude-agent-acp 0.39.0 emits the
+  `thought_level` ConfigOption (`id = "effort"`) when the current model
+  supports effort, and it is runtime-mutable via `session/set_config_option`.
+  The plugin already captures it into `AgentConfigOptions.thought_level`; a
+  selector reads `.options` and sends the chosen value. Provider-specific —
+  guard for bridges that don't emit it. See `lua/agentic/acp/AGENTS.md §
+  "thought_level (effort) ConfigOption — claude-agent-acp"`.
+
+**Blocked upstream or out of scope**
 
 - **`/permissions`**: no ACP surface for reading or writing persistent
   rules. Users edit `settings.json` directly.
@@ -435,9 +444,33 @@ Same applies to bash commands.
 Idea: if an edit fail, wrap the diff in folding markers to hide it. Similar could be done for failed bash commands.
 Both of these could be controlled by a threshold for min number of lines before a fold is warranted. Always folding could also be warranted, to clearly indicate that the hidden contents never happened. With a configurable threshold this could also be done by simply defaulting it to 0 (or 1).
 
+### Simpler chat
+
+Loading a skill looks like:
+````markdown
+### Skill
+`neovim`
+```console
+Launching skill: neovim
+```
+ ✔ completed
+````
+It seems it always says "Launching skill: " which is redundant. Could we simply say:
+````markdown
+### Skill
+`neovim`
+ ✔ completed
+````
+
 ## Folded Read block
 For reading parts of a file, e.g. a small number of lines, it could be nice to have a pre-folded block in the tool block to expand and see exactly the context claude read.
 We wouldn't want this if the whole file is read (since we can just <c-w>gf to it), and if it's a "large" number of lines it might be unnecessary bloat in the chat (would take longer to resume a session, bigger storage).
+
+## Agents don't understand handover
+
+When talking to one agent then switching the new one doesn't understand a change of model occured. Update: the models really have no idea who they are.
+I think this is usually not impportant. A model doesn't need to know who they are to do a task with some meta exceptions.
+We could consider adding a code comment or some other acp docs to point this out.
 
 ## Investigations
 

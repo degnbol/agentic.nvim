@@ -592,23 +592,21 @@ providers don't advertise them in `available_commands_update`):
   headers state (for external UI plugins via `AgenticHeadersChanged`), persists
   to the session JSON, and updates the buffer name. Resets on `/new`.
 
-### `thought_level` ConfigOption not emitted (claude-agent-acp)
+### `thought_level` (effort) ConfigOption — claude-agent-acp
 
-The ACP schema reserves `thought_level` as a `SessionConfigOptionCategory`
-alongside `mode` and `model`, and the Anthropic SDK exposes per-model effort
-capability (`low | medium | high | max`). But `claude-agent-acp` 0.29.0 does not
-construct a `thought_level` ConfigOption — `buildConfigOptions` in
-`dist/acp-agent.js:1250-1279` returns only `mode` and `model`.
+As of `claude-agent-acp` 0.39.0 the bridge emits a `thought_level` ConfigOption
+(`id = "effort"`), **conditional on the current model supporting effort**.
+It is runtime-mutable via the ACP `session/set_config_option` method and rebuilt
+on model switch — mirroring the TUI's `/effort`. Versions through 0.29.0 emitted
+only `mode` and `model`; the old `maxThinkingTokens` passthrough is obsolete.
 
 The plugin's `AgentConfigOptions:set_options` already dispatches on
-`category == "thought_level"` (`agent_config_options.lua:80-81`), so the moment
-the bridge starts emitting it no adapter changes are needed. A
-`/effort`-equivalent selector is blocked on that upstream change — building it
-now against `_meta.claudeCode.options.maxThinkingTokens` would only work at
-session creation, which diverges from the TUI's dynamic `/effort` and is not
-recommended. See
-`@.claude/skills/acp/references/claude-agent.md` § "ConfigOptions —
-`thought_level` not emitted".
+`category == "thought_level"` (`agent_config_options.lua:88-89`), so the option
+is captured into `self.thought_level`. A `/effort`-equivalent selector is now
+unblocked: it would read `self.thought_level.options` and send the chosen value
+via `session/set_config_option`. Provider-specific — non-Claude bridges may not
+emit it. See `@.claude/skills/acp/references/claude-agent.md` § "ConfigOptions —
+`thought_level` (effort)".
 
 ### Mode switch kind inconsistency (claude-agent-acp)
 
