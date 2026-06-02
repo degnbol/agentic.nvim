@@ -159,6 +159,15 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
         elseif not message.diff then
             message.body = self:extract_content_body(update)
         end
+
+        -- Lift description for execute tool calls
+        if
+            update.kind == "execute"
+            and update.rawInput
+            and update.rawInput.description
+        then
+            message.description = update.rawInput.description
+        end
     else
         if update.rawInput then
             if update.rawInput.newString then
@@ -196,7 +205,7 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
                 message.argument = update.rawInput.command
 
                 if update.rawInput.description then
-                    message.body = self:safe_split(update.rawInput.description)
+                    message.description = update.rawInput.description
                 end
             elseif update.rawInput.subagent_type then
                 message.argument = string.format(
