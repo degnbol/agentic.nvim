@@ -771,6 +771,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
             kind = tool_call.kind,
             status = tool_call.status,
             argument = tool_call.argument,
+            description = tool_call.description,
             body = tool_call.body,
             diff = tool_call.diff,
         }
@@ -1016,6 +1017,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         type = "tool_call",
         tool_call_id = tool_call_update.tool_call_id,
         status = tool_call_update.status,
+        description = tool_call_update.description,
         body = tool_call_update.body,
         diff = tool_call_update.diff,
     }

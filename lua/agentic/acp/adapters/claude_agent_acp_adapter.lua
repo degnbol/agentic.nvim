@@ -20,6 +20,34 @@ local ClaudeShared = require("agentic.acp.adapters.claude_shared")
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
+--- Separate a Bash tool call's description from its output. claude-agent-acp
+--- sends `input.description` as the initial tool_call content and wraps
+--- stdout/stderr in a ```console fence on completion (tools.js). Left alone,
+--- the description seeds the body and accumulates ahead of the output behind a
+--- "---" divider, and the renderer double-wraps the already-fenced output.
+--- Lift the description to a title field and reduce the body to the unfenced
+--- output, so the renderer shows the description as a heading and applies a
+--- single fence.
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param raw_input agentic.acp.ClaudeAgentRawInput|nil
+local function lift_execute_description(message, raw_input)
+    local desc = raw_input and raw_input.description
+    local stripped, was_fenced = ClaudeShared.strip_console_fence(message.body)
+    if was_fenced then
+        message.body = stripped
+    else
+        -- Unfenced content is the description echo, not output. Prefer the
+        -- explicit rawInput field, fall back to the echoed text.
+        if (not desc or desc == "") and message.body and #message.body > 0 then
+            desc = table.concat(message.body, "\n")
+        end
+        message.body = nil
+    end
+    if type(desc) == "string" and desc ~= "" then
+        message.description = desc
+    end
+end
+
 --- Intercept mode-switching tools at the initial tool_call level before the
 --- base class renders the body (which contains internal instructions).
 --- @protected
@@ -48,6 +76,20 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
     update.title = ClaudeShared.suppress_placeholder_title(update.title)
 
     ACPClient.__handle_tool_call(self, session_id, update)
+end
+
+--- Lift the Bash description out of the initial execute tool_call body. The
+--- base builds the message from `content`, which for Bash is the description
+--- (tools.js). See `lift_execute_description`.
+--- @protected
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @return agentic.ui.MessageWriter.ToolCallBlock message
+function ClaudeAgentACPAdapter:__build_tool_call_message(update)
+    local message = ACPClient.__build_tool_call_message(self, update)
+    if message.kind == "execute" then
+        lift_execute_description(message, update.rawInput)
+    end
+    return message
 end
 
 --- Build enriched update from rawInput fields that claude-agent-acp
@@ -159,6 +201,8 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             if rawInput.pattern then
                 message.search_pattern = rawInput.pattern
             end
+        elseif kind == "execute" then
+            lift_execute_description(message, rawInput)
         end
     end
 

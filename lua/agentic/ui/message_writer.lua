@@ -6,6 +6,9 @@ local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
 local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+--- Anchors a `*-fold` fence's opening line so a deferred close (chat window
+--- hidden at write time) lands on the right row after later edits shift it.
+local NS_FOLD_ANCHORS = vim.api.nvim_create_namespace("agentic_fold_anchors")
 
 --- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
 --- @param k string|nil
@@ -45,6 +48,7 @@ end
 --- @field search_pattern? string Regex pattern for highlighting matches in search output
 --- @field read_range? { offset: integer, limit?: integer } Line range for partial reads
 --- @field failure_reason? string[] Error message shown in place of kind-specific body when status == "failed" (e.g. hook-denial reason, tool error). Extracted from rawOutput, so no ``` fences.
+--- @field description? string Model-provided one-line summary of the call (e.g. a Bash command's `description`), rendered as a title line under the header. Distinct from body (the output) and argument (the command).
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -73,7 +77,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
---- @field _fold_recompute_gen? integer Monotonic generation for the debounced fold recompute. The deferred callback recomputes only when its captured generation is still current
+--- @field _pending_fold_closes integer[] Anchor extmark ids (NS_FOLD_ANCHORS) for `*-fold` fences written while no chat window was visible. Flushed (closed) by the BufWinEnter autocmd when the chat window reappears. Folds closed live (window visible) are not tracked here, so toggling the chat away and back never re-closes a fold the user opened.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -99,6 +103,7 @@ function MessageWriter:new(bufnr, status_animation)
         _prose_anchor_line = nil,
         _suppress_pin_release = false,
         _auto_scroll_paused = false,
+        _pending_fold_closes = {},
     }, self)
 
     -- Listen for user scrolls. Our own programmatic scrolls and buffer
@@ -112,6 +117,16 @@ function MessageWriter:new(bufnr, status_animation)
         buffer = bufnr,
         callback = function()
             instance:on_user_scroll()
+        end,
+    })
+
+    -- A fold written while the chat window was hidden never got its initial
+    -- close (fold state is window-local). Close those pending folds when the
+    -- chat window reappears.
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+        buffer = bufnr,
+        callback = function()
+            instance:flush_pending_fold_closes()
         end,
     })
 
@@ -792,25 +807,88 @@ function MessageWriter:_auto_scroll(bufnr)
     end)
 end
 
---- Trailing-debounced wrapper around BufHelpers.recompute_folds.
---- Re-assigning foldmethod=expr re-evaluates foldexpr for every line in the
---- buffer (O(buffer length)), so calling it on every streaming body update
---- saturates the main loop on long chats. A burst of updates collapses into
---- one recompute, and the last update still recomputes after streaming stops.
---- Folds appear up to the debounce interval late, which is invisible since
---- they start closed.
---- @param bufnr integer
-function MessageWriter:_schedule_fold_recompute(bufnr)
-    self._fold_recompute_gen = (self._fold_recompute_gen or 0) + 1
-    local gen = self._fold_recompute_gen
-    vim.defer_fn(function()
-        if gen ~= self._fold_recompute_gen then
-            return
+--- Find the first valid window currently displaying the chat buffer. Fold
+--- state is window-local, so closing a fold requires a window.
+--- @return integer|nil winid
+function MessageWriter:_chat_window()
+    for _, win in ipairs(vim.fn.win_findbuf(self.bufnr)) do
+        if vim.api.nvim_win_is_valid(win) then
+            return win
         end
-        if vim.api.nvim_buf_is_valid(bufnr) then
-            BufHelpers.recompute_folds(bufnr)
+    end
+    return nil
+end
+
+--- Mark the treesitter fold containing `anchor_row` to be closed. `anchor_row`
+--- is the first body line of a `*-fold` block — a level-1 row that belongs
+--- only to our fold (the fold spans `code_fence_content`, so the concealed
+--- fence delimiters are level 0, outside it). The one-level :foldclose hits
+--- exactly our block, leaving injected folds and other blocks untouched.
+--- Anchoring on a body line (not the delimiter) also keeps the closed fold's
+--- first screen row visible, so the `··· N lines ···` foldtext shows.
+---
+--- An anchor extmark tracks the row across later edits, and the close is
+--- deferred: treesitter recomputes fold levels on its own vim.schedule
+--- callback after the buffer edit, so an immediate :foldclose races it
+--- (E490 — verified). Scheduling our close after that callback (FIFO) lets
+--- the recompute land first. The deferred flush also covers the case where
+--- no chat window is visible yet — the anchor stays pending until BufWinEnter.
+--- @param anchor_row integer 0-indexed buffer row of the `*-fold` block's first body line
+function MessageWriter:_close_fold(anchor_row)
+    local id = vim.api.nvim_buf_set_extmark(
+        self.bufnr,
+        NS_FOLD_ANCHORS,
+        anchor_row,
+        0,
+        {}
+    )
+    table.insert(self._pending_fold_closes, id)
+    vim.schedule(function()
+        self:flush_pending_fold_closes()
+    end)
+end
+
+--- Close every pending `*-fold` block (see _close_fold). Resolves each anchor
+--- extmark's current row so edits since the write are accounted for. No-op
+--- when nothing is pending. When no chat window exists yet the anchors stay
+--- pending so the BufWinEnter autocmd retries once the window reappears.
+--- Closes are wrapped in `_suppress_pin_release` so the viewport shift from
+--- collapsing a fold is not mistaken for a user scroll.
+--- Public so the BufWinEnter autocmd closure can reach it without tripping
+--- LuaLS's invisible-field check.
+function MessageWriter:flush_pending_fold_closes()
+    if #self._pending_fold_closes == 0 then
+        return
+    end
+    if not vim.api.nvim_buf_is_valid(self.bufnr) then
+        self._pending_fold_closes = {}
+        return
+    end
+    local win = self:_chat_window()
+    if not win then
+        return
+    end
+
+    local prev_suppress = self._suppress_pin_release
+    self._suppress_pin_release = true
+    for _, id in ipairs(self._pending_fold_closes) do
+        local pos = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            NS_FOLD_ANCHORS,
+            id,
+            {}
+        )
+        if pos[1] then
+            -- A missing fold (E490, fence not yet foldable) is non-fatal —
+            -- the body just stays visible — so it is swallowed deliberately.
+            pcall(vim.api.nvim_win_call, win, function()
+                vim.cmd(string.format("%dfoldclose", pos[1] + 1))
+            end)
         end
-    end, 80)
+        pcall(vim.api.nvim_buf_del_extmark, self.bufnr, NS_FOLD_ANCHORS, id)
+    end
+    self._suppress_pin_release = prev_suppress
+    self._pending_fold_closes = {}
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
@@ -847,7 +925,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         local kind = tool_call_block.kind
 
-        local lines, highlight_ranges, ansi_highlights, fold_range, dim_range =
+        local lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range =
             Renderer.prepare_block_lines(
                 tool_call_block,
                 self:_get_wrap_width()
@@ -875,13 +953,8 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         tool_call_block.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, end_row)
 
-        if fold_range then
-            Renderer.set_fold_range(
-                bufnr,
-                start_row + fold_range[1],
-                start_row + fold_range[2]
-            )
-            self:_schedule_fold_recompute(bufnr)
+        if fold_anchor then
+            self:_close_fold(start_row + fold_anchor)
         end
         if dim_range then
             local dim_id = Renderer.set_dim_range(
@@ -911,7 +984,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
 
-        Renderer.apply_tool_header_syntax(bufnr, start_row, Renderer.NS_STATUS)
+        Renderer.apply_tool_header_syntax(
+            bufnr,
+            start_row,
+            Renderer.NS_STATUS,
+            tool_call_block.description
+        )
         Renderer.apply_status_footer(bufnr, end_row, tool_call_block.status)
 
         self:_append_lines({ "" })
@@ -1048,7 +1126,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             return false
         end
 
-        local new_lines, highlight_ranges, ansi_highlights, fold_range, dim_range =
+        local new_lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range =
             Renderer.prepare_block_lines(tracker, self:_get_wrap_width())
 
         -- Compare content lines excluding the footer — the buffer's footer
@@ -1075,7 +1153,6 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             tracker.decoration_extmark_ids
         )
         Renderer.clear_status_namespace(bufnr, start_row, old_end_row)
-        Renderer.clear_fold_range(bufnr, start_row, old_end_row)
 
         vim.api.nvim_buf_set_lines(
             bufnr,
@@ -1154,13 +1231,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         tracker.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, new_end_row)
 
-        if fold_range then
-            Renderer.set_fold_range(
-                bufnr,
-                start_row + fold_range[1],
-                start_row + fold_range[2]
-            )
-            self:_schedule_fold_recompute(bufnr)
+        if fold_anchor then
+            self:_close_fold(start_row + fold_anchor)
         end
         if dim_range then
             local dim_id = Renderer.set_dim_range(
@@ -1171,7 +1243,12 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             table.insert(tracker.decoration_extmark_ids, dim_id)
         end
 
-        Renderer.apply_tool_header_syntax(bufnr, start_row, Renderer.NS_STATUS)
+        Renderer.apply_tool_header_syntax(
+            bufnr,
+            start_row,
+            Renderer.NS_STATUS,
+            tracker.description
+        )
         Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)
     end)
 end

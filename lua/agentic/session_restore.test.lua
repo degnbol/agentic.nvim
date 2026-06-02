@@ -709,8 +709,8 @@ describe("SessionRestore", function()
             "replays a foldable search tool call without emitting marker lines",
             function()
                 -- Persisted bodies never contained markers, so a clean
-                -- re-render must register the fold via NS_FOLDS extmarks
-                -- rather than re-inserting markers into buffer content.
+                -- re-render must signal foldability via the `-fold` fence
+                -- suffix rather than re-inserting markers into buffer content.
                 local MessageWriter = require("agentic.ui.message_writer")
                 Config = require("agentic.config")
                 local original_display =
@@ -746,16 +746,16 @@ describe("SessionRestore", function()
                     assert.are_not.equal("}}}", line)
                 end
 
-                local NS_FOLDS =
-                    vim.api.nvim_create_namespace("agentic_tool_folds")
-                local marks = vim.api.nvim_buf_get_extmarks(
-                    bufnr,
-                    NS_FOLDS,
-                    0,
-                    -1,
-                    {}
-                )
-                assert.is_true(#marks > 0)
+                -- Foldability is encoded in the fence info string (the `-fold`
+                -- suffix the writer adds), not in buffer markers or extmarks.
+                local has_fold_fence = false
+                for _, line in ipairs(lines) do
+                    if line:match("^`+[%w]+%-fold$") then
+                        has_fold_fence = true
+                        break
+                    end
+                end
+                assert.is_true(has_fold_fence)
 
                 schedule_stub:revert()
                 Config.tool_call_display = original_display

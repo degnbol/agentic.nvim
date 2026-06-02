@@ -423,7 +423,37 @@ function Agentic.setup(opts)
 
     traps_set = true
 
-    vim.treesitter.language.register("markdown", "AgenticChat")
+    -- The chat buffer parses as a private `agentic` language (a clone of the
+    -- bundled markdown parser) so its folds query — queries/agentic/folds.scm,
+    -- which folds the writer's `*-fold` fences — is isolated from real markdown
+    -- buffers. `vim.treesitter.foldexpr()` resolves the parser via
+    -- get_parser(bufnr, nil), which infers the language from the filetype, so
+    -- the AgenticChat→agentic registration is what makes folding work. Without
+    -- it the chat would fall back to no parser and never fold.
+    local md_parser = vim.api.nvim_get_runtime_file("parser/markdown.so", false)[1]
+    local agentic_ok = md_parser ~= nil
+        and pcall(vim.treesitter.language.add, "agentic", {
+            path = md_parser,
+            symbol_name = "markdown",
+        })
+    if agentic_ok then
+        vim.treesitter.language.register("agentic", "AgenticChat")
+    else
+        -- markdown.so missing or unloadable: degrade to plain markdown
+        -- highlighting with no custom tool-call folds. chat_widget falls back
+        -- to starting the markdown parser to match this registration.
+        Logger.debug(
+            "agentic treesitter language unavailable, falling back to markdown"
+        )
+        vim.treesitter.language.register("markdown", "AgenticChat")
+    end
+
+    -- The input buffer is plain markdown (chat_widget starts the markdown
+    -- parser on it). Declare that mapping so anything resolving a buffer's
+    -- language by filetype — vim.treesitter.foldexpr, and the nvim config's
+    -- prose-abbrev FileType autocmd — sees markdown without the parser having
+    -- started yet.
+    vim.treesitter.language.register("markdown", "AgenticInput")
 
     -- zsh parser for bash is registered globally in nvim config (treesitter.lua).
     -- Fallback here in case agentic.nvim is used standalone without the config.

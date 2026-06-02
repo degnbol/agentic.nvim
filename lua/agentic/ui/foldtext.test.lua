@@ -5,7 +5,6 @@ describe("agentic.ui.foldtext", function()
     local bufnr
     --- @type number
     local winid
-    local NS_FOLDS
 
     before_each(function()
         bufnr = vim.api.nvim_create_buf(false, true)
@@ -16,13 +15,6 @@ describe("agentic.ui.foldtext", function()
             row = 0,
             col = 0,
         })
-        NS_FOLDS = vim.api.nvim_create_namespace("agentic_tool_folds")
-
-        vim.wo[winid].foldmethod = "expr"
-        vim.wo[winid].foldexpr =
-            'v:lua.require("agentic.ui.foldtext").foldexpr()'
-        vim.wo[winid].foldenable = true
-        vim.wo[winid].foldlevel = 0
     end)
 
     after_each(function()
@@ -43,106 +35,33 @@ describe("agentic.ui.foldtext", function()
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     end
 
-    describe("foldexpr", function()
-        it("creates a fold across an NS_FOLDS extmark range", function()
-            fill_lines(20)
-            -- Extmark rows 4..10 (0-indexed) cover lines 5..11 (1-indexed)
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                NS_FOLDS,
-                4,
-                0,
-                { end_row = 10 }
-            )
-            vim.cmd("normal! zX")
-
-            assert.equal(5, vim.fn.foldclosed(5))
-            assert.equal(5, vim.fn.foldclosed(8))
-            assert.equal(5, vim.fn.foldclosed(11))
-
-            assert.equal(-1, vim.fn.foldclosed(4))
-            assert.equal(-1, vim.fn.foldclosed(12))
-        end)
-
-        it(
-            "creates two distinct folds for adjacent NS_FOLDS extmarks",
-            function()
-                fill_lines(20)
-                -- A merged fold would have foldclosed(8) == 3 (first fold
-                -- start), two distinct folds give 8 for the second range.
-                vim.api.nvim_buf_set_extmark(
-                    bufnr,
-                    NS_FOLDS,
-                    2,
-                    0,
-                    { end_row = 5 }
-                )
-                vim.api.nvim_buf_set_extmark(
-                    bufnr,
-                    NS_FOLDS,
-                    7,
-                    0,
-                    { end_row = 10 }
-                )
-                vim.cmd("normal! zX")
-
-                assert.equal(3, vim.fn.foldclosed(3))
-                assert.equal(3, vim.fn.foldclosed(6))
-                assert.equal(8, vim.fn.foldclosed(8))
-                assert.equal(8, vim.fn.foldclosed(11))
-            end
-        )
-
-        it("does not fold rows without an NS_FOLDS extmark", function()
-            fill_lines(20)
-            vim.cmd("normal! zX")
-
-            for i = 1, 20 do
-                assert.equal(-1, vim.fn.foldclosed(i))
-            end
-        end)
-
-        it(
-            "does not fold lines that contain literal fold-marker text",
-            function()
-                -- The old foldmarker-based approach folded any line
-                -- containing `{{{`/`}}}` as a substring. NS_FOLDS-driven
-                -- folding ignores buffer content entirely.
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
-                    "search hit: {{{",
-                    "matched body line",
-                    "}}}",
-                    "another line",
-                })
-                vim.cmd("normal! zX")
-
-                for i = 1, 4 do
-                    assert.equal(-1, vim.fn.foldclosed(i))
-                end
-            end
-        )
-    end)
-
     describe("foldtext", function()
-        it("returns a Comment-styled line-count summary", function()
-            -- Drive foldtext through a real closed fold so vim.v.foldstart
-            -- and vim.v.foldend are set by vim, not mocked.
-            local foldtext = require("agentic.ui.foldtext").foldtext
+        it("summarises the inclusive line count of a closed fold", function()
+            -- foldtext reads vim.v.foldstart/foldend, which vim only sets while
+            -- rendering a closed fold. foldtextresult() evaluates the window's
+            -- 'foldtext' with those set, so it exercises the real arithmetic
+            -- (a direct call leaves the v: vars unset). The fold source is
+            -- irrelevant — a manual fold stands in for the runtime treesitter
+            -- fold. 5,11fold spans 7 inclusive lines (foldend - foldstart + 1),
+            -- matching the body-only treesitter fold's inclusive count.
             fill_lines(20)
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                NS_FOLDS,
-                4,
-                0,
-                { end_row = 10 }
-            )
-            vim.cmd("normal! zX")
-            vim.fn.cursor(5, 1)
+            vim.wo[winid].foldmethod = "manual"
+            vim.wo[winid].foldenable = true
+            vim.wo[winid].foldtext =
+                'v:lua.require("agentic.ui.foldtext").foldtext()'
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("5,11fold")
+            end)
 
-            local result = vim.api.nvim_win_call(winid, foldtext)
-            assert.is_table(result)
-            assert.equal("Comment", result[1][2])
-            assert.is_not_nil(result[1][1]:match("%d+ lines"))
+            local text = vim.api.nvim_win_call(winid, function()
+                return vim.fn.foldtextresult(5)
+            end)
+            assert.is_not_nil(text:match("··· 7 lines ···"))
+
+            -- The highlight group is fixed regardless of the v: vars, so a
+            -- direct call covers it.
+            local chunks = require("agentic.ui.foldtext").foldtext()
+            assert.equal("Comment", chunks[1][2])
         end)
     end)
 end)

@@ -948,7 +948,12 @@ function ChatWidget:_create_buf_nrs()
         modifiable = true,
     })
 
-    pcall(vim.treesitter.start, chat, "markdown")
+    -- Chat parses as the private `agentic` language so its folds query is
+    -- isolated from real markdown buffers (see init.lua). Fall back to markdown
+    -- if the agentic language could not be registered.
+    if not pcall(vim.treesitter.start, chat, "agentic") then
+        pcall(vim.treesitter.start, chat, "markdown")
+    end
     pcall(vim.treesitter.start, todos, "markdown")
     pcall(vim.treesitter.start, code, "markdown")
     pcall(vim.treesitter.start, files, "markdown")

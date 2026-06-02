@@ -69,4 +69,27 @@ function M.suppress_placeholder_title(title)
     return title
 end
 
+--- Strip the ```console wrapper the bridge adds around Bash output. tools.js
+--- `toolUpdateFromToolResult` formats stdout/stderr as
+--- `` `\`\`\`console\n${output}\n\`\`\`` ``, so the body arrives already fenced.
+--- The chat renderer wraps the body in its own fence, so without stripping the
+--- output is double-fenced (an outer fence widened by `safe_fence` around the
+--- bridge's inner one). Returns the inner lines plus whether a fence was found,
+--- so callers can tell bridge-fenced output apart from the unfenced description
+--- echo the initial tool_call carries.
+--- @param body string[]|nil
+--- @return string[]|nil inner
+--- @return boolean was_fenced
+function M.strip_console_fence(body)
+    if
+        body
+        and #body >= 2
+        and body[1]:match("^```%a*$")
+        and body[#body]:match("^```$")
+    then
+        return vim.list_slice(body, 2, #body - 1), true
+    end
+    return body, false
+end
+
 return M

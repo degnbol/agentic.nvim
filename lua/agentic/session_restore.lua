@@ -354,6 +354,7 @@ function SessionRestore.replay_messages(writer, messages)
                 kind = msg.kind,
                 argument = msg.argument or "",
                 status = msg.status,
+                description = msg.description,
                 body = msg.body,
                 diff = msg.diff,
             }

@@ -94,7 +94,7 @@ configuration. Highlight group definitions are set in `theme.lua` via
 `nvim_set_hl`, which works independently of vim syntax state. The
 `AgenticDimmedBlock` group (dims sidecar bodies — fetch/WebSearch/SubAgent
 output) is applied via an extmark in the `NS_DECORATIONS` namespace, set by
-the writer at the same site that registers the fold range.
+the writer at the same site that marks the body foldable.
 
 Content comparison in `update_tool_call_block` excludes the footer line (which
 has status text in the buffer but `""` in `_prepare_block_lines` output), so
@@ -119,10 +119,10 @@ Sites that use `safe_fence`:
 | --- | --- | --- |
 | Execute command (argument) | `bash` | Command line(s) |
 | Search command (argument) | `bash` | Command line(s) |
-| Execute body (stdout/stderr) | `console` | Folded via NS_FOLDS extmark when `execute_max_lines` exceeded |
-| Search body | `console` | Folded via NS_FOLDS extmark when `search_max_lines` exceeded |
-| Fetch/WebSearch/SubAgent body | `markdown` | Always folded + dimmed (sidecar — see AgenticDimmedBlock note above) |
-| Diff content (edit/write) | language inferred from path | No fold, no dim — file contents are the primary signal |
+| Execute body (stdout/stderr) | `console`, or `console-fold` when `execute_max_lines` exceeded | The `-fold` suffix is the fold signal (see Tool call body folding). claude-agent-acp pre-wraps output in its own ` ```console ` fence — `prepare_block_lines` unwraps an already-fenced execute body before wrapping, so the renderer never double-wraps (see @lua/agentic/acp/AGENTS.md § Execute tool call rendering) |
+| Search body | `console`, or `console-fold` when `search_max_lines` exceeded | Same `-fold` mechanism |
+| Fetch/WebSearch/SubAgent body | `markdown-fold` (multi-line), else `markdown` | Always folded + dimmed (sidecar — see AgenticDimmedBlock note above) |
+| Diff content (edit/write) | language inferred from path, `-fold` suffix stripped | No fold, no dim — file contents are the primary signal |
 | Failure reason | `console` | Replaces kind-specific body when `status == "failed"` |
 
 **Downstream code that consumes the fence must handle variable width.**
@@ -139,7 +139,7 @@ Search/grep results use two separate code fences in `_prepare_block_lines`:
 
 The body always gets a `console` fence (prevents markdown parsing of `--`,
 `*`, etc.). When line count exceeds `search_max_lines` (default 8), the
-writer registers a fold via `NS_FOLDS` extmark on the body rows — no
+fence becomes `console-fold` so the treesitter folds query folds it — no
 markers in buffer text. Never double-wrap — the body from the adapter is
 raw text lines (no fences), so the console fence is the only one.
 
@@ -158,28 +158,56 @@ search-term highlights in the same `search_matches` array via the optional
 
 ## Tool call body folding
 
-Long tool call output uses vim-native folds (`foldmethod=expr`) instead of
-truncation. The renderer never writes fold markers into buffer content.
-Instead the writer registers an `NS_FOLDS` extmark spanning the body row
-range, and `foldexpr` (in `lua/agentic/ui/foldtext.lua`) returns the fold
-state by querying that namespace. The fold state ignores buffer content,
-so coincidental `{{{` in search hits never trigger folds. The chat buffer
-sets `foldlevel=0` so folds start closed.
+Long tool call output uses the built-in `vim.treesitter.foldexpr()` instead
+of truncation, driven by a private treesitter language. The chat keeps
+filetype `AgenticChat` but parses as language `agentic` — a clone of the
+bundled markdown parser registered in `init.lua`
+(`language.add` + `language.register("agentic", "AgenticChat")`). That keeps
+its `queries/agentic/folds.scm` isolated from real markdown buffers. The
+register is what makes folding work: `vim.treesitter.foldexpr()` resolves the
+parser via `get_parser(bufnr, nil)`, which infers the language from the
+filetype.
+
+`folds.scm` folds the **body** (`code_fence_content`) of fenced code blocks
+whose info string carries a `-fold` suffix — not the whole `fenced_code_block`.
+The fence delimiters carry `conceal_lines` metadata (markdown highlights query),
+so a fold whose first line is the opening delimiter renders zero-height when
+closed, hiding the foldtext. Folding the body keeps the fold's first line on
+visible content. The threshold policy stays in the writer
+(`prepare_block_lines`), which appends `-fold` to the base language
+(`console-fold`, `markdown-fold`) when a body is foldable and returns the
+0-indexed offset of the **first body line** as `fold_anchor`.
+`queries/agentic/injections.scm` strips the suffix before resolving the
+injected parser, so sidecar markdown keeps its highlighting and plain fences
+are unaffected.
 
 Folding thresholds are configured per tool kind:
 - `search_max_lines` — search/grep tool output
 - `execute_max_lines` — shell command stdout (and execute failure_reason)
-- `fetch`/`WebSearch`/`SubAgent` — always folded (informational, rarely
-  needed by users)
+- `fetch`/`WebSearch`/`SubAgent` — folded whenever the body is multi-line
+  (informational, rarely needed by users)
+
+Folds start **open**: the chat window inherits the global `foldlevel` (99) —
+the per-window `foldlevel = 0` is gone, since it would also close injected
+folds inside non-`-fold` fences (commands, diffs). The writer instead closes
+**only its own** blocks imperatively, via `MessageWriter:_close_fold`. That
+issues `:{line}foldclose` at the first body line (a level-1 row belonging only
+to our fold, so a one-level close never hits a nested injected fold — the
+concealed delimiters are level 0, outside it). The
+close is **deferred** through `vim.schedule`: treesitter recomputes fold
+levels on its own scheduled callback after a buffer edit, so an immediate
+`:foldclose` races it (E490). Running on a later tick (FIFO) lets the
+recompute land first. An anchor extmark (`NS_FOLD_ANCHORS`) tracks the row, so
+a fold written while the chat window is hidden is closed on the next
+`BufWinEnter` via `flush_pending_fold_closes`. Per-block close means opening
+one block's fold while another streams can never snap the first shut (the
+removed `recompute_folds` re-ran foldexpr for the whole buffer and did exactly
+that).
 
 `lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
-Users toggle with standard fold commands (`zo`/`zc`/`za`).
-
-Diff blocks (edit/write/create) take the `already_has_diff` early-return
-path in `update_tool_call_block` on status updates. Content is frozen
-after the initial render, so any fold extmark set at initial write time
-must survive subsequent status-only updates. `NS_FOLDS` clears are
-therefore scoped to the rewrite branch, not the diff early-return.
+Users toggle with standard fold commands (`zo`/`zc`/`za`). Injected-language
+folds (a `def` inside a diff, etc.) now also exist and are user-controllable —
+a feature of using the real treesitter foldexpr — and stay open.
 
 The chat buffer always has folds; any viewport, scroll, or cursor math in
 this codebase must be fold-aware (see neovim skill § "Common arithmetic

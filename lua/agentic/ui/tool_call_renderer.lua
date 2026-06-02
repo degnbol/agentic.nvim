@@ -13,7 +13,6 @@ local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
 local NS_DIFF_HIGHLIGHTS =
     vim.api.nvim_create_namespace("agentic_diff_highlights")
 local NS_STATUS = vim.api.nvim_create_namespace("agentic_status_footer")
-local NS_FOLDS = vim.api.nvim_create_namespace("agentic_tool_folds")
 
 --- @class agentic.ui.ToolCallRenderer
 local M = {}
@@ -22,7 +21,6 @@ M.NS_TOOL_BLOCKS = NS_TOOL_BLOCKS
 M.NS_DECORATIONS = NS_DECORATIONS
 M.NS_DIFF_HIGHLIGHTS = NS_DIFF_HIGHLIGHTS
 M.NS_STATUS = NS_STATUS
-M.NS_FOLDS = NS_FOLDS
 
 -- ---------------------------------------------------------------------------
 -- Helper functions
@@ -342,11 +340,32 @@ end
 --- @return string[] lines Array of lines to render
 --- @return agentic.ui.MessageWriter.HighlightRange[] highlight_ranges
 --- @return agentic.utils.Ansi.Span[][]|nil ansi_highlights Per-line ANSI highlight spans (execute blocks only)
---- @return [integer, integer]|nil fold_range Body row range to fold, 0-indexed offsets within lines
+--- @return integer|nil fold_anchor 0-indexed offset within lines of the first body line of a `*-fold` fence — a line inside the fold (the fold spans `code_fence_content`, so the concealed fence delimiter is outside it). The writer closes the fold at this line via :foldclose. nil when the block is not foldable.
 --- @return [integer, integer]|nil dim_range Body row range to dim with AgenticDimmedBlock, 0-indexed offsets within lines
 function M.prepare_block_lines(tool_call_block, wrap_width)
     local kind = tool_call_block.kind
     local argument = M.strip_kind_prefix(kind, tool_call_block.argument)
+
+    -- This function wraps the body in a code fence, so a body that is already a
+    -- single fenced block must be unwrapped first or it renders double-fenced
+    -- (an outer fence widened by safe_fence around the inner one). The
+    -- claude-agent-acp adapter normally strips its bridge-added ```console
+    -- wrapper at the source, but a body can still arrive fenced — a stale
+    -- adapter instance after a hot-reload, or another provider that pre-fences.
+    -- Unwrapping here (idempotent) makes single-wrapping a property of the
+    -- renderer rather than a promise each adapter must keep. Mutates in place so
+    -- the ANSI/grep offset consumers below see the same body.
+    if kind == "execute" then
+        local body = tool_call_block.body
+        if
+            body
+            and #body >= 2
+            and body[1]:match("^`+%a*$")
+            and body[#body]:match("^`+$")
+        then
+            tool_call_block.body = vim.list_slice(body, 2, #body - 1)
+        end
+    end
 
     -- For read blocks, strip a trailing "(N - M)" range from the argument
     -- (often baked into the ACP title) — it belongs on the info line, not here.
@@ -367,7 +386,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
         local fence = safe_fence(cmd_lines)
-        lines = { header, fence .. "bash" }
+        lines = { header }
+        -- Model-provided description renders as a title line above the command.
+        local description = tool_call_block.description
+        if description and description ~= "" then
+            vim.list_extend(
+                lines,
+                vim.split(description, "\n", { plain = true })
+            )
+        end
+        table.insert(lines, fence .. "bash")
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)
     elseif kind == "search" then
@@ -402,8 +430,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]
     local highlight_ranges = {}
-    --- @type [integer, integer]|nil
-    local fold_range
+    --- @type integer|nil
+    local fold_anchor
     --- @type [integer, integer]|nil
     local dim_range
 
@@ -429,12 +457,17 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         and #failure_reason > 0
     then
         local fence = safe_fence(failure_reason)
-        table.insert(lines, fence .. "console")
         -- 0 means "never fold" (matches the success path).
         local exec_max_lines = kind == "execute"
                 and Config.tool_call_display.execute_max_lines
             or 0
-        local body_start_idx = #lines
+        local use_fold = exec_max_lines > 0 and #failure_reason > exec_max_lines
+        table.insert(lines, fence .. (use_fold and "console-fold" or "console"))
+        if use_fold then
+            -- First body line (the fold spans code_fence_content, not the
+            -- conceal_lines-hidden delimiters), inserted next.
+            fold_anchor = #lines
+        end
         for _, reason_line in ipairs(failure_reason) do
             table.insert(lines, reason_line)
             if kind ~= "execute" then
@@ -442,10 +475,6 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 local range = { type = "error", line_index = #lines - 1 }
                 table.insert(highlight_ranges, range)
             end
-        end
-        local body_end_idx = #lines - 1
-        if exec_max_lines > 0 and #failure_reason > exec_max_lines then
-            fold_range = { body_start_idx, body_end_idx }
         end
         table.insert(lines, fence)
     elseif kind == "read" then
@@ -492,8 +521,14 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             -- already skips ``` lines.
             local use_fold = max_lines > 0 and count > max_lines
             local fence = safe_fence(body)
-            table.insert(lines, fence .. "console")
-            local body_start_idx = #lines
+            table.insert(
+                lines,
+                fence .. (use_fold and "console-fold" or "console")
+            )
+            if use_fold then
+                -- First body line (fold spans code_fence_content), next.
+                fold_anchor = #lines
+            end
 
             -- Match highlighting strategy:
             -- 1. ANSI codes from grep --color (ideal — zero re-work). ACP
@@ -540,9 +575,6 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 end
             end
 
-            if use_fold then
-                fold_range = { body_start_idx, #lines - 1 }
-            end
             table.insert(lines, fence)
         end
     elseif tool_call_block.diff then
@@ -561,7 +593,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             tool_call_block.cached_diff_blocks = diff_blocks
         end
 
-        local lang = Theme.get_language_from_path(argument)
+        -- The folds query keys on a `-fold` info-string suffix the writer
+        -- adds to mark foldable bodies. Diff fences are never folded, but the
+        -- inferred language is `lang_map[ext] or ext` (theme.lua), so a file
+        -- named `foo.x-fold` would otherwise emit a fence ending in `-fold`
+        -- and fold a diff the user needs to see. Strip the suffix so the
+        -- `-fold$` predicate cannot collide with a diff fence.
+        local lang = Theme.get_language_from_path(argument):gsub("%-fold$", "")
         local wrap_diff_prose = lang == "md" or lang == "markdown"
 
         local fence_content = {}
@@ -883,13 +921,18 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local wrapped =
                 TextWrap.wrap_prose(tool_call_block.body, wrap_width)
             local fence = safe_fence(wrapped)
-            table.insert(lines, fence .. "markdown")
+            local use_fold = #wrapped > 1
+            table.insert(
+                lines,
+                fence .. (use_fold and "markdown-fold" or "markdown")
+            )
             local body_start_idx = #lines
+            if use_fold then
+                -- First body line (fold spans code_fence_content).
+                fold_anchor = body_start_idx
+            end
             vim.list_extend(lines, wrapped)
             local body_end_idx = #lines - 1
-            if body_end_idx > body_start_idx then
-                fold_range = { body_start_idx, body_end_idx }
-            end
             dim_range = { body_start_idx, body_end_idx }
             table.insert(lines, fence)
         end
@@ -904,13 +947,15 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local use_fold = max_lines > 0 and count > max_lines
 
             local fence = safe_fence(body)
-            table.insert(lines, fence .. "console")
-            local body_start_idx = #lines
-            vim.list_extend(lines, body)
-            local body_end_idx = #lines - 1
+            table.insert(
+                lines,
+                fence .. (use_fold and "console-fold" or "console")
+            )
             if use_fold then
-                fold_range = { body_start_idx, body_end_idx }
+                -- First body line (fold spans code_fence_content), next.
+                fold_anchor = #lines
             end
+            vim.list_extend(lines, body)
             table.insert(lines, fence)
         end
     end
@@ -978,7 +1023,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     table.insert(lines, "")
 
-    return lines, highlight_ranges, ansi_highlights, fold_range, dim_range
+    return lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range
 end
 
 -- ---------------------------------------------------------------------------
@@ -1301,15 +1346,16 @@ end
 
 --- Apply syntax highlighting to a tool call header line.
 --- Header format: "### Kind" — highlights the kind portion with TOOL_KIND.
---- The argument (if any) is on the next line as `` `argument` `` and gets
---- TOOL_ARGUMENT highlight.
+--- When `description` is given (execute blocks), the lines directly under the
+--- header are the description title and get a Comment highlight. Otherwise the
+--- next line is `` `argument` `` and gets TOOL_ARGUMENT highlight.
 --- @param bufnr integer
 --- @param line_row integer 0-indexed row of the "### Kind" line
 --- @param ns integer Namespace to use for extmarks
-function M.apply_tool_header_syntax(bufnr, line_row, ns)
-    local lines =
-        vim.api.nvim_buf_get_lines(bufnr, line_row, line_row + 2, false)
-    local line = lines[1]
+--- @param description? string Title rendered under the header (execute only)
+function M.apply_tool_header_syntax(bufnr, line_row, ns, description)
+    local line =
+        vim.api.nvim_buf_get_lines(bufnr, line_row, line_row + 1, false)[1]
     if not line then
         return
     end
@@ -1324,8 +1370,27 @@ function M.apply_tool_header_syntax(bufnr, line_row, ns)
         })
     end
 
+    if description and description ~= "" then
+        -- Title lines sit at line_row+1 .. line_row+n, before the command fence.
+        local n = #vim.split(description, "\n", { plain = true })
+        for i = 1, n do
+            local row = line_row + i
+            local dline =
+                vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+            if dline and #dline > 0 then
+                vim.api.nvim_buf_set_extmark(bufnr, ns, row, 0, {
+                    end_col = #dline,
+                    hl_group = "Comment",
+                    priority = 200,
+                })
+            end
+        end
+        return
+    end
+
     -- Next line: "`argument`" — highlight the argument text inside backticks
-    local arg_line = lines[2]
+    local arg_line =
+        vim.api.nvim_buf_get_lines(bufnr, line_row + 1, line_row + 2, false)[1]
     if arg_line then
         local bt_start = arg_line:find("`")
         if bt_start then
@@ -1415,21 +1480,6 @@ function M.render_decorations(bufnr, start_row, end_row)
     })
 end
 
---- Register a fold extmark spanning a body range. Single-line ranges (where
---- start == end) are rejected — a one-line fold is useless and the foldexpr
---- rule table stays total without a special case.
---- @param bufnr integer
---- @param start_row integer Absolute buffer row (0-indexed)
---- @param end_row integer Absolute buffer row (0-indexed), inclusive
-function M.set_fold_range(bufnr, start_row, end_row)
-    if end_row <= start_row then
-        return
-    end
-    vim.api.nvim_buf_set_extmark(bufnr, NS_FOLDS, start_row, 0, {
-        end_row = end_row,
-    })
-end
-
 --- Register a dim extmark spanning a body range. Lines are highlighted with
 --- AgenticDimmedBlock to de-emphasise sidecar content (fetch/WebSearch/SubAgent).
 --- Returns the extmark id so callers can track it for clearing alongside
@@ -1447,19 +1497,6 @@ function M.set_dim_range(bufnr, start_row, end_row)
     })
 end
 
---- Clear all fold extmarks within a row range, inclusive.
---- @param bufnr integer
---- @param start_row integer
---- @param end_row integer
-function M.clear_fold_range(bufnr, start_row, end_row)
-    pcall(
-        vim.api.nvim_buf_clear_namespace,
-        bufnr,
-        NS_FOLDS,
-        start_row,
-        end_row + 1
-    )
-end
 
 --- @param bufnr integer
 --- @param start_row integer

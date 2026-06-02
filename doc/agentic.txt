@@ -575,7 +575,7 @@ Rendering ~
 - Grep / search output colouring: file paths, line numbers, separators,
   and match highlights.
 - Diff preview for Edit tool calls with hunk navigation (`]c` / `[c`).
-- Fold markers for long tool output, toggleable with `zo` / `zc` / `za`.
+- Treesitter folding for long tool output, toggleable with `zo` / `zc` / `za`.
 - Sign-column decorations on tool-call blocks.
 - Slash-command and `@`-mention syntax highlighting in input and chat.
 

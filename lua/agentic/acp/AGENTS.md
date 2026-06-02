@@ -164,10 +164,39 @@ default, configurable via `tool_call_display.execute_formatter`). If the
 formatter is not installed or errors, a built-in fallback splits long single-line
 commands at top-level shell operators (&&, ||, ;, |).
 
+### Description and output separation (claude-agent-acp)
+
+The bridge sends a Bash call's `input.description` as the **initial tool_call
+content**, and wraps the command output in a ` ```console ` fence on completion
+(`tools.js` `toolInfoFromToolUse` / `toolUpdateFromToolResult` — the fence is a
+template literal `` `\`\`\`console\n${output}\n\`\`\`` ``, so it does not show up
+in a literal-backtick grep). Two consequences the adapter fixes
+(`lift_execute_description` in `claude_agent_acp_adapter.lua`):
+
+1. **Description is lifted to a title.** Without intervention the description
+   seeds the body and accumulates ahead of the output behind a `---` divider
+   (see body-accumulation in `update_tool_call_block`). The adapter moves it to
+   `ToolCallBase.description`, which the renderer prints as a Comment-highlighted
+   line directly under `### Execute`, above the ` ```bash ` command fence.
+2. **The bridge's console fence is stripped.** `ClaudeShared.strip_console_fence`
+   removes the ` ```console … ``` ` wrapper at the source. Without it `safe_fence`
+   widens the outer fence to four backticks around the bridge's inner three,
+   double-wrapping the output. `prepare_block_lines` also unwraps an
+   already-fenced execute body as a final guard (idempotent), so single-wrapping
+   is a property of the renderer — it survives a stale adapter instance after a
+   hot-reload, or another provider that pre-fences.
+
+The fence/non-fence distinction also separates the two payloads: claude Bash
+output is always fenced, so unfenced execute content is the description echo and
+is dropped from the body (the description is read from `rawInput.description`).
+
 **Requirements for injection to work:**
 
-- `vim.treesitter.start(chat_bufnr, "markdown")` must be called on the chat
-  buffer (done in `ChatWidget:_create_buf_nrs`)
+- `vim.treesitter.start(chat_bufnr, "agentic")` must be called on the chat
+  buffer (done in `ChatWidget:_create_buf_nrs`; `agentic` is a markdown-parser
+  clone whose `injections.scm` inherits markdown, so bash/zsh injection still
+  fires — see the folding note in the project CLAUDE.md). Falls back to
+  `markdown` if the `agentic` language could not be registered.
 - The zsh treesitter parser must be installed (bash is aliased to zsh via
   `vim.treesitter.language.register("zsh", "bash")` in `init.lua` as fallback)
 - The `_apply_block_highlights` Comment extmarks skip the code fence lines to
