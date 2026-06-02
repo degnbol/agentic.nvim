@@ -10,12 +10,16 @@ internals — not the ACP protocol itself (see SKILL.md for that).
 
 ## Source locations
 
-- **claude-agent-acp bridge** (npm install, readable JS):
-  `/opt/homebrew/lib/node_modules/@zed-industries/claude-agent-acp/dist/acp-agent.js`.
-  Package renamed to `@agentclientprotocol/claude-agent-acp` from v0.24+.
-- **claude-agent-sdk** is bundled inside the bridge — same path,
-  `dist/` subtree. The SDK's own npm package
-  (`@anthropic-ai/claude-agent-sdk`) is at `node_modules/@anthropic-ai/`.
+- **claude-agent-acp bridge** (npm install, readable JS): resolve the install
+  prefix with `realpath "$(command -v claude-agent-acp)"` — never `find`. The
+  bin is a thin `dist/index.js` wrapper; the implementation lives next to it in
+  `dist/acp-agent.js` (the file all `acp-agent.js:NNN` references below point
+  at), alongside `lib.js`, `settings.js`, `tools.js`, `utils.js`. Package was
+  renamed `@zed-industries/claude-agent-acp` → `@agentclientprotocol/claude-agent-acp`
+  at v0.24+.
+- **claude-agent-sdk** is bundled inside the bridge — same `dist/` subtree. The
+  SDK's own npm package (`@anthropic-ai/claude-agent-sdk`) is at the prefix's
+  `node_modules/@anthropic-ai/`.
 - **Claude Code TUI source** (private + public): cloned at
   `~/Documents/agentic/claude/` with `claude-code-private/src/` (TUI source,
   including `services/`, `assistant/`, `bridge/`) and `claude-code-public/`
