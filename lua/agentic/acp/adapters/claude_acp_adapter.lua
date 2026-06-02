@@ -1,6 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
-local ClaudeShared = require("agentic.acp.adapters.claude_shared")
+local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 
 --- @class agentic.acp.ClaudeRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -37,7 +37,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         tool_call_id = update.toolCallId,
         kind = kind,
         status = update.status,
-        argument = ClaudeShared.suppress_placeholder_title(update.title) or "",
+        argument = ClaudeUtils.suppress_placeholder_title(update.title) or "",
     }
 
     if kind == "read" or kind == "edit" then
@@ -79,7 +79,7 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
                 message.body = self:safe_split(update.rawInput.args)
             end
         else
-            local ml = ClaudeShared.mode_switch_label(update.title)
+            local ml = ClaudeUtils.mode_switch_label(update.title)
             if ml then
                 message.kind = "switch_mode"
                 message.argument = ml
@@ -87,12 +87,12 @@ function ClaudeACPAdapter:__handle_tool_call(session_id, update)
         end
     else
         message.argument = self:__ensure_command_string(update.rawInput.command)
-            or ClaudeShared.suppress_placeholder_title(update.title)
+            or ClaudeUtils.suppress_placeholder_title(update.title)
             or ""
         message.body = self:extract_content_body(update)
 
         if kind == "search" then
-            message.argument = ClaudeShared.rewrite_grep_to_rg(message.argument)
+            message.argument = ClaudeUtils.rewrite_grep_to_rg(message.argument)
             if update.rawInput.pattern then
                 message.search_pattern = update.rawInput.pattern
             end

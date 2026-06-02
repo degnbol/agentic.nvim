@@ -1,6 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
-local ClaudeShared = require("agentic.acp.adapters.claude_shared")
+local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 
 --- @class agentic.acp.ClaudeAgentRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -32,7 +32,7 @@ local ClaudeAgentACPAdapter = ACPClient.extend()
 --- @param raw_input agentic.acp.ClaudeAgentRawInput|nil
 local function lift_execute_description(message, raw_input)
     local desc = raw_input and raw_input.description
-    local stripped, was_fenced = ClaudeShared.strip_console_fence(message.body)
+    local stripped, was_fenced = ClaudeUtils.strip_console_fence(message.body)
     if was_fenced then
         message.body = stripped
     else
@@ -57,7 +57,7 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
     -- Provider sends kind="other" for EnterPlanMode but kind="switch_mode"
     -- for ExitPlanMode ("Ready to code?"). Check both.
     local mode_label = (update.kind == "other" or update.kind == "switch_mode")
-        and ClaudeShared.mode_switch_label(update.title)
+        and ClaudeUtils.mode_switch_label(update.title)
     if mode_label then
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local message = {
@@ -73,7 +73,7 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
         return
     end
 
-    update.title = ClaudeShared.suppress_placeholder_title(update.title)
+    update.title = ClaudeUtils.suppress_placeholder_title(update.title)
 
     ACPClient.__handle_tool_call(self, session_id, update)
 end
@@ -181,7 +181,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
                 message.body = self:safe_split(rawInput.args)
             end
         else
-            local ml = ClaudeShared.mode_switch_label(update.title)
+            local ml = ClaudeUtils.mode_switch_label(update.title)
             if ml then
                 message.kind = "switch_mode"
                 message.argument = ml
@@ -189,7 +189,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         end
     else
         message.argument = self:__ensure_command_string(rawInput.command)
-            or ClaudeShared.suppress_placeholder_title(update.title)
+            or ClaudeUtils.suppress_placeholder_title(update.title)
             or ""
 
         if not message.body then
@@ -197,7 +197,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         end
 
         if kind == "search" then
-            message.argument = ClaudeShared.rewrite_grep_to_rg(message.argument)
+            message.argument = ClaudeUtils.rewrite_grep_to_rg(message.argument)
             if rawInput.pattern then
                 message.search_pattern = rawInput.pattern
             end
