@@ -153,11 +153,14 @@ tracked after terminal status.
 ## Execute tool call rendering
 
 Execute tool calls render their command inside a markdown fenced code block
-(` ```bash `) instead of inline in the header. This lets the markdown treesitter
-parser inject bash/zsh syntax highlighting automatically via its built-in
-injection queries. The `bash` fence label is semantically correct (Claude Code
-executes via bash), and the zsh treesitter parser handles it via
-`vim.treesitter.language.register("zsh", "bash")`.
+instead of inline in the header. This lets the markdown treesitter parser inject
+shell syntax highlighting automatically via its built-in injection queries. The
+fence label comes from `shell_lang()` — the basename of `$SHELL` (e.g. `zsh`),
+matching the shell the provider runs commands in (the same value sent in
+`environment_info`), with `bash` as the fallback when `$SHELL` is unset. The
+label is cosmetic: the zsh treesitter parser is aliased to `bash` via
+`vim.treesitter.language.register("zsh", "bash")`, so highlighting is identical
+regardless and the literal word is only visible at conceallevel=0.
 
 Commands are formatted for readability using an external formatter (`shfmt` by
 default, configurable via `tool_call_display.execute_formatter`). If the
@@ -177,7 +180,7 @@ in a literal-backtick grep). Two consequences the adapter fixes
    seeds the body and accumulates ahead of the output behind a `---` divider
    (see body-accumulation in `update_tool_call_block`). The adapter moves it to
    `ToolCallBase.description`, which the renderer prints as a Comment-highlighted
-   line directly under `### Execute`, above the ` ```bash ` command fence.
+   line directly under `### Execute`, above the command fence (see `shell_lang()`).
 2. **The bridge's console fence is stripped.** `ClaudeShared.strip_console_fence`
    removes the ` ```console … ``` ` wrapper at the source. Without it `safe_fence`
    widens the outer fence to four backticks around the bridge's inner three,
@@ -209,7 +212,7 @@ is dropped from the body (the description is read from `rawInput.description`).
 All kinds:    "### Read"                   (heading — ### is @punctuation.special, kind is TOOL_KIND)
               "`/tmp/file.txt`"            (argument on next line, TOOL_ARGUMENT highlight)
 Execute:      "### Execute"                (heading only, no argument line)
-              ```bash                      (code fence — treesitter injection)
+              ```zsh                       (code fence, label from $SHELL — treesitter injection)
               ls -la /tmp
               ```
 ```

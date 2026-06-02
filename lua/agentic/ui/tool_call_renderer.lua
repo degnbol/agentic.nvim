@@ -84,6 +84,15 @@ local function safe_fence(body_lines)
     return fence
 end
 
+--- Language label for the execute command fence, taken from the user's shell
+--- (basename of $SHELL, e.g. "zsh"). Cosmetic only. The zsh parser is aliased
+--- to "bash", so highlighting is identical regardless of the label, which is
+--- only visible at conceallevel=0.
+--- @return string
+local function shell_lang()
+    return vim.fs.basename(os.getenv("SHELL") or vim.o.shell)
+end
+
 --- Check if a command string starts with a grep-family tool.
 --- Handles leading env vars (VAR=val) and common pipe patterns.
 --- @param argument string Shell command string
@@ -395,7 +404,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 vim.split(description, "\n", { plain = true })
             )
         end
-        table.insert(lines, fence .. "bash")
+        table.insert(lines, fence .. shell_lang())
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)
     elseif kind == "search" then

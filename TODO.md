@@ -8,8 +8,6 @@ minor").
 
 ### Rendering
 
-- Apparently claude can run zsh, not always bash, and opencode defaults to zsh. This means the execute code block that is now the treesitter type `bash` should be `zsh` depending on the shell invocation from the adaptor. Since bash is using zsh treesitter this only makes a difference to which word is displayed in chat and is only visible with conceallevel=0.
-
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.

@@ -17,6 +17,7 @@ describe("agentic.ui.MessageWriter", function()
     --- @type agentic.UserConfig.AutoScroll|nil
     local original_auto_scroll
     local original_tool_call_display
+    local original_shell
 
     before_each(function()
         -- Re-acquire in case a prior test replaced the module in package.loaded
@@ -25,6 +26,10 @@ describe("agentic.ui.MessageWriter", function()
         original_tool_call_display = vim.deepcopy(Config.tool_call_display)
         -- Disable external formatter for deterministic fallback tests
         Config.tool_call_display.execute_formatter = false
+        -- Pin the shell so the execute fence label is deterministic — the
+        -- renderer derives it from $SHELL (basename).
+        original_shell = vim.env.SHELL
+        vim.env.SHELL = "/bin/bash"
         MessageWriter = require("agentic.ui.message_writer")
 
         bufnr = vim.api.nvim_create_buf(false, true)
@@ -44,6 +49,7 @@ describe("agentic.ui.MessageWriter", function()
     after_each(function()
         Config.auto_scroll = original_auto_scroll --- @diagnostic disable-line: assign-type-mismatch
         Config.tool_call_display = original_tool_call_display
+        vim.env.SHELL = original_shell
         if winid and vim.api.nvim_win_is_valid(winid) then
             vim.api.nvim_win_close(winid, true)
         end
@@ -729,6 +735,22 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("```console", lines[5])
             assert.equal("total 16", lines[6])
             assert.equal("```", lines[7])
+        end)
+
+        it("labels the execute fence with the shell from $SHELL", function()
+            vim.env.SHELL = "/usr/bin/zsh"
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-zsh",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la /tmp",
+                body = { "total 16" },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
+
+            assert.equal("```zsh", lines[2])
         end)
 
         it(

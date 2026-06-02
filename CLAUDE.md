@@ -117,7 +117,7 @@ Sites that use `safe_fence`:
 
 | Site | Info string | Notes |
 | --- | --- | --- |
-| Execute command (argument) | `bash` | Command line(s) |
+| Execute command (argument) | shell basename of `$SHELL` (e.g. `zsh`), `bash` fallback | Command line(s). `shell_lang()` — cosmetic only, the zsh parser is aliased to `bash` so highlighting is identical (visible at conceallevel=0) |
 | Search command (argument) | `bash` | Command line(s) |
 | Execute body (stdout/stderr) | `console`, or `console-fold` when `execute_max_lines` exceeded | The `-fold` suffix is the fold signal (see Tool call body folding). claude-agent-acp pre-wraps output in its own ` ```console ` fence — `prepare_block_lines` unwraps an already-fenced execute body before wrapping, so the renderer never double-wraps (see @lua/agentic/acp/AGENTS.md § Execute tool call rendering) |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | Same `-fold` mechanism |
