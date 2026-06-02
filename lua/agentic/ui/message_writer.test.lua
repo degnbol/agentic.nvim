@@ -2251,7 +2251,8 @@ describe("agentic.ui.MessageWriter", function()
                 end
                 assert.equal(1, openers)
 
-                -- Description line gets a Comment highlight (NS_STATUS).
+                -- Description line is left unhighlighted (default chat colour),
+                -- not dimmed with a Comment highlight.
                 local desc_row = 1
                 local marks = vim.api.nvim_buf_get_extmarks(
                     bufnr,
@@ -2266,7 +2267,7 @@ describe("agentic.ui.MessageWriter", function()
                         has_comment = true
                     end
                 end
-                assert.is_true(has_comment)
+                assert.is_false(has_comment)
             end
         )
     end)

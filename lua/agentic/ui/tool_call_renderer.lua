@@ -1347,8 +1347,9 @@ end
 --- Apply syntax highlighting to a tool call header line.
 --- Header format: "### Kind" — highlights the kind portion with TOOL_KIND.
 --- When `description` is given (execute blocks), the lines directly under the
---- header are the description title and get a Comment highlight. Otherwise the
---- next line is `` `argument` `` and gets TOOL_ARGUMENT highlight.
+--- header are the description title and are left unhighlighted (default chat
+--- colour). Otherwise the next line is `` `argument` `` and gets TOOL_ARGUMENT
+--- highlight.
 --- @param bufnr integer
 --- @param line_row integer 0-indexed row of the "### Kind" line
 --- @param ns integer Namespace to use for extmarks
@@ -1371,20 +1372,10 @@ function M.apply_tool_header_syntax(bufnr, line_row, ns, description)
     end
 
     if description and description ~= "" then
-        -- Title lines sit at line_row+1 .. line_row+n, before the command fence.
-        local n = #vim.split(description, "\n", { plain = true })
-        for i = 1, n do
-            local row = line_row + i
-            local dline =
-                vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
-            if dline and #dline > 0 then
-                vim.api.nvim_buf_set_extmark(bufnr, ns, row, 0, {
-                    end_col = #dline,
-                    hl_group = "Comment",
-                    priority = 200,
-                })
-            end
-        end
+        -- Title lines sit at line_row+1 .. line_row+n, before the command
+        -- fence. They render in the default chat colour (no highlight) — the
+        -- description is normal prose, not de-emphasised sidecar content.
+        -- Return so the argument-backtick logic below doesn't run on them.
         return
     end
 
