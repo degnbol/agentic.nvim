@@ -1077,10 +1077,24 @@ function M.apply_block_highlights(
 
         -- Execute blocks with ANSI codes get per-character colour highlights
         if ansi_highlights then
+            -- The generic body_start above stops at the *command* fence's
+            -- closing ``` , landing on the ```console body-fence-open line.
+            -- ANSI spans are indexed from the first body *content* line, so
+            -- advance past the console fence (mirrors the search_ansi path
+            -- below). Without this the colours render one row too high.
+            local ansi_body_start = body_start
+            for i = start_row + 2, end_row - 1 do
+                local l =
+                    vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
+                if l and l:match("^`+console") then
+                    ansi_body_start = i + 1
+                    break
+                end
+            end
             Ansi.apply_highlights(
                 bufnr,
                 NS_DIFF_HIGHLIGHTS,
-                body_start,
+                ansi_body_start,
                 ansi_highlights
             )
         else

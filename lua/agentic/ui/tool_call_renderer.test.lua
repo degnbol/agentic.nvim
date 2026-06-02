@@ -504,4 +504,61 @@ describe("ToolCallRenderer", function()
             assert_no_markers(lines)
         end)
     end)
+
+    describe("execute ANSI highlight placement", function()
+        --- Find the row of the extmark whose hl_group starts with prefix.
+        --- @param bufnr integer
+        --- @param prefix string
+        --- @return integer|nil row 0-indexed
+        local function ansi_extmark_row(bufnr, prefix)
+            local ns = vim.api.nvim_get_namespaces()["agentic_diff_highlights"]
+            local marks =
+                vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+            for _, mark in ipairs(marks) do
+                local hl = mark[4] and mark[4].hl_group
+                if hl and vim.startswith(hl, prefix) then
+                    return mark[2]
+                end
+            end
+            return nil
+        end
+
+        it("lands the colour on the content line, not the console fence", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-ansi",
+                status = "completed",
+                kind = "execute",
+                argument = "echo hi",
+                body = { "\27[31mred\27[0m green" },
+            }
+
+            local lines, highlight_ranges, ansi_highlights =
+                Renderer.prepare_block_lines(block, 80)
+
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+            Renderer.apply_block_highlights(
+                bufnr,
+                0,
+                #lines,
+                "execute",
+                highlight_ranges,
+                ansi_highlights
+            )
+
+            local content_row
+            for i, line in ipairs(lines) do
+                if line == "red green" then
+                    content_row = i - 1
+                    break
+                end
+            end
+            assert.is_not_nil(content_row)
+            assert.equal(content_row, ansi_extmark_row(bufnr, "AgenticAnsi"))
+
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+    end)
 end)
