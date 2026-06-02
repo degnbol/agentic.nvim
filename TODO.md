@@ -460,6 +460,11 @@ It seems it always says "Launching skill: " which is redundant. Could we simply 
  ✔ completed
 ````
 
+### Pending
+
+Hide `pending...` from opencode when it's about to make an edit.
+Similarly, the execute block shows `bash` while the command is being generated. This should also be hidden, but also makes me concerned about the claim that opencode is using zsh.
+
 ## Folded Read block
 For reading parts of a file, e.g. a small number of lines, it could be nice to have a pre-folded block in the tool block to expand and see exactly the context claude read.
 We wouldn't want this if the whole file is read (since we can just <c-w>gf to it), and if it's a "large" number of lines it might be unnecessary bloat in the chat (would take longer to resume a session, bigger storage).
