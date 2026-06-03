@@ -49,10 +49,13 @@ never counted.
 - Compute duration for every tool call from `t_pending` or
   `t_perm_resolved` (whichever applies) to terminal status.
 - Render `[took 5s]` inline on every completed tool-call block in the
-  chat UI. Dim short durations so fast calls aren't noisy.
+  chat UI, always dimmed — it's an annotation, secondary to the block's
+  content and status. No duration-dependent styling: the user judges
+  slowness from the number itself.
 - Inject timing into the next user prompt for tool calls that exceeded
-  a slower threshold, so the model sees runtime context for slow runs.
-- Flag very slow calls more prominently for the user.
+  a slower threshold, so the model sees runtime context for slow runs
+  (the model can't eyeball the buffer — this is the only path that needs
+  a threshold).
 
 ## State location
 
@@ -86,7 +89,7 @@ duration_ms: number?    -- set on terminal status, used by the renderer
    or `failed`, compute `duration_ms = vim.uv.now() - started_at` and
    stash it on the tracker. Pass through to the renderer.
 4. **`ui/tool_call_renderer.lua`** — render `[took Ns]` as a trailing
-   footer fragment (dimmed under `user_show_threshold_ms`).
+   footer fragment, always dimmed. No threshold logic here.
 5. **Prompt submit path** (`session_manager.lua` input handling) — when
    composing the next user prompt, walk `tool_call_blocks` for the
    previous turn and prepend a synthetic prefix
@@ -101,16 +104,14 @@ timing text rendered into the block is invisible to the model.
 
 ## Thresholds
 
-- `user_show_threshold_ms = 0` — always render, dim if below
-  `user_emphasis_threshold_ms`.
-- `user_emphasis_threshold_ms = 3000` — bold / `[slow]` tag for runs
-  above this; default colour otherwise.
-- `model_threshold_ms = 3000` — inject into next user prompt for runs
-  above this. Below this, model never sees the timing.
-- `very_slow_threshold_ms = 60000` — additional emphasis for the user
-  (e.g. warn-coloured `[took 2m 14s]`).
+One threshold, and it only gates the model-injection path — the chat
+render is unconditional and uniformly dimmed.
 
-All under `config.timing = { ... }`.
+- `model_threshold_ms = 3000` — inject into the next user prompt for
+  runs above this. Below this, the model never sees the timing (the user
+  still does, dimmed, in the block).
+
+Under `config.timing = { ... }`.
 
 ## Edge cases
 
