@@ -294,7 +294,8 @@
     "Bash(hyprctl version*)",
     "Bash(hyprctl workspacerules*)",
     "Bash(hyprctl workspaces*)",
-    "Bash(javap *)"
+    "Bash(javap *)",
+    "Bash(typst query *)"
   ],
   "safe_write": [
     "Bash(mlr *)",
