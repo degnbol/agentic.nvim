@@ -913,7 +913,7 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
 
             local result = PermissionRules.should_auto_approve(
-                "stdbuf -oL ls /Users/cmadsen/dotfiles/shell/"
+                "stdbuf -oL ls /tmp/example/"
             )
             assert.is_true(result)
 
