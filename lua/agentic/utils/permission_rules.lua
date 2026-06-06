@@ -298,11 +298,14 @@ end
 --- env var. The hijacking vars (PATH, LD_PRELOAD, DYLD_INSERT_LIBRARIES, IFS,
 --- BASH_ENV, PYTHONPATH) are uppercase by convention, so a name starting with
 --- a lowercase letter or underscore cannot be one and is safe to strip or
---- treat as data.
+--- treat as data. A single uppercase letter (`A`..`Z`) is also safe: every
+--- execution-hijacking env var in the threat model (PATH, LD_*, DYLD_*, IFS,
+--- ENV, BASH_ENV, CDPATH, PYTHON*, ...) is multi-character, so no single
+--- letter can hijack.
 --- @param name string
 --- @return boolean
 local function is_data_var_name(name)
-    return name:match("^[a-z_]") ~= nil
+    return name:match("^[a-z_]") ~= nil or name:match("^[A-Z]$") ~= nil
 end
 
 --- Strip leading harmless prefixes (variable assignments and the `stdbuf`

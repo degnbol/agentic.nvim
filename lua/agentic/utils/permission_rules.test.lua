@@ -206,6 +206,15 @@ describe("PermissionRules", function()
                 PermissionRules.strip_wrapper_prefixes('f=/path/to/file ls "$f"')
             )
         end)
+
+        it("strips a single-uppercase-letter prefix", function()
+            -- No execution-hijacking env var is a single letter, so `N=10`
+            -- is inert data like a lowercase var.
+            assert.equal(
+                "seq 1 10",
+                PermissionRules.strip_wrapper_prefixes("N=10 seq 1 10")
+            )
+        end)
     end)
 
     describe("strip_command_path", function()
