@@ -47,6 +47,29 @@ local function touch(path)
     file:close()
 end
 
+--- Unsets every GIT_* environment variable for the duration of a test,
+--- returning a function that restores the saved values. An ambient GIT_DIR
+--- makes git ignore the `cwd` and operate on whatever it points at: a fixture
+--- `git init` then reinitialises that repo instead, and for a submodule (whose
+--- gitdir does not end in `.git`) with no work-tree on the command line git
+--- sets core.bare=true, contradicting the submodule's core.worktree and
+--- corrupting the real config. Scrubbing the env makes the fixture hermetic.
+--- @return fun() restore
+local function scrub_git_env()
+    local saved = {}
+    for name, value in pairs(vim.fn.environ()) do
+        if name:match("^GIT_") then
+            saved[name] = value
+            vim.uv.os_unsetenv(name)
+        end
+    end
+    return function()
+        for name, value in pairs(saved) do
+            vim.uv.os_setenv(name, value)
+        end
+    end
+end
+
 describe("FilePicker:scan_files", function()
     --- @type TestStub|nil
     local system_stub
@@ -109,8 +132,10 @@ describe("FilePicker:scan_files", function()
     describe("real commands", function()
         local fixture
         local original_cwd
+        local restore_git_env
 
         before_each(function()
+            restore_git_env = scrub_git_env()
             original_cwd = vim.fn.getcwd()
             fixture = vim.fn.tempname()
             vim.fn.mkdir(fixture, "p")
@@ -128,6 +153,7 @@ describe("FilePicker:scan_files", function()
         end)
 
         after_each(function()
+            restore_git_env()
             vim.fn.chdir(original_cwd)
             vim.fs.rm(fixture, { recursive = true })
         end)
