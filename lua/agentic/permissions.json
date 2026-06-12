@@ -349,6 +349,7 @@
     "Bash(find * -exec *)",
     "Bash(find * -delete*)",
     "Bash(find * -ok *)",
+    "Bash(find * -okdir *)",
     "Bash(fd * -x *)",
     "Bash(fd * -X *)",
     "Bash(fd * --exec *)",

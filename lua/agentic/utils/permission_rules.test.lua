@@ -1276,6 +1276,18 @@ describe("PermissionRules", function()
             )
         end)
 
+        it("rejects find -okdir via plugin deny list", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "find . -name '*.lua' -okdir rm {} +"
+                )
+            )
+        end)
+
         it("approves find without -exec", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
