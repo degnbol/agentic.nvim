@@ -36,6 +36,17 @@ local function table_diff(left, right)
     return only_in_left, only_in_right
 end
 
+--- Creates an empty file at `path`, making parent directories as needed.
+--- @param path string
+local function touch(path)
+    vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+    local file, err = io.open(path, "w")
+    if not file then
+        error(err)
+    end
+    file:close()
+end
+
 describe("FilePicker:scan_files", function()
     --- @type TestStub|nil
     local system_stub
@@ -89,41 +100,61 @@ describe("FilePicker:scan_files", function()
         end)
     end)
 
+    -- All three backends (rg, fd, git) must surface the same file set. Drive
+    -- them against a controlled git fixture, not the live repo tree: `git
+    -- ls-files` reads the index (so it lists tracked-but-deleted files) while
+    -- rg/fd walk the disk, so they diverge whenever cwd holds an index/disk
+    -- mismatch (a tracked-but-deleted file, a staged-add since removed, …). A
+    -- fresh `git init` + `git add` over a known set makes all three agree.
     describe("real commands", function()
-        it("should return same files in same order for all commands", function()
-            -- Test rg
-            FilePicker.CMD_RG[1] = original_cmd_rg
+        local fixture
+        local original_cwd
+
+        before_each(function()
+            original_cwd = vim.fn.getcwd()
+            fixture = vim.fn.tempname()
+            vim.fn.mkdir(fixture, "p")
+            for _, path in ipairs({
+                "README.md",
+                "init.lua",
+                "lua/agentic/file_picker.lua",
+                "docs/guide.md",
+            }) do
+                touch(fixture .. "/" .. path)
+            end
+            vim.fn.chdir(fixture)
+            vim.system({ "git", "init" }, { cwd = fixture }):wait()
+            vim.system({ "git", "add", "-A" }, { cwd = fixture }):wait()
+        end)
+
+        after_each(function()
+            vim.fn.chdir(original_cwd)
+            vim.fs.rm(fixture, { recursive = true })
+        end)
+
+        it("returns the same file set for all backends", function()
             FilePicker.CMD_FD[1] = "nonexistent_fd"
             FilePicker.CMD_GIT[1] = "nonexistent_git"
             local files_rg = picker:scan_files()
 
-            -- Test fd
             FilePicker.CMD_RG[1] = "nonexistent_rg"
             FilePicker.CMD_FD[1] = original_cmd_fd
-            FilePicker.CMD_GIT[1] = "nonexistent_git"
             local files_fd = picker:scan_files()
 
-            -- Test git
-            FilePicker.CMD_RG[1] = "nonexistent_rg"
             FilePicker.CMD_FD[1] = "nonexistent_fd"
             FilePicker.CMD_GIT[1] = original_cmd_git
             local files_git = picker:scan_files()
 
-            -- All commands should return more than 0 files
             assert.is_true(#files_rg > 0)
             assert.is_true(#files_fd > 0)
             assert.is_true(#files_git > 0)
 
-            -- Extract just the word (filename) for comparison
-            local words_rg = vim.tbl_map(function(f)
+            local path_of = function(f)
                 return f.path
-            end, files_rg)
-            local words_fd = vim.tbl_map(function(f)
-                return f.path
-            end, files_fd)
-            local words_git = vim.tbl_map(function(f)
-                return f.path
-            end, files_git)
+            end
+            local words_rg = vim.tbl_map(path_of, files_rg)
+            local words_fd = vim.tbl_map(path_of, files_fd)
+            local words_git = vim.tbl_map(path_of, files_git)
 
             local rg_only, fd_only = table_diff(words_rg, words_fd)
             assert.are.same(rg_only, fd_only)
@@ -134,7 +165,6 @@ describe("FilePicker:scan_files", function()
             assert.are.equal(#files_rg, #files_fd)
             assert.are.equal(#files_fd, #files_git)
         end)
-
     end)
 
     -- The glob fallback runs only when rg, fd, and git are all unavailable, so
@@ -145,17 +175,6 @@ describe("FilePicker:scan_files", function()
     describe("glob fallback", function()
         local fixture
         local original_cwd
-
-        --- Creates an empty file at `path`, making parent directories as needed.
-        --- @param path string
-        local function touch(path)
-            vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-            local file, err = io.open(path, "w")
-            if not file then
-                error(err)
-            end
-            file:close()
-        end
 
         before_each(function()
             original_cwd = vim.fn.getcwd()
