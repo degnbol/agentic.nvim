@@ -356,6 +356,7 @@
     "Bash(fd * --exec-batch *)",
     "Bash(sed -i*)",
     "Bash(sed * -i*)",
+    "Bash(awk *system*)",
     "Bash(date -s*)",
     "Bash(date --set*)",
     "Bash(mlr -I*)",
