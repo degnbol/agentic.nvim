@@ -6,7 +6,16 @@ minor").
 
 ## Bugs
 
+### vale-typst
+
+An agent said
+> The lint notice is just vale-typst being absent (markdown, not typst)
+
+Is the vale-typst work incomplete? May not be work for this repo.
+
 ### Rendering
+
+- The auto hard wrap of md prose in chat breaks headings. A heading has to remain on 1 line.
 
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
 
@@ -23,7 +32,7 @@ minor").
   messages from sent ones.
 
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
-  After closing the program (nvim), restarting and resuming the session a response is visible immidiately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
+  After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
   This is a long standing and difficult bug.
 
 - Context amount and percentage occasionally missing or stale in incline,
@@ -40,7 +49,7 @@ minor").
 ```markdown
 ### Search
 ```bash
-rg -n ""todowrite"|@alias|@class.*ToolCall" /Users/cmadsen/dotfiles/config/nvim/modules/agentic.nvim/lua/agentic/ui/message_writer.lua
+rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
 ```
 ```console
 26:--- @class agentic.ui.MessageWriter.ToolCallDiff
@@ -349,8 +358,9 @@ screen so we can read it.
 - **Stale-read warning on Edit/Write**: see
   `notes/feature-stale-read-warning.md`.
 
-- **`/trust` completion and typo tolerance**: `/trust heree` goes through.
-  Completion for subcommands (`repo`, `here`, `off`) would prevent typos.
+- **`/trust` completion and typo tolerance**: a misspelled subcommand
+  goes through unvalidated. Completion for subcommands (`repo`, `here`,
+  `off`) would prevent typos.
 
 - **`/trust` glob coverage**: verify the `/trust` system works with glob
   patterns using `~/`, relative paths, and absolute folders.
@@ -412,7 +422,7 @@ Open questions:
 
 ### LSP
 
-If claude is refactoring, e.g. renaming all occurances of a variable it essentially does a search/replace plus looking at context around word to understand.
+If claude is refactoring, e.g. renaming all occurrences of a variable it essentially does a search/replace plus looking at context around word to understand.
 Why not rename like I would in the editor using the LSP?
 The LSP is often a program that can be run from the shell, it's almost a CLI, but not quite.
 I think we should be able to write some thin wrapper around LSPs to call them like CLIs (like `lsp rename <old name, row and col?> <new name> <filename>`) that then writes a bit of json(?) boilerplate and sends it to based-pyright if `<filename>` is python etc.
@@ -465,13 +475,36 @@ It seems it always says "Launching skill: " which is redundant. Could we simply 
 Hide `pending...` from opencode when it's about to make an edit.
 Similarly, the execute block shows `bash` while the command is being generated. This should also be hidden, but also makes me concerned about the claim that opencode is using zsh.
 
+### Parallel work
+
+Subagent (Task) work renders inline and interleaved with the main agent's,
+and parallel subagents mix together. Plumbing + UI plan in
+[`notes/feature-subagent-separation.md`](notes/feature-subagent-separation.md).
+
 ## Folded Read block
 For reading parts of a file, e.g. a small number of lines, it could be nice to have a pre-folded block in the tool block to expand and see exactly the context claude read.
 We wouldn't want this if the whole file is read (since we can just <c-w>gf to it), and if it's a "large" number of lines it might be unnecessary bloat in the chat (would take longer to resume a session, bigger storage).
 
+### No output
+
+Running a command with no output looks like this in chat:
+````markdown
+### Execute
+Sleep for 10 seconds
+```zsh
+sleep 10
+```
+```console
+(Bash completed with no output)
+```
+ ✔ completed
+````
+The `(Bash completed with no output)` is redundant, given we always show completion status of command (" ✔ completed").
+So, I think we should not be showing this output. If it originates from our code, delete, if it is given by acp, etc. then I think we may have to detect it and suppress. The wording varies, so if we have to detect on wording alone, then consider if this work is worth it.
+
 ## Agents don't understand handover
 
-When talking to one agent then switching the new one doesn't understand a change of model occured. Update: the models really have no idea who they are.
+When talking to one agent then switching the new one doesn't understand a change of model occurred. Update: the models really have no idea who they are.
 I think this is usually not impportant. A model doesn't need to know who they are to do a task with some meta exceptions.
 We could consider adding a code comment or some other acp docs to point this out.
 
