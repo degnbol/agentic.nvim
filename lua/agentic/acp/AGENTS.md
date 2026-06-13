@@ -671,13 +671,41 @@ tool-call blocks) is visible to the user only. It is not part of the
 agent's conversation history and does not survive session resume into
 the model's context.
 
+There are three restore mechanisms that use this asymmetry differently:
+
+- **Path A — true ACP `session/load`.** Requires
+  `agentCapabilities.loadSession`. Sends the saved `sessionId` and the
+  provider replays its own history via `session/update`
+  notifications. `_history_to_send` is *not* set. Used by the picker
+  when the agent supports it; both claude-agent-acp and opencode do.
+- **Path B — `restore_from_history`** (`session_manager.lua`). Falls
+  back when `loadSession` is unsupported or `session/load` errors.
+  Creates a fresh `session/new`, replays the saved messages into the
+  chat buffer locally, and stashes them on `self._history_to_send`.
+  On the first `send_prompt`, `ChatHistory.prepend_restored_messages`
+  (`ui/chat_history.lua`) injects them as text Content blocks
+  (`"User: …"`, `"Assistant: …"`, `"Assistant (thinking): …"`, `"Tool
+  call (…): …\nResult:\n…"`) ahead of the user's prompt. The provider
+  sees one large user message — tool-call provenance is collapsed
+  into prose, no native conversation state.
+- **Path C — `respawn_after_usage_limit`** (`session_recovery.lua`).
+  Triggered by `max_tokens` / usage-limit stalls on the
+  claude-agent-acp subprocess. Kills the agent, saves
+  `chat_history.messages` onto `_history_to_send`, and lets the next
+  `session/new` reuse Path B's prefix-stitching to continue the
+  conversation under a fresh subprocess.
+
 This is the inverse of the "user_message_chunk replay" point below:
-that section explains what the *client* receives on session/load (the
+that section explains what the *client* receives on Path A (the
 provider's history); this point explains what the *model* receives
 (nothing the client wrote into its own buffer, only what the client
-sent via session/prompt).
+sent via session/prompt — including the Path B text prefix when that
+fallback fires).
 
 ### user_message_chunk contains full prompt content
+
+This applies to Path A only — Path B does not call `session/load`, so no
+replay chunks arrive.
 
 During `session/load` replay, the provider sends `user_message_chunk` events for
 each content block in the original `session/prompt` request — not just user-typed

@@ -215,7 +215,14 @@ pitfall").
 
 ## Session lifecycle races and the epoch guard
 
-Two race conditions can overwrite `self.session_id` during session restore:
+For the three restore paths (`session/load`, `restore_from_history`,
+`respawn_after_usage_limit`) and what each sends on the wire, see
+@lua/agentic/acp/AGENTS.md § "Chat buffer is UI only". The races below
+all concern Path A (`session/load`) interleaving with the constructor's
+`session/new`.
+
+Three race conditions can overwrite `self.session_id` during ACP
+`session/load`:
 
 1. **Constructor on-ready race:** `AgentInstance.get_instance()` calls `on_ready`
    synchronously when the instance already exists. The constructor wraps the

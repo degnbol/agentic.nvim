@@ -347,12 +347,17 @@ agentic.restart_session()
 
                                                 *agentic.restore_session()*
 agentic.restore_session()
-    Open the session restore picker.
+    Open the session restore picker. Most providers resume with full
+    native memory of the session. Some cannot, in which case the saved
+    transcript is replayed as context on the next prompt — the
+    conversation continues, but the provider has no native memory of
+    the prior turns.
 
                                                *agentic.load_acp_session()*
 agentic.load_acp_session({session_id}, {cwd})
     Load a specific ACP session by UUID. Optional {cwd} for the working
-    directory.
+    directory. On failure, falls back to the local-history replay
+    described under |agentic.restore_session()|.
 
                                                 *agentic.send_operatorfunc()*
 agentic.send_operatorfunc({type})
