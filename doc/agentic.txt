@@ -85,6 +85,11 @@ install either the `bash` or `zsh` parser. The plugin registers `zsh` as an
 alias for `bash`, so either works. The `zsh` grammar is currently the more
 actively maintained of the two.
 
+Compound Bash command auto-approval additionally requires the `zsh` parser
+specifically: each command is parsed with the zsh grammar and its parse tree
+walked to decompose it safely. Without `zsh`, no compound command
+auto-approves (it falls through to a permission prompt).
+
 Parser installers are not shipped with Neovim core. Install via
 nvim-treesitter (https://github.com/nvim-treesitter/nvim-treesitter) with
 `:TSInstall bash` or `:TSInstall zsh`, or compile a parser manually with
@@ -461,16 +466,19 @@ https://github.com/anthropics/claude-code/issues/16561
 agentic.nvim adds a client-side layer that fills this gap. When a Bash
 permission request arrives and `auto_approve_compound_commands` is true:
 
-1. Split the command on top-level shell operators (`|`, `||`, `&&`, `;`),
-   respecting quote boundaries.
-2. Reject unsafe constructs outright: subshells `$(...)`, backticks,
-   process substitution `<(...)` / `>(...)`.
-3. Strip harmless wrappers before matching: `stdbuf -oL` prefixes,
-   `/dev/null` redirects (`2>/dev/null`, `&>/dev/null`, `2>&1`).
-4. Check each segment against compiled patterns from
+1. Parse the command with the `zsh` treesitter grammar. An absent parser,
+   a parse error, or a malformed/truncated tree fails closed → prompt.
+2. Walk the parse tree, rejecting by default — anything not proven safe
+   prompts. Command/process substitution (`$(...)`, backticks, `<(...)`),
+   control flow (loops, conditionals, subshells, functions), file-writing
+   redirects (anything but `/dev/null` and fd duplication like `2>&1`),
+   dynamic command names, and code-taking builtins (`eval`/`source`/`.`)
+   all bail.
+3. For each safe leaf command, strip a `stdbuf` wrapper and a system
+   binary-dir prefix, then check it against compiled patterns from
    `~/.claude/settings.json` and `.claude/settings.json` (project-local).
-5. Auto-approve only if every segment matches an allow pattern AND no
-   segment matches a deny/ask pattern.
+4. Auto-approve only if every leaf matches an allow pattern AND no leaf
+   matches a deny/ask pattern.
 
 Deny/ask patterns always take precedence over allow patterns (same as
 upstream). Compiled patterns are cached with mtime-based invalidation.
@@ -588,8 +596,8 @@ Permissions ~
 - Auto-approve read-only tools (Read / Grep / Glob) regardless of path.
   The TUI's permission rules still scope these to the working directory
   and `additionalDirectories`.
-- Compound Bash command auto-approval: splits on `|`, `&&`, `||`, `;`
-  and checks each segment against `settings.json` patterns. Fills
+- Compound Bash command auto-approval: walks the zsh parse tree and
+  checks each leaf command against `settings.json` patterns. Fills
   upstream gap tracked at anthropics/claude-code#16561.
 - Allow-always / reject-always cache: the ACP protocol leaves persistence
   of these decisions to the provider, and claude-agent-acp does not

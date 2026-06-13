@@ -56,8 +56,11 @@ local MAGIC_CHARS = {
     ["%"] = "%%",
 }
 
---- Convert a settings.json glob pattern to a Lua pattern.
---- `*` matches anything except shell operators (|, &, ;).
+--- Convert a settings.json glob pattern to a Lua pattern. `*` matches any run
+--- of characters. The walker hands this matcher a single substitution-free,
+--- redirect-free leaf command, so top-level shell operators never reach a
+--- pattern (they are sibling separator nodes). The only `|`/`;`/`&` that can
+--- arrive is a literal inside a quoted argument, which `*` should match.
 --- @param glob string
 --- @return string lua_pattern
 function M.glob_to_lua_pattern(glob)
@@ -66,7 +69,7 @@ function M.glob_to_lua_pattern(glob)
     while i <= #glob do
         local ch = glob:sub(i, i)
         if ch == "*" then
-            table.insert(result, "[^|;&]*")
+            table.insert(result, ".*")
         elseif MAGIC_CHARS[ch] then
             table.insert(result, MAGIC_CHARS[ch])
         else
@@ -308,35 +311,20 @@ local function is_data_var_name(name)
     return name:match("^[a-z_]") ~= nil or name:match("^[A-Z]$") ~= nil
 end
 
---- Strip leading harmless prefixes (variable assignments and the `stdbuf`
---- line-buffering wrapper) from a command segment, so the inner command is
---- matched on its own (`f=/path ls "$f"` becomes `ls "$f"`). Loops to handle
---- chains like `LC_ALL=C TZ=UTC stdbuf -oL grep ...`. Hook injection
---- (`shell-guard.sh` adds `PYTHONUNBUFFERED=1` to commands mentioning a `.py`
---- file) is the main motivating case.
----
---- An assignment is stripped only when its name is a known-safe env var
---- (`SAFE_ENV_NAMES` or `LC_*`) or a lowercase data var (`is_data_var_name`).
---- Uppercase hijackers like `PATH`, `LD_PRELOAD`, `BASH_ENV`, `PYTHONPATH`
---- are left in place so the inner command does not auto-approve.
----
---- A segment that is *only* prefixes with no command (a lone `f=path`)
---- reduces to the empty string, which `is_inert_segment` treats as safe.
+--- Strip a leading `stdbuf` line-buffering wrapper from a command leaf, so the
+--- inner command is matched on its own (`stdbuf -oL grep x` becomes `grep x`).
+--- Loops to handle chains. Variable-assignment prefixes (`LC_ALL=C grep x`,
+--- `f=/path ls "$f"`) are no longer handled here — the walker validates and
+--- excludes them structurally before the matcher sees the leaf.
 --- @param segment string
 --- @return string
 function M.strip_wrapper_prefixes(segment)
     while true do
-        local name, value_end =
-            segment:match("^([A-Za-z_][A-Za-z0-9_]*)=[^|;&%s]*()%s*")
-        if name and (is_safe_env_name(name) or is_data_var_name(name)) then
-            segment = segment:sub(value_end):gsub("^%s+", "")
-        else
-            local stripped = segment:gsub("^stdbuf%s+%-[a-zA-Z0-9]+%s+", "", 1)
-            if stripped == segment then
-                return segment
-            end
-            segment = stripped
+        local stripped = segment:gsub("^stdbuf%s+%-[a-zA-Z0-9]+%s+", "", 1)
+        if stripped == segment then
+            return segment
         end
+        segment = stripped
     end
 end
 
@@ -368,219 +356,10 @@ function M.strip_command_path(segment)
     return segment
 end
 
---- Whether a segment is entirely safe prefixes with no command, e.g.
---- `f=path/to/file`, `a=1 b=2`, or `LC_ALL=C` — one or more variable
---- assignments (or `stdbuf` wrappers) and nothing after. It executes nothing,
---- so it is safe regardless of the allow list. Detected by reducing it with
---- `strip_wrapper_prefixes`: only safe-named or lowercase data vars are
---- stripped, so an uppercase hijacker (`PATH=…`) leaves a non-empty remainder
---- and falls through to a prompt. Dangerous values are excluded upstream
---- (`split_command` rejects `$(...)`, `has_unsafe_redirect` rejects writes).
---- @param segment string
---- @return boolean
-function M.is_inert_segment(segment)
-    return vim.trim(M.strip_wrapper_prefixes(vim.trim(segment))) == ""
-end
-
---- Detect output redirection that would write to a file.
---- Call AFTER `strip_devnull_redirects` so harmless `>/dev/null` and `2>&1`
---- forms don't trigger. Recognises `>`, `>>`, `2>`, `&>` (write) and
---- `>&N` where N is a digit (fd dup, not a file write — `>&2`, `2>&1`,
---- etc. are allowed). Quoted `>` is ignored.
----
---- This is the safety net that lets the read-only command list stay
---- focused on the COMMAND being read-only — without it, `cat foo > evil`
---- would match `Bash(cat *)` because `[^|;&]*` lets `>` through, and
---- silently write the file.
---- @param segment string
---- @return boolean
-function M.has_unsafe_redirect(segment)
-    local in_single = false
-    local in_double = false
-    local i = 1
-    local len = #segment
-    while i <= len do
-        local ch = segment:sub(i, i)
-        if ch == "'" and not in_double then
-            in_single = not in_single
-            i = i + 1
-        elseif ch == '"' and not in_single then
-            in_double = not in_double
-            i = i + 1
-        elseif not in_single and not in_double and ch == ">" then
-            local next_ch = segment:sub(i + 1, i + 1)
-            if next_ch == "&" then
-                local third_ch = segment:sub(i + 2, i + 2)
-                if third_ch:match("%d") then
-                    -- >&N where N is a digit = fd duplication, not a file write
-                    i = i + 3
-                else
-                    -- >&filename = combined output redirect (rare bash idiom)
-                    return true
-                end
-            else
-                -- > file, >> file, 2> file, &> file = file write
-                return true
-            end
-        else
-            i = i + 1
-        end
-    end
-    return false
-end
-
---- Strip harmless redirects from a command segment: writes to /dev/null
---- and file descriptor duplications (`2>&1`, `>&2`, `N>&M`). All of these
---- are no-ops or terminal-only writes — never write to a user file. Run
---- before pattern matching so `[^|;&]*` doesn't choke on the `&` in
---- `>&N`. Other redirect targets are left intact for `has_unsafe_redirect`
---- to detect.
---- @param segment string
---- @return string
-function M.strip_devnull_redirects(segment)
-    -- Order matters: longer/combined patterns before shorter ones
-    segment = segment:gsub("%s*&>/dev/null", "")
-    segment = segment:gsub("%s*2>/dev/null", "")
-    segment = segment:gsub("%s*>/dev/null", "")
-    -- File descriptor duplications: N>&M and >&N (digit only)
-    segment = segment:gsub("%s*%d+>&%d+", "")
-    segment = segment:gsub("%s*>&%d+", "")
-    return segment
-end
-
---- Replace shell operators (`|`, `;`, `&`) that sit inside quoted regions
---- with a safe placeholder. The splitter preserves quoted operators in a
---- segment (test: "preserves operators inside single quotes"), but compiled
---- allow patterns use `[^|;&]*` for `*`, which would reject the segment.
---- Masking only the quoted occurrences lets the match succeed without
---- weakening the operator exclusion against top-level operators (which the
---- splitter has already removed).
---- @param segment string
---- @return string
-function M.mask_quoted_operators(segment)
-    local result = {}
-    local in_single = false
-    local in_double = false
-    for i = 1, #segment do
-        local ch = segment:sub(i, i)
-        if ch == "'" and not in_double then
-            in_single = not in_single
-            table.insert(result, ch)
-        elseif ch == '"' and not in_single then
-            in_double = not in_double
-            table.insert(result, ch)
-        elseif
-            (in_single or in_double)
-            and (ch == "|" or ch == ";" or ch == "&")
-        then
-            table.insert(result, "x")
-        else
-            table.insert(result, ch)
-        end
-    end
-    return table.concat(result)
-end
-
---- Split a command string on top-level shell separators (|, ||, &&, ;, and
---- newline). A bare newline terminates a command the way a semicolon does, so
---- each statement of a multi-line command is checked independently. This both
---- closes an over-approval hole (without it, `echo ok\nrm -rf x` is one
---- segment whose `rm` hides inside `echo`'s trailing `*` wildcard and is
---- auto-approved) and removes false prompts on multi-line read-only scripts.
----
---- Newlines are NOT separators inside quotes (preserved as literal data) or
---- after a `\` line-continuation (the backslash+newline pair is elided). Empty
---- and whitespace-only segments — produced by separator adjacency such as the
---- `\n|\n` around an operator on its own line — are dropped.
----
---- Constructs we don't model (heredoc bodies, control-flow blocks) are not
---- recognised as units. Their inner lines simply become segments that fail to
---- match an allow pattern, so they fall through to a prompt (fail-closed).
----
---- Returns nil if the command contains unsafe constructs (subshells, unbalanced
---- quotes, process substitution).
---- @param command string
---- @return string[]|nil segments
-function M.split_command(command)
-    -- Bail on subshells and process substitution
-    if command:find("%$%(") or command:find("`") then
-        return nil
-    end
-    if command:find("<%(") or command:find(">%(") then
-        return nil
-    end
-
-    local segments = {}
-    local current = {}
-    local in_single = false
-    local in_double = false
-    local i = 1
-    local len = #command
-
-    while i <= len do
-        local ch = command:sub(i, i)
-        local advance = 1
-        local split = false
-
-        if ch == "'" and not in_double then
-            in_single = not in_single
-            table.insert(current, ch)
-        elseif ch == '"' and not in_single then
-            in_double = not in_double
-            table.insert(current, ch)
-        elseif
-            ch == "\\"
-            and not in_single
-            and command:sub(i + 1, i + 1) == "\n"
-        then
-            -- Line continuation: backslash+newline joins the two lines (the
-            -- shell elides it). Literal inside single quotes, so only outside.
-            advance = 2
-        elseif not in_single and not in_double then
-            local next_ch = command:sub(i + 1, i + 1)
-            if
-                (ch == "|" and next_ch == "|") or (ch == "&" and next_ch == "&")
-            then
-                split = true
-                advance = 2
-            elseif ch == "|" or ch == ";" or ch == "\n" then
-                split = true
-            else
-                table.insert(current, ch)
-            end
-        else
-            table.insert(current, ch)
-        end
-
-        if split then
-            table.insert(segments, table.concat(current))
-            current = {}
-        end
-
-        i = i + advance
-    end
-
-    -- Unbalanced quotes
-    if in_single or in_double then
-        return nil
-    end
-
-    table.insert(segments, table.concat(current))
-
-    -- Drop empty / whitespace-only segments (e.g. from a `\n|\n` operator on
-    -- its own line, or a trailing separator). The downstream checks treat a
-    -- whitespace-only segment as a non-match anyway, so dropping keeps the
-    -- segment list aligned with the actual statements.
-    local result = {}
-    for _, seg in ipairs(segments) do
-        if vim.trim(seg) ~= "" then
-            table.insert(result, seg)
-        end
-    end
-    return result
-end
-
---- Check if a single command segment matches any compiled pattern.
+--- Check if a single command leaf matches any compiled pattern. The walker
+--- supplies substitution-free, redirect-free leaf text (env-prefix assignments
+--- already excluded), so only the `stdbuf` wrapper and a system binary-dir
+--- prefix remain to strip before matching.
 --- @param segment string
 --- @param patterns agentic.utils.PermissionRules.CompiledPattern[]
 --- @return boolean
@@ -588,17 +367,14 @@ function M.matches_any_pattern(segment, patterns)
     local trimmed = vim.trim(segment)
     trimmed = M.strip_wrapper_prefixes(trimmed)
     trimmed = M.strip_command_path(trimmed)
-    trimmed = M.strip_devnull_redirects(trimmed)
     trimmed = vim.trim(trimmed)
 
     if trimmed == "" then
         return false
     end
 
-    local masked = M.mask_quoted_operators(trimmed)
-
     for _, pat in ipairs(patterns) do
-        if masked:match(pat.lua_pattern) then
+        if trimmed:match(pat.lua_pattern) then
             return true
         end
     end
@@ -706,61 +482,325 @@ function M.get_ask_patterns()
     return result
 end
 
---- Check if a compound Bash command should be auto-approved.
---- Every segment must match an allow pattern (or be an inert assignment-only
---- segment), and no segment may match a deny or ask pattern. Returns false
---- for empty commands, unsafe constructs, or any unmatched segment.
+-- ── Treesitter walker ──────────────────────────────────────────────────────
+--
+-- A command string is parsed with the zsh grammar and every node is proven
+-- safe before auto-approval. Reject-by-default: any node type not explicitly
+-- whitelisted bails to a prompt (fail-closed). The matcher layer above
+-- (`matches_any_pattern` + the four pattern buckets) is unchanged — the walker
+-- only decides HOW the command decomposes into leaf commands and refuses
+-- non-simple structure (substitution, control flow, file-writing redirects,
+-- dynamic command names).
+--
+-- Node-type names are pinned to the installed tree-sitter-zsh grammar (verified
+-- 2026-06-12). They can drift across grammar versions — re-verify with a
+-- parse-tree dump after upgrading the parser.
+
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[] }
+
+--- Container nodes whose every named child must itself pass. `do_group` and the
+--- loop/conditional statements are intentionally absent — Phase 1a rejects all
+--- control flow.
+local CONTAINER_TYPES = {
+    program = true,
+    list = true,
+    pipeline = true,
+    variable_assignments = true,
+}
+
+--- Command-substitution node types. An occurrence anywhere in a command subtree
+--- launders dangerous tokens past the deny/ask layer (`find $(echo -exec rm)`),
+--- so Phase 1a bails on all of them — assignment-position recursion is Phase 2.
+--- Backticks parse as `command_substitution` too.
+local SUBSTITUTION_TYPES = {
+    command_substitution = true,
+    process_substitution = true,
+}
+
+--- Node types that make a command NAME dynamic — the matcher cannot tell which
+--- binary actually runs, so a dynamic name bails.
+local DYNAMIC_NAME_TYPES = {
+    command_substitution = true,
+    process_substitution = true,
+    expansion = true,
+    simple_expansion = true,
+    variable_ref = true,
+    arithmetic_expansion = true,
+}
+
+--- Code-taking builtins: the argument is shell code the matcher cannot inspect,
+--- so they bail even when the builtin name would match a pattern. Never treated
+--- as transparent wrappers.
+local CODE_TAKING_BUILTINS = { eval = true, source = true, ["."] = true }
+
+--- Whether any node in the subtree is a command/process substitution.
+--- @param node TSNode
+--- @return boolean
+local function subtree_has_substitution(node)
+    if SUBSTITUTION_TYPES[node:type()] then
+        return true
+    end
+    for child in node:iter_children() do
+        if child:named() and subtree_has_substitution(child) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Whether any node in the subtree is a dynamic name part (rejects an
+--- interpolated command name built as a `concatenation`).
+--- @param node TSNode
+--- @return boolean
+local function subtree_has_dynamic_name(node)
+    if DYNAMIC_NAME_TYPES[node:type()] then
+        return true
+    end
+    for child in node:iter_children() do
+        if child:named() and subtree_has_dynamic_name(child) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Whether a `variable_assignment`'s name is safe to ignore as inert data.
+--- Uppercase execution hijackers (`PATH`, `LD_PRELOAD`, `BASH_ENV`,
+--- `PYTHONPATH`, …) are not — a poisoned var set before a use changes which
+--- binary the next command runs.
+--- @param va TSNode
+--- @param src string
+--- @return boolean
+local function safe_assignment_name(va, src)
+    local name_node = va:field("name")[1]
+    if not name_node then
+        return false
+    end
+    local name = vim.treesitter.get_node_text(name_node, src)
+    return is_safe_env_name(name) or is_data_var_name(name)
+end
+
+--- Extract the literal command name from a `command_name` node, normalising
+--- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
+--- deny pattern). Returns nil to bail on a dynamic name — a substitution,
+--- expansion, arithmetic, or an interpolated `concatenation`.
+--- @param command_name TSNode
+--- @param src string
+--- @return string|nil
+local function command_name_text(command_name, src)
+    local inner = command_name:named_child(0)
+    if not inner then
+        return nil
+    end
+    local t = inner:type()
+    if DYNAMIC_NAME_TYPES[t] then
+        return nil
+    end
+    if t == "string" then
+        -- A double-quoted name is literal only with no interpolation child.
+        local parts = {}
+        for c in inner:iter_children() do
+            if c:named() then
+                if c:type() ~= "string_content" then
+                    return nil
+                end
+                table.insert(parts, vim.treesitter.get_node_text(c, src))
+            end
+        end
+        return table.concat(parts)
+    end
+    if t == "raw_string" then
+        local txt = vim.treesitter.get_node_text(inner, src)
+        return (txt:gsub("^'", ""):gsub("'$", ""))
+    end
+    if t == "concatenation" and subtree_has_dynamic_name(inner) then
+        return nil
+    end
+    return vim.treesitter.get_node_text(inner, src)
+end
+
+--- Whether a `file_redirect` is a safe form: a write to /dev/null, or a file
+--- descriptor duplication (`2>&1`, `>&2`, `N>&M`). Every other target is a file
+--- write (or an unmodelled redirect) and bails. A substitution in the target
+--- (`cat > $(echo out)`) bails first.
+--- @param fr TSNode
+--- @param src string
+--- @return boolean
+local function redirect_is_safe(fr, src)
+    local op, dest
+    for child, field in fr:iter_children() do
+        if field == "destination" then
+            dest = child
+        elseif not child:named() then
+            op = child:type()
+        end
+    end
+    if not dest or subtree_has_substitution(dest) then
+        return false
+    end
+    if op == ">&" or op == "<&" then
+        local dt = dest:type()
+        return dt == "file_descriptor" or dt == "number"
+    end
+    return vim.treesitter.get_node_text(dest, src) == "/dev/null"
+end
+
+--- Forward declaration — `walk` and the per-node handlers are mutually
+--- recursive.
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
+local walk
+
+--- Walk a `command`: reject substitution anywhere, validate env-prefix
+--- assignments, extract the literal name, then match the leaf (name + args,
+--- with prefixes and redirects excluded) against the pattern buckets.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_command(node, src, ctx)
+    if subtree_has_substitution(node) then
+        return false
+    end
+
+    local name_node
+    --- @type string[]
+    local args = {}
+    for child in node:iter_children() do
+        local t = child:type()
+        if t == "variable_assignment" then
+            if not safe_assignment_name(child, src) then
+                return false
+            end
+        elseif t == "command_name" then
+            name_node = child
+        elseif child:named() then
+            table.insert(args, vim.treesitter.get_node_text(child, src))
+        end
+    end
+
+    if not name_node then
+        return false
+    end
+    local name = command_name_text(name_node, src)
+    if not name then
+        return false
+    end
+    if CODE_TAKING_BUILTINS[M.strip_command_path(name)] then
+        return false
+    end
+
+    local leaf = name
+    if #args > 0 then
+        leaf = leaf .. " " .. table.concat(args, " ")
+    end
+
+    if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
+        return false
+    end
+    if #ctx.ask > 0 and M.matches_any_pattern(leaf, ctx.ask) then
+        return false
+    end
+    return M.matches_any_pattern(leaf, ctx.allow)
+end
+
+--- Walk a `redirected_statement`: the body (command/pipeline/list) must pass,
+--- and every redirect must be a safe form. Heredoc/herestring redirects are
+--- unmodelled and bail.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_redirected(node, src, ctx)
+    for child, field in node:iter_children() do
+        if field == "body" then
+            if not walk(child, src, ctx) then
+                return false
+            end
+        elseif child:named() then
+            if
+                child:type() ~= "file_redirect"
+                or not redirect_is_safe(child, src)
+            then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+--- Walk a statement-level `variable_assignment` (`f=path`, `arr=(a b c)`). It
+--- executes nothing, so it is inert when the name is safe and the value holds
+--- no substitution. A poisoned-name assignment (`PATH=/evil`) bails because a
+--- later command would inherit it.
+--- @param node TSNode
+--- @param src string
+--- @return boolean
+local function walk_assignment(node, src)
+    if subtree_has_substitution(node) then
+        return false
+    end
+    return safe_assignment_name(node, src)
+end
+
+function walk(node, src, ctx)
+    local t = node:type()
+    if CONTAINER_TYPES[t] then
+        -- Iterate named children only — anonymous separators (`;`, `&&`, `|`,
+        -- `&`, newline) and `comment` nodes carry no executable content.
+        for child in node:iter_children() do
+            if child:named() and child:type() ~= "comment" then
+                if not walk(child, src, ctx) then
+                    return false
+                end
+            end
+        end
+        return true
+    elseif t == "command" then
+        return walk_command(node, src, ctx)
+    elseif t == "redirected_statement" then
+        return walk_redirected(node, src, ctx)
+    elseif t == "variable_assignment" then
+        return walk_assignment(node, src)
+    end
+    return false
+end
+
+--- Check if a Bash command should be auto-approved. Parses the command with the
+--- zsh grammar and walks the tree: every leaf command must match an allow
+--- pattern, no leaf may match a deny or ask pattern, and any non-simple
+--- structure (substitution, control flow, file-writing redirect, dynamic
+--- command name) bails. Fail-closed — an absent parser, a parse error, or a
+--- truncated/malformed tree all return false.
 --- @param command string
 --- @return boolean
 function M.should_auto_approve(command)
-    local allow = M.get_allow_patterns()
-    local deny = M.get_deny_patterns()
-    local ask = M.get_ask_patterns()
+    if type(command) ~= "string" or command == "" then
+        return false
+    end
+    -- A pathologically long generated command could make parsing slow on this
+    -- cold path. 64 KB is far above any real command — refuse rather than parse.
+    if #command > 65536 then
+        return false
+    end
 
+    local allow = M.get_allow_patterns()
     if #allow == 0 then
         return false
     end
 
-    local segments = M.split_command(command)
-    if not segments or #segments == 0 then
+    local ok, root = pcall(function()
+        local parser = vim.treesitter.get_string_parser(command, "zsh")
+        return parser:parse(true)[1]:root()
+    end)
+    if not ok or not root or root:has_error() then
         return false
     end
 
-    for _, seg in ipairs(segments) do
-        local trimmed = vim.trim(seg)
-        if trimmed == "" then
-            return false
-        end
-
-        -- Output redirection is a write regardless of the command, so
-        -- reject before pattern matching. /dev/null forms are stripped
-        -- first because they're harmless.
-        local stripped = M.strip_devnull_redirects(trimmed)
-        if M.has_unsafe_redirect(stripped) then
-            return false
-        end
-
-        -- Deny patterns block immediately
-        if #deny > 0 and M.matches_any_pattern(trimmed, deny) then
-            return false
-        end
-
-        -- Ask patterns trigger a prompt (not auto-approved)
-        if #ask > 0 and M.matches_any_pattern(trimmed, ask) then
-            return false
-        end
-
-        -- An assignment-only segment executes nothing. The segment that uses
-        -- the variable is matched on its own.
-        if
-            not M.is_inert_segment(trimmed)
-            and not M.matches_any_pattern(trimmed, allow)
-        then
-            return false
-        end
-    end
-
-    return true
+    return walk(root, command, {
+        allow = allow,
+        deny = M.get_deny_patterns(),
+        ask = M.get_ask_patterns(),
+    })
 end
 
 --- Invalidate cached patterns (forces re-read on next check).

@@ -123,7 +123,8 @@ glob strings, a small `structured` section carries these.
 ```jsonc
 { "cmd": "sort",                   // command name, after strip_command_path
   "subcommand": "api",             // optional; first non-option token (see below)
-  "options": ["o", "output"] }     // flag ids: short letters and/or long names
+  "options": ["o", "output"],      // flag ids (a.k.a. flags): short letters and/or long names
+  "positionals": ["*.pdf"] }       // optional; glob-matched positional args
 ```
 
 Option matching is the sound over-approximation above (short-cluster letters +
@@ -135,6 +136,17 @@ isn't mistaken for the subcommand — a small per-command list (git: `-C`, `-c`,
 matches `git -C diff push` (path literally `diff`) and auto-approves the push;
 the structured form resolves subcommand=push and prompts.
 
+**Glob is allowed on `positionals` and flag *values*, but never on `options`.**
+A positional has no cluster ambiguity, so a glob over the walker-extracted token
+is precise (clean boundaries, no quoting/operator confusion) — `positionals:
+["*.pdf"]` faithfully expresses `pdftotext *.pdf -`, and a positional glob can
+pin a subcommand a whole-command glob can't. But `options` must stay structured
+id-matching: a glob on a flag (`-o*`) would reabsorb the cluster leak this layer
+exists to close (`-uo` would no longer expand to `{u, o}`). So the schema is
+*available* for any field, glob-*capable* on positionals/values only, and **used
+per rule only where it adds soundness** — bare-command and positional globs that
+have nothing to gate stay plain glob strings in `permissions.json`.
+
 ### Migration
 
 Lift the ~20–30 option-gated entries into the `structured` section; leave every
@@ -144,14 +156,21 @@ each pipe segment independently. No 360-entry rewrite, no lossy conversion of
 settings.json. (The Phase 0 `find -okdir` glob patch is superseded by the
 structured `find` rule, which catches the positions the glob missed.)
 
-**Injected-sublanguage descent.** The config's `queries/zsh/injections.scm`
-injects awk/jq/sql/python/etc. into command-argument strings, and
-`get_string_parser(cmd, "zsh")` + `parse(true)` resolves those subtrees
-(verified: `awk 'BEGIN{system(...)}'` → `languages in tree: zsh, awk`). So the
-walker can descend into an injected sub-language and apply sub-language safety
-rules: awk's `system()`/`print >`/pipe-to-command → deny (closes the awk
-residual the original plan documented); `sqlite3 '<sql>'` → SELECT-only. This is
-a Phase-1+ capability, scoped per sub-language.
+**Injected-sublanguage descent (opportunistic only — not a backstop).** The
+config's `queries/zsh/injections.scm` injects awk/jq/sql/python/etc. into
+command-argument strings, and `get_string_parser(cmd, "zsh")` + `parse(true)`
+resolves those subtrees *when that query is on the runtimepath*. The injection
+is **not** intrinsic to the zsh parser: verified 2026-06-12 that in a clean env
+(`-u NONE`, only `~/.local/share/nvim/site` on rtp) `awk 'BEGIN{system(...)}'`
+resolves as `zsh` only — the awk subtree appears solely when the config dir
+(which owns `queries/zsh/injections.scm`) is on rtp. agentic.nvim is a submodule
+of that config so the query is present in situ, but other consumers of the
+plugin — or a config change — can remove it. So injection descent is a
+**best-effort enrichment** (awk's `system()`/`print >`/pipe-to-command → deny;
+`sqlite3 '<sql>'` → SELECT-only), Phase-1+ and scoped per sub-language, but it
+must never be the *only* thing guarding a sub-language hole. The
+parser-independent backstop is the Phase 0 `Bash(awk *system*)` glob deny — keep
+it regardless of injection descent; do not delete it in favour of the walker.
 
 **Remaining residuals (genuinely uncatchable, document):**
 - `sed` `e`/`s///e` (exec) and `w`/`W`/`s///w` (write) — no sed parser/injection,
@@ -160,13 +179,14 @@ a Phase-1+ capability, scoped per sub-language.
   already tolerated for any `$var`/glob/`~`.
 
 **Consequences for the sections below:** § "What is deleted vs kept" mostly
-stands — the glob matcher functions (`glob_to_lua_pattern`, `matches_any_pattern`,
-`extract_bash_patterns`, `load_patterns`, …) are **kept** as the glob layer, and
+stands — the glob matcher functions (`glob_to_lua_pattern` (with the `*` → `.*`
+tweak, see that section), `matches_any_pattern`, `extract_bash_patterns`,
+`load_patterns`, …) are **kept** as the glob layer, and
 the structural helpers (`split_command`, `mask_quoted_operators`,
 `has_unsafe_redirect`, `strip_devnull_redirects`, `is_inert_segment`) are still
 deleted (the walker replaces them). The structured matcher is **new code added
 beside** the glob matcher, not a rewrite of it; the glob bucket format is not
-replaced. The Phase 0 § sort/tee/awk/curl items defer into the Phase 1 structured
+replaced. The Phase 0 § sort/tee/awk/curl items defer into the Phase 1b structured
 layer; only the `find -okdir` deny (a live exec hole, glob-expressible,
 BSD-present) shipped as a data patch under the current matcher. The sed analysis
 below stands (recommend document), now joined by the awk-via-injection upgrade.
@@ -188,12 +208,25 @@ the command string is decomposed** and **how non-simple structure is refused**.
 `strip_wrapper_prefixes`.
 
 **Kept verbatim** (matcher layer — fed node-extracted text instead of
-regex-split segments): `glob_to_lua_pattern`, `extract_bash_patterns`,
+regex-split segments): `extract_bash_patterns`,
 `patterns_from_strings`, `load_patterns`, `read_json`, `settings_paths`,
 mtime caching, `get_{read_only,safe_write,allow,deny,ask}_patterns`,
 `get_additional_directories`, `SAFE_ENV_NAMES`, `is_safe_env_name`,
 `is_data_var_name`, `SYSTEM_BIN_DIRS`, `strip_command_path`, `invalidate_cache`,
 `matches_any_pattern`.
+
+**Kept but with one change** (`glob_to_lua_pattern`): the `*` expansion changes
+from `[^|;&]*` to `.*`. The operator exclusion was a belt-and-braces against the
+old regex splitter handing a segment that still held a top-level `|`/`;`/`&` — it
+stopped a single `*` from swallowing an operator and matching a compound command.
+The walker makes that structural: top-level operators are sibling separator nodes
+and each `command` leaf is matched independently, so the only `|`/`;`/`&` that can
+reach the matcher is a literal inside a quoted argument (`grep "a|b" file`) — which
+`*` *should* match. This is the partner change to deleting `mask_quoted_operators`
+(below): both were compensating for a tokeniser blind to quotes and structure.
+Keeping `[^|;&]*` while dropping the masking would spuriously fail every
+quoted-operator command (verified: `grep "a|b" file` matches `Bash(grep *)` under
+`.*`, not under `[^|;&]*`).
 
 Note `matches_any_pattern` currently calls the deleted `strip_devnull_redirects`
 and `mask_quoted_operators` (`permission_rules.lua:588,595`). After the rewrite
@@ -219,6 +252,15 @@ the whitelist (a backgrounded `rm x & ls` has `&` as an anonymous `program`
 child; dispatching it would over-reject every backgrounded command). Each
 `command` sibling is still walked independently.
 
+**`comment` is ignored too.** A trailing comment (`ls # rm -rf /`) parses as a
+*named* `comment` child of `program`, so "iterate named children only" would
+dispatch it and the reject-by-default would bail → spurious prompt, regressing
+the current approve-case (today the splitter keeps `#` in the `ls` segment and
+`ls *` matches it). A comment carries no executable content, so skip it in the
+same pass as the anonymous separators. Add it to the ignore set, not the
+whitelist (the whitelist is for nodes whose children must pass; a comment has
+none worth walking).
+
 ### Container nodes (recurse; all children must pass)
 
 `program`, `list`, `pipeline`, `do_group`, **`variable_assignments`**.
@@ -238,7 +280,11 @@ child; dispatching it would over-reject every backgrounded command). Each
    `command_substitution`, `expansion`, `simple_expansion`, `variable_ref`,
    `arithmetic_expansion`, or a `concatenation` containing any of these
    (`$(echo rm) -rf /`, `ec$(echo ho) hi`, `$((1+2))` all bail — dynamic command
-   word).
+   word). A quoted literal name nests one level: `"rm" -rf /` parses as
+   `command_name(string(string_content))`, so extract the name through
+   `string → string_content` (and confirm the `string` has no
+   `command_substitution`/`expansion`/`simple_expansion` child — an interpolated
+   name like `"$x" arg` bails) rather than reading the bare `string` node.
 3. **Leading `variable_assignment` children** (env prefixes, `LC_ALL=C grep x`):
    reuse the hijacker check (`is_safe_env_name`/`is_data_var_name`); uppercase
    hijacker (`PATH=`, `LD_PRELOAD=`, `BASH_ENV=`) → bail. The value must be a
@@ -260,12 +306,18 @@ child; dispatching it would over-reject every backgrounded command). Each
 > (`grep foo 2>/dev/null`, `ls 2>&1`). (Correction to the newer plan.)
 
 - Recurse the `command` child (must pass).
-- Each `file_redirect`, classify by target:
+- Each `file_redirect`, classify. Classification needs the **redirect-operator
+  token** (`&>` vs `>&`, `>` vs `>>`), which is an *anonymous* child of
+  `file_redirect` (e.g. `cat foo &> out` → `file_redirect('&>', word)`;
+  `2>&1` → `file_redirect(file_descriptor, '>&', number)`). This is the one
+  exception to the walker's "never dispatch an anonymous token" rule: the
+  operator token is **read** to classify, not dispatched through the whitelist.
   - target subtree contains a substitution (`cat > $(echo out)`) → bail first.
   - `/dev/null` → safe.
-  - fd duplication (`2>&1`, `>&N`, `N>&M`) → safe.
+  - fd duplication (operator `>&`/`<&`, target a `file_descriptor`/number:
+    `2>&1`, `>&N`, `N>&M`) → safe.
+  - `&>`/`&>>` combined redirects (operator carries the `&`) → bail (file writes).
   - any other target (a `word`/`string` filename) → bail (file write).
-  - `&>`/`&>>` combined redirects → bail (file writes).
 - `heredoc_redirect`, `herestring_redirect` → bail (input-only, not modelled;
   also covers `cat <<< $(rm x)`). Conservative; could be allowed later.
 
@@ -389,72 +441,115 @@ Live, currently-exploitable holes, independent of the parser rework. Pure data,
 shippable separately/first:
 
 - `sort -o out in` / `sort --output=FILE` writes a file (`sort *` in
-  `read_only:91`, no carve-out) → add `Bash(sort * -o *)` and
-  `Bash(sort * --output*)` to **deny**.
+  `read_only:92`; `read_only:91` is the bare `Bash(sort)`; no carve-out) → add
+  `Bash(sort * -o *)` and `Bash(sort * --output*)` to **deny**.
 - `tee out` writes by design (`tee *` in `read_only:318`, no carve-out) → add a
   deny carve-out. (The older plan's list missed this; its own "re-scan for
   flag-writers" instruction would catch it — so do the full re-scan, don't just
   patch the named cases.)
 - `awk 'BEGIN{system("rm -rf /")}'` executes arbitrary code (`awk *` in
-  `read_only:180`) → add `Bash(awk *system*)` to **deny**. Residual `awk -f
-  scriptfile` is out of reach but writing the script is itself gated — document,
-  don't chase.
+  `read_only:180`; today only the redirect form `Bash(awk * > *)` is denied, so
+  `system` is a **live, currently-exploitable hole**) → add `Bash(awk *system*)`
+  to **deny**. This is the parser-independent backstop for awk; the injection
+  descent (§ Injected-sublanguage descent) is opportunistic and must not replace
+  it. Residual `awk -f scriptfile` is out of reach but writing the script is
+  itself gated — document, don't chase.
 - **`sed` `e` command/flag** executes shell (`sed` in `read_only:179`, only
-  `-i` carved out). Two positionally-distinct forms: the `s///e` flag
-  (`sed 's/x/y/e'`, trailing in the flag run after the last delimiter) and the
-  `e` command (`sed 'e cmd'`, `sed '1e cmd'`, after an optional address,
-  mid-script). They have **different anchors**, so no single glob catches both:
-  a trailing-`e` pattern misses the `e` command, and a loose `Bash(sed *e*)`
-  false-positives on any `e` in a word (`sed 's/dependencies//'`). Flag order
-  (`ge` vs `eg`) and a following filename further break anchoring. **Decision
-  needed:** (a) demote `sed` out of `read_only` (costs the common
-  `sed 's/a/b/' file` approval), or (b) accept the `e`-command residual as a
-  documented limitation (same tier as `awk -f scriptfile`). An anchored glob
-  carve-out (c) is not cleanly expressible — do not rely on it. Recommend (b).
+  `-i` carved out). Two forms: the `s///e` flag (`sed 's/x/y/e'`) and the `e`
+  command (`sed 'e cmd'`, `sed '1e cmd'`, after an optional address, mid-script).
+  **Decision: (b) — keep `sed` in `read_only`, document the `e`/`s///e` residual
+  as an accepted limitation** (same tier as `awk -f scriptfile`; constructing a
+  sed exec is itself a deliberate act). A glob carve-out (c) was verified
+  unsound at *both* the `Bash(...)` line level and inside the structured
+  positional field (2026-06-12 spikes against GNU sed 4.10):
+  - The dangerous forms have no globbable anchor. GNU sed needs **no space**
+    after `e` (`sed 'eecho x'` executes), accepts a **bare** `e` (executes the
+    pattern space), and the `e` command can follow an address (`1e`, `/h/e`),
+    `;`, or `{`. The `s///e` flag allows **any delimiter** (`s|…|…|e`) and **any
+    flag order** (`ge`).
+  - So precise patterns (`e *`, `s/*/e`, `s/*/*/e`) are clean (zero
+    false-positives) but bypass 6 of 8 dangerous forms even unioned; the only
+    bypass-free glob, `*e*`, denies any script containing the letter `e` — i.e.
+    most real sed, which is option (a) in disguise.
+  - Field-level glob (matching just the script positional) removes
+    false-positives from *non-script* tokens but not from the script body, and
+    leaves every bypass intact — the discriminating structure lives inside an
+    **unparsed sub-language** (no sed parser/injection), below where any glob or
+    the walker can see.
+  Option (a) (demote `sed` out of `read_only`) was rejected: it prompts on the
+  overwhelmingly-common `sed 's/a/b/' file` to close a rare, deliberately-
+  constructed hole.
 
 ## Phasing
 
 - **Phase 0** — permissions.json audit above. Data only, no logic, no parser
   dependency. Can ship first/independently.
-- **Phase 1** — structural swap: walker with the whitelist above **minus**
+- **Phase 1a** — structural swap: the walker with the whitelist above **minus**
   assignment-substitution recursion and loops (reject all control flow and all
-  substitution). Every existing approve/prompt corpus case must pass unchanged;
-  delete the five replaced helpers; convert helper-level tests to behavioural.
-  This is where the bulk of validation against the corpus lives.
+  substitution), feeding the **existing glob matcher** node-extracted leaf text
+  (`*` → `.*`, `mask_quoted_operators`/`strip_devnull_redirects` deleted). Delete
+  the five replaced structural helpers; convert helper-level tests to behavioural.
+  The contract is the corpus (§ Testing) — with the corrected assertions noted
+  there, not "every case unchanged". This is where the bulk of corpus validation
+  lives.
+- **Phase 1b** — the Policy C structured matcher: the
+  `command`/`subcommand`/`options`/`positionals` schema, the option-cluster
+  over-approximation, the `permissions.json` mixed-format restructure, and the
+  ~20–30 migrated flag-writer rules. Separated from 1a because it is a large
+  *new* attack surface with its own soundness argument (cluster expansion,
+  subcommand detection skipping arg-taking globals) — it deserves review
+  independent of the structural swap. Composes with 1a's glob layer per the
+  `approve iff (glob_allow OR structured_allow) AND NOT any-deny/ask` formula.
 - **Phase 2** — add assignment-position `command_substitution` recursion and
   `for`/`while`/`until` loops. Isolated here so the subtle substitution-safety
   trust-widening gets a focused review.
 
 ## Testing
 
-The 116-case corpus in `permission_rules.test.lua` is the contract and the
+The 118-case corpus in `permission_rules.test.lua` is the contract and the
 regression oracle. Helper-level describe-blocks for deleted functions
 (`split_command:?`, `mask_quoted_operators`, `has_unsafe_redirect`,
 `strip_devnull_redirects`, `is_inert_segment`) get rewritten as end-to-end
 `should_auto_approve` assertions before deletion. The `should_auto_approve`,
 `should_auto_approve with redirect`, and `config permissions` blocks are
-behavioural and must pass unchanged. Tests for kept matcher functions
-(`matches_any_pattern`, `strip_command_path`, `strip_wrapper_prefixes`,
-`glob_to_lua_pattern`, `extract_bash_patterns`) survive as-is.
+behavioural and pass unchanged **except for two assertions that flip
+`false`→`true`** and must be rewritten: `grep "a\"b|c" file`
+(`permission_rules.test.lua:956`) and `echo 'can'\''t|here'` (`:984`) — the old
+splitter bailed on apparent quote imbalance, but the walker correctly sees the
+`|` is inside a string, extracts one safe command, and approves. The flip is
+*more* correct, not a regression; reclassify both as expected positives. Tests
+for kept matcher functions (`matches_any_pattern`, `strip_command_path`,
+`strip_wrapper_prefixes`, `extract_bash_patterns`) survive as-is.
+`glob_to_lua_pattern` tests change with the `*` → `.*` expansion (any case
+asserting `*` stops at `|`/`;`/`&` must be updated).
 
 New cases:
 
-- **Phase 1 negatives:** `$(echo rm) -rf /`, `$(rm -rf /)`,
+- **Phase 1a negatives:** `$(echo rm) -rf /`, `$(rm -rf /)`,
   `grep $(cat list) f`, `echo "$(rm -rf x)"`, `echo a$(whoami)b`,
   `ec$(echo ho) hi`, `cat > $(echo out)`, `cat <<< $(rm x)`,
   `cat foo &> out`, `cat foo &>> out`, `"rm" -rf /` (quoted name → `rm`),
   `! rm x`, `{ rm x; }`, `[[ -f x ]] && rm y`, `( rm -rf x )`, `cat <(ls)`,
   `eval rm -rf /`, `source script`, `. script` (code-taking builtins → bail),
   `exec rm -rf /`, `exec > out` (no transparent-wrapper strip → prompt),
-  truncated `rm -rf / |` (`has_error`), `for …` / `while …` (rejected in P1).
-- **Phase 1 positives (parity):** `a=1 b=2`, `arr=(a b c)`,
+  truncated `rm -rf / |` (`has_error`), `for …` / `while …` (rejected in P1a).
+- **Phase 1a positives (parity):** `a=1 b=2`, `arr=(a b c)`,
   `f=path/to/file; ls "$f"`, `echo '$(foo)'` (raw_string, no subst),
-  `ls # rm -rf /` (comment), all current redirect approve-cases.
+  `ls # rm -rf /` (comment → approved), `grep "a|b" file` (quoted operator),
+  all current redirect approve-cases.
+- **Phase 1b (structured matcher):** `sort -uo out` (short cluster),
+  `sort --out=x` (GNU abbreviation), `sort -oFILE` (glued arg) → all deny via
+  `{cmd: sort, options: ["o","output"]}`; `git -C diff push`
+  (subcommand resolves to `push`, not the `-C` arg `diff`) → prompt; a
+  positional-glob allow (`pdftotext *.pdf -`) → approve.
 - **Phase 2 positives:** `f=$(echo hi)`, `for f in *.txt; do cat "$f"; done`.
 - **Phase 2 negatives:** `foo=$(rm x) ls`, `arr=($(rm x))`, `f=$(rm x)`,
   `f=$(foo > bar)`, `find $(echo '-exec rm')`, `for f in $(ls); do …`.
 - **Phase 0:** `sort -o out in`, `tee out`, `awk 'BEGIN{system("rm -rf /")}'`
-  (and the sed decision's chosen behaviour) all prompt.
+  all prompt. Per the sed (b) decision: `sed 's/a/b/' file` stays **approved**,
+  and the exec residual (`sed 'e cmd'`, `sed 's/x/y/e'`) is a *documented*
+  approved limitation — assert the benign approval, do not assert a prompt for
+  the residual.
 - **Parser guard:** force `get_string_parser` unavailable → `should_auto_approve`
   returns `false` (not error). Confirm `zsh.so` resolves in the mini.test
   headless env.
@@ -470,9 +565,18 @@ Run `make validate` after each step.
   brackets misparses. None compromise safety: misparse → `has_error` → bail;
   unmodelled-but-clean node → not whitelisted → bail. Worth sampling real agent
   commands to gauge how often clean commands degrade to a prompt.
-- **Pathological input** — cap input length (refuse over N KB) to avoid a slow
-  parse on a very long generated command. Cold path, short strings → sub-ms
-  normally.
+  - On a parser upgrade, re-verify that `comment` never attaches as a child of
+    a `command` node. In the pinned grammar comments only attach to containers
+    (`program`, `pipeline`) or to an `array`, all of which skip them, so
+    `walk_command`'s arg loop never folds a comment into a matched leaf. If a
+    future version nests `comment` under `command`, mirror the container walk's
+    comment-skip into the arg loop — incompleteness-safe today (an inert comment
+    can't change the command name or evade an anchored deny), so this is a
+    drift hardening, not a live bug.
+- **Pathological input** — cap input length (refuse over 64 KB, fail-closed →
+  prompt) to avoid a slow parse on a very long generated command. 64 KB is far
+  above any real command and the check is a length comparison before
+  `get_string_parser`. Cold path, short strings → sub-ms normally.
 - **Blast radius** — large rewrite of a security module. Mitigated by the
   untouched matcher layer, the behavioural corpus as contract, and the phasing.
 
@@ -482,3 +586,10 @@ Run `make validate` after each step.
 Bash commands" — the split-on-operators description becomes a tree-walk +
 hard-zsh-parser-dependency description. README permission section: note the zsh
 parser requirement.
+
+**Surface in the PR description (not fixed here):** `Bash(env *)` in `read_only`
+auto-approves arbitrary commands as a side effect (`env PATH=/tmp/evil sh -c …`)
+— `env` *as a command* is untouched by this plan (the walker's env-prefix
+handling covers `LC_ALL=C grep x`, the prefix form, not `env` invoked as a
+program). Adjacent to the env handling this plan moves, so flag it; out of scope
+to fix. See `notes/perm-wrapper-command-auto-approve.md`.

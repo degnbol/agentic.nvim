@@ -5,7 +5,7 @@ describe("PermissionRules", function()
     describe("glob_to_lua_pattern", function()
         it("converts simple glob with trailing *", function()
             local pat = PermissionRules.glob_to_lua_pattern("grep *")
-            assert.equal("^grep [^|;&]*$", pat)
+            assert.equal("^grep .*$", pat)
         end)
 
         it("converts glob with no wildcard", function()
@@ -20,7 +20,7 @@ describe("PermissionRules", function()
 
         it("converts glob with multiple wildcards", function()
             local pat = PermissionRules.glob_to_lua_pattern("cd * && git *log*")
-            assert.equal("^cd [^|;&]* && git [^|;&]*log[^|;&]*$", pat)
+            assert.equal("^cd .* && git .*log.*$", pat)
         end)
     end)
 
@@ -56,73 +56,6 @@ describe("PermissionRules", function()
         end)
     end)
 
-    describe("strip_devnull_redirects", function()
-        it("strips >/dev/null", function()
-            assert.equal(
-                "cmd arg",
-                PermissionRules.strip_devnull_redirects("cmd arg >/dev/null")
-            )
-        end)
-
-        it("strips 2>/dev/null", function()
-            assert.equal(
-                "cmd arg",
-                PermissionRules.strip_devnull_redirects("cmd arg 2>/dev/null")
-            )
-        end)
-
-        it("strips &>/dev/null", function()
-            assert.equal(
-                "cmd arg",
-                PermissionRules.strip_devnull_redirects("cmd arg &>/dev/null")
-            )
-        end)
-
-        it("strips 2>&1", function()
-            assert.equal(
-                "cmd arg",
-                PermissionRules.strip_devnull_redirects("cmd arg 2>&1")
-            )
-        end)
-
-        it("strips multiple redirects", function()
-            assert.equal(
-                "cmd arg",
-                PermissionRules.strip_devnull_redirects(
-                    "cmd arg 2>/dev/null >/dev/null"
-                )
-            )
-        end)
-
-        it("does not strip non-devnull redirects", function()
-            assert.equal(
-                "cmd arg >/tmp/out",
-                PermissionRules.strip_devnull_redirects("cmd arg >/tmp/out")
-            )
-        end)
-
-        it("strips >&N fd duplication", function()
-            assert.equal(
-                "echo hi",
-                PermissionRules.strip_devnull_redirects("echo hi >&2")
-            )
-        end)
-
-        it("strips N>&M fd duplication", function()
-            assert.equal(
-                "cmd",
-                PermissionRules.strip_devnull_redirects("cmd 2>&1")
-            )
-        end)
-
-        it("does not strip >&filename (non-digit target)", function()
-            assert.equal(
-                "cmd >&output",
-                PermissionRules.strip_devnull_redirects("cmd >&output")
-            )
-        end)
-    end)
-
     describe("strip_wrapper_prefixes", function()
         it("strips stdbuf -oL prefix", function()
             assert.equal(
@@ -152,67 +85,16 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("strips known-safe env-var assignment", function()
+        -- Variable-assignment prefixes (env vars, data vars, hijackers) are no
+        -- longer handled here — the walker validates and excludes them
+        -- structurally. Their behaviour is covered by the should_auto_approve
+        -- env-prefix tests below.
+        it("leaves a variable-assignment prefix in place", function()
             assert.equal(
-                "git log",
+                "PYTHONUNBUFFERED=1 git log",
                 PermissionRules.strip_wrapper_prefixes(
                     "PYTHONUNBUFFERED=1 git log"
                 )
-            )
-        end)
-
-        it("strips chained safe env-var assignments", function()
-            assert.equal(
-                "ls -la",
-                PermissionRules.strip_wrapper_prefixes("LC_ALL=C TZ=UTC ls -la")
-            )
-        end)
-
-        it("strips safe env-var followed by stdbuf", function()
-            assert.equal(
-                "grep foo",
-                PermissionRules.strip_wrapper_prefixes(
-                    "PYTHONUNBUFFERED=1 stdbuf -oL grep foo"
-                )
-            )
-        end)
-
-        it("does not strip execution-hijacking env vars", function()
-            -- These can change which binary runs or inject code, so the
-            -- inner command's pattern match must NOT auto-approve.
-            for _, cmd in ipairs({
-                "LD_PRELOAD=/tmp/evil.so cat foo",
-                "DYLD_INSERT_LIBRARIES=/tmp/x.dylib cat foo",
-                "PATH=/tmp/evil:/usr/bin cat foo",
-                "BASH_ENV=/tmp/payload cat foo",
-                "PYTHONPATH=/tmp/evil python -c x",
-                "PYTHONSTARTUP=/tmp/x.py python -c x",
-                "GIT_EXTERNAL_DIFF=/tmp/evil git diff",
-            }) do
-                assert.equal(cmd, PermissionRules.strip_wrapper_prefixes(cmd))
-            end
-        end)
-
-        it("does not strip non-assignment leading word", function()
-            assert.equal(
-                "FOO bar=baz ls",
-                PermissionRules.strip_wrapper_prefixes("FOO bar=baz ls")
-            )
-        end)
-
-        it("strips a lowercase data-var prefix", function()
-            assert.equal(
-                'ls "$f"',
-                PermissionRules.strip_wrapper_prefixes('f=/path/to/file ls "$f"')
-            )
-        end)
-
-        it("strips a single-uppercase-letter prefix", function()
-            -- No execution-hijacking env var is a single letter, so `N=10`
-            -- is inert data like a lowercase var.
-            assert.equal(
-                "seq 1 10",
-                PermissionRules.strip_wrapper_prefixes("N=10 seq 1 10")
             )
         end)
     end)
@@ -250,208 +132,6 @@ describe("PermissionRules", function()
             assert.equal(
                 "grep foo",
                 PermissionRules.strip_command_path("grep foo")
-            )
-        end)
-    end)
-
-    describe("is_inert_segment", function()
-        it("accepts a lowercase assignment", function()
-            assert.is_true(
-                PermissionRules.is_inert_segment("f=path/to/file")
-            )
-        end)
-
-        it("accepts an empty value", function()
-            assert.is_true(PermissionRules.is_inert_segment("f="))
-        end)
-
-        it("accepts repeated assignments", function()
-            assert.is_true(PermissionRules.is_inert_segment("a=1 b=2"))
-        end)
-
-        it("accepts a safe-named env assignment", function()
-            assert.is_true(PermissionRules.is_inert_segment("LC_ALL=C"))
-        end)
-
-        it("rejects an uppercase hijacker assignment", function()
-            assert.is_false(PermissionRules.is_inert_segment("PATH=/evil/bin"))
-        end)
-
-        it("rejects the prefix-with-command form", function()
-            -- `f=foo bar` runs `bar`, which reduces to a non-empty command and
-            -- is matched on its own.
-            assert.is_false(PermissionRules.is_inert_segment("f=foo bar"))
-        end)
-
-        it("rejects a plain command", function()
-            assert.is_false(PermissionRules.is_inert_segment("ls -la"))
-        end)
-    end)
-
-    describe("split_command", function()
-        it("splits on pipe", function()
-            local segs = PermissionRules.split_command("grep foo | head -5")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-            assert.equal("grep foo ", segs[1])
-            assert.equal(" head -5", segs[2])
-        end)
-
-        it("splits on &&", function()
-            local segs = PermissionRules.split_command("cd /tmp && ls -la")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-        end)
-
-        it("splits on ||", function()
-            local segs = PermissionRules.split_command("cmd1 || cmd2")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-        end)
-
-        it("splits on semicolon", function()
-            local segs = PermissionRules.split_command("cmd1; cmd2")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-        end)
-
-        it("handles multi-line pipe commands", function()
-            local segs =
-                PermissionRules.split_command("grep -r 'foo' .\n|\n  head -40")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-        end)
-
-        it("returns nil for subshell $(...)", function()
-            local segs = PermissionRules.split_command("echo $(whoami)")
-            assert.is_nil(segs)
-        end)
-
-        it("returns nil for backticks", function()
-            local segs = PermissionRules.split_command("echo `whoami`")
-            assert.is_nil(segs)
-        end)
-
-        it("returns nil for process substitution <()", function()
-            local segs = PermissionRules.split_command("diff <(cmd1) <(cmd2)")
-            assert.is_nil(segs)
-        end)
-
-        it("returns nil for unbalanced single quotes", function()
-            local segs = PermissionRules.split_command("echo 'unbalanced")
-            assert.is_nil(segs)
-        end)
-
-        it("returns nil for unbalanced double quotes", function()
-            local segs = PermissionRules.split_command('echo "unbalanced')
-            assert.is_nil(segs)
-        end)
-
-        it("preserves operators inside single quotes", function()
-            local segs = PermissionRules.split_command("grep 'a|b' file | head")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-            assert.equal("grep 'a|b' file ", segs[1])
-        end)
-
-        it("preserves operators inside double quotes", function()
-            local segs = PermissionRules.split_command('grep "a&&b" file && ls')
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-        end)
-
-        it("handles single command with no operators", function()
-            local segs = PermissionRules.split_command("ls -la /tmp")
-            assert.is_not_nil(segs)
-            assert.equal(1, #segs)
-            assert.equal("ls -la /tmp", segs[1])
-        end)
-
-        it("splits on bare newline", function()
-            local segs = PermissionRules.split_command("echo hi\nrm -rf bar")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-            assert.equal("echo hi", segs[1])
-            assert.equal("rm -rf bar", segs[2])
-        end)
-
-        it("drops empty segments from a separator on its own line", function()
-            local segs = PermissionRules.split_command("grep foo .\n|\n head")
-            assert.is_not_nil(segs)
-            assert.equal(2, #segs)
-            assert.equal("grep foo .", segs[1])
-            assert.equal(" head", segs[2])
-        end)
-
-        it("joins a backslash line continuation", function()
-            local segs = PermissionRules.split_command("grep foo \\\n bar")
-            assert.is_not_nil(segs)
-            assert.equal(1, #segs)
-            assert.equal("grep foo  bar", segs[1])
-        end)
-
-        it("preserves a newline inside single quotes", function()
-            local segs = PermissionRules.split_command("sed '1p\n2p' file")
-            assert.is_not_nil(segs)
-            assert.equal(1, #segs)
-            assert.equal("sed '1p\n2p' file", segs[1])
-        end)
-    end)
-
-    describe("mask_quoted_operators", function()
-        it("masks | inside double quotes", function()
-            assert.equal(
-                'grep "axb" file',
-                PermissionRules.mask_quoted_operators('grep "a|b" file')
-            )
-        end)
-
-        it("masks | inside single quotes", function()
-            assert.equal(
-                "grep 'axb' file",
-                PermissionRules.mask_quoted_operators("grep 'a|b' file")
-            )
-        end)
-
-        it("masks ; and & inside quotes", function()
-            assert.equal(
-                'echo "axbxc"',
-                PermissionRules.mask_quoted_operators('echo "a;b&c"')
-            )
-        end)
-
-        it("leaves unquoted operators alone", function()
-            assert.equal(
-                "grep foo | head",
-                PermissionRules.mask_quoted_operators("grep foo | head")
-            )
-        end)
-
-        it("handles mixed quoted and unquoted regions", function()
-            assert.equal(
-                'grep "axb" | head',
-                PermissionRules.mask_quoted_operators('grep "a|b" | head')
-            )
-        end)
-
-        it("treats single quotes as literal inside double quotes", function()
-            assert.equal(
-                [["a 'bxc' d"]],
-                PermissionRules.mask_quoted_operators([["a 'b|c' d"]])
-            )
-        end)
-
-        it("treats double quotes as literal inside single quotes", function()
-            assert.equal(
-                [['a "bxc" d']],
-                PermissionRules.mask_quoted_operators([['a "b|c" d']])
-            )
-        end)
-
-        it("handles adjacent quoted regions of different types", function()
-            assert.equal(
-                [["axb"'cxd']],
-                PermissionRules.mask_quoted_operators([["a|b"'c|d']])
             )
         end)
     end)
@@ -503,7 +183,9 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("matches after stripping /dev/null redirect", function()
+        it("matches a leaf with a trailing redirect via *", function()
+            -- The walker strips redirects before the matcher sees the leaf, but
+            -- a stray redirect in the text is matched by `*` (`.*`) anyway.
             local patterns = {
                 {
                     original = "grep *",
@@ -803,7 +485,10 @@ describe("PermissionRules", function()
             Config.permissions.use_claude_settings = orig_claude
         end)
 
-        it("handles newlines in compound commands", function()
+        it("approves a multi-line pipe (trailing-pipe continuation)", function()
+            -- A pipe at end of line continues to the next — valid shell that
+            -- parses as one pipeline. The isolated-pipe form (`src\n|\n head`)
+            -- is invalid shell and is rejected (see the walker block below).
             local orig_read_json = PermissionRules.read_json
             PermissionRules.read_json = function(path)
                 if path:find("settings%.json$") then
@@ -821,7 +506,7 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
 
             local result = PermissionRules.should_auto_approve(
-                "grep -r 'pattern' src\n|\n  head -40"
+                "grep -r 'pattern' src |\n  head -40"
             )
             assert.is_true(result)
 
@@ -954,11 +639,13 @@ describe("PermissionRules", function()
         end)
 
         it(
-            "falls through when same-type escaped quote unbalances segment",
+            "approves an escaped quote with a pipe inside the string",
             function()
-                -- Splitter doesn't model backslash-escapes, so `"a\"b|c"` looks
-                -- unbalanced — split_command returns nil and we don't auto-approve.
-                -- The `\` here must be a literal backslash char, not a lua escape.
+                -- The walker sees `"a\"b|c"` is one double-quoted argument, so
+                -- the `|` is string data, not an operator. One safe `grep`
+                -- command — approve. (The old regex splitter saw an apparent
+                -- quote imbalance and bailed.) The `\` here is a literal
+                -- backslash char, not a lua escape.
                 local orig_read_json = PermissionRules.read_json
                 PermissionRules.read_json = function(path)
                     if path:find("settings%.json$") then
@@ -974,7 +661,7 @@ describe("PermissionRules", function()
 
                 local result =
                     PermissionRules.should_auto_approve([[grep "a\"b|c" file]])
-                assert.is_false(result)
+                assert.is_true(result)
 
                 PermissionRules.read_json = orig_read_json
                 PermissionRules.invalidate_cache()
@@ -982,11 +669,12 @@ describe("PermissionRules", function()
         )
 
         it(
-            "falls through on bash quote-reopening idiom with outer pipe",
+            "approves a quote-reopening idiom with a quoted pipe",
             function()
-                -- Bash 'can'\''t|x' would concatenate as can't|x (pipe quoted).
-                -- Our state machine (and the splitter) see the `|` as unquoted;
-                -- splitter fragments the command, no segment matches, fall through.
+                -- zsh `'can'\''t|here'` concatenates to the literal can't|here,
+                -- so the `|` is inside the argument. The walker parses it as one
+                -- safe `echo` command — approve. (The old splitter saw the `|`
+                -- as unquoted and fragmented the command, bailing.)
                 local orig_read_json = PermissionRules.read_json
                 PermissionRules.read_json = function(path)
                     if path:find("settings%.json$") then
@@ -1003,7 +691,7 @@ describe("PermissionRules", function()
                 local result = PermissionRules.should_auto_approve(
                     [[echo 'can'\''t|here']]
                 )
-                assert.is_false(result)
+                assert.is_true(result)
 
                 PermissionRules.read_json = orig_read_json
                 PermissionRules.invalidate_cache()
@@ -1060,58 +748,6 @@ describe("PermissionRules", function()
 
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
-        end)
-    end)
-
-    describe("has_unsafe_redirect", function()
-        it("detects > file", function()
-            assert.is_true(PermissionRules.has_unsafe_redirect("cat foo > bar"))
-        end)
-
-        it("detects >> file (append)", function()
-            assert.is_true(
-                PermissionRules.has_unsafe_redirect("echo x >> /tmp/log")
-            )
-        end)
-
-        it("detects 2> file", function()
-            assert.is_true(
-                PermissionRules.has_unsafe_redirect("cat foo 2>/tmp/err")
-            )
-        end)
-
-        it("detects &> file", function()
-            assert.is_true(
-                PermissionRules.has_unsafe_redirect("cat foo &>/tmp/all")
-            )
-        end)
-
-        it("allows >&N (fd duplication)", function()
-            assert.is_false(
-                PermissionRules.has_unsafe_redirect("echo error >&2")
-            )
-        end)
-
-        it("allows 2>&1", function()
-            assert.is_false(
-                PermissionRules.has_unsafe_redirect("cmd 2>&1")
-            )
-        end)
-
-        it("ignores > inside single quotes", function()
-            assert.is_false(
-                PermissionRules.has_unsafe_redirect("grep 'a > b' file")
-            )
-        end)
-
-        it("ignores > inside double quotes", function()
-            assert.is_false(
-                PermissionRules.has_unsafe_redirect([[grep "a > b" file]])
-            )
-        end)
-
-        it("returns false for plain command", function()
-            assert.is_false(PermissionRules.has_unsafe_redirect("ls -la /tmp"))
         end)
     end)
 
@@ -1298,6 +934,34 @@ describe("PermissionRules", function()
             )
         end)
 
+        it("rejects awk system() via plugin deny list", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "awk 'BEGIN{system(\"rm -rf /\")}'"
+                )
+            )
+        end)
+
+        -- sed stays in read_only. The s///e flag and `e` command can run a
+        -- shell, but those forms have no soundly-globbable anchor (GNU sed
+        -- needs no space after `e`, accepts a bare `e`, and allows any s///
+        -- delimiter and flag order), so a carve-out would either bypass the
+        -- dangerous forms or deny most real sed. That exec residual is an
+        -- accepted, documented limitation. The common benign case is approved.
+        it("approves benign sed substitution", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
+            assert.is_true(
+                PermissionRules.should_auto_approve("sed 's/a/b/' file")
+            )
+        end)
+
         it("rejects command not in any allow list", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
@@ -1347,6 +1011,166 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve("ls /tmp && make test x")
             )
+        end)
+    end)
+
+    -- Phase 1a walker: structural decomposition via the zsh treesitter parse
+    -- tree. Reject-by-default — substitution, control flow, file-writing
+    -- redirects, dynamic command names, and parse errors all bail to a prompt.
+    describe("should_auto_approve (treesitter walker)", function()
+        --- Decide a command with the given allow/deny/ask Bash patterns sourced
+        --- from a stubbed settings.json (plugin defaults are not loaded — the
+        --- stub returns nil for any non-settings path).
+        --- @param command string
+        --- @param perms { allow?: string[], deny?: string[], ask?: string[] }
+        --- @return boolean
+        local function decide(command, perms)
+            local orig = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = perms }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+            local result = PermissionRules.should_auto_approve(command)
+            PermissionRules.read_json = orig
+            PermissionRules.invalidate_cache()
+            return result
+        end
+
+        -- A broad allow list so a bail is provably about structure, not a
+        -- missing entry.
+        local ALLOW = {
+            allow = {
+                "Bash(grep *)",
+                "Bash(echo *)",
+                "Bash(cat *)",
+                "Bash(ls *)",
+                "Bash(rm *)",
+                "Bash(head *)",
+                "Bash(seq *)",
+            },
+        }
+
+        describe("bails on substitution anywhere", function()
+            for _, cmd in ipairs({
+                "$(echo rm) -rf /",
+                "$(rm -rf /)",
+                "grep $(cat list) f",
+                'echo "$(rm -rf x)"',
+                "echo a$(whoami)b",
+                "ec$(echo ho) hi",
+                "cat > $(echo out)",
+                "cat <<< $(rm x)",
+                "echo `whoami`",
+                "foo=$(rm x) ls",
+                "f=$(echo hi)",
+            }) do
+                it("rejects " .. cmd, function()
+                    assert.is_false(decide(cmd, ALLOW))
+                end)
+            end
+        end)
+
+        describe("bails on control flow and compound structure", function()
+            for _, cmd in ipairs({
+                "! rm x",
+                "{ rm x; }",
+                "[[ -f x ]] && rm y",
+                "( rm -rf x )",
+                "cat <(ls)",
+                "for f in *.txt; do cat \"$f\"; done",
+                "while read l; do echo \"$l\"; done",
+            }) do
+                it("rejects " .. cmd, function()
+                    assert.is_false(decide(cmd, ALLOW))
+                end)
+            end
+        end)
+
+        describe("bails on file-writing and unmodelled redirects", function()
+            for _, cmd in ipairs({
+                "cat foo &> out",
+                "cat foo &>> out",
+                "cat /etc/hosts > /tmp/x",
+                "echo x >> /tmp/log",
+            }) do
+                it("rejects " .. cmd, function()
+                    assert.is_false(decide(cmd, ALLOW))
+                end)
+            end
+        end)
+
+        describe("bails on a parse error (fail-closed)", function()
+            for _, cmd in ipairs({
+                "rm -rf / |", -- truncated pipeline
+                "grep src\n| head", -- isolated pipe — invalid shell
+            }) do
+                it("rejects " .. vim.inspect(cmd), function()
+                    assert.is_false(decide(cmd, ALLOW))
+                end)
+            end
+        end)
+
+        it("bails on code-taking builtins even when allowed", function()
+            local perms = {
+                allow = {
+                    "Bash(eval *)",
+                    "Bash(source *)",
+                    "Bash(. *)",
+                },
+            }
+            assert.is_false(decide("eval rm -rf /", perms))
+            assert.is_false(decide("source script", perms))
+            assert.is_false(decide(". script", perms))
+        end)
+
+        it("bails on a dynamic (arithmetic) command name", function()
+            assert.is_false(decide("$((1+2))", ALLOW))
+        end)
+
+        it("normalises a quoted command name for deny matching", function()
+            -- `"rm"` must resolve to `rm` so it cannot evade the deny rule.
+            assert.is_false(decide('"rm" -rf /', {
+                allow = { "Bash(rm *)" },
+                deny = { "Bash(rm *)" },
+            }))
+        end)
+
+        it("approves inert variable assignments", function()
+            assert.is_true(decide("a=1 b=2", ALLOW))
+            assert.is_true(decide("arr=(a b c)", ALLOW))
+        end)
+
+        it("approves an assignment followed by a use", function()
+            assert.is_true(decide('f=path/to/file; ls "$f"', ALLOW))
+        end)
+
+        it("approves a raw string that looks like substitution", function()
+            -- Single quotes — `$(foo)` is literal data, not a substitution.
+            assert.is_true(decide("echo '$(foo)'", ALLOW))
+        end)
+
+        it("ignores a trailing comment", function()
+            assert.is_true(decide("ls # rm -rf /", {
+                allow = { "Bash(ls)", "Bash(ls *)" },
+            }))
+        end)
+
+        it("approves a quoted operator as string data", function()
+            assert.is_true(decide('grep "a|b" file', ALLOW))
+        end)
+
+        it("returns false when the zsh parser is unavailable", function()
+            local orig = vim.treesitter.get_string_parser
+            --- @diagnostic disable-next-line: duplicate-set-field
+            vim.treesitter.get_string_parser = function()
+                error("no zsh parser")
+            end
+            local result = decide("ls -la", ALLOW)
+            vim.treesitter.get_string_parser = orig
+            assert.is_false(result)
         end)
     end)
 end)

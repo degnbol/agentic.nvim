@@ -288,25 +288,35 @@ segments.
 `PermissionRules` (`lua/agentic/utils/permission_rules.lua`) adds a client-side
 layer that fills this gap. When a Bash permission request arrives:
 
-1. **Split** the command on top-level shell separators (`|`, `||`, `&&`, `;`,
-   and bare newline), respecting quote boundaries and `\`-newline line
-   continuations. A bare newline separates statements like `;` — without it a
-   write hidden on a later line (`echo ok\nrm -rf x`) is swallowed by the
-   preceding command's trailing `*` wildcard and auto-approved. Empty and
-   whitespace-only segments are dropped
-2. **Reject** unsafe constructs outright (subshells `$(...)`, backticks, process
-   substitution `<(...)` / `>(...)`)
-3. **Strip** harmless wrappers before matching: `stdbuf -oL` prefixes (added by
-   hooks), `/dev/null` redirects (`2>/dev/null`, `&>/dev/null`), and file
-   descriptor duplications (`2>&1`, `>&N`, `N>&M`) — none of these write
-   to user files
-4. **Reject** segments containing any other output redirection (`>`, `>>`,
-   `2>`, `&>` to a file). The redirect would write to a file regardless
-   of how innocent the source command looks, so allowing `cat foo > evil`
-   to slip through `Bash(cat *)` would silently write `evil`. In-place
-   modification flags (e.g. `sed -i`) are caught by the deny list rather
-   than by redirect detection.
-5. **Check** each segment against compiled patterns from three sources,
+1. **Parse** the command with the zsh treesitter grammar
+   (`get_string_parser(command, "zsh")`). Fail-closed: an absent parser, a
+   parse failure, or a tree with errors (truncated/malformed) returns false →
+   prompt. Inputs over 64 KB are refused without parsing. The zsh parser is a
+   hard dependency — without it nothing compound auto-approves.
+2. **Walk** the parse tree, reject-by-default — any node type not explicitly
+   whitelisted bails. Container nodes (`program`, `list`, `pipeline`,
+   `variable_assignments`) recurse and every named child must pass; anonymous
+   separators (`|`, `&&`, `;`, `&`, newline) and `comment` nodes are skipped
+   (a trailing `# rm -rf /` carries no executable content). These all bail:
+   control flow (`for`/`while`/`if`/`case`, subshells, function definitions,
+   `! cmd`, `{ …; }`), command/process substitution anywhere in a command
+   subtree (`find $(echo -exec rm)` would otherwise launder a denied flag past
+   the matcher), dynamic command names built from substitution/expansion/
+   arithmetic (`$(echo rm) -rf /`, a quoted `"rm"` is still resolved to `rm`),
+   and code-taking builtins (`eval`/`source`/`.`, whose argument is opaque
+   shell). Phase 1a rejects all substitution and control flow; assignment-
+   position substitution and loops are a later phase.
+3. **Classify redirects and env-prefixes structurally** (not by regex). A
+   `file_redirect` is safe only when it targets `/dev/null` or duplicates a
+   file descriptor (`2>&1`, `>&N`, `N>&M`); any other target is a file write
+   and bails — so `cat foo > evil` cannot slip through `Bash(cat *)`. A leading
+   `VAR=value` prefix bails when the name can hijack execution (`PATH`, `LD_*`,
+   `BASH_ENV`, …) and is otherwise inert. In-place write flags (`sed -i`) are
+   caught by the deny list, not by redirect detection.
+4. For each proven-safe leaf, **extract** the command text (name + args, with
+   redirects and env-prefixes excluded), then strip a `stdbuf` wrapper and a
+   system binary-dir prefix (`/usr/bin/grep` → `grep`).
+5. **Check** each leaf against compiled patterns from three sources,
    merged in `PermissionRules.load_patterns`:
    - Bundled `lua/agentic/permissions.json` (when
      `Config.permissions.use_plugin_defaults` is true) — curated
@@ -324,11 +334,13 @@ layer that fills this gap. When a Bash permission request arrives:
    - `"read-only"` — `read_only` only.
    - `nil` — empty; the compound-command path will not auto-approve
      anything (deny/ask still respected).
-7. **Auto-approve** only if every segment matches an allow pattern AND
-   no segment matches a deny/ask pattern.
+7. **Auto-approve** only if every leaf matches an allow pattern AND
+   no leaf matches a deny/ask pattern.
 
 Patterns use the same `Bash(...)` glob syntax as Claude Code's
-settings.json. `*` matches anything except shell operators. Deny/ask
+settings.json. `*` matches any run of characters (the walker hands the
+matcher a single substitution-free, redirect-free leaf, so a top-level
+operator can never reach a pattern). Deny/ask
 patterns always take precedence over allow patterns. Settings.json
 patterns are cached with mtime-based invalidation; the
 `Config.permissions.*` lists are recompiled only when the user
