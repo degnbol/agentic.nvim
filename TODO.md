@@ -502,6 +502,13 @@ sleep 10
 The `(Bash completed with no output)` is redundant, given we always show completion status of command (" ✔ completed").
 So, I think we should not be showing this output. If it originates from our code, delete, if it is given by acp, etc. then I think we may have to detect it and suppress. The wording varies, so if we have to detect on wording alone, then consider if this work is worth it.
 
+### Hooks
+
+Claude hook system is complicated right now. I have made a lib/ and there's many files.
+There is a fair bit of regex. I wonder if a move to treesitter could improve the code.
+There might be a nice abstraction split with parsing logic and all the lib work moved into this repo, while tiny config patterns utilising the parsing code lives in personal nvim config.
+If that would make the config explode, then a better option might be to consider treesitter for ~/dotfiles/config/claude/hooks/ instead of for here.
+
 ## Agents don't understand handover
 
 When talking to one agent then switching the new one doesn't understand a change of model occurred. Update: the models really have no idea who they are.
