@@ -1,52 +1,30 @@
+---
+name: provider-system
+description:
+  agentic.nvim provider/ACP plumbing — how this plugin handles ACP
+  messages. Event pipeline (Transport → ACPClient → SessionManager →
+  MessageWriter), session update routing, tool call lifecycle (two-phase
+  tool_call / tool_call_update flow and the MessageWriter tracker),
+  execute-tool rendering, adapter override points
+  (`__handle_tool_call`, `__build_tool_call_update`,
+  `__handle_request_permission`), and known ACP limitations as they
+  affect this plugin. Use when editing `lua/agentic/acp/` (adapters,
+  transport, client, session_manager) or debugging provider-specific
+  bridge quirks (claude-agent-acp, opencode, gemini, codex). Distinct
+  from the global `acp` skill which covers the ACP protocol spec
+  itself.
+---
+
 # Provider System
 
-## ACP Providers (Agent Client Protocol)
+## ACP Providers
 
-This plugin spawn **external CLI tools** as subprocesses and communicate via the
-Agent Client Protocol:
-
-- **Requirements**: External CLI tools must be installed by the user, we don't
-  install them for security reasons.
-  - `claude-agent-acp` for Claude
-  - `gemini` for Gemini
-  - `codex-acp` for Codex
-  - `opencode` for OpenCode
-  - `cursor-agent-acp` for Cursor Agent
-  - `auggie` for Augment Code
-  - `vibe-acp` for Mistral Vibe
-
-NOTE: Install instructs are in the README.md
-
-## Provider adapters:
-
-Each provider has a dedicated adapter in `lua/agentic/acp/adapters/`
-
-These adapters implement provider-specific message formatting, tool call
-handling, and protocol quirks.
-
-## ACP provider configuration:
-
-```lua
-acp_providers = {
-  ["claude-agent-acp"] = {
-    name = "Claude Agent ACP",             -- Display name
-    command = "claude-agent-acp",          -- CLI command to spawn
-    env = {                                -- Environment variables
-      NODE_NO_WARNINGS = "1",
-      IS_AI_TERMINAL = "1",
-    },
-  },
-  ["gemini-acp"] = {
-    name = "Gemini ACP",
-    command = "gemini",
-    args = { "--experimental-acp" },       -- CLI arguments
-    env = {
-      NODE_NO_WARNINGS = "1",
-      IS_AI_TERMINAL = "1",
-    },
-  },
-}
-```
+The plugin spawns external CLI tools as subprocesses and talks ACP over stdio.
+The full list of supported providers and their CLI requirements lives in
+`Config.acp_providers` (`lua/agentic/config_default.lua`) — `Config.provider`
+selects one of those keys. Per-provider quirks (message shape, missing fields,
+non-standard `kind` values, etc.) are absorbed by an adapter in
+`lua/agentic/acp/adapters/`. End-user install instructions are in the README.
 
 ## Event pipeline (top to bottom)
 
@@ -220,312 +198,11 @@ Execute:      "### Execute"                (heading only, no argument line)
 Multi-line commands (containing `\n`) are split into separate lines within the
 fence rather than escaped to literal `\n`.
 
-## Permission flow (interleaved with tool calls)
+## Permission flow and client-side auto-approval
 
-```
-Provider sends "session/request_permission"
-  -> PermissionManager:add_request(request, callback)
-     -> _try_auto_approve() runs the auto-approval checks
-        -> If approved/rejected: callback fires immediately, skip UI
-        -> Otherwise: fall through to interactive prompt
-     -> Queues request (sequential — one prompt at a time)
-     -> PermissionFloat:open renders prompt in a float anchored to the
-        chat window (NE corner, focusable=false)
-     -> Binds buffer-local keymaps (1..N) on all widget buffers
-  -> User optionally presses diff_preview.open_in_tab keymap
-     -> Opens diff preview in a new tabpage (opt-in)
-  -> User presses permission key
-     -> Sends result back to provider via callback
-     -> PermissionFloat:close removes the window
-     -> Clears diff preview (if opened)
-     -> Dequeues next permission if any
-```
-
-### Client-side auto-approval
-
-**Why this exists.** The plugin is the ACP client, strictly downstream of the
-provider's own permission system — we can't override what the SDK silently
-approves or denies, only decide how to handle what it escalates as `ask`. Each
-layer below targets a specific provider/protocol gap that causes
-otherwise-authorised work to be re-prompted; together they reduce prompt
-fatigue without *adding* trust beyond what the user already wrote in
-`settings.json`. The one exception is `/trust`, which grants new authorisation
-and compensates by gating on git-recoverability (the user can undo any
-auto-approved edit). Every layer is disablable via `Config.auto_approve_*`,
-and state is per-session — nothing crosses `/new`.
-
-`PermissionManager:_try_auto_approve()` runs four independent checks before
-falling through to the interactive prompt. Any check can approve (or reject) a
-request. The compound-command check (#2) is itself fed by two pattern sources:
-the user's Claude settings.json and a built-in curated list of read-only Bash
-commands (described inline below).
-
-#### Read-only tools
-
-Permission requests for ACP tool kinds `"read"` and `"search"` are always
-approved without prompting. These cover Read, Grep, and Glob — tools that
-cannot mutate the filesystem, regardless of target path. This bypasses the
-provider's directory sandbox restriction, which otherwise prompts for paths
-outside `additionalDirectories` even for read-only operations.
-
-The kind check has a fallback: if `request.toolCall.kind` does not match
-but the tracker entry created by the prior `tool_call` notification has a
-read-only kind, auto-approve anyway. This handles opencode's pattern of
-raising `external_directory` (kind="other") under the same `toolCallId`
-as the underlying read tool — see acp skill `references/opencode.md`
-§ "Permission request shape" finding 1.
-
-Controlled by `Config.auto_approve_read_only_tools` (default `true`).
-
-#### Compound Bash commands
-
-The ACP provider (e.g. claude-agent-acp) has its own permission rules, but its
-pattern matching is limited: compound commands like `grep foo | head -20` prompt
-even when both `Bash(grep *)` and `Bash(head *)` are in the user's allow list.
-The provider matches the full command string against each pattern, not individual
-segments.
-
-`PermissionRules` (`lua/agentic/utils/permission_rules.lua`) adds a client-side
-layer that fills this gap. When a Bash permission request arrives:
-
-1. **Parse** the command with the zsh treesitter grammar
-   (`get_string_parser(command, "zsh")`). Fail-closed: an absent parser, a
-   parse failure, or a tree with errors (truncated/malformed) returns false →
-   prompt. Inputs over 64 KB are refused without parsing. The zsh parser is a
-   hard dependency — without it nothing compound auto-approves.
-2. **Walk** the parse tree, reject-by-default — any node type not explicitly
-   whitelisted bails. Container nodes (`program`, `list`, `pipeline`,
-   `variable_assignments`) recurse and every named child must pass; anonymous
-   separators (`|`, `&&`, `;`, `&`, newline) and `comment` nodes are skipped
-   (a trailing `# rm -rf /` carries no executable content). These all bail:
-   control flow (`for`/`while`/`if`/`case`, subshells, function definitions,
-   `! cmd`, `{ …; }`), command/process substitution anywhere in a command
-   subtree (`find $(echo -exec rm)` would otherwise launder a denied flag past
-   the matcher), dynamic command names built from substitution/expansion/
-   arithmetic (`$(echo rm) -rf /`, a quoted `"rm"` is still resolved to `rm`),
-   and code-taking builtins (`eval`/`source`/`.`, whose argument is opaque
-   shell). Phase 1a rejects all substitution and control flow; assignment-
-   position substitution and loops are a later phase.
-3. **Classify redirects and env-prefixes structurally** (not by regex). A
-   `file_redirect` is safe only when it targets `/dev/null` or duplicates a
-   file descriptor (`2>&1`, `>&N`, `N>&M`); any other target is a file write
-   and bails — so `cat foo > evil` cannot slip through `Bash(cat *)`. A leading
-   `VAR=value` prefix bails when the name can hijack execution (`PATH`, `LD_*`,
-   `BASH_ENV`, …) and is otherwise inert. In-place write flags (`sed -i`) are
-   caught by the deny list, not by redirect detection.
-4. For each proven-safe leaf, **extract** the command text (name + args, with
-   redirects and env-prefixes excluded), then strip a `stdbuf` wrapper and a
-   system binary-dir prefix (`/usr/bin/grep` → `grep`).
-5. **Check** each leaf against compiled patterns from three sources,
-   merged in `PermissionRules.load_patterns`:
-   - Bundled `lua/agentic/permissions.json` (when
-     `Config.permissions.use_plugin_defaults` is true) — curated
-     plugin-defaults split into `read_only`, `safe_write`, `deny`, `ask`
-     buckets. Provider-agnostic baseline.
-   - `~/.claude/settings.json` and `.claude/settings.json` (when
-     `Config.permissions.use_claude_settings` is true) — Claude's
-     `allow` patterns merge into `read_only`, plus `deny` and `ask`.
-     Mtime-cached.
-   - `Config.permissions.{read_only, safe_write, deny, ask}` — user
-     additions per bucket.
-6. **Resolve the allow list** per `Config.permissions.auto_approve`:
-   - `"allow"` — `read_only` ∪ `safe_write` (commands that mutate but
-     in known-safe ways, e.g. `mkdir`, `touch`, `git add`).
-   - `"read-only"` — `read_only` only.
-   - `nil` — empty; the compound-command path will not auto-approve
-     anything (deny/ask still respected).
-7. **Auto-approve** only if every leaf matches an allow pattern AND
-   no leaf matches a deny/ask pattern.
-
-Patterns use the same `Bash(...)` glob syntax as Claude Code's
-settings.json. `*` matches any run of characters (the walker hands the
-matcher a single substitution-free, redirect-free leaf, so a top-level
-operator can never reach a pattern). Deny/ask
-patterns always take precedence over allow patterns. Settings.json
-patterns are cached with mtime-based invalidation; the
-`Config.permissions.*` lists are recompiled only when the user
-replaces the list (table-reference identity).
-
-Controlled by `Config.auto_approve_compound_commands` (default `true`) —
-the master switch that gates the whole compound-command path. The
-individual sources have their own opt-outs
-(`Config.permissions.use_plugin_defaults`,
-`Config.permissions.use_claude_settings`) so users can independently
-disable the plugin baseline or the Claude settings merge.
-
-The command source has a fallback: if `request.toolCall.rawInput.command`
-is nil and the tracker's kind is `"execute"`, the check reads the command
-from `tracker.argument` instead. This handles opencode, which sends
-`metadata: {}` on shell permission requests but populates `rawInput.command`
-on the tool_call_update that fires just before — see acp skill
-`references/opencode.md` § "Permission request shape" finding 3.
-
-#### Allow/reject always cache
-
-ACP providers don't reliably persist `allow_always`/`reject_always` decisions
-(the protocol leaves persistence as provider-specific behaviour). The plugin
-caches these decisions in `PermissionManager._always_cache` and auto-approves
-or auto-rejects subsequent matching requests.
-
-Cache keys are scoped to the specific resource being approved, so an
-`allow_always` on one invocation cannot silently approve unrelated calls
-of the same kind. Two paths in `_build_cache_key`:
-
-1. **Known kinds** — listed in `CACHE_KEY_FIELDS` with the field(s) that
-   identify the operation. The key is `kind:<value>:<value>...`, taking
-   the first non-empty value per slot (so cross-adapter casing like
-   `file_path` vs `filePath` collapses to the same key):
-
-   | Kind | Identity fields |
-   | --- | --- |
-   | edit / write / create / delete / move | `file_path`, `filePath` |
-   | execute | `command` (falls back to `tracker.argument` for opencode) |
-   | fetch | `url` |
-   | WebSearch | `query` |
-   | SlashCommand | `command`, `name` |
-   | SubAgent | `subagent_type` |
-   | Skill | `skill` |
-   | switch_mode | `mode` |
-
-2. **Unknown kinds** (e.g. `"other"`, future kinds) — hybrid: key on the
-   full `rawInput` minus `CACHE_NOISE_FIELDS` (`description`, `timeout`).
-   `description` is provider narration ("List files in current
-   directory") that varies across identical calls and would otherwise
-   fragment the cache. Top-level keys are sorted so two equivalent
-   `rawInput`s always produce the same key.
-
-In both paths the cache key is `nil` (decision not persisted) when no
-identifying input is available — the next matching request prompts
-again. That's the safer-but-pessimistic side of the trade-off: better
-to ask twice than to silently approve something the user did not see.
-
-When a cached `allow` entry matches, the plugin sends `allow_once` back to the
-provider (same as the other auto-approval checks). When a cached `reject` entry
-matches, it sends `reject_once`.
-
-The cache is per-session — cleared by `clear()` (called on `/new`, session
-cancel, and tabpage close).
-
-#### Trust scope (`/trust`)
-
-The `/trust` slash command sets a per-session scope inside which file-scoped
-tool kinds (edit, write, create, delete, move) auto-approve when the change is
-safely recoverable. Three reserved literals plus any path/glob:
-
-- `repo` — any git-tracked file in the current repo
-- `here` — git-tracked files under the activation cwd
-- `off` — clear the scope
-- any other string — literal path or `vim.glob.to_lpeg` glob
-
-Scope membership is **necessary but not sufficient** — the orchestrator
-(`PermissionManager:_check_trust`) layers the following safety properties on
-top before approving:
-
-1. **Symlink resolution.** Both the original path AND its `vim.uv.fs_realpath`
-   must lie inside the scope. A tracked symlink pointing outside (e.g.
-   `~/.ssh/authorized_keys`) is rejected.
-2. **Per-kind recoverability** (see `safe_for_kind` in
-   `lua/agentic/utils/trust_safety.lua`):
-   - `create` — file does not exist
-   - `write` — new file, OR tracked + working tree clean
-   - `delete` — tracked + clean
-   - `edit` — new file, tracked + clean, **pure addition** (diff.old is a
-     contiguous line subsequence of diff.new, so user content anchored by
-     old_string is preserved verbatim inside new_string), edit range
-     disjoint from unstaged hunks, OR every overlapping hunk is a verified
-     Claude-owned range
-   - `move` — source satisfies `edit`, destination satisfies `write`, both
-     symlink endpoints in scope
-3. **Verified Claude-owned range.** Ranges are recorded at edit time, not
-   re-discovered at check time. At the initial `tool_call` notification
-   (before the SDK applies the edit — see "Edits are not applied before
-   permission"), `SessionManager:_record_pending_edit_range` reads the file
-   and finds `diff.old` as a unique line subsequence. The start line is
-   stashed in `PermissionManager._pending_edits`. When the matching
-   `tool_call_update` arrives with `status: "completed"`,
-   `finalize_edit_range` promotes it to `_edit_records` with
-   `end_line = start_line + #diff.new - 1` and the recorded `new_lines`.
-   At trust-check time, `TrustSafety.verify_edit_range` confirms the
-   on-disk content at the recorded range still equals `new_lines`. Any
-   divergence (user edit, or a later Claude edit that shifted those
-   lines) drops the record and falls through.
-
-   **Why range-based, not content-search:** Claude's Edit tool is
-   string-based (no line numbers in the payload, see acp skill's Edit tool
-   section), and the SDK's `FileEditOutput.structuredPatch` is **not
-   forwarded** by the claude-agent-acp bridge — `rawOutput` is flattened to
-   a plain success string. We synthesise ranges ourselves using the tool's
-   uniqueness contract on `old_string`. Searching for `diff.new` at check
-   time would be ambiguous when the new content coincides with other file
-   text (e.g. short replacements like `}`, `end`, blank lines).
-4. **TOCTOU revalidation.** Capture `mtime`/`size` (or non-existence) before
-   the safety check, re-stat just before approving, and bail on any change.
-   Closes the same-process race between our git snapshot and `callback`.
-5. **Cache precedence.** A cached `reject_always` (`_always_cache`) wins over
-   a would-be-safe trust check — trust runs after the cache.
-6. **Wide-scope WARN.** When the user supplies a path scope that covers
-   `$HOME`, a top-level dir (`/`, `/tmp`, `/var`, …), or starts with an
-   unanchored `**`, `Logger.notify` fires a WARN with the affected kinds.
-
-Scope state lives on `PermissionManager._trust_scope` and is cleared by
-`clear()` (same lifecycle as `_always_cache`). The scope display string is
-also pushed into the chat panel's `vim.t.agentic_headers` so external UI
-plugins can surface it via the `AgenticHeadersChanged` autocmd.
-
-`git_files.lua` resolves the worktree's actual index path via
-`git rev-parse --git-path index` (`.git/worktrees/<name>/index` for worktree
-checkouts, plain `.git/index` otherwise) and uses that for mtime-based cache
-invalidation of the tracked-files set.
-
-Controlled by `Config.auto_approve_trust_scope` (default `true`). When false,
-`/trust` is rejected and the trust check is skipped entirely.
-
-### Permission response keys
-
-| Key | Action | ACP outcome |
-| --- | ------ | ----------- |
-| `1` | Allow once | `selected` with `allow_once` option |
-| `2` | Allow always | `selected` with `allow_always` option |
-| `3` | Reject once (show next) | `selected` with `reject_once` option |
-| `4` | Reject all | `reject_once` for current, `cancelled` for remaining |
-| `5` | Reject always | `selected` with `reject_always` option |
-| `<C-c>` | Hard abort | `cancelled` for all + `session/cancel` |
-
-Key numbers match escalating severity: reject-all (4, local) comes before
-reject-always (5, permanent rule). Numbers adapt if a provider sends fewer options.
-
-**`4` vs `<C-c>`:** Both stop permission processing, but `4` sends `reject_once`
-for the current tool call so the provider sees an active rejection and can adapt
-(explain why, suggest alternatives). `<C-c>` kills the turn immediately via
-`session/cancel` — the provider gets no chance to react. Use `4` when you want
-to reject and provide follow-up feedback in the next turn.
-
-### Permission float positions
-
-The prompt renders in a dedicated floating window owned by
-`PermissionFloat` (`lua/agentic/ui/permission_float.lua`) — one instance
-per tab, paired with the tab's `PermissionManager`. Streaming tool-call
-content and the prompt UI live in separate buffers, so updates to the
-chat buffer never displace the prompt.
-
-**Anchor.** `relative = "win"` against the chat window of the owning
-tab, resolved from `message_writer.bufnr` via `vim.fn.win_findbuf`
-filtered by tab id. Corner and offsets come from `Config.permission_float`
-(default `NE`). A `WinResized` autocmd reapplies geometry; a `WinClosed`
-autocmd on the chat winid closes the float if the chat window goes away.
-
-**Focus.** `focusable = false` blocks `<C-w>w`, mouse focus, and
-programmatic focus. The float never holds the cursor. Number-key
-bindings (`1`..`N`) are installed on the widget buffers (chat, input,
-todos, code, files, diagnostics), not on the float buffer. The user
-must have focus on one of those to answer.
-
-**Hidden chat.** If `_find_chat_winid` returns nil (widget toggled
-away), `:open` is a no-op and returns nil. `_process_next` records
-`current_request` but `_setup_keymaps` short-circuits on a nil
-mapping, so the prompt cannot be answered until the widget reopens;
-the float does not auto-render on reopen. Niche edge case — the
-supported flow is to keep the chat visible while a prompt is pending.
+See the `permissions` project skill for the permission flow ASCII
+diagram, the four auto-approval mechanisms, response keys table, and
+the six `/trust` safety properties.
 
 ## Adapter override points
 
@@ -620,7 +297,7 @@ The plugin's `AgentConfigOptions:set_options` already dispatches on
 is captured into `self.thought_level`. A `/effort`-equivalent selector is now
 unblocked: it would read `self.thought_level.options` and send the chosen value
 via `session/set_config_option`. Provider-specific — non-Claude bridges may not
-emit it. See `@.claude/skills/acp/references/claude-agent.md` § "ConfigOptions —
+emit it. See the `acp` skill's `references/claude-agent.md` § "ConfigOptions —
 `thought_level` (effort)".
 
 ### Mode switch kind inconsistency (claude-agent-acp)

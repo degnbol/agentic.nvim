@@ -5,6 +5,11 @@ local FileSystem = require("agentic.utils.file_system")
 --- @class agentic.Theme
 local Theme = {}
 
+-- All programmatic highlighting in the chat buffer uses extmarks (NS_STATUS,
+-- NS_DECORATIONS, NS_DIFF_HIGHLIGHTS, ...) rather than vim syntax rules:
+-- treesitter clears `vim.bo.syntax` on `vim.treesitter.start()` and the chat
+-- must render with or without a user re-enabling it. Highlight group
+-- definitions below are set via `nvim_set_hl`, which works regardless.
 Theme.HL_GROUPS = {
     DIFF_DELETE = "AgenticDiffDelete",
     DIFF_ADD = "AgenticDiffAdd",

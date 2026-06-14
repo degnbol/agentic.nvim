@@ -6,7 +6,7 @@ local Logger = require("agentic.utils.logger")
 --- @field mode? agentic.acp.ConfigOption
 --- @field model? agentic.acp.ConfigOption
 --- Reserved ACP category. claude-agent-acp 0.29.0 does not emit it — see
---- lua/agentic/acp/AGENTS.md § "`thought_level` ConfigOption not emitted".
+--- the `provider-system` skill § "`thought_level` ConfigOption not emitted".
 --- @field thought_level? agentic.acp.ConfigOption
 --- @field legacy_agent_modes agentic.acp.AgentModes
 --- @field legacy_agent_models agentic.acp.AgentModels

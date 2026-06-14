@@ -13,10 +13,6 @@ description:
 
 Reference for the ACP specification. Based on protocol version 1.
 
-> **Scope:** ACP protocol and external bridge/SDK behaviour only. Plugin-internal
-> patterns (MessageWriter, SessionManager, adapter base class, the `/trust` layer)
-> live in `@lua/agentic/acp/AGENTS.md` — don't add them here.
-
 Full spec: https://agentclientprotocol.com/protocol/overview.md
 
 For claude-agent-acp / claude-agent-sdk internals (session _meta passthrough,
@@ -145,8 +141,8 @@ tokenisation (auth failure, quota wall), but it also appears in legitimate
 flows — stalled generators reusing the prompt loop, cancelled turns,
 models that returned nothing. Without a protocol-level distinguisher,
 treating zero usage as an error produces false positives. See
-`lua/agentic/acp/AGENTS.md` § "Silent upstream failure" for a documented
-provider example and one client's resulting surfacing rule.
+the agentic.nvim `provider-system` skill § "Silent upstream failure" for a
+documented provider example and one client's resulting surfacing rule.
 
 ### Cancellation
 

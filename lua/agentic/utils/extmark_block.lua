@@ -1,3 +1,7 @@
+-- Borders (╭─ │ ╰─) render via sign_text extmarks in the sign column rather
+-- than inline virtual text. Signs survive nvim_buf_set_lines line-replacement
+-- without delete/recreate cycles, so updates to a tool call block do not
+-- displace its decorations.
 local SIGNS = {
     HEADER = "╭─",
     BODY = "│ ",

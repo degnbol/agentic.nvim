@@ -768,6 +768,11 @@ function MessageWriter:scroll_to_bottom()
     BufHelpers.scroll_down(wins[1])
 end
 
+--- Capture at-bottom / pin state, then schedule a scroll-to-bottom after
+--- the current synchronous write. Must be called **before** the write —
+--- a post-write check would see `botline < total_lines` (the write just
+--- grew the buffer past the viewport) and gate the scroll off.
+--- Coalesces multiple calls per tick via `_scroll_scheduled`.
 --- @param bufnr integer Buffer number to scroll
 function MessageWriter:_auto_scroll(bufnr)
     if self._should_auto_scroll ~= true then

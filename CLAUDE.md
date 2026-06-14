@@ -16,7 +16,8 @@ not necessarily Claude. Anything that depends on the host (slash command
 interception, permission flow, `environment_info`, what's forwarded in
 `available_commands_update`) follows the ACP path, not the TUI path.
 Provider-specific behaviour (e.g. which tools the SDK auto-approves vs
-escalates) is adapter-dependent — see @lua/agentic/acp/AGENTS.md.
+escalates) is adapter-dependent — see the `provider-system` project
+skill.
 
 ## Debugging at runtime
 
@@ -40,24 +41,17 @@ Remove before committing. Never leave `io.open` debug logging in production code
 
 ## Multi-tabpage architecture
 
-One session instance per tabpage. `SessionRegistry` maps `tab_page_id -> SessionManager`.
-One shared ACP provider subprocess, one ACP session ID per tabpage, full UI isolation.
-
-- No module-level shared state for per-tabpage runtime data
-- Namespaces are global, extmarks are buffer-scoped — module-level `nvim_create_namespace` is fine
-- Highlight groups defined once globally in `lua/agentic/theme.lua`
-- Keymaps and autocommands must be buffer-local
-- See scoped storage: `vim.b`/`vim.bo`, `vim.w`/`vim.wo`, `vim.t`
+Multi-tabpage isolation rules (no module-level shared state, buffer-local keymaps,
+`vim.b`/`vim.t` scoping, namespace lifecycle) live in `.claude/rules/multi-tabpage.md`.
+That rule auto-loads when session/widget/registry files are accessed.
 
 ## Validation
-
-Run after ANY Lua file changes:
 
 ```bash
 make validate
 ```
 
-Outputs 4-5 lines (exit codes + log paths). Never redirect its output.
+Outputs 4-5 lines (exit codes + log paths).
 On failure, read the log file with `tail` or `rg`, never the Read tool.
 
 Log paths: `.local/agentic_{luals,selene,test}_output.log`
@@ -73,410 +67,44 @@ Log paths: `.local/agentic_{luals,selene,test}_output.log`
 Persisted chat sessions: `~/.cache/nvim/agentic/sessions/<normalized-cwd>_<hash>/<session-id>.json`.
 Grep by `"title":"<name>"` to find a session renamed via `/rename` across all projects.
 
-## Tool call block rendering
+## Chat-buffer rendering and folding
 
-Border decorations (╭─ │ ╰─) use `sign_text` extmarks in the sign column, not
-inline virtual text. This is more stable during buffer edits — signs survive
-line content replacement without delete/recreate cycles.
+Tool call blocks, code-fence widths and info-strings, search highlighting, and
+body folding — see the `rendering` project skill. Per-site rationale (sign
+extmarks, status footer writes, fold-anchor scheduling, priority numbers) lives
+in docstrings at the relevant functions in `tool_call_renderer.lua`,
+`message_writer.lua`, `extmark_block.lua`, `theme.lua`, and the
+`queries/agentic/*.scm` files. The chat buffer always has folds; any viewport,
+scroll, or cursor math must be fold-aware (see neovim skill § "Common
+arithmetic pitfall").
 
-Status text (" ✔ completed ", " ✖ failed ", etc.) is written directly into the
-footer buffer line as real text using `nvim_buf_set_text` (not `set_lines` —
-that shifts extmarks on the replaced line), then highlighted with an extmark
-(`NS_STATUS` namespace). This avoids the entire class of overlay-to-static-text
-timing bugs. Status changes just replace the footer line content in place. No
-deferred freezing, no cleanup passes.
+## Session lifecycle, cross-turn state, and header pipeline
 
-**All programmatic highlighting uses extmarks**, not vim syntax rules. Extmarks
-work regardless of `vim.bo.syntax` state — whether treesitter has disabled it
-(default after `vim.treesitter.start()`) or a user/plugin re-enables it with
-`vim.bo.syntax = 'ON'`. This makes the highlighting robust against user
-configuration. Highlight group definitions are set in `theme.lua` via
-`nvim_set_hl`, which works independently of vim syntax state. The
-`AgenticDimmedBlock` group (dims sidecar bodies — fetch/WebSearch/SubAgent
-output) is applied via an extmark in the `NS_DECORATIONS` namespace, set by
-the writer at the same site that marks the body foldable.
-
-Content comparison in `update_tool_call_block` excludes the footer line (which
-has status text in the buffer but `""` in `_prepare_block_lines` output), so
-status-only updates skip the expensive content replacement path.
-
-If a range extmark collapses (start >= end, indicating corruption),
-`update_tool_call_block` bails out and removes the block from tracking rather
-than proceeding with stale positions.
-
-## Code fence handling
-
-All tool-call command and body content is wrapped in a fenced code block.
-The fence width is computed by `safe_fence(content_lines)` in
-`tool_call_renderer.lua` — it returns a backtick run one longer than the
-longest backtick run inside the content, so embedded triple-backticks
-never close the outer fence. The same fence string is used for open and
-close.
-
-Sites that use `safe_fence`:
-
-| Site | Info string | Notes |
-| --- | --- | --- |
-| Execute command (argument) | shell basename of `$SHELL` (e.g. `zsh`), `bash` fallback | Command line(s). `shell_lang()` — cosmetic only, the zsh parser is aliased to `bash` so highlighting is identical (visible at conceallevel=0) |
-| Search command (argument) | `bash` | Command line(s) |
-| Execute body (stdout/stderr) | `console`, or `console-fold` when `execute_max_lines` exceeded | The `-fold` suffix is the fold signal (see Tool call body folding). claude-agent-acp pre-wraps output in its own ` ```console ` fence — `prepare_block_lines` unwraps an already-fenced execute body before wrapping, so the renderer never double-wraps (see @lua/agentic/acp/AGENTS.md § Execute tool call rendering) |
-| Search body | `console`, or `console-fold` when `search_max_lines` exceeded | Same `-fold` mechanism |
-| Fetch/WebSearch/SubAgent body | `markdown-fold` (multi-line), else `markdown` | Always folded + dimmed (sidecar — see AgenticDimmedBlock note above) |
-| Diff content (edit/write) | language inferred from path, `-fold` suffix stripped | No fold, no dim — file contents are the primary signal |
-| Failure reason | `console` | Replaces kind-specific body when `status == "failed"` |
-
-**Downstream code that consumes the fence must handle variable width.**
-Match `^\`+$` (any backtick-only line) instead of literal ` ``` `, and
-match `^\`+<lang>$` for typed fences. See `apply_block_highlights` and
-the body-range computation in `prepare_block_lines`.
-
-## Search tool call rendering
-
-Search/grep results use two separate code fences in `_prepare_block_lines`:
-
-1. **Command** — ` ```bash ` fence around the search command (argument)
-2. **Results body** — ` ```console ` fence around result lines
-
-The body always gets a `console` fence (prevents markdown parsing of `--`,
-`*`, etc.). When line count exceeds `search_max_lines` (default 8), the
-fence becomes `console-fold` so the treesitter folds query folds it — no
-markers in buffer text. Never double-wrap — the body from the adapter is
-raw text lines (no fences), so the console fence is the only one.
-
-Match highlighting: ANSI codes from the provider (preferred, rarely available)
-or regex fallback that extracts the pattern from the command string and
-re-matches against body lines. Highlights use `AgenticSearchMatch` extmark
-with priority 200.
-
-Grep-format line highlighting: lines matching `path:linenum:` get per-component
-extmark highlights — `AgenticGrepPath` (file path), `AgenticGrepLineNr` (line
-number), `AgenticGrepSeparator` (colons/dashes). These fire for all search
-blocks and for execute blocks where the command is a grep-family tool (`grep`,
-`rg`, `ag`, `ack`, `git grep`, `ugrep`). Grep-line highlights coexist with
-search-term highlights in the same `search_matches` array via the optional
-`hl_group` field on `SearchMatch`.
-
-## Tool call body folding
-
-Long tool call output uses the built-in `vim.treesitter.foldexpr()` instead
-of truncation, driven by a private treesitter language. The chat keeps
-filetype `AgenticChat` but parses as language `agentic` — a clone of the
-bundled markdown parser registered in `init.lua`
-(`language.add` + `language.register("agentic", "AgenticChat")`). That keeps
-its `queries/agentic/folds.scm` isolated from real markdown buffers. The
-register is what makes folding work: `vim.treesitter.foldexpr()` resolves the
-parser via `get_parser(bufnr, nil)`, which infers the language from the
-filetype.
-
-`folds.scm` folds the **body** (`code_fence_content`) of fenced code blocks
-whose info string carries a `-fold` suffix — not the whole `fenced_code_block`.
-The fence delimiters carry `conceal_lines` metadata (markdown highlights query),
-so a fold whose first line is the opening delimiter renders zero-height when
-closed, hiding the foldtext. Folding the body keeps the fold's first line on
-visible content. The threshold policy stays in the writer
-(`prepare_block_lines`), which appends `-fold` to the base language
-(`console-fold`, `markdown-fold`) when a body is foldable and returns the
-0-indexed offset of the **first body line** as `fold_anchor`.
-`queries/agentic/injections.scm` strips the suffix before resolving the
-injected parser, so sidecar markdown keeps its highlighting and plain fences
-are unaffected.
-
-Folding thresholds are configured per tool kind:
-- `search_max_lines` — search/grep tool output
-- `execute_max_lines` — shell command stdout (and execute failure_reason)
-- `fetch`/`WebSearch`/`SubAgent` — folded whenever the body is multi-line
-  (informational, rarely needed by users)
-
-Folds start **open**: the chat window inherits the global `foldlevel` (99) —
-the per-window `foldlevel = 0` is gone, since it would also close injected
-folds inside non-`-fold` fences (commands, diffs). The writer instead closes
-**only its own** blocks imperatively, via `MessageWriter:_close_fold`. That
-issues `:{line}foldclose` at the first body line (a level-1 row belonging only
-to our fold, so a one-level close never hits a nested injected fold — the
-concealed delimiters are level 0, outside it). The
-close is **deferred** through `vim.schedule`: treesitter recomputes fold
-levels on its own scheduled callback after a buffer edit, so an immediate
-`:foldclose` races it (E490). Running on a later tick (FIFO) lets the
-recompute land first. An anchor extmark (`NS_FOLD_ANCHORS`) tracks the row, so
-a fold written while the chat window is hidden is closed on the next
-`BufWinEnter` via `flush_pending_fold_closes`. Per-block close means opening
-one block's fold while another streams can never snap the first shut (the
-removed `recompute_folds` re-ran foldexpr for the whole buffer and did exactly
-that).
-
-`lua/agentic/ui/foldtext.lua` provides a custom `foldtext` showing line count.
-Users toggle with standard fold commands (`zo`/`zc`/`za`). Injected-language
-folds (a `def` inside a diff, etc.) now also exist and are user-controllable —
-a feature of using the real treesitter foldexpr — and stay open.
-
-The chat buffer always has folds; any viewport, scroll, or cursor math in
-this codebase must be fold-aware (see neovim skill § "Common arithmetic
-pitfall").
-
-## Session lifecycle races and the epoch guard
-
-For the three restore paths (`session/load`, `restore_from_history`,
-`respawn_after_usage_limit`) and what each sends on the wire, see
-@lua/agentic/acp/AGENTS.md § "Chat buffer is UI only". The races below
-all concern Path A (`session/load`) interleaving with the constructor's
-`session/new`.
-
-Three race conditions can overwrite `self.session_id` during ACP
-`session/load`:
-
-1. **Constructor on-ready race:** `AgentInstance.get_instance()` calls `on_ready`
-   synchronously when the instance already exists. The constructor wraps the
-   inner logic in `vim.schedule`. When `load_acp_session()` is called immediately
-   after construction (from the session picker), the deferred callback fires
-   after `_do_load_acp_session` — without the `_restoring` guard it would call
-   `new_session()`, replacing the loaded session.
-
-2. **Stale create_session response race:** The constructor's `new_session()`
-   sends `session/new` (async RPC). The user then browses the session picker for
-   seconds/minutes. `_do_load_acp_session` sets `_restoring = true` and sends
-   `session/load`. The load completes and clears `_restoring = false`. The
-   `session/new` response then arrives — `_restoring` is false, so the callback
-   overwrites `session_id` with the stale new-session ID.
-
-3. **Cross-provider restore, three linked hazards.** Picking a saved session
-   whose provider differs from `Config.provider` requires destroying the
-   current tab's SessionManager, flipping `Config.provider`, and letting
-   `get_session_for_tab_page` spawn a replacement bound to the new agent.
-   This sequence surfaces three races that don't affect same-provider restore:
-
-   a. **Capability check during agent init.** `agent_supports_load` is called
-      synchronously inside the picker callback. A freshly-spawned agent has
-      `agent_capabilities == nil` (initialize RPC still in flight). Treating
-      nil as "no support" silently drops into the non-ACP fallback path.
-      Treat nil as "support-assumed" — `load_acp_session` already queues via
-      `_pending_load_session_id` until on_ready fires.
-
-   b. **Tab-id-based deferred destroy.** `ChatWidget.on_hide` schedules
-      `SessionRegistry.destroy_session(tab_page_id)` via `vim.schedule` when
-      `chat_history.messages` is empty. If a replacement session has been
-      installed on the same tab before that callback runs, a naive
-      destroy-by-tab-id would wipe the replacement. The scheduled closure
-      captures the session instance (`this`) and only destroys when
-      `SessionRegistry.sessions[this.tab_page_id] == this` — so the replacement
-      survives. `SessionManager:destroy` also disarms `on_hide` before
-      `widget:destroy()` as belt-and-braces.
-
-   c. **Stale `session/new` callback from the outgoing provider.** The
-      original SessionManager's `create_session` RPC may still be in flight
-      when it's destroyed. The callback closure holds a reference to the
-      destroyed `self`. When the response arrives, the callback runs
-      `_handle_new_config_options` → `_update_chat_header` →
-      `WindowDecoration.set_headers_state(self.widget.tab_page_id, ...)`,
-      stomping the replacement session's headers with the outgoing
-      provider's model. Bail out at the top of the create_session callback
-      when `self._destroyed` is true. Also clear
-      `vim.t[tab_page_id].agentic_headers` in `SessionManager:destroy` so
-      the replacement starts from a clean slate — per-tab header state
-      outlives the session that wrote it.
-
-**Guards:**
-
-- `_restoring` flag — prevents the deferred on-ready callback (race 1) and
-  catches in-flight create callbacks while load is active.
-- `_session_epoch` counter — monotonically incremented by both `new_session()`
-  and `_do_load_acp_session`. The `create_session` callback captures the epoch
-  at call time and rejects the response if the epoch has advanced (race 2).
-  This catches stale responses even after `_restoring` is cleared.
-- `_destroyed` flag — set in `SessionManager:destroy`. Checked at the top of
-  the `create_session` callback for race 3c (epoch/restoring can't catch it
-  because they track the *replacement's* state, not the destroyed sender's).
-
-**Rules:**
-
-- Any code path that initiates a session transition must increment
-  `_session_epoch`. Any async callback that sets `self.session_id` must check
-  that its captured epoch matches `self._session_epoch`.
-- Any async callback on a SessionManager that writes to tab-scoped state
-  (`vim.t[tab].agentic_headers`, `SessionRegistry.sessions[tab]`, etc.) must
-  check `self._destroyed` — the instance may have been replaced on the same
-  tab while the RPC was in flight.
-- `_do_load_acp_session` must feed `result.configOptions` through
-  `_handle_new_config_options` on success (mirrors the `new_session` path) —
-  otherwise the header stays on the previous provider's model after a
-  cross-provider restore.
-
-## Cross-turn state hazards in MessageWriter
-
-MessageWriter carries mutable flags that persist across turns. Any flag set
-during a turn MUST be cleared at the turn boundary (`append_separator`) or on
-the next tool call — otherwise it silently corrupts all subsequent turns.
-
-Known hazards (and their reset points):
-
-| Flag | Set when | Reset in |
-|------|----------|----------|
-| `_suppressing_rejection` | Permission rejected | `append_separator`, `write_tool_call_block` |
-| `_rejection_buffer` | With above | With above |
-| `_last_wrote_tool_call` | Tool call block written | Next `write_message_chunk` |
-| `_chunk_start_line` | First streamed chunk | `_reflow_chunks(flush_all=true)` via `append_separator` |
-
-When adding new per-turn state to MessageWriter, always ensure it resets at the
-turn boundary. The `send_prompt` response callback (which calls
-`append_separator`) runs inside `vim.schedule` from `_handle_message` — do not
-add another `vim.schedule` wrapper or the cleanup races with the next turn.
-
-## Header state and external UI plugins
-
-Runtime session data (mode, context %, session name) flows to external UI
-plugins (incline.nvim, tabline plugins) through the **headers state pipeline**,
-not through buffer names.
-
-**Pipeline:** `SessionManager` → `ChatWidget:render_header()` /
-`ChatWidget:set_chat_title()` → `WindowDecoration.set_headers_state()` →
-`vim.t[tab].agentic_headers` → `AgenticHeadersChanged` User autocmd → external
-plugin refresh.
-
-`vim.t.agentic_headers` is the single source of truth for header display data.
-Each panel has a `HeaderParts` table with `title`, `context`, and optional extra
-fields (e.g. `session_name`). External plugins read these fields in their render
-functions and refresh via the `AgenticHeadersChanged` autocmd.
-
-**Do not rely on buffer names for UI display.** `nvim_buf_set_name` sets neovim's
-internal buffer path (visible in `:ls`) but does not fire events that floating
-window plugins respond to. The buffer name is a secondary artifact — the headers
-state is the primary mechanism.
+Three closely related areas — all covered by the `session-lifecycle` project skill.
+Load that skill before editing `session_manager.lua`, `chat_history.lua`, or
+`window_decoration.lua`. It documents: the three ACP session/load race conditions
+and their `_restoring`/`_session_epoch`/`_destroyed` guards; the MessageWriter
+cross-turn flag hazards (which flags exist, where each resets); and the header
+state pipeline (`SessionManager` → `WindowDecoration.set_headers_state()` →
+`vim.t[tab].agentic_headers` → `AgenticHeadersChanged` autocmd → external plugins).
 
 ## Auto-scroll and attention notifications
 
-**Intent.** Auto-scroll follows streaming content. Two independent
-mechanisms control it:
-
-- **Don't fight the user.** Manual scroll pauses following — otherwise
-  auto-scroll would yank the view back while the user is reading
-  earlier content. The signal that the user wants to follow again is
-  the cursor returning to the chat's last line (e.g. press G).
-- **Pin for the final summary.** A pin caps the viewport at the start
-  of the current prose run so the response can be read from the top.
-  The pin is set on each prose run and released by the next write to
-  chat — so in practice only the final prose's pin sticks, since
-  intermediate runs are followed by more output that releases the pin
-  and following resumes.
-
-The two are independent: if the user scrolls away during a pin, the
-manual-scroll pause persists across subsequent pin releases until the
-user returns to the bottom.
-
-User-facing behaviour summary is in `doc/agentic.txt § Auto-scroll`.
-The rest of this section documents the control flow for maintenance.
-
-**Master switches:**
-- `Config.auto_scroll.enabled` — runtime-toggleable via
-  `keymaps.widget.toggle_auto_scroll` (`<localLeader>a`). When false,
-  `BufHelpers.scroll_down` returns early. Mutated at runtime, not
-  persisted.
-- `Config.auto_scroll.pause_on_prose` — when false, no pin (auto-scroll
-  always tracks the trailing edge during streaming).
-
-**Per-instance state on `MessageWriter`:**
-| Field | Purpose |
-|---|---|
-| `_prose_anchor_line` | 0-indexed buffer line of the first non-blank line of the current prose run. Set on the first prose chunk of a run while not paused. Cleared at run boundaries (`write_tool_call_block`, `append_separator`, `write_error_message`, `reset_turn_state`) and on user-scroll-away. |
-| `_auto_scroll_paused` | True after the user scrolled away from the bottom; gates pin-setting and `_check_auto_scroll`. Survives turn boundaries — only `on_user_scroll` flips it back. |
-| `_suppress_pin_release` | True only while the plugin is synchronously executing its own scroll commands or buffer writes. The `WinScrolled` autocmd checks this before treating an event as user-initiated. |
-| `_should_auto_scroll`, `_scroll_scheduled` | Per-call coalescing. Captured by `_auto_scroll`, consumed by the deferred `vim.schedule` callback. |
-
-**Flow per streaming chunk** (`MessageWriter:write_message_chunk`):
-1. Sync: `_auto_scroll(bufnr)` records `_should_auto_scroll` from
-   `_check_auto_scroll` (gated on `_auto_scroll_paused`, with a pin
-   override) and queues a `vim.schedule` callback. `_scroll_scheduled`
-   coalesces.
-2. Sync: `_with_modifiable_suppressed` writes the chunk — the
-   suppress flag is set for this whole block so any `WinScrolled` that
-   fires from buffer-grow / topline auto-correct is filtered out.
-3. Sync (still inside the write): pin the start of the prose run if
-   `_prose_anchor_line` is nil **and** `_auto_scroll_paused` is false.
-4. Async: the scheduled callback flips suppress on, calls
-   `BufHelpers.scroll_down` with `max_topline = anchor + 1` (when
-   the pin is set), flips suppress off.
-
-The same pre-write `_auto_scroll(bufnr)` call appears in
-`write_tool_call_block`, `update_tool_call_block`, `write_error_message`,
-and `write_error_action`. Any new method that grows the chat buffer must
-call `_auto_scroll` *before* the write — checking `_is_at_bottom`
-afterwards would see `botline < total_lines` and gate the scroll off.
-
-**`scroll_down`** (`utils/buf_helpers.lua`) is the forward-only
-viewport move. It sets topline to the smallest value that puts the
-last buffer line at the bottom row, capped at `max_topline` if given,
-never below the current topline. A single `winrestview` sets topline
-and cursor together, leaving the window in a consistent state.
-
-**At-bottom rule** (`MessageWriter:_is_at_bottom`):
-- Chat window is the current window → `cursor_line >= line_count`. The
-  user can move the cursor; if they kept it off the last line, they're
-  not at the bottom regardless of viewport state.
-- Chat window is not focused → `getwininfo().botline >= line_count`. The
-  user can't move the chat cursor (focus elsewhere) but can still scroll
-  the chat with the OS pointer; viewport-reaches-end is the only signal.
-
-**`on_user_scroll`** (`MessageWriter:on_user_scroll`) is bound to
-`WinScrolled` on the chat buffer in `MessageWriter:new`. It returns
-immediately if `_suppress_pin_release` is set, then calls `_is_at_bottom`
-to either clear `_auto_scroll_paused` (resume) or set it and release the
-pin (pause). The chat-widget autocmd that clears the unread badge uses
-the same dual rule inline (see `chat_widget.lua` `_setup_autocommands`).
-
-Attention notifications (`_notify_attention(badge)`) fire on two events:
-- **Response complete** — badge `"[done]"`
-- **Permission request** — badge `"[?]"`
-
-Behaviour depends on focus state:
-- **Chat window unfocused** → rings bell
-- **Scrolled up from bottom** → sets badge in buffer name (visible in `:ls`/tabline)
-
-Badge clears when:
-- User reaches the bottom of the chat by the at-bottom rule above
-  (`WinScrolled` autocmd on the chat buffer in `chat_widget.lua`)
-- User submits next prompt (`clear_unread_badge()`)
+See the `autoscroll` project skill for the two-mechanism model
+(manual-scroll pause + prose pin), the per-instance state on
+`MessageWriter`, the chunk flow, and badge clearing rules. The discipline
+rule worth holding in your head: any new method that grows the chat
+buffer must call `_auto_scroll(bufnr)` *before* the write. User-facing
+behaviour summary is in `doc/agentic.txt § Auto-scroll`.
 
 ## Input buffer completion
 
-Completion for `/` slash commands and `@` file references uses an in-process LSP
-server (`lua/agentic/completion/lsp_server.lua`), not custom completefunc/omnifunc.
-The LSP declares `/` and `@` as trigger characters so any LSP-aware completion
-framework (blink.cmp, nvim-cmp, built-in) picks them up automatically. No
-plugin-specific keymaps needed.
-
-- `vim.lsp.start()` with same `name` + `root_dir` reuses one client across
-  buffers (handles multi-tabpage)
-- Handler uses `nvim_get_current_buf()` not URI (all input buffers share name
-  `agentic://prompt`)
-- `States.getSlashCommandsForBuffer(bufnr)` reads from specific buffer (not
-  `vim.b[0]` which is unreliable in LSP handler context)
-- `@` file completion lists one directory level at a time via `vim.uv.fs_scandir`,
-  not a pre-cached file list. Picking a directory inserts `@dir/` which re-triggers
-  completion via the `/` trigger character. This is a deliberate reimplementation
-  (~30 lines) to stay framework-agnostic (works with blink.cmp, nvim-cmp, or
-  built-in completion via standard LSP) rather than delegating to a specific
-  framework's path source
-
-### Syntax highlighting for `/` and `@`
-
-Slash commands (`/command`) and `@` mentions (`@path`) get vim syntax highlighting
-in both input and chat buffers via `syntax/AgenticInput.vim` and
-`syntax/AgenticChat.vim`, sourced by a deferred `vim.bo.syntax = "ON"` in
-their respective ftplugins (needed because `vim.treesitter.start()` clears syntax
-after the ftplugin runs).
-
-The prefix character (`/`, `@`) and the body text are separate syntax groups using
-`nextgroup` + `contained` — no character belongs to two groups, preventing
-unintended style bleed (e.g. underline from the path group leaking onto `@`).
-Prefix groups (`AgenticSlashCommandPrefix`, `AgenticMentionPrefix`) link to
-`@punctuation.special`; body groups keep their existing links (`@function.call`,
-`@string.special.path`).
-
-**Slash commands are highlighted only at line start** (`^/`), not mid-line.
-Line-start `/command` is intercepted by the CLI before the LLM sees it —
-whether it's a built-in (`/model`, `/compact`), a skill (`/bevy`, `/commit`),
-or an unknown command. The LLM never receives raw `/something` as a plain
-message. Mid-line `/word` has no special meaning at the protocol level — it's
-plain prose. The highlight (`AgenticSlashCommand` → `@function.call`) signals
-"this is intercepted and acted upon" vs unmarked text.
+Completion for `/` and `@` uses an in-process LSP server (`lua/agentic/completion/lsp_server.lua`).
+Design rationale (why LSP over completefunc, why `@` directory walk is reimplemented,
+multi-tabpage client reuse) is documented in that file's module and function docstrings.
+Syntax highlighting for `/command` and `@path` uses `syntax/AgenticInput.vim` and
+`syntax/AgenticChat.vim`; the line-start-only slash highlight rationale is in a comment
+in `AgenticChat.vim`.
 
 ## Keymaps and configuration
 
@@ -487,81 +115,24 @@ buffer only), `keymaps.chat` (chat buffer only), `keymaps.diff_preview`.
 Keymap values use `BufHelpers.multi_keymap_set` which accepts a string, a list
 of strings, or a list of `{ key, mode = ... }` tables for multi-mode bindings.
 All widget keymaps are applied as buffer-local maps in `ChatWidget:_setup_keymaps`
-over every buffer in `self.buf_nrs` (chat, input, todos, code, files, diagnostics).
-
-The plugin's `ftplugin/` directory holds filetype-specific setup (e.g.
-`AgenticChat.lua` for treesitter query overrides). Buffer filetypes are set in
-`ChatWidget:_create_buf_nrs`: `AgenticChat`, `AgenticInput`, `AgenticTodos`,
-`AgenticCode`, `AgenticFiles`, `AgenticDiagnostics`.
+over every buffer in `self.buf_nrs`.
 
 ## Client-side auto-approval
 
-The plugin extends the ACP provider's permission system with four client-side
-auto-approval mechanisms in `PermissionManager:_try_auto_approve()`:
-
-1. **Read-only tools** — ACP kinds `"read"` and `"search"` (covers Read, Grep,
-   Glob) are always approved regardless of target path. These tools cannot mutate
-   the filesystem. Controlled by `Config.auto_approve_read_only_tools` (default
-   `true`).
-
-2. **Compound Bash commands** — the upstream provider matches the full command
-   string against each `Bash(...)` pattern, so `grep foo | head -20` prompts
-   even when both `Bash(grep *)` and `Bash(head *)` are allowed. The plugin
-   parses the command with the zsh treesitter grammar and walks the parse
-   tree, proving every leaf command safe before approving: control flow,
-   command/process substitution, file-writing redirects, and dynamic command
-   names all bail to a prompt (fail-closed — an absent zsh parser or any
-   parse error also bails). Each safe leaf is matched independently against
-   patterns merged from three sources: the bundled `permissions.json` baseline
-   (`Config.permissions.use_plugin_defaults`), Claude
-   `settings.json` files (`Config.permissions.use_claude_settings`), and
-   `Config.permissions.{read_only, safe_write, deny, ask}` user additions.
-   `Config.permissions.auto_approve` selects the allow list: `"allow"`
-   enables `read_only` ∪ `safe_write` (mutates-but-safe commands like
-   `mkdir`, `git add`), `"read-only"` restricts to `read_only` only, `nil`
-   disables compound auto-approve entirely (deny/ask still respected).
-   Master switch: `Config.auto_approve_compound_commands` (default `true`).
-   Implementation in `lua/agentic/utils/permission_rules.lua`.
-
-3. **Allow/reject always cache** — when the user selects `allow_always` or
-   `reject_always`, the decision is cached in `PermissionManager._always_cache`
-   and subsequent matching requests are auto-approved/rejected without prompting.
-   This compensates for providers that don't reliably persist `allow_always`
-   decisions via ACP. Cache keys are scoped to the specific resource via a
-   two-path strategy in `_build_cache_key`: known kinds use a per-kind
-   identity table (file_path for file-scoped, command for execute, url for
-   fetch, query for WebSearch, etc.); unknown kinds key on the whole
-   `rawInput` minus a `description`/`timeout` noise filter. Missing
-   identifying input skips caching so the next call prompts again. The
-   cache clears on `clear()` (session reset / `/new`). See
-   `lua/agentic/acp/AGENTS.md § Allow/reject always cache` for the full
-   kind→field table.
-
-4. **Trust scope (`/trust`)** — per-session scoped auto-approval for
-   file-scoped tool kinds. The user picks a scope via `/trust` (with reserved
-   literals `repo` / `here` / `off`, or any path/glob). For matching paths the
-   plugin still requires git-recoverable safety: new file, tracked + clean,
-   **pure addition** (diff.old is a contiguous line subsequence of diff.new,
-   so `old_string`-anchored user content is preserved verbatim inside
-   `new_string`), or tracked + dirty hunks that overlap a **recorded
-   Claude-owned line range** whose content still matches disk. Ranges are
-   captured at the initial `tool_call` via unique-subsequence match of
-   `diff.old` (Claude's Edit tool enforces `old_string` uniqueness, so a
-   non-unique match at recording time means the file has shifted and we skip
-   recording). Symlink endpoints, mtime TOCTOU revalidation, and a wide-scope
-   WARN are all enforced. Controlled by `Config.auto_approve_trust_scope`
-   (default `true`). Implementation in `lua/agentic/utils/trust_safety.lua`
-   and `lua/agentic/utils/git_files.lua`; range capture in
-   `SessionManager:_record_pending_edit_range` and
-   `PermissionManager:{record_pending_edit,finalize_edit_range}`.
-
-See "Client-side auto-approval" in @lua/agentic/acp/AGENTS.md for the full
-algorithm and safety rules (including the six trust-scope safety properties).
+See the `permissions` project skill for the two-tier model
+(SDK-internal + ACP-bridge), the four auto-approval mechanisms
+(read-only tools, compound Bash matching, allow/reject-always cache,
+`/trust` scope) and the six safety properties layered on top of trust
+scope. Implementation lives in `PermissionManager`, `PermissionRules`,
+`TrustSafety`, `GitFiles`, and `PermissionFloat`.
 
 ## ACP details
 
-See @lua/agentic/acp/AGENTS.md for event pipeline, tool call lifecycle,
-adapter override points, and permission flow.
+Event pipeline, session-update routing, tool-call lifecycle, adapter
+override points, execute rendering, and known ACP limitations live in
+the `provider-system` project skill. Load it before any work in
+`lua/agentic/acp/`. The global `acp` skill covers the ACP protocol
+spec itself, not our implementation.
 
 ### Upstream issues (claude-agent-sdk)
 
@@ -571,4 +142,6 @@ adapter override points, and permission flow.
 
 ## Testing
 
-See @tests/AGENTS.md for test framework, file locations, and how to run tests.
+Test framework, file locations, and how to run tests are in
+`.claude/rules/tests.md` (auto-loaded when `**/*.test.lua` or `tests/**` is
+accessed).
