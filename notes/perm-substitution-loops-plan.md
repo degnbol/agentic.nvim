@@ -3,9 +3,11 @@
 ## Status
 
 Phase 0 (`permissions.json` defence-in-depth) and Phase 1a (zsh treesitter
-walker swap) have shipped on `main`. Phase 1b (structured command matcher) is
-the precondition for this work and lives on the `phase-1b` branch — see
-`notes/perm-treesitter-plan.md`.
+walker swap) have shipped on `main`. Phase 1b (structured command matcher)
+shipped on the `phase-1b` branch (commit `97f864c`) and is the precondition
+for this work — the matcher lives in
+`lua/agentic/utils/permission_structured.lua`; see the `permissions` project
+skill for the cross-file overview.
 
 This branch (`phase-2-substitution-loops`) carries the walker carve-outs that
 let assignment-position command substitution and loops auto-approve. It is

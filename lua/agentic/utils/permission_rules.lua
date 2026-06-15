@@ -868,7 +868,7 @@ local walk
 
 --- Walk a `command`: reject substitution anywhere, validate env-prefix
 --- assignments, extract the literal name and arg tokens, then combine the glob
---- and structured layers per `notes/perm-treesitter-plan.md § Composition site`.
+--- and structured layers (composition rule in the `permissions` project skill).
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx

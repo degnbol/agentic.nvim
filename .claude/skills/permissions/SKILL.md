@@ -146,6 +146,35 @@ Command-source fallback: if `request.toolCall.rawInput.command` is nil
 and the tracker kind is `"execute"`, read from `tracker.argument` instead
 (opencode quirk — see acp skill `references/opencode.md` finding 3).
 
+#### Known limitations (uncatchable — fall through to a prompt)
+
+A command whose write/exec intent is hidden inside an opaque token cannot
+be classified by token-level matching. These are accepted residuals, not
+bugs — the failure mode is auto-approving a write at `auto_approve` =
+`"read-only"`, never bypassing a `deny`/`ask` that *did* match:
+
+- **`sed`** `e`/`s///e` (exec) and `w`/`W`/`s///w` (write) — the script
+  body is opaque (no sed parser/injection). A glob carve-out in the
+  positional is unsound (GNU sed needs no space after `e`, accepts a bare
+  `e` or an address prefix, `s///e` allows any delimiter/flag order). Kept
+  in `read_only` with a `deny` on `-i` only.
+- **`awk`** script body via `-f scriptfile` or DSL — opaque. The
+  `awk` `deny` on positional `*system*` is a parser-independent backstop
+  (catches an inline `system(...)` in the script positional).
+- **`mlr`** write verbs reached past a `then` chain (`mlr cat then tee x`)
+  or inside a `put`/`filter` DSL string — positional matching is
+  index-based and sees only the first verb, and the DSL body is one opaque
+  positional. The `ask` on `split`/`tee` and `deny` on `-I` catch only the
+  direct forms.
+- **Dynamic expansion** (`sort $FLAG out` where `$FLAG=-o`) — tolerated for
+  any `$var`/glob/`~`; the token is not a literal flag.
+
+Sub-language injection (awk/jq/sql/python parsed *into* command-argument
+strings via `queries/zsh/injections.scm`) is **best-effort enrichment, never
+the sole guard** — it depends on the injection query being on the
+runtimepath, which a downstream consumer can remove. The parser-independent
+backstops (the `awk *system*` deny) stay regardless of injection descent.
+
 ### 3. Allow/reject-always cache
 
 ACP leaves persistence of `allow_always`/`reject_always` as

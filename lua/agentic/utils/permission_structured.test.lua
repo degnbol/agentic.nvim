@@ -1,6 +1,6 @@
---- Tests for the structured option matcher (Phase 1b of perm-treesitter plan).
+--- Tests for the structured option matcher.
 ---
---- API targeted (per § Matcher API spec of notes/perm-treesitter-plan.md):
+--- API targeted (see the `permissions` project skill for the overview):
 ---     extract_option_candidates(token: string) -> string[]
 ---     match_options(candidates: string[], rule_options: string[]) -> boolean
 ---     resolve_args(args: string[], cmd_name: string) -> {

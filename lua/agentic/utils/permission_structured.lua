@@ -6,8 +6,8 @@ local PermissionRules = require("agentic.utils.permission_rules")
 --- already quote-stripped tokens, joined literal concatenations, and excluded
 --- redirects / env-prefixes / substitution; this module trusts that input shape.
 ---
---- See notes/perm-treesitter-plan.md § Matcher API spec for the authoritative
---- algorithm.
+--- See the `permissions` project skill § "Compound Bash commands" for the
+--- cross-file overview; this module's functions are the authoritative algorithm.
 --- @class agentic.utils.PermissionStructured
 local M = {}
 
