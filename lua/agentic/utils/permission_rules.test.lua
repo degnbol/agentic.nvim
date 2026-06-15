@@ -1172,5 +1172,407 @@ describe("PermissionRules", function()
             vim.treesitter.get_string_parser = orig
             assert.is_false(result)
         end)
+
+        -- Phase 1b composition: a structured-entry decision (deny / ask /
+        -- allow) feeds into the same walk through `M.get_structured_entries`.
+        -- Tests stub the accessor directly to avoid coupling to the bundled
+        -- permissions.json (which is still in the legacy glob format).
+        describe("structured matcher composition", function()
+            --- Run should_auto_approve with stubbed structured entries AND
+            --- stubbed settings.json. Restores both on exit.
+            --- @param command string
+            --- @param perms { allow?: string[], deny?: string[], ask?: string[] }
+            --- @param entries agentic.StructuredEntries
+            --- @return boolean
+            local function decide_with_entries(command, perms, entries)
+                local orig_read = PermissionRules.read_json
+                local orig_get = PermissionRules.get_structured_entries
+                PermissionRules.read_json = function(path)
+                    if path:find("settings%.json$") then
+                        return { permissions = perms }
+                    end
+                    return nil
+                end
+                --- @diagnostic disable-next-line: duplicate-set-field
+                PermissionRules.get_structured_entries = function()
+                    return entries
+                end
+                PermissionRules.invalidate_cache()
+                local result = PermissionRules.should_auto_approve(command)
+                PermissionRules.read_json = orig_read
+                PermissionRules.get_structured_entries = orig_get
+                PermissionRules.invalidate_cache()
+                return result
+            end
+
+            local ALLOW_FIND = { allow = { "Bash(find *)" } }
+            local ALLOW_ECHO = { allow = { "Bash(echo *)" } }
+            local ALLOW_GREP = { allow = { "Bash(grep *)" } }
+
+            it(
+                "denies a literal concatenation in option position (-ex\"e\"c)",
+                function()
+                    assert.is_false(
+                        decide_with_entries(
+                            'find . -ex"e"c rm \\;',
+                            ALLOW_FIND,
+                            { find = { deny = { { options = { "exec" } } } } }
+                        )
+                    )
+                end
+            )
+
+            it(
+                "bails on a substitution-bearing concatenation in option position",
+                function()
+                    assert.is_false(
+                        decide_with_entries(
+                            'find . -ex"$x"c rm',
+                            ALLOW_FIND,
+                            { find = { deny = { { options = { "exec" } } } } }
+                        )
+                    )
+                end
+            )
+
+            it(
+                "denies find -exec when {} joins to a literal placeholder",
+                function()
+                    assert.is_false(
+                        decide_with_entries(
+                            "find . -exec rm {} \\;",
+                            ALLOW_FIND,
+                            { find = { deny = { { options = { "exec" } } } } }
+                        )
+                    )
+                end
+            )
+
+            it(
+                "approves a literal {} positional with no matching deny",
+                function()
+                    assert.is_true(
+                        decide_with_entries(
+                            "find . -name {}",
+                            ALLOW_FIND,
+                            { find = { deny = { { options = { "exec" } } } } }
+                        )
+                    )
+                end
+            )
+
+            it("approves a brace_expression argument", function()
+                assert.is_true(
+                    decide_with_entries(
+                        "echo {1..3}",
+                        ALLOW_ECHO,
+                        { echo = { read_only = { {} } } }
+                    )
+                )
+            end)
+
+            it("approves a literal concatenation in command-name position", function()
+                assert.is_true(
+                    decide_with_entries(
+                        'gr"e"p foo file',
+                        ALLOW_GREP,
+                        { grep = { read_only = { {} } } }
+                    )
+                )
+            end)
+
+            it(
+                "matches the same option whether the rule lists -exec or exec (post-normalisation)",
+                function()
+                    -- Stubs bypass `get_structured_entries`, so the test
+                    -- supplies already-normalised entries. Round-tripping
+                    -- through the accessor is covered by the
+                    -- `get_structured_entries normalisation` describe block.
+                    assert.is_false(
+                        decide_with_entries(
+                            "find . -exec rm {} \\;",
+                            ALLOW_FIND,
+                            { find = { deny = { { options = { "exec" } } } } }
+                        )
+                    )
+                end
+            )
+        end)
+
+        -- get_structured_entries returns dashless-normalised entries even when
+        -- the input rule uses --foo / -foo forms.
+        describe("get_structured_entries normalisation", function()
+            it("strips leading dashes from option strings", function()
+                local Config = require("agentic.config")
+                local original_structured = Config.permissions.structured
+                Config.permissions.structured = {
+                    find = {
+                        deny = { { options = { "--exec", "-x", "okdir" } } },
+                    },
+                }
+                PermissionRules.invalidate_cache()
+                local entries = PermissionRules.get_structured_entries()
+                Config.permissions.structured = original_structured
+                PermissionRules.invalidate_cache()
+
+                local find_entry = entries.find
+                assert.is_not_nil(find_entry)
+                assert.same(
+                    { "exec", "x", "okdir" },
+                    find_entry and find_entry.deny[1].options
+                )
+            end)
+        end)
+
+    end)
+
+    -- End-to-end exercise of the real bundled permissions.json (post-Phase 1b
+    -- migration) through the structured matcher. Settings.json is stubbed to
+    -- nil so user-side rules cannot pollute results; the bundled file is
+    -- read from disk via the real read_json path.
+    describe("bundled permissions.json (end-to-end)", function()
+        local Config = require("agentic.config")
+        local orig_read_json
+        local orig_auto_approve
+        local orig_use_plugin
+        local orig_use_claude
+
+        before_each(function()
+            orig_read_json = PermissionRules.read_json
+            --- @diagnostic disable-next-line: duplicate-set-field
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return nil
+                end
+                return orig_read_json(path)
+            end
+            orig_auto_approve = Config.permissions.auto_approve
+            orig_use_plugin = Config.permissions.use_plugin_defaults
+            orig_use_claude = Config.permissions.use_claude_settings
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = true
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
+        end)
+
+        after_each(function()
+            PermissionRules.read_json = orig_read_json
+            Config.permissions.auto_approve = orig_auto_approve
+            Config.permissions.use_plugin_defaults = orig_use_plugin
+            Config.permissions.use_claude_settings = orig_use_claude
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("denies sort -uo out (short cluster)", function()
+            assert.is_false(PermissionRules.should_auto_approve("sort -uo out"))
+        end)
+
+        it("denies sort --out=x (GNU abbreviation)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("sort --out=x")
+            )
+        end)
+
+        it("denies sort -oFILE (glued arg)", function()
+            assert.is_false(PermissionRules.should_auto_approve("sort -oFILE"))
+        end)
+
+        it("does not auto-approve git -C diff push", function()
+            -- option walker consumes `-C diff`, positionals = ["push"]; no
+            -- entry matches positionals[1]="push" as allow.
+            assert.is_false(
+                PermissionRules.should_auto_approve("git -C diff push")
+            )
+        end)
+
+        it("auto-approves git -C path config --get foo", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    "git -C path config --get foo"
+                )
+            )
+        end)
+
+        it("auto-approves pdftotext foo.pdf -", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("pdftotext foo.pdf -")
+            )
+        end)
+
+        it("does not auto-approve tee out", function()
+            -- tee is intentionally absent from permissions.json.
+            assert.is_false(PermissionRules.should_auto_approve("tee out"))
+        end)
+
+        it("does not auto-approve curl -K config.txt", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("curl -K config.txt")
+            )
+        end)
+
+        it("auto-approves ls --help", function()
+            assert.is_true(PermissionRules.should_auto_approve("ls --help"))
+        end)
+
+        it(
+            "does not auto-approve mlr -I foo even at auto_approve = 'allow' (deny wins)",
+            function()
+                Config.permissions.auto_approve = "allow"
+                PermissionRules.invalidate_cache()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("mlr -I foo")
+                )
+            end
+        )
+
+        it(
+            "auto-approves mlr foo at read-only (mlr writes to stdout)",
+            function()
+                Config.permissions.auto_approve = "read-only"
+                PermissionRules.invalidate_cache()
+                assert.is_true(PermissionRules.should_auto_approve("mlr foo"))
+            end
+        )
+
+        it(
+            "does not auto-approve a safe_write command at read-only (stylua)",
+            function()
+                Config.permissions.auto_approve = "read-only"
+                PermissionRules.invalidate_cache()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("stylua foo.lua")
+                )
+            end
+        )
+
+        it(
+            "auto-approves a safe_write command at allow (stylua)",
+            function()
+                Config.permissions.auto_approve = "allow"
+                PermissionRules.invalidate_cache()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("stylua foo.lua")
+                )
+            end
+        )
+
+        -- Write carve-outs: a read-only base command prompts only on the
+        -- options/verbs that actually write (local file, upload, or remote
+        -- mutation). Plain invocations still auto-approve.
+        it("auto-approves a plain curl GET", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("curl https://example.com")
+            )
+        end)
+
+        it("asks curl -X POST -d (remote mutation)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "curl -X POST -d @body https://example.com"
+                )
+            )
+        end)
+
+        it("asks curl -o (writes a file)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "curl -o out https://example.com"
+                )
+            )
+        end)
+
+        it("asks yq --inplace (long-form write)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("yq --inplace '.a=1' f.yaml")
+            )
+        end)
+
+        it("asks qalc -s (persists settings)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("qalc -s 'prec 5'")
+            )
+        end)
+
+        it("auto-approves mlr cat (stdout)", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("mlr --icsv cat foo")
+            )
+        end)
+
+        it("asks mlr split (writes files)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("mlr split -n 1000 foo")
+            )
+        end)
+
+        it("asks mlr tee (writes a file)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("mlr tee out.csv")
+            )
+        end)
+
+        it("auto-approves a plain httpie GET", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("http https://example.com")
+            )
+        end)
+
+        it("asks httpie POST (remote mutation, any case)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "http post https://example.com a=b"
+                )
+            )
+        end)
+
+        it("asks httpie --download (writes a file)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "http --download https://example.com"
+                )
+            )
+        end)
+
+        -- Cluster-bypass closure rules: a destructive short letter sharing a
+        -- cluster with an allow-listed letter must still prompt.
+        it("asks pacman -QR foo (R shares the -Q cluster)", function()
+            assert.is_false(PermissionRules.should_auto_approve("pacman -QR foo"))
+        end)
+
+        it("auto-approves pacman -Q kitty", function()
+            assert.is_true(PermissionRules.should_auto_approve("pacman -Q kitty"))
+        end)
+
+        it("asks luac -lo evil.luac (o writes bytecode)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("luac -lo evil.luac foo.lua")
+            )
+        end)
+
+        it("auto-approves luac -l foo.lua", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("luac -l foo.lua")
+            )
+        end)
+
+        it("asks zsh -nc 'rm' (c runs arbitrary shell)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("zsh -nc 'rm -rf x'")
+            )
+        end)
+
+        it("auto-approves zsh -n script.zsh", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("zsh -n script.zsh")
+            )
+        end)
+
+        it("denies curl --remote-name-all", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "curl --remote-name-all https://x"
+                )
+            )
+        end)
     end)
 end)

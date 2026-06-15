@@ -480,15 +480,48 @@ permission request arrives and `auto_approve_compound_commands` is true:
    dynamic command names, and code-taking builtins (`eval`/`source`/`.`)
    all bail.
 3. For each safe leaf command, strip a `stdbuf` wrapper and a system
-   binary-dir prefix, then check it against compiled patterns from
-   `~/.claude/settings.json` and `.claude/settings.json` (project-local).
-4. Auto-approve only if every leaf matches an allow pattern AND no leaf
-   matches a deny/ask pattern.
+   binary-dir prefix, then check it against two complementary layers:
+   - a glob layer reading Claude's `Bash(...)` patterns from
+     `~/.claude/settings.json`, `.claude/settings.json`, and the
+     `Config.permissions.{read_only,safe_write,deny,ask}` lists;
+   - a structured layer reading the plugin's bundled `permissions.json`
+     plus `Config.permissions.structured`. It matches on tokenised flag
+     identifiers, so option clustering (`sort -uo out`), GNU abbreviation
+     (`sort --out=x`), and glued args (`sort -oFILE`) are caught where a
+     glob would let them through.
+4. Auto-approve a leaf only if some layer allows it AND no layer denies or
+   asks: `(glob_allow OR structured_allow) AND NOT (glob_deny OR
+   structured_deny OR glob_ask OR structured_ask)`.
 
-Deny/ask patterns always take precedence over allow patterns (same as
-upstream). Compiled patterns are cached with mtime-based invalidation.
+Deny/ask always take precedence over allow (same as upstream). Which allow
+rules count depends on `Config.permissions.auto_approve`: "allow" admits
+read-only + safe-write rules, "read-only" admits read-only only, nil admits
+none. Compiled patterns and the bundled file are cached with mtime-based
+invalidation.
 
-Disable with: >lua
+Structured rules are a cmd-keyed table. Each command maps to up to four
+gate-kind arrays — `read_only`, `safe_write`, `ask`, `deny` — and each gate
+constrains `options` (literal flag identifiers) and/or `positionals`
+(literal or glob, matched in order). The kind name encodes the policy:
+`read_only` auto-approves at "read-only"/"allow", `safe_write` only at
+"allow", `ask` always prompts, `deny` always vetoes. Add or override rules
+via `Config.permissions.structured`, deep-merged over the bundled defaults —
+a cmd key replaces that command's bundled kind-arrays wholesale, and
+`vim.NIL` disables the bundled entry: >lua
+    require("agentic").setup({
+        permissions = {
+            structured = {
+                -- Auto-approve `tee` when writing (safe_write kind).
+                tee = { safe_write = { {} } },
+                -- Disable the bundled `rm` prompt.
+                rm = vim.NIL,
+                -- Silence pacman's destructive-flag ask.
+                pacman = { ask = {} },
+            },
+        },
+    })
+<
+Disable the whole compound layer with: >lua
     require("agentic").setup({
         auto_approve_compound_commands = false,
     })

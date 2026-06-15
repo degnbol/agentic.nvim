@@ -1,406 +1,480 @@
 {
-  "read_only": [
-    "Bash(ls)",
-    "Bash(ls *)",
-    "Bash(xargs ls *)",
-    "Bash(cat)",
-    "Bash(cat *)",
-    "Bash(head)",
-    "Bash(head *)",
-    "Bash(tail)",
-    "Bash(tail *)",
-    "Bash(less *)",
-    "Bash(zless *)",
-    "Bash(wc)",
-    "Bash(wc *)",
-    "Bash(tree)",
-    "Bash(tree *)",
-    "Bash(du)",
-    "Bash(du *)",
-    "Bash(df)",
-    "Bash(df *)",
-    "Bash(file *)",
-    "Bash(stat *)",
-    "Bash(which *)",
-    "Bash(whereis *)",
-    "Bash(type *)",
-    "Bash(command -v *)",
-    "Bash(command -V *)",
-    "Bash(realpath *)",
-    "Bash(readlink *)",
-    "Bash(dirname *)",
-    "Bash(basename *)",
-    "Bash(cd)",
-    "Bash(cd *)",
-    "Bash(pwd)",
-    "Bash(pwd *)",
-    "Bash(pwd*)",
-    "Bash(echo *)",
-    "Bash(printf *)",
-    "Bash(seq *)",
-    "Bash(true)",
-    "Bash(:)",
-    "Bash(false)",
-    "Bash(grep *)",
-    "Bash(grep * | head *)",
-    "Bash(rg *)",
-    "Bash(ag *)",
-    "Bash(ack *)",
-    "Bash(pdfgrep *)",
-    "Bash(pdftotext *.pdf -)",
-    "Bash(find *)",
-    "Bash(diff *)",
-    "Bash(cmp *)",
-    "Bash(comm *)",
-    "Bash(git diff)",
-    "Bash(git diff *)",
-    "Bash(git *diff*)",
-    "Bash(git log)",
-    "Bash(git log *)",
-    "Bash(git *log*)",
-    "Bash(git show)",
-    "Bash(git show *)",
-    "Bash(git show*)",
-    "Bash(git status)",
-    "Bash(git status *)",
-    "Bash(git *status*)",
-    "Bash(git blame *)",
-    "Bash(git rev-parse *)",
-    "Bash(git branch)",
-    "Bash(git branch *)",
-    "Bash(git branch --list*)",
-    "Bash(git remote)",
-    "Bash(git remote *)",
-    "Bash(git remote -v)",
-    "Bash(git tag)",
-    "Bash(git tag *)",
-    "Bash(git tag --list*)",
-    "Bash(git ls-files*)",
-    "Bash(git *ls-files *)",
-    "Bash(git ls-tree*)",
-    "Bash(git *ls-tree *)",
-    "Bash(git cat-file *)",
-    "Bash(git config --get *)",
-    "Bash(git config --list *)",
-    "Bash(git config -f * --get *)",
-    "Bash(git config -f * --list*)",
-    "Bash(git -C * rev-parse *)",
-    "Bash(git -C * remote)",
-    "Bash(git -C * remote -v)",
-    "Bash(git stash list *)",
-    "Bash(sort)",
-    "Bash(sort *)",
-    "Bash(uniq)",
-    "Bash(uniq *)",
-    "Bash(cut *)",
-    "Bash(tr *)",
-    "Bash(column)",
-    "Bash(column *)",
-    "Bash(jq *)",
-    "Bash(yq *)",
-    "Bash(xq *)",
-    "Bash(xmllint *)",
-    "Bash(xxd *)",
-    "Bash(hexdump *)",
-    "Bash(od *)",
-    "Bash(strings *)",
-    "Bash(md5 *)",
-    "Bash(md5sum *)",
-    "Bash(shasum *)",
-    "Bash(sha256sum *)",
-    "Bash(cksum *)",
-    "Bash(gzcat *)",
-    "Bash(bzcat *)",
-    "Bash(xzcat *)",
-    "Bash(lz4cat *)",
-    "Bash(zstdcat *)",
-    "Bash(man)",
-    "Bash(man *)",
-    "Bash(info)",
-    "Bash(info *)",
-    "Bash(apropos *)",
-    "Bash(whatis *)",
-    "Bash(tldr *)",
-    "Bash(help)",
-    "Bash(help *)",
-    "Bash(uname)",
-    "Bash(uname *)",
-    "Bash(hostname)",
-    "Bash(hostname *)",
-    "Bash(date)",
-    "Bash(date *)",
-    "Bash(cal)",
-    "Bash(cal *)",
-    "Bash(uptime)",
-    "Bash(uptime *)",
-    "Bash(id)",
-    "Bash(id *)",
-    "Bash(whoami)",
-    "Bash(whoami *)",
-    "Bash(groups)",
-    "Bash(groups *)",
-    "Bash(who)",
-    "Bash(who *)",
-    "Bash(w)",
-    "Bash(w *)",
-    "Bash(ps)",
-    "Bash(ps *)",
-    "Bash(pgrep *)",
-    "Bash(pidof *)",
-    "Bash(pstree)",
-    "Bash(pstree *)",
-    "Bash(lsof *)",
-    "Bash(dig *)",
-    "Bash(host *)",
-    "Bash(nslookup *)",
-    "Bash(ping *)",
-    "Bash(traceroute *)",
-    "Bash(ss)",
-    "Bash(ss *)",
-    "Bash(netstat)",
-    "Bash(netstat *)",
-    "Bash(env)",
-    "Bash(env *)",
-    "Bash(printenv)",
-    "Bash(printenv *)",
-    "Bash(bat *)",
-    "Bash(eza)",
-    "Bash(eza *)",
-    "Bash(lsd)",
-    "Bash(lsd *)",
-    "Bash(fd *)",
-    "Bash(mdfind *)",
-    "Bash(locate *)",
-    "Bash(defaults read)",
-    "Bash(defaults read *)",
-    "Bash(xattr)",
-    "Bash(xattr -l *)",
-    "Bash(xattr -h)",
-    "Bash(sed *)",
-    "Bash(awk *)",
-    "Bash(bc *)",
-    "Bash(getent *)",
-    "Bash(h5dump *)",
-    "Bash(h5ls *)",
-    "Bash(journalctl)",
-    "Bash(journalctl *)",
-    "Bash(localectl)",
-    "Bash(localectl *)",
-    "Bash(loginctl *)",
-    "Bash(log show *)",
-    "Bash(lsblk)",
-    "Bash(lsblk *)",
-    "Bash(lscpu)",
-    "Bash(lscpu *)",
-    "Bash(lspci)",
-    "Bash(lspci *)",
-    "Bash(luac -l*)",
-    "Bash(mount)",
-    "Bash(mount | grep *)",
-    "Bash(ncdump *)",
-    "Bash(nproc)",
-    "Bash(nproc *)",
-    "Bash(sw_vers *)",
-    "Bash(sysctl *)",
-    "Bash(systemctl is-active *)",
-    "Bash(systemctl is-enabled *)",
-    "Bash(systemctl list-*)",
-    "Bash(systemctl status *)",
-    "Bash(timedatectl)",
-    "Bash(timedatectl *)",
-    "Bash(vulkaninfo *)",
-    "Bash(xdg-mime query *)",
-    "Bash(dmesg)",
-    "Bash(dmesg *)",
-    "Bash(free)",
-    "Bash(free *)",
-    "Bash(* --help)",
-    "Bash(* --version)",
-    "Bash(* list*)",
-    "Bash(* list *| grep *)",
-    "Bash(brew info *)",
-    "Bash(brew list *)",
-    "Bash(brew search *)",
-    "Bash(cargo doc *)",
-    "Bash(cargo metadata *)",
-    "Bash(cargo tree *)",
-    "Bash(conda info *)",
-    "Bash(conda list *)",
-    "Bash(conda search *)",
-    "Bash(conda env *)",
-    "Bash(flatpak info *)",
-    "Bash(flatpak list *)",
-    "Bash(npm info *)",
-    "Bash(npm list *)",
-    "Bash(npm view *)",
-    "Bash(pacman -Q*)",
-    "Bash(pacman -Si *)",
-    "Bash(pacman -Ss *)",
-    "Bash(pip list *)",
-    "Bash(pip show *)",
-    "Bash(pnpm info *)",
-    "Bash(uv pip list *)",
-    "Bash(uv pip search *)",
-    "Bash(uv pip show *)",
-    "Bash(gh alias list *)",
-    "Bash(gh api *)",
-    "Bash(gh auth status *)",
-    "Bash(gh cache list *)",
-    "Bash(gh config get *)",
-    "Bash(gh config list *)",
-    "Bash(gh extension list *)",
-    "Bash(gh gist list *)",
-    "Bash(gh gist view *)",
-    "Bash(gh issue list *)",
-    "Bash(gh issue status *)",
-    "Bash(gh issue view *)",
-    "Bash(gh label list *)",
-    "Bash(gh org list *)",
-    "Bash(gh pr checks *)",
-    "Bash(gh pr diff *)",
-    "Bash(gh pr list *)",
-    "Bash(gh pr status *)",
-    "Bash(gh pr view *)",
-    "Bash(gh project list *)",
-    "Bash(gh project view *)",
-    "Bash(gh release list *)",
-    "Bash(gh release view *)",
-    "Bash(gh repo list *)",
-    "Bash(gh repo view *)",
-    "Bash(gh ruleset *)",
-    "Bash(gh run list *)",
-    "Bash(gh run view *)",
-    "Bash(gh search *)",
-    "Bash(gh status *)",
-    "Bash(gh workflow list *)",
-    "Bash(gh workflow view *)",
-    "Bash(aws s3 ls *)",
-    "Bash(aws * get-*)",
-    "Bash(aws * describe-*)",
-    "Bash(aws * list-*)",
-    "Bash(aws * head-*)",
-    "Bash(kitty @ ls*)",
-    "Bash(kitty @ ls | head *)",
-    "Bash(kitty @ get-text*)",
-    "Bash(hyprctl activewindow*)",
-    "Bash(hyprctl activeworkspace*)",
-    "Bash(hyprctl animations*)",
-    "Bash(hyprctl binds*)",
-    "Bash(hyprctl clients*)",
-    "Bash(hyprctl configerrors*)",
-    "Bash(hyprctl cursorpos*)",
-    "Bash(hyprctl decorations *)",
-    "Bash(hyprctl devices*)",
-    "Bash(hyprctl get*)",
-    "Bash(hyprctl getoption *)",
-    "Bash(hyprctl getprop *)",
-    "Bash(hyprctl globalshortcuts*)",
-    "Bash(hyprctl instances*)",
-    "Bash(hyprctl layers*)",
-    "Bash(hyprctl layouts*)",
-    "Bash(hyprctl monitors*)",
-    "Bash(hyprctl rollinglog*)",
-    "Bash(hyprctl splash*)",
-    "Bash(hyprctl systeminfo*)",
-    "Bash(hyprctl version*)",
-    "Bash(hyprctl workspacerules*)",
-    "Bash(hyprctl workspaces*)",
-    "Bash(javap *)",
-    "Bash(typst query *)"
-  ],
-  "safe_write": [
-    "Bash(mlr *)",
-    "Bash(mlr *| head *)",
-    "Bash(printf * | mlr *)",
-    "Bash(qalc *)",
-    "Bash(paste *)",
-    "Bash(tac *)",
-    "Bash(tee *)",
-    "Bash(curl *)",
-    "Bash(uv lock)",
-    "Bash(luarocks search *)",
-    "Bash(just lint)",
-    "Bash(just type)",
-    "Bash(make test)",
-    "Bash(make test *)",
-    "Bash(make validate)",
-    "Bash(bun test)",
-    "Bash(bun test *)",
-    "Bash(ruff *)",
-    "Bash(selene *)",
-    "Bash(stylua *)",
-    "Bash(tree-sitter *)",
-    "Bash(npx tree-sitter *)",
-    "Bash(latexmk *)",
-    "Bash(typst *)",
-    "Bash(tlmgr *)",
-    "Bash(claude config list *)",
-    "Bash(claude mcp list *)",
-    "Bash(flyte get *)",
-    "Bash(flytectl get *)",
-    "Bash(zsh -n *)",
-    "Bash(python3 -m unittest*)",
-    "Bash(sleep *)",
-    "Bash(blender --background *)",
-    "Bash(pymol *)",
-    "Bash(http *)"
-  ],
-  "deny": [
-    "Bash(find * -exec *)",
-    "Bash(find * -delete*)",
-    "Bash(find * -ok *)",
-    "Bash(find * -okdir *)",
-    "Bash(fd * -x *)",
-    "Bash(fd * -X *)",
-    "Bash(fd * --exec *)",
-    "Bash(fd * --exec-batch *)",
-    "Bash(sed -i*)",
-    "Bash(sed * -i*)",
-    "Bash(awk *system*)",
-    "Bash(date -s*)",
-    "Bash(date --set*)",
-    "Bash(mlr -I*)",
-    "Bash(mlr * -I*)",
-    "Bash(curl * -o *)",
-    "Bash(curl * --output *)",
-    "Bash(curl * -O*)",
-    "Bash(curl * --remote-name*)",
-    "Bash(ruff * --fix*)",
-    "Bash(ruff * -fix*)",
-    "Bash(stylua * --replace*)"
-  ],
-  "ask": [
-    "Bash(yq -i*)",
-    "Bash(yq * -i*)",
-    "Bash(awk * > *)",
-    "Bash(awk *>*)",
-    "Bash(rm *)",
-    "Bash(git checkout -- *)",
-    "Bash(git checkout *)",
-    "Bash(git branch *-d *)",
-    "Bash(git branch *-D *)",
-    "Bash(git branch *--delete *)",
-    "Bash(git branch *-m *)",
-    "Bash(git branch *-M *)",
-    "Bash(git branch *--move *)",
-    "Bash(git branch *-c *)",
-    "Bash(git branch *-C *)",
-    "Bash(git branch *--copy *)",
-    "Bash(git reset*)",
-    "Bash(git push*)",
-    "Bash(git commit*)",
-    "Bash(git * commit *)",
-    "Bash(git stash)",
-    "Bash(git stash push*)",
-    "Bash(git stash drop*)",
-    "Bash(git stash -m *)",
-    "Bash(gh issue create *)",
-    "Bash(gh api *-X*)",
-    "Bash(gh api *--method*)",
-    "Bash(gh api *-f*)",
-    "Bash(gh api *-F*)",
-    "Bash(gh api *--input*)",
-    "Bash(find * -exec *)",
-    "Bash(find * -execdir *)"
-  ]
+  "ls":        { "read_only": [{}] },
+  "tree":      { "read_only": [{}] },
+  "du":        { "read_only": [{}] },
+  "df":        { "read_only": [{}] },
+  "file":      { "read_only": [{}] },
+  "stat":      { "read_only": [{}] },
+  "wc":        { "read_only": [{}] },
+  "column":    { "read_only": [{}] },
+  "eza":       { "read_only": [{}] },
+  "lsd":       { "read_only": [{}] },
+  "bat":       { "read_only": [{}] },
+  "mdfind":    { "read_only": [{}] },
+  "locate":    { "read_only": [{}] },
+
+  "xargs":     { "read_only": [{ "positionals": ["ls"] }] },
+
+  "which":     { "read_only": [{}] },
+  "whereis":   { "read_only": [{}] },
+  "type":      { "read_only": [{}] },
+  "realpath":  { "read_only": [{}] },
+  "readlink":  { "read_only": [{}] },
+  "dirname":   { "read_only": [{}] },
+  "basename":  { "read_only": [{}] },
+
+  "command":   { "read_only": [{ "options": ["v", "V"] }] },
+
+  "cat":       { "read_only": [{}] },
+  "head":      { "read_only": [{}] },
+  "tail":      { "read_only": [{}] },
+  "less":      { "read_only": [{}] },
+  "zless":     { "read_only": [{}] },
+  "gzcat":     { "read_only": [{}] },
+  "bzcat":     { "read_only": [{}] },
+  "xzcat":     { "read_only": [{}] },
+  "lz4cat":    { "read_only": [{}] },
+  "zstdcat":   { "read_only": [{}] },
+
+  "cd":        { "read_only": [{}] },
+  "pwd":       { "read_only": [{}] },
+  "echo":      { "read_only": [{}] },
+  "printf":    { "read_only": [{}] },
+  "seq":       { "read_only": [{}] },
+  "true":      { "read_only": [{}] },
+  ":":         { "read_only": [{}] },
+  "false":     { "read_only": [{}] },
+  "help":      { "read_only": [{}] },
+  "sleep":     { "read_only": [{}] },
+
+  "grep":      { "read_only": [{}] },
+  "rg":        { "read_only": [{}] },
+  "ag":        { "read_only": [{}] },
+  "ack":       { "read_only": [{}] },
+  "pdfgrep":   { "read_only": [{}] },
+
+  "pdftotext": { "read_only": [{ "positionals": ["*.pdf", "-"] }] },
+
+  "find": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["exec", "execdir", "okdir", "delete", "ok"] }]
+  },
+
+  "fd": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["x", "X", "exec", "exec-batch"] }]
+  },
+
+  "diff": { "read_only": [{}] },
+  "cmp":  { "read_only": [{}] },
+  "comm": { "read_only": [{}] },
+
+  "git": {
+    "read_only": [
+      { "positionals": ["diff"] },
+      { "positionals": ["log"] },
+      { "positionals": ["show"] },
+      { "positionals": ["status"] },
+      { "positionals": ["blame"] },
+      { "positionals": ["rev-parse"] },
+      { "positionals": ["branch"] },
+      { "positionals": ["remote"] },
+      { "positionals": ["tag"] },
+      { "positionals": ["ls-files"] },
+      { "positionals": ["ls-tree"] },
+      { "positionals": ["cat-file"] },
+      { "positionals": ["config", "--get", "*"] },
+      { "positionals": ["config", "--list", "*"] },
+      { "positionals": ["config", "-f", "*", "--get", "*"] },
+      { "positionals": ["config", "-f", "*", "--list", "*"] },
+      { "positionals": ["stash", "list"] }
+    ],
+    "ask": [
+      { "positionals": ["branch"],
+        "options":     ["d", "D", "m", "M", "c", "C",
+                        "delete", "move", "copy"] },
+      { "positionals": ["stash"] },
+      { "positionals": ["checkout"] },
+      { "positionals": ["reset"] },
+      { "positionals": ["push"] },
+      { "positionals": ["commit"] }
+    ]
+  },
+
+  "sort": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["o", "output"] }]
+  },
+
+  "uniq": { "read_only": [{}] },
+  "cut":  { "read_only": [{}] },
+  "tr":   { "read_only": [{}] },
+
+  "jq": { "read_only": [{}] },
+  "yq": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["i", "inplace", "in-place"] }]
+  },
+  "xq":      { "read_only": [{}] },
+  "xmllint": { "read_only": [{}] },
+  "xxd":     { "read_only": [{}] },
+  "hexdump": { "read_only": [{}] },
+  "od":      { "read_only": [{}] },
+  "strings": { "read_only": [{}] },
+
+  "md5":       { "read_only": [{}] },
+  "md5sum":    { "read_only": [{}] },
+  "shasum":    { "read_only": [{}] },
+  "sha256sum": { "read_only": [{}] },
+  "cksum":     { "read_only": [{}] },
+
+  "man":     { "read_only": [{}] },
+  "info":    { "read_only": [{}] },
+  "apropos": { "read_only": [{}] },
+  "whatis":  { "read_only": [{}] },
+  "tldr":    { "read_only": [{}] },
+
+  "uname":       { "read_only": [{}] },
+  "hostname":    { "read_only": [{}] },
+  "date": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["s", "set"] }]
+  },
+  "cal":         { "read_only": [{}] },
+  "uptime":      { "read_only": [{}] },
+  "id":          { "read_only": [{}] },
+  "whoami":      { "read_only": [{}] },
+  "groups":      { "read_only": [{}] },
+  "who":         { "read_only": [{}] },
+  "w":           { "read_only": [{}] },
+  "nproc":       { "read_only": [{}] },
+  "sw_vers":     { "read_only": [{}] },
+  "lsblk":       { "read_only": [{}] },
+  "lscpu":       { "read_only": [{}] },
+  "lspci":       { "read_only": [{}] },
+  "timedatectl": { "read_only": [{}] },
+  "localectl":   { "read_only": [{}] },
+  "loginctl":    { "read_only": [{}] },
+  "free":        { "read_only": [{}] },
+  "dmesg":       { "read_only": [{}] },
+  "vulkaninfo":  { "read_only": [{}] },
+
+  "ps":     { "read_only": [{}] },
+  "pgrep":  { "read_only": [{}] },
+  "pidof":  { "read_only": [{}] },
+  "pstree": { "read_only": [{}] },
+  "lsof":   { "read_only": [{}] },
+
+  "dig":        { "read_only": [{}] },
+  "host":       { "read_only": [{}] },
+  "nslookup":   { "read_only": [{}] },
+  "ping":       { "read_only": [{}] },
+  "traceroute": { "read_only": [{}] },
+  "ss":         { "read_only": [{}] },
+  "netstat":    { "read_only": [{}] },
+  "mount":      { "read_only": [{}] },
+
+  "env":      { "read_only": [{}] },
+  "printenv": { "read_only": [{}] },
+
+  "defaults": { "read_only": [{ "positionals": ["read"] }] },
+  "xattr": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "d", "c"] }]
+  },
+  "log": { "read_only": [{ "positionals": ["show"] }] },
+
+  "sed": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["i", "in-place"] }]
+  },
+
+  "awk": {
+    "read_only": [{}],
+    "deny":      [{ "positionals": ["*system*"] }]
+  },
+
+  "bc":     { "read_only": [{}] },
+  "getent": { "read_only": [{}] },
+
+  "h5dump": { "read_only": [{}] },
+  "h5ls":   { "read_only": [{}] },
+  "ncdump": { "read_only": [{}] },
+
+  "journalctl": { "read_only": [{}] },
+  "systemctl": {
+    "read_only": [
+      { "positionals": ["is-active"] },
+      { "positionals": ["is-enabled"] },
+      { "positionals": ["list-*"] },
+      { "positionals": ["status"] }
+    ]
+  },
+
+  "sysctl":   { "read_only": [{}] },
+  "xdg-mime": { "read_only": [{ "positionals": ["query"] }] },
+
+  "luac": {
+    "read_only": [{ "options": ["l"] }],
+    "ask":       [{ "options": ["o"] }]
+  },
+  "typst": {
+    "read_only":  [{ "positionals": ["query"] }],
+    "safe_write": [{}]
+  },
+  "latexmk": { "safe_write": [{}] },
+  "tlmgr":   { "safe_write": [{}] },
+
+  "javap": { "read_only": [{}] },
+
+  "*": {
+    "read_only": [
+      { "options": ["help", "version"] },
+      { "positionals": ["list*"] }
+    ]
+  },
+
+  "brew": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] },
+      { "positionals": ["search"] }
+    ]
+  },
+
+  "cargo": {
+    "read_only": [
+      { "positionals": ["doc"] },
+      { "positionals": ["metadata"] },
+      { "positionals": ["tree"] }
+    ]
+  },
+
+  "conda": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] },
+      { "positionals": ["search"] },
+      { "positionals": ["env"] }
+    ]
+  },
+
+  "flatpak": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] }
+    ]
+  },
+
+  "npm": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] },
+      { "positionals": ["view"] }
+    ]
+  },
+
+  "pacman": {
+    "read_only": [{ "options": ["Q", "Si", "Ss"] }],
+    "ask":       [{ "options": ["R", "U", "D", "F", "T"] }]
+  },
+
+  "pip": {
+    "read_only": [
+      { "positionals": ["list"] },
+      { "positionals": ["show"] }
+    ]
+  },
+
+  "pnpm": { "read_only": [{ "positionals": ["info"] }] },
+
+  "uv": {
+    "read_only": [
+      { "positionals": ["pip", "list"] },
+      { "positionals": ["pip", "search"] },
+      { "positionals": ["pip", "show"] }
+    ],
+    "safe_write": [{ "positionals": ["lock"] }]
+  },
+
+  "luarocks": { "read_only": [{ "positionals": ["search"] }] },
+
+  "gh": {
+    "read_only": [
+      { "positionals": ["alias", "list"] },
+      { "positionals": ["api"] },
+      { "positionals": ["auth", "status"] },
+      { "positionals": ["cache", "list"] },
+      { "positionals": ["config", "get"] },
+      { "positionals": ["config", "list"] },
+      { "positionals": ["extension", "list"] },
+      { "positionals": ["gist", "list"] },
+      { "positionals": ["gist", "view"] },
+      { "positionals": ["issue", "list"] },
+      { "positionals": ["issue", "status"] },
+      { "positionals": ["issue", "view"] },
+      { "positionals": ["label", "list"] },
+      { "positionals": ["org", "list"] },
+      { "positionals": ["pr", "checks"] },
+      { "positionals": ["pr", "diff"] },
+      { "positionals": ["pr", "list"] },
+      { "positionals": ["pr", "status"] },
+      { "positionals": ["pr", "view"] },
+      { "positionals": ["project", "list"] },
+      { "positionals": ["project", "view"] },
+      { "positionals": ["release", "list"] },
+      { "positionals": ["release", "view"] },
+      { "positionals": ["repo", "list"] },
+      { "positionals": ["repo", "view"] },
+      { "positionals": ["ruleset"] },
+      { "positionals": ["run", "list"] },
+      { "positionals": ["run", "view"] },
+      { "positionals": ["search"] },
+      { "positionals": ["status"] },
+      { "positionals": ["workflow", "list"] },
+      { "positionals": ["workflow", "view"] }
+    ],
+    "ask": [
+      { "positionals": ["api"],
+        "options":     ["X", "method", "f", "F", "input"] },
+      { "positionals": ["issue", "create"] }
+    ]
+  },
+
+  "aws": {
+    "read_only": [
+      { "positionals": ["s3", "ls"] },
+      { "positionals": ["*", "get-*"] },
+      { "positionals": ["*", "describe-*"] },
+      { "positionals": ["*", "list-*"] },
+      { "positionals": ["*", "head-*"] }
+    ]
+  },
+
+  "kitty": {
+    "read_only": [
+      { "positionals": ["@", "ls"] },
+      { "positionals": ["@", "get-text"] }
+    ]
+  },
+
+  "hyprctl": {
+    "read_only": [
+      { "positionals": ["activewindow"] },
+      { "positionals": ["activeworkspace"] },
+      { "positionals": ["animations"] },
+      { "positionals": ["binds"] },
+      { "positionals": ["clients"] },
+      { "positionals": ["configerrors"] },
+      { "positionals": ["cursorpos"] },
+      { "positionals": ["decorations"] },
+      { "positionals": ["devices"] },
+      { "positionals": ["get*"] },
+      { "positionals": ["globalshortcuts"] },
+      { "positionals": ["instances"] },
+      { "positionals": ["layers"] },
+      { "positionals": ["layouts"] },
+      { "positionals": ["monitors"] },
+      { "positionals": ["rollinglog"] },
+      { "positionals": ["splash"] },
+      { "positionals": ["systeminfo"] },
+      { "positionals": ["version"] },
+      { "positionals": ["workspacerules"] },
+      { "positionals": ["workspaces"] }
+    ]
+  },
+
+  "mlr": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["I", "in-place"] }],
+    "ask":       [{ "positionals": ["split"] },
+                  { "positionals": ["tee"] }]
+  },
+
+  "qalc":  { "read_only": [{}], "ask": [{ "options": ["s", "set"] }] },
+  "paste": { "read_only": [{}] },
+  "tac":   { "read_only": [{}] },
+
+  "curl": {
+    "read_only": [{}],
+    "ask": [{ "options": ["o", "O", "output",
+                          "remote-name", "remote-name-all",
+                          "remote-header-name", "J",
+                          "output-dir", "create-dirs",
+                          "D", "dump-header", "trace", "trace-ascii",
+                          "K", "config",
+                          "T", "upload-file",
+                          "d", "data", "data-ascii", "data-binary",
+                          "data-raw", "data-urlencode",
+                          "F", "form", "X", "request", "json"] }]
+  },
+
+  "http": {
+    "read_only": [{}],
+    "ask": [
+      { "options": ["o", "output", "d", "download"] },
+      { "positionals": ["POST"] },
+      { "positionals": ["post"] },
+      { "positionals": ["PUT"] },
+      { "positionals": ["put"] },
+      { "positionals": ["DELETE"] },
+      { "positionals": ["delete"] },
+      { "positionals": ["PATCH"] },
+      { "positionals": ["patch"] }
+    ]
+  },
+
+  "just": {
+    "safe_write": [
+      { "positionals": ["lint"] },
+      { "positionals": ["type"] }
+    ]
+  },
+
+  "make": {
+    "safe_write": [
+      { "positionals": ["test"] },
+      { "positionals": ["validate"] }
+    ]
+  },
+
+  "bun": { "safe_write": [{ "positionals": ["test"] }] },
+
+  "ruff": {
+    "safe_write": [{}],
+    "deny":       [{ "options": ["fix", "fix-only"] }]
+  },
+
+  "selene": { "read_only": [{}] },
+
+  "stylua": {
+    "safe_write": [{}],
+    "deny":       [{ "options": ["replace"] }]
+  },
+
+  "tree-sitter": { "safe_write": [{}] },
+  "npx": { "safe_write": [{ "positionals": ["tree-sitter"] }] },
+
+  "claude": {
+    "read_only": [
+      { "positionals": ["config", "list"] },
+      { "positionals": ["mcp", "list"] }
+    ]
+  },
+
+  "flyte":    { "read_only": [{ "positionals": ["get"] }] },
+  "flytectl": { "read_only": [{ "positionals": ["get"] }] },
+
+  "zsh": {
+    "read_only": [{ "options": ["n"] }],
+    "ask":       [{ "options": ["c", "i", "s", "f"] }]
+  },
+  "python3": {
+    "safe_write": [{ "options": ["m"], "positionals": ["unittest*"] }]
+  },
+
+  "blender": { "safe_write": [{ "options": ["background"] }] },
+  "pymol":   { "safe_write": [{}] },
+
+  "rm": { "ask": [{}] }
 }

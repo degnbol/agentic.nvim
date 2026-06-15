@@ -34,6 +34,14 @@ local cached_config_deny_ref, cached_config_deny_patterns = nil, {}
 --- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
 local cached_config_ask_ref, cached_config_ask_patterns = nil, {}
 
+--- @type agentic.StructuredEntries|nil
+local cached_plugin_structured_entries
+--- @type number
+local cached_plugin_structured_mtime = 0
+
+--- @type table|nil, agentic.StructuredEntries
+local cached_config_structured_ref, cached_config_structured_entries = nil, {}
+
 --- Path to bundled permissions.json
 --- @return string
 local function plugin_permissions_path()
@@ -482,6 +490,134 @@ function M.get_ask_patterns()
     return result
 end
 
+--- Strip leading dashes from a rule option so `"--exec"`, `"-exec"`, and
+--- `"exec"` all canonicalise to the dashless candidate-space form. Idempotent.
+--- @param s string
+--- @return string
+local function normalise_option(s)
+    return (s:gsub("^%-+", ""))
+end
+
+local STRUCTURED_KINDS = { "read_only", "safe_write", "ask", "deny" }
+
+--- Deep-copy a single gate, normalising every option string to the dashless
+--- form. Positionals are left raw (glob-compiled at match time).
+--- @param gate any
+--- @return agentic.PermGate
+local function normalise_gate(gate)
+    --- @type agentic.PermGate
+    local g = {}
+    if type(gate) ~= "table" then
+        return g
+    end
+    if type(gate.options) == "table" then
+        local opts = {}
+        for _, opt in ipairs(gate.options) do
+            if type(opt) == "string" then
+                table.insert(opts, normalise_option(opt))
+            end
+        end
+        g.options = opts
+    end
+    if type(gate.positionals) == "table" then
+        local pos = {}
+        for _, p in ipairs(gate.positionals) do
+            if type(p) == "string" then
+                table.insert(pos, p)
+            end
+        end
+        g.positionals = pos
+    end
+    return g
+end
+
+--- Deep-copy a cmd-keyed structured-entries table, normalising every option
+--- string to the dashless form. A `vim.NIL` value (the user's "disable a
+--- bundled cmd" marker) is preserved so it survives the merge in
+--- `get_structured_entries`. The output is owned by the caller (safe to
+--- mutate) so this caches the normalised view rather than mutating the input.
+--- @param entries any
+--- @return agentic.StructuredEntries
+local function normalise_structured_entries(entries)
+    --- @type agentic.StructuredEntries
+    local out = {}
+    if type(entries) ~= "table" then
+        return out
+    end
+    for cmd, entry in pairs(entries) do
+        if type(cmd) == "string" then
+            if entry == vim.NIL then
+                --- @diagnostic disable-next-line: assign-type-mismatch
+                out[cmd] = vim.NIL
+            elseif type(entry) == "table" then
+                --- @type agentic.StructuredCmdEntry
+                local copy = {}
+                for _, kind in ipairs(STRUCTURED_KINDS) do
+                    local gates = entry[kind]
+                    if type(gates) == "table" then
+                        local arr = {}
+                        for _, gate in ipairs(gates) do
+                            table.insert(arr, normalise_gate(gate))
+                        end
+                        copy[kind] = arr
+                    end
+                end
+                out[cmd] = copy
+            end
+        end
+    end
+    return out
+end
+
+--- Resolve the merged cmd-keyed structured-entries table from the bundled
+--- permissions.json plus any user additions in `Config.permissions.structured`.
+--- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)` — a
+--- user cmd key wins wholesale (its kind-arrays replace the bundled ones), and
+--- a `vim.NIL` value disables the bundled cmd entirely (stripped before return).
+--- Re-reads the bundled file automatically when its mtime changes; user
+--- additions are recompiled when the table reference changes.
+--- @return agentic.StructuredEntries
+function M.get_structured_entries()
+    local plugin_path = plugin_permissions_path()
+    local plugin_mtime = get_mtime(plugin_path)
+    if
+        cached_plugin_structured_entries == nil
+        or plugin_mtime ~= cached_plugin_structured_mtime
+    then
+        cached_plugin_structured_mtime = plugin_mtime
+        cached_plugin_structured_entries = {}
+        if Config.permissions.use_plugin_defaults then
+            local data = M.read_json(plugin_path)
+            cached_plugin_structured_entries =
+                normalise_structured_entries(data)
+        end
+    end
+
+    local user_table = Config.permissions.structured
+    if user_table ~= cached_config_structured_ref then
+        cached_config_structured_ref = user_table
+        cached_config_structured_entries =
+            normalise_structured_entries(user_table)
+    end
+
+    --- @type agentic.StructuredEntries
+    local merged = vim.tbl_deep_extend(
+        "force",
+        cached_plugin_structured_entries,
+        cached_config_structured_entries
+    ) or {}
+    -- Drop `vim.NIL`-valued entries (the user's disable marker) so the matcher
+    -- sees a clean table. decide_leaf also guards against vim.NIL.
+    --- @type agentic.StructuredEntries
+    local result = {}
+    for cmd, entry in pairs(merged) do
+        if entry ~= vim.NIL then
+            result[cmd] = entry
+        end
+    end
+    return result
+end
+
 -- ── Treesitter walker ──────────────────────────────────────────────────────
 --
 -- A command string is parsed with the zsh grammar and every node is proven
@@ -496,7 +632,7 @@ end
 -- 2026-06-12). They can drift across grammar versions — re-verify with a
 -- parse-tree dump after upgrading the parser.
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[] }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove }
 
 --- Container nodes whose every named child must itself pass. `do_group` and the
 --- loop/conditional statements are intentionally absent — Phase 1a rejects all
@@ -548,22 +684,6 @@ local function subtree_has_substitution(node)
     return false
 end
 
---- Whether any node in the subtree is a dynamic name part (rejects an
---- interpolated command name built as a `concatenation`).
---- @param node TSNode
---- @return boolean
-local function subtree_has_dynamic_name(node)
-    if DYNAMIC_NAME_TYPES[node:type()] then
-        return true
-    end
-    for child in node:iter_children() do
-        if child:named() and subtree_has_dynamic_name(child) then
-            return true
-        end
-    end
-    return false
-end
-
 --- Whether a `variable_assignment`'s name is safe to ignore as inert data.
 --- Uppercase execution hijackers (`PATH`, `LD_PRELOAD`, `BASH_ENV`,
 --- `PYTHONPATH`, …) are not — a poisoned var set before a use changes which
@@ -580,26 +700,22 @@ local function safe_assignment_name(va, src)
     return is_safe_env_name(name) or is_data_var_name(name)
 end
 
---- Extract the literal command name from a `command_name` node, normalising
---- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
---- deny pattern). Returns nil to bail on a dynamic name — a substitution,
---- expansion, arithmetic, or an interpolated `concatenation`.
---- @param command_name TSNode
+--- Strict literal extraction: every byte of the returned string must be
+--- exactly what the shell delivers to the program. Returns nil if any subtree
+--- contains a variable expansion or substitution. Used as the recursive step
+--- inside `concatenation` — joining `-ex"$x"c` would otherwise launder a
+--- dynamic flag past the matcher.
+--- @param node TSNode
 --- @param src string
 --- @return string|nil
-local function command_name_text(command_name, src)
-    local inner = command_name:named_child(0)
-    if not inner then
-        return nil
-    end
-    local t = inner:type()
-    if DYNAMIC_NAME_TYPES[t] then
-        return nil
+local function pure_literal_token(node, src)
+    local t = node:type()
+    if t == "word" or t == "number" or t == "glob_pattern" then
+        return vim.treesitter.get_node_text(node, src)
     end
     if t == "string" then
-        -- A double-quoted name is literal only with no interpolation child.
         local parts = {}
-        for c in inner:iter_children() do
+        for c in node:iter_children() do
             if c:named() then
                 if c:type() ~= "string_content" then
                     return nil
@@ -610,13 +726,113 @@ local function command_name_text(command_name, src)
         return table.concat(parts)
     end
     if t == "raw_string" then
-        local txt = vim.treesitter.get_node_text(inner, src)
+        local txt = vim.treesitter.get_node_text(node, src)
         return (txt:gsub("^'", ""):gsub("'$", ""))
     end
-    if t == "concatenation" and subtree_has_dynamic_name(inner) then
+    if t == "concatenation" then
+        if subtree_has_substitution(node) then
+            return nil
+        end
+        local parts = {}
+        for c in node:iter_children() do
+            if c:named() then
+                local part = pure_literal_token(c, src)
+                if part == nil then
+                    return nil
+                end
+                table.insert(parts, part)
+            end
+        end
+        return table.concat(parts)
+    end
+    if t == "brace_expression" then
+        if subtree_has_substitution(node) then
+            return nil
+        end
+        return vim.treesitter.get_node_text(node, src)
+    end
+    -- Variable expansions, substitutions, anything else: not pure.
+    return nil
+end
+
+--- Extract the token text from one node that appears as a child of a
+--- `command` (an argument token) or as the inner of a `command_name`. Returns
+--- the joined string, or nil to bail. Lenient for top-level expansion-bearing
+--- tokens (`"$f"`, `$bar`) — they're emitted as raw source text, preserving
+--- the Phase 1a behaviour where `ls "$f"` matches `Bash(ls *)`. Strict
+--- (`pure_literal_token`) inside a concatenation, so an expansion glued into a
+--- flag (`-ex"$x"c`) cannot be silently joined to a deny-matching literal.
+--- @param node TSNode
+--- @param src string
+--- @return string|nil
+local function literal_token(node, src)
+    local t = node:type()
+    -- Pure-literal types: delegate to the strict path.
+    if
+        t == "word"
+        or t == "number"
+        or t == "glob_pattern"
+        or t == "raw_string"
+        or t == "brace_expression"
+    then
+        return pure_literal_token(node, src)
+    end
+    if t == "string" then
+        -- Substitution-bearing strings are caught at the command level. A
+        -- string composed only of `string_content` joins to its quote-stripped
+        -- literal (so `"rm"` cannot evade a deny pattern). A string that
+        -- mixes `string_content` with expansions yields the raw quoted text,
+        -- preserving Phase 1a glob matching.
+        local has_non_content = false
+        local parts = {}
+        for c in node:iter_children() do
+            if c:named() then
+                if c:type() == "string_content" then
+                    table.insert(parts, vim.treesitter.get_node_text(c, src))
+                else
+                    has_non_content = true
+                end
+            end
+        end
+        if has_non_content then
+            return vim.treesitter.get_node_text(node, src)
+        end
+        return table.concat(parts)
+    end
+    if t == "concatenation" then
+        return pure_literal_token(node, src)
+    end
+    if DYNAMIC_NAME_TYPES[t] then
+        -- A bare expansion as an arg (`ls $f`) — emit raw source text so the
+        -- glob layer still sees the original token (`$f`). The structured
+        -- matcher's `extract_option_candidates` will not produce option
+        -- candidates from a `$`-prefixed token. Substitution is already
+        -- rejected at the command level.
+        if t == "command_substitution" or t == "process_substitution" then
+            return nil
+        end
+        return vim.treesitter.get_node_text(node, src)
+    end
+    -- Anything else (heredoc bodies, redirects, unknown future node types):
+    -- fail-closed.
+    return nil
+end
+
+--- Extract the literal command name from a `command_name` node, normalising
+--- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
+--- deny pattern). Returns nil to bail on a dynamic name — a substitution,
+--- expansion, arithmetic, or an interpolated `concatenation`. A literal
+--- concatenation in command-name position (e.g. `gr"e"p`) joins to its
+--- concatenated text via `literal_token`.
+--- @param command_name TSNode
+--- @param src string
+--- @return string|nil
+local function command_name_text(command_name, src)
+    local inner = command_name:named_child(0)
+    if not inner then
         return nil
     end
-    return vim.treesitter.get_node_text(inner, src)
+    return literal_token(inner, src)
 end
 
 --- Whether a `file_redirect` is a safe form: a write to /dev/null, or a file
@@ -651,8 +867,8 @@ end
 local walk
 
 --- Walk a `command`: reject substitution anywhere, validate env-prefix
---- assignments, extract the literal name, then match the leaf (name + args,
---- with prefixes and redirects excluded) against the pattern buckets.
+--- assignments, extract the literal name and arg tokens, then combine the glob
+--- and structured layers (composition rule in the `permissions` project skill).
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
@@ -674,7 +890,11 @@ local function walk_command(node, src, ctx)
         elseif t == "command_name" then
             name_node = child
         elseif child:named() then
-            table.insert(args, vim.treesitter.get_node_text(child, src))
+            local tok = literal_token(child, src)
+            if tok == nil then
+                return false
+            end
+            table.insert(args, tok)
         end
     end
 
@@ -685,7 +905,8 @@ local function walk_command(node, src, ctx)
     if not name then
         return false
     end
-    if CODE_TAKING_BUILTINS[M.strip_command_path(name)] then
+    local cmd_name = M.strip_command_path(name)
+    if CODE_TAKING_BUILTINS[cmd_name] then
         return false
     end
 
@@ -694,11 +915,35 @@ local function walk_command(node, src, ctx)
         leaf = leaf .. " " .. table.concat(args, " ")
     end
 
+    -- Cheap glob denies first — short-circuit before the structured matcher.
     if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
         return false
     end
     if #ctx.ask > 0 and M.matches_any_pattern(leaf, ctx.ask) then
         return false
+    end
+
+    --- @type agentic.PermDecision
+    local structured = nil
+    if next(ctx.structured_entries) ~= nil then
+        --- @type agentic.ParsedLeaf
+        local parsed = { cmd_name = cmd_name, args = args }
+        -- Lazy require: permission_structured itself requires this module
+        -- (for `glob_to_lua_pattern`). Deferring to call-time breaks the cycle.
+        local PermissionStructured =
+            require("agentic.utils.permission_structured")
+        structured = PermissionStructured.decide_leaf(
+            ctx.structured_entries,
+            parsed,
+            ctx.auto_approve
+        )
+        if structured == "deny" or structured == "ask" then
+            return false
+        end
+    end
+
+    if structured == "allow" then
+        return true
     end
     return M.matches_any_pattern(leaf, ctx.allow)
 end
@@ -784,7 +1029,10 @@ function M.should_auto_approve(command)
     end
 
     local allow = M.get_allow_patterns()
-    if #allow == 0 then
+    local structured_entries = M.get_structured_entries()
+    -- Skip the parse entirely when neither layer has any allow source — the
+    -- walker has nothing to approve against.
+    if #allow == 0 and next(structured_entries) == nil then
         return false
     end
 
@@ -800,6 +1048,8 @@ function M.should_auto_approve(command)
         allow = allow,
         deny = M.get_deny_patterns(),
         ask = M.get_ask_patterns(),
+        structured_entries = structured_entries,
+        auto_approve = Config.permissions.auto_approve,
     })
 end
 
@@ -809,6 +1059,10 @@ function M.invalidate_cache()
     cached_ask_patterns = nil
     cached_read_only_patterns = nil
     cached_safe_write_patterns = nil
+    cached_plugin_structured_entries = nil
+    cached_plugin_structured_mtime = 0
+    cached_config_structured_ref = nil
+    cached_config_structured_entries = {}
     cached_mtimes = {}
     cached_config_read_only_ref = nil
     cached_config_read_only_patterns = {}
