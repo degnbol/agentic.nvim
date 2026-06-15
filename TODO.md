@@ -502,12 +502,40 @@ sleep 10
 The `(Bash completed with no output)` is redundant, given we always show completion status of command (" ✔ completed").
 So, I think we should not be showing this output. If it originates from our code, delete, if it is given by acp, etc. then I think we may have to detect it and suppress. The wording varies, so if we have to detect on wording alone, then consider if this work is worth it.
 
+### highlight `ask`
+
+For an execute call that require a prompt, there could be several commands that were accepted as read-only and safe mixed with commands that require prompt.
+For quicker scanning by the user of evaluating the command it would be useful with a highlight of the commands that required their attention.
+This could be a new highlight group. A default config for it would probably be a bg color that maps to something that indicates "warning".
+I think it should only be highlighted while the prompt is displayed, i.e. disappears after accept or reject.
+So, it should probably be extmark or virtual line based.
+
 ### Hooks
 
 Claude hook system is complicated right now. I have made a lib/ and there's many files.
 There is a fair bit of regex. I wonder if a move to treesitter could improve the code.
 There might be a nice abstraction split with parsing logic and all the lib work moved into this repo, while tiny config patterns utilising the parsing code lives in personal nvim config.
 If that would make the config explode, then a better option might be to consider treesitter for ~/dotfiles/config/claude/hooks/ instead of for here.
+
+## Rewind
+
+A useful Claude CLI feature is /rewind where a menu allows for selecting a previous prompt and rewinds the agent to that point in the conversation.
+If this feature is available through the ACP. If so, we can make a UI version, where we have a keymap that rewinds to where the cursor is placed in chat.
+
+### Auto-allow system reading files
+
+Since we have a treesitter-based system for detecting read-only-ness of an 
+execution block I don't see why we can't apply this to the contents of a zsh 
+script.
+A lot of times claude will write commands to a file and run these, e.g. a zsh 
+file in /tmp or `zsh all-tests.zsh`.
+We could extend the permission system to handle the special case of `zsh ...` 
+invocations to read the contents of a supplied file, or if instructions are 
+given directly with a flag read them from there.
+A similar thing can be done for other languages but we should do zsh first, as 
+it's the biggest win. I mention this since we should aim to write the code as 
+language-agnostic as possible (within reasonable effort) so we are better 
+prepared for a future extension into other languages without major refactor.
 
 ## Agents don't understand handover
 

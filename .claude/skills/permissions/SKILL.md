@@ -92,10 +92,17 @@ Pipeline summary (read the module's docstrings for full detail):
 
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
    failure, or any error node → prompt. The zsh parser is a hard dependency.
-2. **Walk** reject-by-default. Bail on control flow, command/process
-   substitution, dynamic command names, code-taking builtins
-   (`eval`/`source`/`.`). Anonymous separators (`|`, `&&`, `;`, `&`, newline)
-   and comments are skipped.
+2. **Walk** reject-by-default. Bail on dynamic command names, code-taking
+   builtins (`eval`/`source`/`.`), `if`, and `case`. Anonymous separators
+   (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
+   (`for`, `while`, `until`) recurse: a `for` list must be literal or glob
+   (substitution in the list bails), and every body command must itself
+   approve. Command/process substitution bails in argument, command-name,
+   for-list, and redirect-target positions — those launder dangerous
+   tokens past deny/ask (`find $(echo '-exec rm')`). It is allowed only
+   as a `variable_assignment` value or array element, where its inner
+   commands recurse through the same walker (so `f=$(rm x)` still bails
+   because `rm` is not allowed).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
    FD duplication (`2>&1`) are safe; any other file redirect bails. Env
    prefixes that hijack execution (`PATH=`, `LD_*`, `BASH_ENV`) bail.
