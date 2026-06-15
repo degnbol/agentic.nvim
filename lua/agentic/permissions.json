@@ -1,395 +1,480 @@
-[
-  { "cmd": "ls",        "allow": {} },
-  { "cmd": "tree",      "allow": {} },
-  { "cmd": "du",        "allow": {} },
-  { "cmd": "df",        "allow": {} },
-  { "cmd": "file",      "allow": {} },
-  { "cmd": "stat",      "allow": {} },
-  { "cmd": "wc",        "allow": {} },
-  { "cmd": "column",    "allow": {} },
-  { "cmd": "eza",       "allow": {} },
-  { "cmd": "lsd",       "allow": {} },
-  { "cmd": "bat",       "allow": {} },
-  { "cmd": "fd",        "allow": {} },
-  { "cmd": "mdfind",    "allow": {} },
-  { "cmd": "locate",    "allow": {} },
-
-  { "cmd": "xargs", "allow": { "positionals": ["ls"] } },
-
-  { "cmd": "which",    "allow": {} },
-  { "cmd": "whereis",  "allow": {} },
-  { "cmd": "type",     "allow": {} },
-  { "cmd": "realpath", "allow": {} },
-  { "cmd": "readlink", "allow": {} },
-  { "cmd": "dirname",  "allow": {} },
-  { "cmd": "basename", "allow": {} },
-
-  { "cmd": "command", "allow": { "options": ["v", "V"] } },
-
-  { "cmd": "cat",      "allow": {} },
-  { "cmd": "head",     "allow": {} },
-  { "cmd": "tail",     "allow": {} },
-  { "cmd": "less",     "allow": {} },
-  { "cmd": "zless",    "allow": {} },
-  { "cmd": "gzcat",    "allow": {} },
-  { "cmd": "bzcat",    "allow": {} },
-  { "cmd": "xzcat",    "allow": {} },
-  { "cmd": "lz4cat",   "allow": {} },
-  { "cmd": "zstdcat",  "allow": {} },
-
-  { "cmd": "cd",       "allow": {} },
-  { "cmd": "pwd",      "allow": {} },
-  { "cmd": "echo",     "allow": {} },
-  { "cmd": "printf",   "allow": {} },
-  { "cmd": "seq",      "allow": {} },
-  { "cmd": "true",     "allow": {} },
-  { "cmd": ":",        "allow": {} },
-  { "cmd": "false",    "allow": {} },
-  { "cmd": "help",     "allow": {} },
-  { "cmd": "sleep",    "allow": {}, "category": "safe_write" },
-
-  { "cmd": "grep",     "allow": {} },
-  { "cmd": "rg",       "allow": {} },
-  { "cmd": "ag",       "allow": {} },
-  { "cmd": "ack",      "allow": {} },
-  { "cmd": "pdfgrep",  "allow": {} },
-
-  { "cmd": "pdftotext", "allow": { "positionals": ["*.pdf", "-"] } },
-
-  { "cmd": "find",
-    "allow": {},
-    "deny":  { "options": ["exec", "execdir", "okdir", "delete", "ok"] } },
-
-  { "cmd": "fd",
-    "allow": {},
-    "deny":  { "options": ["x", "X", "exec", "exec-batch"] } },
-
-  { "cmd": "diff", "allow": {} },
-  { "cmd": "cmp",  "allow": {} },
-  { "cmd": "comm", "allow": {} },
-
-  { "cmd": "git", "allow": { "positionals": ["diff"] } },
-  { "cmd": "git", "allow": { "positionals": ["log"] } },
-  { "cmd": "git", "allow": { "positionals": ["show"] } },
-  { "cmd": "git", "allow": { "positionals": ["status"] } },
-  { "cmd": "git", "allow": { "positionals": ["blame"] } },
-  { "cmd": "git", "allow": { "positionals": ["rev-parse"] } },
-  { "cmd": "git", "allow": { "positionals": ["branch"] },
-    "ask":  { "positionals": ["branch"],
-              "options":     ["d", "D", "m", "M", "c", "C",
-                              "delete", "move", "copy"] } },
-  { "cmd": "git", "allow": { "positionals": ["remote"] } },
-  { "cmd": "git", "allow": { "positionals": ["tag"] } },
-  { "cmd": "git", "allow": { "positionals": ["ls-files"] } },
-  { "cmd": "git", "allow": { "positionals": ["ls-tree"] } },
-  { "cmd": "git", "allow": { "positionals": ["cat-file"] } },
-
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "--get", "*"] } },
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "--list", "*"] } },
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "-f", "*", "--get", "*"] } },
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "-f", "*", "--list", "*"] } },
-
-  { "cmd": "git",
-    "allow": { "positionals": ["stash", "list"] } },
-  { "cmd": "git", "ask": { "positionals": ["stash"] } },
-
-  { "cmd": "git", "ask": { "positionals": ["checkout"] } },
-  { "cmd": "git", "ask": { "positionals": ["reset"] } },
-  { "cmd": "git", "ask": { "positionals": ["push"] } },
-  { "cmd": "git", "ask": { "positionals": ["commit"] } },
-
-  { "cmd": "sort",
-    "allow": {},
-    "deny":  { "options": ["o", "output"] } },
-
-  { "cmd": "uniq", "allow": {} },
-  { "cmd": "cut",  "allow": {} },
-  { "cmd": "tr",   "allow": {} },
-
-  { "cmd": "jq",      "allow": {} },
-  { "cmd": "yq",
-    "allow": {},
-    "ask":   { "options": ["i"] } },
-  { "cmd": "xq",      "allow": {} },
-  { "cmd": "xmllint", "allow": {} },
-  { "cmd": "xxd",     "allow": {} },
-  { "cmd": "hexdump", "allow": {} },
-  { "cmd": "od",      "allow": {} },
-  { "cmd": "strings", "allow": {} },
-
-  { "cmd": "md5",       "allow": {} },
-  { "cmd": "md5sum",    "allow": {} },
-  { "cmd": "shasum",    "allow": {} },
-  { "cmd": "sha256sum", "allow": {} },
-  { "cmd": "cksum",     "allow": {} },
-
-  { "cmd": "man",     "allow": {} },
-  { "cmd": "info",    "allow": {} },
-  { "cmd": "apropos", "allow": {} },
-  { "cmd": "whatis",  "allow": {} },
-  { "cmd": "tldr",    "allow": {} },
-
-  { "cmd": "uname",       "allow": {} },
-  { "cmd": "hostname",    "allow": {} },
-  { "cmd": "date",
-    "allow": {},
-    "deny":  { "options": ["s", "set"] } },
-  { "cmd": "cal",         "allow": {} },
-  { "cmd": "uptime",      "allow": {} },
-  { "cmd": "id",          "allow": {} },
-  { "cmd": "whoami",      "allow": {} },
-  { "cmd": "groups",      "allow": {} },
-  { "cmd": "who",         "allow": {} },
-  { "cmd": "w",           "allow": {} },
-  { "cmd": "nproc",       "allow": {} },
-  { "cmd": "sw_vers",     "allow": {} },
-  { "cmd": "lsblk",       "allow": {} },
-  { "cmd": "lscpu",       "allow": {} },
-  { "cmd": "lspci",       "allow": {} },
-  { "cmd": "timedatectl", "allow": {} },
-  { "cmd": "localectl",   "allow": {} },
-  { "cmd": "loginctl",    "allow": {} },
-  { "cmd": "free",        "allow": {} },
-  { "cmd": "dmesg",       "allow": {} },
-  { "cmd": "vulkaninfo",  "allow": {} },
-
-  { "cmd": "ps",     "allow": {} },
-  { "cmd": "pgrep",  "allow": {} },
-  { "cmd": "pidof",  "allow": {} },
-  { "cmd": "pstree", "allow": {} },
-  { "cmd": "lsof",   "allow": {} },
-
-  { "cmd": "dig",        "allow": {} },
-  { "cmd": "host",       "allow": {} },
-  { "cmd": "nslookup",   "allow": {} },
-  { "cmd": "ping",       "allow": {} },
-  { "cmd": "traceroute", "allow": {} },
-  { "cmd": "ss",         "allow": {} },
-  { "cmd": "netstat",    "allow": {} },
-  { "cmd": "mount",      "allow": {} },
-
-  { "cmd": "env",      "allow": {} },
-  { "cmd": "printenv", "allow": {} },
-
-  { "cmd": "defaults", "allow": { "positionals": ["read"] } },
-  { "cmd": "xattr",
-    "allow": {},
-    "ask":   { "options": ["w", "d", "c"] } },
-  { "cmd": "log",      "allow": { "positionals": ["show"] } },
-
-  { "cmd": "sed",
-    "allow": {},
-    "deny":  { "options": ["i"] } },
-
-  { "cmd": "awk",
-    "allow": {},
-    "deny":  { "positionals": ["*system*"] } },
-
-  { "cmd": "bc",     "allow": {} },
-  { "cmd": "getent", "allow": {} },
-
-  { "cmd": "h5dump", "allow": {} },
-  { "cmd": "h5ls",   "allow": {} },
-  { "cmd": "ncdump", "allow": {} },
-
-  { "cmd": "journalctl", "allow": {} },
-  { "cmd": "systemctl", "allow": { "positionals": ["is-active"] } },
-  { "cmd": "systemctl", "allow": { "positionals": ["is-enabled"] } },
-  { "cmd": "systemctl", "allow": { "positionals": ["list-*"] } },
-  { "cmd": "systemctl", "allow": { "positionals": ["status"] } },
-
-  { "cmd": "sysctl",   "allow": {} },
-  { "cmd": "xdg-mime", "allow": { "positionals": ["query"] } },
-
-  { "cmd": "luac",  "allow": { "options": ["l"] } },
-  { "cmd": "typst", "allow": { "positionals": ["query"] } },
-  { "cmd": "typst", "allow": {}, "category": "safe_write" },
-  { "cmd": "latexmk", "allow": {}, "category": "safe_write" },
-  { "cmd": "tlmgr",   "allow": {}, "category": "safe_write" },
-
-  { "cmd": "javap", "allow": {} },
-
-  { "cmd": "*", "allow": { "options": ["help", "version"] } },
-
-  { "cmd": "*", "allow": { "positionals": ["list*"] } },
-
-  { "cmd": "brew", "allow": { "positionals": ["info"] } },
-  { "cmd": "brew", "allow": { "positionals": ["list"] } },
-  { "cmd": "brew", "allow": { "positionals": ["search"] } },
-
-  { "cmd": "cargo", "allow": { "positionals": ["doc"] } },
-  { "cmd": "cargo", "allow": { "positionals": ["metadata"] } },
-  { "cmd": "cargo", "allow": { "positionals": ["tree"] } },
-
-  { "cmd": "conda", "allow": { "positionals": ["info"] } },
-  { "cmd": "conda", "allow": { "positionals": ["list"] } },
-  { "cmd": "conda", "allow": { "positionals": ["search"] } },
-  { "cmd": "conda", "allow": { "positionals": ["env"] } },
-
-  { "cmd": "flatpak", "allow": { "positionals": ["info"] } },
-  { "cmd": "flatpak", "allow": { "positionals": ["list"] } },
-
-  { "cmd": "npm", "allow": { "positionals": ["info"] } },
-  { "cmd": "npm", "allow": { "positionals": ["list"] } },
-  { "cmd": "npm", "allow": { "positionals": ["view"] } },
-
-  { "cmd": "pacman", "allow": { "options": ["Q", "Si", "Ss"] } },
-
-  { "cmd": "pip", "allow": { "positionals": ["list"] } },
-  { "cmd": "pip", "allow": { "positionals": ["show"] } },
-
-  { "cmd": "pnpm", "allow": { "positionals": ["info"] } },
-
-  { "cmd": "uv", "allow": { "positionals": ["pip", "list"] } },
-  { "cmd": "uv", "allow": { "positionals": ["pip", "search"] } },
-  { "cmd": "uv", "allow": { "positionals": ["pip", "show"] } },
-  { "cmd": "uv", "allow": { "positionals": ["lock"] }, "category": "safe_write" },
-
-  { "cmd": "luarocks", "allow": { "positionals": ["search"] },
-    "category": "safe_write" },
-
-  { "cmd": "gh", "allow": { "positionals": ["alias", "list"] } },
-  { "cmd": "gh",
-    "allow": { "positionals": ["api"] },
-    "ask":   { "positionals": ["api"],
-               "options":     ["X", "method", "f", "F", "input"] } },
-  { "cmd": "gh", "allow": { "positionals": ["auth", "status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["cache", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["config", "get"] } },
-  { "cmd": "gh", "allow": { "positionals": ["config", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["extension", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["gist", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["gist", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["issue", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["issue", "status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["issue", "view"] } },
-  { "cmd": "gh", "ask":   { "positionals": ["issue", "create"] } },
-  { "cmd": "gh", "allow": { "positionals": ["label", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["org", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "checks"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "diff"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["project", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["project", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["release", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["release", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["repo", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["repo", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["ruleset"] } },
-  { "cmd": "gh", "allow": { "positionals": ["run", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["run", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["search"] } },
-  { "cmd": "gh", "allow": { "positionals": ["status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["workflow", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["workflow", "view"] } },
-
-  { "cmd": "aws", "allow": { "positionals": ["s3", "ls"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "get-*"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "describe-*"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "list-*"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "head-*"] } },
-
-  { "cmd": "kitty", "allow": { "positionals": ["@", "ls"] } },
-  { "cmd": "kitty", "allow": { "positionals": ["@", "get-text"] } },
-
-  { "cmd": "hyprctl", "allow": { "positionals": ["activewindow"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["activeworkspace"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["animations"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["binds"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["clients"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["configerrors"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["cursorpos"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["decorations"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["devices"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["get*"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["globalshortcuts"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["instances"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["layers"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["layouts"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["monitors"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["rollinglog"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["splash"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["systeminfo"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["version"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["workspacerules"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["workspaces"] } },
-
-  { "cmd": "mlr",
-    "allow": {},
-    "deny":  { "options": ["I"] },
-    "category": "safe_write" },
-
-  { "cmd": "qalc",  "allow": {}, "category": "safe_write" },
-  { "cmd": "paste", "allow": {}, "category": "safe_write" },
-  { "cmd": "tac",   "allow": {}, "category": "safe_write" },
-
-  { "cmd": "curl",
-    "allow": {},
-    "deny":  { "options": ["o", "O", "output", "remote-name",
-                           "K", "config",
-                           "T", "upload-file",
-                           "D", "dump-header",
-                           "output-dir", "trace-ascii"] },
-    "category": "safe_write" },
-
-  { "cmd": "http",
-    "allow": {},
-    "deny":  { "options": ["d", "download", "o", "output"] },
-    "category": "safe_write" },
-
-  { "cmd": "just", "allow": { "positionals": ["lint"] },
-    "category": "safe_write" },
-  { "cmd": "just", "allow": { "positionals": ["type"] },
-    "category": "safe_write" },
-
-  { "cmd": "make", "allow": { "positionals": ["test"] },
-    "category": "safe_write" },
-  { "cmd": "make", "allow": { "positionals": ["validate"] },
-    "category": "safe_write" },
-
-  { "cmd": "bun",  "allow": { "positionals": ["test"] },
-    "category": "safe_write" },
-
-  { "cmd": "ruff",
-    "allow": {},
-    "deny":  { "options": ["fix"] },
-    "category": "safe_write" },
-
-  { "cmd": "selene", "allow": {}, "category": "safe_write" },
-
-  { "cmd": "stylua",
-    "allow": {},
-    "deny":  { "options": ["replace"] },
-    "category": "safe_write" },
-
-  { "cmd": "tree-sitter", "allow": {}, "category": "safe_write" },
-  { "cmd": "npx", "allow": { "positionals": ["tree-sitter"] },
-    "category": "safe_write" },
-
-  { "cmd": "claude", "allow": { "positionals": ["config", "list"] },
-    "category": "safe_write" },
-  { "cmd": "claude", "allow": { "positionals": ["mcp", "list"] },
-    "category": "safe_write" },
-
-  { "cmd": "flyte",    "allow": { "positionals": ["get"] },
-    "category": "safe_write" },
-  { "cmd": "flytectl", "allow": { "positionals": ["get"] },
-    "category": "safe_write" },
-
-  { "cmd": "zsh", "allow": { "options": ["n"] }, "category": "safe_write" },
-  { "cmd": "python3",
-    "allow": { "options": ["m"], "positionals": ["unittest*"] },
-    "category": "safe_write" },
-
-  { "cmd": "blender", "allow": { "options": ["background"] },
-    "category": "safe_write" },
-  { "cmd": "pymol",   "allow": {}, "category": "safe_write" },
-
-  { "cmd": "rm", "ask": {} }
-]
+{
+  "ls":        { "read_only": [{}] },
+  "tree":      { "read_only": [{}] },
+  "du":        { "read_only": [{}] },
+  "df":        { "read_only": [{}] },
+  "file":      { "read_only": [{}] },
+  "stat":      { "read_only": [{}] },
+  "wc":        { "read_only": [{}] },
+  "column":    { "read_only": [{}] },
+  "eza":       { "read_only": [{}] },
+  "lsd":       { "read_only": [{}] },
+  "bat":       { "read_only": [{}] },
+  "mdfind":    { "read_only": [{}] },
+  "locate":    { "read_only": [{}] },
+
+  "xargs":     { "read_only": [{ "positionals": ["ls"] }] },
+
+  "which":     { "read_only": [{}] },
+  "whereis":   { "read_only": [{}] },
+  "type":      { "read_only": [{}] },
+  "realpath":  { "read_only": [{}] },
+  "readlink":  { "read_only": [{}] },
+  "dirname":   { "read_only": [{}] },
+  "basename":  { "read_only": [{}] },
+
+  "command":   { "read_only": [{ "options": ["v", "V"] }] },
+
+  "cat":       { "read_only": [{}] },
+  "head":      { "read_only": [{}] },
+  "tail":      { "read_only": [{}] },
+  "less":      { "read_only": [{}] },
+  "zless":     { "read_only": [{}] },
+  "gzcat":     { "read_only": [{}] },
+  "bzcat":     { "read_only": [{}] },
+  "xzcat":     { "read_only": [{}] },
+  "lz4cat":    { "read_only": [{}] },
+  "zstdcat":   { "read_only": [{}] },
+
+  "cd":        { "read_only": [{}] },
+  "pwd":       { "read_only": [{}] },
+  "echo":      { "read_only": [{}] },
+  "printf":    { "read_only": [{}] },
+  "seq":       { "read_only": [{}] },
+  "true":      { "read_only": [{}] },
+  ":":         { "read_only": [{}] },
+  "false":     { "read_only": [{}] },
+  "help":      { "read_only": [{}] },
+  "sleep":     { "read_only": [{}] },
+
+  "grep":      { "read_only": [{}] },
+  "rg":        { "read_only": [{}] },
+  "ag":        { "read_only": [{}] },
+  "ack":       { "read_only": [{}] },
+  "pdfgrep":   { "read_only": [{}] },
+
+  "pdftotext": { "read_only": [{ "positionals": ["*.pdf", "-"] }] },
+
+  "find": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["exec", "execdir", "okdir", "delete", "ok"] }]
+  },
+
+  "fd": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["x", "X", "exec", "exec-batch"] }]
+  },
+
+  "diff": { "read_only": [{}] },
+  "cmp":  { "read_only": [{}] },
+  "comm": { "read_only": [{}] },
+
+  "git": {
+    "read_only": [
+      { "positionals": ["diff"] },
+      { "positionals": ["log"] },
+      { "positionals": ["show"] },
+      { "positionals": ["status"] },
+      { "positionals": ["blame"] },
+      { "positionals": ["rev-parse"] },
+      { "positionals": ["branch"] },
+      { "positionals": ["remote"] },
+      { "positionals": ["tag"] },
+      { "positionals": ["ls-files"] },
+      { "positionals": ["ls-tree"] },
+      { "positionals": ["cat-file"] },
+      { "positionals": ["config", "--get", "*"] },
+      { "positionals": ["config", "--list", "*"] },
+      { "positionals": ["config", "-f", "*", "--get", "*"] },
+      { "positionals": ["config", "-f", "*", "--list", "*"] },
+      { "positionals": ["stash", "list"] }
+    ],
+    "ask": [
+      { "positionals": ["branch"],
+        "options":     ["d", "D", "m", "M", "c", "C",
+                        "delete", "move", "copy"] },
+      { "positionals": ["stash"] },
+      { "positionals": ["checkout"] },
+      { "positionals": ["reset"] },
+      { "positionals": ["push"] },
+      { "positionals": ["commit"] }
+    ]
+  },
+
+  "sort": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["o", "output"] }]
+  },
+
+  "uniq": { "read_only": [{}] },
+  "cut":  { "read_only": [{}] },
+  "tr":   { "read_only": [{}] },
+
+  "jq": { "read_only": [{}] },
+  "yq": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["i", "inplace", "in-place"] }]
+  },
+  "xq":      { "read_only": [{}] },
+  "xmllint": { "read_only": [{}] },
+  "xxd":     { "read_only": [{}] },
+  "hexdump": { "read_only": [{}] },
+  "od":      { "read_only": [{}] },
+  "strings": { "read_only": [{}] },
+
+  "md5":       { "read_only": [{}] },
+  "md5sum":    { "read_only": [{}] },
+  "shasum":    { "read_only": [{}] },
+  "sha256sum": { "read_only": [{}] },
+  "cksum":     { "read_only": [{}] },
+
+  "man":     { "read_only": [{}] },
+  "info":    { "read_only": [{}] },
+  "apropos": { "read_only": [{}] },
+  "whatis":  { "read_only": [{}] },
+  "tldr":    { "read_only": [{}] },
+
+  "uname":       { "read_only": [{}] },
+  "hostname":    { "read_only": [{}] },
+  "date": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["s", "set"] }]
+  },
+  "cal":         { "read_only": [{}] },
+  "uptime":      { "read_only": [{}] },
+  "id":          { "read_only": [{}] },
+  "whoami":      { "read_only": [{}] },
+  "groups":      { "read_only": [{}] },
+  "who":         { "read_only": [{}] },
+  "w":           { "read_only": [{}] },
+  "nproc":       { "read_only": [{}] },
+  "sw_vers":     { "read_only": [{}] },
+  "lsblk":       { "read_only": [{}] },
+  "lscpu":       { "read_only": [{}] },
+  "lspci":       { "read_only": [{}] },
+  "timedatectl": { "read_only": [{}] },
+  "localectl":   { "read_only": [{}] },
+  "loginctl":    { "read_only": [{}] },
+  "free":        { "read_only": [{}] },
+  "dmesg":       { "read_only": [{}] },
+  "vulkaninfo":  { "read_only": [{}] },
+
+  "ps":     { "read_only": [{}] },
+  "pgrep":  { "read_only": [{}] },
+  "pidof":  { "read_only": [{}] },
+  "pstree": { "read_only": [{}] },
+  "lsof":   { "read_only": [{}] },
+
+  "dig":        { "read_only": [{}] },
+  "host":       { "read_only": [{}] },
+  "nslookup":   { "read_only": [{}] },
+  "ping":       { "read_only": [{}] },
+  "traceroute": { "read_only": [{}] },
+  "ss":         { "read_only": [{}] },
+  "netstat":    { "read_only": [{}] },
+  "mount":      { "read_only": [{}] },
+
+  "env":      { "read_only": [{}] },
+  "printenv": { "read_only": [{}] },
+
+  "defaults": { "read_only": [{ "positionals": ["read"] }] },
+  "xattr": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "d", "c"] }]
+  },
+  "log": { "read_only": [{ "positionals": ["show"] }] },
+
+  "sed": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["i", "in-place"] }]
+  },
+
+  "awk": {
+    "read_only": [{}],
+    "deny":      [{ "positionals": ["*system*"] }]
+  },
+
+  "bc":     { "read_only": [{}] },
+  "getent": { "read_only": [{}] },
+
+  "h5dump": { "read_only": [{}] },
+  "h5ls":   { "read_only": [{}] },
+  "ncdump": { "read_only": [{}] },
+
+  "journalctl": { "read_only": [{}] },
+  "systemctl": {
+    "read_only": [
+      { "positionals": ["is-active"] },
+      { "positionals": ["is-enabled"] },
+      { "positionals": ["list-*"] },
+      { "positionals": ["status"] }
+    ]
+  },
+
+  "sysctl":   { "read_only": [{}] },
+  "xdg-mime": { "read_only": [{ "positionals": ["query"] }] },
+
+  "luac": {
+    "read_only": [{ "options": ["l"] }],
+    "ask":       [{ "options": ["o"] }]
+  },
+  "typst": {
+    "read_only":  [{ "positionals": ["query"] }],
+    "safe_write": [{}]
+  },
+  "latexmk": { "safe_write": [{}] },
+  "tlmgr":   { "safe_write": [{}] },
+
+  "javap": { "read_only": [{}] },
+
+  "*": {
+    "read_only": [
+      { "options": ["help", "version"] },
+      { "positionals": ["list*"] }
+    ]
+  },
+
+  "brew": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] },
+      { "positionals": ["search"] }
+    ]
+  },
+
+  "cargo": {
+    "read_only": [
+      { "positionals": ["doc"] },
+      { "positionals": ["metadata"] },
+      { "positionals": ["tree"] }
+    ]
+  },
+
+  "conda": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] },
+      { "positionals": ["search"] },
+      { "positionals": ["env"] }
+    ]
+  },
+
+  "flatpak": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] }
+    ]
+  },
+
+  "npm": {
+    "read_only": [
+      { "positionals": ["info"] },
+      { "positionals": ["list"] },
+      { "positionals": ["view"] }
+    ]
+  },
+
+  "pacman": {
+    "read_only": [{ "options": ["Q", "Si", "Ss"] }],
+    "ask":       [{ "options": ["R", "U", "D", "F", "T"] }]
+  },
+
+  "pip": {
+    "read_only": [
+      { "positionals": ["list"] },
+      { "positionals": ["show"] }
+    ]
+  },
+
+  "pnpm": { "read_only": [{ "positionals": ["info"] }] },
+
+  "uv": {
+    "read_only": [
+      { "positionals": ["pip", "list"] },
+      { "positionals": ["pip", "search"] },
+      { "positionals": ["pip", "show"] }
+    ],
+    "safe_write": [{ "positionals": ["lock"] }]
+  },
+
+  "luarocks": { "read_only": [{ "positionals": ["search"] }] },
+
+  "gh": {
+    "read_only": [
+      { "positionals": ["alias", "list"] },
+      { "positionals": ["api"] },
+      { "positionals": ["auth", "status"] },
+      { "positionals": ["cache", "list"] },
+      { "positionals": ["config", "get"] },
+      { "positionals": ["config", "list"] },
+      { "positionals": ["extension", "list"] },
+      { "positionals": ["gist", "list"] },
+      { "positionals": ["gist", "view"] },
+      { "positionals": ["issue", "list"] },
+      { "positionals": ["issue", "status"] },
+      { "positionals": ["issue", "view"] },
+      { "positionals": ["label", "list"] },
+      { "positionals": ["org", "list"] },
+      { "positionals": ["pr", "checks"] },
+      { "positionals": ["pr", "diff"] },
+      { "positionals": ["pr", "list"] },
+      { "positionals": ["pr", "status"] },
+      { "positionals": ["pr", "view"] },
+      { "positionals": ["project", "list"] },
+      { "positionals": ["project", "view"] },
+      { "positionals": ["release", "list"] },
+      { "positionals": ["release", "view"] },
+      { "positionals": ["repo", "list"] },
+      { "positionals": ["repo", "view"] },
+      { "positionals": ["ruleset"] },
+      { "positionals": ["run", "list"] },
+      { "positionals": ["run", "view"] },
+      { "positionals": ["search"] },
+      { "positionals": ["status"] },
+      { "positionals": ["workflow", "list"] },
+      { "positionals": ["workflow", "view"] }
+    ],
+    "ask": [
+      { "positionals": ["api"],
+        "options":     ["X", "method", "f", "F", "input"] },
+      { "positionals": ["issue", "create"] }
+    ]
+  },
+
+  "aws": {
+    "read_only": [
+      { "positionals": ["s3", "ls"] },
+      { "positionals": ["*", "get-*"] },
+      { "positionals": ["*", "describe-*"] },
+      { "positionals": ["*", "list-*"] },
+      { "positionals": ["*", "head-*"] }
+    ]
+  },
+
+  "kitty": {
+    "read_only": [
+      { "positionals": ["@", "ls"] },
+      { "positionals": ["@", "get-text"] }
+    ]
+  },
+
+  "hyprctl": {
+    "read_only": [
+      { "positionals": ["activewindow"] },
+      { "positionals": ["activeworkspace"] },
+      { "positionals": ["animations"] },
+      { "positionals": ["binds"] },
+      { "positionals": ["clients"] },
+      { "positionals": ["configerrors"] },
+      { "positionals": ["cursorpos"] },
+      { "positionals": ["decorations"] },
+      { "positionals": ["devices"] },
+      { "positionals": ["get*"] },
+      { "positionals": ["globalshortcuts"] },
+      { "positionals": ["instances"] },
+      { "positionals": ["layers"] },
+      { "positionals": ["layouts"] },
+      { "positionals": ["monitors"] },
+      { "positionals": ["rollinglog"] },
+      { "positionals": ["splash"] },
+      { "positionals": ["systeminfo"] },
+      { "positionals": ["version"] },
+      { "positionals": ["workspacerules"] },
+      { "positionals": ["workspaces"] }
+    ]
+  },
+
+  "mlr": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["I", "in-place"] }],
+    "ask":       [{ "positionals": ["split"] },
+                  { "positionals": ["tee"] }]
+  },
+
+  "qalc":  { "read_only": [{}], "ask": [{ "options": ["s", "set"] }] },
+  "paste": { "read_only": [{}] },
+  "tac":   { "read_only": [{}] },
+
+  "curl": {
+    "read_only": [{}],
+    "ask": [{ "options": ["o", "O", "output",
+                          "remote-name", "remote-name-all",
+                          "remote-header-name", "J",
+                          "output-dir", "create-dirs",
+                          "D", "dump-header", "trace", "trace-ascii",
+                          "K", "config",
+                          "T", "upload-file",
+                          "d", "data", "data-ascii", "data-binary",
+                          "data-raw", "data-urlencode",
+                          "F", "form", "X", "request", "json"] }]
+  },
+
+  "http": {
+    "read_only": [{}],
+    "ask": [
+      { "options": ["o", "output", "d", "download"] },
+      { "positionals": ["POST"] },
+      { "positionals": ["post"] },
+      { "positionals": ["PUT"] },
+      { "positionals": ["put"] },
+      { "positionals": ["DELETE"] },
+      { "positionals": ["delete"] },
+      { "positionals": ["PATCH"] },
+      { "positionals": ["patch"] }
+    ]
+  },
+
+  "just": {
+    "safe_write": [
+      { "positionals": ["lint"] },
+      { "positionals": ["type"] }
+    ]
+  },
+
+  "make": {
+    "safe_write": [
+      { "positionals": ["test"] },
+      { "positionals": ["validate"] }
+    ]
+  },
+
+  "bun": { "safe_write": [{ "positionals": ["test"] }] },
+
+  "ruff": {
+    "safe_write": [{}],
+    "deny":       [{ "options": ["fix", "fix-only"] }]
+  },
+
+  "selene": { "read_only": [{}] },
+
+  "stylua": {
+    "safe_write": [{}],
+    "deny":       [{ "options": ["replace"] }]
+  },
+
+  "tree-sitter": { "safe_write": [{}] },
+  "npx": { "safe_write": [{ "positionals": ["tree-sitter"] }] },
+
+  "claude": {
+    "read_only": [
+      { "positionals": ["config", "list"] },
+      { "positionals": ["mcp", "list"] }
+    ]
+  },
+
+  "flyte":    { "read_only": [{ "positionals": ["get"] }] },
+  "flytectl": { "read_only": [{ "positionals": ["get"] }] },
+
+  "zsh": {
+    "read_only": [{ "options": ["n"] }],
+    "ask":       [{ "options": ["c", "i", "s", "f"] }]
+  },
+  "python3": {
+    "safe_write": [{ "options": ["m"], "positionals": ["unittest*"] }]
+  },
+
+  "blender": { "safe_write": [{ "options": ["background"] }] },
+  "pymol":   { "safe_write": [{}] },
+
+  "rm": { "ask": [{}] }
+}

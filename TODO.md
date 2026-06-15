@@ -11,9 +11,12 @@ minor").
 An agent said
 > The lint notice is just vale-typst being absent (markdown, not typst)
 
-Is the vale-typst work incomplete? May not be work for this repo.
+vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/bin/)?
 
 ### Rendering
+
+- Show more verbose info in chat: full model details when loading a new model (on startup and all other model loading situations, e.g. when switching model).
+  Similarly, show the model's context, how much did the CLAUDE.md and system prompts fill up it's context?
 
 - The auto hard wrap of md prose in chat breaks headings. A heading has to remain on 1 line.
 

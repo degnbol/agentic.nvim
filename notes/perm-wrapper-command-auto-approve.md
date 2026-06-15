@@ -1,9 +1,10 @@
 # Auto-approving read-only commands behind a wrapper prefix
 
-> **Sequencing.** Depends on the treesitter migration in
-> `notes/perm-treesitter-plan.md` landing first. The mechanism below is a small
-> structural rule inside that walker's `command` handler — not implementable
-> cleanly against the current regex tokeniser, which is why it is deferred.
+> **Sequencing.** Builds on the shipped treesitter walker
+> (`lua/agentic/utils/permission_rules.lua`; overview in the `permissions`
+> project skill). The mechanism below is a small structural rule inside that
+> walker's `command` handler — not implementable cleanly against the old regex
+> tokeniser, which is why it was deferred until after the migration.
 > Grounded in a zsh-grammar probe (2026-06-06).
 
 ## Goal
@@ -140,7 +141,7 @@ quoting/whitespace) that a re-parse approach would raise.
 
 ## Composition with the migration
 
-After `notes/perm-treesitter-plan.md` lands, the walker's `command` arm already
+With the treesitter walker shipped, the walker's `command` arm already
 runs the literal-command-name check and the subtree-substitution scan, and
 `strip_command_path` plus the compiled-pattern matcher are kept verbatim. The
 unwrap step is new logic in that arm: detect a wrapper, skip its operands,

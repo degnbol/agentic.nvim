@@ -77,10 +77,20 @@ patterns from `~/.claude/settings.json`, `.claude/settings.json`, and
 with the Claude TUI, kept for user-side rules. The **structured matcher**
 (`lua/agentic/utils/permission_structured.lua`) consumes the bundled
 `lua/agentic/permissions.json`, which is now purely structured (no globs),
-plus any `Config.permissions.structured` user additions. Each entry names
-a command and carries up to three gates (`allow`, `ask`, `deny`); a gate
-matches on literal flag identifiers (`options`) and ordered positional
-patterns (`positionals`). The structured layer exists because globs are
+plus any `Config.permissions.structured` user additions. It is a cmd-keyed
+table: each command maps to up to four gate-kind arrays (`read_only`,
+`safe_write`, `ask`, `deny`), and each gate matches on literal flag
+identifiers (`options`) and ordered positional patterns (`positionals`).
+The kind name encodes the policy — `read_only` approves at
+"read-only"/"allow", `safe_write` only at "allow", `ask`/`deny` are
+unconditional. Classify a command by its *un-redirected* effect: a command
+that only prints to stdout is `read_only` (writing via pipe/redirect is
+caught structurally by the walker), while one that mutates disk or executes
+arbitrary code as its normal action is `safe_write` — carve out the
+write-causing options/subcommands as `ask`/`deny`. Users add or override via
+`Config.permissions.structured`
+(deep-merged "force" over the bundled defaults; a cmd key replaces that
+command's bundled kind-arrays wholesale, `vim.NIL` disables it). The structured layer exists because globs are
 unsound against option clustering and GNU abbreviation — `sort -uo out`,
 `sort --out=x`, and `sort -oFILE` all evade a `Bash(sort * -o *)` glob.
 The matcher over-approximates option presence per token (single-dash
@@ -135,6 +145,35 @@ Pipeline summary (read the module's docstrings for full detail):
 Command-source fallback: if `request.toolCall.rawInput.command` is nil
 and the tracker kind is `"execute"`, read from `tracker.argument` instead
 (opencode quirk — see acp skill `references/opencode.md` finding 3).
+
+#### Known limitations (uncatchable — fall through to a prompt)
+
+A command whose write/exec intent is hidden inside an opaque token cannot
+be classified by token-level matching. These are accepted residuals, not
+bugs — the failure mode is auto-approving a write at `auto_approve` =
+`"read-only"`, never bypassing a `deny`/`ask` that *did* match:
+
+- **`sed`** `e`/`s///e` (exec) and `w`/`W`/`s///w` (write) — the script
+  body is opaque (no sed parser/injection). A glob carve-out in the
+  positional is unsound (GNU sed needs no space after `e`, accepts a bare
+  `e` or an address prefix, `s///e` allows any delimiter/flag order). Kept
+  in `read_only` with a `deny` on `-i` only.
+- **`awk`** script body via `-f scriptfile` or DSL — opaque. The
+  `awk` `deny` on positional `*system*` is a parser-independent backstop
+  (catches an inline `system(...)` in the script positional).
+- **`mlr`** write verbs reached past a `then` chain (`mlr cat then tee x`)
+  or inside a `put`/`filter` DSL string — positional matching is
+  index-based and sees only the first verb, and the DSL body is one opaque
+  positional. The `ask` on `split`/`tee` and `deny` on `-I` catch only the
+  direct forms.
+- **Dynamic expansion** (`sort $FLAG out` where `$FLAG=-o`) — tolerated for
+  any `$var`/glob/`~`; the token is not a literal flag.
+
+Sub-language injection (awk/jq/sql/python parsed *into* command-argument
+strings via `queries/zsh/injections.scm`) is **best-effort enrichment, never
+the sole guard** — it depends on the injection query being on the
+runtimepath, which a downstream consumer can remove. The parser-independent
+backstops (the `awk *system*` deny) stay regardless of injection descent.
 
 ### 3. Allow/reject-always cache
 

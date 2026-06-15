@@ -2,29 +2,37 @@ local PermissionRules = require("agentic.utils.permission_rules")
 
 --- Structured option matcher for compound-Bash auto-approval. Consumes a
 --- ParsedLeaf produced by the walker (chunk 6) and decides allow / ask / deny /
---- nil against a list of StructuredEntry rules. The walker has already
---- quote-stripped tokens, joined literal concatenations, and excluded redirects
---- / env-prefixes / substitution; this module trusts that input shape.
+--- nil against a cmd-keyed table of StructuredCmdEntry rules. The walker has
+--- already quote-stripped tokens, joined literal concatenations, and excluded
+--- redirects / env-prefixes / substitution; this module trusts that input shape.
 ---
---- See notes/perm-treesitter-plan.md § Matcher API spec for the authoritative
---- algorithm.
+--- See the `permissions` project skill § "Compound Bash commands" for the
+--- cross-file overview; this module's functions are the authoritative algorithm.
 --- @class agentic.utils.PermissionStructured
 local M = {}
 
---- @alias agentic.PermCategory "read_only" | "safe_write"
 --- @alias agentic.PermAutoApprove "allow" | "read-only" | nil
 --- @alias agentic.PermDecision "allow" | "ask" | "deny" | nil
+--- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
 
 --- @class agentic.PermGate
 --- @field options?     string[] -- literal flag identifiers, no globs
 --- @field positionals? string[] -- per element literal or glob
 
---- @class agentic.StructuredEntry
---- @field cmd       string      -- literal cmd name or exact "*"
---- @field allow?    agentic.PermGate
---- @field ask?      agentic.PermGate
---- @field deny?     agentic.PermGate
---- @field category? agentic.PermCategory  -- default "read_only"
+--- One value of the cmd-keyed schema. The kind name encodes the policy:
+--- `read_only` approves at "read-only"|"allow", `safe_write` only at "allow",
+--- `ask` always prompts, `deny` always vetoes. Each is an array of gates.
+--- @class agentic.StructuredCmdEntry
+--- @field read_only?  agentic.PermGate[]
+--- @field safe_write? agentic.PermGate[]
+--- @field ask?        agentic.PermGate[]
+--- @field deny?       agentic.PermGate[]
+
+--- Cmd-keyed table (`"*"` is the literal wildcard key). A `vim.NIL` value is
+--- treated as "no entry" so a user can disable a bundled cmd via
+--- `Config.permissions.structured` (the `vim.NIL` sentinel is untyped here;
+--- `decide_leaf` and the loader both filter it).
+--- @alias agentic.StructuredEntries table<string, agentic.StructuredCmdEntry>
 
 --- @class agentic.ParsedLeaf
 --- @field cmd_name string    after strip_command_path / wrapper strip
@@ -248,21 +256,20 @@ local function gate_matches(gate, resolved, opt_cands)
     return true
 end
 
---- Whether an allow-gate's category is permitted under the active
---- auto_approve mode. Deny/ask gates are unconditional and skip this check at
---- the call site.
---- @param entry agentic.StructuredEntry
+--- The allow-kind names eligible for approval under the active auto_approve
+--- mode. `"allow"` admits read_only ∪ safe_write; `"read-only"` admits
+--- read_only only; `nil` admits none (no allow gate can fire). Deny/ask gates
+--- are unconditional and do not consult this.
 --- @param auto_approve agentic.PermAutoApprove
---- @return boolean
-local function allow_category_ok(entry, auto_approve)
-    local cat = entry.category or "read_only"
+--- @return agentic.PermKind[]
+local function eligible_allow_kinds(auto_approve)
     if auto_approve == "allow" then
-        return true
+        return { "read_only", "safe_write" }
     end
     if auto_approve == "read-only" then
-        return cat == "read_only"
+        return { "read_only" }
     end
-    return false
+    return {}
 end
 
 --- Collect option candidates from every option token AND every positional
@@ -287,11 +294,28 @@ local function collect_option_candidates(resolved)
     return cands
 end
 
---- Resolve the structured decision for one parsed leaf against the merged
---- entry list. Precedence is deny > ask > allow across the *union* of all
---- entries whose `cmd` matches `parsed.cmd_name` (literal or `*`). Allow gates
---- are additionally filtered by category against `auto_approve`.
---- @param entries agentic.StructuredEntry[]
+--- True iff any gate in `gates` matches. A nil or empty array matches nothing.
+--- @param gates agentic.PermGate[]|nil
+--- @param resolved agentic.ResolvedArgs
+--- @param opt_cands string[]
+--- @return boolean
+local function any_gate_matches(gates, resolved, opt_cands)
+    if gates == nil then
+        return false
+    end
+    for _, gate in ipairs(gates) do
+        if gate_matches(gate, resolved, opt_cands) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Resolve the structured decision for one parsed leaf. Looks up the cmd entry
+--- and the `"*"` wildcard entry (either may be absent or `vim.NIL`) and
+--- resolves deny > ask > allow across both. Allow gates are restricted to the
+--- kind set eligible under `auto_approve` (see `eligible_allow_kinds`).
+--- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @param auto_approve agentic.PermAutoApprove
 --- @return agentic.PermDecision
@@ -299,31 +323,34 @@ function M.decide_leaf(entries, parsed, auto_approve)
     local resolved = M.resolve_args(parsed.args, parsed.cmd_name)
     local opt_cands = collect_option_candidates(resolved)
 
-    --- @type agentic.StructuredEntry[]
+    -- Build explicitly (not via a `{a, b}` literal) so a nil cmd entry does
+    -- not truncate ipairs and silently drop the wildcard entry after it.
+    --- @type agentic.StructuredCmdEntry[]
     local relevant = {}
-    for _, e in ipairs(entries) do
-        if e.cmd == parsed.cmd_name or e.cmd == "*" then
-            table.insert(relevant, e)
+    for _, e in ipairs({ parsed.cmd_name, "*" }) do
+        local entry = entries[e]
+        if entry ~= nil and entry ~= vim.NIL then
+            table.insert(relevant, entry)
         end
     end
 
     for _, e in ipairs(relevant) do
-        if e.deny ~= nil and gate_matches(e.deny, resolved, opt_cands) then
+        if any_gate_matches(e.deny, resolved, opt_cands) then
             return "deny"
         end
     end
     for _, e in ipairs(relevant) do
-        if e.ask ~= nil and gate_matches(e.ask, resolved, opt_cands) then
+        if any_gate_matches(e.ask, resolved, opt_cands) then
             return "ask"
         end
     end
+
+    local kinds = eligible_allow_kinds(auto_approve)
     for _, e in ipairs(relevant) do
-        if
-            e.allow ~= nil
-            and allow_category_ok(e, auto_approve)
-            and gate_matches(e.allow, resolved, opt_cands)
-        then
-            return "allow"
+        for _, kind in ipairs(kinds) do
+            if any_gate_matches(e[kind], resolved, opt_cands) then
+                return "allow"
+            end
         end
     end
 

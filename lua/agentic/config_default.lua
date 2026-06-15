@@ -451,6 +451,7 @@ local ConfigDefault = {
     --- @field safe_write string[] Additional safe-write patterns
     --- @field deny string[] Additional deny patterns (override read_only and safe_write)
     --- @field ask string[] Ask patterns (trigger prompt, lower precedence than deny)
+    --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
@@ -459,6 +460,7 @@ local ConfigDefault = {
         safe_write = {},
         deny = {},
         ask = {},
+        structured = {},
     },
 
     auto_approve_trust_scope = true,
