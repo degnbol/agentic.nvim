@@ -1,24 +1,30 @@
-# Treesitter-based compound-command auto-approval — Phase 1b + Phase 2
+# Treesitter-based compound-command auto-approval — Phase 1b
 
 ## Status
 
 Phase 0 (permissions.json defence-in-depth) and Phase 1a (zsh treesitter walker
-swap) have shipped:
+swap) have shipped on `main`:
 
-- Walker at `lua/agentic/utils/permission_rules.lua:485-766` (commit `19710f8`)
+- Walker at `lua/agentic/utils/permission_rules.lua` (commit `19710f8`)
 - `awk *system*` deny (commit `4c81e35`), `find * -okdir *` deny (`0092dbc`)
 - Five replaced helpers deleted (`split_command`, `mask_quoted_operators`,
   `has_unsafe_redirect`, `strip_devnull_redirects`, `is_inert_segment`)
-- `glob_to_lua_pattern`: `*` → `.*` (`permission_rules.lua:72`)
-- Phase-1a corpus at `permission_rules.test.lua:1020-1175`
+- `glob_to_lua_pattern`: `*` → `.*`
 - `sed e`/`s///e` residual accepted as a documented limitation (see § Remaining
   residuals)
 
-Remaining: Phase 1b (structured option-matcher beside the glob matcher) and
-Phase 2 (assignment-position substitution + loops). Two items (`sort -o`/
-`--output`, `tee` carve-out) are not in Phase 0 because the analysis below
-shows globs are unsound against option clustering — they land in Phase 1b's
-structured matcher instead.
+**Phase 1b** (this document) is the in-flight work on branch `phase-1b`,
+currently at commit `WIP: Phase 1b structured matcher (pre-schema-refactor)`.
+A grilling session settled the design — cmd-keyed schema with
+`read_only`/`safe_write`/`ask`/`deny` kinds, override via
+`vim.tbl_deep_extend`, missing flag variants audited, cluster-bypass
+closure rules added. The implementation chunks in § Work breakdown
+refactor the WIP commit to that design.
+
+**Phase 2** (assignment-position substitution + loops) lives on branch
+`phase-2-substitution-loops` — see
+[perm-substitution-loops-plan.md](perm-substitution-loops-plan.md). It
+depends on Phase 1b and will be rebased onto `main` after Phase 1b lands.
 
 The governing discipline remains **fail-closed**: anything not explicitly
 proven safe falls through to a permission prompt.
@@ -78,73 +84,105 @@ the migrated bundled allowlist.
 
 ### Structured schema
 
-`permissions.json` is a flat list of entries. Each entry names a command and
-carries up to three gates (`allow`, `ask`, `deny`). Each gate has a uniform
-shape:
+`permissions.json` is a **cmd-keyed object**. Each top-level key is the
+command name; each value is a record with up to four gate-kind arrays:
+`read_only`, `safe_write`, `ask`, `deny`. Each gate in those arrays carries
+an `options` constraint and/or a `positionals` constraint.
 
 ```jsonc
-[
-  { "cmd": "find",
-    "allow": {},
-    "deny":  { "options": ["exec", "execdir", "okdir", "delete", "ok"] } },
+{
+  "find": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["exec", "execdir", "okdir", "delete", "ok"] }]
+  },
 
-  { "cmd": "sed",
-    "allow": {},
-    "deny":  { "options": ["i"] } },
+  "sed": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["i", "in-place"] }]
+  },
 
-  { "cmd": "yq",
-    "allow": {},
-    "ask":   { "options": ["i"] } },
+  "yq": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["i", "in-place"] }]
+  },
 
-  { "cmd": "gh",
-    "allow": {},
-    "ask":   { "positionals": ["api"],
-               "options":     ["X", "method", "f", "F", "input"] } },
+  "gh": {
+    "read_only": [{ "positionals": ["api"] }],
+    "ask":       [{ "positionals": ["api"],
+                    "options":     ["X", "method", "f", "F", "input"] }]
+  },
 
-  { "cmd": "pdftotext",
-    "allow": { "positionals": ["*.pdf", "-"] } },
+  "pdftotext": {
+    "read_only": [{ "positionals": ["*.pdf", "-"] }]
+  },
 
-  { "cmd": "git",
-    "allow": { "positionals": ["diff"] },
-    "category": "read_only" },
+  "git": {
+    "read_only": [
+      { "positionals": ["diff"] },
+      { "positionals": ["log"] },
+      { "positionals": ["config", "--get", "*"] }
+    ],
+    "ask": [
+      { "positionals": ["push"] }
+    ]
+  },
 
-  { "cmd": "mlr",
-    "allow": {},
-    "deny":  { "options": ["I"] },
-    "category": "safe_write" },
+  "mlr": {
+    "safe_write": [{}],
+    "deny":       [{ "options": ["I", "in-place"] }]
+  },
 
-  { "cmd": "*",
-    "allow": { "options": ["help", "version"] } }
-]
+  "typst": {
+    "read_only":  [{ "positionals": ["query"] }],
+    "safe_write": [{}]
+  },
+
+  "pacman": {
+    "read_only": [{ "options": ["Q", "Si", "Ss"] }],
+    "ask":       [{ "options": ["R", "U", "D", "F", "T"] }]
+  },
+
+  "rm": { "ask": [{}] },
+
+  "*": {
+    "read_only": [
+      { "options": ["help", "version"] },
+      { "positionals": ["list*"] }
+    ]
+  }
+}
 ```
 
-Fields per entry:
+Top-level layout:
 
-- **`cmd`** (required) — literal command name (after `strip_command_path`), or
-  `"*"` for cross-command rules. Only exact `*` is meaningful; no other glob
-  shape on `cmd`.
-- **`category`** (optional, default `"read_only"`) — `"read_only"` or
-  `"safe_write"`. Mirrors the existing user-facing `auto_approve` toggle:
-  `auto_approve = "read-only"` filters out `category: "safe_write"` allow
-  gates; `auto_approve = "allow"` accepts both; `auto_approve = nil` rejects
-  all allow gates. Deny and ask gates are unconditional (a `safe_write` entry
-  with a deny gate still vetoes even at `auto_approve = nil`).
-- **`allow`** / **`ask`** / **`deny`** (each optional) — gate spec. A gate
-  shape:
+- **Key** — literal command name (after `strip_command_path`), or `"*"` for
+  cross-command rules. `"*"` is matched as a literal key, not as a glob —
+  no other key shape acts as a wildcard.
+- **Value** — object with four optional fields, each an array of gates:
+  - **`read_only`** — auto-approves at `auto_approve = "read-only"` or
+    `"allow"`.
+  - **`safe_write`** — auto-approves at `auto_approve = "allow"` only
+    (mutates-but-safe — `mkdir`, `touch`, `git add`).
+  - **`ask`** — unconditionally prompts. Beats every approval kind.
+  - **`deny`** — unconditionally vetoes. Beats `ask`.
 
-  ```jsonc
-  { "options":     ["help"],              // optional; literal flag names
-    "positionals": ["config", "--get"] }  // optional; literal or glob
-  ```
+The kind name encodes the policy. There is no separate `category` field.
 
-  An empty gate `{}` matches the bare command (no further constraints). Any
-  field present must match.
+Gate shape (each element of those arrays):
+
+```jsonc
+{ "options":     ["help"],              // optional; literal flag names
+  "positionals": ["config", "--get"] }  // optional; literal or glob
+```
+
+An empty gate `{}` matches the bare command (no further constraints). Any
+field present must match.
 
 Gate-field semantics:
 
 - **`options`** — list of flag identifiers (short letters or long names). A
   candidate set is built from every literal arg token via the cluster
-  expansion above; the gate matches if any candidate is in the list.
+  expansion below; the gate matches if any candidate is in the list.
   **Literal identifiers only — no globs.** A glob on a flag id would reabsorb
   the cluster leak this layer exists to close (`-uo` would no longer expand to
   `{u, o}`).
@@ -162,23 +200,73 @@ Where glob is and is not allowed inside the schema:
 
 | Field | Glob? |
 | --- | --- |
-| `cmd` | only exact `"*"` |
+| top-level key | only exact `"*"` |
 | `positionals[i]` | yes |
 | `options[i]` | no — literal flag identifiers |
 
 Glob syntax is the same `*` as Claude's `Bash(...)` patterns (also used by the
 existing glob layer).
 
+#### User overrides via `Config.permissions.structured`
+
+`Config.permissions.structured` is a cmd-keyed table with the same shape.
+At load time the matcher computes
+`vim.tbl_deep_extend("force", bundled, user)` — user keys win at the
+cmd granularity. To override a specific gate kind without restating the
+others, the user supplies only that field. To remove a bundled cmd entry
+entirely, set the cmd key to `vim.NIL`; the matcher treats `vim.NIL` as
+"no entry."
+
+Examples:
+
+```lua
+require("agentic").setup({
+    permissions = {
+        structured = {
+            -- Silence pacman's ask on -R/-U/etc. — auto-approve at own risk.
+            pacman = { ask = {} },
+
+            -- Add a tee allow.
+            tee = { safe_write = { {} } },
+
+            -- Disable the bundled rm ask entirely.
+            rm = vim.NIL,
+
+            -- Add new positional to git's allow list. NOTE: this REPLACES
+            -- the bundled git.read_only array — the user must restate any
+            -- bundled gates they want to keep.
+            git = {
+                read_only = {
+                    { positionals = { "diff" } },
+                    { positionals = { "log" } },
+                    { positionals = { "config", "--get", "*" } },
+                    { positionals = { "amend-summary" } }  -- new
+                }
+            }
+        },
+    },
+})
+```
+
+The "restate to extend" friction is the cost of single-knob simplicity. A
+second `Config.permissions.structured_add` (flat union) is reserved for
+the future if real users hit the extension pattern often enough.
+
 ### Entry composition
 
-Multiple entries can match the same command — for example "allow `find`, deny
-`find -exec`" as two separate entries, or rolled into one entry's two gates.
-Per leaf, collect every matching entry's gates. Within a leaf:
+Per leaf, look up two entries at most:
 
-- **deny** if any matched deny gate fires;
-- else **ask** if any matched ask gate fires;
-- else **allow** if any matched allow gate fires (subject to the `category`
-  filter against `auto_approve`);
+- `cmd_entry = entries[parsed.cmd_name]`
+- `wild_entry = entries["*"]`
+
+Either may be absent. Their kind-arrays compose:
+
+- **deny** if any gate in `cmd_entry.deny ++ wild_entry.deny` fires;
+- else **ask** if any gate in `cmd_entry.ask ++ wild_entry.ask` fires;
+- else **allow** if any gate in the eligible-kinds union fires:
+  - `auto_approve == "allow"` → `read_only ++ safe_write`
+  - `auto_approve == "read-only"` → `read_only` only
+  - `auto_approve == nil` → empty (no allow gate can fire)
 - else fall through to the glob layer.
 
 The composition rule at the top (`approve iff (glob OR structured) ALLOW
@@ -198,25 +286,29 @@ test will be adjusted in chunk 5.
 local M = {}
 ```
 
-`StructuredEntry` mirrors the JSON schema in § Structured schema. Optional
-fields are absent (not `vim.NIL`) when unspecified — `cjson.decode` of
-`permissions.json` already produces this shape.
+`StructuredCmdEntry` mirrors one value of the cmd-keyed JSON schema in
+§ Structured schema. The entry table itself maps `cmd_name` → `StructuredCmdEntry`.
+Optional kind-array fields are absent (not `vim.NIL`) when unspecified —
+`vim.json.decode` of `permissions.json` already produces this shape.
 
 ```lua
---- @alias agentic.PermCategory "read_only" | "safe_write"
 --- @alias agentic.PermAutoApprove "allow" | "read-only" | nil
 --- @alias agentic.PermDecision "allow" | "ask" | "deny" | nil
+--- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
 
 --- @class agentic.PermGate
 --- @field options?     string[] -- literal flag identifiers, no globs
 --- @field positionals? string[] -- per element literal or glob
 
---- @class agentic.StructuredEntry
---- @field cmd       string      -- literal cmd name or exact "*"
---- @field allow?    agentic.PermGate
---- @field ask?      agentic.PermGate
---- @field deny?     agentic.PermGate
---- @field category? agentic.PermCategory  -- default "read_only"
+--- @class agentic.StructuredCmdEntry
+--- @field read_only?  agentic.PermGate[]
+--- @field safe_write? agentic.PermGate[]
+--- @field ask?        agentic.PermGate[]
+--- @field deny?       agentic.PermGate[]
+
+--- Cmd-keyed table. `vim.NIL`-valued keys are treated as "no entry" so the
+--- user can disable a bundled cmd via `Config.permissions.structured`.
+--- @alias agentic.StructuredEntries table<string, agentic.StructuredCmdEntry|nil>
 
 --- @class agentic.ParsedLeaf
 --- @field cmd_name string    after strip_command_path / wrapper strip
@@ -227,8 +319,8 @@ fields are absent (not `vim.NIL`) when unspecified — `cjson.decode` of
 --- @field option_tokens string[]    leading option tokens + consumed values
 ```
 
-The walker is the sole producer of `ParsedLeaf` (chunk 3). The matcher
-trusts its input.
+The walker is the sole producer of `ParsedLeaf`. The matcher trusts its
+input.
 
 #### Public functions
 
@@ -257,9 +349,10 @@ function M.match_options(candidates, rule_options) end
 --- @return agentic.ResolvedArgs
 function M.resolve_args(args, cmd_name) end
 
---- Collect every matching entry's gates and resolve deny > ask > allow,
---- with allow gated by the category filter.
---- @param entries      agentic.StructuredEntry[]
+--- Look up entries[cmd_name] and entries["*"] (either may be nil/vim.NIL),
+--- then resolve deny > ask > allow across both. Allow gates are restricted
+--- to the kind set selected by `auto_approve`.
+--- @param entries      agentic.StructuredEntries
 --- @param parsed       agentic.ParsedLeaf
 --- @param auto_approve agentic.PermAutoApprove
 --- @return agentic.PermDecision
@@ -267,9 +360,9 @@ function M.decide_leaf(entries, parsed, auto_approve) end
 ```
 
 Internal helpers (not exported, named so reviewers can grep):
-`gate_matches`, `positionals_match`, `allow_category_ok`,
-`collect_option_candidates`, `match_one`. None are called by the test
-file; the public four cover every assertion in
+`gate_matches`, `positionals_match`, `collect_option_candidates`,
+`match_one`, `eligible_allow_kinds`. None are called by the test file;
+the public four cover every assertion in
 `permission_structured.test.lua`.
 
 #### Cluster expansion algorithm
@@ -554,7 +647,7 @@ match a token *after* an option in the middle of positionals would
 encode the option literally in the pattern (e.g. `positionals: ["api",
 "-X", "POST"]`), though in practice options live on either end.
 
-#### Entry composition and category filter
+#### Entry composition
 
 `decide_leaf(entries, parsed, auto_approve)`:
 
@@ -565,37 +658,45 @@ encode the option literally in the pattern (e.g. `positionals: ["api",
                        resolved.option_tokens
                        ++ { t in resolved.positionals : t:sub(1,1) == "-" }
 
-2. Filter entries by cmd:
-       relevant = { e in entries
-                    : e.cmd == parsed.cmd_name or e.cmd == "*" }
+2. Look up the two relevant cmd entries:
+       cmd_entry  = entries[parsed.cmd_name]
+       wild_entry = entries["*"]
+       relevant   = filter non-nil/non-vim.NIL from [cmd_entry, wild_entry]
 
-3. For each gate kind in order (deny, ask, allow):
-       hits = { e in relevant
-                : e[kind] ~= nil
-                  and gate_matches(e[kind], resolved, opt_cands)
-                  and category_ok(e, kind, auto_approve) }
-       (category filter applies only when kind == "allow"; deny/ask
-        are unconditional)
-       if any hits and kind == "deny"  → return "deny"
-       if any hits and kind == "ask"   → return "ask"
-       if any hits and kind == "allow" → return "allow"
+3. For deny then ask (unconditional kinds):
+       for entry in relevant:
+           for gate in entry.deny or {}:
+               if gate_matches(gate, resolved, opt_cands) → return "deny"
+       for entry in relevant:
+           for gate in entry.ask or {}:
+               if gate_matches(gate, resolved, opt_cands) → return "ask"
 
-4. Return nil.
+4. For the eligible approval kinds (one or two, per `auto_approve`):
+       kinds = eligible_allow_kinds(auto_approve)
+       for entry in relevant:
+           for kind in kinds:
+               for gate in entry[kind] or {}:
+                   if gate_matches(gate, resolved, opt_cands)
+                       → return "allow"
 
-category_ok(entry, kind, auto_approve):
-    if kind ~= "allow" then return true end
-    cat = entry.category or "read_only"
-    if auto_approve == "allow"     then return true end
-    if auto_approve == "read-only" then return cat == "read_only" end
-    return false           -- auto_approve == nil rejects all allow gates
+5. Return nil.
+
+eligible_allow_kinds(auto_approve):
+    if auto_approve == "allow"     then return {"read_only", "safe_write"}
+    if auto_approve == "read-only" then return {"read_only"}
+    return {}                                     -- auto_approve == nil
 ```
 
-Precedence is therefore **deny > ask > allow**, evaluated across the
-*union* of all entries matching `cmd` (literal name or `*`). A deny
-gate in one entry vetoes an allow gate in another for the same
-command — the `find` / `sort` corpus pins this. A `*` entry's allow
-gate fires for any command whose own entries don't deny/ask first,
-which is how `Bash(* --help)` migrates.
+Precedence is **deny > ask > allow**, evaluated across the *union* of all
+gates from `cmd_entry` and `wild_entry`. A deny gate on the `cmd_entry`
+vetoes an allow gate on the `wild_entry` for the same command — the
+`find` / `sort` corpus pins this. A `*` entry's allow gate fires for any
+command whose own entry doesn't deny/ask first, which is how
+`Bash(* --help)` migrates.
+
+`vim.NIL`-valued entries (the user's mechanism for disabling a bundled
+cmd via `Config.permissions.structured`) are treated as missing — the
+filter in step 2 drops them.
 
 #### Resolution of `-- AMBIGUOUS:` markers
 
@@ -766,7 +867,7 @@ end
 
 -- Structured layer: returns "deny" | "ask" | "allow" | nil.
 local structured = nil
-if #ctx.structured_entries > 0 then
+if next(ctx.structured_entries) ~= nil then
     structured = PermissionStructured.decide_leaf(
         ctx.structured_entries, parsed, ctx.auto_approve
     )
@@ -797,25 +898,26 @@ the glob allow check.
 
 #### `WalkCtx` shape update
 
-The current alias at line 499:
+The Phase 1a alias:
 
 ```lua
 --- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[] }
 ```
 
-Extended:
+Extended for Phase 1b (cmd-keyed schema):
 
 ```lua
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.utils.PermissionStructured.Entry[], auto_approve: "allow"|"read-only"|nil }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove }
 ```
 
-Both new fields are required (no `?`). The matcher reads `auto_approve` for
-the category filter; passing `nil` is meaningful (rejects all allow gates).
-Reading from `Config.permissions.auto_approve` inside the walker would
-re-introduce a `require("agentic.config")` round-trip per leaf — better to
-pass it once at `should_auto_approve`'s callsite, alongside the entries list.
+Both new fields are required (no `?`). The matcher reads `auto_approve` to
+select the eligible approval kinds; passing `nil` is meaningful (rejects
+all allow gates). Reading from `Config.permissions.auto_approve` inside
+the walker would re-introduce a `require("agentic.config")` round-trip per
+leaf — better to pass it once at `should_auto_approve`'s callsite,
+alongside the entries table.
 
-`should_auto_approve` constructs the ctx (the call at lines 799-803):
+`should_auto_approve` constructs the ctx:
 
 ```lua
 return walk(root, command, {
@@ -827,13 +929,13 @@ return walk(root, command, {
 })
 ```
 
-`M.get_structured_entries()` is the new accessor — same caching shape as
-`get_deny_patterns`, returns the entries parsed from `permissions.json` plus
-any `Config.permissions.structured` user additions (defined in chunk 4's
-migration spec, not this one). The accessor returns `{}` when the bundled
-defaults are disabled and no user entries exist, in which case the
-composition site's `#ctx.structured_entries > 0` guard skips the matcher
-entirely — no-op for users who haven't opted in.
+`M.get_structured_entries()` returns the cmd-keyed table merged from the
+bundled `permissions.json` plus any `Config.permissions.structured` user
+additions via `vim.tbl_deep_extend("force", bundled, user)`. The accessor
+returns an empty table (`{}`) when bundled defaults are disabled and no
+user entries exist, in which case the composition site's
+`next(ctx.structured_entries) ~= nil` guard skips the matcher entirely —
+no-op for users who haven't opted in.
 
 #### Phase 1a regression surface
 
@@ -970,8 +1072,12 @@ wise by the unexpanded form.
 ### Migration
 
 Mechanical conversion of the current `lua/agentic/permissions.json` (396 glob
-entries across `read_only`/`safe_write`/`deny`/`ask`) to the flat structured
-form. Conversion principles applied uniformly:
+entries across `read_only`/`safe_write`/`deny`/`ask`) to the cmd-keyed
+structured form. The implementation file `lua/agentic/permissions.json` is
+the source of truth for the final shipped content; the example below is a
+representative slice showing every shape that appears.
+
+Conversion principles applied uniformly:
 
 - The option walker skips arg-taking globals before reading the first
   positional, so most `Bash(cmd *foo*)` and `Bash(cmd -X * foo *)` globs
@@ -983,581 +1089,138 @@ form. Conversion principles applied uniformly:
   `options: ["get"]`.
 - Pipelines (`Bash(X | Y)`) are dropped: the walker already evaluates each
   pipe segment independently against all rules.
-- `read_only` becomes per-entry `category: "read_only"` (the default;
-  omitted for brevity); `safe_write` becomes explicit
-  `category: "safe_write"`.
-- `deny`/`ask` glob entries fold into the same command's gate, keeping each
-  command's rules in one place.
-- New flag-writer rules (`sort`, `tee`, expanded `curl`, `http`) added per
-  the plan's § Migration "New rules" subsection.
+- `read_only` and `safe_write` are the JSON kind names (no separate
+  `category` field). `auto_approve` selects which kinds count as approval.
+- `deny`/`ask` glob entries fold into the same cmd entry's kind-array,
+  keeping each command's rules in one place.
 - The `pwd*` typo (matches `pwdwhatever`) is dropped; `pwd` plus `pwd *`
   collapse to a single bare-command entry.
+- Multiple bundled glob entries that share a `cmd` all consolidate under
+  one cmd key. This is one of the larger collapses (every `git
+  <subcommand>` glob becomes a positional gate under `git.read_only`).
+
+Representative example — the patterns that appear across the migration:
 
 ```jsonc
-[
-  // ── file/directory listing and metadata ────────────────────────────────
-  { "cmd": "ls",        "allow": {} },
-  { "cmd": "tree",      "allow": {} },
-  { "cmd": "du",        "allow": {} },
-  { "cmd": "df",        "allow": {} },
-  { "cmd": "file",      "allow": {} },
-  { "cmd": "stat",      "allow": {} },
-  { "cmd": "wc",        "allow": {} },
-  { "cmd": "column",    "allow": {} },
-  { "cmd": "eza",       "allow": {} },
-  { "cmd": "lsd",       "allow": {} },
-  { "cmd": "bat",       "allow": {} },
-  { "cmd": "fd",        "allow": {} },
-  { "cmd": "mdfind",    "allow": {} },
-  { "cmd": "locate",    "allow": {} },
-
-  // xargs ls is the only xargs-prefixed entry; safest is to keep narrow.
-  // merged from Bash(xargs ls *)
-  { "cmd": "xargs", "allow": { "positionals": ["ls"] } },
-
-  // ── path/name introspection ────────────────────────────────────────────
-  { "cmd": "which",    "allow": {} },
-  { "cmd": "whereis",  "allow": {} },
-  { "cmd": "type",     "allow": {} },
-  { "cmd": "realpath", "allow": {} },
-  { "cmd": "readlink", "allow": {} },
-  { "cmd": "dirname",  "allow": {} },
-  { "cmd": "basename", "allow": {} },
-
-  // merged from Bash(command -v *), Bash(command -V *)
-  { "cmd": "command", "allow": { "options": ["v", "V"] } },
-
-  // ── content readers ────────────────────────────────────────────────────
-  { "cmd": "cat",      "allow": {} },
-  { "cmd": "head",     "allow": {} },
-  { "cmd": "tail",     "allow": {} },
-  { "cmd": "less",     "allow": {} },
-  { "cmd": "zless",    "allow": {} },
-  { "cmd": "gzcat",    "allow": {} },
-  { "cmd": "bzcat",    "allow": {} },
-  { "cmd": "xzcat",    "allow": {} },
-  { "cmd": "lz4cat",   "allow": {} },
-  { "cmd": "zstdcat",  "allow": {} },
-
-  // ── shell builtins / control ───────────────────────────────────────────
-  { "cmd": "cd",       "allow": {} },
-  { "cmd": "pwd",      "allow": {} },           // merged from Bash(pwd), Bash(pwd *); Bash(pwd*) typo dropped
-  { "cmd": "echo",     "allow": {} },
-  { "cmd": "printf",   "allow": {} },
-  { "cmd": "seq",      "allow": {} },
-  { "cmd": "true",     "allow": {} },
-  { "cmd": ":",        "allow": {} },
-  { "cmd": "false",    "allow": {} },
-  { "cmd": "help",     "allow": {} },
-  { "cmd": "sleep",    "allow": {}, "category": "safe_write" },
-
-  // ── search ─────────────────────────────────────────────────────────────
-  { "cmd": "grep",     "allow": {} },           // pipeline variant Bash(grep * | head *) dropped
-  { "cmd": "rg",       "allow": {} },
-  { "cmd": "ag",       "allow": {} },
-  { "cmd": "ack",      "allow": {} },
-  { "cmd": "pdfgrep",  "allow": {} },
-
-  // merged from Bash(pdftotext *.pdf -)
-  { "cmd": "pdftotext", "allow": { "positionals": ["*.pdf", "-"] } },
-
-  // ── find / fd write-flag denies ────────────────────────────────────────
-  // merged from Bash(find *) allow + Bash(find * -exec *), -delete*, -ok *, -okdir * denies
-  // also folds Bash(find * -execdir *) from the ask section (deny takes precedence)
-  { "cmd": "find",
-    "allow": {},
-    "deny":  { "options": ["exec", "execdir", "okdir", "delete", "ok"] } },
-
-  // merged from Bash(fd *) allow + Bash(fd * -x *), -X *, --exec *, --exec-batch * denies
-  { "cmd": "fd",
-    "allow": {},
-    "deny":  { "options": ["x", "X", "exec", "exec-batch"] } },
-
-  // ── diff / cmp ─────────────────────────────────────────────────────────
-  { "cmd": "diff", "allow": {} },
-  { "cmd": "cmp",  "allow": {} },
-  { "cmd": "comm", "allow": {} },
-
-  // ── git: read-only subcommands ─────────────────────────────────────────
-  // merged from Bash(git diff), Bash(git diff *), Bash(git *diff*)
-  { "cmd": "git", "allow": { "positionals": ["diff"] } },
-  // merged from Bash(git log), Bash(git log *), Bash(git *log*)
-  { "cmd": "git", "allow": { "positionals": ["log"] } },
-  // merged from Bash(git show), Bash(git show *), Bash(git show*)
-  { "cmd": "git", "allow": { "positionals": ["show"] } },
-  // merged from Bash(git status), Bash(git status *), Bash(git *status*)
-  { "cmd": "git", "allow": { "positionals": ["status"] } },
-  { "cmd": "git", "allow": { "positionals": ["blame"] } },
-  // merged from Bash(git rev-parse *), Bash(git -C * rev-parse *)
-  { "cmd": "git", "allow": { "positionals": ["rev-parse"] } },
-  // merged from Bash(git branch), Bash(git branch *), Bash(git branch --list*)
-  // (branch -d/-D/-m/-M/-c/-C/--delete/--move/--copy carved out below in ask)
-  { "cmd": "git", "allow": { "positionals": ["branch"] },
-    "ask":  { "positionals": ["branch"],
-              "options":     ["d", "D", "m", "M", "c", "C",
-                              "delete", "move", "copy"] } },
-  // merged from Bash(git remote), Bash(git remote *), Bash(git remote -v),
-  // Bash(git -C * remote), Bash(git -C * remote -v)
-  { "cmd": "git", "allow": { "positionals": ["remote"] } },
-  // merged from Bash(git tag), Bash(git tag *), Bash(git tag --list*)
-  { "cmd": "git", "allow": { "positionals": ["tag"] } },
-  // merged from Bash(git ls-files*), Bash(git *ls-files *)
-  { "cmd": "git", "allow": { "positionals": ["ls-files"] } },
-  // merged from Bash(git ls-tree*), Bash(git *ls-tree *)
-  { "cmd": "git", "allow": { "positionals": ["ls-tree"] } },
-  { "cmd": "git", "allow": { "positionals": ["cat-file"] } },
-
-  // git config: read-only positional carve-outs (positional preserves intent)
-  // merged from Bash(git config --get *)
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "--get", "*"] } },
-  // merged from Bash(git config --list *)
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "--list", "*"] } },
-  // merged from Bash(git config -f * --get *)
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "-f", "*", "--get", "*"] } },
-  // merged from Bash(git config -f * --list*)
-  { "cmd": "git",
-    "allow": { "positionals": ["config", "-f", "*", "--list", "*"] } },
-
-  // git stash: list is read-only, push/drop/-m are ask
-  // merged from Bash(git stash list *)
-  { "cmd": "git",
-    "allow": { "positionals": ["stash", "list"] } },
-  // merged from Bash(git stash) and Bash(git stash push*), drop*, -m *
-  { "cmd": "git", "ask": { "positionals": ["stash"] } },
-
-  // git: write-side ask carve-outs
-  // merged from Bash(git checkout *), Bash(git checkout -- *)
-  { "cmd": "git", "ask": { "positionals": ["checkout"] } },
-  // merged from Bash(git reset*)
-  { "cmd": "git", "ask": { "positionals": ["reset"] } },
-  // merged from Bash(git push*)
-  { "cmd": "git", "ask": { "positionals": ["push"] } },
-  // merged from Bash(git commit*), Bash(git * commit *)
-  { "cmd": "git", "ask": { "positionals": ["commit"] } },
-
-  // ── sort: deny output flags (cluster-proof, replaces unsound globs) ────
-  { "cmd": "sort",
-    "allow": {},
-    "deny":  { "options": ["o", "output"] } },
-
-  // ── uniq / cut / tr ────────────────────────────────────────────────────
-  { "cmd": "uniq", "allow": {} },
-  { "cmd": "cut",  "allow": {} },
-  { "cmd": "tr",   "allow": {} },
-
-  // tee is intentionally absent: it always writes. No entry → falls through
-  // to a permission prompt. Users who want auto-approval add an entry to
-  // Config.permissions.structured.
-
-  // ── data-format tools ──────────────────────────────────────────────────
-  { "cmd": "jq",      "allow": {} },
-  // merged from Bash(yq *) allow + Bash(yq -i*), Bash(yq * -i*) asks
-  { "cmd": "yq",
-    "allow": {},
-    "ask":   { "options": ["i"] } },
-  { "cmd": "xq",      "allow": {} },
-  { "cmd": "xmllint", "allow": {} },
-  { "cmd": "xxd",     "allow": {} },
-  { "cmd": "hexdump", "allow": {} },
-  { "cmd": "od",      "allow": {} },
-  { "cmd": "strings", "allow": {} },
-
-  // ── hash / checksum ────────────────────────────────────────────────────
-  { "cmd": "md5",       "allow": {} },
-  { "cmd": "md5sum",    "allow": {} },
-  { "cmd": "shasum",    "allow": {} },
-  { "cmd": "sha256sum", "allow": {} },
-  { "cmd": "cksum",     "allow": {} },
-
-  // ── documentation / help ───────────────────────────────────────────────
-  { "cmd": "man",     "allow": {} },
-  { "cmd": "info",    "allow": {} },
-  { "cmd": "apropos", "allow": {} },
-  { "cmd": "whatis",  "allow": {} },
-  { "cmd": "tldr",    "allow": {} },
-
-  // ── system info ────────────────────────────────────────────────────────
-  { "cmd": "uname",       "allow": {} },
-  { "cmd": "hostname",    "allow": {} },
-  // merged from Bash(date), Bash(date *) allow + Bash(date -s*), --set* denies
-  { "cmd": "date",
-    "allow": {},
-    "deny":  { "options": ["s", "set"] } },
-  { "cmd": "cal",         "allow": {} },
-  { "cmd": "uptime",      "allow": {} },
-  { "cmd": "id",          "allow": {} },
-  { "cmd": "whoami",      "allow": {} },
-  { "cmd": "groups",      "allow": {} },
-  { "cmd": "who",         "allow": {} },
-  { "cmd": "w",           "allow": {} },
-  { "cmd": "nproc",       "allow": {} },
-  { "cmd": "sw_vers",     "allow": {} },
-  { "cmd": "lsblk",       "allow": {} },
-  { "cmd": "lscpu",       "allow": {} },
-  { "cmd": "lspci",       "allow": {} },
-  { "cmd": "timedatectl", "allow": {} },
-  { "cmd": "localectl",   "allow": {} },
-  { "cmd": "loginctl",    "allow": {} },
-  { "cmd": "free",        "allow": {} },
-  { "cmd": "dmesg",       "allow": {} },
-  { "cmd": "vulkaninfo",  "allow": {} },
-
-  // ── processes ──────────────────────────────────────────────────────────
-  { "cmd": "ps",     "allow": {} },
-  { "cmd": "pgrep",  "allow": {} },
-  { "cmd": "pidof",  "allow": {} },
-  { "cmd": "pstree", "allow": {} },
-  { "cmd": "lsof",   "allow": {} },
-
-  // ── networking introspection ───────────────────────────────────────────
-  { "cmd": "dig",        "allow": {} },
-  { "cmd": "host",       "allow": {} },
-  { "cmd": "nslookup",   "allow": {} },
-  { "cmd": "ping",       "allow": {} },
-  { "cmd": "traceroute", "allow": {} },
-  { "cmd": "ss",         "allow": {} },
-  { "cmd": "netstat",    "allow": {} },
-  // pipeline variant Bash(mount | grep *) dropped
-  { "cmd": "mount",      "allow": {} },
-
-  // ── env ────────────────────────────────────────────────────────────────
-  // NOTE: Bash(env *) auto-approves arbitrary commands via env wrapper —
-  // tracked in notes/perm-wrapper-command-auto-approve.md (out of scope here).
-  { "cmd": "env",      "allow": {} },
-  { "cmd": "printenv", "allow": {} },
-
-  // ── macOS-specific ─────────────────────────────────────────────────────
-  // merged from Bash(defaults read), Bash(defaults read *)
-  { "cmd": "defaults", "allow": { "positionals": ["read"] } },
-  // merged from Bash(xattr), Bash(xattr -l *), Bash(xattr -h)
-  { "cmd": "xattr",
-    "allow": {},
-    "ask":   { "options": ["w", "d", "c"] } },
-  { "cmd": "log",      "allow": { "positionals": ["show"] } },
-
-  // ── text-processing with write-flag carve-outs ─────────────────────────
-  // merged from Bash(sed *) allow + Bash(sed -i*), Bash(sed * -i*) denies
-  // residual: sed e/s///e (exec) and w/W/s///w (write) still leak — see § Remaining residuals
-  { "cmd": "sed",
-    "allow": {},
-    "deny":  { "options": ["i"] } },
-
-  // merged from Bash(awk *) allow + Bash(awk *system*) deny + Bash(awk * > *), Bash(awk *>*) asks
-  // residual: awk system() inside the script body — covered by positionals "*system*"; redirects via the walker
-  { "cmd": "awk",
-    "allow": {},
-    "deny":  { "positionals": ["*system*"] } },
-
-  { "cmd": "bc",     "allow": {} },
-  { "cmd": "getent", "allow": {} },
-
-  // ── HDF5 / NetCDF ──────────────────────────────────────────────────────
-  { "cmd": "h5dump", "allow": {} },
-  { "cmd": "h5ls",   "allow": {} },
-  { "cmd": "ncdump", "allow": {} },
-
-  // ── journal / systemd ──────────────────────────────────────────────────
-  { "cmd": "journalctl", "allow": {} },
-  // merged from Bash(systemctl is-active *), is-enabled *, list-*, status *
-  { "cmd": "systemctl", "allow": { "positionals": ["is-active"] } },
-  { "cmd": "systemctl", "allow": { "positionals": ["is-enabled"] } },
-  { "cmd": "systemctl", "allow": { "positionals": ["list-*"] } },
-  { "cmd": "systemctl", "allow": { "positionals": ["status"] } },
-
-  // ── sysctl / xdg ───────────────────────────────────────────────────────
-  { "cmd": "sysctl",   "allow": {} },
-  // merged from Bash(xdg-mime query *)
-  { "cmd": "xdg-mime", "allow": { "positionals": ["query"] } },
-
-  // ── lua / typst / latex ────────────────────────────────────────────────
-  // merged from Bash(luac -l*)
-  { "cmd": "luac",  "allow": { "options": ["l"] } },
-  // merged from Bash(typst query *) read-only + Bash(typst *) safe_write
-  { "cmd": "typst", "allow": { "positionals": ["query"] } },
-  { "cmd": "typst", "allow": {}, "category": "safe_write" },
-  // merged from Bash(latexmk *)
-  { "cmd": "latexmk", "allow": {}, "category": "safe_write" },
-  // merged from Bash(tlmgr *)
-  { "cmd": "tlmgr",   "allow": {}, "category": "safe_write" },
-
-  // ── java introspection ─────────────────────────────────────────────────
-  { "cmd": "javap", "allow": {} },
-
-  // ── universal --help/--version ─────────────────────────────────────────
-  // merged from Bash(* --help), Bash(* --version)
-  { "cmd": "*", "allow": { "options": ["help", "version"] } },
-
-  // ── universal first-positional "list*" (informational subcommands) ─────
-  // merged from Bash(* list*) (and pipeline variant Bash(* list *| grep *) dropped)
-  { "cmd": "*", "allow": { "positionals": ["list*"] } },
-
-  // ── package managers (read-only info subcommands) ──────────────────────
-  // merged from Bash(brew info *), Bash(brew list *), Bash(brew search *)
-  { "cmd": "brew", "allow": { "positionals": ["info"] } },
-  { "cmd": "brew", "allow": { "positionals": ["list"] } },
-  { "cmd": "brew", "allow": { "positionals": ["search"] } },
-
-  // merged from Bash(cargo doc *), Bash(cargo metadata *), Bash(cargo tree *)
-  { "cmd": "cargo", "allow": { "positionals": ["doc"] } },
-  { "cmd": "cargo", "allow": { "positionals": ["metadata"] } },
-  { "cmd": "cargo", "allow": { "positionals": ["tree"] } },
-
-  // merged from Bash(conda info *), Bash(conda list *), Bash(conda search *), Bash(conda env *)
-  { "cmd": "conda", "allow": { "positionals": ["info"] } },
-  { "cmd": "conda", "allow": { "positionals": ["list"] } },
-  { "cmd": "conda", "allow": { "positionals": ["search"] } },
-  { "cmd": "conda", "allow": { "positionals": ["env"] } },
-
-  { "cmd": "flatpak", "allow": { "positionals": ["info"] } },
-  { "cmd": "flatpak", "allow": { "positionals": ["list"] } },
-
-  { "cmd": "npm", "allow": { "positionals": ["info"] } },
-  { "cmd": "npm", "allow": { "positionals": ["list"] } },
-  { "cmd": "npm", "allow": { "positionals": ["view"] } },
-
-  // merged from Bash(pacman -Q*), Bash(pacman -Si *), Bash(pacman -Ss *)
-  { "cmd": "pacman", "allow": { "options": ["Q", "Si", "Ss"] } },
-
-  { "cmd": "pip", "allow": { "positionals": ["list"] } },
-  { "cmd": "pip", "allow": { "positionals": ["show"] } },
-
-  { "cmd": "pnpm", "allow": { "positionals": ["info"] } },
-
-  // merged from Bash(uv pip list *), Bash(uv pip search *), Bash(uv pip show *)
-  { "cmd": "uv", "allow": { "positionals": ["pip", "list"] } },
-  { "cmd": "uv", "allow": { "positionals": ["pip", "search"] } },
-  { "cmd": "uv", "allow": { "positionals": ["pip", "show"] } },
-  // merged from Bash(uv lock)
-  { "cmd": "uv", "allow": { "positionals": ["lock"] }, "category": "safe_write" },
-
-  // merged from Bash(luarocks search *)
-  { "cmd": "luarocks", "allow": { "positionals": ["search"] },
-    "category": "safe_write" },
-
-  // ── gh (GitHub CLI) ────────────────────────────────────────────────────
-  // merged from Bash(gh alias list *), and similar
-  { "cmd": "gh", "allow": { "positionals": ["alias", "list"] } },
-  // merged from Bash(gh api *) allow + Bash(gh api *-X*), --method*, -f*, -F*, --input* asks
-  { "cmd": "gh",
-    "allow": { "positionals": ["api"] },
-    "ask":   { "positionals": ["api"],
-               "options":     ["X", "method", "f", "F", "input"] } },
-  { "cmd": "gh", "allow": { "positionals": ["auth", "status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["cache", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["config", "get"] } },
-  { "cmd": "gh", "allow": { "positionals": ["config", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["extension", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["gist", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["gist", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["issue", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["issue", "status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["issue", "view"] } },
-  // merged from Bash(gh issue create *)
-  { "cmd": "gh", "ask":   { "positionals": ["issue", "create"] } },
-  { "cmd": "gh", "allow": { "positionals": ["label", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["org", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "checks"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "diff"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["pr", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["project", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["project", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["release", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["release", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["repo", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["repo", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["ruleset"] } },
-  { "cmd": "gh", "allow": { "positionals": ["run", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["run", "view"] } },
-  { "cmd": "gh", "allow": { "positionals": ["search"] } },
-  { "cmd": "gh", "allow": { "positionals": ["status"] } },
-  { "cmd": "gh", "allow": { "positionals": ["workflow", "list"] } },
-  { "cmd": "gh", "allow": { "positionals": ["workflow", "view"] } },
-
-  // ── aws ────────────────────────────────────────────────────────────────
-  // merged from Bash(aws s3 ls *)
-  { "cmd": "aws", "allow": { "positionals": ["s3", "ls"] } },
-  // merged from Bash(aws * get-*), describe-*, list-*, head-*
-  // The first-positional pattern matches the service name (which varies),
-  // while the second positional matches the read-only verb prefix.
-  // `aws ec2 describe-instances` → positionals=["ec2", "describe-instances"]
-  // matches positionals=["*", "describe-*"].
-  { "cmd": "aws", "allow": { "positionals": ["*", "get-*"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "describe-*"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "list-*"] } },
-  { "cmd": "aws", "allow": { "positionals": ["*", "head-*"] } },
-
-  // ── kitty (terminal) ───────────────────────────────────────────────────
-  // merged from Bash(kitty @ ls*), Bash(kitty @ ls | head *), Bash(kitty @ get-text*)
-  // pipeline variant dropped. `@` is a literal positional (the kitty
-  // remote-control sigil), not a subcommand sentinel.
-  { "cmd": "kitty", "allow": { "positionals": ["@", "ls"] } },
-  { "cmd": "kitty", "allow": { "positionals": ["@", "get-text"] } },
-
-  // ── hyprctl (Hyprland) ─────────────────────────────────────────────────
-  // merged from numerous Bash(hyprctl SUBCOMMAND*) entries
-  { "cmd": "hyprctl", "allow": { "positionals": ["activewindow"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["activeworkspace"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["animations"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["binds"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["clients"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["configerrors"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["cursorpos"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["decorations"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["devices"] } },
-  // merged from Bash(hyprctl get*), Bash(hyprctl getoption *), Bash(hyprctl getprop *)
-  { "cmd": "hyprctl", "allow": { "positionals": ["get*"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["globalshortcuts"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["instances"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["layers"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["layouts"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["monitors"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["rollinglog"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["splash"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["systeminfo"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["version"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["workspacerules"] } },
-  { "cmd": "hyprctl", "allow": { "positionals": ["workspaces"] } },
-
-  // ── safe-write data tools ──────────────────────────────────────────────
-  // merged from Bash(mlr *) safe_write + Bash(mlr -I*), Bash(mlr * -I*) denies
-  // pipeline variants Bash(mlr *| head *), Bash(printf * | mlr *) dropped
-  { "cmd": "mlr",
-    "allow": {},
-    "deny":  { "options": ["I"] },
-    "category": "safe_write" },
-
-  // merged from Bash(qalc *)
-  { "cmd": "qalc",  "allow": {}, "category": "safe_write" },
-  // merged from Bash(paste *)
-  { "cmd": "paste", "allow": {}, "category": "safe_write" },
-  // merged from Bash(tac *)
-  { "cmd": "tac",   "allow": {}, "category": "safe_write" },
-
-  // ── curl: deny output/upload flags (expanded per § Migration new rules) ─
-  // merged from Bash(curl *) safe_write + Bash(curl * -o *), --output *, -O*, --remote-name* denies
-  // New denies added: -K/--config, -T/--upload-file, -D/--dump-header, --output-dir, --trace-ascii
-  { "cmd": "curl",
-    "allow": {},
-    "deny":  { "options": ["o", "O", "output", "remote-name",
-                           "K", "config",
-                           "T", "upload-file",
-                           "D", "dump-header",
-                           "output-dir", "trace-ascii"] },
-    "category": "safe_write" },
-
-  // ── http (httpie): new flag-writer deny rules ──────────────────────────
-  // merged from Bash(http *) safe_write
-  // New denies: -d/--download, -o/--output
-  { "cmd": "http",
-    "allow": {},
-    "deny":  { "options": ["d", "download", "o", "output"] },
-    "category": "safe_write" },
-
-  // ── build / test / lint ────────────────────────────────────────────────
-  { "cmd": "just", "allow": { "positionals": ["lint"] },
-    "category": "safe_write" },
-  { "cmd": "just", "allow": { "positionals": ["type"] },
-    "category": "safe_write" },
-
-  { "cmd": "make", "allow": { "positionals": ["test"] },
-    "category": "safe_write" },
-  { "cmd": "make", "allow": { "positionals": ["validate"] },
-    "category": "safe_write" },
-
-  { "cmd": "bun",  "allow": { "positionals": ["test"] },
-    "category": "safe_write" },
-
-  // merged from Bash(ruff *) safe_write + Bash(ruff * --fix*), Bash(ruff * -fix*) denies
-  // -fix*: literal `-fix` is malformed (single dash long form), kept as a defensive deny
-  { "cmd": "ruff",
-    "allow": {},
-    "deny":  { "options": ["fix"] },
-    "category": "safe_write" },
-
-  { "cmd": "selene", "allow": {}, "category": "safe_write" },
-
-  // merged from Bash(stylua *) safe_write + Bash(stylua * --replace*) deny
-  { "cmd": "stylua",
-    "allow": {},
-    "deny":  { "options": ["replace"] },
-    "category": "safe_write" },
-
-  // merged from Bash(tree-sitter *)
-  { "cmd": "tree-sitter", "allow": {}, "category": "safe_write" },
-  // merged from Bash(npx tree-sitter *)
-  { "cmd": "npx", "allow": { "positionals": ["tree-sitter"] },
-    "category": "safe_write" },
-
-  // ── claude (CLI) ───────────────────────────────────────────────────────
-  // merged from Bash(claude config list *)
-  { "cmd": "claude", "allow": { "positionals": ["config", "list"] },
-    "category": "safe_write" },
-  // merged from Bash(claude mcp list *)
-  { "cmd": "claude", "allow": { "positionals": ["mcp", "list"] },
-    "category": "safe_write" },
-
-  // ── flyte ──────────────────────────────────────────────────────────────
-  { "cmd": "flyte",    "allow": { "positionals": ["get"] },
-    "category": "safe_write" },
-  { "cmd": "flytectl", "allow": { "positionals": ["get"] },
-    "category": "safe_write" },
-
-  // ── zsh syntax-check / python -m unittest ──────────────────────────────
-  // merged from Bash(zsh -n *)
-  { "cmd": "zsh", "allow": { "options": ["n"] }, "category": "safe_write" },
-  // merged from Bash(python3 -m unittest*)
-  { "cmd": "python3",
-    "allow": { "options": ["m"], "positionals": ["unittest*"] },
-    "category": "safe_write" },
-
-  // ── headless graphics ──────────────────────────────────────────────────
-  // merged from Bash(blender --background *)
-  { "cmd": "blender", "allow": { "options": ["background"] },
-    "category": "safe_write" },
-  // merged from Bash(pymol *)
-  { "cmd": "pymol",   "allow": {}, "category": "safe_write" },
-
-  // ── ask gates: destructive but recoverable ─────────────────────────────
-  // merged from Bash(rm *)
-  { "cmd": "rm", "ask": {} }
-]
+{
+  // bare allow — `Bash(ls)` / `Bash(ls *)` / `Bash(xargs ls *)` collapse here
+  "ls":   { "read_only": [{}] },
+  "tree": { "read_only": [{}] },
+
+  // bare safe_write — `Bash(mlr *)` lands as a safe_write allow plus deny
+  "mlr":  {
+    "safe_write": [{}],
+    "deny":       [{ "options": ["I", "in-place"] }]
+  },
+
+  // positional allow — `Bash(pdftotext *.pdf -)`
+  "pdftotext": { "read_only": [{ "positionals": ["*.pdf", "-"] }] },
+
+  // option-only deny — `Bash(find *) + Bash(find * -exec *)/...`
+  "find": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["exec", "execdir", "okdir", "delete", "ok"] }]
+  },
+
+  // option deny + long-name variant — sed allow + -i deny with --in-place
+  "sed": {
+    "read_only": [{}],
+    "deny":      [{ "options": ["i", "in-place"] }]
+  },
+
+  // option ask — yq allow + -i ask
+  "yq": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["i", "in-place"] }]
+  },
+
+  // subcommand-positional + option-ask — gh api with destructive flags
+  "gh": {
+    "read_only": [{ "positionals": ["api"] }],
+    "ask":       [{ "positionals": ["api"],
+                    "options":     ["X", "method", "f", "F", "input"] }]
+  },
+
+  // multiple read_only positionals (eleven git subcommand globs collapse)
+  "git": {
+    "read_only": [
+      { "positionals": ["diff"] },
+      { "positionals": ["log"] },
+      { "positionals": ["show"] },
+      { "positionals": ["status"] },
+      { "positionals": ["config", "--get", "*"] }
+    ],
+    "ask": [
+      { "positionals": ["push"] },
+      { "positionals": ["reset"] },
+      { "positionals": ["branch"],
+        "options":     ["d", "D", "m", "M", "c", "C",
+                        "delete", "move", "copy"] }
+    ]
+  },
+
+  // mixed read_only + safe_write under one cmd
+  "typst": {
+    "read_only":  [{ "positionals": ["query"] }],
+    "safe_write": [{}]
+  },
+
+  // cluster-bypass closure — short-letter allow paired with an ask on every
+  // destructive short letter that could share the cluster (see § Cluster
+  // expansion algorithm). Required wherever the allow uses short letters.
+  "pacman": {
+    "read_only": [{ "options": ["Q", "Si", "Ss"] }],
+    "ask":       [{ "options": ["R", "U", "D", "F", "T"] }]
+  },
+
+  // bare ask — `Bash(rm *)`
+  "rm": { "ask": [{}] },
+
+  // wildcard entry — universal --help/--version + `list*` first-positional
+  "*": {
+    "read_only": [
+      { "options": ["help", "version"] },
+      { "positionals": ["list*"] }
+    ]
+  }
+}
 ```
+
+The full migrated file lives at `lua/agentic/permissions.json`; the
+chunk-7 implementation produces it from the audit notes below.
 
 #### Migration notes
 
-**Collapses** (groups of glob entries → single structured entry):
+**Collapses** (groups of glob entries → single structured cmd entry):
 
-1. `Bash(git diff)`, `Bash(git diff *)`, `Bash(git *diff*)` → one entry with
-   `subcommand: "diff"`. Same shape for `log`, `show`, `status`, `remote`,
-   `tag`, `ls-files`, `ls-tree`, `rev-parse` — eleven git subcommand globs
-   collapse to a one-per-subcommand entry.
+1. `Bash(git diff)`, `Bash(git diff *)`, `Bash(git *diff*)` → one
+   `positionals: ["diff"]` gate under `git.read_only`. Same shape for
+   `log`, `show`, `status`, `remote`, `tag`, `ls-files`, `ls-tree`,
+   `rev-parse` — eleven git subcommand globs collapse to one gate each
+   under a single `git` cmd entry.
 2. `Bash(git -C * rev-parse *)` and `Bash(git -C * remote)`/`Bash(git -C *
-   remote -v)` fold into the unprefixed entry — subcommand resolution skips
-   `-C <path>` structurally.
+   remote -v)` fold into the unprefixed gates — the option walker skips
+   `-C <path>` structurally so the positional list resolves the same way.
 3. `Bash(pwd)`, `Bash(pwd *)`, `Bash(pwd*)` → one entry. The `pwd*` typo
    (matches `pwdwhatever`) is dropped.
 4. `Bash(branch --list*)` plus `Bash(branch)`/`Bash(branch *)` plus
    `Bash(branch -d *)`/`-D`/`-m`/`-M`/`-c`/`-C`/`--delete`/`--move`/`--copy`
-   collapse to one allow + one ask gate on subcommand `branch`.
+   collapse to one `read_only` gate (positional `branch`) plus one `ask`
+   gate (positional `branch` + the destructive options).
 5. `Bash(find *)` allow + four `find` deny globs (`-exec`, `-delete*`,
    `-ok *`, `-okdir *`) plus the ask-side `-execdir *` collapse into a
-   single `find` entry with `allow: {}` + `deny: {options: [...]}`.
+   single `find` cmd entry: `read_only: [{}]` + `deny: [{options: [...]}]`.
 6. `Bash(fd *)` + four `fd` deny globs (`-x *`, `-X *`, `--exec *`,
-   `--exec-batch *`) collapse to one entry.
+   `--exec-batch *`) collapse the same way.
 7. `Bash(curl *)` + four existing curl denies + the five **new** denies
    (`-K`, `-T`, `-D`, `--output-dir`, `--trace-ascii`) collapse into one
-   entry with a single `deny.options` array.
-8. `Bash(yq *)` + `Bash(yq -i*)` + `Bash(yq * -i*)` → one entry,
-   `allow: {}` + `ask: {options: ["i"]}`.
+   `curl` cmd entry with a single `deny[0].options` array.
+8. `Bash(yq *)` + `Bash(yq -i*)` + `Bash(yq * -i*)` → one entry with
+   `read_only: [{}]` + `ask: [{options: ["i", "in-place"]}]`.
 9. `Bash(date)`, `Bash(date *)` + `Bash(date -s*)` + `Bash(date --set*)`
-   → one entry with `deny: {options: ["s", "set"]}`.
-10. `Bash(* --help)` + `Bash(* --version)` → single `cmd: "*"` entry with
-    both option names.
+   → one entry with `read_only: [{}]` + `deny: [{options: ["s", "set"]}]`.
+10. `Bash(* --help)` + `Bash(* --version)` → single `"*"` cmd entry with
+    both option names in one `read_only` gate.
 
 **Drops** (pipeline globs the walker handles structurally — every entry
 listed below is removed):
@@ -1572,46 +1235,72 @@ listed below is removed):
 **New flag-writer rules** (added at migration time, not present in the
 current JSON):
 
-- `sort` — `deny: {options: ["o", "output"]}`. Catches `-o`, `-uo`,
+- `sort` — `deny: [{options: ["o", "output"]}]`. Catches `-o`, `-uo`,
   `-oFILE`, `--output=x`, `--out=x`. No current entry.
 - `tee` — **dropped entirely**. The current JSON had `Bash(tee *)` under
   `safe_write`. `tee` always writes, so it should not auto-approve.
   No-entry → falls through to a permission prompt, which is the correct
   default. Users who genuinely want auto-approval (e.g. piping to a
-  per-project log) add their own entry to `Config.permissions.structured`.
-  This is a deliberate behaviour change vs. the previous auto-approval at
-  `auto_approve = "allow"`; flag in the PR description.
+  per-project log) add their own entry to `Config.permissions.structured`
+  (cmd-keyed override; see § Structured schema). Deliberate behaviour
+  change vs. the previous auto-approval at `auto_approve = "allow"`;
+  flag in the PR description.
 - `curl` — added `-K`/`--config`, `-T`/`--upload-file`,
   `-D`/`--dump-header`, `--output-dir`, `--trace-ascii` (in addition to
-  the already-converted `-o`/`-O`/`--output`/`--remote-name`).
-- `http` (httpie) — new entry with `deny: {options: ["d", "download",
-  "o", "output"]}`. Current JSON had only `Bash(http *)` allow.
+  the already-converted `-o`/`-O`/`--output`/`--remote-name`). Also add
+  `--remote-name-all` (variant of `--remote-name`).
+- `http` (httpie) — new entry with `deny: [{options: ["d", "download",
+  "o", "output"]}]`. Current JSON had only `Bash(http *)` allow.
+
+**Missing long-form variants** (asymmetric prefix matching catches the
+canonical name + GNU abbreviations but NOT longer-suffix variants — see
+§ Option matching rule):
+
+- `ruff` — add `fix-only` (and `fix-all` if present in target ruff
+  version) alongside `fix`/`unsafe-fixes` in the deny gate. Rule `fix`
+  does not catch `--fix-only` under the asymmetric prefix rule.
+- `sed` — add `in-place` alongside `i` in the deny gate. Same reason.
+- `mlr` — add `in-place` alongside `I` in the deny gate. Same reason.
+- `curl` — `remote-name-all` is a real variant; not caught by rule
+  `remote-name` under asymmetric prefix.
+
+**Cluster-bypass closure rules** (every allow-options entry with short
+letters needs a matching ask gate on the destructive letters of the
+same command — see § Cluster expansion algorithm):
+
+- `pacman` — `read_only: [{options: ["Q", "Si", "Ss"]}]` needs
+  `ask: [{options: ["R", "U", "D", "F", "T"]}]`. Pre-migration
+  `pacman -QR foo` was approved by the glob `Bash(pacman -Q*)`; after
+  this rule it prompts. `S` deliberately excluded because `-Si`/`-Ss`
+  are legitimate read operations.
+- `luac` — `read_only: [{options: ["l"]}]` needs `ask: [{options: ["o"]}]`.
+  `luac -lo evil` writes a bytecode file under cluster expansion.
+- `zsh` — `safe_write: [{options: ["n"]}]` needs
+  `ask: [{options: ["c", "i", "s", "f"]}]`. `zsh -nc 'rm'` runs arbitrary
+  shell when `n` is allow-listed. Pre-migration: `Bash(zsh -n *)` glob
+  required literal `-n ` (space) — `-nc` did NOT match. Regression closed
+  by the new ask gate.
 
 **Audit findings**:
 
-- `Bash(awk *system*)` deny converts to `{positionals: ["*system*"]}` on
-  `awk`. The plan (§259) calls this out as the parser-independent
-  backstop — sound regardless of whether the zsh injection query
-  populates awk's subtree. Two ask entries `Bash(awk * > *)` and
-  `Bash(awk *>*)` are **not** translated as structured entries because
-  redirects are classified structurally by the walker (`file_redirect`
-  to a non-`/dev/null` target bails). They become redundant under
-  Phase 1a + 1b — explicitly listed as dropped because the walker fires
-  first.
+- `Bash(awk *system*)` deny converts to `awk.deny: [{positionals: ["*system*"]}]`.
+  Parser-independent backstop — sound regardless of whether the zsh
+  injection query populates awk's subtree. The script body must reach
+  the matcher as positional[1] for the deny to fire; `awk -f script.awk`
+  (script body in a file) is opaque to both pre and post migration.
+  Two ask entries `Bash(awk * > *)` and `Bash(awk *>*)` are **dropped**
+  because redirects are classified structurally by the walker
+  (`file_redirect` to a non-`/dev/null` target bails) — redundant after
+  Phase 1a.
 - `Bash(sed *)` allow + `Bash(sed -i*)` / `Bash(sed * -i*)` deny convert
-  cleanly to `sed` with `deny: {options: ["i"]}`. § Remaining residuals
-  documents that `sed e/s///e/w/W` still escape this layer — accepted
-  limitation, no rule attempts to catch it (a `*e*` positional glob
-  denies most real sed use).
-- `Bash(ruff * -fix*)` is a malformed single-dash long form (real ruff
-  uses `--fix`). Folded into the `fix` long-name deny by candidate
-  prefix-match — defensible defensive coverage.
+  cleanly. § Remaining residuals documents that `sed e/s///e/w/W` still
+  escape this layer — accepted limitation.
 - `Bash(stylua * --replace*)` — `--replace` is the actual long flag;
-  folded into `deny.options: ["replace"]`.
+  folded into `stylua.deny[0].options: ["replace"]`.
 - `Bash(branch *--delete *)` etc.: the leading `*` is consuming
-  arg-taking-global-like noise (`git branch -r --delete foo`). Structured
-  subcommand resolution drops the leading `*`; the option is now in
-  `ask.options`.
+  arg-taking-global-like noise (`git branch -r --delete foo`). The
+  option walker drops the leading short option (`-r`); the destructive
+  flag is now in `git.ask[].options`.
 - `Bash(env *)` survives unchanged as a known wrapper-command escape —
   explicitly flagged in `notes/perm-wrapper-command-auto-approve.md`,
   out of scope for Phase 1b. Same out-of-scope deferral applies to other
@@ -1621,27 +1310,33 @@ current JSON):
   and still won't after migration. The wrapper-transparency plan is
   responsible for letting these prefixes pass through to the inner
   command's rules.
-- `Bash(* list*)` becomes `{cmd: "*", allow: {positionals: ["list*"]}}`.
+- `Bash(* list*)` becomes `"*".read_only: [{positionals: ["list*"]}]`.
   The trailing `*` is a real glob on the first positional (covers
-  `list-pods`, `list-buckets`, etc.) — preserved.
+  `list-pods`, `list-buckets`, etc.) — preserved. Deliberate tightening
+  vs. pre-migration: `kubectl get foo list-pods` no longer matches the
+  `list*` allow (positional[1] = `get`, not `list-pods`). See § Q4
+  decision (order-dependent positional matching).
 - `Bash(pacman -Q*)`, `-Si *`, `-Ss *`: pacman's short-form action flags
-  fold into `options: ["Q", "Si", "Ss"]`. Letter-set expansion makes
-  `-Q` and the long-name `Si`/`Ss` both candidates.
+  fold into `read_only[0].options: ["Q", "Si", "Ss"]`. Cluster expansion
+  makes `-Q` (letter) and `-Si`/`-Ss` (long names) both candidates. See
+  the cluster-bypass closure rule above for the matching ask gate.
 - Duplicate-shape pairs `Bash(systemctl list-*)` plus `Bash(* list*)`:
-  the `*` entry already covers it but the `systemctl` entry is kept
+  the `"*"` entry already covers it but the `systemctl` entry is kept
   for clarity (cheap, non-overlapping with denies). Not strictly
   redundant — survives.
 - `Bash(awk * > *)`, `Bash(awk *>*)` — dropped; walker `file_redirect`
   classification handles redirects structurally.
 
-**Entry count**: 396 glob entries → 269 structured entries (the
-collapse is driven by git/hyprctl/gh subcommand folding and deny-into-
-same-command merges; pipeline drops contribute a small share; the
-`tee` drop removes one more). Every entry in the current
-`permissions.json` is either present in the new file (possibly merged),
-explicitly listed as dropped (`tee`, pipelines, `pwd*` typo, `awk
-*>*` ask entries), or replaced by a structurally-equivalent new entry.
-The chunk-7 implementation MUST run `jq 'length'` to confirm the count.
+**Entry count**: 396 glob entries → roughly 60 cmd keys (each carrying
+multiple gates under its kind-arrays). The collapse is much larger than
+the flat-array form because subcommand globs (eleven git, twenty
+hyprctl, thirty-one gh, etc.) fold under one cmd key each. Every entry
+in the current `permissions.json` is either present in the new file
+(possibly merged), explicitly listed as dropped (`tee`, pipelines,
+`pwd*` typo, `awk *>*` ask entries), or replaced by a
+structurally-equivalent new entry. The chunk-7 implementation MUST
+verify the cmd-key count and run the faithfulness sweep tests (see
+§ Phase 1b tests) before merging.
 
 ### Injected-sublanguage descent (opportunistic only)
 
@@ -1677,177 +1372,145 @@ patterns — keep both regardless of injection descent.
 
 ### Phase 1b tests
 
+**Cluster-soundness and migration-positive cases:**
+
 - `sort -uo out` (short cluster), `sort --out=x` (GNU abbreviation),
   `sort -oFILE` (glued arg) → all deny via
-  `{cmd: "sort", deny: {options: ["o", "output"]}}`.
+  `sort.deny: [{options: ["o", "output"]}]`.
 - `git -C diff push` → option walker consumes `-C diff`, positionals
-  resolve to `["push"]`, not `["diff", "push"]` → prompt (allow gate
-  `positionals: ["diff"]` does not match).
-- `git -C path config --get foo` → option walker consumes `-C path`,
-  positionals resolve to `["config", "--get", "foo"]` which match
-  `["config", "--get", "*"]` → allow.
-- `pdftotext *.pdf -` → approve via positional-glob allow.
-- `tee out` → prompt (no entry — `tee` is intentionally absent from
-  `permissions.json` so it falls through; users opt-in via
+  resolve to `["push"]`, not `["diff", "push"]` → no `git.read_only`
+  positional-`diff` gate matches; falls through.
+- `git -C path config --get foo` → positionals resolve to
+  `["config", "--get", "foo"]` matching the `["config", "--get", "*"]`
+  read_only gate → allow.
+- `pdftotext *.pdf -` → approve via positional-glob read_only.
+- `tee out` → prompt (no entry; users opt-in via
   `Config.permissions.structured`).
-- `curl -K config.txt` → deny (config-file write/exfil flag).
-- `ls --help` → approve via `{cmd: "*", allow: {options: ["help"]}}`.
-- `mlr -I foo` with `auto_approve = "read-only"` → deny gate fires
-  unconditionally; even at `auto_approve = "allow"` the deny wins.
-- `mlr foo` with `auto_approve = "read-only"` → no approval (entry's allow
-  gate is filtered out by category); falls through to glob layer or prompt.
-- `mlr foo` with `auto_approve = "allow"` → approve.
+- `curl -K config.txt`, `curl --upload-file f url` → deny.
+- `ls --help`, `ls --version` → approve via the `"*"` read_only gate.
+- `mlr -I foo` at any `auto_approve` value → deny (deny wins
+  unconditionally).
+- `mlr foo` at `auto_approve = "read-only"` → no approval (mlr's
+  read_only kind is empty; safe_write is filtered out by auto_approve).
+- `mlr foo` at `auto_approve = "allow"` → approve (safe_write kind is
+  eligible).
+
+**Cluster-bypass closure cases** (the new ask gates close these holes):
+
+- `pacman -QR foo` → ask (R is in pacman.ask options; precedence
+  beats the read_only match on Q).
+- `pacman -Q kitty` → approve (only Q in cluster; no destructive letter).
+- `luac -lo evil.luac foo.lua` → ask (o in luac.ask).
+- `luac -l foo.lua` → approve.
+- `zsh -nc 'rm'` → ask (c in zsh.ask).
+- `zsh -n script.zsh` → approve at `auto_approve = "allow"`.
+
+**Walker `literal_token` strict/lenient cases:**
+
+- `sort "-o" out` → deny (string quote-stripped, `-o` candidate fires).
+- `sort -ex"e"c out` (literal concatenation in option position) →
+  joined literal `-exec`; `find.deny` matches in the find variant.
+- `sort -ex"$x"c out` (substitution inside concatenation) → bail.
+- `ls "$f"` (bare expansion at top-level) → approve (literal_token
+  returns raw source for expansion-bearing string; no option candidate).
+- `gr"e"p foo file` (literal concat in command-name position) →
+  resolves to command name `grep`, allow via `grep.read_only`.
+
+**Override mechanism (`Config.permissions.structured`):**
+
+- User adds `tee = { safe_write = { {} } }` → `tee out` now approves
+  at `auto_approve = "allow"`.
+- User sets `rm = vim.NIL` → `rm foo.txt` no longer prompts (the
+  bundled `rm.ask` is removed).
+- User overrides `pacman.ask = {}` → `pacman -R foo` approves (closure
+  rule disabled).
+- User adds a new cmd key (e.g. `kubectl = { read_only = [{}] }`) →
+  `kubectl get pods` approves.
+
+**Migration faithfulness sweep** (judgment-based — some cases
+intentionally diverge from pre-migration behaviour, see § Migration
+notes for the deliberate behaviour shifts):
+
+A focused corpus of ~30-50 real command shapes (cmd + flags +
+positionals) drawn from recent agent transcripts and the migration
+notes. Each case asserts the new decision against the migrated JSON.
+Deliberate behaviour shifts (tee → prompt, pacman -QR → ask, zsh -nc
+→ ask, `kubectl get foo list-pods` → prompt) are listed explicitly
+and the test asserts the new (correct) behaviour, not the
+pre-migration glob behaviour.
 
 ### Work breakdown
 
 Phase 1b is large enough to split across multiple subagents. Two passes:
-**plan-fleshing** (this file grows) then **implementation** (code lands).
-Tests are written before the matcher code — the test file is committed in a
-failing state, and the diff that introduces the matcher module is the one
-that turns the tests green.
+**plan-fleshing** (already complete — see § Status) then **implementation**
+(code lands per the chunks below). Tests are written before the matcher
+code is reworked — the test file is committed in a failing state and the
+diff that re-shapes the matcher turns the tests green.
 
-#### Plan-fleshing pass (sequential then parallel)
-
-Each chunk appends a self-contained subsection to this file. Each subagent
-gets briefed with the specific section it owns.
-
-1. **Test corpus (sequential, first).** Produce
-   `lua/agentic/utils/permission_structured.test.lua` as a real Lua file with
-   `describe`/`it` blocks and `assert.equal(...)` lines targeting
-   not-yet-existing functions in `permission_structured.lua`. Anchor it to
-   `require`-skip until the module exists (e.g. wrap with `pcall(require, ...)`
-   + `pending(...)` so `make test` stays green pre-implementation). Cases
-   cover:
-   - cluster expansion (`-uo`, `--output=x`, `-oFILE`, quoted forms,
-     edge cases like `--`, `-`, `--=`, `-=x`)
-   - option matching (letter exact, long-name prefix-by-candidate, both
-     directions of the prefix relationship)
-   - arg resolution (option walker skips arg-taking globals,
-     `git -C path diff`, empty positionals when only options present)
-   - positional matching (in-order, trailing-allowance,
-     literal-vs-glob per element)
-   - gate evaluation (`allow`/`ask`/`deny` composition within an entry)
-   - entry composition (multiple entries on same cmd, deny > ask > allow
-     across entries)
-   - category filtering (`read_only` vs `safe_write` against the three
-     `auto_approve` values)
-   - the full end-to-end cases already enumerated in § Phase 1b tests above
-
-2. **Matcher API spec (parallel, after #1).** Append a "§ Matcher API"
-   subsection: exact function signatures
-   (`extract_option_candidates(token: string) -> string[]`,
-   `match_options(candidates, rule_options) -> bool`,
-   `resolve_args(args, cmd_name) -> { positionals, option_tokens }`,
-   `decide_leaf(entries, parsed) -> "allow" | "ask" | "deny" | nil`),
-   precise algorithm for cluster expansion (quote-strip → `=value` strip →
-   letter-set + long-name branch), the option-matching rule (letters exact,
-   long-name candidate-is-prefix-of-rule-option), and the per-command
-   arg-taking-globals table (at minimum `git`'s `-C/-c/--git-dir/--work-tree`;
-   audit the current `permissions.json` for any other commands that need
-   entries).
-
-3. **Walker token-extraction spec (parallel, after #1).** Append a
-   "§ Walker integration" subsection: which `command` child node types
-   become tokens for the structured matcher, how `string`/`raw_string` get
-   quote-stripped, how `concatenation` is handled (bail vs join), how
-   `variable_assignment` env-prefixes are excluded, and how the walker
-   emits both leaf-text (for the glob layer) and the token list (for the
-   structured layer) in a single pass. Document the composition site in
-   `walk_command` where the four-way combine happens.
-
-4. **Migration table (parallel, after #1).** Append a "§ Full migration"
-   subsection. Convert every entry in the current `lua/agentic/permissions.json`
-   (~260 entries across `read_only`/`safe_write`/`deny`/`ask`) to its
-   structured form, organised by command. Note collapses (multiple glob
-   entries → one structured entry), drops (pipelines), and the new
-   flag-writer rules (`sort`, `tee`, expanded `curl`, `http`). Output is a
-   JSONC block ready to drop into `permissions.json`.
+The starting point is the `phase-1b` branch's existing commit (`WIP:
+Phase 1b structured matcher (pre-schema-refactor)`) which has the
+flat-array form. The implementation chunks below refactor that to the
+cmd-keyed schema per § Structured schema.
 
 #### Implementation pass (sequential)
 
-5. **Module + tests turning green.** Write `permission_structured.lua` to
-   the spec from #2. Flip the test file's `pending`s to live assertions.
-   No walker or `permissions.json` changes yet.
+1. **Test corpus refactor.** Rewrite
+   `lua/agentic/utils/permission_structured.test.lua` so every
+   `decide_leaf(entries, parsed, auto_approve)` call passes a cmd-keyed
+   `entries` table instead of a flat array. Gate shape unchanged. Test
+   cases new to this pass:
+   - cmd-keyed lookup: `entries[cmd_name]` and `entries["*"]` resolution
+   - eligible-kinds selection per `auto_approve`
+   - `vim.NIL`-valued entry treated as missing
+   - explicit removal of any test asserting the old `category` field
 
-6. **Walker integration.** Update `permission_rules.lua` per #3. Add the
-   four-way composition. Existing Phase 1a tests must stay green.
+2. **Module refactor.** Rewrite `permission_structured.lua`:
+   - drop `category`, `allow_category_ok`, `agentic.PermCategory`
+   - new types per § Matcher API spec (`StructuredCmdEntry`,
+     `StructuredEntries`, `PermKind`)
+   - `decide_leaf` reshaped to dict lookup + `eligible_allow_kinds`
+   - walker integration in `permission_rules.lua` updates the
+     `WalkCtx.structured_entries` type from list to table
 
-7. **JSON migration.** Replace `lua/agentic/permissions.json` per #4. Add
-   integration tests (cases in § Phase 1b tests) that exercise both layers
-   together.
+3. **JSON migration.** Replace `lua/agentic/permissions.json` with the
+   cmd-keyed form per § Migration. Includes:
+   - all collapses listed in § Migration notes
+   - the missing-long-form-variants audit (`ruff fix-only`,
+     `sed in-place`, `mlr in-place`, `curl remote-name-all`)
+   - the cluster-bypass closure rules (`pacman` ask, `luac` ask,
+     `zsh` ask)
+   - `tee` drop
+   Verify with a `jq 'keys | length'` count and the faithfulness sweep
+   tests.
 
-8. **Docs.** Update `CLAUDE.md` § "Compound Bash commands",
-   `lua/agentic/acp/AGENTS.md` § "Compound Bash commands", and the README
-   permissions section per § "Docs to update on completion".
+4. **Loader + override mechanism.** Update
+   `M.get_structured_entries()` in `permission_rules.lua`:
+   - reads the new cmd-keyed JSON
+   - merges `Config.permissions.structured` via
+     `vim.tbl_deep_extend("force", bundled, user)`
+   - strips `vim.NIL`-valued entries before returning to the matcher
+   - cache invalidation per the existing mtime / table-ref discipline
 
-Chunks 2/3/4 read the test file (#1) for grounding but do not depend on
-each other. They can be three concurrent subagents. Chunks 5–8 are
-sequential — each consumes the previous chunk's output.
+5. **Walker integration verification.** Re-run the live-permissions
+   describe blocks in `permission_rules.test.lua`. All existing Phase 1a
+   + initial Phase 1b tests must stay green. The walker itself does
+   not change — only the `ctx.structured_entries` type.
 
-## Phase 2 — assignment-position substitution and loops
+6. **Docs.** Update `CLAUDE.md` § "Compound Bash commands",
+   `lua/agentic/acp/AGENTS.md` § "Compound Bash commands", the README
+   permissions section, and add a `doc/agentic.txt` § structured
+   permissions block with the override examples (per § Structured
+   schema).
 
-Isolated as a separate phase so the substitution-safety trust-widening gets a
-focused review.
+Chunks 1–6 are sequential — each consumes the previous chunk's output.
 
-### Substitution safety — assignment position ONLY
-
-**Allow command substitution as a `variable_assignment` value (or array
-element); reject it in command-argument, command-name, for-list, and
-redirect-target positions.**
-
-Argument-position substitution **launders dangerous tokens past the deny/ask
-layer** — the mechanism that makes broad allow patterns tolerable. A literal
-`find . -exec rm {}` matches the `Bash(find * -exec *)` deny pattern and
-prompts; `find $(echo '-exec rm')` does not — the matcher sees only `$(...)`,
-but at runtime `find` receives `-exec rm` and executes the deletion. The
-substitution converts a denied command into an approved one. Not unique to
-`find`: any read-only-looking command with a write flag (`sort -o $(echo out)
-in`) is a vector. So no allow entry is immune, and arg-position substitution
-must continue to bail.
-
-Assignment position is safe: `f=$(X)` puts X's output into a variable; this
-statement runs only the assignment plus X as a side effect (the recursion
-guards X — `f=$(rm x)` prompts because `rm` is not allowed; `f=$(foo > bar)`
-prompts because the inner `file_redirect` fires). The dangerous expansion is
-deferred to a later, separately-evaluated use site (`find $f`), which inherits
-the **pre-existing** limitation that text-based deny patterns can't see
-through any dynamic expansion (variables, globs, `~`) — already tolerated
-today. Allowing the assignment doesn't widen that; it only avoids a spurious
-prompt on the inert assignment.
-
-Implementation in the walker:
-
-- Whitelist `command_substitution` as a recurse target **only** when its parent
-  is a statement-level `variable_assignment` value or an `array` element.
-  Recurse `walk` over its inner `command`/`redirected_statement`/`pipeline`/
-  `list` — every inner command must be auto-approvable, and a redirect inside
-  (`f=$(foo > bar)`) is caught by the same `file_redirect` classification.
-- Reached in any other position (arg, command name, command-prefix assignment,
-  for-list, redirect target, here-string) → the existing subtree scan still
-  bails before recursing here.
-
-### Loop support
-
-`for_statement`, `while_statement`, `until_statement` join the whitelist.
-
-- `for_statement` list items must be literal/glob. Run the subtree-substitution
-  scan over the list: a substitution anywhere (`for f in $(ls)`,
-  `for f in a $(ls) b`) bails — its output becomes loop values that flow into
-  body args (the same arg-position laundering, deferred through the loop var).
-  A `glob_pattern` list (`for f in *.txt`) is allowed; the `$f` body expansion
-  is opaque, same as any `$var`, so no new hole.
-- `do_group` body: recurse `walk` over every command — bounded by allow
-  patterns (`rm "$f"` only approves if `rm *` is allowed, which it is not).
-- `while`/`until` condition is a `command` (`read l`) → recurse, must be
-  auto-approvable.
-- `if_statement`/`case_statement` stay rejected — natural follow-up, same
-  machinery.
-
-### Phase 2 tests
-
-- **Positives:** `f=$(echo hi)`, `for f in *.txt; do cat "$f"; done`.
-- **Negatives:** `foo=$(rm x) ls`, `arr=($(rm x))`, `f=$(rm x)`,
-  `f=$(foo > bar)`, `find $(echo '-exec rm')`, `for f in $(ls); do …`.
+Phase 2 (assignment-position substitution + loops) is on the
+`phase-2-substitution-loops` branch — see
+[notes/perm-substitution-loops-plan.md](perm-substitution-loops-plan.md).
+After Phase 1b lands on `main`, that branch must be rebased onto `main`
+to pick up the new schema; the Phase 2 walker code itself is
+schema-agnostic (it goes through `walk_command` which calls
+`decide_leaf` opaquely).
 
 ## Risks
 
@@ -1867,8 +1530,14 @@ Implementation in the walker:
   prompt) already enforced; keep when adding the structured matcher.
 - **Blast radius (1b)** — adding a *new* matcher layer is a new attack
   surface with its own soundness argument (cluster expansion, subcommand
-  detection skipping arg-taking globals). Land 1b separately from 2 for
-  focused review.
+  detection skipping arg-taking globals). Phase 1b and Phase 2 land on
+  separate branches (see § Status) so each gets focused review.
+- **Migration faithfulness** — the full migration of ~250 cmd entries
+  has gaps in unit test coverage. The faithfulness sweep in § Phase 1b
+  tests is the gating signal before merging. Deliberate behaviour
+  shifts (tee → prompt, pacman -QR → ask, zsh -nc → ask,
+  `kubectl get foo list-pods` → prompt) are listed explicitly and must
+  appear in PR description.
 
 ## Docs to update on completion
 
