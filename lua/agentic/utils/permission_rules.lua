@@ -602,14 +602,27 @@ end
 
 --- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntry[], auto_approve: agentic.PermAutoApprove }
 
---- Container nodes whose every named child must itself pass. `do_group` and the
---- loop/conditional statements are intentionally absent — Phase 1a rejects all
---- control flow.
+--- Container nodes whose every named child must itself pass. `do_group` is
+--- dispatched explicitly (it shares the same "every child is a statement"
+--- semantics but is only reachable as a loop body). `if_statement` and
+--- `case_statement` stay rejected — Phase 2 only widens to loops.
 local CONTAINER_TYPES = {
     program = true,
     list = true,
     pipeline = true,
     variable_assignments = true,
+}
+
+--- Statement types that may appear as the inner content of a
+--- `command_substitution` (when reached via assignment value or array
+--- element) or as a `do_group` body element. Every other named child
+--- inside a substitution bails — e.g. a nested `for_statement` inside
+--- `$(...)` is out of scope for Phase 2.
+local SUBSTITUTION_INNER_STATEMENT_TYPES = {
+    command = true,
+    redirected_statement = true,
+    pipeline = true,
+    list = true,
 }
 
 --- Command-substitution node types. An occurrence anywhere in a command subtree
@@ -941,18 +954,165 @@ local function walk_redirected(node, src, ctx)
     return true
 end
 
---- Walk a statement-level `variable_assignment` (`f=path`, `arr=(a b c)`). It
---- executes nothing, so it is inert when the name is safe and the value holds
---- no substitution. A poisoned-name assignment (`PATH=/evil`) bails because a
+--- Recurse `walk` over every inner statement of a `command_substitution`. Each
+--- direct named child must be one of `SUBSTITUTION_INNER_STATEMENT_TYPES` AND
+--- pass its own walk — so `f=$(rm x)` still bails (the inner `rm` is not in
+--- allow) and `f=$(foo > bar)` bails (the inner `file_redirect` fires through
+--- `walk_redirected` → `redirect_is_safe`). The carve-out is narrow:
+--- substitution is sound only as an assignment value or array element (the
+--- output is captured into a variable, deferring expansion to a later use
+--- site that the matcher cannot see through but already cannot see through
+--- for any `$var`). Reached from `walk_command`/argument/redirect/for-list
+--- positions, the existing `subtree_has_substitution` bail wins first, so
+--- this helper is never invoked in laundering-vulnerable positions.
+--- @param subst TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_substitution_inner(subst, src, ctx)
+    local saw_statement = false
+    for child in subst:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if not SUBSTITUTION_INNER_STATEMENT_TYPES[child:type()] then
+                return false
+            end
+            if not walk(child, src, ctx) then
+                return false
+            end
+            saw_statement = true
+        end
+    end
+    -- An empty `$()` has no inner statement; refuse rather than approve a
+    -- substitution that contributes no walked content.
+    return saw_statement
+end
+
+--- Walk a statement-level `variable_assignment` (`f=path`, `arr=(a b c)`,
+--- `f=$(echo hi)`, `arr=(a $(echo b) c)`). Inert by itself — only its `value`
+--- may carry a side-effecting substitution, and only assignment value /
+--- array-element position is sound (Phase 2: see § "Substitution safety —
+--- assignment position ONLY"). A poisoned name (`PATH=/evil`) bails because a
 --- later command would inherit it.
 --- @param node TSNode
 --- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @return boolean
-local function walk_assignment(node, src)
-    if subtree_has_substitution(node) then
+local function walk_assignment(node, src, ctx)
+    if not safe_assignment_name(node, src) then
         return false
     end
-    return safe_assignment_name(node, src)
+    local value = node:field("value")[1]
+    if not value then
+        -- Bare `f=` with no value — no substitution, no side effect.
+        return true
+    end
+    local vt = value:type()
+    if vt == "command_substitution" then
+        return walk_substitution_inner(value, src, ctx)
+    end
+    if vt == "array" then
+        for child in value:iter_children() do
+            if child:named() and child:type() ~= "comment" then
+                local ct = child:type()
+                if ct == "command_substitution" then
+                    if not walk_substitution_inner(child, src, ctx) then
+                        return false
+                    end
+                elseif subtree_has_substitution(child) then
+                    -- A non-`command_substitution` element that nonetheless
+                    -- carries a substitution (e.g. `"$(...)"`, `a$(b)c`) is
+                    -- argument-position substitution once expanded; bail.
+                    return false
+                end
+            end
+        end
+        return true
+    end
+    -- Any other value form (literal, concatenation, expansion, …): the
+    -- pre-Phase-2 bail still applies — a substitution anywhere in the value
+    -- that did not come through the two carve-outs above is rejected.
+    if subtree_has_substitution(value) then
+        return false
+    end
+    return true
+end
+
+--- Walk a `for_statement`: every list item must be substitution-free
+--- (literal / glob / expansion), then the `do_group` body recurses. List items
+--- that carry substitution (`for f in $(ls)`, `for f in a $(ls) b`) bail —
+--- their output becomes loop values that flow into body args, the same
+--- arg-position laundering deferred through the loop var. Unnamed children
+--- (the `for`/`in`/`do`/`;` keywords and separators) are ignored even when
+--- the grammar tags them with the same field as a named sibling.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_for(node, src, ctx)
+    local body
+    for child, field in node:iter_children() do
+        if child:named() then
+            if field == "value" then
+                if subtree_has_substitution(child) then
+                    return false
+                end
+            elseif field == "body" then
+                body = child
+            end
+        end
+    end
+    if not body then
+        return false
+    end
+    return walk(body, src, ctx)
+end
+
+--- Walk a `while_statement` (covers `while` and `until` — both parse to the
+--- same node type in this grammar). The `condition` is a statement
+--- (`command`/`pipeline`/`list`/`redirected_statement`) that must itself
+--- pass; the `body` (a `do_group`) recurses. The grammar attaches the
+--- terminating `;` to the `condition` field as well as the statement itself,
+--- so unnamed children with that field are ignored.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_while(node, src, ctx)
+    local cond, body
+    for child, field in node:iter_children() do
+        if child:named() then
+            if field == "condition" then
+                cond = child
+            elseif field == "body" then
+                body = child
+            end
+        end
+    end
+    if not cond or not body then
+        return false
+    end
+    if not walk(cond, src, ctx) then
+        return false
+    end
+    return walk(body, src, ctx)
+end
+
+--- Walk a `do_group`: every named child is a statement that must pass.
+--- Anonymous separators (`do`, `done`, `;`) and `comment` nodes are skipped
+--- (mirrors the container walk).
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_do_group(node, src, ctx)
+    for child in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if not walk(child, src, ctx) then
+                return false
+            end
+        end
+    end
+    return true
 end
 
 function walk(node, src, ctx)
@@ -973,8 +1133,17 @@ function walk(node, src, ctx)
     elseif t == "redirected_statement" then
         return walk_redirected(node, src, ctx)
     elseif t == "variable_assignment" then
-        return walk_assignment(node, src)
+        return walk_assignment(node, src, ctx)
+    elseif t == "for_statement" then
+        return walk_for(node, src, ctx)
+    elseif t == "while_statement" then
+        -- `until` also parses to `while_statement` in the pinned zsh grammar.
+        return walk_while(node, src, ctx)
+    elseif t == "do_group" then
+        return walk_do_group(node, src, ctx)
     end
+    -- `if_statement`, `case_statement`, and any unknown future node type stay
+    -- rejected. Phase 2 widens to loops only.
     return false
 end
 

@@ -1053,7 +1053,10 @@ describe("PermissionRules", function()
             },
         }
 
-        describe("bails on substitution anywhere", function()
+        describe("bails on substitution in arg/redirect/here-string positions", function()
+            -- Phase 2 carves out assignment-value / array-element positions
+            -- only; argument-position substitution still launders dangerous
+            -- tokens past deny/ask, so the existing bail must stay.
             for _, cmd in ipairs({
                 "$(echo rm) -rf /",
                 "$(rm -rf /)",
@@ -1065,7 +1068,6 @@ describe("PermissionRules", function()
                 "cat <<< $(rm x)",
                 "echo `whoami`",
                 "foo=$(rm x) ls",
-                "f=$(echo hi)",
             }) do
                 it("rejects " .. cmd, function()
                     assert.is_false(decide(cmd, ALLOW))
@@ -1074,14 +1076,16 @@ describe("PermissionRules", function()
         end)
 
         describe("bails on control flow and compound structure", function()
+            -- `for_statement` / `while_statement` / `until_statement` are
+            -- accepted in Phase 2 (see the loop describe block below). The
+            -- remaining cases (`!`, brace group, `[[ ]]`, subshell, process
+            -- substitution) stay rejected.
             for _, cmd in ipairs({
                 "! rm x",
                 "{ rm x; }",
                 "[[ -f x ]] && rm y",
                 "( rm -rf x )",
                 "cat <(ls)",
-                "for f in *.txt; do cat \"$f\"; done",
-                "while read l; do echo \"$l\"; done",
             }) do
                 it("rejects " .. cmd, function()
                     assert.is_false(decide(cmd, ALLOW))
@@ -1349,6 +1353,118 @@ describe("PermissionRules", function()
             end)
         end)
 
+        -- Phase 2: assignment-position command substitution and loops.
+        -- Argument-position substitution still bails (covered by the
+        -- "bails on substitution in arg/redirect/here-string positions"
+        -- block above); these tests focus on the new positive cases and
+        -- on the negatives that remain unsafe.
+        describe("Phase 2 (assignment-position substitution and loops)", function()
+            local ALLOW_ECHO_CAT = {
+                allow = { "Bash(echo *)", "Bash(echo)", "Bash(cat *)" },
+            }
+            local ALLOW_ECHO = {
+                allow = { "Bash(echo *)", "Bash(echo)" },
+            }
+            local ALLOW_READ_ECHO = {
+                allow = { "Bash(read *)", "Bash(echo *)", "Bash(echo)" },
+            }
+            local ALLOW_GREP_SLEEP = {
+                allow = { "Bash(grep *)", "Bash(sleep *)" },
+            }
+
+            it("approves f=$(echo hi) when echo is allowed", function()
+                assert.is_true(decide("f=$(echo hi)", ALLOW_ECHO))
+            end)
+
+            it("approves f=$(echo a; echo b) — multi-statement inner list", function()
+                assert.is_true(decide("f=$(echo a; echo b)", ALLOW_ECHO))
+            end)
+
+            it("approves f=$(echo a | head) — inner pipeline", function()
+                assert.is_true(
+                    decide("f=$(echo a | head)", {
+                        allow = { "Bash(echo *)", "Bash(head)" },
+                    })
+                )
+            end)
+
+            it("approves arr=(a $(echo b) c) — safe substitution in array element", function()
+                assert.is_true(decide("arr=(a $(echo b) c)", ALLOW_ECHO))
+            end)
+
+            it("approves a for-loop over a glob with allowed body", function()
+                assert.is_true(
+                    decide("for f in *.txt; do cat \"$f\"; done", ALLOW_ECHO_CAT)
+                )
+            end)
+
+            it("approves a for-loop over literal items", function()
+                assert.is_true(
+                    decide("for f in a b c; do cat \"$f\"; done", ALLOW_ECHO_CAT)
+                )
+            end)
+
+            it("approves a while-loop with allowed condition and body", function()
+                assert.is_true(
+                    decide("while read l; do echo \"$l\"; done", ALLOW_READ_ECHO)
+                )
+            end)
+
+            it("approves an until-loop with allowed condition and body", function()
+                assert.is_true(
+                    decide(
+                        "until grep done log; do sleep 1; done",
+                        ALLOW_GREP_SLEEP
+                    )
+                )
+            end)
+
+            it("rejects f=$(rm x) — inner command not allowed", function()
+                assert.is_false(decide("f=$(rm x)", ALLOW_ECHO))
+            end)
+
+            it("rejects f=$(foo > bar) — inner file_redirect fires", function()
+                assert.is_false(
+                    decide("f=$(foo > bar)", {
+                        allow = { "Bash(foo *)", "Bash(foo)" },
+                    })
+                )
+            end)
+
+            it("rejects arr=($(rm x)) — array element with disallowed inner", function()
+                assert.is_false(decide("arr=($(rm x))", ALLOW_ECHO))
+            end)
+
+            it("rejects foo=$(rm x) ls — command-prefix assignment with substitution", function()
+                assert.is_false(decide("foo=$(rm x) ls", ALLOW_ECHO_CAT))
+            end)
+
+            it("rejects find $(echo '-exec rm') — argument-position substitution", function()
+                assert.is_false(
+                    decide("find $(echo '-exec rm')", {
+                        allow = { "Bash(find *)", "Bash(echo *)" },
+                    })
+                )
+            end)
+
+            it("rejects for f in $(ls); do … — list-position substitution", function()
+                assert.is_false(
+                    decide(
+                        "for f in $(ls); do cat \"$f\"; done",
+                        ALLOW_ECHO_CAT
+                    )
+                )
+            end)
+
+            it("rejects for f in a $(ls) b; do … — substitution mixed with literals", function()
+                assert.is_false(
+                    decide(
+                        "for f in a $(ls) b; do cat \"$f\"; done",
+                        ALLOW_ECHO_CAT
+                    )
+                )
+            end)
+        end)
     end)
 
     -- End-to-end exercise of the real bundled permissions.json (post-Phase 1b
