@@ -1369,6 +1369,15 @@ patterns — keep both regardless of injection descent.
   use.
 - Dynamic expansion (`sort $FLAG out` where `$FLAG=-o`) — pre-existing limit,
   already tolerated for any `$var`/glob/`~`.
+- `mlr` write verbs reached past a `then` chain (`mlr cat then tee out`) or
+  inside a `put`/`filter` DSL string (`mlr put 'tee > "x", $*'`). `mlr` is
+  `read_only` with `ask` carve-outs on the `split`/`tee` verbs and a `deny`
+  on `-I`/`--in-place`, but positional matching is index-based — it sees only
+  the first verb, not verbs after `then`, and the DSL body is one opaque
+  positional. Both auto-approve at `auto_approve = "read-only"`. Same tier as
+  `awk` `system()` inside an opaque script body: a parser-independent backstop
+  would need DSL injection descent (§ Injected-sublanguage descent),
+  best-effort only.
 
 ### Phase 1b tests
 

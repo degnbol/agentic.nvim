@@ -1,6 +1,6 @@
 --- Tests for the structured option matcher (Phase 1b of perm-treesitter plan).
 ---
---- API targeted (per § Matcher API of notes/perm-treesitter-plan.md):
+--- API targeted (per § Matcher API spec of notes/perm-treesitter-plan.md):
 ---     extract_option_candidates(token: string) -> string[]
 ---     match_options(candidates: string[], rule_options: string[]) -> boolean
 ---     resolve_args(args: string[], cmd_name: string) -> {
@@ -8,7 +8,7 @@
 ---         option_tokens: string[],
 ---     }
 ---     decide_leaf(
----         entries: StructuredEntry[],
+---         entries: StructuredEntries,   -- cmd-keyed dict, "*" wildcard key
 ---         parsed: ParsedLeaf,
 ---         auto_approve: "allow"|"read-only"|nil
 ---     ) -> "allow"|"ask"|"deny"|nil
@@ -228,7 +228,7 @@ describe("PermissionStructured", function()
     describe("positional matching (via decide_leaf)", function()
         it("matches a literal first positional", function()
             local entries = {
-                { cmd = "git", allow = { positionals = { "push" } } },
+                git = { read_only = { { positionals = { "push" } } } },
             }
             local decision = PermissionStructured.decide_leaf(
                 entries,
@@ -240,9 +240,8 @@ describe("PermissionStructured", function()
 
         it("matches a glob in a positional", function()
             local entries = {
-                {
-                    cmd = "pdftotext",
-                    allow = { positionals = { "*.pdf", "-" } },
+                pdftotext = {
+                    read_only = { { positionals = { "*.pdf", "-" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -256,10 +255,7 @@ describe("PermissionStructured", function()
         it("allows trailing args beyond the positional pattern", function()
             -- `positionals: ["push"]` matches `git push --foo bar`.
             local entries = {
-                {
-                    cmd = "git",
-                    allow = { positionals = { "push" } },
-                },
+                git = { read_only = { { positionals = { "push" } } } },
             }
             local decision = PermissionStructured.decide_leaf(
                 entries,
@@ -271,7 +267,7 @@ describe("PermissionStructured", function()
 
         it("fails when the first positional does not match", function()
             local entries = {
-                { cmd = "git", allow = { positionals = { "push" } } },
+                git = { read_only = { { positionals = { "push" } } } },
             }
             local decision = PermissionStructured.decide_leaf(
                 entries,
@@ -282,11 +278,11 @@ describe("PermissionStructured", function()
         end)
 
         it("matches the second positional with a glob", function()
-            -- Replaces the old subcommand+positional split.
             local entries = {
-                {
-                    cmd = "git",
-                    allow = { positionals = { "config", "--get", "*" } },
+                git = {
+                    read_only = {
+                        { positionals = { "config", "--get", "*" } },
+                    },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -299,15 +295,14 @@ describe("PermissionStructured", function()
     end)
 
     -- ------------------------------------------------------------------
-    -- Gate evaluation within a single entry
+    -- Gate evaluation within a single cmd entry
     -- ------------------------------------------------------------------
     describe("gate evaluation within an entry", function()
         it("deny fires regardless of a matching allow", function()
             local entries = {
-                {
-                    cmd = "sed",
-                    allow = {},
-                    deny = { options = { "i" } },
+                sed = {
+                    read_only = { {} },
+                    deny = { { options = { "i" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -320,10 +315,9 @@ describe("PermissionStructured", function()
 
         it("ask fires when no deny matches", function()
             local entries = {
-                {
-                    cmd = "yq",
-                    allow = {},
-                    ask = { options = { "i" } },
+                yq = {
+                    read_only = { {} },
+                    ask = { { options = { "i" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -335,12 +329,7 @@ describe("PermissionStructured", function()
         end)
 
         it("allow fires when no deny or ask matches", function()
-            local entries = {
-                {
-                    cmd = "ls",
-                    allow = {},
-                },
-            }
+            local entries = { ls = { read_only = { {} } } }
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("ls", { "-la" }),
@@ -350,9 +339,7 @@ describe("PermissionStructured", function()
         end)
 
         it("empty gate `{}` matches the bare command", function()
-            local entries = {
-                { cmd = "grep", allow = {} },
-            }
+            local entries = { grep = { read_only = { {} } } }
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("grep", { "pattern", "file" }),
@@ -360,44 +347,54 @@ describe("PermissionStructured", function()
             )
             assert.equal("allow", decision)
         end)
+
+        it("an empty kind array `{}` matches nothing", function()
+            -- `read_only = {}` carries no gates (distinct from `{{}}`), so
+            -- the user's "disable this kind" override yields no allow.
+            local entries = { grep = { read_only = {} } }
+            local decision = PermissionStructured.decide_leaf(
+                entries,
+                parsed("grep", { "pattern" }),
+                "allow"
+            )
+            assert.is_nil(decision)
+        end)
     end)
 
     -- ------------------------------------------------------------------
-    -- Entry composition across entries on the same command
+    -- Composition across kind-arrays and the "*" wildcard entry
     -- ------------------------------------------------------------------
-    describe("entry composition across entries", function()
+    describe("composition across kinds and wildcard", function()
+        local find_entry = {
+            find = {
+                read_only = { {} },
+                deny = { { options = { "exec" } } },
+            },
+        }
+
         it("allows find with no -exec", function()
-            local entries = {
-                { cmd = "find", allow = {} },
-                { cmd = "find", deny = { options = { "exec" } } },
-            }
             local decision = PermissionStructured.decide_leaf(
-                entries,
+                find_entry,
                 parsed("find", { ".", "-name", "foo" }),
                 "allow"
             )
             assert.equal("allow", decision)
         end)
 
-        it("denies find with -exec across two entries", function()
-            local entries = {
-                { cmd = "find", allow = {} },
-                { cmd = "find", deny = { options = { "exec" } } },
-            }
+        it("denies find with -exec", function()
             local decision = PermissionStructured.decide_leaf(
-                entries,
+                find_entry,
                 parsed("find", { ".", "-exec", "rm", "{}" }),
                 "allow"
             )
             assert.equal("deny", decision)
         end)
 
-        it("deny in any matching entry beats allow in another", function()
+        it("deny beats allow within the same cmd entry", function()
             local entries = {
-                { cmd = "sort", allow = {} },
-                {
-                    cmd = "sort",
-                    deny = { options = { "o", "output" } },
+                sort = {
+                    read_only = { {} },
+                    deny = { { options = { "o", "output" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -407,22 +404,78 @@ describe("PermissionStructured", function()
             )
             assert.equal("deny", decision)
         end)
+
+        it("wildcard allow fires when no cmd entry exists", function()
+            local entries = {
+                ["*"] = { read_only = { { options = { "help" } } } },
+            }
+            local decision = PermissionStructured.decide_leaf(
+                entries,
+                parsed("ls", { "--help" }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("a cmd deny beats a wildcard allow", function()
+            local entries = {
+                ["*"] = { read_only = { {} } },
+                sort = { deny = { { options = { "o" } } } },
+            }
+            local decision = PermissionStructured.decide_leaf(
+                entries,
+                parsed("sort", { "-o", "out" }),
+                "allow"
+            )
+            assert.equal("deny", decision)
+        end)
     end)
 
     -- ------------------------------------------------------------------
-    -- Category filtering (read_only vs safe_write) against auto_approve
+    -- vim.NIL-valued entry treated as missing (user disable mechanism)
     -- ------------------------------------------------------------------
-    describe("category filtering", function()
+    describe("vim.NIL entry handling", function()
+        it("treats a vim.NIL cmd entry as missing", function()
+            local entries = { ls = vim.NIL }
+            local decision = PermissionStructured.decide_leaf(
+                entries,
+                parsed("ls", { "--help" }),
+                "allow"
+            )
+            assert.is_nil(decision)
+        end)
+
+        it("a vim.NIL cmd entry does not shadow the wildcard", function()
+            local entries = {
+                ls = vim.NIL,
+                ["*"] = { read_only = { { options = { "help" } } } },
+            }
+            local decision = PermissionStructured.decide_leaf(
+                entries,
+                parsed("ls", { "--help" }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+    end)
+
+    -- ------------------------------------------------------------------
+    -- Eligible allow kinds (read_only vs safe_write) against auto_approve
+    -- ------------------------------------------------------------------
+    -- The kind name encodes the policy: read_only auto-approves at
+    -- "read-only" or "allow"; safe_write only at "allow". deny/ask are
+    -- unconditional. auto_approve=nil admits no allow kind.
+    describe("eligible allow kinds", function()
         local mlr_entry = {
-            cmd = "mlr",
-            allow = {},
-            deny = { options = { "I" } },
-            category = "safe_write",
+            mlr = {
+                safe_write = { {} },
+                deny = { { options = { "I" } } },
+            },
         }
 
         it("deny wins at auto_approve='allow'", function()
             local decision = PermissionStructured.decide_leaf(
-                { mlr_entry },
+                mlr_entry,
                 parsed("mlr", { "-I", "foo" }),
                 "allow"
             )
@@ -431,7 +484,7 @@ describe("PermissionStructured", function()
 
         it("deny is unconditional at auto_approve='read-only'", function()
             local decision = PermissionStructured.decide_leaf(
-                { mlr_entry },
+                mlr_entry,
                 parsed("mlr", { "-I", "foo" }),
                 "read-only"
             )
@@ -440,7 +493,7 @@ describe("PermissionStructured", function()
 
         it("deny is unconditional at auto_approve=nil", function()
             local decision = PermissionStructured.decide_leaf(
-                { mlr_entry },
+                mlr_entry,
                 parsed("mlr", { "-I", "foo" }),
                 nil
             )
@@ -449,7 +502,7 @@ describe("PermissionStructured", function()
 
         it("safe_write allow fires at auto_approve='allow'", function()
             local decision = PermissionStructured.decide_leaf(
-                { mlr_entry },
+                mlr_entry,
                 parsed("mlr", { "foo" }),
                 "allow"
             )
@@ -458,7 +511,7 @@ describe("PermissionStructured", function()
 
         it("safe_write allow is filtered out at auto_approve='read-only'", function()
             local decision = PermissionStructured.decide_leaf(
-                { mlr_entry },
+                mlr_entry,
                 parsed("mlr", { "foo" }),
                 "read-only"
             )
@@ -467,8 +520,37 @@ describe("PermissionStructured", function()
 
         it("safe_write allow is filtered out at auto_approve=nil", function()
             local decision = PermissionStructured.decide_leaf(
-                { mlr_entry },
+                mlr_entry,
                 parsed("mlr", { "foo" }),
+                nil
+            )
+            assert.is_nil(decision)
+        end)
+
+        local cat_entry = { cat = { read_only = { {} } } }
+
+        it("read_only allow fires at auto_approve='read-only'", function()
+            local decision = PermissionStructured.decide_leaf(
+                cat_entry,
+                parsed("cat", { "foo" }),
+                "read-only"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("read_only allow fires at auto_approve='allow'", function()
+            local decision = PermissionStructured.decide_leaf(
+                cat_entry,
+                parsed("cat", { "foo" }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("read_only allow is filtered out at auto_approve=nil", function()
+            local decision = PermissionStructured.decide_leaf(
+                cat_entry,
+                parsed("cat", { "foo" }),
                 nil
             )
             assert.is_nil(decision)
@@ -480,14 +562,15 @@ describe("PermissionStructured", function()
     -- ------------------------------------------------------------------
     describe("plan-enumerated end-to-end cases", function()
         local sort_entry = {
-            cmd = "sort",
-            allow = {},
-            deny = { options = { "o", "output" } },
+            sort = {
+                read_only = { {} },
+                deny = { { options = { "o", "output" } } },
+            },
         }
 
         it("denies `sort -uo out` via short cluster", function()
             local decision = PermissionStructured.decide_leaf(
-                { sort_entry },
+                sort_entry,
                 parsed("sort", { "-uo", "out" }),
                 "allow"
             )
@@ -496,7 +579,7 @@ describe("PermissionStructured", function()
 
         it("denies `sort --out=x` via GNU abbreviation", function()
             local decision = PermissionStructured.decide_leaf(
-                { sort_entry },
+                sort_entry,
                 parsed("sort", { "--out=x" }),
                 "allow"
             )
@@ -505,7 +588,7 @@ describe("PermissionStructured", function()
 
         it("denies `sort -oFILE` via glued arg", function()
             local decision = PermissionStructured.decide_leaf(
-                { sort_entry },
+                sort_entry,
                 parsed("sort", { "-oFILE" }),
                 "allow"
             )
@@ -517,7 +600,7 @@ describe("PermissionStructured", function()
             -- positional. An allow gate keyed on positionals[1]="diff" must
             -- NOT fire.
             local entries = {
-                { cmd = "git", allow = { positionals = { "diff" } } },
+                git = { read_only = { { positionals = { "diff" } } } },
             }
             local decision = PermissionStructured.decide_leaf(
                 entries,
@@ -529,9 +612,10 @@ describe("PermissionStructured", function()
 
         it("allows `git -C path config --get foo`", function()
             local entries = {
-                {
-                    cmd = "git",
-                    allow = { positionals = { "config", "--get", "*" } },
+                git = {
+                    read_only = {
+                        { positionals = { "config", "--get", "*" } },
+                    },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -544,9 +628,8 @@ describe("PermissionStructured", function()
 
         it("allows `pdftotext *.pdf -` via positional glob", function()
             local entries = {
-                {
-                    cmd = "pdftotext",
-                    allow = { positionals = { "*.pdf", "-" } },
+                pdftotext = {
+                    read_only = { { positionals = { "*.pdf", "-" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -560,9 +643,8 @@ describe("PermissionStructured", function()
         it("does not auto-approve bare `tee out` (no entry)", function()
             -- `tee` is intentionally absent from the bundled rules. With no
             -- matching entry, decide_leaf returns nil → caller prompts.
-            local entries = {}
             local decision = PermissionStructured.decide_leaf(
-                entries,
+                {},
                 parsed("tee", { "out" }),
                 "allow"
             )
@@ -571,10 +653,9 @@ describe("PermissionStructured", function()
 
         it("denies `curl -K config.txt`", function()
             local entries = {
-                {
-                    cmd = "curl",
-                    allow = {},
-                    deny = { options = { "K", "config" } },
+                curl = {
+                    read_only = { {} },
+                    deny = { { options = { "K", "config" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -587,9 +668,8 @@ describe("PermissionStructured", function()
 
         it("allows `ls --help` via cmd=* options=help", function()
             local entries = {
-                {
-                    cmd = "*",
-                    allow = { options = { "help", "version" } },
+                ["*"] = {
+                    read_only = { { options = { "help", "version" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -600,52 +680,27 @@ describe("PermissionStructured", function()
             assert.equal("allow", decision)
         end)
 
-        it("denies `mlr -I foo` even at auto_approve='allow'", function()
-            local entries = {
-                {
-                    cmd = "mlr",
-                    allow = {},
-                    deny = { options = { "I" } },
-                    category = "safe_write",
-                },
-            }
+        -- Cluster-bypass closure cases (the new ask gates close these holes).
+        local pacman_entry = {
+            pacman = {
+                read_only = { { options = { "Q", "Si", "Ss" } } },
+                ask = { { options = { "R", "U", "D", "F", "T" } } },
+            },
+        }
+
+        it("asks `pacman -QR foo` (R in cluster beats Q read_only)", function()
             local decision = PermissionStructured.decide_leaf(
-                entries,
-                parsed("mlr", { "-I", "foo" }),
+                pacman_entry,
+                parsed("pacman", { "-QR", "foo" }),
                 "allow"
             )
-            assert.equal("deny", decision)
+            assert.equal("ask", decision)
         end)
 
-        it("yields nil for `mlr foo` at auto_approve='read-only'", function()
-            local entries = {
-                {
-                    cmd = "mlr",
-                    allow = {},
-                    deny = { options = { "I" } },
-                    category = "safe_write",
-                },
-            }
+        it("allows `pacman -Q kitty` (no destructive letter)", function()
             local decision = PermissionStructured.decide_leaf(
-                entries,
-                parsed("mlr", { "foo" }),
-                "read-only"
-            )
-            assert.is_nil(decision)
-        end)
-
-        it("allows `mlr foo` at auto_approve='allow'", function()
-            local entries = {
-                {
-                    cmd = "mlr",
-                    allow = {},
-                    deny = { options = { "I" } },
-                    category = "safe_write",
-                },
-            }
-            local decision = PermissionStructured.decide_leaf(
-                entries,
-                parsed("mlr", { "foo" }),
+                pacman_entry,
+                parsed("pacman", { "-Q", "kitty" }),
                 "allow"
             )
             assert.equal("allow", decision)

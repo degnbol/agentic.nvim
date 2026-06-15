@@ -77,10 +77,20 @@ patterns from `~/.claude/settings.json`, `.claude/settings.json`, and
 with the Claude TUI, kept for user-side rules. The **structured matcher**
 (`lua/agentic/utils/permission_structured.lua`) consumes the bundled
 `lua/agentic/permissions.json`, which is now purely structured (no globs),
-plus any `Config.permissions.structured` user additions. Each entry names
-a command and carries up to three gates (`allow`, `ask`, `deny`); a gate
-matches on literal flag identifiers (`options`) and ordered positional
-patterns (`positionals`). The structured layer exists because globs are
+plus any `Config.permissions.structured` user additions. It is a cmd-keyed
+table: each command maps to up to four gate-kind arrays (`read_only`,
+`safe_write`, `ask`, `deny`), and each gate matches on literal flag
+identifiers (`options`) and ordered positional patterns (`positionals`).
+The kind name encodes the policy — `read_only` approves at
+"read-only"/"allow", `safe_write` only at "allow", `ask`/`deny` are
+unconditional. Classify a command by its *un-redirected* effect: a command
+that only prints to stdout is `read_only` (writing via pipe/redirect is
+caught structurally by the walker), while one that mutates disk or executes
+arbitrary code as its normal action is `safe_write` — carve out the
+write-causing options/subcommands as `ask`/`deny`. Users add or override via
+`Config.permissions.structured`
+(deep-merged "force" over the bundled defaults; a cmd key replaces that
+command's bundled kind-arrays wholesale, `vim.NIL` disables it). The structured layer exists because globs are
 unsound against option clustering and GNU abbreviation — `sort -uo out`,
 `sort --out=x`, and `sort -oFILE` all evade a `Bash(sort * -o *)` glob.
 The matcher over-approximates option presence per token (single-dash

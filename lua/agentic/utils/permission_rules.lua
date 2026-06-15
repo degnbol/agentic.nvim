@@ -34,12 +34,12 @@ local cached_config_deny_ref, cached_config_deny_patterns = nil, {}
 --- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
 local cached_config_ask_ref, cached_config_ask_patterns = nil, {}
 
---- @type agentic.StructuredEntry[]|nil
+--- @type agentic.StructuredEntries|nil
 local cached_plugin_structured_entries
 --- @type number
 local cached_plugin_structured_mtime = 0
 
---- @type table|nil, agentic.StructuredEntry[]
+--- @type table|nil, agentic.StructuredEntries
 local cached_config_structured_ref, cached_config_structured_entries = nil, {}
 
 --- Path to bundled permissions.json
@@ -498,61 +498,85 @@ local function normalise_option(s)
     return (s:gsub("^%-+", ""))
 end
 
---- Deep-copy a list of structured entries, normalising every option string to
---- the dashless form. Leaves all other fields untouched. The output is owned by
---- the caller (safe to mutate) so this caches the normalised view rather than
---- mutating the input table.
+local STRUCTURED_KINDS = { "read_only", "safe_write", "ask", "deny" }
+
+--- Deep-copy a single gate, normalising every option string to the dashless
+--- form. Positionals are left raw (glob-compiled at match time).
+--- @param gate any
+--- @return agentic.PermGate
+local function normalise_gate(gate)
+    --- @type agentic.PermGate
+    local g = {}
+    if type(gate) ~= "table" then
+        return g
+    end
+    if type(gate.options) == "table" then
+        local opts = {}
+        for _, opt in ipairs(gate.options) do
+            if type(opt) == "string" then
+                table.insert(opts, normalise_option(opt))
+            end
+        end
+        g.options = opts
+    end
+    if type(gate.positionals) == "table" then
+        local pos = {}
+        for _, p in ipairs(gate.positionals) do
+            if type(p) == "string" then
+                table.insert(pos, p)
+            end
+        end
+        g.positionals = pos
+    end
+    return g
+end
+
+--- Deep-copy a cmd-keyed structured-entries table, normalising every option
+--- string to the dashless form. A `vim.NIL` value (the user's "disable a
+--- bundled cmd" marker) is preserved so it survives the merge in
+--- `get_structured_entries`. The output is owned by the caller (safe to
+--- mutate) so this caches the normalised view rather than mutating the input.
 --- @param entries any
---- @return agentic.StructuredEntry[]
+--- @return agentic.StructuredEntries
 local function normalise_structured_entries(entries)
+    --- @type agentic.StructuredEntries
     local out = {}
     if type(entries) ~= "table" then
         return out
     end
-    for _, entry in ipairs(entries) do
-        if type(entry) == "table" and type(entry.cmd) == "string" then
-            --- @type agentic.StructuredEntry
-            local copy = { cmd = entry.cmd, category = entry.category }
-            for _, gate_key in ipairs({ "allow", "ask", "deny" }) do
-                local gate = entry[gate_key]
-                if type(gate) == "table" then
-                    --- @type agentic.PermGate
-                    local g = {}
-                    if type(gate.options) == "table" then
-                        local opts = {}
-                        for _, opt in ipairs(gate.options) do
-                            if type(opt) == "string" then
-                                table.insert(opts, normalise_option(opt))
-                            end
+    for cmd, entry in pairs(entries) do
+        if type(cmd) == "string" then
+            if entry == vim.NIL then
+                --- @diagnostic disable-next-line: assign-type-mismatch
+                out[cmd] = vim.NIL
+            elseif type(entry) == "table" then
+                --- @type agentic.StructuredCmdEntry
+                local copy = {}
+                for _, kind in ipairs(STRUCTURED_KINDS) do
+                    local gates = entry[kind]
+                    if type(gates) == "table" then
+                        local arr = {}
+                        for _, gate in ipairs(gates) do
+                            table.insert(arr, normalise_gate(gate))
                         end
-                        g.options = opts
+                        copy[kind] = arr
                     end
-                    if type(gate.positionals) == "table" then
-                        local pos = {}
-                        for _, p in ipairs(gate.positionals) do
-                            if type(p) == "string" then
-                                table.insert(pos, p)
-                            end
-                        end
-                        g.positionals = pos
-                    end
-                    copy[gate_key] = g
                 end
+                out[cmd] = copy
             end
-            table.insert(out, copy)
         end
     end
     return out
 end
 
---- Resolve the merged structured-entry list from the bundled permissions.json
---- plus any user additions in `Config.permissions.structured`. The bundled file
---- is still in the old (object) glob format during Phase 1b; this accessor
---- returns `{}` for that shape and only parses entries when the top-level
---- value is a JSON array (the Phase 1b migration that ships in chunk 7).
---- Re-reads automatically when the file's mtime changes; user additions are
---- recompiled when the table reference changes.
---- @return agentic.StructuredEntry[]
+--- Resolve the merged cmd-keyed structured-entries table from the bundled
+--- permissions.json plus any user additions in `Config.permissions.structured`.
+--- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)` — a
+--- user cmd key wins wholesale (its kind-arrays replace the bundled ones), and
+--- a `vim.NIL` value disables the bundled cmd entirely (stripped before return).
+--- Re-reads the bundled file automatically when its mtime changes; user
+--- additions are recompiled when the table reference changes.
+--- @return agentic.StructuredEntries
 function M.get_structured_entries()
     local plugin_path = plugin_permissions_path()
     local plugin_mtime = get_mtime(plugin_path)
@@ -564,25 +588,33 @@ function M.get_structured_entries()
         cached_plugin_structured_entries = {}
         if Config.permissions.use_plugin_defaults then
             local data = M.read_json(plugin_path)
-            -- Only the array form (Phase 1b migrated layout) is read.
-            -- Object form (legacy glob layout) yields no structured entries.
-            if type(data) == "table" and #data > 0 then
-                cached_plugin_structured_entries =
-                    normalise_structured_entries(data)
-            end
+            cached_plugin_structured_entries =
+                normalise_structured_entries(data)
         end
     end
 
-    local user_list = Config.permissions.structured
-    if user_list ~= cached_config_structured_ref then
-        cached_config_structured_ref = user_list
+    local user_table = Config.permissions.structured
+    if user_table ~= cached_config_structured_ref then
+        cached_config_structured_ref = user_table
         cached_config_structured_entries =
-            normalise_structured_entries(user_list)
+            normalise_structured_entries(user_table)
     end
 
+    --- @type agentic.StructuredEntries
+    local merged = vim.tbl_deep_extend(
+        "force",
+        cached_plugin_structured_entries,
+        cached_config_structured_entries
+    ) or {}
+    -- Drop `vim.NIL`-valued entries (the user's disable marker) so the matcher
+    -- sees a clean table. decide_leaf also guards against vim.NIL.
+    --- @type agentic.StructuredEntries
     local result = {}
-    vim.list_extend(result, cached_plugin_structured_entries)
-    vim.list_extend(result, cached_config_structured_entries)
+    for cmd, entry in pairs(merged) do
+        if entry ~= vim.NIL then
+            result[cmd] = entry
+        end
+    end
     return result
 end
 
@@ -600,7 +632,7 @@ end
 -- 2026-06-12). They can drift across grammar versions — re-verify with a
 -- parse-tree dump after upgrading the parser.
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntry[], auto_approve: agentic.PermAutoApprove }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove }
 
 --- Container nodes whose every named child must itself pass. `do_group` and the
 --- loop/conditional statements are intentionally absent — Phase 1a rejects all
@@ -893,7 +925,7 @@ local function walk_command(node, src, ctx)
 
     --- @type agentic.PermDecision
     local structured = nil
-    if #ctx.structured_entries > 0 then
+    if next(ctx.structured_entries) ~= nil then
         --- @type agentic.ParsedLeaf
         local parsed = { cmd_name = cmd_name, args = args }
         -- Lazy require: permission_structured itself requires this module
@@ -1000,7 +1032,7 @@ function M.should_auto_approve(command)
     local structured_entries = M.get_structured_entries()
     -- Skip the parse entirely when neither layer has any allow source — the
     -- walker has nothing to approve against.
-    if #allow == 0 and #structured_entries == 0 then
+    if #allow == 0 and next(structured_entries) == nil then
         return false
     end
 
