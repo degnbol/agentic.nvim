@@ -1,10 +1,21 @@
 local PermissionRules = require("agentic.utils.permission_rules")
 
 --- Structured option matcher for compound-Bash auto-approval. Consumes a
---- ParsedLeaf produced by the walker (chunk 6) and decides allow / ask / deny /
+--- ParsedLeaf produced by the walker (an ordered word list, each word tagged
+--- only with whether it expands at runtime) and decides allow / ask / deny /
 --- nil against a cmd-keyed table of StructuredCmdEntry rules. The walker has
 --- already quote-stripped tokens, joined literal concatenations, and excluded
 --- redirects / env-prefixes / substitution; this module trusts that input shape.
+---
+--- The matcher carries no getopt arity table for soundness. Each leading
+--- dash-word can absorb 0 or 1 following plain word, and the two directions
+--- read that ambiguity differently:
+---   * deny/ask are EXISTENTIAL — a gate fires if *any* absorption parse (plus
+---     dynamic-token wildcarding) exposes the gated subcommand/option. Owns
+---     soundness; an over-match only over-prompts.
+---   * allow is a SINGLE list-resolved parse — a leading flag absorbs its next
+---     word iff it is a known `value_options` value-taker. Convenience only:
+---     the existential pass has already cleared every parse before allow runs.
 ---
 --- See the `permissions` project skill § "Compound Bash commands" for the
 --- cross-file overview; this module's functions are the authoritative algorithm.
@@ -16,8 +27,18 @@ local M = {}
 --- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
 
 --- @class agentic.PermGate
---- @field options?     string[] -- literal flag identifiers, no globs
---- @field positionals? string[] -- per element literal or glob
+--- @field options?     string[] -- flag identifiers (dashless), matched
+---        order-free over every flag anywhere in the command.
+--- @field positionals? string[] -- per element literal or glob, matched
+---        contiguously from the subcommand (stream index 1).
+--- @field leading_options? string[] -- like `options`, but matched only against
+---        the leading option region (before the first positional) and
+---        wildcard-reachable only by a dynamic token that can occupy that region
+---        (a dynamic leading flag / absorbed value, or a dynamic first
+---        positional that could word-split into a leading flag). For a leading
+---        global whose danger is position-specific — git's `-c x.y=z` (a code
+---        channel) is dangerous before the subcommand but inert after it, and a
+---        trailing token like the `$ref` in `git log $ref` can never inject it.
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
 --- `read_only` approves at "read-only"|"allow", `safe_write` only at "allow",
@@ -36,18 +57,20 @@ local M = {}
 
 --- @class agentic.ParsedLeaf
 --- @field cmd_name string    after strip_command_path / wrapper strip
---- @field args     string[]  quote-stripped, env-prefix/redirect-excluded
+--- @field args     string[]  ordered word list, quote-stripped,
+---        env-prefix/redirect-excluded. `--` is the literal end-of-options
+---        sentinel; `-` is a positional (stdin/stdout). No role tagging.
+--- @field args_dynamic? boolean[] parallel to `args`: token expands at runtime
+---        (variable/glob/quoted-expansion) so its value is unknown. Absent =
+---        all-static (back-compat for direct callers).
 
---- @class agentic.ResolvedArgs
---- @field positionals   string[]    non-option tokens, in source order
---- @field option_tokens string[]    leading option tokens + consumed values
-
---- Per-command flags that consume the following token as their argument. The
---- option walker uses this to keep `-C path` together when locating the first
---- positional. Without an entry, every option token is treated as taking no
---- value, so the first non-`-`-prefixed token is the first positional.
+--- Leading flags that consume the following word as their argument. Used by the
+--- ALLOW single-parse only (deny/ask branch arity existentially, so they need
+--- no table — see the module doc). A fail-safe optimisation: an unlisted leading
+--- flag absorbs nothing, which only constrains allow (over-prompts), never an
+--- unsound approval. Keyed by the full flag token (`-C`, `--region`).
 --- @type table<string, table<string, true>>
-local OPTION_VALUE_TAKERS = {
+local value_options = {
     git = {
         ["-C"] = true,
         ["-c"] = true,
@@ -77,6 +100,14 @@ local OPTION_VALUE_TAKERS = {
         ["--admin-endpoint"] = true,
     },
 }
+
+--- Multi-element-positional existential matching enumerates absorption parses
+--- (DFS over each flag's 0/1 choice). Real commands carry a handful of
+--- absorbable flags; cap the enumeration so a pathological generated command
+--- cannot blow up. Over the cap the gate conservatively MATCHES — for deny/ask
+--- that only over-prompts, never an unsound approval.
+--- ponytail: fixed cap, raise it if a legitimate command ever trips it.
+local MULTI_ELEMENT_FLAG_CAP = 24
 
 --- Build the set of option-identifier candidates for a single token. The output
 --- is over-approximate: extra candidates can only widen a deny/ask match, never
@@ -170,86 +201,366 @@ function M.match_options(candidates, rule_options)
     return false
 end
 
---- Split args into leading option tokens (with their consumed values for
---- commands listed in `OPTION_VALUE_TAKERS`) and the remaining positional
---- tokens. A bare `--` terminates the option block. The first positional is
---- whatever role the command treats it as (subcommand, file path, …) — gates
---- match it via `positionals[1]`, so the matcher has one uniform concept.
---- @param args string[]
---- @param cmd_name string
---- @return agentic.ResolvedArgs
-function M.resolve_args(args, cmd_name)
-    local globals = OPTION_VALUE_TAKERS[cmd_name] or {}
-    local option_tokens = {}
-    local i = 1
+--- A dash-token that acts as an option in the getopt sense — excludes the `-`
+--- stdin/stdout sentinel and the `--` end-of-options marker, both positionals
+--- (or, for `--`, a region terminator) rather than flags.
+--- @param word string
+--- @return boolean
+local function is_flag(word)
+    return word:sub(1, 1) == "-" and word ~= "-" and word ~= "--"
+end
 
-    while i <= #args do
-        local tok = args[i]
-        if tok == "--" then
-            i = i + 1
+--- A non-flag word: a plain word or the `-` sentinel. `--` is excluded (it is
+--- the option-region terminator, neither flag nor positional).
+--- @param word string
+--- @return boolean
+local function is_plain(word)
+    return word ~= "--" and not is_flag(word)
+end
+
+--- Whether a flag carries its value inline (`--opt=val`, or a glued short
+--- cluster `-Cval`/`-uo`), so it absorbs no following word in the allow parse.
+--- A bare flag (`-C`, `--opt`) does not.
+--- @param flag string
+--- @return boolean
+local function has_inline_value(flag)
+    if flag:sub(1, 2) == "--" then
+        return flag:find("=", 1, true) ~= nil
+    end
+    return #flag > 2
+end
+
+--- Option-identifier candidates from every flag in the command (stopping at
+--- `--`, after which dash-words are positionals). A flag is a flag in every
+--- absorption parse, so this is parse-independent — feeds the order-free
+--- `options` gate field.
+--- @param words string[]
+--- @return string[]
+local function flag_candidates(words)
+    local cands = {}
+    for _, w in ipairs(words) do
+        if w == "--" then
             break
-        elseif tok:sub(1, 1) == "-" then
-            table.insert(option_tokens, tok)
-            if globals[tok] then
-                if args[i + 1] ~= nil then
-                    table.insert(option_tokens, args[i + 1])
-                    i = i + 2
-                else
-                    -- Malformed: arg-taking global with no value following.
-                    i = i + 1
+        end
+        if is_flag(w) then
+            vim.list_extend(cands, M.extract_option_candidates(w))
+        end
+    end
+    return cands
+end
+
+--- Walk the absorption parses far enough to collect, as index sets:
+---   R — indices that can be the first positional (subcommand) in some parse
+---   L — indices of flags that precede the first positional in some parse
+--- Each leading flag absorbs 0 or 1 of the immediately-following plain word; the
+--- DFS explores both. The walk stops at each plain word (a first-positional
+--- candidate), so a post-subcommand flag never enters L. A `--` ends the option
+--- region — the following word is the subcommand.
+--- @param words string[]
+--- @return table<integer, boolean> first_positional_indices
+--- @return table<integer, boolean> leading_flag_indices
+local function prefix_walk(words)
+    local n = #words
+    local R, L, seen = {}, {}, {}
+    local stack = { 1 }
+    while #stack > 0 do
+        local i = table.remove(stack)
+        if i <= n and not seen[i] then
+            seen[i] = true
+            local w = words[i]
+            if w == "--" then
+                if i + 1 <= n then
+                    R[i + 1] = true
+                end
+            elseif is_flag(w) then
+                L[i] = true
+                table.insert(stack, i + 1) -- absorb 0
+                if i + 1 <= n and is_plain(words[i + 1]) then
+                    table.insert(stack, i + 2) -- absorb 1 (plain word only)
                 end
             else
-                i = i + 1
+                R[i] = true
             end
-        else
+        end
+    end
+    return R, L
+end
+
+--- Whether any index in `set` carries a dynamic word.
+--- @param set table<integer, boolean>
+--- @param dynamic boolean[]
+--- @return boolean
+local function any_dynamic(set, dynamic)
+    for i in pairs(set) do
+        if dynamic[i] then
+            return true
+        end
+    end
+    return false
+end
+
+--- Flatten option candidates from the flags at the given indices.
+--- @param words string[]
+--- @param set table<integer, boolean>
+--- @return string[]
+local function candidates_at(words, set)
+    local cands = {}
+    for i in pairs(set) do
+        vim.list_extend(cands, M.extract_option_candidates(words[i]))
+    end
+    return cands
+end
+
+--- Existential single-element positional match: does `pattern` match the
+--- first-positional candidate at some `R` index? A dynamic candidate wildcards
+--- (it could expand to anything, including the gated subcommand).
+--- @param pattern string
+--- @param words string[]
+--- @param dynamic boolean[]
+--- @param R table<integer, boolean>
+--- @return boolean
+local function some_first_positional_matches(pattern, words, dynamic, R)
+    local lua_pat = PermissionRules.glob_to_lua_pattern(pattern)
+    for i in pairs(R) do
+        if dynamic[i] or words[i]:match(lua_pat) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Number of flags that could absorb a following plain word — the branching
+--- factor of the parse enumeration. Used only to cap multi-element matching.
+--- @param words string[]
+--- @return integer
+local function absorbable_flag_count(words)
+    local n, count = #words, 0
+    for i = 1, n do
+        local w = words[i]
+        if w == "--" then
             break
+        end
+        if is_flag(w) and i + 1 <= n and is_plain(words[i + 1]) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+--- Existential multi-element positional match: does some absorption parse's
+--- positional stream match `patterns` contiguously from the subcommand
+--- (stream index 1)? Trailing stream tokens are allowed; a dynamic stream word
+--- wildcards its element and every later one. DFS over each flag's 0/1
+--- absorption of the following plain word; a flag never enters the stream.
+--- @param patterns string[]
+--- @param words string[]
+--- @param dynamic boolean[]
+--- @return boolean
+local function some_stream_matches(patterns, words, dynamic)
+    local n = #patterns
+    local nw = #words
+
+    --- @param i integer index into words
+    --- @param pos integer 1-based index into the positional stream / patterns
+    --- @return boolean
+    local function rec(i, pos)
+        if pos > n then
+            return true -- every pattern element matched
+        end
+        if i > nw then
+            return false -- ran out of words first
+        end
+        local w = words[i]
+        if w == "--" then
+            for j = i + 1, nw do
+                if pos > n then
+                    return true
+                end
+                if dynamic[j] then
+                    return true
+                end
+                local pat = PermissionRules.glob_to_lua_pattern(patterns[pos])
+                if not words[j]:match(pat) then
+                    return false
+                end
+                pos = pos + 1
+            end
+            return pos > n
+        elseif is_flag(w) then
+            if rec(i + 1, pos) then -- absorb 0
+                return true
+            end
+            if i + 1 <= nw and is_plain(words[i + 1]) then
+                return rec(i + 2, pos) -- absorb 1
+            end
+            return false
+        else
+            if dynamic[i] then
+                return true -- wildcards this element and all later
+            end
+            local pat = PermissionRules.glob_to_lua_pattern(patterns[pos])
+            if words[i]:match(pat) then
+                return rec(i + 1, pos + 1)
+            end
+            return false
         end
     end
 
-    local positionals = {}
-    for j = i, #args do
-        table.insert(positionals, args[j])
-    end
-
-    return {
-        positionals = positionals,
-        option_tokens = option_tokens,
-    }
+    return rec(1, 1)
 end
 
---- Match a positional pattern list left-to-right against the positionals list.
---- Each pattern matches the token at the same 1-based index. Trailing tokens
---- beyond the pattern list are allowed.
---- @param patterns string[]
---- @param positionals string[]
+--- @class agentic.PermStructured.ExistCtx
+--- @field words string[]
+--- @field dynamic boolean[]
+--- @field has_dynamic boolean
+--- @field flag_cands string[]
+--- @field leading_cands string[]
+--- @field leading_dynamic boolean
+--- @field R table<integer, boolean>
+
+--- Evaluate a gate existentially (deny/ask). Absent fields are wildcards. A
+--- dynamic token satisfies `options` (could expand to any flag); `positionals`
+--- and `leading_options` get the per-position dynamic treatment documented on
+--- their match helpers.
+--- @param gate agentic.PermGate
+--- @param ctx agentic.PermStructured.ExistCtx
 --- @return boolean
-local function positionals_match(patterns, positionals)
-    if #patterns > #positionals then
-        return false
+local function gate_matches_existential(gate, ctx)
+    if gate.options ~= nil then
+        if
+            not (
+                M.match_options(ctx.flag_cands, gate.options)
+                or ctx.has_dynamic
+            )
+        then
+            return false
+        end
     end
-    for k, pat in ipairs(patterns) do
-        local lua_pat = PermissionRules.glob_to_lua_pattern(pat)
-        if not positionals[k]:match(lua_pat) then
+    if gate.leading_options ~= nil then
+        if
+            not (
+                M.match_options(ctx.leading_cands, gate.leading_options)
+                or ctx.leading_dynamic
+            )
+        then
+            return false
+        end
+    end
+    if gate.positionals ~= nil and #gate.positionals > 0 then
+        local patterns = gate.positionals
+        --- @cast patterns string[]
+        if #patterns == 1 then
+            if
+                not some_first_positional_matches(
+                    patterns[1],
+                    ctx.words,
+                    ctx.dynamic,
+                    ctx.R
+                )
+            then
+                return false
+            end
+        elseif absorbable_flag_count(ctx.words) > MULTI_ELEMENT_FLAG_CAP then
+            return true -- enumeration cap: over-prompt rather than blow up
+        elseif not some_stream_matches(patterns, ctx.words, ctx.dynamic) then
             return false
         end
     end
     return true
 end
 
---- Evaluate a single gate against the resolved args + option candidates.
---- Absent gate fields are wildcards.
---- @param gate agentic.PermGate
---- @param resolved agentic.ResolvedArgs
---- @param opt_cands string[]
+--- @class agentic.PermStructured.AllowParse
+--- @field stream string[]          positional stream (subcommand at index 1)
+--- @field stream_dynamic boolean[] parallel to `stream`
+--- @field flag_cands string[]      candidates from every flag
+--- @field leading_cands string[]   candidates from flags before the subcommand
+
+--- The single deterministic parse used for ALLOW matching: each flag absorbs
+--- its following plain word iff it is bare AND a known `value_options`
+--- value-taker for `cmd` (inline-value and unlisted flags absorb 0). `--` ends
+--- the option region. No wildcarding — allow stays concrete.
+--- @param words string[]
+--- @param dynamic boolean[]
+--- @param cmd string
+--- @return agentic.PermStructured.AllowParse
+local function allow_parse(words, dynamic, cmd)
+    local takers = value_options[cmd] or {}
+    --- @type agentic.PermStructured.AllowParse
+    local p = { stream = {}, stream_dynamic = {}, flag_cands = {}, leading_cands = {} }
+    local options_ended = false
+    local i, n = 1, #words
+    while i <= n do
+        local w = words[i]
+        if not options_ended and w == "--" then
+            options_ended = true
+            i = i + 1
+        elseif not options_ended and is_flag(w) then
+            local cands = M.extract_option_candidates(w)
+            vim.list_extend(p.flag_cands, cands)
+            if #p.stream == 0 then
+                vim.list_extend(p.leading_cands, cands)
+            end
+            if
+                not has_inline_value(w)
+                and takers[w]
+                and i + 1 <= n
+                and is_plain(words[i + 1])
+            then
+                i = i + 2 -- absorb the value word
+            else
+                i = i + 1
+            end
+        else
+            table.insert(p.stream, w)
+            table.insert(p.stream_dynamic, dynamic[i] or false)
+            i = i + 1
+        end
+    end
+    return p
+end
+
+--- Single-parse positional match for ALLOW. Each pattern matches the stream
+--- token at the same index (trailing stream tokens allowed). A dynamic stream
+--- word is a concrete unknown — it satisfies a `*` element but never a literal.
+--- @param patterns string[]
+--- @param parse agentic.PermStructured.AllowParse
 --- @return boolean
-local function gate_matches(gate, resolved, opt_cands)
-    if gate.options ~= nil then
-        if not M.match_options(opt_cands, gate.options) then
+local function allow_positionals_match(patterns, parse)
+    for k, pat in ipairs(patterns) do
+        local w = parse.stream[k]
+        if w == nil then
+            return false
+        end
+        if parse.stream_dynamic[k] then
+            if pat ~= "*" then
+                return false
+            end
+        elseif not w:match(PermissionRules.glob_to_lua_pattern(pat)) then
             return false
         end
     end
-    if gate.positionals ~= nil then
-        if not positionals_match(gate.positionals, resolved.positionals) then
+    return true
+end
+
+--- Evaluate a gate against the single allow parse. Absent fields are wildcards.
+--- `leading_options` (not carried by bundled allow gates) is matched concretely
+--- against the leading flags — no wildcarding, since allow must stay concrete.
+--- @param gate agentic.PermGate
+--- @param parse agentic.PermStructured.AllowParse
+--- @return boolean
+local function gate_matches_allow(gate, parse)
+    if gate.options ~= nil then
+        if not M.match_options(parse.flag_cands, gate.options) then
+            return false
+        end
+    end
+    if gate.leading_options ~= nil then
+        if not M.match_options(parse.leading_cands, gate.leading_options) then
+            return false
+        end
+    end
+    if gate.positionals ~= nil and #gate.positionals > 0 then
+        if not allow_positionals_match(gate.positionals, parse) then
             return false
         end
     end
@@ -272,39 +583,17 @@ local function eligible_allow_kinds(auto_approve)
     return {}
 end
 
---- Collect option candidates from every option token AND every positional
---- whose first byte is `-` (so `gh api -X POST` lets a rule listing `X` match
---- even though `-X` lives after the first positional).
---- @param resolved agentic.ResolvedArgs
---- @return string[]
-local function collect_option_candidates(resolved)
-    local cands = {}
-    for _, tok in ipairs(resolved.option_tokens) do
-        for _, c in ipairs(M.extract_option_candidates(tok)) do
-            table.insert(cands, c)
-        end
-    end
-    for _, tok in ipairs(resolved.positionals) do
-        if tok:sub(1, 1) == "-" then
-            for _, c in ipairs(M.extract_option_candidates(tok)) do
-                table.insert(cands, c)
-            end
-        end
-    end
-    return cands
-end
-
---- True iff any gate in `gates` matches. A nil or empty array matches nothing.
+--- True iff some gate in `gates` matches under `predicate`. A nil or empty
+--- array matches nothing.
 --- @param gates agentic.PermGate[]|nil
---- @param resolved agentic.ResolvedArgs
---- @param opt_cands string[]
+--- @param predicate fun(gate: agentic.PermGate): boolean
 --- @return boolean
-local function any_gate_matches(gates, resolved, opt_cands)
+local function any_gate(gates, predicate)
     if gates == nil then
         return false
     end
     for _, gate in ipairs(gates) do
-        if gate_matches(gate, resolved, opt_cands) then
+        if predicate(gate) then
             return true
         end
     end
@@ -320,8 +609,27 @@ end
 --- @param auto_approve agentic.PermAutoApprove
 --- @return agentic.PermDecision
 function M.decide_leaf(entries, parsed, auto_approve)
-    local resolved = M.resolve_args(parsed.args, parsed.cmd_name)
-    local opt_cands = collect_option_candidates(resolved)
+    local words = parsed.args
+    local dynamic = parsed.args_dynamic or {}
+    local has_dynamic = false
+    for _, d in ipairs(dynamic) do
+        if d then
+            has_dynamic = true
+            break
+        end
+    end
+
+    local R, L = prefix_walk(words)
+    --- @type agentic.PermStructured.ExistCtx
+    local ctx = {
+        words = words,
+        dynamic = dynamic,
+        has_dynamic = has_dynamic,
+        flag_cands = flag_candidates(words),
+        leading_cands = candidates_at(words, L),
+        leading_dynamic = any_dynamic(R, dynamic) or any_dynamic(L, dynamic),
+        R = R,
+    }
 
     -- Build explicitly (not via a `{a, b}` literal) so a nil cmd entry does
     -- not truncate ipairs and silently drop the wildcard entry after it.
@@ -334,21 +642,28 @@ function M.decide_leaf(entries, parsed, auto_approve)
         end
     end
 
+    local function exist(gate)
+        return gate_matches_existential(gate, ctx)
+    end
     for _, e in ipairs(relevant) do
-        if any_gate_matches(e.deny, resolved, opt_cands) then
+        if any_gate(e.deny, exist) then
             return "deny"
         end
     end
     for _, e in ipairs(relevant) do
-        if any_gate_matches(e.ask, resolved, opt_cands) then
+        if any_gate(e.ask, exist) then
             return "ask"
         end
     end
 
+    local parse = allow_parse(words, dynamic, parsed.cmd_name)
+    local function allow(gate)
+        return gate_matches_allow(gate, parse)
+    end
     local kinds = eligible_allow_kinds(auto_approve)
     for _, e in ipairs(relevant) do
         for _, kind in ipairs(kinds) do
-            if any_gate_matches(e[kind], resolved, opt_cands) then
+            if any_gate(e[kind], allow) then
                 return "allow"
             end
         end

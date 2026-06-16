@@ -83,10 +83,10 @@
       { "positionals": ["ls-files"] },
       { "positionals": ["ls-tree"] },
       { "positionals": ["cat-file"] },
-      { "positionals": ["config", "--get", "*"] },
-      { "positionals": ["config", "--list", "*"] },
-      { "positionals": ["config", "-f", "*", "--get", "*"] },
-      { "positionals": ["config", "-f", "*", "--list", "*"] },
+      { "positionals": ["config"], "options": ["get"] },
+      { "positionals": ["config"], "options": ["list"] },
+      { "positionals": ["config"], "options": ["f", "get"] },
+      { "positionals": ["config"], "options": ["f", "list"] },
       { "positionals": ["stash", "list"] }
     ],
     "ask": [
@@ -97,7 +97,8 @@
       { "positionals": ["checkout"] },
       { "positionals": ["reset"] },
       { "positionals": ["push"] },
-      { "positionals": ["commit"] }
+      { "positionals": ["commit"] },
+      { "leading_options": ["c", "config-env"] }
     ]
   },
 

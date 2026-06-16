@@ -3,10 +3,6 @@
 --- API targeted (see the `permissions` project skill for the overview):
 ---     extract_option_candidates(token: string) -> string[]
 ---     match_options(candidates: string[], rule_options: string[]) -> boolean
----     resolve_args(args: string[], cmd_name: string) -> {
----         positionals: string[],
----         option_tokens: string[],
----     }
 ---     decide_leaf(
 ---         entries: StructuredEntries,   -- cmd-keyed dict, "*" wildcard key
 ---         parsed: ParsedLeaf,
@@ -159,69 +155,6 @@ describe("PermissionStructured", function()
     end)
 
     -- ------------------------------------------------------------------
-    -- Arg resolution — resolve_args(args, cmd_name)
-    -- ------------------------------------------------------------------
-    -- Splits args into option_tokens (leading options, including consumed
-    -- values for OPTION_VALUE_TAKERS entries) and positionals (the rest).
-    -- The first positional is whatever the command treats it as — gates
-    -- match positionals[1] uniformly, no subcommand concept in the schema.
-    describe("resolve_args", function()
-        it("returns the args as positionals when no leading options", function()
-            local result =
-                PermissionStructured.resolve_args({ "diff" }, "git")
-            assert.same({ "diff" }, result.positionals)
-            assert.same({}, result.option_tokens)
-        end)
-
-        it("skips git's -C <path> arg-taking global", function()
-            local result = PermissionStructured.resolve_args(
-                { "-C", "path", "diff", "foo" },
-                "git"
-            )
-            assert.same({ "diff", "foo" }, result.positionals)
-            assert.same({ "-C", "path" }, result.option_tokens)
-        end)
-
-        it("skips git's -c key=val arg-taking global", function()
-            local result = PermissionStructured.resolve_args(
-                { "-c", "user.name=foo", "log" },
-                "git"
-            )
-            assert.same({ "log" }, result.positionals)
-            assert.same({ "-c", "user.name=foo" }, result.option_tokens)
-        end)
-
-        it("treats a non-OPTION_VALUE_TAKERS command uniformly", function()
-            local result =
-                PermissionStructured.resolve_args({ "-la", "/tmp" }, "ls")
-            assert.same({ "/tmp" }, result.positionals)
-            assert.same({ "-la" }, result.option_tokens)
-        end)
-
-        it("returns empty positionals when only options are present (git)", function()
-            local result =
-                PermissionStructured.resolve_args({ "-C", "path" }, "git")
-            assert.same({}, result.positionals)
-            assert.same({ "-C", "path" }, result.option_tokens)
-        end)
-
-        it("returns empty for an empty arg list", function()
-            local result = PermissionStructured.resolve_args({}, "git")
-            assert.same({}, result.positionals)
-            assert.same({}, result.option_tokens)
-        end)
-
-        it("terminates option walk on `--` sentinel", function()
-            local result = PermissionStructured.resolve_args(
-                { "-la", "--", "-not-a-flag" },
-                "ls"
-            )
-            assert.same({ "-not-a-flag" }, result.positionals)
-            assert.same({ "-la" }, result.option_tokens)
-        end)
-    end)
-
-    -- ------------------------------------------------------------------
     -- Positional matching — exercised via decide_leaf since the public
     -- API matches positionals inside a gate, not as a standalone helper.
     -- ------------------------------------------------------------------
@@ -277,11 +210,14 @@ describe("PermissionStructured", function()
             assert.is_nil(decision)
         end)
 
-        it("matches the second positional with a glob", function()
+        it("matches a subcommand positional plus a post-subcommand option", function()
+            -- Migrated from the old positional-embedded-flag shape
+            -- (`["config", "--get", "*"]`): dash-tokens are always stripped to
+            -- the order-free `options` set now.
             local entries = {
                 git = {
                     read_only = {
-                        { positionals = { "config", "--get", "*" } },
+                        { positionals = { "config" }, options = { "get" } },
                     },
                 },
             }
@@ -558,9 +494,9 @@ describe("PermissionStructured", function()
     end)
 
     -- ------------------------------------------------------------------
-    -- End-to-end cases from § Phase 1b tests of the plan
+    -- End-to-end cases (see the `permissions` skill § "Compound Bash commands")
     -- ------------------------------------------------------------------
-    describe("plan-enumerated end-to-end cases", function()
+    describe("end-to-end cases", function()
         local sort_entry = {
             sort = {
                 read_only = { {} },
@@ -614,7 +550,7 @@ describe("PermissionStructured", function()
             local entries = {
                 git = {
                     read_only = {
-                        { positionals = { "config", "--get", "*" } },
+                        { positionals = { "config" }, options = { "get" } },
                     },
                 },
             }
@@ -704,6 +640,257 @@ describe("PermissionStructured", function()
                 "allow"
             )
             assert.equal("allow", decision)
+        end)
+    end)
+
+    -- ------------------------------------------------------------------
+    -- Dynamic-token wildcard (use-site gate fix)
+    -- ------------------------------------------------------------------
+    -- A dynamic arg (`args_dynamic[i] == true`) is treated as a wildcard for
+    -- deny/ask gates only: it satisfies any `options` requirement and any
+    -- positional pattern at or after its index. Allow gates stay concrete so a
+    -- dynamic token never widens an approval.
+    describe("dynamic-token wildcard", function()
+        --- @param cmd string
+        --- @param args string[]
+        --- @param dyn boolean[]
+        --- @return agentic.ParsedLeaf
+        local function parsed_dyn(cmd, args, dyn)
+            return { cmd_name = cmd, args = args, args_dynamic = dyn }
+        end
+
+        local find_entry = {
+            find = { read_only = { {} }, deny = { { options = { "exec" } } } },
+        }
+
+        it("a dynamic positional satisfies an options deny gate", function()
+            local decision = PermissionStructured.decide_leaf(
+                find_entry,
+                parsed_dyn("find", { ".", "$f" }, { false, true }),
+                "allow"
+            )
+            assert.equal("deny", decision)
+        end)
+
+        it("a fully-static find . -name x is unaffected", function()
+            local decision = PermissionStructured.decide_leaf(
+                find_entry,
+                parsed_dyn("find", { ".", "-name", "x" }, { false, false, false }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        local git_entry = {
+            git = {
+                read_only = { { positionals = { "log" } } },
+                ask = { { positionals = { "branch" } } },
+            },
+        }
+
+        it("a dynamic positional[0] reaches a positional-keyed ask gate", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed_dyn("git", { "$sub" }, { true }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("a dynamic token after a pinned positional stays approved", function()
+            -- positional[0] = "log" (static) keeps the allow gate; the dynamic
+            -- "$ref" at index 1 cannot reach the index-0 "branch" ask gate.
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed_dyn("git", { "log", "$ref" }, { false, true }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("a dynamic token does not widen an allow gate (no gate ⇒ nil)", function()
+            -- `ls` has no entry here, so a dynamic token approves nothing — it
+            -- must not be coerced into matching an absent allow gate.
+            local decision = PermissionStructured.decide_leaf(
+                { ls = { read_only = { { positionals = { "src" } } } } },
+                parsed_dyn("ls", { "$dir" }, { true }),
+                "allow"
+            )
+            assert.is_nil(decision)
+        end)
+
+        -- A dynamic token consumed as an option value (-C is in
+        -- OPTION_VALUE_TAKERS for git) leaves the positional stream, but can
+        -- word-split at runtime to inject a positional ahead of the visible
+        -- one — so it must wildcard positional-keyed gates from index 1.
+        it("a dynamic consumed option value reaches a positional ask gate", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed_dyn("git", { "-C", "$x", "log" }, { false, true, false }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("a static consumed option value leaves the gate concrete", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed_dyn("git", { "-C", "/repo", "log" }, { false, false, false }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        -- `leading_options` matches only the leading option region and is
+        -- wildcard-reachable only by a token that can occupy it. So a leading
+        -- `-c` (concrete or via a dynamic first positional) trips it, while a
+        -- trailing dynamic positional and a post-subcommand `-c` do not.
+        local leading_entry = {
+            git = {
+                read_only = { { positionals = { "log" } } },
+                ask = { { leading_options = { "c", "config" } } },
+            },
+        }
+
+        it("a concrete leading -c trips a leading_options gate", function()
+            local decision = PermissionStructured.decide_leaf(
+                leading_entry,
+                parsed_dyn("git", { "-c", "x", "log" }, { false, false, false }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("a trailing dynamic positional cannot reach a leading_options gate", function()
+            local decision = PermissionStructured.decide_leaf(
+                leading_entry,
+                parsed_dyn("git", { "log", "$ref" }, { false, true }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("a dynamic first positional can inject a leading flag", function()
+            local decision = PermissionStructured.decide_leaf(
+                leading_entry,
+                parsed_dyn("git", { "$sub" }, { true }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("a post-subcommand -c does not match a leading_options gate", function()
+            local decision = PermissionStructured.decide_leaf(
+                leading_entry,
+                parsed_dyn("git", { "log", "-c" }, { false, false }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+    end)
+
+    -- ------------------------------------------------------------------
+    -- Absorption matching (correction step): no getopt arity table for
+    -- deny/ask. Each leading flag absorbs 0 or 1 following plain word; deny/ask
+    -- match existentially over the parses, allow over the single value_options
+    -- parse. git's gates are 100% positional[1] (subcommand) keyed, so a flag
+    -- that shifts the subcommand in the took-0 parse exposes it.
+    -- ------------------------------------------------------------------
+    describe("absorption matching", function()
+        -- Mirrors the bundled git entry shape (subcommand-keyed throughout).
+        local git_entry = {
+            git = {
+                read_only = {
+                    { positionals = { "log" } },
+                    { positionals = { "diff" } },
+                },
+                ask = {
+                    { positionals = { "push" } },
+                    { positionals = { "commit" } },
+                    { leading_options = { "c", "config-env" } },
+                },
+            },
+        }
+
+        it("allows `git -C /repo log` (value-taker absorbs /repo)", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed("git", { "-C", "/repo", "log" }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("asks `git -C push log` (took-0 parse reads push as subcommand)", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed("git", { "-C", "push", "log" }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("asks `git -p push` (zero-arity global can't hide push)", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed("git", { "-p", "push" }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("asks `git --no-pager push`", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed("git", { "--no-pager", "push" }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("asks `git --new-global val push` (unknown value-taker, no table)", function()
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed("git", { "--new-global", "val", "push" }),
+                "allow"
+            )
+            assert.equal("ask", decision)
+        end)
+
+        it("prompts `git --foo ci log` (single-parse allow: unknown subcommand ci)", function()
+            -- A leading bare flag could launder a true subcommand to a
+            -- read-only alternate parse under existential allow; single-parse
+            -- allow defaults --foo to absorb-0, so the subcommand is `ci`
+            -- (∉ read_only) and falls through to a prompt.
+            local decision = PermissionStructured.decide_leaf(
+                git_entry,
+                parsed("git", { "--foo", "ci", "log" }),
+                "allow"
+            )
+            assert.is_nil(decision)
+        end)
+
+        it("allows `xargs -0 ls` (unlisted leading flag absorbs 0)", function()
+            local decision = PermissionStructured.decide_leaf(
+                { xargs = { read_only = { { positionals = { "ls" } } } } },
+                parsed("xargs", { "-0", "ls" }),
+                "allow"
+            )
+            assert.equal("allow", decision)
+        end)
+
+        it("asks `gh -R x issue create` (multi-element existential)", function()
+            -- The one bundled multi-element existential gate; -R absorbs `x` in
+            -- the parse whose stream is `issue create`.
+            local entries = {
+                gh = { ask = { { positionals = { "issue", "create" } } } },
+            }
+            local decision = PermissionStructured.decide_leaf(
+                entries,
+                parsed("gh", { "-R", "x", "issue", "create" }),
+                "allow"
+            )
+            assert.equal("ask", decision)
         end)
     end)
 end)

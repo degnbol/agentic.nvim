@@ -409,7 +409,8 @@ end
 --- @field write_all? boolean Write replaces the entire file (diff.all)
 --- @field dest? agentic.utils.TrustSafety.KindArgs Destination state for `move`
 
---- Per-kind safety predicate. See plan §"Per-kind predicates".
+--- Per-kind safety predicate. See the `permissions` skill § "Trust scope"
+--- (property 2, "Per-kind recoverability").
 --- @param kind agentic.acp.ToolKind
 --- @param args agentic.utils.TrustSafety.KindArgs
 --- @return boolean safe

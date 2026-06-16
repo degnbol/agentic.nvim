@@ -1076,14 +1076,14 @@ describe("PermissionRules", function()
         end)
 
         describe("bails on control flow and compound structure", function()
-            -- `for_statement` / `while_statement` / `until_statement` are
-            -- accepted in Phase 2 (see the loop describe block below). The
-            -- remaining cases (`!`, brace group, `[[ ]]`, subshell, process
-            -- substitution) stay rejected.
+            -- Loops and if/case control flow recurse (see the dedicated
+            -- describe blocks below); a top-level `test_command` is a
+            -- side-effect-free predicate that walks. The remaining cases
+            -- (`!`, brace group, subshell, process substitution) stay
+            -- rejected.
             for _, cmd in ipairs({
                 "! rm x",
                 "{ rm x; }",
-                "[[ -f x ]] && rm y",
                 "( rm -rf x )",
                 "cat <(ls)",
             }) do
@@ -1440,6 +1440,91 @@ describe("PermissionRules", function()
                 )
             end)
         end)
+
+        describe("control flow (if / case)", function()
+            local ALLOW_CF = {
+                allow = {
+                    "Bash(cat *)",
+                    "Bash(echo *)",
+                    "Bash(echo)",
+                    "Bash(grep *)",
+                },
+            }
+
+            it("approves if with a test-command condition", function()
+                assert.is_true(
+                    decide("if [[ -f x ]]; then cat x; fi", ALLOW_CF)
+                )
+            end)
+
+            it("approves if with a command condition", function()
+                assert.is_true(
+                    decide("if grep -q foo x; then cat x; fi", ALLOW_CF)
+                )
+            end)
+
+            it("approves if/elif/else with allowed bodies", function()
+                assert.is_true(decide(
+                    "if [ -f x ]; then cat x; "
+                        .. "elif grep y z; then echo a; "
+                        .. "else echo b; fi",
+                    ALLOW_CF
+                ))
+            end)
+
+            it("rejects a disallowed command in an if body", function()
+                assert.is_false(
+                    decide("if [[ -f x ]]; then rm x; fi", ALLOW_CF)
+                )
+            end)
+
+            it("rejects a disallowed command in an elif body", function()
+                assert.is_false(decide(
+                    "if [ -f x ]; then cat x; elif grep y z; then rm a; fi",
+                    ALLOW_CF
+                ))
+            end)
+
+            it("rejects a disallowed command condition", function()
+                assert.is_false(
+                    decide("if rm x; then cat x; fi", ALLOW_CF)
+                )
+            end)
+
+            it("rejects substitution inside a test-command condition", function()
+                -- `[[ -f $(rm y) ]]` runs `rm y` during the predicate.
+                assert.is_false(
+                    decide("if [[ -f $(rm y) ]]; then cat x; fi", ALLOW_CF)
+                )
+            end)
+
+            it("approves case with allowed item bodies", function()
+                assert.is_true(decide(
+                    "case $x in a) cat x;; b|c) echo y;; esac",
+                    ALLOW_CF
+                ))
+            end)
+
+            it("rejects a disallowed command in a case item body", function()
+                assert.is_false(
+                    decide("case $x in a) rm x;; esac", ALLOW_CF)
+                )
+            end)
+
+            it("rejects substitution in the case value", function()
+                -- `case $(rm x) in …` runs `rm x` to compute the value.
+                assert.is_false(
+                    decide("case $(rm x) in a) cat x;; esac", ALLOW_CF)
+                )
+            end)
+
+            it("rejects substitution in a case item pattern", function()
+                -- `$(rm y)` in a pattern runs during the match attempt.
+                assert.is_false(
+                    decide("case $x in $(rm y)) cat x;; esac", ALLOW_CF)
+                )
+            end)
+        end)
     end)
 
     -- End-to-end exercise of the real bundled permissions.json (post-Phase 1b
@@ -1689,6 +1774,235 @@ describe("PermissionRules", function()
                     "curl --remote-name-all https://x"
                 )
             )
+        end)
+
+        -- Use-site gate fix: a dynamic token (`$var`, unquoted glob, quoted
+        -- expansion) acts as a wildcard for the structured ask/deny gates, so a
+        -- gated command cannot launder a payload past them through an opaque
+        -- token. Scoped to commands that have a reachable gate — `find`'s danger
+        -- is option-keyed (any slot reaches it), `git`'s is keyed to the
+        -- subcommand positional (a token after it cannot reach it), and `ls`
+        -- has no gate at all.
+        describe("use-site dynamic-token gate", function()
+            it("prompts on find . $f (-exec gate reachable)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("find . $f")
+                )
+            end)
+
+            it("prompts on find \"$f\" (quoting does not help)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('find "$f"')
+                )
+            end)
+
+            it("prompts on sort $f in (-o gate reachable)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("sort $f in")
+                )
+            end)
+
+            it("prompts on git $sub (dynamic subcommand)", function()
+                assert.is_false(PermissionRules.should_auto_approve("git $sub"))
+            end)
+
+            it("prompts on git branch $x (ask gate options wildcard)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git branch $x")
+                )
+            end)
+
+            it("auto-approves git log $ref (token after pinned positional)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("git log $ref")
+                )
+            end)
+
+            it("auto-approves ls $f (no gate to evade)", function()
+                assert.is_true(PermissionRules.should_auto_approve("ls $f"))
+            end)
+
+            it("auto-approves find . -name '*.lua' (quoted glob is literal)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "find . -name '*.lua'"
+                    )
+                )
+            end)
+
+            it("prompts on find . -name *.lua (unquoted glob is dynamic)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("find . -name *.lua")
+                )
+            end)
+        end)
+
+        -- The two phase-2 carve-outs (assignment substitution, loops) defer or
+        -- multiply a use site; the gate fix guards that use site, so a payload
+        -- routed through them is still caught.
+        describe("use-site fix closes the carve-out laundering chains", function()
+            it("prompts on f=$(printf …); find . $f (assignment-deferred)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f=$(printf -- '-exec rm {} ;'); find . $f"
+                    )
+                )
+            end)
+
+            it("prompts on for f in *.txt; do find . $f; done (loop-multiplied)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "for f in *.txt; do find . $f; done"
+                    )
+                )
+            end)
+
+            it("prompts on g=-exec; find . \"$g\" echo X {} \\; (flag in a var)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        'g=-exec; find . "$g" echo X {} \\;'
+                    )
+                )
+            end)
+
+            it("still auto-approves for r in a b; do git show $r; done", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "for r in a b; do git show $r; done"
+                    )
+                )
+            end)
+
+            it("still auto-approves the git-rev-parse capture idiom", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "branch=$(git rev-parse --abbrev-ref HEAD)"
+                    )
+                )
+            end)
+
+            it("still auto-approves capture-then-cd", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        'root=$(git rev-parse --git-dir); cd "$root"'
+                    )
+                )
+            end)
+        end)
+
+        -- A dynamic token consumed as an option value (only the value-taking
+        -- flags of git/gh/aws/flytectl) is removed from the positional stream,
+        -- but unquoted it can word-split at runtime and inject a positional
+        -- ahead of the visible ones — so it must wildcard positional-keyed
+        -- gates too.
+        describe("option-value injection wildcards positional gates", function()
+            it("prompts on git -C $repo log (dynamic value word-splits)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git -C $repo log")
+                )
+            end)
+
+            it("auto-approves git -C /repo log (static value, no injection)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("git -C /repo log")
+                )
+            end)
+
+            it("prompts on git -c $x log (dynamic config value)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git -c $x log")
+                )
+            end)
+        end)
+
+        -- git's leading `-c x.y=z` is a code channel (`core.pager=!cmd`), so it
+        -- is gated even with a static value. The gate is direction-aware: it
+        -- matches only in the leading option region, so the dominant `git log
+        -- $ref` (dynamic ref after the pinned subcommand, which can never inject
+        -- a leading flag) stays AUTO, and a post-subcommand `-c` (the harmless
+        -- combined-diff flag) is not flagged.
+        describe("git -c leading-option gate", function()
+            it("prompts on git -c core.pager=x log (static code channel)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "git -c core.pager=x log"
+                    )
+                )
+            end)
+
+            it("auto-approves git log $ref (trailing token can't inject -c)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("git log $ref")
+                )
+            end)
+
+            it("auto-approves git log -c (post-subcommand -c is harmless)", function()
+                assert.is_true(PermissionRules.should_auto_approve("git log -c"))
+            end)
+
+            -- `--config-env=<name>=<envvar>` is git's other leading config
+            -- channel ("Like -c <name>=<value>"), so it is the same code
+            -- channel as `-c` and must be in `leading_options`. (`--config`
+            -- is not a real git option.)
+            it("prompts on git --config-env=core.pager=X log (env code channel)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "git --config-env=core.pager=X log"
+                    )
+                )
+            end)
+        end)
+
+        -- Correction step: deny/ask branch each leading flag's 0/1 absorption
+        -- existentially (no getopt arity table), allow resolves a single parse
+        -- via value_options. git's gates are subcommand-keyed, so a leading
+        -- flag that shifts the subcommand in the took-0 parse exposes it.
+        describe("absorption matching", function()
+            it("auto-approves git -C /repo log (value-taker absorbs /repo)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("git -C /repo log")
+                )
+            end)
+
+            it("prompts on git -p push (zero-arity global can't hide push)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git -p push")
+                )
+            end)
+
+            it("prompts on git --no-pager push", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git --no-pager push")
+                )
+            end)
+
+            it("prompts on git --new-global val push (unknown value-taker)", function()
+                -- The old silent OPTION_VALUE_TAKERS hole: an unlisted
+                -- value-taker mis-split the args and hid the real subcommand.
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "git --new-global val push"
+                    )
+                )
+            end)
+
+            it("prompts on git --foo ci log (single-parse allow: unknown subcommand)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git --foo ci log")
+                )
+            end)
+
+            it("prompts on git -C push log (accepted false-positive)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("git -C push log")
+                )
+            end)
+
+            it("auto-approves xargs -0 ls (unlisted leading flag absorbs 0)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("xargs -0 ls")
+                )
+            end)
         end)
     end)
 end)

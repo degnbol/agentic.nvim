@@ -15,6 +15,9 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 ### Rendering
 
+- Edit injection for no filetype.
+If we edit a file without filetype the chat shows bare triple ticks without a language annotation. It should be able to get the filetype from shebang.
+
 - Show more verbose info in chat: full model details when loading a new model (on startup and all other model loading situations, e.g. when switching model).
   Similarly, show the model's context, how much did the CLAUDE.md and system prompts fill up it's context?
 
@@ -512,6 +515,10 @@ For quicker scanning by the user of evaluating the command it would be useful wi
 This could be a new highlight group. A default config for it would probably be a bg color that maps to something that indicates "warning".
 I think it should only be highlighted while the prompt is displayed, i.e. disappears after accept or reject.
 So, it should probably be extmark or virtual line based.
+One thing to note is that the bail out system bails and asks on first 
+non-auto-allow command or pattern. The highlight would also be useful to show 
+for *all* non-allowed patterns. I think this implies changing the logic to 
+tally all parts of the execution that is not auto-allowed.
 
 ### Hooks
 

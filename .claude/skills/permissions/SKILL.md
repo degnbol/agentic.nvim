@@ -98,18 +98,65 @@ The matcher over-approximates option presence per token (single-dash
 `--output=x` becomes prefix-matched long-name `output`), which is sound
 for deny/ask — extra candidates can only widen a match, never miss one.
 
+**Arity is matched, not guessed.** The walker emits an ordered word list
+(`{cmd_name, args}`, each arg tagged only with whether it expands at runtime);
+no role/arity tagging. The matcher carries no per-command getopt table for
+soundness — each leading dash-word may absorb 0 or 1 following plain word, and
+the two directions read that ambiguity differently:
+
+- *deny/ask are existential* — a gate fires if **any** absorption parse exposes
+  the gated subcommand/option. A linear prefix-walk collects the possible
+  first-positional (subcommand) indices; the rare multi-element positional gate
+  enumerates parses (bounded). Owns soundness — an over-match only over-prompts.
+- *allow is a single parse* — a leading flag absorbs its next word iff it is a
+  known value-taker (`value_options`, a fail-safe optimisation; an unlisted flag
+  absorbs 0, only over-prompting). Convenience only: the existential pass has
+  already cleared every parse. Single-parse — *not* existential — keeps an
+  unknown subcommand → prompt, so a leading bare flag cannot launder a dangerous
+  subcommand to a read-only alternate parse.
+
+So `git -C /repo log` auto-approves (`-C` absorbs `/repo`, subcommand `log`),
+while `git -C push log`, `git -p push`, and `git --new-global val push` all
+prompt — the took-0 parse exposes `push`. Every dash-token is stripped to the
+option fields; only `-` (stdin/stdout sentinel) and the words after `--` are
+positionals.
+
+**Dynamic tokens wildcard deny/ask, never allow.** A token that expands at
+runtime — `$var`, unquoted glob (`~` is exempt: it only yields a path, never a
+flag/subcommand) — is treated as "could be anything" for deny/ask: it satisfies
+any `options` requirement and any positional at or after its reachable index.
+So laundering a payload through `$f` at a gated command prompts — guarding the
+bare (`find $f`), assignment-laundered (`f=$(…); find . $f`), and loop-body
+(`for f in *.txt; do find . $f`) vectors at the single use site. For allow it
+stays concrete (a dynamic subcommand fails the allowlist → prompt; a trailing
+dynamic arg like `git log $ref` is harmless), so a dynamic token never widens
+an approval.
+
+**`leading_options`** is a gate field matching a flag only in the leading
+region (before the first positional), for a code channel whose danger is
+position-specific: git's leading `-c core.pager=!cmd` runs code before the
+subcommand, but `git log -c` is the harmless combined-diff flag and a trailing
+`$ref` can never inject a leading flag.
+
 Pipeline summary (read the module's docstrings for full detail):
 
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
    failure, or any error node → prompt. The zsh parser is a hard dependency.
-2. **Walk** reject-by-default. Bail on dynamic command names, code-taking
-   builtins (`eval`/`source`/`.`), `if`, and `case`. Anonymous separators
+2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
+   builtins (`eval`/`source`/`.`). Anonymous separators
    (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
    (`for`, `while`, `until`) recurse: a `for` list must be literal or glob
    (substitution in the list bails), and every body command must itself
-   approve. Command/process substitution bails in argument, command-name,
-   for-list, and redirect-target positions — those launder dangerous
-   tokens past deny/ask (`find $(echo '-exec rm')`). It is allowed only
+   approve. `if`/`case` recurse into every branch (no branch prediction):
+   each condition, body, `elif`/`else` clause, and `case` item body must
+   approve. A `test_command` (`[[ … ]]`/`[ … ]`) is a side-effect-free
+   predicate — safe unless it embeds a substitution (`[[ -f $(rm y) ]]`
+   runs `rm`). The `case` value and each `case` item *pattern* must be
+   substitution-free too — both run code during the match
+   (`case $(rm x) in $(rm y)) …`). Command/process substitution bails in
+   argument, command-name, for-list, case-value/pattern, and
+   redirect-target positions — those launder dangerous tokens past
+   deny/ask (`find $(echo '-exec rm')`). It is allowed only
    as a `variable_assignment` value or array element, where its inner
    commands recurse through the same walker (so `f=$(rm x)` still bails
    because `rm` is not allowed).
@@ -166,8 +213,13 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   index-based and sees only the first verb, and the DSL body is one opaque
   positional. The `ask` on `split`/`tee` and `deny` on `-I` catch only the
   direct forms.
-- **Dynamic expansion** (`sort $FLAG out` where `$FLAG=-o`) — tolerated for
-  any `$var`/glob/`~`; the token is not a literal flag.
+- **Dynamic expansion** at a gated command now prompts rather than launders
+  (a dynamic token wildcards deny/ask — see above), so `find . $f` and
+  `f=$(…); find . $f` escalate. Two residuals remain: a *benign* dynamic value
+  over-prompts (`f=/safe/dir; find $f` — recovering it needs intra-command
+  constant propagation, deferred), and a user *glob* deny in settings.json
+  cannot get the wildcard treatment (only the typed structured gates can), so it
+  keeps the pre-existing hole — express the gate structurally to close it.
 
 Sub-language injection (awk/jq/sql/python parsed *into* command-argument
 strings via `queries/zsh/injections.scm`) is **best-effort enrichment, never

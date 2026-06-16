@@ -500,8 +500,10 @@ end
 
 local STRUCTURED_KINDS = { "read_only", "safe_write", "ask", "deny" }
 
---- Deep-copy a single gate, normalising every option string to the dashless
---- form. Positionals are left raw (glob-compiled at match time).
+--- Deep-copy a single gate, normalising every option string (`options` and
+--- `leading_options`) to the dashless form. Positionals are left raw
+--- (glob-compiled at match time). Unknown keys are dropped — defence in depth,
+--- so a gate is never silently treated as the all-wildcard `{}`.
 --- @param gate any
 --- @return agentic.PermGate
 local function normalise_gate(gate)
@@ -510,14 +512,16 @@ local function normalise_gate(gate)
     if type(gate) ~= "table" then
         return g
     end
-    if type(gate.options) == "table" then
-        local opts = {}
-        for _, opt in ipairs(gate.options) do
-            if type(opt) == "string" then
-                table.insert(opts, normalise_option(opt))
+    for _, field in ipairs({ "options", "leading_options" }) do
+        if type(gate[field]) == "table" then
+            local opts = {}
+            for _, opt in ipairs(gate[field]) do
+                if type(opt) == "string" then
+                    table.insert(opts, normalise_option(opt))
+                end
             end
+            g[field] = opts
         end
-        g.options = opts
     end
     if type(gate.positionals) == "table" then
         local pos = {}
@@ -636,13 +640,21 @@ end
 
 --- Container nodes whose every named child must itself pass. `do_group` is
 --- dispatched explicitly (it shares the same "every child is a statement"
---- semantics but is only reachable as a loop body). `if_statement` and
---- `case_statement` stay rejected — Phase 2 only widens to loops.
+--- semantics but is only reachable as a loop body). `if_statement`,
+--- `elif_clause`, and `else_clause` are containers too: the `condition` child
+--- is a `test_command` (substitution-free check, handled in `walk`) or a real
+--- statement that walks normally, and every body statement walks. Anonymous
+--- keywords/separators (`if`/`then`/`fi`/`;`) carry no field that survives the
+--- named-child filter. `case_statement` is dispatched explicitly because its
+--- value and its `case_item` patterns must be substitution-checked, not walked.
 local CONTAINER_TYPES = {
     program = true,
     list = true,
     pipeline = true,
     variable_assignments = true,
+    if_statement = true,
+    elif_clause = true,
+    else_clause = true,
 }
 
 --- Statement types that may appear as the inner content of a
@@ -831,6 +843,38 @@ local function literal_token(node, src)
     return nil
 end
 
+--- Whether an argument token expands at runtime to a value the matcher cannot
+--- see — a variable/arithmetic expansion, an unquoted glob, or a quoted string
+--- carrying an expansion. Pure literals (`word`, `number`, `raw_string`, an
+--- all-`string_content` string, a literal `concatenation`, `brace_expression`)
+--- are static. A `~`-prefixed path is a plain `word` in this grammar and
+--- expands only to a path (never a flag or subcommand), so it stays static.
+--- Only called on tokens `literal_token` already accepted, so substitution-
+--- bearing nodes (rejected at the command level) never reach here, and a
+--- `concatenation` that survived is necessarily all-literal.
+--- @param node TSNode
+--- @return boolean
+local function token_is_dynamic(node)
+    local t = node:type()
+    if
+        t == "glob_pattern"
+        or t == "variable_ref"
+        or t == "simple_expansion"
+        or t == "expansion"
+        or t == "arithmetic_expansion"
+    then
+        return true
+    end
+    if t == "string" then
+        for c in node:iter_children() do
+            if c:named() and c:type() ~= "string_content" then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 --- Extract the literal command name from a `command_name` node, normalising
 --- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
 --- deny pattern). Returns nil to bail on a dynamic name — a substitution,
@@ -894,6 +938,8 @@ local function walk_command(node, src, ctx)
     local name_node
     --- @type string[]
     local args = {}
+    --- @type boolean[]
+    local args_dynamic = {}
     for child in node:iter_children() do
         local t = child:type()
         if t == "variable_assignment" then
@@ -908,6 +954,7 @@ local function walk_command(node, src, ctx)
                 return false
             end
             table.insert(args, tok)
+            table.insert(args_dynamic, token_is_dynamic(child))
         end
     end
 
@@ -940,7 +987,8 @@ local function walk_command(node, src, ctx)
     local structured = nil
     if next(ctx.structured_entries) ~= nil then
         --- @type agentic.ParsedLeaf
-        local parsed = { cmd_name = cmd_name, args = args }
+        local parsed =
+            { cmd_name = cmd_name, args = args, args_dynamic = args_dynamic }
         -- Lazy require: permission_structured itself requires this module
         -- (for `glob_to_lua_pattern`). Deferring to call-time breaks the cycle.
         local PermissionStructured =
@@ -1022,8 +1070,8 @@ end
 --- Walk a statement-level `variable_assignment` (`f=path`, `arr=(a b c)`,
 --- `f=$(echo hi)`, `arr=(a $(echo b) c)`). Inert by itself — only its `value`
 --- may carry a side-effecting substitution, and only assignment value /
---- array-element position is sound (Phase 2: see § "Substitution safety —
---- assignment position ONLY"). A poisoned name (`PATH=/evil`) bails because a
+--- array-element position is sound (see the `permissions` skill § "Compound
+--- Bash commands"). A poisoned name (`PATH=/evil`) bails because a
 --- later command would inherit it.
 --- @param node TSNode
 --- @param src string
@@ -1147,9 +1195,56 @@ local function walk_do_group(node, src, ctx)
     return true
 end
 
+--- Walk a `case_statement`: the matched value and every `case_item` pattern
+--- must be substitution-free (a `$(cmd)` in either position *runs* during the
+--- match — `case $(rm x) in $(rm y)) …` executes both), and every item body
+--- recurses. Pattern words/extglobs that are not substitutions are inert glob
+--- text and ignored. The `value`-field children inside a `case_item` are the
+--- patterns; unfielded named children are body statements.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_case(node, src, ctx)
+    for child, field in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if field == "value" then
+                if subtree_has_substitution(child) then
+                    return false
+                end
+            elseif child:type() == "case_item" then
+                for item_child, item_field in child:iter_children() do
+                    if
+                        item_child:named()
+                        and item_child:type() ~= "comment"
+                    then
+                        if item_field == "value" then
+                            if subtree_has_substitution(item_child) then
+                                return false
+                            end
+                        elseif not walk(item_child, src, ctx) then
+                            return false
+                        end
+                    end
+                end
+            else
+                -- Unexpected named child for this node type — fail-closed.
+                return false
+            end
+        end
+    end
+    return true
+end
+
 function walk(node, src, ctx)
     local t = node:type()
-    if CONTAINER_TYPES[t] then
+    if t == "test_command" then
+        -- `[[ … ]]` / `[ … ]` — a side-effect-free predicate. The only way it
+        -- runs code is an embedded substitution (`[[ -f $(rm y) ]]`).
+        return not subtree_has_substitution(node)
+    elseif t == "case_statement" then
+        return walk_case(node, src, ctx)
+    elseif CONTAINER_TYPES[t] then
         -- Iterate named children only — anonymous separators (`;`, `&&`, `|`,
         -- `&`, newline) and `comment` nodes carry no executable content.
         for child in node:iter_children() do
@@ -1174,17 +1269,17 @@ function walk(node, src, ctx)
     elseif t == "do_group" then
         return walk_do_group(node, src, ctx)
     end
-    -- `if_statement`, `case_statement`, and any unknown future node type stay
-    -- rejected. Phase 2 widens to loops only.
+    -- Any unknown future node type stays rejected (fail-closed).
     return false
 end
 
 --- Check if a Bash command should be auto-approved. Parses the command with the
 --- zsh grammar and walks the tree: every leaf command must match an allow
---- pattern, no leaf may match a deny or ask pattern, and any non-simple
---- structure (substitution, control flow, file-writing redirect, dynamic
---- command name) bails. Fail-closed — an absent parser, a parse error, or a
---- truncated/malformed tree all return false.
+--- pattern, no leaf may match a deny or ask pattern, and any unmodelled
+--- structure (argument-position substitution, file-writing redirect, dynamic
+--- command name, subshell, brace group, negation) bails. Loops and if/case
+--- control flow recurse into every branch. Fail-closed — an absent parser, a
+--- parse error, or a truncated/malformed tree all return false.
 --- @param command string
 --- @return boolean
 function M.should_auto_approve(command)
