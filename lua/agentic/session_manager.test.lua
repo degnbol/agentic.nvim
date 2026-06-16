@@ -388,6 +388,97 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("announce_model_loaded", function()
+        --- @param models table<string, agentic.acp.ConfigOption.Option>
+        local function make_session(models)
+            local write_spy = spy.new(function() end)
+            local session = {
+                _announced_model_id = nil,
+                config_options = {
+                    get_model = function(_, id)
+                        return models[id]
+                    end,
+                    legacy_agent_models = {
+                        get_model = function() end,
+                    },
+                },
+                message_writer = { write_message = write_spy },
+                announce_model_loaded = SessionManager.announce_model_loaded,
+            } --[[@as agentic.SessionManager]]
+            return session, write_spy
+        end
+
+        --- @param spy_obj TestSpy
+        --- @param call integer
+        --- @return string
+        local function written_text(spy_obj, call)
+            return spy_obj.calls[call][2].content.text
+        end
+
+        it("writes bold name · id and description", function()
+            local session, write_spy = make_session({
+                ["claude-opus-4-8[1m]"] = {
+                    value = "claude-opus-4-8[1m]",
+                    name = "Opus 4.8 (1M context)",
+                    description = "Opus 4.8 with 1M context window.",
+                },
+            })
+
+            session:announce_model_loaded("claude-opus-4-8[1m]")
+
+            assert.spy(write_spy).was.called(1)
+            assert.equal(
+                "**Loaded Opus 4.8 (1M context)** · claude-opus-4-8[1m]\n"
+                    .. "Opus 4.8 with 1M context window.",
+                written_text(write_spy, 1)
+            )
+        end)
+
+        it("extracts real model from description for Default name", function()
+            local session, write_spy = make_session({
+                ["default"] = {
+                    value = "default",
+                    name = "Default (recommended)",
+                    description = "Opus 4.8 with 1M context window.",
+                },
+            })
+
+            session:announce_model_loaded("default")
+
+            assert.equal(
+                "**Loaded Opus** · default\nOpus 4.8 with 1M context window.",
+                written_text(write_spy, 1)
+            )
+        end)
+
+        it("falls back to the id when the model is unknown", function()
+            local session, write_spy = make_session({})
+
+            session:announce_model_loaded("ghost-model")
+
+            assert.equal("**Loaded ghost-model** · ghost-model", written_text(write_spy, 1))
+        end)
+
+        it("suppresses a consecutive duplicate id", function()
+            local session, write_spy = make_session({
+                ["m"] = { value = "m", name = "M", description = "desc" },
+            })
+
+            session:announce_model_loaded("m")
+            session:announce_model_loaded("m")
+
+            assert.spy(write_spy).was.called(1)
+        end)
+
+        it("ignores nil model id", function()
+            local session, write_spy = make_session({})
+
+            session:announce_model_loaded(nil)
+
+            assert.spy(write_spy).was.called(0)
+        end)
+    end)
+
     describe("switch_provider", function()
         --- @type TestStub
         local notify_stub

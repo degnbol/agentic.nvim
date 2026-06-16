@@ -192,6 +192,9 @@ function SessionManager:new(tab_page_id)
         _plan_exit_pending = false,
         _retry_attempt = 0,
         _checktime_scheduled = false,
+        --- @type string|nil Last model id announced via announce_model_loaded;
+        --- dedups the start/pending-flush double-announce (reset per new_session)
+        _announced_model_id = nil,
     }, self)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
@@ -1156,11 +1159,7 @@ function SessionManager:_handle_model_change(model_id, is_legacy)
                 self:_handle_new_config_options(result.configOptions)
             end
 
-            Logger.notify(
-                "Model changed to: " .. model_id,
-                vim.log.levels.INFO,
-                { title = "Agentic Model changed" }
-            )
+            self:announce_model_loaded(model_id)
         end
     end
 
@@ -1179,31 +1178,8 @@ end
 function SessionManager:_update_chat_header()
     local parts = {}
 
-    -- Model name (e.g. "Opus", "Haiku") — always show when available
-    local model_id = self.config_options.model
-            and self.config_options.model.currentValue
-        or self.config_options.legacy_agent_models.current_model_id
-    if model_id then
-        local model_opt = self.config_options:get_model(model_id)
-        local model_name
-        if model_opt then
-            model_name = model_opt.name
-            -- "Default (recommended)" → extract real model from description
-            -- e.g. "Opus 4.6 with 1M context" → "Opus"
-            if model_name:find("^Default") and model_opt.description then
-                model_name = model_opt.description:match("^(%S+)") or model_name
-            end
-        end
-        if not model_name then
-            -- Legacy path
-            local legacy =
-                self.config_options.legacy_agent_models:get_model(model_id)
-            model_name = legacy and legacy.name or model_id
-        end
-        -- Strip "Claude " prefix — redundant for anyone using the plugin
-        model_name = model_name:gsub("^Claude ", "")
-        table.insert(parts, model_name)
-    end
+    -- Model is announced as a chat marker (see announce_model_loaded), not in
+    -- the header — switching is rare, so the header carries only mode · %.
 
     -- Mode — only show non-default modes (e.g. "Plan").
     -- Hidden IDs: "default" (claude-agent-acp), "build" (opencode-acp).
@@ -1237,6 +1213,38 @@ function SessionManager:_update_chat_header()
 
     -- Render winbar and buffer name (context is already in headers state)
     self.widget:render_header("chat")
+end
+
+--- Write a two-line "Loaded <model>" marker into the chat buffer announcing
+--- which model is now active, with its full id and description. Doubles as a
+--- temporal marker — its scrollback position shows when the model was
+--- loaded/switched. Display-only: not persisted, not sent to the model, not
+--- replayed on restore. Consecutive duplicate ids are suppressed
+--- (dedups the session-start announce against the pending-initial-model flush).
+--- @param model_id string|nil
+function SessionManager:announce_model_loaded(model_id)
+    if not model_id or model_id == self._announced_model_id then
+        return
+    end
+    self._announced_model_id = model_id
+
+    local model = self.config_options:get_model(model_id)
+        or self.config_options.legacy_agent_models:get_model(model_id)
+    local name = model and model.name or model_id
+    local description = model and model.description
+
+    -- "Default (recommended)" → extract real model from description
+    -- (matches _update_chat_header's prior handling).
+    if name:find("^Default") and description then
+        name = description:match("^(%S+)") or name
+    end
+
+    local lines = { string.format("**Loaded %s** · %s", name, model_id) }
+    if description and description ~= "" then
+        table.insert(lines, description)
+    end
+
+    self.message_writer:write_message(ACPPayloads.generate_agent_message(lines))
 end
 
 --- @param input_text string
@@ -1585,6 +1593,10 @@ function SessionManager:new_session(opts)
         self:_cancel_session()
     end
 
+    -- Reset so the session-start marker always writes, even when /new keeps the
+    -- same model; the pending-initial-model flush below still gets deduped.
+    self._announced_model_id = nil
+
     self.status_animation:start("busy")
 
     local handlers = self:_build_handlers()
@@ -1688,6 +1700,21 @@ function SessionManager:new_session(opts)
                 self.message_writer:write_message(
                     ACPPayloads.generate_user_message(welcome_message)
                 )
+
+                -- Announce the effective model directly under the welcome
+                -- header. preserved_model (if it differs from the provider
+                -- default) is being switched in asynchronously via the flush
+                -- above; name it here so the marker shows the model the
+                -- session will actually use, not the transient default.
+                -- Skipped on restore (incline already shows the model).
+                if not restore_mode then
+                    local co = self.config_options
+                    self:announce_model_loaded(
+                        preserved_model
+                            or (co.model and co.model.currentValue)
+                            or co.legacy_agent_models.current_model_id
+                    )
+                end
             end
 
             -- Invoke on_created callback after welcome message is written
