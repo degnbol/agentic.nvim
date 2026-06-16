@@ -1192,9 +1192,12 @@ function SessionManager:_update_chat_header()
         table.insert(parts, mode_name)
     end
 
+    -- Used-token count, not %: performance degrades near a fixed ~200k
+    -- threshold regardless of the model's advertised window, so the absolute
+    -- number is what matters. Full ratio + % stays in the /context panel.
     if self._usage and self._usage.size > 0 then
-        local pct = math.floor(self._usage.used / self._usage.size * 100)
-        table.insert(parts, string.format("%d%%", pct))
+        local used_k = math.floor(self._usage.used / 1000 + 0.5)
+        table.insert(parts, string.format("%dk", used_k))
     end
 
     local context = #parts > 0 and table.concat(parts, " · ") or nil
