@@ -245,9 +245,10 @@ end
 
 --- Try to auto-approve a permission request without user interaction.
 ---
---- Two independent checks (either can approve):
+--- Independent checks (any can approve):
 --- 1. Read-only tool kinds ("read", "search") — always safe regardless of path.
---- 2. Compound Bash commands — every pipe/chain segment must match an allow
+--- 2. Skill loading ("Skill") — injects a SKILL.md into context, no mutation.
+--- 3. Compound Bash commands — every pipe/chain segment must match an allow
 ---    pattern from settings.json with no deny/ask match.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
@@ -280,6 +281,16 @@ function PermissionManager:_try_auto_approve(request, callback)
             callback,
             "read-only tool kind: " .. (tracker_kind_lc ~= "" and tracker_kind_lc or kind_lc)
         )
+    end
+
+    -- Skill loading: always approve. Loading a skill injects a SKILL.md into
+    -- context — no filesystem mutation. Covers users who don't have `Skill` in
+    -- their settings.json allow list, so the SDK escalates it as `ask`.
+    if
+        Config.auto_approve_skills
+        and (kind_lc == "skill" or tracker_kind_lc == "skill")
+    then
+        return auto_approve(request, callback, "skill load")
     end
 
     -- Compound Bash commands: check each segment against settings.json rules.

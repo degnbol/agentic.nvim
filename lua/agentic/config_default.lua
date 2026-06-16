@@ -440,6 +440,12 @@ local ConfigDefault = {
     --- cannot mutate the filesystem.
     auto_approve_read_only_tools = true,
 
+    --- Auto-approve Skill tool calls (ACP kind "Skill") without prompting.
+    --- Loading a skill injects a SKILL.md into context — no filesystem
+    --- mutation. Covers users who don't have `Skill` in their settings.json
+    --- allow list, so the provider's SDK escalates it as `ask`.
+    auto_approve_skills = true,
+
     --- @class agentic.UserConfig.Permissions
     --- @field use_plugin_defaults boolean Load bundled patterns from permissions.json
     --- @field use_claude_settings boolean Merge patterns from ~/.claude/settings.json and .claude/settings.json

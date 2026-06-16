@@ -158,6 +158,59 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
+    describe("auto-approve skills", function()
+        --- @type agentic.UserConfig
+        local Config
+
+        before_each(function()
+            Config = require("agentic.config")
+        end)
+
+        --- @return agentic.acp.RequestPermission
+        local function make_skill_request()
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = "tc-skill",
+                    kind = "Skill",
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
+                },
+            }
+        end
+
+        it("auto-approves Skill kind", function()
+            local cb = spy.new(function() end)
+            pm:add_request(make_skill_request(), cb --[[@as function]])
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("allow-once"))
+            assert.is_nil(pm.current_request)
+        end)
+
+        it("respects config toggle", function()
+            local original = Config.auto_approve_skills
+            Config.auto_approve_skills = false
+
+            local cb = spy.new(function() end)
+            pm:add_request(make_skill_request(), cb --[[@as function]])
+            assert.spy(cb).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+
+            Config.auto_approve_skills = original
+        end)
+    end)
+
     describe("allow_always client-side cache", function()
         --- @param kind agentic.acp.ToolKind
         --- @param file_path string|nil
