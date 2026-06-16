@@ -191,7 +191,7 @@ local function get_file_completions(_bufnr, line_text, cursor_col, cursor_line)
             -- Resolve symlinks to determine if directory
             local is_dir = entry_type == "directory"
             if entry_type == "link" then
-                local stat = vim.uv.fs_stat(scan_dir .. "/" .. name)
+                local stat = vim.uv.fs_stat(vim.fs.joinpath(scan_dir, name))
                 is_dir = stat and stat.type == "directory" or false
             end
 

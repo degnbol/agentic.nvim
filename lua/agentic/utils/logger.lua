@@ -7,10 +7,6 @@ local Logger = {}
 --- callbacks (vim.fn.stdpath cannot be called from fast events).
 local LOG_FILE_PATH = vim.fn.stdpath("cache") .. "/agentic_debug.log"
 
-function Logger.get_timestamp()
-    return os.date("%Y-%m-%d %H:%M:%S")
-end
-
 local function format_debug_message(...)
     local args = { ... }
 
@@ -23,7 +19,7 @@ local function format_debug_message(...)
     local caller_module =
         caller_source:gsub("^.*/lua/", ""):gsub("%.lua$", ""):gsub("/", ".")
 
-    local timestamp = Logger.get_timestamp()
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local log_parts = {
         string.format(
             "[%s] [%s:%d]",

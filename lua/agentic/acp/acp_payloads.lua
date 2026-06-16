@@ -81,7 +81,7 @@ end
 --- @return agentic.acp.ResourceLinkContent
 function M.create_resource_link_content(path)
     local uri = "file://" .. FileSystem.to_absolute_path(path)
-    local name = FileSystem.base_name(path)
+    local name = vim.fs.basename(path)
 
     --- @type agentic.acp.ResourceLinkContent
     local resource = {

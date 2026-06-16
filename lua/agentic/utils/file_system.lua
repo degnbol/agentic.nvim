@@ -189,18 +189,8 @@ function FileSystem.read_file_base64(path)
 end
 
 --- @param path string
-function FileSystem.to_relative_path(path)
-    return vim.fn.fnamemodify(path, ":.")
-end
-
---- @param path string
 function FileSystem.to_absolute_path(path)
     return vim.fn.fnamemodify(path, ":p")
-end
-
---- @param path string
-function FileSystem.base_name(path)
-    return vim.fn.fnamemodify(path, ":t")
 end
 
 --- Convert a path to a "smart" path, which is:
@@ -217,37 +207,19 @@ function FileSystem.get_file_extension(file_path)
     return vim.fn.fnamemodify(file_path, ":e"):lower()
 end
 
---- Create directory recursively (equivalent to mkdir -p)
---- Uses libuv fs_mkdir directly. vim.fn.mkdir can silently no-op
---- in some contexts (e.g. test runners with sandbox-like behaviour).
+--- Create directory recursively (equivalent to mkdir -p). Kept as a named
+--- function (not inlined) because chat_history.test.lua stubs it.
 --- @param path string
 --- @return boolean success
 --- @return string|nil error
 function FileSystem.mkdirp(path)
-    local stat = vim.uv.fs_stat(path)
-    if stat and stat.type == "directory" then
-        return true, nil
+    local ok, ret = pcall(vim.fn.mkdir, path, "p")
+    if not ok then
+        return false, tostring(ret)
     end
-
-    -- Walk path components and create each missing directory
-    local parts = {}
-    local current = path
-    while current ~= "/" and current ~= "" do
-        local parent_stat = vim.uv.fs_stat(current)
-        if parent_stat and parent_stat.type == "directory" then
-            break
-        end
-        table.insert(parts, 1, current)
-        current = vim.fn.fnamemodify(current, ":h")
+    if ret == 0 then
+        return false, "failed to create directory: " .. path
     end
-
-    for _, dir in ipairs(parts) do
-        local ok, err = vim.uv.fs_mkdir(dir, 493) -- 0755
-        if not ok and err ~= "EEXIST" then
-            return false, err or ("failed to create: " .. dir)
-        end
-    end
-
     return true, nil
 end
 

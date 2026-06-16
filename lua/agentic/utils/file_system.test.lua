@@ -68,44 +68,6 @@ describe("FileSystem", function()
         end)
     end)
 
-    describe("base_name", function()
-        it("returns filename from path", function()
-            assert.equal(
-                "init.lua",
-                FileSystem.base_name("/home/user/init.lua")
-            )
-        end)
-
-        it("returns filename from relative path", function()
-            assert.equal(
-                "test.lua",
-                FileSystem.base_name("lua/agentic/test.lua")
-            )
-        end)
-
-        it("returns name itself when no directory", function()
-            assert.equal("file.txt", FileSystem.base_name("file.txt"))
-        end)
-    end)
-
-    describe("to_relative_path", function()
-        it("converts absolute path to relative", function()
-            local cwd = vim.fn.getcwd()
-            local abs_path = cwd .. "/lua/agentic/init.lua"
-            assert.equal(
-                "lua/agentic/init.lua",
-                FileSystem.to_relative_path(abs_path)
-            )
-        end)
-
-        it("returns path unchanged if already relative", function()
-            assert.equal(
-                "lua/agentic/init.lua",
-                FileSystem.to_relative_path("lua/agentic/init.lua")
-            )
-        end)
-    end)
-
     describe("to_absolute_path", function()
         it("converts relative path to absolute", function()
             local result = FileSystem.to_absolute_path("init.lua")

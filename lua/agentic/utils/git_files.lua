@@ -57,7 +57,7 @@ local function resolve_index_path(git_root)
     if rel:sub(1, 1) == "/" then
         return rel
     end
-    return git_root .. "/" .. rel
+    return vim.fs.joinpath(git_root, rel)
 end
 
 --- @param path string
@@ -101,7 +101,7 @@ local function load_cache(git_root)
 
     local tracked = {}
     for entry in (result.stdout or ""):gmatch("([^%z]+)") do
-        tracked[git_root .. "/" .. entry] = true
+        tracked[vim.fs.joinpath(git_root, entry)] = true
     end
 
     --- @type agentic.utils.GitFiles.Cache

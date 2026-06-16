@@ -285,6 +285,9 @@ function SessionRestore.show_picker(tab_page_id, current_session, scope)
             return restore_with_conflict_check(item, tab_page_id, has_conflict)
         end
 
+        -- Three genuinely different backends (builtin quickfix, fzf-lua,
+        -- vim.ui.select) selected by config — a real strategy split, not a
+        -- factory to collapse.
         local picker_name = Config.session_restore.picker or "quickfix"
         local picker_opts = {
             scope = scope,

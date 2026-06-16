@@ -88,28 +88,35 @@ function M.glob_to_lua_pattern(glob)
     return "^" .. table.concat(result) .. "$"
 end
 
---- Extract Bash(...) allow patterns from a settings.json permissions table.
---- @param permissions table
---- @param list_key string "allow" or "deny" or "ask"
+--- Compile a list of `Bash(...)` glob strings into matched patterns. Skips
+--- non-Bash entries and malformed strings.
+--- @param strings string[]|nil
 --- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.extract_bash_patterns(permissions, list_key)
-    local patterns = {}
-    local list = permissions[list_key]
-    if type(list) ~= "table" then
-        return patterns
+local function patterns_from_strings(strings)
+    local out = {}
+    if type(strings) ~= "table" then
+        return out
     end
-    for _, entry in ipairs(list) do
+    for _, entry in ipairs(strings) do
         if type(entry) == "string" then
             local inner = entry:match("^Bash%((.+)%)$")
             if inner then
-                table.insert(patterns, {
+                table.insert(out, {
                     original = inner,
                     lua_pattern = M.glob_to_lua_pattern(inner),
                 })
             end
         end
     end
-    return patterns
+    return out
+end
+
+--- Extract Bash(...) allow patterns from a settings.json permissions table.
+--- @param permissions table
+--- @param list_key string "allow" or "deny" or "ask"
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function M.extract_bash_patterns(permissions, list_key)
+    return patterns_from_strings(permissions[list_key])
 end
 
 --- Read and decode a JSON file, returning nil on any error.
@@ -387,29 +394,6 @@ function M.matches_any_pattern(segment, patterns)
         end
     end
     return false
-end
-
---- Compile a list of `Bash(...)` glob strings into matched patterns. Skips
---- non-Bash entries and malformed strings.
---- @param strings string[]|nil
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-local function patterns_from_strings(strings)
-    local out = {}
-    if type(strings) ~= "table" then
-        return out
-    end
-    for _, entry in ipairs(strings) do
-        if type(entry) == "string" then
-            local inner = entry:match("^Bash%((.+)%)$")
-            if inner then
-                table.insert(out, {
-                    original = inner,
-                    lua_pattern = M.glob_to_lua_pattern(inner),
-                })
-            end
-        end
-    end
-    return out
 end
 
 --- Resolve the merged read_only pattern list from all sources.

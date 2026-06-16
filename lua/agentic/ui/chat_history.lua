@@ -172,7 +172,7 @@ function ChatHistory:save(callback)
     end
 
     local path = ChatHistory.get_file_path(self.session_id)
-    local dir = vim.fn.fnamemodify(path, ":h")
+    local dir = vim.fs.dirname(path)
 
     local dir_ok, dir_err = FileSystem.mkdirp(dir)
     if not dir_ok then

@@ -43,20 +43,6 @@ function BufHelpers.start_insert_on_last_char()
     vim.cmd("startinsert!")
 end
 
---- @generic T
---- @param bufnr integer
---- @param callback fun(bufnr: integer): T|nil
---- @return T|nil
-function BufHelpers.execute_on_buffer(bufnr, callback)
-    if not vim.api.nvim_buf_is_valid(bufnr) then
-        return nil
-    end
-
-    return vim.api.nvim_buf_call(bufnr, function()
-        return callback(bufnr)
-    end)
-end
-
 --- Sets a keymap for a specific buffer.
 --- @param bufnr integer
 --- @param mode string|string[]

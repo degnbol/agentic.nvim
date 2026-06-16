@@ -62,8 +62,7 @@ function M.compile_path_scope(input, cwd)
     -- Resolve relative paths against cwd.
     local pattern = expanded
     if pattern:sub(1, 1) ~= "/" then
-        pattern = cwd .. "/" .. pattern
-        pattern = normalize(pattern)
+        pattern = normalize(vim.fs.joinpath(cwd, pattern))
     end
 
     -- Bare directory with no glob characters → match anything beneath it.
@@ -122,8 +121,7 @@ function M.is_wide_scope(scope)
     local raw = scope.display
     local expanded = normalize(raw)
     if expanded:sub(1, 1) ~= "/" then
-        expanded = scope.cwd .. "/" .. expanded
-        expanded = normalize(expanded)
+        expanded = normalize(vim.fs.joinpath(scope.cwd, expanded))
     end
 
     local home = vim.uv.os_homedir() or ""

@@ -275,17 +275,8 @@ end
 --- @param width integer
 --- @return string[]
 function M.wrap_single_line(line, width)
-    if
-        width <= 0
-        or #line <= width
-        or line:match("^%s*$")
-        or line:match("^%s*```")
-        or is_table_line(line)
-    then
-        return { line }
-    end
-    local result = wrap_line(line, width)
-    return result
+    local sub_lines = M.wrap_single_line_with_offsets(line, width)
+    return sub_lines
 end
 
 --- Same as `wrap_single_line` but also returns byte-offset metadata for each

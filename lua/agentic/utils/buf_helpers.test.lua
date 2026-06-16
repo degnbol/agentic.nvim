@@ -1,5 +1,4 @@
 local assert = require("tests.helpers.assert")
-local spy = require("tests.helpers.spy")
 
 describe("BufHelpers", function()
     --- @type agentic.utils.BufHelpers
@@ -67,36 +66,6 @@ describe("BufHelpers", function()
 
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
-    end)
-
-    describe("execute_on_buffer", function()
-        it("should return nil for invalid buffer number", function()
-            local result = BufHelpers.execute_on_buffer(9999, function(_buf)
-                return "should not execute"
-            end)
-
-            assert.is_nil(result)
-        end)
-
-        it(
-            "should execute callback with buffer number and return value",
-            function()
-                local bufnr = vim.api.nvim_create_buf(false, true)
-                local expected_return = { value = 42, text = "test" }
-                local callback_spy = spy.new(function(_buf)
-                    return expected_return
-                end)
-
-                ---@diagnostic disable-next-line: param-type-mismatch spy won't match the expected type
-                local result = BufHelpers.execute_on_buffer(bufnr, callback_spy)
-
-                assert.spy(callback_spy).was.called(1)
-                assert.spy(callback_spy).was.called_with(bufnr)
-                assert.are.same(expected_return, result)
-
-                vim.api.nvim_buf_delete(bufnr, { force = true })
-            end
-        )
     end)
 
     describe("is_buffer_empty", function()

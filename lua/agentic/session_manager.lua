@@ -876,7 +876,7 @@ local function find_recent_plan_file()
             break
         end
         if type == "file" and name:match("%.md$") then
-            local full = plans_dir .. "/" .. name
+            local full = vim.fs.joinpath(plans_dir, name)
             local stat = vim.uv.fs_stat(full)
             if stat and stat.mtime.sec > best_mtime then
                 best_mtime = stat.mtime.sec

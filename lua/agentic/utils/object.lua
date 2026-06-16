@@ -1,6 +1,12 @@
 --- @class agentic.utils.object
 local M = {}
 
+--- Recursively merge each source into `target`, mutating it in place.
+--- Kept over `vim.tbl_deep_extend`: every module holds a reference to the one
+--- `Config` table, so the merge must mutate it — `tbl_deep_extend` returns a
+--- new table and would force a copy-back loop that is this function again.
+--- @param target table
+--- @param ... table
 function M.deep_merge_into(target, ...)
     for _, source in ipairs({ ... }) do
         for k, v in pairs(source) do
