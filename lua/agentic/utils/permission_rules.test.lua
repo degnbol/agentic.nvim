@@ -2005,4 +2005,118 @@ describe("PermissionRules", function()
             end)
         end)
     end)
+
+    describe("tally_unapproved", function()
+        local Config = require("agentic.config")
+
+        --- Run `fn` with settings.json permissions stubbed and plugin defaults
+        --- disabled, so only the injected globs (plus any `config` overrides on
+        --- Config.permissions) classify leaves. Structured entries stay empty.
+        local function with_perms(permissions, config, fn)
+            local orig_read_json = PermissionRules.read_json
+            local orig_plugin = Config.permissions.use_plugin_defaults
+            local orig_config = {}
+            for k, v in pairs(config or {}) do
+                orig_config[k] = Config.permissions[k]
+                Config.permissions[k] = v
+            end
+            Config.permissions.use_plugin_defaults = false
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = permissions }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            local ok, err = pcall(fn)
+
+            PermissionRules.read_json = orig_read_json
+            Config.permissions.use_plugin_defaults = orig_plugin
+            for k in pairs(config or {}) do
+                Config.permissions[k] = orig_config[k]
+            end
+            PermissionRules.invalidate_cache()
+            if not ok then
+                error(err)
+            end
+        end
+
+        --- The byte substring of a single-line `command` covered by `range`.
+        --- @param command string
+        --- @param range agentic.utils.PermissionRules.Range
+        local function span_text(command, range)
+            return command:sub(range[2] + 1, range[4])
+        end
+
+        it("returns only the unapproved leaf of a mixed pipeline", function()
+            with_perms(
+                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "grep foo | rm bar"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm bar", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("does not return a safe_write leaf (intrinsically safe)", function()
+            with_perms(
+                { allow = { "Bash(echo *)" } },
+                { safe_write = { "Bash(git add *)" } },
+                function()
+                    local ranges = PermissionRules.tally_unapproved("git add x")
+                    assert.equal(0, #ranges)
+                end
+            )
+        end)
+
+        it("returns an unknown command", function()
+            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                local cmd = "frobnicate x"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("frobnicate x", span_text(cmd, ranges[1]))
+            end)
+        end)
+
+        it("returns a substitution even when the command is allowed", function()
+            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                local cmd = "echo $(whoami)"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal(cmd, span_text(cmd, ranges[1]))
+            end)
+        end)
+
+        it("returns an unsafe redirect", function()
+            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                local cmd = "grep foo > out.txt"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.is_true(span_text(cmd, ranges[1]):find("out.txt") ~= nil)
+            end)
+        end)
+
+        it("returns every unapproved leaf (record-and-continue)", function()
+            with_perms({ allow = {} }, nil, function()
+                local ranges = PermissionRules.tally_unapproved("frob a | nope b")
+                assert.equal(2, #ranges)
+            end)
+        end)
+
+        it("returns nil on parse failure", function()
+            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                assert.is_nil(
+                    PermissionRules.tally_unapproved("echo 'unterminated")
+                )
+            end)
+        end)
+
+        it("returns nil for empty input", function()
+            assert.is_nil(PermissionRules.tally_unapproved(""))
+        end)
+    end)
 end)

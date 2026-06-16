@@ -602,17 +602,12 @@ local function any_gate(gates, predicate)
     return false
 end
 
---- Resolve the structured decision for one parsed leaf. Looks up the cmd entry
---- and the `"*"` wildcard entry (either may be absent or `vim.NIL`) and
---- resolves deny > ask > allow across both. Allow gates are restricted to the
---- kind set eligible under `auto_approve` (see `eligible_allow_kinds`).
---- @param entries agentic.StructuredEntries
---- @param parsed agentic.ParsedLeaf
---- @param auto_approve agentic.PermAutoApprove
---- @return agentic.PermDecision
-function M.decide_leaf(entries, parsed, auto_approve)
-    local words = parsed.args
-    local dynamic = parsed.args_dynamic or {}
+--- Build the existential-match context shared by `decide_leaf` and
+--- `classify_leaf` from a leaf's word list and dynamic mask.
+--- @param words string[]
+--- @param dynamic boolean[]
+--- @return agentic.PermStructured.ExistCtx
+local function build_exist_ctx(words, dynamic)
     local has_dynamic = false
     for _, d in ipairs(dynamic) do
         if d then
@@ -633,17 +628,40 @@ function M.decide_leaf(entries, parsed, auto_approve)
             or any_dynamic(leading_flag_idx, dynamic),
         subcommand_idx = subcommand_idx,
     }
+    return ctx
+end
 
-    -- Build explicitly (not via a `{a, b}` literal) so a nil cmd entry does
-    -- not truncate ipairs and silently drop the wildcard entry after it.
+--- Collect the cmd entry plus the `"*"` wildcard entry, skipping absent or
+--- `vim.NIL` values. Built explicitly (not via a `{a, b}` literal) so a nil
+--- cmd entry does not truncate ipairs and silently drop the wildcard after it.
+--- @param entries agentic.StructuredEntries
+--- @param cmd_name string
+--- @return agentic.StructuredCmdEntry[]
+local function relevant_entries(entries, cmd_name)
     --- @type agentic.StructuredCmdEntry[]
     local relevant = {}
-    for _, e in ipairs({ parsed.cmd_name, "*" }) do
+    for _, e in ipairs({ cmd_name, "*" }) do
         local entry = entries[e]
         if entry ~= nil and entry ~= vim.NIL then
             table.insert(relevant, entry)
         end
     end
+    return relevant
+end
+
+--- Resolve the structured decision for one parsed leaf. Looks up the cmd entry
+--- and the `"*"` wildcard entry (either may be absent or `vim.NIL`) and
+--- resolves deny > ask > allow across both. Allow gates are restricted to the
+--- kind set eligible under `auto_approve` (see `eligible_allow_kinds`).
+--- @param entries agentic.StructuredEntries
+--- @param parsed agentic.ParsedLeaf
+--- @param auto_approve agentic.PermAutoApprove
+--- @return agentic.PermDecision
+function M.decide_leaf(entries, parsed, auto_approve)
+    local words = parsed.args
+    local dynamic = parsed.args_dynamic or {}
+    local ctx = build_exist_ctx(words, dynamic)
+    local relevant = relevant_entries(entries, parsed.cmd_name)
 
     local function exist(gate)
         return gate_matches_existential(gate, ctx)
@@ -673,6 +691,55 @@ function M.decide_leaf(entries, parsed, auto_approve)
     end
 
     return nil
+end
+
+--- @class agentic.PermClassification
+--- @field read_only boolean
+--- @field safe_write boolean
+--- @field ask boolean
+--- @field deny boolean
+
+--- Category-level classification of a leaf, independent of `auto_approve`.
+--- Where `decide_leaf` resolves a single mode-gated decision, this reports
+--- which of the four gate kinds match — the highlight layer needs the
+--- intrinsic category ("is this known-safe") not "was this auto-approved", so
+--- a `safe_write` like `git add` reads as safe even in `read-only` mode.
+--- deny/ask use existential matching; read_only/safe_write use the allow parse.
+--- @param entries agentic.StructuredEntries
+--- @param parsed agentic.ParsedLeaf
+--- @return agentic.PermClassification
+function M.classify_leaf(entries, parsed)
+    local words = parsed.args
+    local dynamic = parsed.args_dynamic or {}
+    local ctx = build_exist_ctx(words, dynamic)
+    local parse = allow_parse(words, dynamic, parsed.cmd_name)
+    local relevant = relevant_entries(entries, parsed.cmd_name)
+
+    local function exist(gate)
+        return gate_matches_existential(gate, ctx)
+    end
+    local function allow(gate)
+        return gate_matches_allow(gate, parse)
+    end
+
+    --- @type agentic.PermClassification
+    local result =
+        { read_only = false, safe_write = false, ask = false, deny = false }
+    for _, e in ipairs(relevant) do
+        if any_gate(e.deny, exist) then
+            result.deny = true
+        end
+        if any_gate(e.ask, exist) then
+            result.ask = true
+        end
+        if any_gate(e.read_only, allow) then
+            result.read_only = true
+        end
+        if any_gate(e.safe_write, allow) then
+            result.safe_write = true
+        end
+    end
+    return result
 end
 
 return M

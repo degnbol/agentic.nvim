@@ -1273,6 +1273,309 @@ function walk(node, src, ctx)
     return false
 end
 
+-- ── Tally walk (highlight the unapproved parts of a prompt) ──────────────────
+--
+-- A second traversal over the same parse tree, used only for UI: it records the
+-- byte ranges of every leaf/structural node that is NOT known-safe, so the
+-- permission prompt can wash those bytes. It is deliberately SEPARATE from the
+-- decision `walk` above — a bug here can only mis-highlight, never mis-approve,
+-- since it never feeds `should_auto_approve`. It reuses every structural helper
+-- (`literal_token`, `command_name_text`, `redirect_is_safe`,
+-- `subtree_has_substitution`, the node-type sets, …) so "what counts as safe
+-- structure" stays single-sourced; only the control flow differs (record and
+-- continue, vs bail on first).
+--
+-- Classification is CATEGORY-level (`PermissionStructured.classify_leaf` + the
+-- four glob buckets), not the `auto_approve`-resolved decision: a leaf is
+-- known-safe iff it matches a read_only/safe_write rule AND no deny/ask rule, so
+-- a `safe_write` like `git add` never lights up even in read-only mode.
+
+--- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries }
+
+--- @alias agentic.utils.PermissionRules.Range [integer, integer, integer, integer]
+
+--- Append a node's `node:range()` (0-indexed byte cols) to `ranges`.
+--- @param ranges agentic.utils.PermissionRules.Range[]
+--- @param node TSNode
+local function record(ranges, node)
+    local sr, sc, er, ec = node:range()
+    table.insert(ranges, { sr, sc, er, ec })
+end
+
+--- Record every command/process substitution node in a subtree without
+--- descending into it. Substitution is always a "look before OK" case (it runs
+--- code the matcher cannot inspect), so it highlights wherever it appears
+--- outside a command leaf (for-list, case value/pattern, assignment value,
+--- test). Inside a `command` it is absorbed into the whole-command range.
+--- @param node TSNode
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function record_substitutions(node, ranges)
+    if SUBSTITUTION_TYPES[node:type()] then
+        record(ranges, node)
+        return
+    end
+    for child in node:iter_children() do
+        if child:named() then
+            record_substitutions(child, ranges)
+        end
+    end
+end
+
+--- Whether a `command` leaf is known-safe: it matches a read_only/safe_write
+--- rule (glob or structured) AND no deny/ask rule, with no structural reason to
+--- bail (substitution, env-hijack prefix, dynamic name, code-taking builtin,
+--- unextractable token). Mirrors `walk_command`'s extraction but classifies by
+--- category instead of resolving the mode-gated decision.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @return boolean known_safe
+local function command_known_safe(node, src, ctx)
+    if subtree_has_substitution(node) then
+        return false
+    end
+
+    local name_node
+    --- @type string[]
+    local args = {}
+    --- @type boolean[]
+    local args_dynamic = {}
+    for child in node:iter_children() do
+        local t = child:type()
+        if t == "variable_assignment" then
+            if not safe_assignment_name(child, src) then
+                return false
+            end
+        elseif t == "command_name" then
+            name_node = child
+        elseif child:named() then
+            local tok = literal_token(child, src)
+            if tok == nil then
+                return false
+            end
+            table.insert(args, tok)
+            table.insert(args_dynamic, token_is_dynamic(child))
+        end
+    end
+
+    if not name_node then
+        return false
+    end
+    local name = command_name_text(name_node, src)
+    if not name then
+        return false
+    end
+    local cmd_name = M.strip_command_path(name)
+    if CODE_TAKING_BUILTINS[cmd_name] then
+        return false
+    end
+
+    local leaf = name
+    if #args > 0 then
+        leaf = leaf .. " " .. table.concat(args, " ")
+    end
+
+    if
+        M.matches_any_pattern(leaf, ctx.deny)
+        or M.matches_any_pattern(leaf, ctx.ask)
+    then
+        return false
+    end
+    local glob_safe = M.matches_any_pattern(leaf, ctx.read_only)
+        or M.matches_any_pattern(leaf, ctx.safe_write)
+
+    local struct_safe = false
+    if next(ctx.structured_entries) ~= nil then
+        local PermissionStructured =
+            require("agentic.utils.permission_structured")
+        local c = PermissionStructured.classify_leaf(ctx.structured_entries, {
+            cmd_name = cmd_name,
+            args = args,
+            args_dynamic = args_dynamic,
+        })
+        if c.deny or c.ask then
+            return false
+        end
+        struct_safe = c.read_only or c.safe_write
+    end
+
+    return glob_safe or struct_safe
+end
+
+--- Forward declaration — the tally handlers are mutually recursive.
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.TallyCtx, ranges: agentic.utils.PermissionRules.Range[])
+local tally_walk
+
+--- Recurse a container/`do_group`: every named non-comment child is a statement.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function tally_children(node, src, ctx, ranges)
+    for child in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            tally_walk(child, src, ctx, ranges)
+        end
+    end
+end
+
+--- Tally a `redirected_statement`: the body recurses; any redirect that is not
+--- a safe form (`> /dev/null`, FD duplication) records as unapproved.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function tally_redirected(node, src, ctx, ranges)
+    for child, field in node:iter_children() do
+        if field == "body" then
+            tally_walk(child, src, ctx, ranges)
+        elseif child:named() then
+            if
+                child:type() ~= "file_redirect"
+                or not redirect_is_safe(child, src)
+            then
+                record(ranges, child)
+            end
+        end
+    end
+end
+
+--- Tally a `for_statement`: list-item substitutions record (they run code that
+--- flows into body args); the `do_group` body recurses.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function tally_for(node, src, ctx, ranges)
+    for child, field in node:iter_children() do
+        if child:named() then
+            if field == "value" then
+                record_substitutions(child, ranges)
+            elseif field == "body" then
+                tally_walk(child, src, ctx, ranges)
+            end
+        end
+    end
+end
+
+--- Tally a `while_statement` (covers `while`/`until`): condition and body each
+--- recurse as statements.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function tally_while(node, src, ctx, ranges)
+    for child, field in node:iter_children() do
+        if child:named() and (field == "condition" or field == "body") then
+            tally_walk(child, src, ctx, ranges)
+        end
+    end
+end
+
+--- Tally a `case_statement`: the matched value and each item pattern record
+--- their substitutions (both run code during the match); each item body
+--- recurses.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function tally_case(node, src, ctx, ranges)
+    for child, field in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if field == "value" then
+                record_substitutions(child, ranges)
+            elseif child:type() == "case_item" then
+                for item_child, item_field in child:iter_children() do
+                    if
+                        item_child:named()
+                        and item_child:type() ~= "comment"
+                    then
+                        if item_field == "value" then
+                            record_substitutions(item_child, ranges)
+                        else
+                            tally_walk(item_child, src, ctx, ranges)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function tally_walk(node, src, ctx, ranges)
+    local t = node:type()
+    if t == "test_command" then
+        record_substitutions(node, ranges)
+    elseif t == "case_statement" then
+        tally_case(node, src, ctx, ranges)
+    elseif CONTAINER_TYPES[t] or t == "do_group" then
+        tally_children(node, src, ctx, ranges)
+    elseif t == "command" then
+        if not command_known_safe(node, src, ctx) then
+            record(ranges, node)
+        end
+    elseif t == "redirected_statement" then
+        tally_redirected(node, src, ctx, ranges)
+    elseif t == "variable_assignment" then
+        local value = node:field("value")[1]
+        if value then
+            record_substitutions(value, ranges)
+        end
+    elseif t == "for_statement" then
+        tally_for(node, src, ctx, ranges)
+    elseif t == "while_statement" then
+        tally_while(node, src, ctx, ranges)
+    else
+        -- A bare substitution statement or any unknown/unmodelled node:
+        -- highlight it. The decision walk fails closed here, so the prompt
+        -- fired — show the user what triggered it.
+        record(ranges, node)
+    end
+end
+
+--- Tally the byte ranges of the parts of a Bash command that are NOT known-safe
+--- — the leaves and structural nodes the permission prompt is asking about. The
+--- highlight binds to the displayed (reformatted) command, so coordinates are
+--- relative to `command`'s own lines (0-indexed rows, byte cols), matching
+--- tree-sitter's `node:range()`.
+---
+--- Returns `nil` when the command does not parse (no parser / parse error) so
+--- the caller can fall back to highlighting the whole block; an empty list means
+--- it parsed and nothing needs attention (bare prompt). This is pure UI — it
+--- never grants anything and binds to the *displayed* text, whereas the decision
+--- walk binds to the raw `rawInput.command` (see notes/perm-highlight…).
+--- @param command string
+--- @return agentic.utils.PermissionRules.Range[]|nil
+function M.tally_unapproved(command)
+    if type(command) ~= "string" or command == "" then
+        return nil
+    end
+    if #command > 65536 then
+        return nil
+    end
+
+    local ok, root = pcall(function()
+        local parser = vim.treesitter.get_string_parser(command, "zsh")
+        return parser:parse(true)[1]:root()
+    end)
+    if not ok or not root or root:has_error() then
+        return nil
+    end
+
+    --- @type agentic.utils.PermissionRules.TallyCtx
+    local ctx = {
+        read_only = M.get_read_only_patterns(),
+        safe_write = M.get_safe_write_patterns(),
+        deny = M.get_deny_patterns(),
+        ask = M.get_ask_patterns(),
+        structured_entries = M.get_structured_entries(),
+    }
+    --- @type agentic.utils.PermissionRules.Range[]
+    local ranges = {}
+    tally_walk(root, command, ctx, ranges)
+    return ranges
+end
+
 --- Check if a Bash command should be auto-approved. Parses the command with the
 --- zsh grammar and walks the tree: every leaf command must match an allow
 --- pattern, no leaf may match a deny or ask pattern, and any unmodelled

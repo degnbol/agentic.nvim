@@ -571,6 +571,15 @@ All groups use `default = true` so user definitions take priority.
     `AgenticSpinnerSearching`      |DiagnosticInfo|               Searching spinner
     `AgenticSpinnerBusy`           |Comment|                      Busy spinner
     `AgenticDimmedBlock`           (set in ftplugin)             Dimmed fence lines
+    `AgenticUnapprovedCommand`     |DiagnosticVirtualTextWarn|   Non-known-safe parts of an execute permission prompt
+
+`AgenticUnapprovedCommand` washes the leaves and structural parts of an
+`execute` permission prompt that are not known-safe (anything not matching a
+`read_only`/`safe_write` rule, or matching a `deny`/`ask` rule, plus
+substitutions and unsafe redirects) while the prompt is shown. It is gated by
+`permissions.highlight_unapproved` (default true). |DiagnosticVirtualTextWarn|
+is fg+bg in some colorschemes and fg-only in others; on a bare theme set an
+explicit `bg` for the wash to be visible.
 
 ==============================================================================
 9. AUTOCMDS                                              *agentic-autocmds*

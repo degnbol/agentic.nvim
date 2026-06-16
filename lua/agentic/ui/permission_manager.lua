@@ -4,8 +4,15 @@ local FileSystem = require("agentic.utils.file_system")
 local GitFiles = require("agentic.utils.git_files")
 local Logger = require("agentic.utils.logger")
 local PermissionFloat = require("agentic.ui.permission_float")
+local PermissionHighlight = require("agentic.ui.permission_highlight")
 local PermissionRules = require("agentic.utils.permission_rules")
 local TrustSafety = require("agentic.utils.trust_safety")
+
+--- Highlights washing the non-known-safe parts of an execute permission prompt.
+--- Module-level (shared id across tabs) but cleared per-buffer, so each tab's
+--- manager only ever touches its own chat buffer.
+local NS_PERMISSION_HIGHLIGHT =
+    vim.api.nvim_create_namespace("agentic_permission_highlight")
 
 -- Priority order for permission option kinds.
 -- Lower number = higher priority (appears first).
@@ -682,6 +689,7 @@ function PermissionManager:_process_next()
     local sorted_options = self._sort_permission_options(request.options)
 
     local option_mapping = self.permission_float:open(sorted_options)
+    self:_apply_unapproved_highlight(request)
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
     self.current_request = {
@@ -692,6 +700,42 @@ function PermissionManager:_process_next()
     }
 
     self:_setup_keymaps(option_mapping)
+end
+
+--- Highlight the non-known-safe parts of an execute permission prompt while it
+--- is shown. No-op when the feature is disabled, for non-execute kinds (no
+--- command to decompose), or when the block / chat buffer can't be resolved.
+--- Uses the same `tracker.kind` fallback as elsewhere in this file for
+--- providers that re-kind a request under the underlying tool's toolCallId.
+--- @param request agentic.acp.RequestPermission
+function PermissionManager:_apply_unapproved_highlight(request)
+    if not Config.permissions.highlight_unapproved then
+        return
+    end
+    local tool_call = request.toolCall
+    if not tool_call then
+        return
+    end
+    local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
+    local tracker_kind_lc = tracker and kind_key(tracker.kind) or ""
+    if kind_key(tool_call.kind) ~= "execute" and tracker_kind_lc ~= "execute" then
+        return
+    end
+    if not tracker then
+        return
+    end
+    local bufnr = self.message_writer.bufnr
+    if bufnr then
+        PermissionHighlight.apply(bufnr, NS_PERMISSION_HIGHLIGHT, tracker)
+    end
+end
+
+--- Clear the unapproved-command highlight from this manager's chat buffer.
+function PermissionManager:_clear_unapproved_highlight()
+    local bufnr = self.message_writer.bufnr
+    if bufnr then
+        PermissionHighlight.clear(bufnr, NS_PERMISSION_HIGHLIGHT)
+    end
 end
 
 --- @param options agentic.acp.PermissionOption[]
@@ -738,6 +782,7 @@ function PermissionManager:_complete_request(option_id)
     end
 
     self.permission_float:close()
+    self:_clear_unapproved_highlight()
 
     self:_remove_keymaps()
     current.callback(option_id)
@@ -751,6 +796,7 @@ end
 function PermissionManager:clear()
     if self.current_request then
         self.permission_float:close()
+        self:_clear_unapproved_highlight()
         self:_remove_keymaps()
 
         local ok, err = pcall(self.current_request.callback, nil)
@@ -794,6 +840,7 @@ function PermissionManager:reject_and_cancel_remaining()
 
     -- Remove UI and keymaps for current request
     self.permission_float:close()
+    self:_clear_unapproved_highlight()
     self:_remove_keymaps()
 
     -- Send reject_once for current, cancelled for the rest

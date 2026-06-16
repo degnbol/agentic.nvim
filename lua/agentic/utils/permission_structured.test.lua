@@ -893,4 +893,61 @@ describe("PermissionStructured", function()
             assert.equal("ask", decision)
         end)
     end)
+
+    -- ------------------------------------------------------------------
+    -- classify_leaf — category-level, mode-independent classification
+    -- ------------------------------------------------------------------
+    describe("classify_leaf", function()
+        it("reports read_only for a matching read_only gate", function()
+            local entries = {
+                git = { read_only = { { positionals = { "log" } } } },
+            }
+            local c = PermissionStructured.classify_leaf(
+                entries,
+                parsed("git", { "log" })
+            )
+            assert.is_true(c.read_only)
+            assert.is_false(c.safe_write)
+            assert.is_false(c.ask)
+            assert.is_false(c.deny)
+        end)
+
+        it("reports safe_write regardless of auto_approve mode", function()
+            local entries = {
+                git = { safe_write = { { positionals = { "add" } } } },
+            }
+            local c = PermissionStructured.classify_leaf(
+                entries,
+                parsed("git", { "add", "x" })
+            )
+            assert.is_true(c.safe_write)
+            assert.is_false(c.read_only)
+        end)
+
+        it("reports deny and ask together when both gates fire", function()
+            local entries = {
+                foo = {
+                    deny = { { options = { "force" } } },
+                    ask = { { positionals = { "run" } } },
+                },
+            }
+            local c = PermissionStructured.classify_leaf(
+                entries,
+                parsed("foo", { "run", "--force" })
+            )
+            assert.is_true(c.deny)
+            assert.is_true(c.ask)
+        end)
+
+        it("reports nothing for an unknown command", function()
+            local c = PermissionStructured.classify_leaf(
+                {},
+                parsed("frobnicate", { "x" })
+            )
+            assert.is_false(c.read_only)
+            assert.is_false(c.safe_write)
+            assert.is_false(c.ask)
+            assert.is_false(c.deny)
+        end)
+    end)
 end)

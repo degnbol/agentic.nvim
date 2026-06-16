@@ -39,6 +39,7 @@ Theme.HL_GROUPS = {
     ERROR_BODY = "AgenticErrorBody",
     PICKER_DATE = "AgenticPickerDate",
     PICKER_DELIM = "AgenticPickerDelim",
+    UNAPPROVED_COMMAND = "AgenticUnapprovedCommand",
 }
 
 --- A lang map of extension to language identifier for markdown code fences
@@ -145,6 +146,9 @@ function Theme.setup()
         { Theme.HL_GROUPS.SPINNER_THINKING, { link = "Special" } },
         { Theme.HL_GROUPS.SPINNER_SEARCHING, { link = "DiagnosticInfo" } },
         { Theme.HL_GROUPS.SPINNER_BUSY, { link = "Comment" } },
+
+        -- Unapproved parts of an execute permission prompt
+        { Theme.HL_GROUPS.UNAPPROVED_COMMAND, { link = "DiagnosticVirtualTextWarn" } },
     }
     -- stylua: ignore end
 

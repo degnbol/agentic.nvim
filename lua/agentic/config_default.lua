@@ -458,6 +458,7 @@ local ConfigDefault = {
     --- @field deny string[] Additional deny patterns (override read_only and safe_write)
     --- @field ask string[] Ask patterns (trigger prompt, lower precedence than deny)
     --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
+    --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of the auto_approve switches).
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
@@ -467,6 +468,7 @@ local ConfigDefault = {
         deny = {},
         ask = {},
         structured = {},
+        highlight_unapproved = true,
     },
 
     auto_approve_trust_scope = true,
