@@ -315,7 +315,7 @@ end
 --- letter can hijack.
 --- @param name string
 --- @return boolean
-local function is_data_var_name(name)
+local function is_inert_var_name(name)
     return name:match("^[a-z_]") ~= nil or name:match("^[A-Z]$") ~= nil
 end
 
@@ -722,7 +722,7 @@ local function safe_assignment_name(va, src)
         return false
     end
     local name = vim.treesitter.get_node_text(name_node, src)
-    return is_safe_env_name(name) or is_data_var_name(name)
+    return is_safe_env_name(name) or is_inert_var_name(name)
 end
 
 --- Strict literal extraction: every byte of the returned string must be
