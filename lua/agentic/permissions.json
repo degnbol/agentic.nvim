@@ -83,6 +83,7 @@
       { "positionals": ["ls-files"] },
       { "positionals": ["ls-tree"] },
       { "positionals": ["cat-file"] },
+      { "positionals": ["grep"] },
       { "positionals": ["config"], "options": ["get"] },
       { "positionals": ["config"], "options": ["list"] },
       { "positionals": ["config"], "options": ["f", "get"] },
@@ -238,6 +239,7 @@
   "brew": {
     "read_only": [
       { "positionals": ["info"] },
+      { "positionals": ["leaves"] },
       { "positionals": ["list"] },
       { "positionals": ["search"] }
     ]
@@ -395,6 +397,7 @@
   "qalc":  { "read_only": [{}], "ask": [{ "options": ["s", "set"] }] },
   "paste": { "read_only": [{}] },
   "tac":   { "read_only": [{}] },
+  "col":   { "read_only": [{}] },
 
   "curl": {
     "read_only": [{}],
@@ -425,6 +428,8 @@
     ]
   },
 
+  "mktemp": { "safe_write": [{}] },
+
   "just": {
     "safe_write": [
       { "positionals": ["lint"] },
@@ -435,6 +440,7 @@
   "make": {
     "safe_write": [
       { "positionals": ["test"] },
+      { "positionals": ["test-file"] },
       { "positionals": ["validate"] }
     ]
   },
