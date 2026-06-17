@@ -27,7 +27,7 @@ CONTENTS                                                    *agentic-contents*
        6.4 Diff keymaps ...................... |agentic-keymaps-diff|
        6.5 Permission keymaps ................ |agentic-keymaps-permission|
        6.6 Plug mappings ..................... |agentic-plug-mappings|
-    7. Compound command auto-approval ........ |agentic-compound-commands|
+    7. Shell command auto-approval ........... |agentic-compound-commands|
     8. Auto-scroll ........................... |agentic-auto-scroll|
     9. Highlight groups ...................... |agentic-highlights|
    10. Autocmds .............................. |agentic-autocmds|
@@ -84,10 +84,10 @@ install either the `bash` or `zsh` parser. The plugin registers `zsh` as an
 alias for `bash`, so either works. The `zsh` grammar is currently the more
 actively maintained of the two.
 
-Compound Bash command auto-approval additionally requires the `zsh` parser
+Shell command auto-approval additionally requires the `zsh` parser
 specifically: each command is parsed with the zsh grammar and its parse tree
-walked to decompose it safely. Without `zsh`, no compound command
-auto-approves (it falls through to a permission prompt).
+walked so every leaf is classified separately. Without `zsh`, no command
+auto-approves through this path (it falls through to a permission prompt).
 
 Parser installers are not shipped with Neovim core. Install via
 nvim-treesitter (https://github.com/nvim-treesitter/nvim-treesitter) with
@@ -461,7 +461,7 @@ Global `<Plug>` mappings for binding from any buffer:
     `<Plug>(agentic-rotate-layout)`            n      Rotate layout
 
 ==============================================================================
-7. COMPOUND COMMAND AUTO-APPROVAL             *agentic-compound-commands*
+7. SHELL COMMAND AUTO-APPROVAL                *agentic-compound-commands*
 
 ACP providers (e.g. claude-agent-acp) match the full Bash command string
 against permission patterns as a single unit. This means a compound command
@@ -469,7 +469,8 @@ like `cd /path && git status` won't match `Bash(git *)` because the string
 starts with `cd`. This is an upstream limitation tracked at
 https://github.com/anthropics/claude-code/issues/16561
 
-agentic.nvim adds a client-side layer that fills this gap. When a Bash
+agentic.nvim adds a client-side layer that parses every Bash command with the
+`zsh` treesitter grammar and matches its leaves individually. When a Bash
 permission request arrives and `auto_approve_compound_commands` is true:
 
 1. Parse the command with the `zsh` treesitter grammar. An absent parser,

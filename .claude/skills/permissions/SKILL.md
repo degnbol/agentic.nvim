@@ -1,8 +1,8 @@
 ---
 name: permissions
 description:
-  Permission flow and client-side auto-approval — read-only tools, compound
-  Bash matching, allow/reject-always cache, /trust scope. Use when editing
+  Permission flow and client-side auto-approval — read-only tools, parse-tree
+  shell command matching, allow/reject-always cache, /trust scope. Use when editing
   PermissionManager, PermissionRules, TrustSafety, GitFiles, PermissionFloat,
   the permission keymaps, or anything in the request-permission code path.
   Per-function rationale lives in docstrings on those modules — read them
@@ -63,135 +63,89 @@ read-only kind, approve anyway. This catches opencode raising
 underlying read tool. See the acp skill's `references/opencode.md`
 § "Permission request shape" finding 1.
 
-### 2. Compound Bash commands (`Config.auto_approve_compound_commands`)
+### 2. Shell command parsing (`Config.auto_approve_compound_commands`)
 
-Fills a provider gap: the SDK matches the whole command string against each
-`Bash(...)` pattern, so `grep foo | head -20` prompts even when both
-`Bash(grep *)` and `Bash(head *)` are allowed. `PermissionRules`
-(`lua/agentic/utils/permission_rules.lua`) walks the zsh parse tree and
-matches each leaf separately.
+Each `Bash`/`execute` command is parsed with the **zsh treesitter grammar**
+and every leaf classified independently, so pipelines, loops, conditionals,
+redirects, and env-prefixes are all checked structurally — catching evasions a
+whole-string glob cannot see. (The config key keeps the historical name
+`auto_approve_compound_commands`; compound commands are one case the parser
+handles, not the whole of it.) This fills a provider gap: the SDK matches the
+entire command string against each `Bash(...)` pattern, so `grep foo | head -20`
+prompts even when both `Bash(grep *)` and `Bash(head *)` are allowed.
+`PermissionRules` (`lua/agentic/utils/permission_rules.lua`) walks the parse
+tree and matches each leaf separately.
 
-Two layers run per leaf. The **glob matcher** consumes Claude's `Bash(...)`
-patterns from `~/.claude/settings.json`, `.claude/settings.json`, and
-`Config.permissions.{read_only, safe_write, deny, ask}` — shared schema
+**Two matcher layers run per leaf.** The **glob matcher** consumes Claude's
+`Bash(...)` patterns from `~/.claude/settings.json`, `.claude/settings.json`,
+and `Config.permissions.{read_only, safe_write, deny, ask}` — shared schema
 with the Claude TUI, kept for user-side rules. The **structured matcher**
 (`lua/agentic/utils/permission_structured.lua`) consumes the bundled
-`lua/agentic/permissions.json`, which is now purely structured (no globs),
-plus any `Config.permissions.structured` user additions. It is a cmd-keyed
-table: each command maps to up to four gate-kind arrays (`read_only`,
-`safe_write`, `ask`, `deny`), and each gate matches on literal flag
-identifiers (`options`) and ordered positional patterns (`positionals`).
-The kind name encodes the policy — `read_only` approves at
-"read-only"/"allow", `safe_write` only at "allow", `ask`/`deny` are
-unconditional. Classify a command by its *un-redirected* effect: a command
-that only prints to stdout is `read_only` (writing via pipe/redirect is
-caught structurally by the walker), while one that mutates disk or executes
-arbitrary code as its normal action is `safe_write` — carve out the
-write-causing options/subcommands as `ask`/`deny`. Users add or override via
-`Config.permissions.structured`
-(deep-merged "force" over the bundled defaults; a cmd key replaces that
-command's bundled kind-arrays wholesale, `vim.NIL` disables it). The structured layer exists because globs are
-unsound against option clustering and GNU abbreviation — `sort -uo out`,
-`sort --out=x`, and `sort -oFILE` all evade a `Bash(sort * -o *)` glob.
-The matcher over-approximates option presence per token (single-dash
-`-uo` expands to letters `{u, o}` AND long-name `uo`; double-dash
-`--output=x` becomes prefix-matched long-name `output`), which is sound
-for deny/ask — extra candidates can only widen a match, never miss one.
+`lua/agentic/permissions.json` (purely structured, no globs) plus any
+`Config.permissions.structured` additions. It is cmd-keyed: each command maps
+to up to four gate-kind arrays (`read_only`, `safe_write`, `ask`, `deny`),
+matched on literal flag identifiers (`options`) and ordered positional patterns
+(`positionals`). It exists because globs are unsound against option clustering
+and GNU abbreviation — `sort -uo out`, `sort --out=x`, and `sort -oFILE` all
+evade a `Bash(sort * -o *)` glob.
 
-**Arity is matched, not guessed.** The walker emits an ordered word list
-(`{cmd_name, args}`, each arg tagged only with whether it expands at runtime);
-no role/arity tagging. The matcher carries no per-command getopt table for
-soundness — each leading dash-word may absorb 0 or 1 following plain word, and
-the two directions read that ambiguity differently:
+**Safety, not call-correctness.** The matcher classifies a command by its
+*intended structural effect* — never by whether the invocation is well-formed
+or would succeed. It carries no per-command getopt/signature table: guarding
+safety does not require knowing a command's valid call signature, and a
+malformed command that fails at runtime fails safely — its redirects and
+env-prefixes are still classified structurally (below), separately from the
+command itself. Modelling call signatures would be scope creep that buys no
+safety. (`value_options` on the allow path is a fail-safe convenience to cut
+over-prompts — an unlisted flag over-prompts, never under-guards — not a
+correctness model.)
 
-- *deny/ask are existential* — a gate fires if **any** absorption parse exposes
-  the gated subcommand/option. A linear prefix-walk collects the possible
-  first-positional (subcommand) indices; the rare multi-element positional gate
-  enumerates parses (bounded). Owns soundness — an over-match only over-prompts.
-- *allow is a single parse* — a leading flag absorbs its next word iff it is a
-  known value-taker (`value_options`, a fail-safe optimisation; an unlisted flag
-  absorbs 0, only over-prompting). Convenience only: the existential pass has
-  already cleared every parse. Single-parse — *not* existential — keeps an
-  unknown subcommand → prompt, so a leading bare flag cannot launder a dangerous
-  subcommand to a read-only alternate parse.
+**Classify by un-redirected effect.** A command that only prints to stdout is
+`read_only` (writing via pipe/redirect is caught structurally by the walker);
+one that mutates disk or executes arbitrary code as its normal action is
+`safe_write`, with write-causing options/subcommands carved out as `ask`/`deny`.
+The kind name encodes the policy — `read_only` approves at "read-only"/"allow",
+`safe_write` only at "allow", `ask`/`deny` are unconditional. Users override via
+`Config.permissions.structured` (deep-merged over the bundled defaults; a cmd
+key replaces that command's bundled kind-arrays wholesale, `vim.NIL` disables
+it).
 
-So `git -C /repo log` auto-approves (`-C` absorbs `/repo`, subcommand `log`),
-while `git -C push log`, `git -p push`, and `git --new-global val push` all
-prompt — the took-0 parse exposes `push`. Every dash-token is stripped to the
-option fields; only `-` (stdin/stdout sentinel) and the words after `--` are
-positionals.
+**Guarantees the walker enforces** (token-level mechanics — absorption parses,
+`leading_options`, the over-approximation soundness argument, the full pipeline
+— are in [references/parsing.md](references/parsing.md)):
 
-**Dynamic tokens wildcard deny/ask, never allow.** A token that expands at
-runtime — `$var`, unquoted glob (`~` is exempt: it only yields a path, never a
-flag/subcommand) — is treated as "could be anything" for deny/ask: it satisfies
-any `options` requirement and any positional at or after its reachable index.
-So laundering a payload through `$f` at a gated command prompts — guarding the
-bare (`find $f`), assignment-laundered (`f=$(…); find . $f`), and loop-body
-(`for f in *.txt; do find . $f`) vectors at the single use site. For allow it
-stays concrete (a dynamic subcommand fails the allowlist → prompt; a trailing
-dynamic arg like `git log $ref` is harmless), so a dynamic token never widens
-an approval.
+- **Fail-closed parse.** No parser, parse failure, or any error node → prompt.
+  The zsh parser is a hard dependency.
+- **Reject-by-default walk.** Bails on dynamic command names and code-taking
+  builtins (`eval`/`source`/`.`). Loops and `if`/`case` recurse into every
+  branch — each body command must itself approve; a `for` list must be literal
+  or glob. Command/process substitution bails in argument, command-name,
+  for-list, case-value/pattern, and redirect-target positions (they launder
+  dangerous tokens past deny/ask); it is allowed only as a `variable_assignment`
+  value, whose inner commands recurse through the same walker.
+- **Redirects and env-prefixes classified structurally.** `> /dev/null` and FD
+  duplication (`2>&1`) are safe; any other file redirect bails. Execution-hijack
+  env prefixes (`PATH=`, `LD_*`, `BASH_ENV`) bail. This runs regardless of
+  whether the command would succeed — a failing command's redirect has already
+  truncated its target, which is *why* redirects are guarded here and not by the
+  command's classification.
+- **Dynamic tokens wildcard deny/ask, never allow.** A runtime-expanding token
+  (`$var`, unquoted glob; `~` exempt) satisfies any deny/ask `options` or
+  positional requirement at or after its index, so laundering a payload through
+  `$f` at a gated command prompts. For allow it stays concrete, so it never
+  widens an approval.
+- **Over-approximation is sound for deny/ask.** Option presence is
+  over-approximated per token — extra candidates can only widen a deny/ask
+  match, never miss one. Allow uses a single parse, so an unknown subcommand
+  still prompts.
 
-**`leading_options`** is a gate field matching a flag only in the leading
-region (before the first positional), for a code channel whose danger is
-position-specific: git's leading `-c core.pager=!cmd` runs code before the
-subcommand, but `git log -c` is the harmless combined-diff flag and a trailing
-`$ref` can never inject a leading flag.
-
-Pipeline summary (read the module's docstrings for full detail):
-
-1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
-   failure, or any error node → prompt. The zsh parser is a hard dependency.
-2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
-   builtins (`eval`/`source`/`.`). Anonymous separators
-   (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
-   (`for`, `while`, `until`) recurse: a `for` list must be literal or glob
-   (substitution in the list bails), and every body command must itself
-   approve. `if`/`case` recurse into every branch (no branch prediction):
-   each condition, body, `elif`/`else` clause, and `case` item body must
-   approve. A `test_command` (`[[ … ]]`/`[ … ]`) is a side-effect-free
-   predicate — safe unless it embeds a substitution (`[[ -f $(rm y) ]]`
-   runs `rm`). The `case` value and each `case` item *pattern* must be
-   substitution-free too — both run code during the match
-   (`case $(rm x) in $(rm y)) …`). Command/process substitution bails in
-   argument, command-name, for-list, case-value/pattern, and
-   redirect-target positions — those launder dangerous tokens past
-   deny/ask (`find $(echo '-exec rm')`). It is allowed only
-   as a `variable_assignment` value or array element, where its inner
-   commands recurse through the same walker (so `f=$(rm x)` still bails
-   because `rm` is not allowed).
-3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
-   FD duplication (`2>&1`) are safe; any other file redirect bails. Env
-   prefixes that hijack execution (`PATH=`, `LD_*`, `BASH_ENV`) bail.
-4. **Extract** each safe leaf — the command name and quote-stripped arg
-   tokens, minus redirects and env-prefixes. The leaf goes to the glob
-   matcher as a joined string; the tokenised form (`{cmd_name, args}`)
-   goes to the structured matcher. `stdbuf` wrappers and system
-   binary-dir prefixes are stripped on the command name.
-5. **Check** against compiled patterns and structured entries, sourced
-   per layer:
-   - Bundled `lua/agentic/permissions.json` (when
-     `Config.permissions.use_plugin_defaults`) — structured entries only.
-   - `~/.claude/settings.json` and `.claude/settings.json` (when
-     `Config.permissions.use_claude_settings`) — glob patterns.
-     Mtime-cached.
-   - `Config.permissions.{read_only, safe_write, deny, ask}` — glob
-     patterns. `Config.permissions.structured` — structured entries.
-     Recompiled on table-reference change.
-6. **Resolve** the allow list per `Config.permissions.auto_approve`. Both
-   layers honour the same toggle: `"allow"` accepts entries in
-   `read_only` ∪ `safe_write` (mkdir, touch, git add, …); `"read-only"`
-   accepts `read_only` only; `nil` accepts no allow rules (compound path
-   will not approve; deny/ask still apply).
-7. **Compose** per leaf:
-   `approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR
-   structured_deny OR glob_ask OR structured_ask)`. Deny/ask are OR across
-   layers; allow is union. A leaf approves only when every layer that
-   votes against it stays silent.
-
-Command-source fallback: if `request.toolCall.rawInput.command` is nil
-and the tracker kind is `"execute"`, read from `tracker.argument` instead
-(opencode quirk — see acp skill `references/opencode.md` finding 3).
+**Composition per leaf:**
+`approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR
+structured_deny OR glob_ask OR structured_ask)`. Deny/ask are OR across layers;
+allow is union; the allow set resolves per `Config.permissions.auto_approve`
+(`"allow"` = `read_only` ∪ `safe_write`, `"read-only"` = `read_only` only,
+`nil` = no allow rules). A leaf approves only when every layer that votes
+against it stays silent.
 
 #### Known limitations (uncatchable — fall through to a prompt)
 

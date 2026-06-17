@@ -43,7 +43,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 ### Permissions
 
-- Compound Bash command auto-approval — walks the zsh parse tree of `foo | bar && baz` and checks each leaf against two complementary layers (requires the `zsh` treesitter parser): a glob layer reading Claude's `Bash(...)` patterns from `settings.json` and `Config.permissions.*`, and a structured option matcher reading the plugin's bundled `permissions.json`. The structured layer matches on tokenised flag identifiers, so option clustering (`sort -uo out`) and GNU abbreviation (`--out=x`) are caught where globs would let them through.
+- Parse-tree shell command auto-approval — parses each `Bash`/`execute` command with the `zsh` treesitter grammar (required) and classifies every leaf independently, so pipelines, loops, conditionals, redirects, and env-prefixes are each checked rather than the whole string matched as one unit (a compound like `foo | bar && baz` is decomposed and matched per-segment). Two layers: a glob layer reading Claude's `Bash(...)` patterns from `settings.json` and `Config.permissions.*`, and a structured option matcher reading the bundled `permissions.json` on tokenised flag identifiers, so option clustering (`sort -uo out`) and GNU abbreviation (`--out=x`) are matched where globs would not.
 - `/trust` — per-session auto-approval scope for file-scoped edits, layered with git-recoverability, symlink, and TOCTOU safety
 - Auto-approve read-only tools (Read/Grep/Glob) regardless of target path
 - A per-session cache for "Allow always" / "Reject always" decisions, scoped per resource (file path, command, URL, …) so one approval never silently approves a different call of the same kind
