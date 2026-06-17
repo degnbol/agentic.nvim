@@ -67,21 +67,26 @@ a dynamic token never widens an approval.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
    builtins (`eval`/`source`/`.`). Anonymous separators
    (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
-   (`for`, `while`, `until`) recurse: a `for` list must be literal or glob
-   (substitution in the list bails), and every body command must itself
-   approve. `if`/`case` recurse into every branch (no branch prediction):
-   each condition, body, `elif`/`else` clause, and `case` item body must
-   approve. A `test_command` (`[[ … ]]`/`[ … ]`) is a side-effect-free
-   predicate — safe unless it embeds a substitution (`[[ -f $(rm y) ]]`
-   runs `rm`). The `case` value and each `case` item *pattern* must be
-   substitution-free too — both run code during the match
-   (`case $(rm x) in $(rm y)) …`). Command/process substitution bails in
-   argument, command-name, for-list, case-value/pattern, and
-   redirect-target positions — those launder dangerous tokens past
-   deny/ask (`find $(echo '-exec rm')`). It is allowed only
-   as a `variable_assignment` value or array element, where its inner
-   commands recurse through the same walker (so `f=$(rm x)` still bails
-   because `rm` is not allowed).
+   (`for`, `while`, `until`) recurse: every body command must itself approve,
+   and a `for` list item is a literal, glob, or a bare `command_substitution`
+   (recursed — see below). `if`/`case` recurse into every branch (no branch
+   prediction): each condition, body, `elif`/`else` clause, and `case` item
+   body must approve. A `test_command` (`[[ … ]]`/`[ … ]`) is a
+   side-effect-free predicate — safe unless it embeds a substitution
+   (`[[ -f $(rm y) ]]` runs `rm`). The `case` value and each `case` item
+   *pattern* must be substitution-free too — both run code during the match
+   (`case $(rm x) in $(rm y)) …`).
+   A bare `command_substitution` (`$(…)` / backticks) in **argument**,
+   **for-list**, or **assignment-value/array-element** position recurses
+   through `walk_substitution_inner`: its inner commands must approve
+   standalone (so `f=$(rm x)` and `cat $(rm x)` bail — `rm` not allowed). In
+   argument and for-list position the output is then spliced in as a *dynamic
+   token*, so a gated outer command still prompts — `find . $(echo -exec rm)`
+   approves the inner `echo` but the dynamic token wildcard-fires find's
+   `-exec` gate. Still bails (output is a control surface the dynamic-token
+   machinery can't guard): substitution as the command name (`$(echo rm) x`),
+   string-embedded or concatenated (`"$(…)"`, `a$(b)c`), process substitution
+   (`<(…)`), case value/pattern, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
    FD duplication (`2>&1`) are safe; any other file redirect bails. Env
    prefixes that hijack execution (`PATH=`, `LD_*`, `BASH_ENV`) bail.
