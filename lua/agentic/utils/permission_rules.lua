@@ -620,7 +620,7 @@ end
 -- 2026-06-12). They can drift across grammar versions — re-verify with a
 -- parse-tree dump after upgrading the parser.
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer }
 
 --- Container nodes whose every named child must itself pass. `do_group` is
 --- dispatched explicitly (it shares the same "every child is a statement"
@@ -902,6 +902,57 @@ local function redirect_is_safe(fr, src)
     return vim.treesitter.get_node_text(dest, src) == "/dev/null"
 end
 
+--- Parse a command string with the zsh grammar. Returns the root node, or nil
+--- on missing parser / parse error / any error node (fail-closed). Shared by the
+--- decision walk, the tally walk, and the inline `-c` body recursion.
+--- @param src string
+--- @return TSNode|nil
+local function parse_zsh(src)
+    local ok, root = pcall(function()
+        local parser = vim.treesitter.get_string_parser(src, "zsh")
+        return parser:parse(true)[1]:root()
+    end)
+    if not ok or not root or root:has_error() then
+        return nil
+    end
+    return root
+end
+
+--- Shell command names whose `-c <body>` runs an inline script. When the body
+--- is a pure literal it is already present verbatim in `rawInput.command` (no
+--- file read, no TOCTOU window), so it is re-parsed and walked recursively
+--- instead of firing the unconditional `c`-flag ask.
+local SHELL_C_COMMANDS = { zsh = true, bash = true, sh = true, dash = true }
+
+--- Recursion-depth cap for nested inline `-c` bodies (`zsh -c 'zsh -c "…"'`).
+--- A body at the cap falls through to the ask rather than recursing further.
+local SHELL_C_MAX_DEPTH = 3
+
+--- The inline `-c` script body of a shell command, or nil when the branch does
+--- not apply: not a shell, no `-c` flag, or the body is missing or dynamic
+--- (`sh -c "$x"` is opaque). A `-c` may be the trailing letter of a short-flag
+--- cluster (`-lc`), which still consumes the next word as its argument. The
+--- returned body is already quote-stripped (it comes from `args`).
+--- @param cmd_name string
+--- @param args string[]
+--- @param args_dynamic boolean[]
+--- @return string|nil body
+local function shell_c_body(cmd_name, args, args_dynamic)
+    if not SHELL_C_COMMANDS[cmd_name] then
+        return nil
+    end
+    for i, arg in ipairs(args) do
+        if arg:match("^%-[a-zA-Z]*c$") then
+            local body = args[i + 1]
+            if body ~= nil and not args_dynamic[i + 1] then
+                return body
+            end
+            return nil
+        end
+    end
+    return nil
+end
+
 --- Forward declaration — `walk` and the per-node handlers are mutually
 --- recursive.
 --- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
@@ -965,6 +1016,23 @@ local function walk_command(node, src, ctx)
     end
     if #ctx.ask > 0 and M.matches_any_pattern(leaf, ctx.ask) then
         return false
+    end
+
+    -- Inline `sh -c '<literal body>'`: walk the body instead of firing the
+    -- unconditional `c`-flag ask. Must run before the structured matcher so its
+    -- `c` gate does not pre-empt this. A body at the depth cap, or a dynamic /
+    -- missing body, falls through to that ask.
+    local body = shell_c_body(cmd_name, args, args_dynamic)
+    if body and ctx.depth < SHELL_C_MAX_DEPTH then
+        local root = parse_zsh(body)
+        if not root then
+            return false
+        end
+        return walk(
+            root,
+            body,
+            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
+        )
     end
 
     --- @type agentic.PermDecision
@@ -1274,7 +1342,12 @@ end
 -- known-safe iff it matches a read_only/safe_write rule AND no deny/ask rule, so
 -- a `safe_write` like `git add` never lights up even in read-only mode.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries }
+--- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer }
+
+--- Forward declaration — the tally handlers are mutually recursive, and
+--- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.TallyCtx, ranges: agentic.utils.PermissionRules.Range[])
+local tally_walk
 
 --- @alias agentic.utils.PermissionRules.Range [integer, integer, integer, integer]
 
@@ -1365,6 +1438,26 @@ local function command_known_safe(node, src, ctx)
     then
         return false
     end
+
+    -- Mirror the decision walk's inline `sh -c '<literal body>'` recursion: the
+    -- leaf is known-safe iff the whole body tallies clean (no unapproved range).
+    local body = shell_c_body(cmd_name, args, args_dynamic)
+    if body and ctx.depth < SHELL_C_MAX_DEPTH then
+        local root = parse_zsh(body)
+        if not root then
+            return false
+        end
+        --- @type agentic.utils.PermissionRules.Range[]
+        local body_ranges = {}
+        tally_walk(
+            root,
+            body,
+            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 }),
+            body_ranges
+        )
+        return #body_ranges == 0
+    end
+
     local glob_safe = M.matches_any_pattern(leaf, ctx.read_only)
         or M.matches_any_pattern(leaf, ctx.safe_write)
 
@@ -1385,10 +1478,6 @@ local function command_known_safe(node, src, ctx)
 
     return glob_safe or struct_safe
 end
-
---- Forward declaration — the tally handlers are mutually recursive.
---- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.TallyCtx, ranges: agentic.utils.PermissionRules.Range[])
-local tally_walk
 
 --- Recurse a container/`do_group`: every named non-comment child is a statement.
 --- @param node TSNode
@@ -1538,11 +1627,8 @@ function M.tally_unapproved(command)
         return nil
     end
 
-    local ok, root = pcall(function()
-        local parser = vim.treesitter.get_string_parser(command, "zsh")
-        return parser:parse(true)[1]:root()
-    end)
-    if not ok or not root or root:has_error() then
+    local root = parse_zsh(command)
+    if not root then
         return nil
     end
 
@@ -1553,6 +1639,7 @@ function M.tally_unapproved(command)
         deny = M.get_deny_patterns(),
         ask = M.get_ask_patterns(),
         structured_entries = M.get_structured_entries(),
+        depth = 0,
     }
     --- @type agentic.utils.PermissionRules.Range[]
     local ranges = {}
@@ -1587,11 +1674,8 @@ function M.should_auto_approve(command)
         return false
     end
 
-    local ok, root = pcall(function()
-        local parser = vim.treesitter.get_string_parser(command, "zsh")
-        return parser:parse(true)[1]:root()
-    end)
-    if not ok or not root or root:has_error() then
+    local root = parse_zsh(command)
+    if not root then
         return false
     end
 
@@ -1601,6 +1685,7 @@ function M.should_auto_approve(command)
         ask = M.get_ask_patterns(),
         structured_entries = structured_entries,
         auto_approve = Config.permissions.auto_approve,
+        depth = 0,
     })
 end
 

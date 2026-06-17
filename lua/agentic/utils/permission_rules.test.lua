@@ -1756,7 +1756,7 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("asks zsh -nc 'rm' (c runs arbitrary shell)", function()
+        it("asks zsh -nc 'rm -rf x' (body command not allowed)", function()
             assert.is_false(
                 PermissionRules.should_auto_approve("zsh -nc 'rm -rf x'")
             )
@@ -1766,6 +1766,57 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve("zsh -n script.zsh")
             )
+        end)
+
+        -- An inline `<shell> -c '<literal body>'` is re-parsed and walked
+        -- recursively (the body is verbatim in rawInput, no file read), so it
+        -- approves iff the body approves — instead of firing the `c`-flag ask.
+        describe("inline shell -c body", function()
+            it("auto-approves zsh -c 'rg foo' (allowed body)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("zsh -c 'rg foo'")
+                )
+            end)
+
+            it("auto-approves bash -c \"echo hi\"", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve('bash -c "echo hi"')
+                )
+            end)
+
+            it("auto-approves a compound body (rg foo | head)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "sh -c 'rg foo | head -5'"
+                    )
+                )
+            end)
+
+            it("handles -c as a trailing flag-cluster letter (-lc)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("zsh -lc 'rg foo'")
+                )
+            end)
+
+            it("asks when the body holds a non-allowed command", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("zsh -c 'rm foo'")
+                )
+            end)
+
+            it("asks on a dynamic (opaque) body", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('zsh -c "$x"')
+                )
+            end)
+
+            it("recurses into a nested -c body", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        [[zsh -c 'zsh -c "rg foo"']]
+                    )
+                )
+            end)
         end)
 
         it("denies curl --remote-name-all", function()
