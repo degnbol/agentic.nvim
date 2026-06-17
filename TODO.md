@@ -21,8 +21,6 @@ If we edit a file without filetype the chat shows bare triple ticks without a la
 - Show more verbose info in chat: full model details when loading a new model (on startup and all other model loading situations, e.g. when switching model).
   Similarly, show the model's context, how much did the CLAUDE.md and system prompts fill up it's context?
 
-- The auto hard wrap of md prose in chat breaks headings. A heading has to remain on 1 line.
-
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
@@ -532,20 +530,13 @@ If that would make the config explode, then a better option might be to consider
 A useful Claude CLI feature is /rewind where a menu allows for selecting a previous prompt and rewinds the agent to that point in the conversation.
 If this feature is available through the ACP. If so, we can make a UI version, where we have a keymap that rewinds to where the cursor is placed in chat.
 
-### Auto-allow system reading files
+### Extending Bash auto-approval
 
-Since we have a treesitter-based system for detecting read-only-ness of an 
-execution block I don't see why we can't apply this to the contents of a zsh 
-script.
-A lot of times claude will write commands to a file and run these, e.g. a zsh 
-file in /tmp or `zsh all-tests.zsh`.
-We could extend the permission system to handle the special case of `zsh ...` 
-invocations to read the contents of a supplied file, or if instructions are 
-given directly with a flag read them from there.
-A similar thing can be done for other languages but we should do zsh first, as 
-it's the biggest win. I mention this since we should aim to write the code as 
-language-agnostic as possible (within reasonable effort) so we are better 
-prepared for a future extension into other languages without major refactor.
+Designed in [`notes/perm-extend-auto-approve.md`](notes/perm-extend-auto-approve.md):
+generalise `$(...)` recursion, flow-sensitive literal propagation, walking
+`zsh -c '…'` bodies, and `rm` of Claude's own scratch (`scratch_rm`, off by
+default). Walking into script *files* (the original item here) + function
+walking is parked there — sound but blocked on a function-definition walker.
 
 ## Agents don't understand handover
 
