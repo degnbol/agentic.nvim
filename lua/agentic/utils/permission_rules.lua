@@ -1112,6 +1112,7 @@ local function walk_command(node, src, ctx)
                 return false
             end
             table.insert(args, vim.treesitter.get_node_text(child, src))
+            table.insert(arg_nodes, child)
             table.insert(args_dynamic, true)
         elseif child:named() then
             -- Any other substitution-bearing argument (string-embedded
@@ -1621,6 +1622,7 @@ local function command_known_safe(node, src, ctx)
                 return false
             end
             table.insert(args, vim.treesitter.get_node_text(child, src))
+            table.insert(arg_nodes, child)
             table.insert(args_dynamic, true)
         elseif child:named() then
             if subtree_has_substitution(child) then

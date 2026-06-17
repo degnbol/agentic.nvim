@@ -2300,6 +2300,7 @@ describe("PermissionRules", function()
             "stdbuf -oL timeout 5 grep foo", -- nested wrappers
             "PYTHONUNBUFFERED=1 timeout 5 grep foo", -- assignment + wrapper
             "timeout 5 grep foo | head -5", -- compound
+            "timeout 5 grep $(cat list)", -- vetted substitution under a wrapper
         }
         for _, cmd in ipairs(approve) do
             it("approves: " .. cmd, function()
@@ -2316,7 +2317,7 @@ describe("PermissionRules", function()
             "timeout 5 PATH=/evil grep foo", -- inner env hijacker
             "/usr/bin/time -o out grep foo", -- write option
             "timeout 5 grep foo > out", -- write redirect
-            "timeout 5 grep $(cat list)", -- substitution laundering
+            "timeout 5 grep $(rm list)", -- substitution with a denied inner
             "timeout 5 $(echo rm) -rf /",
             "timeout grep foo", -- grep skipped as DURATION; inner `foo` not allowed
             "timeout 5", -- empty inner
