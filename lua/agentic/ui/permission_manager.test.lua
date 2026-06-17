@@ -158,6 +158,46 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
+    describe("add_request return value", function()
+        --- @param kind agentic.acp.ToolKind
+        --- @return agentic.acp.RequestPermission
+        local function make_request(kind)
+            return {
+                sessionId = "test-session",
+                toolCall = { toolCallId = "tc-ret-" .. kind, kind = kind },
+                options = {
+                    { optionId = "allow-once", name = "Allow", kind = "allow_once" },
+                    { optionId = "reject-once", name = "Reject", kind = "reject_once" },
+                },
+            }
+        end
+
+        it("returns false when auto-approved", function()
+            local prompted = pm:add_request(
+                make_request("read"),
+                function() end --[[@as function]]
+            )
+            assert.is_false(prompted)
+        end)
+
+        it("returns true when an interactive prompt is queued", function()
+            local prompted = pm:add_request(
+                make_request("edit"),
+                function() end --[[@as function]]
+            )
+            assert.is_true(prompted)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("returns false for an invalid request", function()
+            local prompted = pm:add_request(
+                { options = {} } --[[@as agentic.acp.RequestPermission]],
+                function() end --[[@as function]]
+            )
+            assert.is_false(prompted)
+        end)
+    end)
+
     describe("auto-approve skills", function()
         --- @type agentic.UserConfig
         local Config

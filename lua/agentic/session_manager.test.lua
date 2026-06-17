@@ -1058,6 +1058,81 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_on_request_permission attention gating", function()
+        --- @type TestStub
+        local bell_stub
+        --- @type TestStub
+        local schedule_stub
+        local original_notifications
+        local original_hooks
+
+        before_each(function()
+            original_notifications = Config.notifications
+            original_hooks = Config.hooks
+            Config.notifications = { bell = true }
+            bell_stub = spy.stub(SessionManager, "_ring_bell")
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            Config.notifications = original_notifications
+            Config.hooks = original_hooks
+            bell_stub:revert()
+            schedule_stub:revert()
+        end)
+
+        --- @param prompted boolean value add_request should report
+        local function make_session(prompted)
+            local noop = function() end
+            local hook_calls = {}
+            Config.hooks = {
+                on_permission_request = function(data)
+                    table.insert(hook_calls, data)
+                end,
+            }
+            local session = {
+                session_id = "s-1",
+                tab_page_id = 1,
+                _destroyed = false,
+                status_animation = { start = noop, stop = noop },
+                message_writer = { tool_call_blocks = {} },
+                -- nil chat window => unfocused => bell would ring if notified
+                widget = { win_nrs = { chat = nil } },
+                permission_manager = {
+                    add_request = function()
+                        return prompted
+                    end,
+                },
+                _notify_attention = SessionManager._notify_attention,
+                _on_request_permission = SessionManager._on_request_permission,
+            } --[[@as agentic.SessionManager]]
+            return session, hook_calls
+        end
+
+        local request = {
+            toolCall = { toolCallId = "tc-1" },
+            options = {},
+        }
+
+        it("stays silent when add_request auto-approves", function()
+            local session, hook_calls = make_session(false)
+            session:_on_request_permission(request, function() end)
+            assert.spy(bell_stub).was.called(0)
+            assert.equal(0, #hook_calls)
+        end)
+
+        it("rings bell and fires hook on an interactive prompt", function()
+            local session, hook_calls = make_session(true)
+            session:_on_request_permission(request, function() end)
+            assert.spy(bell_stub).was.called(1)
+            assert.equal(1, #hook_calls)
+            assert.equal("tc-1", hook_calls[1].tool_call_id)
+        end)
+    end)
+
     describe("_format_duration", function()
         it("formats hours and minutes", function()
             assert.equal(

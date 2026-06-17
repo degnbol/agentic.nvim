@@ -984,29 +984,34 @@ function SessionManager:_on_request_permission(request, callback)
         end
     end
 
-    -- Non-essential UI setup (notifications, hooks) must not prevent
-    -- add_request from being called. If add_request never runs, the ACP
-    -- permission callback is lost — the provider waits forever for a
-    -- response, permanently locking the session.
-    local ok, err = pcall(function()
-        self:_notify_attention("[?]", true)
+    -- add_request must run first and unconditionally: if it never runs, the
+    -- ACP permission callback is lost and the provider waits forever, locking
+    -- the session. It resolves auto-approvals synchronously and reports whether
+    -- an interactive prompt was queued — only then do we ring the bell / fire
+    -- the hook, so auto-approved requests stay silent.
+    local prompted =
+        self.permission_manager:add_request(request, wrapped_callback)
 
-        P.invoke_hook("on_permission_request", {
-            session_id = self.session_id,
-            tab_page_id = self.tab_page_id,
-            tool_call_id = request.toolCall.toolCallId,
-        })
-    end)
+    if prompted then
+        -- Notifications and hooks are non-essential UI; a throw here must not
+        -- escape (add_request has already run, so the callback is safe).
+        local ok, err = pcall(function()
+            self:_notify_attention("[?]", true)
 
-    if not ok then
-        Logger.notify(
-            "Error setting up permission UI (permission still queued): "
-                .. tostring(err),
-            vim.log.levels.WARN
-        )
+            P.invoke_hook("on_permission_request", {
+                session_id = self.session_id,
+                tab_page_id = self.tab_page_id,
+                tool_call_id = request.toolCall.toolCallId,
+            })
+        end)
+
+        if not ok then
+            Logger.notify(
+                "Error setting up permission UI: " .. tostring(err),
+                vim.log.levels.WARN
+            )
+        end
     end
-
-    self.permission_manager:add_request(request, wrapped_callback)
 end
 
 --- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers

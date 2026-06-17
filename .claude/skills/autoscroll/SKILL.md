@@ -101,7 +101,9 @@ Two firing events:
 
 - **Response complete** — `_notify_attention("[done]")`
 - **Permission request** — `_notify_attention("[?]", skip_badge=true)`
-  (the float is always visible, so the scrolled-up badge is redundant)
+  (the float is always visible, so the scrolled-up badge is redundant).
+  Fires only when `add_request` reports an interactive prompt was queued;
+  auto-approved requests (read-only, cached, trust-scoped) stay silent.
 
 Behaviour by focus state:
 

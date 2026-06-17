@@ -657,16 +657,18 @@ end
 --- Add a new permission request to the queue to be processed sequentially
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
+--- @return boolean prompted true only when an interactive prompt was queued
+--- (user must act); false when auto-resolved or the request was invalid
 function PermissionManager:add_request(request, callback)
     if not request.toolCall or not request.toolCall.toolCallId then
         Logger.debug(
             "PermissionManager: Invalid request - missing toolCall.toolCallId"
         )
-        return
+        return false
     end
 
     if self:_try_auto_approve(request, callback) then
-        return
+        return false
     end
 
     local toolCallId = request.toolCall.toolCallId
@@ -675,6 +677,7 @@ function PermissionManager:add_request(request, callback)
     if not self.current_request then
         self:_process_next()
     end
+    return true
 end
 
 function PermissionManager:_process_next()

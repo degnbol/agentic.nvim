@@ -246,7 +246,9 @@ override what you need.
                                               *agentic-config-notifications*
 `notifications` table
     `bell`    boolean (default: false)
-        Ring the vim bell on response complete and permission request.
+        Ring the vim bell on response complete and on permission prompts
+        that require a response. Auto-approved requests (read-only tools,
+        cached or trust-scoped decisions) are silent.
 
                                                 *agentic-config-file_picker*
 `file_picker` table
