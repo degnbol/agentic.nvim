@@ -506,17 +506,15 @@ sleep 10
 The `(Bash completed with no output)` is redundant, given we always show completion status of command (" ✔ completed").
 So, I think we should not be showing this output. If it originates from our code, delete, if it is given by acp, etc. then I think we may have to detect it and suppress. The wording varies, so if we have to detect on wording alone, then consider if this work is worth it.
 
-### highlight `ask`
+### Peek file
 
-For an execute call that require a prompt, there could be several commands that were accepted as read-only and safe mixed with commands that require prompt.
-For quicker scanning by the user of evaluating the command it would be useful with a highlight of the commands that required their attention.
-This could be a new highlight group. A default config for it would probably be a bg color that maps to something that indicates "warning".
-I think it should only be highlighted while the prompt is displayed, i.e. disappears after accept or reject.
-So, it should probably be extmark or virtual line based.
-One thing to note is that the bail out system bails and asks on first 
-non-auto-allow command or pattern. The highlight would also be useful to show 
-for *all* non-allowed patterns. I think this implies changing the logic to 
-tally all parts of the execution that is not auto-allowed.
+When being prompted for running a script it would be useful to see what that script actually contains.
+A hover peek window would be one solution. The regular hover keymap `K` isn't used here for anything else, so that could be the config default.
+
+### Treesitter-context
+
+I use the Treesitter-context plugin that provides a line at the top with breadcrumbs for what function/class, etc I am inside of if the start isn't visible.
+This isn't active at all currently in chat, but it should work for markdown. The question is if we could get it to show the filename for a long edit call.
 
 ### Hooks
 
