@@ -70,7 +70,7 @@ can't guard):
 
 ---
 
-## #3 — flow-sensitive literal propagation
+## #3 — flow-sensitive literal propagation (todo)
 
 **Today.** A `$var` is always dynamic — `f=/safe/dir; find $f` bails because the
 dynamic `$f` flips `has_dynamic`, which wildcard-fires find's `-exec` deny gate.
@@ -106,7 +106,7 @@ collect-assignment-targets helper. Container handlers create/scope the env.
 
 ---
 
-## #5 — walk the body of an inline `zsh -c '…'`
+## #5 — walk the body of an inline `zsh -c '…'` (done)
 
 **Today.** `permissions.json`'s `zsh` entry has `ask: [{options:["c","i","s","f"]}]`,
 so every `zsh -c '…'` (and `bash -c`, `sh -c`) prompts unconditionally.
@@ -134,7 +134,7 @@ that dependency.
 
 ---
 
-## #1 — `rm` of Claude's own scratch (`scratch_rm`)
+## #1 — `rm` of Claude's own scratch (`scratch_rm`) (todo)
 
 **Today.** `rm` is unconditionally `ask`; any non-`/dev/null` redirect bails. The
 whole Bash system is path-agnostic — no notion of a safe path (only `/trust`,
