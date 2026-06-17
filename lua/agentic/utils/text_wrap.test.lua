@@ -361,6 +361,16 @@ describe("agentic.utils.TextWrap", function()
             -- All rows should have same structure
             assert.is_true(result[3]:match("| 1") ~= nil)
         end)
+
+        it("never wraps headings", function()
+            local heading =
+                "## the quick brown fox jumps over the lazy dog and keeps running"
+            assert.same({ heading }, TextWrap.wrap_prose({ heading }, 30))
+            -- 7+ hashes is not a heading and may wrap like prose
+            local non_heading =
+                "####### not a heading but still long enough to wrap around"
+            assert.is_true(#TextWrap.wrap_prose({ non_heading }, 30) > 1)
+        end)
     end)
 
     describe("wrap_single_line", function()

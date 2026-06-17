@@ -88,6 +88,16 @@ local function is_table_line(line)
     return line:match("^%s*|") ~= nil
 end
 
+--- Check if a line is an ATX heading (1-6 `#` followed by a space or EOL).
+--- Headings must never be wrapped — a wrapped continuation line is no longer
+--- part of the heading.
+--- @param line string
+--- @return boolean
+local function is_heading(line)
+    local hashes = line:match("^%s*(#+)%s") or line:match("^%s*(#+)$")
+    return hashes ~= nil and #hashes <= 6
+end
+
 --- Split a string on unescaped `|` delimiters.
 --- `\|` is a literal pipe (not a delimiter), `\\` is a literal backslash
 --- (so `\\|` is a literal backslash followed by a delimiter).
@@ -293,6 +303,7 @@ function M.wrap_single_line_with_offsets(line, width)
         or line:match("^%s*$")
         or line:match("^%s*```")
         or is_table_line(line)
+        or is_heading(line)
     then
         return { line }, { { orig_start = 0, indent_len = 0 } }
     end
@@ -365,7 +376,7 @@ function M.wrap_prose(lines, width)
                 end
                 table_buf = {}
             end
-            if line:match("^%s*$") then
+            if line:match("^%s*$") or is_heading(line) then
                 out[#out + 1] = line
             else
                 local wrapped = wrap_line(line, width)
