@@ -368,7 +368,7 @@ end
 --- use slightly different field names; check the common ones in order.
 ---
 --- Known field usage by provider:
----   - claude-agent-acp, claude-acp, auggie-acp: `file_path` (snake_case)
+---   - claude-agent-acp, auggie-acp: `file_path` (snake_case)
 ---   - opencode-acp: `filePath` (camelCase)
 ---   - gemini-acp, codex-acp, mistral-vibe-acp: path arrives via
 ---     `update.locations[]` or `update.content[]`, not `rawInput` — these

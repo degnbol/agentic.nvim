@@ -59,7 +59,6 @@ gap-fills, behaviour differences, and TUI features not available here.
 - An ACP provider binary on PATH. Supported providers:
 
   `claude-agent-acp`    Claude (default)
-  `claude-code-acp`     Claude (alternative)
   `gemini`              Gemini (with --experimental-acp)
   `codex-acp`           Codex
   `opencode`            OpenCode (with acp subcommand)

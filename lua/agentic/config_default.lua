@@ -1,6 +1,5 @@
 --- List of supported ACP providers
 --- @alias agentic.UserConfig.ProviderName
---- | "claude-acp"
 --- | "claude-agent-acp"
 --- | "gemini-acp"
 --- | "codex-acp"
@@ -84,12 +83,6 @@ local ConfigDefault = {
         ["claude-agent-acp"] = {
             name = "Claude Agent ACP",
             command = "claude-agent-acp",
-            env = {},
-        },
-
-        ["claude-acp"] = {
-            name = "Claude ACP",
-            command = "claude-code-acp",
             env = {},
         },
 

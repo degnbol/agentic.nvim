@@ -1,4 +1,4 @@
---- Constants and helpers for Claude ACP adapters (claude_acp + claude_agent_acp).
+--- Constants and helpers for the Claude ACP adapter (claude_agent_acp).
 local M = {}
 
 --- Mode-switching tools: maps ACP tool_call title to a short display label.

@@ -42,11 +42,7 @@ function AgentInstance.get_instance(provider_name, on_ready)
         "Creating new ACP agent instance for provider: " .. provider_name
     )
 
-    if provider_name == "claude-acp" then
-        local ClaudeACPAdapter =
-            require("agentic.acp.adapters.claude_acp_adapter")
-        client = ClaudeACPAdapter:new(config, on_ready)
-    elseif provider_name == "claude-agent-acp" then
+    if provider_name == "claude-agent-acp" then
         local ClaudeAgentACPAdapter =
             require("agentic.acp.adapters.claude_agent_acp_adapter")
         client = ClaudeAgentACPAdapter:new(config, on_ready)

@@ -5,11 +5,11 @@ local FileSystem = require("agentic.utils.file_system")
 --- @class agentic.acp.AuggieACPAdapter : agentic.acp.ACPClient
 local AuggieACPAdapter = ACPClient.extend()
 
---- Mirrors claude_acp_adapter's kind-dispatch (read/edit, fetch, else) minus the
---- Claude-only kinds (SubAgent, Skill, SlashCommand, switch_mode). The shared
---- branches diverge in detail (auggie falls back to update.title for missing
---- paths; claude reads rawInput.content for the Write tool and extracts a body),
---- so they are intentionally not factored into a base helper.
+--- Mirrors claude_agent_acp_adapter's kind-dispatch (read/edit, fetch, else)
+--- minus the Claude-only kinds (SubAgent, Skill, SlashCommand, switch_mode). The
+--- shared branches diverge in detail (auggie falls back to update.title for
+--- missing paths; claude reads rawInput.content for the Write tool and extracts
+--- a body), so they are intentionally not factored into a base helper.
 --- @protected
 --- @param session_id string
 --- @param update agentic.acp.ToolCallMessage

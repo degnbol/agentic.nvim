@@ -17,8 +17,7 @@ local Logger = require("agentic.utils.logger")
 local M = {}
 
 local function is_claude_provider()
-    return Config.provider == "claude-acp"
-        or Config.provider == "claude-agent-acp"
+    return Config.provider == "claude-agent-acp"
 end
 
 --- Surface a successful prompt response with a non-terminal stopReason
