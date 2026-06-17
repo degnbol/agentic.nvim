@@ -609,7 +609,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- and fold a diff the user needs to see. Strip the suffix so the
         -- `-fold$` predicate cannot collide with a diff fence.
         local lang = Theme.get_language_from_path(argument):gsub("%-fold$", "")
-        local wrap_diff_prose = lang == "md" or lang == "markdown"
+        local wrap_diff_prose = lang == "markdown"
 
         local fence_content = {}
         for _, block in ipairs(diff_blocks) do
@@ -620,12 +620,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         table.insert(lines, fence .. lang)
 
         -- Load the target file buffer to enable context-aware syntax
-        -- highlighting. The injected markdown parser only sees the diff
+        -- highlighting. The chat buffer's fence injection only sees the diff
         -- lines in isolation, so structurally-dependent captures (strings,
-        -- comments, docstrings, language injections) come out wrong.
-        -- Reparsing the snippet inside its surrounding ancestor in the real
-        -- file reconstructs the correct captures. Falls back silently when
-        -- the file can't be loaded or no parser is available.
+        -- comments, docstrings, language injections — including code fences
+        -- embedded in markdown) come out wrong. Reparsing the snippet inside
+        -- its surrounding ancestor in the real file reconstructs the correct
+        -- captures. Falls back silently when the file can't be loaded or no
+        -- parser is available.
         local target_bufnr, target_lang
         local abs_path = FileSystem.to_absolute_path(argument)
         local max_lines = Config.tool_call_display

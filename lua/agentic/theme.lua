@@ -80,7 +80,7 @@ local lang_map = {
     purs = "purescript",
     typescriptreact = "tsx",
     javascriptreact = "jsx",
-    markdown = "md",
+    md = "markdown",
 }
 
 local status_hl = {
