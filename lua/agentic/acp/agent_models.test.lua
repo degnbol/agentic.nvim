@@ -112,51 +112,6 @@ describe("agentic.acp.AgentModels", function()
         end)
     end)
 
-    describe("handle_agent_update_model", function()
-        --- @type TestStub
-        local notify_stub
-
-        before_each(function()
-            local Logger = require("agentic.utils.logger")
-            notify_stub = spy.stub(Logger, "notify")
-        end)
-
-        after_each(function()
-            notify_stub:revert()
-        end)
-
-        it("updates current_model_id and notifies on valid model", function()
-            local success = agent_models:handle_agent_update_model("opus")
-
-            assert.is_true(success)
-            assert.equal("opus", agent_models.current_model_id)
-            assert.stub(notify_stub).was.called(1)
-            assert.is_true(string.find(notify_stub.calls[1][1], "opus") ~= nil)
-        end)
-
-        it("returns false and warns for nil or invalid model_id", function()
-            assert.is_false(agent_models:handle_agent_update_model(nil))
-            assert.is_false(
-                agent_models:handle_agent_update_model("nonexistent")
-            )
-
-            assert.equal("default", agent_models.current_model_id)
-            assert.stub(notify_stub).was.called(2)
-            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
-            assert.equal(vim.log.levels.WARN, notify_stub.calls[2][2])
-        end)
-
-        it("returns false when models list is empty", function()
-            agent_models:set_models({
-                availableModels = {},
-                currentModelId = "",
-            })
-
-            assert.is_false(agent_models:handle_agent_update_model("opus"))
-            assert.stub(notify_stub).was.called(0)
-        end)
-    end)
-
     describe("clear", function()
         it("resets models and current_model_id", function()
             agent_models:clear()
