@@ -1020,20 +1020,22 @@ describe("PermissionRules", function()
             },
         }
 
-        describe("bails on substitution in arg/redirect/here-string positions", function()
-            -- Phase 2 carves out assignment-value / array-element positions
-            -- only; argument-position substitution still launders dangerous
-            -- tokens past deny/ask, so the existing bail must stay.
+        describe("bails on substitution in non-recursed positions", function()
+            -- Bare `$(...)` in argument / for-list position is recursed (see
+            -- the "#4 argument-position substitution" block below). These
+            -- remaining positions either hide the substitution from the matcher
+            -- or splice its output somewhere the dynamic-token machinery cannot
+            -- guard, so they still bail: substitution as the command name,
+            -- inside a string or concatenation, as a redirect target, in a
+            -- here-string, or in a command-prefix assignment value.
             for _, cmd in ipairs({
                 "$(echo rm) -rf /",
                 "$(rm -rf /)",
-                "grep $(cat list) f",
                 'echo "$(rm -rf x)"',
                 "echo a$(whoami)b",
                 "ec$(echo ho) hi",
                 "cat > $(echo out)",
                 "cat <<< $(rm x)",
-                "echo `whoami`",
                 "foo=$(rm x) ls",
             }) do
                 it("rejects " .. cmd, function()
@@ -1296,10 +1298,10 @@ describe("PermissionRules", function()
         end)
 
         -- Phase 2: assignment-position command substitution and loops.
-        -- Argument-position substitution still bails (covered by the
-        -- "bails on substitution in arg/redirect/here-string positions"
-        -- block above); these tests focus on the new positive cases and
-        -- on the negatives that remain unsafe.
+        -- (Argument / for-list substitution is now recursed too — see the
+        -- "#4 argument-position command substitution" block below.) These
+        -- tests focus on the assignment positives and on the negatives that
+        -- remain unsafe.
         describe("Phase 2 (assignment-position substitution and loops)", function()
             local ALLOW_ECHO_CAT = {
                 allow = { "Bash(echo *)", "Bash(echo)", "Bash(cat *)" },
@@ -1380,30 +1382,79 @@ describe("PermissionRules", function()
             it("rejects foo=$(rm x) ls — command-prefix assignment with substitution", function()
                 assert.is_false(decide("foo=$(rm x) ls", ALLOW_ECHO_CAT))
             end)
+        end)
 
-            it("rejects find $(echo '-exec rm') — argument-position substitution", function()
-                assert.is_false(
-                    decide("find $(echo '-exec rm')", {
-                        allow = { "Bash(find *)", "Bash(echo *)" },
-                    })
+        -- #4: a bare `$(...)` in argument or for-list position is recursed —
+        -- the inner command must approve on its own, and its output splices
+        -- into the surrounding stream as a dynamic token (so a gated outer
+        -- command still wildcard-prompts; see the use-site blocks below).
+        describe("#4 argument-position command substitution", function()
+            local ALLOW_CAT_LS = {
+                allow = {
+                    "Bash(cat *)",
+                    "Bash(cat)",
+                    "Bash(ls *)",
+                    "Bash(ls)",
+                    "Bash(echo *)",
+                    "Bash(echo)",
+                },
+            }
+
+            it("approves cat $(ls) — inner and outer both allowed", function()
+                assert.is_true(decide("cat $(ls)", ALLOW_CAT_LS))
+            end)
+
+            it("approves cat foo $(ls) bar — substitution among literals", function()
+                assert.is_true(decide("cat foo $(ls) bar", ALLOW_CAT_LS))
+            end)
+
+            it("approves a backtick substitution", function()
+                assert.is_true(decide("cat `ls`", ALLOW_CAT_LS))
+            end)
+
+            it("rejects cat $(nope) — inner command not allowed", function()
+                assert.is_false(decide("cat $(nope)", ALLOW_CAT_LS))
+            end)
+
+            it("rejects cat $(ls > out) — inner write redirect fires", function()
+                assert.is_false(decide("cat $(ls > out)", ALLOW_CAT_LS))
+            end)
+
+            it("rejects cat $() — empty substitution", function()
+                assert.is_false(decide("cat $()", ALLOW_CAT_LS))
+            end)
+
+            it("approves two substitutions in one command", function()
+                assert.is_true(decide("cat $(ls) $(echo hi)", ALLOW_CAT_LS))
+            end)
+
+            it("approves nested substitution — inner recurses", function()
+                assert.is_true(decide("cat $(echo $(ls))", ALLOW_CAT_LS))
+            end)
+
+            it("rejects nested substitution with a disallowed innermost command", function()
+                assert.is_false(decide("cat $(echo $(rm x))", ALLOW_CAT_LS))
+            end)
+
+            it("rejects process substitution — only command substitution recurses", function()
+                assert.is_false(decide("cat <(ls)", ALLOW_CAT_LS))
+            end)
+
+            it("approves a for-loop over a substitution list", function()
+                assert.is_true(
+                    decide("for f in $(ls); do cat \"$f\"; done", ALLOW_CAT_LS)
                 )
             end)
 
-            it("rejects for f in $(ls); do … — list-position substitution", function()
-                assert.is_false(
-                    decide(
-                        "for f in $(ls); do cat \"$f\"; done",
-                        ALLOW_ECHO_CAT
-                    )
+            it("approves a for-loop with substitution among literals", function()
+                assert.is_true(
+                    decide("for f in a $(ls) b; do cat \"$f\"; done", ALLOW_CAT_LS)
                 )
             end)
 
-            it("rejects for f in a $(ls) b; do … — substitution mixed with literals", function()
+            it("rejects a for-loop over a substitution with disallowed inner", function()
                 assert.is_false(
-                    decide(
-                        "for f in a $(ls) b; do cat \"$f\"; done",
-                        ALLOW_ECHO_CAT
-                    )
+                    decide("for f in $(nope); do cat \"$f\"; done", ALLOW_CAT_LS)
                 )
             end)
         end)
@@ -1875,6 +1926,16 @@ describe("PermissionRules", function()
                 )
             end)
 
+            it("prompts on find . $(echo -exec rm {} ;) (arg-substitution spliced)", function()
+                -- The inner echo approves, but its output splices in as a
+                -- dynamic token that wildcards find's -exec deny gate.
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "find . $(echo -exec rm {} \\;)"
+                    )
+                )
+            end)
+
             it("prompts on g=-exec; find . \"$g\" echo X {} \\; (flag in a var)", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
@@ -2100,12 +2161,28 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("returns a substitution even when the command is allowed", function()
+        it("returns the leaf when an arg substitution's inner is not approved", function()
             with_perms({ allow = { "Bash(echo *)" } }, nil, function()
                 local cmd = "echo $(whoami)"
                 local ranges = PermissionRules.tally_unapproved(cmd)
                 assert.equal(1, #ranges)
                 assert.equal(cmd, span_text(cmd, ranges[1]))
+            end)
+        end)
+
+        it("returns nothing when an arg substitution's inner is approved", function()
+            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                local ranges = PermissionRules.tally_unapproved("echo $(echo hi)")
+                assert.equal(0, #ranges)
+            end)
+        end)
+
+        it("returns nothing for a for-loop over an approved substitution", function()
+            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                local ranges = PermissionRules.tally_unapproved(
+                    "for f in $(echo x); do echo \"$f\"; done"
+                )
+                assert.equal(0, #ranges)
             end)
         end)
 

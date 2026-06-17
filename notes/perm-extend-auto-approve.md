@@ -18,12 +18,18 @@ Build order: **#3, #4, #5** (preserve the invariant, no new config, broad
 benefit) → **#1** (off by default, narrow) → **#2** (parked, see end).
 
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
-mirrored in `command_known_safe`; tests under "inline shell -c body"). Remaining:
-#3, #4, #1, #2.
+mirrored in `command_known_safe`; tests under "inline shell -c body").
+
+**#4 is done** (`walk_substitution_inner` invoked from the bare
+`command_substitution` argument branch in `walk_command` and the list-item
+branch in `walk_for`; the spliced token is pushed dynamic; mirrored in
+`command_known_safe` / `tally_for` via `substitution_inner_clean`; tests under
+"#4 argument-position command substitution" plus a laundering case in the
+use-site carve-out block). Remaining: #3, #1, #2.
 
 ---
 
-## #4 — generalise command-substitution recursion
+## #4 — generalise command-substitution recursion (done)
 
 **Today.** `walk_command` bails on `subtree_has_substitution` (line ~918), so
 any `$(...)` in argument position prompts. Only `walk_assignment` recurses into

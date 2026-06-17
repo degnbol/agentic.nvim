@@ -1064,18 +1064,21 @@ end
 --- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
 local walk
 
---- Walk a `command`: reject substitution anywhere, validate env-prefix
---- assignments, extract the literal name and arg tokens, then combine the glob
+--- Forward declaration — `walk_command`/`walk_for` recurse into a bare
+--- `command_substitution` (argument or for-list position) via this helper, which
+--- is defined further down.
+--- @type fun(subst: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
+local walk_substitution_inner
+
+--- Walk a `command`: validate the name and each argument by position
+--- (substitution is recursed in argument position, bailed elsewhere), validate
+--- env-prefix assignments, then combine the glob
 --- and structured layers (composition rule in the `permissions` project skill).
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @return boolean
 local function walk_command(node, src, ctx)
-    if subtree_has_substitution(node) then
-        return false
-    end
-
     local name_node
     --- @type string[]
     local args = {}
@@ -1086,12 +1089,37 @@ local function walk_command(node, src, ctx)
     for child in node:iter_children() do
         local t = child:type()
         if t == "variable_assignment" then
-            if not safe_assignment_name(child, src) then
+            -- A prefix assignment's name must be inert; a substitution in its
+            -- value launders argument-position tokens once expanded at a later
+            -- use, so bail (the standalone-statement form, where the value is
+            -- captured into a variable, is vetted by walk_assignment).
+            if
+                not safe_assignment_name(child, src)
+                or subtree_has_substitution(child)
+            then
                 return false
             end
         elseif t == "command_name" then
+            -- A substitution-bearing name is dynamic; command_name_text returns
+            -- nil for it below and we bail.
             name_node = child
+        elseif t == "command_substitution" then
+            -- A bare `$(...)` argument: vet the inner command (it runs), then
+            -- splice its output into the arg stream as a dynamic token. The
+            -- dynamic flag makes the structured layer wildcard deny/ask, so a
+            -- payload like `find . $(echo -exec rm)` still prompts.
+            if not walk_substitution_inner(child, src, ctx) then
+                return false
+            end
+            table.insert(args, vim.treesitter.get_node_text(child, src))
+            table.insert(args_dynamic, true)
         elseif child:named() then
+            -- Any other substitution-bearing argument (string-embedded
+            -- `"$(…)"`, concatenation `a$(b)c`, process substitution `<(…)`) is
+            -- not handled by the dynamic-token machinery — bail.
+            if subtree_has_substitution(child) then
+                return false
+            end
             local tok = literal_token(child, src)
             if tok == nil then
                 return false
@@ -1200,18 +1228,23 @@ end
 --- direct named child must be one of `SUBSTITUTION_INNER_STATEMENT_TYPES` AND
 --- pass its own walk — so `f=$(rm x)` still bails (the inner `rm` is not in
 --- allow) and `f=$(foo > bar)` bails (the inner `file_redirect` fires through
---- `walk_redirected` → `redirect_is_safe`). The carve-out is narrow:
---- substitution is sound only as an assignment value or array element (the
---- output is captured into a variable, deferring expansion to a later use
---- site that the matcher cannot see through but already cannot see through
---- for any `$var`). Reached from `walk_command`/argument/redirect/for-list
---- positions, the existing `subtree_has_substitution` bail wins first, so
---- this helper is never invoked in laundering-vulnerable positions.
+--- `walk_redirected` → `redirect_is_safe`).
+---
+--- Two soundness requirements hold at every call site (assignment value /
+--- array element, bare argument, for-list item): the inner code *runs*, so it
+--- must clear the same bar as a standalone command (this walk); and its
+--- *output* splices into the surrounding context, where it is opaque to the
+--- matcher. In assignment position the output is captured into a variable
+--- (expansion deferred to a later use the matcher already cannot see through);
+--- in argument / for-list position the caller marks the spliced token dynamic,
+--- so the structured layer wildcards deny/ask over it. The non-bare forms
+--- (string-embedded `"$(…)"`, concatenation, process substitution) are bailed
+--- by `subtree_has_substitution` at the call site before reaching here.
 --- @param subst TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @return boolean
-local function walk_substitution_inner(subst, src, ctx)
+function walk_substitution_inner(subst, src, ctx)
     local saw_statement = false
     for child in subst:iter_children() do
         if child:named() and child:type() ~= "comment" then
@@ -1279,13 +1312,13 @@ local function walk_assignment(node, src, ctx)
     return true
 end
 
---- Walk a `for_statement`: every list item must be substitution-free
---- (literal / glob / expansion), then the `do_group` body recurses. List items
---- that carry substitution (`for f in $(ls)`, `for f in a $(ls) b`) bail —
---- their output becomes loop values that flow into body args, the same
---- arg-position laundering deferred through the loop var. Unnamed children
---- (the `for`/`in`/`do`/`;` keywords and separators) are ignored even when
---- the grammar tags them with the same field as a named sibling.
+--- Walk a `for_statement`: each list item is a literal / glob / expansion or a
+--- bare `command_substitution` (recursed via `walk_substitution_inner`); any
+--- other substitution-bearing item bails. Then the `do_group` body recurses,
+--- where the loop var is already dynamic so a laundered payload is caught at
+--- the use site. Unnamed children (the `for`/`in`/`do`/`;` keywords and
+--- separators) are ignored even when the grammar tags them with the same field
+--- as a named sibling.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
@@ -1295,7 +1328,15 @@ local function walk_for(node, src, ctx)
     for child, field in node:iter_children() do
         if child:named() then
             if field == "value" then
-                if subtree_has_substitution(child) then
+                -- A bare `$(...)` list item is vetted like an argument
+                -- substitution: it runs, and its output becomes loop values
+                -- that enter the body as the already-dynamic loop var. Any
+                -- other substitution-bearing item bails.
+                if child:type() == "command_substitution" then
+                    if not walk_substitution_inner(child, src, ctx) then
+                        return false
+                    end
+                elseif subtree_has_substitution(child) then
                     return false
                 end
             elseif field == "body" then
@@ -1511,11 +1552,36 @@ local function translate_ranges(ranges, origin)
     return out
 end
 
+--- Whether a `command_substitution`'s inner tallies clean: every inner
+--- statement is a valid inner type AND records no unapproved range. Mirrors
+--- `walk_substitution_inner` for the highlight pass, so an approved
+--- `cmd $(...)` does not light up its whole leaf.
+--- @param subst TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @return boolean
+local function substitution_inner_clean(subst, src, ctx)
+    local saw_statement = false
+    --- @type agentic.utils.PermissionRules.Range[]
+    local sub_ranges = {}
+    for child in subst:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if not SUBSTITUTION_INNER_STATEMENT_TYPES[child:type()] then
+                return false
+            end
+            tally_walk(child, src, ctx, sub_ranges)
+            saw_statement = true
+        end
+    end
+    return saw_statement and #sub_ranges == 0
+end
+
 --- Whether a `command` leaf is known-safe: it matches a read_only/safe_write
 --- rule (glob or structured) AND no deny/ask rule, with no structural reason to
---- bail (substitution, env-hijack prefix, dynamic name, code-taking builtin,
---- unextractable token). Mirrors `walk_command`'s extraction but classifies by
---- category instead of resolving the mode-gated decision.
+--- bail (substitution in a non-bare position, env-hijack prefix, dynamic name,
+--- code-taking builtin, unextractable token). Mirrors `walk_command`'s
+--- extraction but classifies by category instead of resolving the mode-gated
+--- decision.
 ---
 --- For a transparent prefix (exec-wrapper or `sh -c`) the inner command is
 --- tallied recursively. A wrapper inner returns its unapproved sub-ranges
@@ -1530,10 +1596,6 @@ end
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
 local function command_known_safe(node, src, ctx)
-    if subtree_has_substitution(node) then
-        return false
-    end
-
     local name_node
     --- @type string[]
     local args = {}
@@ -1544,12 +1606,26 @@ local function command_known_safe(node, src, ctx)
     for child in node:iter_children() do
         local t = child:type()
         if t == "variable_assignment" then
-            if not safe_assignment_name(child, src) then
+            if
+                not safe_assignment_name(child, src)
+                or subtree_has_substitution(child)
+            then
                 return false
             end
         elseif t == "command_name" then
             name_node = child
+        elseif t == "command_substitution" then
+            -- Mirror walk_command: a bare `$(...)` arg is known-safe only if its
+            -- inner tallies clean; then treat its output as a dynamic token.
+            if not substitution_inner_clean(child, src, ctx) then
+                return false
+            end
+            table.insert(args, vim.treesitter.get_node_text(child, src))
+            table.insert(args_dynamic, true)
         elseif child:named() then
+            if subtree_has_substitution(child) then
+                return false
+            end
             local tok = literal_token(child, src)
             if tok == nil then
                 return false
@@ -1665,8 +1741,9 @@ local function tally_redirected(node, src, ctx, ranges)
     end
 end
 
---- Tally a `for_statement`: list-item substitutions record (they run code that
---- flows into body args); the `do_group` body recurses.
+--- Tally a `for_statement`: a clean bare `$(...)` list item is approved; any
+--- other list-item substitution records (it runs code that flows into body
+--- args); the `do_group` body recurses.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
@@ -1675,7 +1752,17 @@ local function tally_for(node, src, ctx, ranges)
     for child, field in node:iter_children() do
         if child:named() then
             if field == "value" then
-                record_substitutions(child, ranges)
+                -- A clean bare `$(...)` list item is approved (mirrors
+                -- walk_for) and does not highlight; any other substitution
+                -- records.
+                if
+                    not (
+                        child:type() == "command_substitution"
+                        and substitution_inner_clean(child, src, ctx)
+                    )
+                then
+                    record_substitutions(child, ranges)
+                end
             elseif field == "body" then
                 tally_walk(child, src, ctx, ranges)
             end
