@@ -56,49 +56,6 @@ describe("PermissionRules", function()
         end)
     end)
 
-    describe("strip_wrapper_prefixes", function()
-        it("strips stdbuf -oL prefix", function()
-            assert.equal(
-                "ls -la /tmp",
-                PermissionRules.strip_wrapper_prefixes("stdbuf -oL ls -la /tmp")
-            )
-        end)
-
-        it("strips stdbuf with other flags", function()
-            assert.equal(
-                "grep foo",
-                PermissionRules.strip_wrapper_prefixes("stdbuf -eL grep foo")
-            )
-        end)
-
-        it("does not strip unknown wrappers", function()
-            assert.equal(
-                "timeout 5 ls",
-                PermissionRules.strip_wrapper_prefixes("timeout 5 ls")
-            )
-        end)
-
-        it("returns unchanged when no wrapper present", function()
-            assert.equal(
-                "grep -r 'foo' .",
-                PermissionRules.strip_wrapper_prefixes("grep -r 'foo' .")
-            )
-        end)
-
-        -- Variable-assignment prefixes (env vars, data vars, hijackers) are no
-        -- longer handled here — the walker validates and excludes them
-        -- structurally. Their behaviour is covered by the should_auto_approve
-        -- env-prefix tests below.
-        it("leaves a variable-assignment prefix in place", function()
-            assert.equal(
-                "PYTHONUNBUFFERED=1 git log",
-                PermissionRules.strip_wrapper_prefixes(
-                    "PYTHONUNBUFFERED=1 git log"
-                )
-            )
-        end)
-    end)
-
     describe("strip_command_path", function()
         it("strips /usr/bin/ prefix", function()
             assert.equal(
@@ -812,6 +769,16 @@ describe("PermissionRules", function()
                 PermissionRules.should_auto_approve(
                     "cat /etc/hosts | head -3 > /tmp/x"
                 )
+            )
+        end)
+
+        -- `env` is a launcher, not an effect-neutral wrapper (it can set PATH /
+        -- LD_PRELOAD), so it must carry no blanket read-only entry — otherwise it
+        -- would launder whatever it launches. `cat *` is allowed; `env cat …`
+        -- must still prompt because the matcher does not recurse into `env`.
+        it("rejects env launching an otherwise-allowed command", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("env cat /etc/hosts")
             )
         end)
     end)
@@ -2169,5 +2136,121 @@ describe("PermissionRules", function()
         it("returns nil for empty input", function()
             assert.is_nil(PermissionRules.tally_unapproved(""))
         end)
+
+        it("returns nothing for a wrapper with a known-safe inner", function()
+            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                local ranges = PermissionRules.tally_unapproved("timeout 5 grep foo")
+                assert.equal(0, #ranges)
+            end)
+        end)
+
+        it("pinpoints only the unapproved inner of a wrapper", function()
+            with_perms(
+                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "timeout 5 rm -rf /"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        -- The deny case above reaches the sub-range via the deny matcher; an
+        -- inner that is merely not-allowed reaches it through the recursive
+        -- leaf `record` instead. Both must translate to the same pinpoint.
+        it("pinpoints a not-allowed (non-deny) wrapper inner", function()
+            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                local cmd = "timeout 5 curl x"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("curl x", span_text(cmd, ranges[1]))
+            end)
+        end)
+
+        it("highlights the whole leaf for an unsafe -c body (coarse)", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "sh -c 'rm x'"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal(cmd, span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+    end)
+
+    describe("should_auto_approve exec-wrappers", function()
+        --- Run `fn` with grep/cat/head allowed and rm/sed-i denied, so the
+        --- inner-command recursion is what decides each wrapped case.
+        local function with_wrapper_perms(fn)
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = {
+                                "Bash(grep *)",
+                                "Bash(cat *)",
+                                "Bash(head *)",
+                            },
+                            deny = { "Bash(rm *)", "Bash(sed * -i*)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+            local ok, err = pcall(fn)
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+            if not ok then
+                error(err)
+            end
+        end
+
+        local approve = {
+            "timeout 5 grep foo",
+            "timeout -s KILL -k 1 5 grep foo",
+            "time grep foo",
+            "time -p grep foo",
+            "/usr/bin/time grep foo",
+            "stdbuf -oL grep foo",
+            "stdbuf -i0 -o0 grep foo",
+            "stdbuf -oL timeout 5 grep foo", -- nested wrappers
+            "PYTHONUNBUFFERED=1 timeout 5 grep foo", -- assignment + wrapper
+            "timeout 5 grep foo | head -5", -- compound
+        }
+        for _, cmd in ipairs(approve) do
+            it("approves: " .. cmd, function()
+                with_wrapper_perms(function()
+                    assert.is_true(PermissionRules.should_auto_approve(cmd))
+                end)
+            end)
+        end
+
+        local prompt = {
+            "timeout 5 rm -rf /", -- inner not allowed (deny)
+            "time rm x",
+            "timeout 5 sed -i 's/x/y/' f", -- deny survives wrapper
+            "timeout 5 PATH=/evil grep foo", -- inner env hijacker
+            "/usr/bin/time -o out grep foo", -- write option
+            "timeout 5 grep foo > out", -- write redirect
+            "timeout 5 grep $(cat list)", -- substitution laundering
+            "timeout 5 $(echo rm) -rf /",
+            "timeout grep foo", -- grep skipped as DURATION; inner `foo` not allowed
+            "timeout 5", -- empty inner
+            "timeout --unknown-opt 5 grep foo", -- unrecognised option
+        }
+        for _, cmd in ipairs(prompt) do
+            it("prompts: " .. cmd, function()
+                with_wrapper_perms(function()
+                    assert.is_false(PermissionRules.should_auto_approve(cmd))
+                end)
+            end)
+        end
     end)
 end)

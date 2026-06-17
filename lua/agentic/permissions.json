@@ -176,7 +176,6 @@
   "netstat":    { "read_only": [{}] },
   "mount":      { "read_only": [{}] },
 
-  "env":      { "read_only": [{}] },
   "printenv": { "read_only": [{}] },
 
   "defaults": { "read_only": [{ "positionals": ["read"] }] },

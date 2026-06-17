@@ -106,6 +106,14 @@ If `Read(**)` is in settings.json allow list, the SDK auto-approves reads
 internally and `canUseTool` is never called. The client never sees a
 `request_permission` for reads.
 
+The SDK also pre-approves read-only **Bash** commands — including pipelines and
+effect-neutral wrapper prefixes it unwraps itself (`timeout`/`time`/`stdbuf`).
+Verified 2026-06-17: 8/8 wrapped read-only commands (`grep`, `find`, `sort`,
+`git log`, piped) never reached the client; writes (`touch`) did escalate. So a
+client's own compound-command auto-approval is dead code on the Claude path for
+read-only inners — it fires only for non-pre-approving providers or for a
+command the SDK escalates as `ask` (e.g. a wrapped safe-write inner).
+
 ## Path resolution
 
 The SDK's path resolver (`t4` in minified code):

@@ -326,23 +326,6 @@ local function is_inert_var_name(name)
     return name:match("^[a-z_]") ~= nil or name:match("^[A-Z]$") ~= nil
 end
 
---- Strip a leading `stdbuf` line-buffering wrapper from a command leaf, so the
---- inner command is matched on its own (`stdbuf -oL grep x` becomes `grep x`).
---- Loops to handle chains. Variable-assignment prefixes (`LC_ALL=C grep x`,
---- `f=/path ls "$f"`) are no longer handled here — the walker validates and
---- excludes them structurally before the matcher sees the leaf.
---- @param segment string
---- @return string
-function M.strip_wrapper_prefixes(segment)
-    while true do
-        local stripped = segment:gsub("^stdbuf%s+%-[a-zA-Z0-9]+%s+", "", 1)
-        if stripped == segment then
-            return segment
-        end
-        segment = stripped
-    end
-end
-
 --- Fixed system binary directories. Restricted to non-arbitrary system
 --- locations so an absolute path into a writable directory
 --- (`/tmp/evil/grep`) cannot impersonate an allowed command.
@@ -373,14 +356,13 @@ end
 
 --- Check if a single command leaf matches any compiled pattern. The walker
 --- supplies substitution-free, redirect-free leaf text (env-prefix assignments
---- already excluded), so only the `stdbuf` wrapper and a system binary-dir
---- prefix remain to strip before matching.
+--- already excluded, exec-wrapper prefixes already recursed past), so only a
+--- system binary-dir prefix remains to strip before matching.
 --- @param segment string
 --- @param patterns agentic.utils.PermissionRules.CompiledPattern[]
 --- @return boolean
 function M.matches_any_pattern(segment, patterns)
     local trimmed = vim.trim(segment)
-    trimmed = M.strip_wrapper_prefixes(trimmed)
     trimmed = M.strip_command_path(trimmed)
     trimmed = vim.trim(trimmed)
 
@@ -924,33 +906,157 @@ end
 --- instead of firing the unconditional `c`-flag ask.
 local SHELL_C_COMMANDS = { zsh = true, bash = true, sh = true, dash = true }
 
---- Recursion-depth cap for nested inline `-c` bodies (`zsh -c 'zsh -c "…"'`).
---- A body at the cap falls through to the ask rather than recursing further.
-local SHELL_C_MAX_DEPTH = 3
+--- Recursion-depth cap for nested transparent prefixes — inline `-c` bodies
+--- (`zsh -c 'zsh -c "…"'`) and exec-wrappers (`stdbuf -oL timeout 5 grep foo`). It is
+--- NOT a termination guard: each recursion operates on a strict substring of its
+--- parent (the prefix is always removed), so source length decreases and the
+--- recursion terminates with or without a cap. It exists for two other reasons:
+--- a cheap O(1) bound against a crafted deeply-nested command whose per-level
+--- re-parse is ~O(N²) over the 64 KB length cap (a multi-second freeze), and a
+--- policy bound — benign commands nest prefixes 1–2 deep, so a deeper chain
+--- correctly falls through to a prompt. A command at the cap stops recursing.
+local NESTED_MAX_DEPTH = 3
 
---- The inline `-c` script body of a shell command, or nil when the branch does
---- not apply: not a shell, no `-c` flag, or the body is missing or dynamic
---- (`sh -c "$x"` is opaque). A `-c` may be the trailing letter of a short-flag
---- cluster (`-lc`), which still consumes the next word as its argument. The
---- returned body is already quote-stripped (it comes from `args`).
---- @param cmd_name string
---- @param args string[]
---- @param args_dynamic boolean[]
---- @return string|nil body
-local function shell_c_body(cmd_name, args, args_dynamic)
-    if not SHELL_C_COMMANDS[cmd_name] then
-        return nil
-    end
-    for i, arg in ipairs(args) do
-        if arg:match("^%-[a-zA-Z]*c$") then
-            local body = args[i + 1]
-            if body ~= nil and not args_dynamic[i + 1] then
-                return body
-            end
+--- Whether `s` matches any of the Lua patterns in `patterns`.
+--- @param s string
+--- @param patterns string[]
+--- @return boolean
+local function matches_any_lua_pattern(s, patterns)
+    return vim.tbl_contains(patterns, function(p)
+        return s:match(p) ~= nil
+    end, { predicate = true })
+end
+
+--- Per-wrapper operand grammar, read by the shared engine
+--- (`skip_wrapper_operands`). A table rather than per-wrapper skip functions
+--- because the three share one getopt skeleton (value/flag/attached) — the
+--- soundness-critical "bail on unrecognised option" logic is then audited once
+--- in the engine instead of re-verified per wrapper. Option forms a token can
+--- take, in the order the engine tries them:
+--- @class agentic.utils.PermissionRules.WrapperSpec
+--- @field value_opts? string[] options whose value is the next token (`-s KILL`)
+--- @field flag_opts? string[] boolean options (consume themselves only)
+--- @field attached? string[] Lua patterns for self-contained forms — attached short value (`-oL`), `--long=value`, bare numeric (`-5`)
+--- @field positionals? integer count of fixed positional operands before the inner command (timeout's `DURATION` = 1); skipped by count, not inspected
+
+--- Exec-wrappers: effect-neutral prefixes whose sole job is to launch the
+--- following command. Excluding a write option / requiring a positional makes
+--- the inner slice misparse fail-closed rather than expose a dangerous inner.
+---
+--- Transparency is a per-wrapper property, not a category — recursing into any
+--- launcher is unsound. Other launchers are deliberately NOT here: `env` and
+--- `nohup` can set an execution-hijacking var (`PATH`, `LD_PRELOAD`) or write
+--- `nohup.out`; `command`/`builtin`/`exec` alter `PATH`/the shell process;
+--- `xargs`/`parallel` run a command per input. These are left to match no allow
+--- rule (so they prompt) rather than recursed — and must NOT be given a blanket
+--- read-only entry in `permissions.json`, which would auto-approve whatever they
+--- launch without the matcher ever inspecting it.
+--- @type table<string, agentic.utils.PermissionRules.WrapperSpec>
+local EXEC_WRAPPERS = {
+    -- [OPTION]... DURATION COMMAND
+    timeout = {
+        value_opts = { "-s", "--signal", "-k", "--kill-after" },
+        flag_opts = { "--preserve-status", "--foreground", "-v", "--verbose" },
+        attached = { "^%-%-signal=", "^%-%-kill%-after=" },
+        positionals = 1, -- DURATION; a malformed one fails when run, harmless
+    },
+    -- [-p] only — any write option (-o/--output/-a/-f) bails (soundness §4)
+    time = { flag_opts = { "-p" } },
+    -- (-i/-o/-e MODE | --input/--output/--error=MODE)... — none write
+    stdbuf = {
+        value_opts = { "-i", "-o", "-e", "--input", "--output", "--error" },
+        attached = {
+            "^%-[ioe].",
+            "^%-%-input=",
+            "^%-%-output=",
+            "^%-%-error=",
+        },
+    },
+}
+
+--- Consume an exec-wrapper's own operands per its spec and return the 1-based
+--- index into `args` where the inner command begins, or nil to bail.
+---
+--- Soundness rests on bailing on any unrecognised option: an unknown option
+--- might consume a value we don't know to skip, mis-slicing the inner. The
+--- `positionals` operands (timeout's DURATION) are skipped by count, never
+--- inspected — validating their shape would be checking command correctness,
+--- which is not our job. A malformed command fails when run (harmless), and any
+--- mis-slice yields a non-matching/unparseable inner → prompt, never a dangerous
+--- inner reconstructed as allowed. A dynamic operand (`timeout $D …`) is consumed
+--- positionally; the inner is re-parsed, so a dynamic inner name still bails.
+--- @param args string[] quote-stripped arg tokens after the wrapper name
+--- @param spec agentic.utils.PermissionRules.WrapperSpec
+--- @return integer|nil inner_idx
+local function skip_wrapper_operands(args, spec)
+    local i = 1
+    while args[i] and args[i]:sub(1, 1) == "-" do
+        local opt = args[i]
+        if spec.value_opts and vim.tbl_contains(spec.value_opts, opt) then
+            i = i + 2 -- value is the next token (`-s KILL`)
+        elseif
+            -- boolean flag, or a self-contained form (`-oL`, `--signal=K`, `-5`)
+            (spec.flag_opts and vim.tbl_contains(spec.flag_opts, opt))
+            or (spec.attached and matches_any_lua_pattern(opt, spec.attached))
+        then
+            i = i + 1
+        else
             return nil
         end
     end
-    return nil
+    return i + (spec.positionals or 0)
+end
+
+--- @alias agentic.utils.PermissionRules.Origin [integer, integer]
+
+--- Resolve the inner command to recurse into for a transparent prefix — an
+--- inline shell `-c '<body>'` or an exec-wrapper (`timeout`/`time`/`stdbuf`).
+--- Returns nil to fall through to the leaf matchers (not a shell or
+--- wrapper, missing/dynamic body, malformed operands, empty inner).
+---
+--- The `-c` body comes quote-stripped from `args` (a `-c` may be the trailing
+--- letter of a short-flag cluster like `-lc`, still consuming the next word);
+--- origin is nil because its quote-stripped coordinates cannot be mapped back to
+--- `src`. The wrapper inner is a raw substring of `src` (quotes/escapes intact)
+--- from the inner node's start to the wrapper command node's end, with the inner
+--- node's `(row, col)` as origin for translating tally ranges.
+--- @param cmd_name string command name, already path-stripped
+--- @param node TSNode the `command` node
+--- @param args string[] quote-stripped arg tokens
+--- @param arg_nodes TSNode[] the arg token nodes, parallel to `args`
+--- @param args_dynamic boolean[]
+--- @param src string
+--- @return string|nil inner
+--- @return agentic.utils.PermissionRules.Origin|nil origin
+local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    if SHELL_C_COMMANDS[cmd_name] then
+        for i, arg in ipairs(args) do
+            if arg:match("^%-[a-zA-Z]*c$") then
+                local body = args[i + 1]
+                if body ~= nil and not args_dynamic[i + 1] then
+                    return body, nil
+                end
+                return nil, nil -- missing or dynamic body
+            end
+        end
+        return nil, nil
+    end
+
+    local spec = EXEC_WRAPPERS[cmd_name]
+    if not spec then
+        return nil, nil
+    end
+    local inner_idx = skip_wrapper_operands(args, spec)
+    if not inner_idx then
+        return nil, nil
+    end
+    local inner_node = arg_nodes[inner_idx]
+    if not inner_node then
+        return nil, nil -- empty inner
+    end
+    local sr, sc, inner_start_byte = inner_node:range(true)
+    local _, _, _, _, _, node_end_byte = node:range(true)
+    return src:sub(inner_start_byte + 1, node_end_byte), { sr, sc }
 end
 
 --- Forward declaration — `walk` and the per-node handlers are mutually
@@ -973,6 +1079,8 @@ local function walk_command(node, src, ctx)
     local name_node
     --- @type string[]
     local args = {}
+    --- @type TSNode[]
+    local arg_nodes = {}
     --- @type boolean[]
     local args_dynamic = {}
     for child in node:iter_children() do
@@ -989,6 +1097,7 @@ local function walk_command(node, src, ctx)
                 return false
             end
             table.insert(args, tok)
+            table.insert(arg_nodes, child)
             table.insert(args_dynamic, token_is_dynamic(child))
         end
     end
@@ -1018,19 +1127,20 @@ local function walk_command(node, src, ctx)
         return false
     end
 
-    -- Inline `sh -c '<literal body>'`: walk the body instead of firing the
-    -- unconditional `c`-flag ask. Must run before the structured matcher so its
-    -- `c` gate does not pre-empt this. A body at the depth cap, or a dynamic /
-    -- missing body, falls through to that ask.
-    local body = shell_c_body(cmd_name, args, args_dynamic)
-    if body and ctx.depth < SHELL_C_MAX_DEPTH then
-        local root = parse_zsh(body)
+    -- Transparent prefix (inline `sh -c '<body>'` or exec-wrapper): walk the
+    -- inner command instead of treating the prefix as an opaque leaf. Must run
+    -- before the structured matcher so a shell's `c` gate does not pre-empt the
+    -- `-c` recursion. A body at the depth cap, or one that does not resolve,
+    -- falls through to the leaf matchers.
+    local inner = inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    if inner and ctx.depth < NESTED_MAX_DEPTH then
+        local root = parse_zsh(inner)
         if not root then
             return false
         end
         return walk(
             root,
-            body,
+            inner,
             vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
         )
     end
@@ -1378,15 +1488,47 @@ local function record_substitutions(node, ranges)
     end
 end
 
+--- Translate tally ranges produced against an inner-command source back into the
+--- outer `src` coordinate system, given the inner's `(row, col)` origin. Rows
+--- shift by the origin row; the origin column applies only to relative-row 0
+--- (every later row already starts at column 0 in the inner source).
+--- @param ranges agentic.utils.PermissionRules.Range[]
+--- @param origin agentic.utils.PermissionRules.Origin
+--- @return agentic.utils.PermissionRules.Range[]
+local function translate_ranges(ranges, origin)
+    local orow, ocol = origin[1], origin[2]
+    --- @type agentic.utils.PermissionRules.Range[]
+    local out = {}
+    for _, r in ipairs(ranges) do
+        local sr, sc, er, ec = r[1], r[2], r[3], r[4]
+        table.insert(out, {
+            sr + orow,
+            sr == 0 and sc + ocol or sc,
+            er + orow,
+            er == 0 and ec + ocol or ec,
+        })
+    end
+    return out
+end
+
 --- Whether a `command` leaf is known-safe: it matches a read_only/safe_write
 --- rule (glob or structured) AND no deny/ask rule, with no structural reason to
 --- bail (substitution, env-hijack prefix, dynamic name, code-taking builtin,
 --- unextractable token). Mirrors `walk_command`'s extraction but classifies by
 --- category instead of resolving the mode-gated decision.
+---
+--- For a transparent prefix (exec-wrapper or `sh -c`) the inner command is
+--- tallied recursively. A wrapper inner returns its unapproved sub-ranges
+--- (translated into `src` coordinates) so the prompt pinpoints only the
+--- genuinely-unapproved part — e.g. `rm -rf /` in `timeout 5 rm -rf /`, not the
+--- known-safe `timeout 5` prefix. The `-c` body has no faithful coordinate
+--- mapping (quote-stripped), so it stays coarse: not-known-safe with no
+--- sub-ranges, falling back to the whole-leaf highlight.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @return boolean known_safe
+--- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
 local function command_known_safe(node, src, ctx)
     if subtree_has_substitution(node) then
         return false
@@ -1395,6 +1537,8 @@ local function command_known_safe(node, src, ctx)
     local name_node
     --- @type string[]
     local args = {}
+    --- @type TSNode[]
+    local arg_nodes = {}
     --- @type boolean[]
     local args_dynamic = {}
     for child in node:iter_children() do
@@ -1411,6 +1555,7 @@ local function command_known_safe(node, src, ctx)
                 return false
             end
             table.insert(args, tok)
+            table.insert(arg_nodes, child)
             table.insert(args_dynamic, token_is_dynamic(child))
         end
     end
@@ -1439,11 +1584,12 @@ local function command_known_safe(node, src, ctx)
         return false
     end
 
-    -- Mirror the decision walk's inline `sh -c '<literal body>'` recursion: the
-    -- leaf is known-safe iff the whole body tallies clean (no unapproved range).
-    local body = shell_c_body(cmd_name, args, args_dynamic)
-    if body and ctx.depth < SHELL_C_MAX_DEPTH then
-        local root = parse_zsh(body)
+    -- Transparent prefix: known-safe iff the inner tallies clean. A wrapper
+    -- inner pinpoints its unapproved sub-ranges; the `-c` body stays coarse.
+    local inner, origin =
+        inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    if inner and ctx.depth < NESTED_MAX_DEPTH then
+        local root = parse_zsh(inner)
         if not root then
             return false
         end
@@ -1451,11 +1597,17 @@ local function command_known_safe(node, src, ctx)
         local body_ranges = {}
         tally_walk(
             root,
-            body,
+            inner,
             vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 }),
             body_ranges
         )
-        return #body_ranges == 0
+        if #body_ranges == 0 then
+            return true
+        end
+        if origin then
+            return false, translate_ranges(body_ranges, origin)
+        end
+        return false
     end
 
     local glob_safe = M.matches_any_pattern(leaf, ctx.read_only)
@@ -1584,8 +1736,15 @@ function tally_walk(node, src, ctx, ranges)
     elseif CONTAINER_TYPES[t] or t == "do_group" then
         tally_children(node, src, ctx, ranges)
     elseif t == "command" then
-        if not command_known_safe(node, src, ctx) then
-            record(ranges, node)
+        local known, sub_ranges = command_known_safe(node, src, ctx)
+        if not known then
+            if sub_ranges then
+                for _, r in ipairs(sub_ranges) do
+                    table.insert(ranges, r)
+                end
+            else
+                record(ranges, node)
+            end
         end
     elseif t == "redirected_statement" then
         tally_redirected(node, src, ctx, ranges)
