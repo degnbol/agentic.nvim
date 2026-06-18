@@ -869,12 +869,15 @@ local walk_substitution_inner
 --- and structured layers (composition rule in the `permissions` project skill).
 --- `known` (optional) is the #3 constant environment of the enclosing sequence;
 --- a bare `$name` bound in it resolves to its literal and becomes a static token.
+--- `funcs` (optional) is the #6 set of function names defined and body-walked
+--- clean earlier in the sequence; a call to one approves regardless of its args.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @param known table<string, string>|nil
+--- @param funcs table<string, boolean>|nil
 --- @return boolean
-local function walk_command(node, src, ctx, known)
+local function walk_command(node, src, ctx, known, funcs)
     local name_node
     --- @type string[]
     local args = {}
@@ -965,6 +968,15 @@ local function walk_command(node, src, ctx, known)
         return false
     end
 
+    -- #6: a call to a function defined earlier in this straight-line sequence.
+    -- Its body was walked clean at definition time with every parameter dynamic,
+    -- so the body is safe for ANY call arguments — the call needs no re-vetting
+    -- of how the function uses them. The arguments were still walked above (a
+    -- side-effecting `foo $(rm x)` already bailed on the substitution).
+    if funcs and funcs[cmd_name] then
+        return true
+    end
+
     -- Transparent prefix (inline `sh -c '<body>'` or exec-wrapper): walk the
     -- inner command instead of treating the prefix as an opaque leaf. Must run
     -- before the structured matcher so a shell's `c` gate does not pre-empt the
@@ -1009,12 +1021,39 @@ local function walk_command(node, src, ctx, known)
     return M.matches_any_pattern(leaf, ctx.allow)
 end
 
+--- Walk a named `function_definition` in sequence context (#6). Defining a named
+--- function never runs its body, so the definition always approves; the body's
+--- cleanliness only decides whether a later *call* resolves. Body-walk it as a
+--- fresh sequence (every `$var`/positional dynamic, no inherited `known` literals
+--- or `funcs`); record the name in `funcs` iff it walks clean. A redefinition
+--- with an unsafe body must *un-record* the name — otherwise a stale safe record
+--- would approve a call that now runs the rebound (unsafe) body. An anonymous
+--- `() { … }` executes immediately and is left to the dispatcher's fail-closed
+--- branch.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param funcs table<string, boolean>
+--- @return boolean
+local function walk_function_definition(node, src, ctx, funcs)
+    local name_node = node:field("name")[1]
+    if not name_node then
+        return false
+    end
+    local name = vim.treesitter.get_node_text(name_node, src)
+    local body = node:field("body")[1]
+    funcs[name] = (body and walk(body, src, ctx)) or nil
+    return true
+end
+
 --- Walk a straight-line statement sequence (`program`, `list`, an `if`/`elif`/
---- `else` body, or a `do_group`), threading the #3 constant environment left to
---- right: a pure-literal assignment binds a name, and a later `command` resolves
---- bare `$name` references against those bindings (invalidation in
---- `update_known`). `known` is sequence-local — nested blocks reached via
---- `walk(child)` start fresh, so a binding never leaks across sequences.
+--- `else` body, a `do_group`, or a brace group / function body
+--- `compound_statement`), threading the #3 constant environment and the #6
+--- function table left to right: a pure-literal assignment binds a name, a
+--- function definition records a body-walked-clean name, and a later `command`
+--- resolves bare `$name` references and recorded calls against them. Both are
+--- sequence-local — nested blocks reached via `walk(child)` start fresh, so
+--- neither a binding nor a function name leaks across sequences.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
@@ -1022,11 +1061,16 @@ end
 local function walk_sequence(node, src, ctx)
     --- @type table<string, string>
     local known = {}
+    --- @type table<string, boolean>
+    local funcs = {}
     for child in node:iter_children() do
         if child:named() and child:type() ~= "comment" then
             local ok
-            if child:type() == "command" then
-                ok = walk_command(child, src, ctx, known)
+            local t = child:type()
+            if t == "command" then
+                ok = walk_command(child, src, ctx, known, funcs)
+            elseif t == "function_definition" then
+                ok = walk_function_definition(child, src, ctx, funcs)
             else
                 ok = walk(child, src, ctx)
             end
@@ -1269,7 +1313,9 @@ function walk(node, src, ctx)
         return not subtree_has_substitution(node)
     elseif t == "case_statement" then
         return walk_case(node, src, ctx)
-    elseif SEQUENCE_TYPES[t] or t == "do_group" then
+    elseif SEQUENCE_TYPES[t] or t == "do_group" or t == "compound_statement" then
+        -- `compound_statement` is a brace group `{ …; }` or a function body —
+        -- both run sequentially in the current shell, like a `list`.
         return walk_sequence(node, src, ctx)
     elseif CONTAINER_TYPES[t] then
         -- `pipeline` / `variable_assignments` — the non-sequence containers (the
@@ -1296,11 +1342,11 @@ function walk(node, src, ctx)
         -- `until` also parses to `while_statement` in the pinned zsh grammar.
         return walk_while(node, src, ctx)
     elseif t == "function_definition" then
-        -- Defining a *named* function never runs its body; only a later call
-        -- does, and that call is a separate `command` leaf that must approve on
-        -- its own. So the body is not walked. An anonymous function
-        -- (`() { … }`, no `name` field) executes immediately, so it is left to
-        -- fail closed.
+        -- Reached outside a sequence (rare): defining a *named* function never
+        -- runs its body, so it approves without a body-walk; an anonymous
+        -- (`() { … }`, no `name`) executes immediately and fails closed. The #6
+        -- body-walk-and-record happens in `walk_sequence` (the common path),
+        -- which has the `funcs` table; here there is none to record into.
         return node:field("name")[1] ~= nil
     end
     -- Any unknown future node type stays rejected (fail-closed).
@@ -1425,9 +1471,10 @@ end
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param known table<string, string>|nil #3 constant environment of the enclosing sequence
+--- @param funcs table<string, boolean>|nil #6 recorded function names of the enclosing sequence
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
-local function command_known_safe(node, src, ctx, known)
+local function command_known_safe(node, src, ctx, known, funcs)
     local name_node
     --- @type string[]
     local args = {}
@@ -1503,6 +1550,12 @@ local function command_known_safe(node, src, ctx, known)
         return false
     end
 
+    -- #6: a call to a function recorded earlier in this sequence is known-safe
+    -- (mirrors walk_command — body vetted at definition time for any args).
+    if funcs and funcs[cmd_name] then
+        return true
+    end
+
     -- Transparent prefix: known-safe iff the inner tallies clean. A wrapper
     -- inner pinpoints its unapproved sub-ranges; the `-c` body stays coarse.
     local inner, origin =
@@ -1575,11 +1628,14 @@ end
 local function tally_sequence(node, src, ctx, ranges)
     --- @type table<string, string>
     local known = {}
+    --- @type table<string, boolean>
+    local funcs = {}
     for child in node:iter_children() do
         if child:named() and child:type() ~= "comment" then
-            if child:type() == "command" then
+            local t = child:type()
+            if t == "command" then
                 local safe, sub_ranges =
-                    command_known_safe(child, src, ctx, known)
+                    command_known_safe(child, src, ctx, known, funcs)
                 if not safe then
                     if sub_ranges then
                         for _, r in ipairs(sub_ranges) do
@@ -1588,6 +1644,24 @@ local function tally_sequence(node, src, ctx, ranges)
                     else
                         record(ranges, child)
                     end
+                end
+            elseif t == "function_definition" then
+                -- Mirror walk_function_definition: a named definition is not run
+                -- (body not highlighted); record the name if the body tallies
+                -- clean. An anonymous function runs immediately, so highlight it.
+                local name_node = child:field("name")[1]
+                if name_node then
+                    local name = vim.treesitter.get_node_text(name_node, src)
+                    local body = child:field("body")[1]
+                    --- @type agentic.utils.PermissionRules.Range[]
+                    local body_ranges = {}
+                    if body then
+                        tally_walk(body, src, ctx, body_ranges)
+                    end
+                    -- Record on clean, un-record on unsafe redefinition.
+                    funcs[name] = (body and #body_ranges == 0) or nil
+                else
+                    record(ranges, child)
                 end
             else
                 tally_walk(child, src, ctx, ranges)
@@ -1697,7 +1771,7 @@ function tally_walk(node, src, ctx, ranges)
         record_substitutions(node, ranges)
     elseif t == "case_statement" then
         tally_case(node, src, ctx, ranges)
-    elseif SEQUENCE_TYPES[t] or t == "do_group" then
+    elseif SEQUENCE_TYPES[t] or t == "do_group" or t == "compound_statement" then
         tally_sequence(node, src, ctx, ranges)
     elseif CONTAINER_TYPES[t] then
         tally_children(node, src, ctx, ranges)

@@ -545,24 +545,94 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
-        it("blocks calling a defined function with a disallowed name", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = { allow = { "Bash(echo *)" } } }
+        describe("#6 calls to locally-defined functions", function()
+            local orig_read_json
+            before_each(function()
+                orig_read_json = PermissionRules.read_json
+                PermissionRules.read_json = function(path)
+                    if path:find("settings%.json$") then
+                        return {
+                            permissions = { allow = { "Bash(echo *)" } },
+                        }
+                    end
+                    return nil
                 end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
+                PermissionRules.invalidate_cache()
+            end)
+            after_each(function()
+                PermissionRules.read_json = orig_read_json
+                PermissionRules.invalidate_cache()
+            end)
 
-            -- The definition approves, but the trailing call is a separate
-            -- command leaf and `foo` is not allowed.
-            assert.is_false(
-                PermissionRules.should_auto_approve("foo() { echo hi }; foo")
-            )
+            it("resolves a call to a clean function body", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("foo() { echo hi }; foo")
+                )
+            end)
 
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            it("approves a call regardless of its arguments", function()
+                -- Body treats `$1` as dynamic at definition time, so the
+                -- recorded function is safe for any call args.
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "foo() { echo $1 }; foo whatever"
+                    )
+                )
+            end)
+
+            it("does not record a function whose body bails", function()
+                -- `rm -rf /` is not allowed, so the body never walks clean and
+                -- the name is not recorded — the call bails.
+                assert.is_false(
+                    PermissionRules.should_auto_approve("foo() { rm -rf / }; foo")
+                )
+            end)
+
+            it("un-records on redefinition to an unsafe body", function()
+                -- The safe first definition must not leave a stale record that
+                -- would approve the call that now runs the unsafe second body.
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "foo() { echo hi }; foo() { rm -rf / }; foo"
+                    )
+                )
+            end)
+
+            it("records on redefinition to a clean body", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "foo() { rm -rf / }; foo() { echo hi }; foo"
+                    )
+                )
+            end)
+
+            it("bails on a call before its definition", function()
+                -- Left-to-right: `foo` is not yet recorded at the call site.
+                assert.is_false(
+                    PermissionRules.should_auto_approve("foo; foo() { echo hi }")
+                )
+            end)
+
+            it("still vets a side-effecting call argument", function()
+                -- The `$(rm x)` argument runs at the call site to produce
+                -- foo's input, so it is walked and bails before resolution.
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "foo() { echo hi }; foo $(rm x)"
+                    )
+                )
+            end)
+
+            it("does not leak a function name into a nested sequence", function()
+                -- funcs is per-sequence (same scoping as #3's `known`): the
+                -- `if` body is a fresh sequence, so a parent definition does not
+                -- resolve there. Accepted residual — over-prompts, never under.
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "foo() { echo hi }; if true; then foo; fi"
+                    )
+                )
+            end)
         end)
 
         it("blocks an anonymous function (runs immediately)", function()
@@ -1121,12 +1191,12 @@ describe("PermissionRules", function()
         describe("bails on control flow and compound structure", function()
             -- Loops and if/case control flow recurse (see the dedicated
             -- describe blocks below); a top-level `test_command` is a
-            -- side-effect-free predicate that walks. The remaining cases
-            -- (`!`, brace group, subshell, process substitution) stay
-            -- rejected.
+            -- side-effect-free predicate that walks; a brace group runs
+            -- sequentially in the current shell so it walks like a `list`
+            -- (covered separately below). The remaining cases (`!`, subshell,
+            -- process substitution) stay rejected.
             for _, cmd in ipairs({
                 "! rm x",
-                "{ rm x; }",
                 "( rm -rf x )",
                 "cat <(ls)",
             }) do
@@ -1134,6 +1204,18 @@ describe("PermissionRules", function()
                     assert.is_false(decide(cmd, ALLOW))
                 end)
             end
+        end)
+
+        describe("brace group walks like a sequence", function()
+            -- A `{ …; }` brace group runs its contents in the current shell,
+            -- so its decision equals that of the contained list (the node that
+            -- also forms a #6 function body).
+            it("approves when every contained command is allowed", function()
+                assert.is_true(decide("{ echo hi; rm x; }", ALLOW))
+            end)
+            it("bails when any contained command is not allowed", function()
+                assert.is_false(decide("{ echo hi; danger x; }", ALLOW))
+            end)
         end)
 
         describe("bails on file-writing and unmodelled redirects", function()

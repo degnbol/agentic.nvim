@@ -109,9 +109,18 @@ nested block.
    *pattern* must be substitution-free too — both run code during the match
    (`case $(rm x) in $(rm y)) …`).
    A **named** `function_definition` (`foo() { … }`, `function foo { … }`)
-   approves without walking its body — defining a function never runs it; a
-   later call is a separate `command` leaf gated on its own. An **anonymous**
-   function (`() { … }`, no `name` field) executes immediately and bails.
+   always approves *as a definition* — defining never runs the body. #6 adds
+   *call* resolution: the body is also walked as a fresh sequence (every
+   `$var`/positional dynamic), and on a clean walk the name is recorded in a
+   per-sequence function table (same left-to-right lifetime as #3's `known`). A
+   later `command` whose name matches a recorded entry approves regardless of
+   its call arguments — the body was vetted for arbitrary args, though a
+   side-effecting argument substitution (`foo $(rm x)`) is still walked and
+   bails. A redefinition with an unsafe body un-records the name; a call before
+   the definition, or to one defined in a different sequence (a nested `if`
+   body, a subshell), still bails. An **anonymous** function (`() { … }`, no
+   `name` field) executes immediately and bails. A brace group `{ …; }` is the
+   same `compound_statement` node and walks like a `list`.
    A bare `command_substitution` (`$(…)` / backticks) in **argument**,
    **for-list**, or **assignment-value/array-element** position recurses
    through `walk_substitution_inner`: its inner commands must approve

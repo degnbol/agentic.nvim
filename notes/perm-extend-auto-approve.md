@@ -14,14 +14,13 @@ widens what auto-approves and must be shown to keep that one-directional safety:
 it may change *what a token is* or *which leaves are walked*, never *whether a
 leaf is checked* against deny/ask.
 
-Build order: **#3, #4, #5** (preserve the invariant, no new config, broad
-benefit; all done, both #3 grades) → **#1** (off by default, narrow) → **#6**
-(local function-call resolution) → **#2** (parked, see end).
+Build order: **#3, #4, #5, #6** (preserve the invariant, no new config, broad
+benefit; all done) → **#1** (off by default, narrow) → **#2** (parked, see end).
 
 A named `function_definition` already auto-approves *as a definition* (body not
 walked — defining never runs it; an anonymous `() { … }` executes immediately
-and bails). That shipped outside this roadmap; **#6** is the advanced follow-up
-that also approves *calls* to such functions.
+and bails). **#6** (done) builds on that to also approve *calls* to such
+functions.
 
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
 mirrored in `command_known_safe`; tests under "inline shell -c body").
@@ -277,18 +276,23 @@ walk ctx and special-cased for `cmd_name=="rm"` in `walk_command`;
 
 ---
 
-## #6 — resolve calls to locally-defined functions (todo)
+## #6 — resolve calls to locally-defined functions (done)
 
-**Today.** A named `function_definition` auto-approves *as a definition* (body
-not walked). But a *call* is an ordinary `command` leaf — `foo` is not in the
-allowlist — so `foo() { grep x file }; foo` still prompts on the call.
+**Was.** A named `function_definition` auto-approved *as a definition* (body not
+walked). But a *call* was an ordinary `command` leaf — `foo` not in the
+allowlist — so `foo() { grep x file }; foo` prompted on the call.
 
-**Change.** Walk the body at the definition site, treating every `$var`
-(including positionals `$1`/`$@`) as **dynamic**; if it approves, record the name
-in a per-sequence function table (same left-to-right lifetime as #3's `known`). A
-later `command` whose name matches a recorded entry approves by the recorded
-decision instead of bailing. Redefinition rebinds; an unresolved call still
-bails.
+**Change (shipped).** `walk_function_definition` walks the body as a **fresh
+sequence** (every `$var`/positional dynamic — no inherited `known` literals or
+`funcs`); on a clean walk it records the name in a per-sequence `funcs` table
+threaded alongside #3's `known` in `walk_sequence`. A later `command` whose name
+matches a recorded entry approves in `walk_command` (after the deny/ask glob
+gates, before the structured matcher). A redefinition with an unsafe body
+**un-records** the name (`funcs[name] = walk(body) or nil`) — else a stale safe
+record would approve a call that now runs the rebound body. Function bodies are
+`compound_statement` nodes, so `walk`/`tally_walk` now route `compound_statement`
+to the sequence walk (a brace group `{ …; }` runs like a `list` — sound, minor
+bonus). Mirrored in `command_known_safe`/`tally_sequence` (UI).
 
 **Why it's sound.** Shell functions have dynamic scope — the body runs with the
 caller's variables and arguments, not the definition site's. So the body-walk
@@ -296,12 +300,16 @@ inherits *no* `known` literals and treats all params as arbitrary, which the
 dynamic-token machinery already covers. A body that pipes `$1` into a gated
 position (`foo() { find . $1 }`) fails closed at definition time and is never
 recorded; a recorded function is therefore safe for **any** call arguments, so
-the call site needs no re-vetting of its args. Only *which leaves are walked*
-changes — every body leaf is still checked against deny/ask. Invariant held.
+the call site needs no re-vetting of its args (though a side-effecting argument
+substitution `foo $(rm x)` is still walked and bails — it runs at the call
+site). Only *which leaves are walked* changes — every body leaf is still checked
+against deny/ask. Invariant held.
 
-**Touches.** A function table threaded alongside `known` in `walk_sequence`;
-`walk_command` records on a `function_definition` (body-walk) and resolves on a
-matching call name. Mirror in the tally walk.
+**Accepted residuals** (over-prompt, never under). `funcs` is per-sequence (same
+scoping as #3's `known`): a call before its definition, in a nested `if`/loop
+body, or to a function defined in a subshell does not resolve. Forward/mutual
+recursion between functions does not resolve (each body-walk starts with empty
+`funcs`).
 
 **Enables #2.** This is the "function-definition walking" #2 names as its
 prerequisite; with it in place, reading and walking a script *file* is the easy
@@ -316,19 +324,17 @@ architecture auto-approval fires synchronously with no human-wait window and ACP
 runs tool calls sequentially, so the TOCTOU gap between the plugin reading the
 file and the shell reading it has no writer in it.
 
-**Blocked on bail rate, not safety.** A named `function_definition` approves as
-a definition but its body is not walked and a *call* to a local `foo` still
-bails (the call name is not in the allowlist); real scripts also bail on
-`source`, on a harness command not in the allowlist (`nvim --headless`, `make`,
-`pytest`), or on any write redirect. The scripts that pass are the trivial
-all-allowlisted ones — already covered by a one-line `Bash(zsh run-tests.zsh)`
-allow in `.claude/settings.json`.
+**Blocked on bail rate, not safety.** With **#6** done, a call to a locally-
+defined `foo` now resolves, but real scripts still bail on `source`, on a
+harness command not in the allowlist (`nvim --headless`, `make`, `pytest`), or
+on any write redirect. The scripts that pass are the trivial all-allowlisted
+ones — already covered by a one-line `Bash(zsh run-tests.zsh)` allow in
+`.claude/settings.json`.
 
-To make #2 beat that one-liner, first build **#6** (local function-call
-resolution): walk each `foo(){…}` body, record it, and resolve a call to a
-locally-defined `foo` into the recorded body. That is the real work; reading the
-file is the easy part on top. Keep the walker language-agnostic enough (the
-body-walk in #5 and a future file-read share the "parse a body, recurse `walk`"
-shape) that a non-zsh extension needs no major refactor.
+The function-call-resolution prerequisite (#6) is in place; reading and walking
+the file is the easy part on top (the #5 `-c` body-walk and a future file-read
+share the "parse a body, recurse `walk`" shape, so a non-zsh extension needs no
+major refactor). What remains for #2 to beat the one-liner is closing the
+`source` / harness-command / write-redirect bail rate, not new walker machinery.
 
 Revisit only when wanting general safe-script approval across many scripts.
