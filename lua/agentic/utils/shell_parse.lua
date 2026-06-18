@@ -357,6 +357,14 @@ local function command_name_text(command_name, src)
     if not inner then
         return nil
     end
+    -- A dynamic name bails. `literal_token` hands back raw `$VAR` text for a
+    -- bare expansion; the permission walk tolerates that (a `$VAR` leaf matches
+    -- no allow pattern → prompt) but `extract_commands` does not — a
+    -- `$VAR`-named record matches no block rule, a silent miss. So drop it here
+    -- and both consumers get nil. ponytail: lazy bail, not var propagation.
+    if DYNAMIC_NAME_TYPES[inner:type()] then
+        return nil
+    end
     return literal_token(inner, src)
 end
 

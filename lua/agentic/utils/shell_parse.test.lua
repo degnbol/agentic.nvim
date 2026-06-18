@@ -98,8 +98,16 @@ describe("ShellParse.extract_commands", function()
             assert.equal(nil, ShellParse.extract_commands("rm -f $("))
         end)
 
-        it("returns nil on a dynamic command name", function()
+        it("returns nil on a substitution command name", function()
             assert.equal(nil, ShellParse.extract_commands("$(echo rm) -rf /"))
+        end)
+
+        it("returns nil on an expansion command name", function()
+            -- `$R` could resolve to anything; a record named `$R` matches no
+            -- block rule, so bail rather than emit a name no guard can catch.
+            assert.equal(nil, ShellParse.extract_commands("$VAR -rf /"))
+            assert.equal(nil, ShellParse.extract_commands("R=rm; $R -f /"))
+            assert.equal(nil, ShellParse.extract_commands("${CMD} -f x"))
         end)
 
         it("returns nil on a code-taking builtin", function()
