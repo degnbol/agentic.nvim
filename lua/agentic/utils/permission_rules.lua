@@ -607,6 +607,13 @@ end
 --- `readonly` parse as `declaration_command` (handled by the sequence walk's
 --- clear-on-other-node branch) and are listed only for the rare grammar emission
 --- as a plain command.
+---
+--- Cross-file coupling: any builtin allowlisted in `permissions.json` that can
+--- rebind a shell variable must appear here, else the preserve-on-plain-command
+--- branch under-prompts (the matcher resolves a stale `known[var]` while the
+--- shell ran the rebound value). Today only `printf` satisfies "allowlisted ∧
+--- rebinds" (special-cased in `update_known` to clear only on its `-v` form),
+--- which is why its membership is load-bearing, not insurance.
 local NAMESPACE_MUTATING = {
     read = true,
     printf = true,
@@ -655,6 +662,11 @@ end
 --- @param child TSNode
 --- @param src string
 local function update_known(known, child, src)
+    local function clear()
+        for k in pairs(known) do
+            known[k] = nil
+        end
+    end
     local t = child:type()
     if t == "variable_assignment" then
         local name_node = child:field("name")[1]
@@ -672,15 +684,25 @@ local function update_known(known, child, src)
         end
     elseif t == "command" then
         local name = command_leaf_name(child, src)
-        if not name or NAMESPACE_MUTATING[name] then
-            for k in pairs(known) do
-                known[k] = nil
+        if name == "printf" then
+            -- printf only rebinds via its `-v NAME` form; plain `printf "msg"`
+            -- (logging/formatting between an assignment and a use) is inert and
+            -- common, so it must preserve `known`. printf has no bundled or long
+            -- form for this in bash or zsh — it is spelled exactly `-v` — so a
+            -- literal `-v` token among the args catches every assigning form
+            -- (including a dynamic target `printf -v "$x" …`). `printf '%s' -v`
+            -- (printing the string "-v") over-clears, which only over-prompts.
+            for arg in child:iter_children() do
+                if vim.treesitter.get_node_text(arg, src) == "-v" then
+                    clear()
+                    break
+                end
             end
+        elseif not name or NAMESPACE_MUTATING[name] then
+            clear()
         end
     else
-        for k in pairs(known) do
-            known[k] = nil
-        end
+        clear()
     end
 end
 

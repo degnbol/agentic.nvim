@@ -48,40 +48,40 @@ leading `-c core.pager=!cmd` runs code before the subcommand, but `git log -c`
 is the harmless combined-diff flag and a trailing `$ref` can never inject a
 leading flag.
 
-## Dynamic tokens wildcard deny/ask, never allow
+## Token expansion: resolve statically, else dynamic
 
-A token that expands at runtime — `$var`, unquoted glob (`~` is exempt: it only
-yields a path, never a flag/subcommand) — is treated as "could be anything" for
-deny/ask: it satisfies any `options` requirement and any positional at or after
-its reachable index. So laundering a payload through `$f` at a gated command
-prompts — guarding the bare (`find $f`), assignment-laundered
-(`f=$(…); find . $f`), and loop-body (`for f in *.txt; do find . $f`) vectors at
-the single use site. For allow it stays concrete (a dynamic subcommand fails the
-allowlist → prompt; a trailing dynamic arg like `git log $ref` is harmless), so
+Imprecision is one-directional — it may only ever over-prompt, never
+auto-approve something the gates would otherwise catch. So a token's concrete
+value is resolved wherever it provably can be, and falls back to a conservative
+"could be anything" otherwise.
+
+**Resolved** — a literal, or a bare `$name`/`${name}` bound to a *splitting-proof*
+literal (`is_safe_literal` — no IFS whitespace, glob/brace/tilde, or expansion
+trigger) earlier in the same straight-line sequence. `walk_sequence`/
+`tally_sequence` thread a per-sequence `known` environment left to right;
+`resolved_var_name` accepts only a lone `simple_variable_name`, so `$f[1]`,
+`${f:-x}`, and `"$f"` are excluded. The resolved value feeds the same gates, so
+`f=/safe; find $f` approves while `f=--exec; find $f` denies.
+
+**Dynamic** — anything unresolvable: an unbound `$var`, an unquoted glob (`~` is
+exempt — it only yields a path, never a flag/subcommand), or substitution
+output. Treated as satisfying any `options` requirement and any positional at or
+after its reachable index, so a payload laundered through `$f` at a gated command
+prompts — guarding the bare (`find $f`), assignment (`f=$(…); find . $f`), and
+loop-body (`for f in *.txt; do find . $f`) vectors at the single use site.
+Wildcarded only against deny/ask, **never allow**: a dynamic subcommand fails the
+allowlist (→ prompt) and a trailing dynamic arg (`git log $ref`) is harmless, so
 a dynamic token never widens an approval.
 
-## Constant-literal propagation (#3)
-
-One narrowing of "every `$var` is dynamic": `walk_sequence`/`tally_sequence`
-thread a per-sequence `known` environment over the straight-line statement types
-(`SEQUENCE_TYPES` + `do_group`), left to right. A pure-literal assignment whose
-value is *splitting-proof* (`is_safe_literal` — no IFS whitespace, glob/brace/
-tilde, or expansion trigger) binds `known[name]`; a later bare `$name`/`${name}`
-(`resolved_var_name` — exactly one `simple_variable_name` child, so `$f[1]`/
-`${f:-x}`/`"$f"` are excluded) resolves to that literal and goes **static**. The
-literal feeds the *same* gates, so `f=/safe; find $f` approves while
-`f=--exec; find $f` denies — substitution can only narrow over-prompting, never
-widen approval.
-
-Soundness is in `update_known`'s invalidation, which **defaults to clear** rather
-than enumerating rebinding vectors (those undercount — `local`/`typeset` parse as
-`declaration_command`, `printf -v`/`read` as `command`, `(( x=… ))` as
-`arithmetic_expansion`, none as a top-level `variable_assignment`). A child
-*preserves* `known` only when provably inert: a pure-literal assignment (records),
-or a plain non-`NAMESPACE_MUTATING` command. Everything else — control flow,
-`declaration_command`, arithmetic, a mutating builtin — clears `known` entirely
-(lazy grade; a control-flow-sibling target scan is the deferred capable grade).
-`known` is sequence-local, so a binding never leaks into or out of a nested block.
+**Invalidation** (`update_known`) defaults to clear: `known` shrinks whenever a
+sibling is not provably inert. A child preserves it only as a pure-literal
+assignment (which records the binding) or a plain non-mutating command;
+control flow, a `declaration_command`, arithmetic, or a namespace-mutating
+builtin clears it entirely. Enumerating rebinding vectors instead would
+undercount — `local`/`typeset` parse as `declaration_command`, `printf -v`/`read`
+as `command`, `(( x=… ))` as `arithmetic_expansion`, none as a top-level
+`variable_assignment`. `known` is sequence-local; a binding never leaks into or
+out of a nested block.
 
 ## Pipeline
 

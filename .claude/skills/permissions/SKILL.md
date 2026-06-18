@@ -170,16 +170,15 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   direct forms.
 - **Dynamic expansion** at a gated command prompts rather than launders
   (a dynamic token wildcards deny/ask — see above), so `find . $f` and
-  `f=$(…); find . $f` escalate. A `$var` bound to a splitting-proof literal
-  earlier in the same straight-line sequence is the exception: it resolves to
-  that literal and goes static (constant propagation — see
-  [references/parsing.md](references/parsing.md)), so `f=/safe; find $f` now
-  approves while `f=--exec; find $f` still denies. Residuals: an interleaved
-  control-flow sibling clears the binding (`f=/safe; if c; …; find $f`
-  over-prompts — the lazy grade clears rather than scanning the branch), a
-  multi-word / glob / substitution value stays dynamic, and a user *glob* deny
-  in settings.json cannot get the wildcard treatment (only the typed structured
-  gates can) — express the gate structurally to close that one.
+  `f=$(…); find . $f` escalate. The exception: a `$var` resolving to a literal
+  bound earlier in the same straight-line sequence is matched as that literal
+  (`f=/safe; find $f` approves, `f=--exec; find $f` denies — mechanism in
+  [references/parsing.md](references/parsing.md)). A value rebound across a
+  control-flow boundary, or a multi-word / glob / substitution value, stays
+  dynamic and prompts.
+- A user *glob* deny in settings.json cannot get the dynamic-token wildcard
+  treatment (only the typed structured gates can), so it keeps the pre-existing
+  hole — express the gate structurally to close it.
 
 Sub-language injection (awk/jq/sql/python parsed *into* command-argument
 strings via `queries/zsh/injections.scm`) is **best-effort enrichment, never

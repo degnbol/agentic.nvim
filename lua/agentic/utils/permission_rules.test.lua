@@ -2143,10 +2143,18 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("prompts on f=/safe; printf x; find $f (mutating builtin clears)", function()
+            it("prompts on f=/safe; printf -v f -- -exec; find $f (printf -v rebinds)", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
-                        "f=/safe; printf x; find $f"
+                        "f=/safe; printf -v f -- -exec; find $f"
+                    )
+                )
+            end)
+
+            it("approves f=/safe; printf 'msg'; find $f (plain printf is inert)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; printf 'msg'; find $f"
                     )
                 )
             end)

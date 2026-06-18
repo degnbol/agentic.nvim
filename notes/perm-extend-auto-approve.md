@@ -32,7 +32,9 @@ per-sequence `known` env over `SEQUENCE_TYPES` + `do_group`, left to right;
 `update_known` records a pure-literal assignment and clears on any non-inert
 sibling; `walk_command`/`command_known_safe` resolve a bare `$name`/`${name}`
 via `resolved_var_name` when `is_safe_literal`; tests under "#3 constant-literal
-propagation" + a tally case). The capable grade — a control-flow-sibling
+propagation" + a tally case). The two post-review corrections (a `printf`
+over-prompt fix + a soundness-coupling docstring/test; see "Follow-up
+corrections" under #3) are also done. The capable grade — a control-flow-sibling
 collect-targets scan instead of clear-all — is still open. Remaining: #1, #2.
 
 ---
@@ -78,7 +80,7 @@ can't guard):
 
 ---
 
-## #3 — flow-sensitive literal propagation (done, lazy grade)
+## #3 — flow-sensitive literal propagation (done, lazy grade; follow-ups done)
 
 **Today.** A `$var` is always dynamic — `f=/safe/dir; find $f` bails because the
 dynamic `$f` flips `has_dynamic`, which wildcard-fires find's `-exec` deny gate.
@@ -129,6 +131,60 @@ dynamic positional currently wildcard-fires a gate (`find`, `git`, `sort`).
 handlers create, scope, and shrink the env (clear-all for the lazy grade; a
 collect-targets helper for the capable grade). Mirror in the tally walk
 (UI-only — a stale binding there mis-highlights, never mis-approves).
+
+### Follow-up corrections (post-review, done)
+
+The lazy grade shipped, then a review found one over-prompt and one
+under-documented soundness coupling. Docs (`SKILL.md`, `references/parsing.md`)
+were corrected in that review; the code + tests below shipped after.
+
+**A. `printf` over-prompts (the only real cost of clear-all).** `update_known`
+treats every `NAMESPACE_MUTATING` builtin — including `printf` — as clearing
+`known`. But `printf` only rebinds via its `-v NAME` form; plain `printf "msg"`
+(logging/formatting between an assignment and a use) is harmless and common, so
+`f=/safe; printf "log"; find $f` needlessly prompts.
+
+- *Change:* in `update_known`'s `command` branch, special-case `name == "printf"`
+  — clear `known` only when a bare `-v` token appears among the node's args;
+  otherwise fall through to *preserve*. Every other `NAMESPACE_MUTATING` name
+  keeps the unconditional clear. ~3 lines.
+- *Soundness:* a false positive (clearing when we needn't) only over-prompts;
+  only a missed real `-v` could under-prompt. `printf` has no bundled or long
+  form for this in bash or zsh — it is spelled exactly `-v NAME`, no `-vf`, no
+  `--variable`. So scanning the node's children for a token equal to `-v` catches
+  *every* assigning form (including a dynamic target `printf -v "$x" …` — the
+  `-v` is still literally present, so we clear without inspecting the name).
+  `printf '%s' -v` (printing the string "-v") over-clears — harmless, not worth
+  parsing `--`/format position to avoid.
+- *Scope:* `printf` is the **only** builtin needing this. Verified against the
+  full `permissions.json`: the always-assigning builtins (`read`, `mapfile`,
+  `set`, `unset`, `export`, `declare`, `let`, `eval`, `source`) are not
+  allowlisted (they bail), `command` only approves `-v`/`-V` lookups (no
+  execution, no rebind), and `cd`/`pwd` only mutate `PWD`/`OLDPWD` (theoretical
+  `PWD=lit; cd x; cmd $PWD` residual — exploitability ≈ zero, and clearing on
+  `cd` would over-prompt heavily; deliberately not actioned). Do **not** build a
+  general carve-out mechanism — one `if name == "printf"` branch.
+
+**B. Document the cross-file coupling.** Add one line to `NAMESPACE_MUTATING`'s
+docstring stating the obligation it carries: *any builtin allowlisted in
+`permissions.json` that can rebind a shell variable must appear here* — else the
+preserve-on-plain-command branch under-prompts (the matcher resolves a stale
+`known[var]` while the shell ran the rebound value). Today only `printf`
+satisfies "allowlisted ∧ rebinds", which is why its membership is load-bearing,
+not insurance.
+
+**C. Fix the witness tests** (`permission_rules.test.lua`, "#3 constant-literal
+propagation"):
+
+- *Replace* `f=/safe; printf x; find $f` (asserts prompt, but `printf x` rebinds
+  nothing — it passes for an incidental reason and the name "mutating builtin
+  clears" misleads) **with** `f=/safe; printf -v f -- -exec; find $f` → must
+  **prompt**. This locks coupling B: it fails if `printf` is ever dropped from
+  the clear path. The `-exec` payload makes the threat legible, though the lock
+  works regardless of the value (a stale-binding bug resolves `$f` to `/safe` and
+  approves without ever inspecting printf's argument).
+- *Add* `f=/safe; printf "msg"; find $f` → must **approve**, locking the
+  over-prompt fix in A.
 
 ---
 
