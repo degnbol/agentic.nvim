@@ -15,7 +15,7 @@ it may change *what a token is* or *which leaves are walked*, never *whether a
 leaf is checked* against deny/ask.
 
 Build order: **#3, #4, #5** (preserve the invariant, no new config, broad
-benefit) → **#1** (off by default, narrow) → **#2** (parked, see end).
+benefit; all done) → **#1** (off by default, narrow) → **#2** (parked, see end).
 
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
 mirrored in `command_known_safe`; tests under "inline shell -c body").
@@ -25,7 +25,15 @@ mirrored in `command_known_safe`; tests under "inline shell -c body").
 branch in `walk_for`; the spliced token is pushed dynamic; mirrored in
 `command_known_safe` / `tally_for` via `substitution_inner_clean`; tests under
 "#4 argument-position command substitution" plus a laundering case in the
-use-site carve-out block). Remaining: #3, #1, #2.
+use-site carve-out block).
+
+**#3 is done (lazy grade)** (`walk_sequence`/`tally_sequence` thread a
+per-sequence `known` env over `SEQUENCE_TYPES` + `do_group`, left to right;
+`update_known` records a pure-literal assignment and clears on any non-inert
+sibling; `walk_command`/`command_known_safe` resolve a bare `$name`/`${name}`
+via `resolved_var_name` when `is_safe_literal`; tests under "#3 constant-literal
+propagation" + a tally case). The capable grade — a control-flow-sibling
+collect-targets scan instead of clear-all — is still open. Remaining: #1, #2.
 
 ---
 
@@ -70,7 +78,7 @@ can't guard):
 
 ---
 
-## #3 — flow-sensitive literal propagation (todo)
+## #3 — flow-sensitive literal propagation (done, lazy grade)
 
 **Today.** A `$var` is always dynamic — `f=/safe/dir; find $f` bails because the
 dynamic `$f` flips `has_dynamic`, which wildcard-fires find's `-exec` deny gate.
@@ -80,29 +88,47 @@ Documented residual ("benign dynamic value over-prompts").
 straight-line statement sequence (a `list`, `do_group`, or branch body). Walk
 each sequence left-to-right; on a pure-literal assignment record `known[var]=L`;
 when resolving a `$var` token in `walk_command`, substitute the literal and mark
-the token static. The resolved literal is fed through the **same** gate
-evaluation (so `f=--exec; find $f` still hits find's deny).
+the token static.
 
-**Soundness rests entirely on the invalidation set.** Drop `var` to dynamic on:
-1. reassignment to a non-literal, or any reassignment not provably the same
-   literal;
-2. assignment to `var` nested inside an intervening control-flow sibling
-   (`d=/safe; if c; then d=/danger; fi; git $d` — `$d` must stay dynamic) — needs
-   a recursive "collect assignment targets in this subtree" scan;
-3. the non-`var=…` assignment vectors: `read d`, `for d in …` (loop var),
-   `${d:=…}` / `${d:-…}` default-expansion, `unset d`.
+**Soundness: invalidation defaults to clear, never enumerates.** The unsafe
+direction is *under*-prompt, so `known` must shrink whenever a rebinding *might*
+have happened — and enumerating "what rebinds `var`" undercounts, because the
+rebinding constructs share no node type: `local d=…`/`typeset d=…` parse as
+`declaration_command` (with a `variable_assignment` *child*), `printf -v d` and
+`read d` as `command`, `(( d = 1 ))` as `arithmetic_expansion` — none surface as
+a top-level `variable_assignment`, so a scan keyed on that type silently keeps a
+stale `known[d]` and approves `find /danger`. Invert the rule: an element
+**preserves** `known` only when provably inert; everything else clears.
 
-No cross-sequence propagation (a nested block's bindings do not leak to its
-parent). `$HOME`/`$PWD`-style expansion is a **separate later step** (env
-knowledge, not dataflow) — out of scope here.
+- **Pure-literal `variable_assignment`** (`f=lit`) — record `known[var]=lit`.
+- **Plain `command`** with no namespace-mutating builtin — preserves `known`;
+  each `$var` resolves against it (literal + static) at token extraction.
+- **Everything else clears.** Two grades:
+  - *Lazy (sound, narrow):* clear `known` entirely on any other element —
+    `declaration_command`, control flow, `arithmetic_expansion`, or a
+    namespace-mutating builtin (`read`, `printf -v`, `mapfile`, `getopts`,
+    `set`, `unset`, `eval`, `for`-loop var). Catches the common immediate case
+    (`f=/safe; find $f`); over-prompts on interleaved control flow
+    (`f=/safe; if c; then :; fi; find $f`).
+  - *Capable (later):* for a control-flow sibling, recurse a collect-targets
+    scan over `variable_assignment` **and** `declaration_command` targets and
+    drop only those — but clear-all on any construct whose targets can't be
+    enumerated (arithmetic assignment, `read`/`printf -v`/`eval`/…).
+
+The resolved literal is fed through the **same** gate evaluation, so
+`f=--exec; find $f` still hits find's deny. No cross-sequence propagation (a
+nested block's bindings do not leak to its parent). `$HOME`/`$PWD`-style
+expansion is a separate later step (env knowledge, not dataflow) — out of scope.
 
 **Why it's the real value.** Commands with no deny/ask gates (`rg`, `cat`)
 already approve with dynamic args; #3 only changes outcomes for commands where a
 dynamic positional currently wildcard-fires a gate (`find`, `git`, `sort`).
 
 **Touches.** New env threaded through `walk` and its handlers; `walk_assignment`
-(record), `walk_command` (resolve at token extraction), new
-collect-assignment-targets helper. Container handlers create/scope the env.
+(record), `walk_command` (resolve at token extraction); container/sequence
+handlers create, scope, and shrink the env (clear-all for the lazy grade; a
+collect-targets helper for the capable grade). Mirror in the tally walk
+(UI-only — a stale binding there mis-highlights, never mis-approves).
 
 ---
 

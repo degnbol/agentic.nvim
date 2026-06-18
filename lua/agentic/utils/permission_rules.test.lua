@@ -2083,6 +2083,94 @@ describe("PermissionRules", function()
                 )
             end)
         end)
+
+        -- #3: a `$var` bound to a splitting-proof literal earlier in the same
+        -- straight-line sequence resolves to that literal (static), so a benign
+        -- value no longer wildcard-fires a gate — while the literal feeds the
+        -- SAME gates, and any non-inert sibling clears the binding (over-prompt).
+        describe("#3 constant-literal propagation", function()
+            it("approves f=/safe/dir; find $f (benign value recovered)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("f=/safe/dir; find $f")
+                )
+            end)
+
+            it("approves f=/safe; find ${f} (braced reference)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("f=/safe; find ${f}")
+                )
+            end)
+
+            it("approves d=/repo; git -C $d log (resolved option value)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("d=/repo; git -C $d log")
+                )
+            end)
+
+            it("approves f=data.txt; sort $f (benign positional recovered)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("f=data.txt; sort $f")
+                )
+            end)
+
+            it("approves f=/safe; ls; find $f (inert command preserves binding)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("f=/safe; ls; find $f")
+                )
+            end)
+
+            it("prompts on f=--exec; find $f (literal feeds the same deny gate)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("f=--exec; find $f")
+                )
+            end)
+
+            it("prompts on f='-exec rm'; find $f (multi-word literal not propagated)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("f='-exec rm'; find $f")
+                )
+            end)
+
+            it("prompts on f=*.txt; find $f (glob value not propagated)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("f=*.txt; find $f")
+                )
+            end)
+
+            it("prompts on f=/safe; f=$x; find $f (reassignment to dynamic drops it)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("f=/safe; f=$x; find $f")
+                )
+            end)
+
+            it("prompts on f=/safe; printf x; find $f (mutating builtin clears)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; printf x; find $f"
+                    )
+                )
+            end)
+
+            it("prompts on f=/safe; if true; then echo hi; fi; find $f (control flow clears)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; if true; then echo hi; fi; find $f"
+                    )
+                )
+            end)
+
+            it("approves f=/safe; find $f; printf x (resolved before the clearing sibling)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; find $f; printf x"
+                    )
+                )
+            end)
+
+            it("does not leak across statements — bare find $f still prompts", function()
+                assert.is_false(PermissionRules.should_auto_approve("find $f"))
+            end)
+        end)
     end)
 
     describe("tally_unapproved", function()
@@ -2193,6 +2281,36 @@ describe("PermissionRules", function()
                 assert.equal(1, #ranges)
                 assert.is_true(span_text(cmd, ranges[1]):find("out.txt") ~= nil)
             end)
+        end)
+
+        it("does not highlight a #3-resolved benign $var (bundled defaults)", function()
+            -- `find $f` resolves to /safe (known-safe via the bundled find rule),
+            -- so only the unknown command highlights. Without the constant-
+            -- propagation mirror, $f would wildcard-fire find's -exec deny and
+            -- light up too. Needs the structured (bundled) gate — a glob deny
+            -- cannot get the dynamic-token wildcard treatment.
+            local orig_read_json = PermissionRules.read_json
+            local orig_plugin = Config.permissions.use_plugin_defaults
+            Config.permissions.use_plugin_defaults = true
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return nil
+                end
+                return orig_read_json(path)
+            end
+            PermissionRules.invalidate_cache()
+            local ok, err = pcall(function()
+                local cmd = "f=/safe; find $f; frobnicate x"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("frobnicate x", span_text(cmd, ranges[1]))
+            end)
+            PermissionRules.read_json = orig_read_json
+            Config.permissions.use_plugin_defaults = orig_plugin
+            PermissionRules.invalidate_cache()
+            if not ok then
+                error(err)
+            end
         end)
 
         it("returns every unapproved leaf (record-and-continue)", function()

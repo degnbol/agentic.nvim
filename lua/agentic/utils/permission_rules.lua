@@ -623,6 +623,21 @@ local CONTAINER_TYPES = {
     else_clause = true,
 }
 
+--- Container types that are straight-line statement sequences — #3
+--- constant-literal propagation threads a per-sequence `known` environment
+--- through these (and `do_group`) left to right. The decision/tally walks route
+--- these to `walk_sequence`/`tally_sequence` (checked *before* `CONTAINER_TYPES`,
+--- which they overlap). `pipeline` and `variable_assignments` are deliberately
+--- absent: a `pipeline` stage runs in a subshell so its assignments do not reach
+--- siblings, so they stay on the plain (no-propagation) container path.
+local SEQUENCE_TYPES = {
+    program = true,
+    list = true,
+    if_statement = true,
+    elif_clause = true,
+    else_clause = true,
+}
+
 --- Statement types that may appear as the inner content of a
 --- `command_substitution` (when reached via assignment value or array
 --- element) or as a `do_group` body element. Every other named child
@@ -1059,6 +1074,126 @@ local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     return src:sub(inner_start_byte + 1, node_end_byte), { sr, sc }
 end
 
+--- The simplest splitting-proof literal: replacing an unquoted `$f` with this
+--- value must yield exactly one word identical to itself — no IFS whitespace, no
+--- glob/brace/tilde metacharacter, no expansion trigger. Paths, flags, and
+--- `option=value` tokens qualify; anything richer keeps `$f` dynamic. This is the
+--- soundness guard for #3 substitution: a multi-word or glob value would
+--- word-split / expand and change which tokens the matcher sees.
+--- @param lit string
+--- @return boolean
+local function is_safe_literal(lit)
+    return lit ~= "" and lit:match("^[%w%-_./=:+@,]+$") ~= nil
+end
+
+--- The plain scalar name behind a bare `$name` / `${name}` reference, or nil for
+--- any richer form (`$f[1]`, `${f:-x}`, `${#f}`, a quoted `"$f"`, …) that #3
+--- substitution must not touch. A resolvable node has exactly one named child, a
+--- `simple_variable_name`.
+--- @param node TSNode
+--- @param src string
+--- @return string|nil
+local function resolved_var_name(node, src)
+    local t = node:type()
+    if
+        t == "variable_ref"
+        or t == "expansion"
+        or t == "simple_expansion"
+    then
+        if node:named_child_count() == 1 then
+            local c = node:named_child(0)
+            if c and c:type() == "simple_variable_name" then
+                return vim.treesitter.get_node_text(c, src)
+            end
+        end
+    end
+    return nil
+end
+
+--- Builtins whose normal action rebinds the shell namespace without an explicit
+--- `variable_assignment` node, so a `known` binding cannot survive them.
+--- `eval`/`source`/`.` already bail in `walk_command`; they clear `known` here
+--- too for the tally walk, which does not bail. `local`/`typeset`/`declare`/
+--- `readonly` parse as `declaration_command` (handled by the sequence walk's
+--- clear-on-other-node branch) and are listed only for the rare grammar emission
+--- as a plain command.
+local NAMESPACE_MUTATING = {
+    read = true,
+    printf = true,
+    mapfile = true,
+    readarray = true,
+    getopts = true,
+    set = true,
+    unset = true,
+    export = true,
+    eval = true,
+    source = true,
+    ["."] = true,
+    let = true,
+    declare = true,
+    typeset = true,
+    ["local"] = true,
+    readonly = true,
+}
+
+--- The path-stripped command name of a `command` node, or nil when it has no
+--- literal `command_name` (a dynamic name — treated as namespace-mutating by the
+--- sequence walk, i.e. it clears `known`).
+--- @param node TSNode
+--- @param src string
+--- @return string|nil
+local function command_leaf_name(node, src)
+    for child in node:iter_children() do
+        if child:type() == "command_name" then
+            local n = command_name_text(child, src)
+            return n and M.strip_command_path(n) or nil
+        end
+    end
+    return nil
+end
+
+--- Update the per-sequence constant environment after processing one
+--- straight-line child, left to right (#3 lazy grade). The rule is inverted from
+--- enumerating what rebinds: a child *preserves* `known` only when provably
+--- inert, and everything else clears the binding(s) it could touch. A
+--- pure-literal `variable_assignment` records `known[name]=lit`; a non-literal
+--- one drops just that name; a plain non-mutating `command` preserves all
+--- bindings; a namespace-mutating command, or any other node type (control flow,
+--- `declaration_command`, arithmetic, pipeline, redirect), clears `known`
+--- entirely. Clearing can only shrink `known`, so it can only ever over-prompt.
+--- @param known table<string, string>
+--- @param child TSNode
+--- @param src string
+local function update_known(known, child, src)
+    local t = child:type()
+    if t == "variable_assignment" then
+        local name_node = child:field("name")[1]
+        local name = name_node
+            and vim.treesitter.get_node_text(name_node, src)
+        if not name then
+            return
+        end
+        local value = child:field("value")[1]
+        local lit = value and pure_literal_token(value, src)
+        if lit and is_safe_literal(lit) then
+            known[name] = lit
+        else
+            known[name] = nil
+        end
+    elseif t == "command" then
+        local name = command_leaf_name(child, src)
+        if not name or NAMESPACE_MUTATING[name] then
+            for k in pairs(known) do
+                known[k] = nil
+            end
+        end
+    else
+        for k in pairs(known) do
+            known[k] = nil
+        end
+    end
+end
+
 --- Forward declaration — `walk` and the per-node handlers are mutually
 --- recursive.
 --- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
@@ -1074,11 +1209,14 @@ local walk_substitution_inner
 --- (substitution is recursed in argument position, bailed elsewhere), validate
 --- env-prefix assignments, then combine the glob
 --- and structured layers (composition rule in the `permissions` project skill).
+--- `known` (optional) is the #3 constant environment of the enclosing sequence;
+--- a bare `$name` bound in it resolves to its literal and becomes a static token.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param known table<string, string>|nil
 --- @return boolean
-local function walk_command(node, src, ctx)
+local function walk_command(node, src, ctx, known)
     local name_node
     --- @type string[]
     local args = {}
@@ -1115,19 +1253,32 @@ local function walk_command(node, src, ctx)
             table.insert(arg_nodes, child)
             table.insert(args_dynamic, true)
         elseif child:named() then
-            -- Any other substitution-bearing argument (string-embedded
-            -- `"$(…)"`, concatenation `a$(b)c`, process substitution `<(…)`) is
-            -- not handled by the dynamic-token machinery — bail.
-            if subtree_has_substitution(child) then
-                return false
+            -- #3: a bare `$name`/`${name}` bound to a splitting-proof literal
+            -- earlier in this straight-line sequence resolves to that literal and
+            -- becomes static, so a benign value (`f=/safe; find $f`) no longer
+            -- wildcard-fires a gate. The literal feeds the same gates, so
+            -- `f=--exec; find $f` still denies.
+            local kname = known and resolved_var_name(child, src)
+            local lit = kname and known and known[kname] or nil
+            if lit ~= nil then
+                table.insert(args, lit)
+                table.insert(arg_nodes, child)
+                table.insert(args_dynamic, false)
+            else
+                -- Any other substitution-bearing argument (string-embedded
+                -- `"$(…)"`, concatenation `a$(b)c`, process substitution `<(…)`)
+                -- is not handled by the dynamic-token machinery — bail.
+                if subtree_has_substitution(child) then
+                    return false
+                end
+                local tok = literal_token(child, src)
+                if tok == nil then
+                    return false
+                end
+                table.insert(args, tok)
+                table.insert(arg_nodes, child)
+                table.insert(args_dynamic, token_is_dynamic(child))
             end
-            local tok = literal_token(child, src)
-            if tok == nil then
-                return false
-            end
-            table.insert(args, tok)
-            table.insert(arg_nodes, child)
-            table.insert(args_dynamic, token_is_dynamic(child))
         end
     end
 
@@ -1198,6 +1349,36 @@ local function walk_command(node, src, ctx)
         return true
     end
     return M.matches_any_pattern(leaf, ctx.allow)
+end
+
+--- Walk a straight-line statement sequence (`program`, `list`, an `if`/`elif`/
+--- `else` body, or a `do_group`), threading the #3 constant environment left to
+--- right: a pure-literal assignment binds a name, and a later `command` resolves
+--- bare `$name` references against those bindings (invalidation in
+--- `update_known`). `known` is sequence-local — nested blocks reached via
+--- `walk(child)` start fresh, so a binding never leaks across sequences.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @return boolean
+local function walk_sequence(node, src, ctx)
+    --- @type table<string, string>
+    local known = {}
+    for child in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            local ok
+            if child:type() == "command" then
+                ok = walk_command(child, src, ctx, known)
+            else
+                ok = walk(child, src, ctx)
+            end
+            if not ok then
+                return false
+            end
+            update_known(known, child, src)
+        end
+    end
+    return true
 end
 
 --- Walk a `redirected_statement`: the body (command/pipeline/list) must pass,
@@ -1381,24 +1562,6 @@ local function walk_while(node, src, ctx)
     return walk(body, src, ctx)
 end
 
---- Walk a `do_group`: every named child is a statement that must pass.
---- Anonymous separators (`do`, `done`, `;`) and `comment` nodes are skipped
---- (mirrors the container walk).
---- @param node TSNode
---- @param src string
---- @param ctx agentic.utils.PermissionRules.WalkCtx
---- @return boolean
-local function walk_do_group(node, src, ctx)
-    for child in node:iter_children() do
-        if child:named() and child:type() ~= "comment" then
-            if not walk(child, src, ctx) then
-                return false
-            end
-        end
-    end
-    return true
-end
-
 --- Walk a `case_statement`: the matched value and every `case_item` pattern
 --- must be substitution-free (a `$(cmd)` in either position *runs* during the
 --- match — `case $(rm x) in $(rm y)) …` executes both), and every item body
@@ -1448,9 +1611,13 @@ function walk(node, src, ctx)
         return not subtree_has_substitution(node)
     elseif t == "case_statement" then
         return walk_case(node, src, ctx)
+    elseif SEQUENCE_TYPES[t] or t == "do_group" then
+        return walk_sequence(node, src, ctx)
     elseif CONTAINER_TYPES[t] then
-        -- Iterate named children only — anonymous separators (`;`, `&&`, `|`,
-        -- `&`, newline) and `comment` nodes carry no executable content.
+        -- `pipeline` / `variable_assignments` — the non-sequence containers (the
+        -- sequence types overlap CONTAINER_TYPES but are caught above). Iterate
+        -- named children only; anonymous separators (`;`, `&&`, `|`, `&`,
+        -- newline) and `comment` nodes carry no executable content.
         for child in node:iter_children() do
             if child:named() and child:type() ~= "comment" then
                 if not walk(child, src, ctx) then
@@ -1470,8 +1637,6 @@ function walk(node, src, ctx)
     elseif t == "while_statement" then
         -- `until` also parses to `while_statement` in the pinned zsh grammar.
         return walk_while(node, src, ctx)
-    elseif t == "do_group" then
-        return walk_do_group(node, src, ctx)
     end
     -- Any unknown future node type stays rejected (fail-closed).
     return false
@@ -1594,9 +1759,10 @@ end
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param known table<string, string>|nil #3 constant environment of the enclosing sequence
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
-local function command_known_safe(node, src, ctx)
+local function command_known_safe(node, src, ctx, known)
     local name_node
     --- @type string[]
     local args = {}
@@ -1625,16 +1791,26 @@ local function command_known_safe(node, src, ctx)
             table.insert(arg_nodes, child)
             table.insert(args_dynamic, true)
         elseif child:named() then
-            if subtree_has_substitution(child) then
-                return false
+            -- Mirror walk_command's #3 resolution so a command whose only
+            -- "unapproved" token is a resolved benign `$var` is not highlighted.
+            local kname = known and resolved_var_name(child, src)
+            local lit = kname and known and known[kname] or nil
+            if lit ~= nil then
+                table.insert(args, lit)
+                table.insert(arg_nodes, child)
+                table.insert(args_dynamic, false)
+            else
+                if subtree_has_substitution(child) then
+                    return false
+                end
+                local tok = literal_token(child, src)
+                if tok == nil then
+                    return false
+                end
+                table.insert(args, tok)
+                table.insert(arg_nodes, child)
+                table.insert(args_dynamic, token_is_dynamic(child))
             end
-            local tok = literal_token(child, src)
-            if tok == nil then
-                return false
-            end
-            table.insert(args, tok)
-            table.insert(arg_nodes, child)
-            table.insert(args_dynamic, token_is_dynamic(child))
         end
     end
 
@@ -1709,7 +1885,8 @@ local function command_known_safe(node, src, ctx)
     return glob_safe or struct_safe
 end
 
---- Recurse a container/`do_group`: every named non-comment child is a statement.
+--- Recurse a non-sequence container (`pipeline`, `variable_assignments`): every
+--- named non-comment child is a statement.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
@@ -1718,6 +1895,39 @@ local function tally_children(node, src, ctx, ranges)
     for child in node:iter_children() do
         if child:named() and child:type() ~= "comment" then
             tally_walk(child, src, ctx, ranges)
+        end
+    end
+end
+
+--- Tally a straight-line sequence, threading the #3 constant environment so a
+--- command whose only "unapproved" token is a resolved benign `$var` is not
+--- highlighted (mirrors `walk_sequence`). UI-only — a stale binding here can only
+--- mis-highlight, never mis-approve.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+local function tally_sequence(node, src, ctx, ranges)
+    --- @type table<string, string>
+    local known = {}
+    for child in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if child:type() == "command" then
+                local safe, sub_ranges =
+                    command_known_safe(child, src, ctx, known)
+                if not safe then
+                    if sub_ranges then
+                        for _, r in ipairs(sub_ranges) do
+                            table.insert(ranges, r)
+                        end
+                    else
+                        record(ranges, child)
+                    end
+                end
+            else
+                tally_walk(child, src, ctx, ranges)
+            end
+            update_known(known, child, src)
         end
     end
 end
@@ -1822,11 +2032,13 @@ function tally_walk(node, src, ctx, ranges)
         record_substitutions(node, ranges)
     elseif t == "case_statement" then
         tally_case(node, src, ctx, ranges)
-    elseif CONTAINER_TYPES[t] or t == "do_group" then
+    elseif SEQUENCE_TYPES[t] or t == "do_group" then
+        tally_sequence(node, src, ctx, ranges)
+    elseif CONTAINER_TYPES[t] then
         tally_children(node, src, ctx, ranges)
     elseif t == "command" then
-        local known, sub_ranges = command_known_safe(node, src, ctx)
-        if not known then
+        local safe, sub_ranges = command_known_safe(node, src, ctx)
+        if not safe then
             if sub_ranges then
                 for _, r in ipairs(sub_ranges) do
                     table.insert(ranges, r)

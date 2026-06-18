@@ -60,6 +60,29 @@ the single use site. For allow it stays concrete (a dynamic subcommand fails the
 allowlist → prompt; a trailing dynamic arg like `git log $ref` is harmless), so
 a dynamic token never widens an approval.
 
+## Constant-literal propagation (#3)
+
+One narrowing of "every `$var` is dynamic": `walk_sequence`/`tally_sequence`
+thread a per-sequence `known` environment over the straight-line statement types
+(`SEQUENCE_TYPES` + `do_group`), left to right. A pure-literal assignment whose
+value is *splitting-proof* (`is_safe_literal` — no IFS whitespace, glob/brace/
+tilde, or expansion trigger) binds `known[name]`; a later bare `$name`/`${name}`
+(`resolved_var_name` — exactly one `simple_variable_name` child, so `$f[1]`/
+`${f:-x}`/`"$f"` are excluded) resolves to that literal and goes **static**. The
+literal feeds the *same* gates, so `f=/safe; find $f` approves while
+`f=--exec; find $f` denies — substitution can only narrow over-prompting, never
+widen approval.
+
+Soundness is in `update_known`'s invalidation, which **defaults to clear** rather
+than enumerating rebinding vectors (those undercount — `local`/`typeset` parse as
+`declaration_command`, `printf -v`/`read` as `command`, `(( x=… ))` as
+`arithmetic_expansion`, none as a top-level `variable_assignment`). A child
+*preserves* `known` only when provably inert: a pure-literal assignment (records),
+or a plain non-`NAMESPACE_MUTATING` command. Everything else — control flow,
+`declaration_command`, arithmetic, a mutating builtin — clears `known` entirely
+(lazy grade; a control-flow-sibling target scan is the deferred capable grade).
+`known` is sequence-local, so a binding never leaks into or out of a nested block.
+
 ## Pipeline
 
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
