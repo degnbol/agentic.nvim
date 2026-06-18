@@ -370,10 +370,12 @@ end
 
 -- ── Redirects ────────────────────────────────────────────────────────────────
 
---- Whether a `file_redirect` is a safe form: a write to /dev/null, or a file
---- descriptor duplication (`2>&1`, `>&2`, `N>&M`). Every other target is a file
---- write (or an unmodelled redirect) and bails. A substitution in the target
---- (`cat > $(echo out)`) bails first.
+--- Whether a `file_redirect` is a safe form: an input redirect (`<file` —
+--- a pure read, never writes/truncates; the read-write `<>` form parses to an
+--- ERROR node and is rejected fail-closed upstream), a write to /dev/null, or a
+--- file descriptor duplication (`2>&1`, `>&2`, `N>&M`). Every other target is a
+--- file write (or an unmodelled redirect) and bails. A substitution in the
+--- target (`cat > $(echo out)`, `wc <$(f)`) bails first.
 --- @param fr TSNode
 --- @param src string
 --- @return boolean
@@ -392,6 +394,9 @@ local function redirect_is_safe(fr, src)
     if op == ">&" or op == "<&" then
         local dt = dest:type()
         return dt == "file_descriptor" or dt == "number"
+    end
+    if op == "<" then
+        return true
     end
     return vim.treesitter.get_node_text(dest, src) == "/dev/null"
 end

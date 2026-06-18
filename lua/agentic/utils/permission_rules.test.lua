@@ -833,6 +833,19 @@ describe("PermissionRules", function()
             )
         end)
 
+        it("approves allowed command reading from input redirect", function()
+            -- `<file` is a pure read; it must not force a prompt.
+            assert.is_true(
+                PermissionRules.should_auto_approve("wc -l </tmp/x.txt")
+            )
+        end)
+
+        it("rejects input-redirect target built by substitution", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("wc -l <$(echo /tmp/x)")
+            )
+        end)
+
         -- `env` is a launcher, not an effect-neutral wrapper (it can set PATH /
         -- LD_PRELOAD), so it must carry no blanket read-only entry — otherwise it
         -- would launder whatever it launches. `cat *` is allowed; `env cat …`
