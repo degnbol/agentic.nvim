@@ -1149,6 +1149,13 @@ function walk(node, src, ctx)
     elseif t == "while_statement" then
         -- `until` also parses to `while_statement` in the pinned zsh grammar.
         return walk_while(node, src, ctx)
+    elseif t == "function_definition" then
+        -- Defining a *named* function never runs its body; only a later call
+        -- does, and that call is a separate `command` leaf that must approve on
+        -- its own. So the body is not walked. An anonymous function
+        -- (`() { … }`, no `name` field) executes immediately, so it is left to
+        -- fail closed.
+        return node:field("name")[1] ~= nil
     end
     -- Any unknown future node type stays rejected (fail-closed).
     return false
@@ -1570,6 +1577,12 @@ function tally_walk(node, src, ctx, ranges)
         tally_for(node, src, ctx, ranges)
     elseif t == "while_statement" then
         tally_while(node, src, ctx, ranges)
+    elseif t == "function_definition" then
+        -- Mirror `walk`: a named definition is approved (body not run), so it
+        -- records nothing; an anonymous function runs immediately and records.
+        if node:field("name")[1] == nil then
+            record(ranges, node)
+        end
     else
         -- A bare substitution statement or any unknown/unmodelled node:
         -- highlight it. The decision walk fails closed here, so the prompt

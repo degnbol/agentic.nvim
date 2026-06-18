@@ -99,6 +99,10 @@ out of a nested block.
    (`[[ -f $(rm y) ]]` runs `rm`). The `case` value and each `case` item
    *pattern* must be substitution-free too — both run code during the match
    (`case $(rm x) in $(rm y)) …`).
+   A **named** `function_definition` (`foo() { … }`, `function foo { … }`)
+   approves without walking its body — defining a function never runs it; a
+   later call is a separate `command` leaf gated on its own. An **anonymous**
+   function (`() { … }`, no `name` field) executes immediately and bails.
    A bare `command_substitution` (`$(…)` / backticks) in **argument**,
    **for-list**, or **assignment-value/array-element** position recurses
    through `walk_substitution_inner`: its inner commands must approve

@@ -522,6 +522,67 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
+        it("approves a named function definition (body never runs)", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = { allow = { "Bash(echo *)" } } }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            -- The body holds `rm -rf /`, which is not allowed, but defining the
+            -- function does not execute it.
+            assert.is_true(
+                PermissionRules.should_auto_approve("foo() { rm -rf / }")
+            )
+            assert.is_true(
+                PermissionRules.should_auto_approve("function foo { rm -rf / }")
+            )
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("blocks calling a defined function with a disallowed name", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = { allow = { "Bash(echo *)" } } }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            -- The definition approves, but the trailing call is a separate
+            -- command leaf and `foo` is not allowed.
+            assert.is_false(
+                PermissionRules.should_auto_approve("foo() { echo hi }; foo")
+            )
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("blocks an anonymous function (runs immediately)", function()
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = { allow = { "Bash(echo *)" } } }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+
+            assert.is_false(
+                PermissionRules.should_auto_approve("() { rm -rf / }")
+            )
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
         it("approves three-segment pipeline", function()
             local orig_read_json = PermissionRules.read_json
             PermissionRules.read_json = function(path)
