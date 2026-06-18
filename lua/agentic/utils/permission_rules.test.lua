@@ -2220,10 +2220,60 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("prompts on f=/safe; if true; then echo hi; fi; find $f (control flow clears)", function()
-                assert.is_false(
+            it("approves f=/safe; printf -v g x; find $f (printf -v drops only its target)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; printf -v g x; find $f"
+                    )
+                )
+            end)
+
+            -- #3 capable grade: a control-flow sibling drops only the names it
+            -- could rebind, not all of `known`.
+            it("approves f=/safe; if true; then echo hi; fi; find $f (binding-free if preserves)", function()
+                assert.is_true(
                     PermissionRules.should_auto_approve(
                         "f=/safe; if true; then echo hi; fi; find $f"
+                    )
+                )
+            end)
+
+            it("approves f=/safe; [[ -n x ]] && echo ok; find $f (test guard preserves)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; [[ -n x ]] && echo ok; find $f"
+                    )
+                )
+            end)
+
+            it("approves f=/safe; for x in a b; do echo $x; done; find $f (loop over other var preserves)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; for x in a b; do echo $x; done; find $f"
+                    )
+                )
+            end)
+
+            it("prompts on f=/safe; if true; then f=/danger; fi; find $f (if-body rebinds the var)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; if true; then f=/danger; fi; find $f"
+                    )
+                )
+            end)
+
+            it("prompts on f=/safe; for f in a b; do echo $f; done; find $f (loop rebinds the var)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; for f in a b; do echo $f; done; find $f"
+                    )
+                )
+            end)
+
+            it("prompts on f=/safe; if c; then printf -v f -- -exec; fi; find $f (printf -v in if-body rebinds)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f=/safe; if true; then printf -v f -- -exec; fi; find $f"
                     )
                 )
             end)

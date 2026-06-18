@@ -600,20 +600,20 @@ local function resolved_var_name(node, src)
     return nil
 end
 
---- Builtins whose normal action rebinds the shell namespace without an explicit
---- `variable_assignment` node, so a `known` binding cannot survive them.
---- `eval`/`source`/`.` already bail in `walk_command`; they clear `known` here
---- too for the tally walk, which does not bail. `local`/`typeset`/`declare`/
---- `readonly` parse as `declaration_command` (handled by the sequence walk's
---- clear-on-other-node branch) and are listed only for the rare grammar emission
---- as a plain command.
+--- Builtins whose normal action rebinds the shell namespace into the enclosing
+--- scope. `collect_bindings` returns clear-all for any of these (the bindings
+--- can't be enumerated from a token scan), with `printf` carved out — its
+--- `-v NAME` form names its target, so it enumerates that one name instead.
+--- `eval`/`source`/`.` already bail in `walk_command`; listed here so the tally
+--- walk (which does not bail) still clears. `local`/`typeset`/`declare`/
+--- `readonly` parse as `declaration_command` (collect-all'd directly) and are
+--- listed only for the rare grammar emission as a plain command.
 ---
 --- Cross-file coupling: any builtin allowlisted in `permissions.json` that can
---- rebind a shell variable must appear here, else the preserve-on-plain-command
---- branch under-prompts (the matcher resolves a stale `known[var]` while the
---- shell ran the rebound value). Today only `printf` satisfies "allowlisted ∧
---- rebinds" (special-cased in `update_known` to clear only on its `-v` form),
---- which is why its membership is load-bearing, not insurance.
+--- rebind a shell variable must appear here, else the binding survives a plain
+--- command unscathed and the matcher resolves a stale `known[var]` while the
+--- shell ran the rebound value. Today only `printf` satisfies "allowlisted ∧
+--- rebinds", which is why its membership is load-bearing, not insurance.
 local NAMESPACE_MUTATING = {
     read = true,
     printf = true,
@@ -649,26 +649,180 @@ local function command_leaf_name(node, src)
     return nil
 end
 
+--- Node types whose bindings never reach the enclosing sequence — a subshell,
+--- a `$(…)` / `<(…)` substitution. Their inner assignments are sealed in a
+--- child shell, so they contribute no names to drop and need no recursion.
+--- (`pipeline` is deliberately absent: a `read`/`mapfile` in a pipeline stage
+--- could escape under bash `lastpipe`, so it stays in `STATEMENT_CONTAINER` and
+--- a mutating stage clears `known`.)
+local SCOPE_BOUNDARY = {
+    subshell = true,
+    command_substitution = true,
+    process_substitution = true,
+}
+
+--- Control-flow / grouping containers whose every named child is a statement
+--- (no value/pattern/redirect-target leaves), so the collect-targets scan can
+--- recurse all their named children. Field-specific containers
+--- (`for`/`while`/`case`/`case_item`/`redirected_statement`) are handled inline
+--- so the scan descends only into statement positions and skips the loop list,
+--- matched value, case patterns, and redirect targets — which carry no escaping
+--- binding (a `$(…)` there is sealed in a subshell) and would otherwise hit the
+--- fail-safe.
+local STATEMENT_CONTAINER = {
+    if_statement = true,
+    elif_clause = true,
+    else_clause = true,
+    list = true,
+    pipeline = true,
+    do_group = true,
+    compound_statement = true,
+    negated_command = true,
+}
+
+--- Collect the variable names a control-flow sibling could rebind in the
+--- enclosing sequence (#3 capable grade), accumulating them into `targets`.
+--- Returns `false` to signal *clear-all* — the construct contains a binding
+--- whose target set cannot be enumerated (a namespace-mutating builtin, a
+--- dynamic / subscripted assignment name, arithmetic assignment, a
+--- `declaration_command`, or any unmodelled node type), so the caller must
+--- drop every binding rather than trust an undercount.
+---
+--- Soundness is one-directional: an over-collected name (or a needless
+--- clear-all) only over-prompts; a *missed* binder under-prompts (the matcher
+--- would resolve a stale `known[var]` while the shell ran the rebound value).
+--- So a node preserves `known` only when provably binding-free or
+--- cleanly-enumerable; any unmodelled node type returns `false`. The scan
+--- recurses only into statement positions (so `while read x; …` clears via the
+--- recursed condition while `case $x in …` skips the matched value), stops at
+--- `SCOPE_BOUNDARY` nodes (inner bindings sealed in a child shell), and mirrors
+--- `update_known`'s per-command logic (`printf -v` enumerates its target, other
+--- namespace-mutating builtins clear-all) so the two stay consistent.
+--- @param node TSNode
+--- @param src string
+--- @param targets table<string, boolean>
+--- @return boolean enumerable
+local function collect_bindings(node, src, targets)
+    --- Recurse every named, non-comment child whose field is in `fields` (all
+    --- of them when `fields` is nil). Returns false on the first clear-all.
+    --- @param fields table<string, boolean>|nil
+    --- @return boolean
+    local function recurse(fields)
+        for child, field in node:iter_children() do
+            if
+                child:named()
+                and child:type() ~= "comment"
+                and (not fields or fields[field])
+                and not collect_bindings(child, src, targets)
+            then
+                return false
+            end
+        end
+        return true
+    end
+
+    local t = node:type()
+    if SCOPE_BOUNDARY[t] or t == "test_command" then
+        -- Sealed subshell, or a side-effect-free predicate — binds nothing.
+        return true
+    elseif t == "variable_assignment" then
+        local name_node = node:field("name")[1]
+        local name = name_node
+            and vim.treesitter.get_node_text(name_node, src)
+        -- Only a plain scalar name is enumerable; `arr[$i]=…` / a name carrying
+        -- an expansion could rebind anything → clear-all.
+        if name and name:match("^[%w_]+$") then
+            targets[name] = true
+            return true
+        end
+        return false
+    elseif t == "for_statement" then
+        local var = node:field("variable")[1]
+        local name = var and vim.treesitter.get_node_text(var, src)
+        if not (name and name:match("^[%w_]+$")) then
+            return false
+        end
+        targets[name] = true
+        return recurse({ body = true })
+    elseif t == "while_statement" then
+        return recurse({ condition = true, body = true })
+    elseif t == "case_statement" then
+        for child in node:iter_children() do
+            if
+                child:type() == "case_item"
+                and not collect_bindings(child, src, targets)
+            then
+                return false
+            end
+        end
+        return true
+    elseif t == "case_item" then
+        for child, field in node:iter_children() do
+            if
+                field ~= "value"
+                and child:named()
+                and child:type() ~= "comment"
+                and not collect_bindings(child, src, targets)
+            then
+                return false
+            end
+        end
+        return true
+    elseif t == "redirected_statement" then
+        return recurse({ body = true })
+    elseif t == "command" then
+        local name = command_leaf_name(node, src)
+        if name == "printf" then
+            -- Mirrors update_known: `-v NAME` rebinds NAME. Enumerate a literal
+            -- NAME; a dynamic / missing target → clear-all.
+            local want_name = false
+            for arg in node:iter_children() do
+                local at = vim.treesitter.get_node_text(arg, src)
+                if want_name then
+                    if at:match("^[%w_]+$") then
+                        targets[at] = true
+                        want_name = false
+                    else
+                        return false
+                    end
+                elseif at == "-v" then
+                    want_name = true
+                end
+            end
+            return not want_name
+        elseif not name or NAMESPACE_MUTATING[name] then
+            return false
+        end
+        -- A plain non-mutating command binds nothing in the enclosing scope.
+        -- (Args are inert or scope boundaries; `$((d=…))` arithmetic in an arg
+        -- is the same accepted residual as the lazy grade — it can only forge a
+        -- numeric value, never a flag/path.)
+        return true
+    elseif STATEMENT_CONTAINER[t] then
+        return recurse(nil)
+    end
+    -- Unknown / unmodelled node type → fail-safe clear-all.
+    return false
+end
+
 --- Update the per-sequence constant environment after processing one
---- straight-line child, left to right (#3 lazy grade). The rule is inverted from
---- enumerating what rebinds: a child *preserves* `known` only when provably
---- inert, and everything else clears the binding(s) it could touch. A
---- pure-literal `variable_assignment` records `known[name]=lit`; a non-literal
---- one drops just that name; a plain non-mutating `command` preserves all
---- bindings; a namespace-mutating command, or any other node type (control flow,
---- `declaration_command`, arithmetic, pipeline, redirect), clears `known`
---- entirely. Clearing can only shrink `known`, so it can only ever over-prompt.
+--- straight-line child, left to right. The rule is inverted from enumerating
+--- what rebinds: a child *preserves* `known` only when provably inert, and
+--- everything else drops only the binding(s) it could touch. A pure-literal
+--- `variable_assignment` records `known[name]=lit`; a non-literal one drops
+--- just that name. Every other child is handed to `collect_bindings` (#3
+--- capable grade): a plain command or a binding-free control-flow construct
+--- drops nothing (`f=…; if c; then :; fi; find $f` keeps `f`), one that binds
+--- enumerable names (`printf -v g`, an `if`-body assignment, a `for` loop var)
+--- drops exactly those, and one whose targets can't be enumerated (a
+--- namespace-mutating builtin, arithmetic assignment, a `declaration_command`,
+--- a dynamic name, or any unmodelled node type) clears `known` entirely.
+--- Dropping can only shrink `known`, so it can only ever over-prompt.
 --- @param known table<string, string>
 --- @param child TSNode
 --- @param src string
 local function update_known(known, child, src)
-    local function clear()
-        for k in pairs(known) do
-            known[k] = nil
-        end
-    end
-    local t = child:type()
-    if t == "variable_assignment" then
+    if child:type() == "variable_assignment" then
         local name_node = child:field("name")[1]
         local name = name_node
             and vim.treesitter.get_node_text(name_node, src)
@@ -682,27 +836,19 @@ local function update_known(known, child, src)
         else
             known[name] = nil
         end
-    elseif t == "command" then
-        local name = command_leaf_name(child, src)
-        if name == "printf" then
-            -- printf only rebinds via its `-v NAME` form; plain `printf "msg"`
-            -- (logging/formatting between an assignment and a use) is inert and
-            -- common, so it must preserve `known`. printf has no bundled or long
-            -- form for this in bash or zsh — it is spelled exactly `-v` — so a
-            -- literal `-v` token among the args catches every assigning form
-            -- (including a dynamic target `printf -v "$x" …`). `printf '%s' -v`
-            -- (printing the string "-v") over-clears, which only over-prompts.
-            for arg in child:iter_children() do
-                if vim.treesitter.get_node_text(arg, src) == "-v" then
-                    clear()
-                    break
-                end
-            end
-        elseif not name or NAMESPACE_MUTATING[name] then
-            clear()
+        return
+    end
+
+    --- @type table<string, boolean>
+    local targets = {}
+    if collect_bindings(child, src, targets) then
+        for name in pairs(targets) do
+            known[name] = nil
         end
     else
-        clear()
+        for k in pairs(known) do
+            known[k] = nil
+        end
     end
 end
 

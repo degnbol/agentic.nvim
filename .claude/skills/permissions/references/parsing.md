@@ -73,15 +73,24 @@ Wildcarded only against deny/ask, **never allow**: a dynamic subcommand fails th
 allowlist (→ prompt) and a trailing dynamic arg (`git log $ref`) is harmless, so
 a dynamic token never widens an approval.
 
-**Invalidation** (`update_known`) defaults to clear: `known` shrinks whenever a
-sibling is not provably inert. A child preserves it only as a pure-literal
-assignment (which records the binding) or a plain non-mutating command;
-control flow, a `declaration_command`, arithmetic, or a namespace-mutating
-builtin clears it entirely. Enumerating rebinding vectors instead would
-undercount — `local`/`typeset` parse as `declaration_command`, `printf -v`/`read`
-as `command`, `(( x=… ))` as `arithmetic_expansion`, none as a top-level
-`variable_assignment`. `known` is sequence-local; a binding never leaks into or
-out of a nested block.
+**Invalidation** (`update_known` → `collect_bindings`) drops only the names a
+sibling could rebind, defaulting to clear-all when those names can't be
+enumerated. A pure-literal `variable_assignment` records its binding; every
+other sibling goes to `collect_bindings`, which returns the set of rebound names
+(dropped) or signals clear-all. A binding-free sibling (a plain command, a
+`[[ … ]]` guard, `if c; then :; fi`, a loop over another var) drops nothing and
+`known` survives; an enumerable binder (an `if`-body `d=…`, a `for` loop var,
+`printf -v g`) drops exactly those names; an un-enumerable binder (a
+namespace-mutating builtin, arithmetic assignment, a `declaration_command`, a
+dynamic/subscripted name, or any unmodelled node type) clears `known` entirely —
+enumerating every rebinding vector would undercount (`local`/`typeset` are
+`declaration_command`, `printf -v`/`read` are `command`, `(( x=… ))` is
+`arithmetic_expansion`, none a top-level `variable_assignment`), so anything not
+provably enumerable fails closed to clear-all. The scan recurses only statement
+positions (`while read x` clears via the recursed condition; `case $x in` skips
+the matched value) and stops at subshell / `$(…)` boundaries (those bindings are
+sealed). `known` is sequence-local; a binding never leaks into or out of a
+nested block.
 
 ## Pipeline
 

@@ -15,7 +15,13 @@ it may change *what a token is* or *which leaves are walked*, never *whether a
 leaf is checked* against deny/ask.
 
 Build order: **#3, #4, #5** (preserve the invariant, no new config, broad
-benefit; all done) → **#1** (off by default, narrow) → **#2** (parked, see end).
+benefit; all done, both #3 grades) → **#1** (off by default, narrow) → **#6**
+(local function-call resolution) → **#2** (parked, see end).
+
+A named `function_definition` already auto-approves *as a definition* (body not
+walked — defining never runs it; an anonymous `() { … }` executes immediately
+and bails). That shipped outside this roadmap; **#6** is the advanced follow-up
+that also approves *calls* to such functions.
 
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
 mirrored in `command_known_safe`; tests under "inline shell -c body").
@@ -27,15 +33,17 @@ branch in `walk_for`; the spliced token is pushed dynamic; mirrored in
 "#4 argument-position command substitution" plus a laundering case in the
 use-site carve-out block).
 
-**#3 is done (lazy grade)** (`walk_sequence`/`tally_sequence` thread a
+**#3 is done (both grades)** (`walk_sequence`/`tally_sequence` thread a
 per-sequence `known` env over `SEQUENCE_TYPES` + `do_group`, left to right;
-`update_known` records a pure-literal assignment and clears on any non-inert
-sibling; `walk_command`/`command_known_safe` resolve a bare `$name`/`${name}`
-via `resolved_var_name` when `is_safe_literal`; tests under "#3 constant-literal
-propagation" + a tally case). The two post-review corrections (a `printf`
-over-prompt fix + a soundness-coupling docstring/test; see "Follow-up
+`update_known` records a pure-literal assignment and otherwise hands the sibling
+to `collect_bindings`; `walk_command`/`command_known_safe` resolve a bare
+`$name`/`${name}` via `resolved_var_name` when `is_safe_literal`; tests under "#3
+constant-literal propagation" + a tally case). The two post-review corrections (a
+`printf` over-prompt fix + a soundness-coupling docstring/test; see "Follow-up
 corrections" under #3) are also done. The capable grade — a control-flow-sibling
-collect-targets scan instead of clear-all — is still open. Remaining: #1, #2.
+collect-targets scan instead of clear-all — is now done (`collect_bindings`
+field-aware walk; see the "capable grade" sub-bullet under #3). Remaining:
+#1, #2.
 
 ---
 
@@ -80,7 +88,7 @@ can't guard):
 
 ---
 
-## #3 — flow-sensitive literal propagation (done, lazy grade; follow-ups done)
+## #3 — flow-sensitive literal propagation (both grades done; follow-ups done)
 
 **Today.** A `$var` is always dynamic — `f=/safe/dir; find $f` bails because the
 dynamic `$f` flips `has_dynamic`, which wildcard-fires find's `-exec` deny gate.
@@ -105,17 +113,25 @@ stale `known[d]` and approves `find /danger`. Invert the rule: an element
 - **Pure-literal `variable_assignment`** (`f=lit`) — record `known[var]=lit`.
 - **Plain `command`** with no namespace-mutating builtin — preserves `known`;
   each `$var` resolves against it (literal + static) at token extraction.
-- **Everything else clears.** Two grades:
-  - *Lazy (sound, narrow):* clear `known` entirely on any other element —
-    `declaration_command`, control flow, `arithmetic_expansion`, or a
-    namespace-mutating builtin (`read`, `printf -v`, `mapfile`, `getopts`,
-    `set`, `unset`, `eval`, `for`-loop var). Catches the common immediate case
-    (`f=/safe; find $f`); over-prompts on interleaved control flow
+- **Everything else** is handed to `collect_bindings`, which returns the names
+  the sibling could rebind (dropped from `known`) or signals *clear-all*. Two
+  grades, both now shipped:
+  - *Lazy (sound, narrow):* the original form cleared `known` entirely on any
+    non-assignment, non-plain-command sibling. Caught the common immediate case
+    (`f=/safe; find $f`); over-prompted on interleaved control flow
     (`f=/safe; if c; then :; fi; find $f`).
-  - *Capable (later):* for a control-flow sibling, recurse a collect-targets
-    scan over `variable_assignment` **and** `declaration_command` targets and
-    drop only those — but clear-all on any construct whose targets can't be
-    enumerated (arithmetic assignment, `read`/`printf -v`/`eval`/…).
+  - *Capable (done):* `collect_bindings` field-aware walk. A binding-free
+    control-flow sibling (`if true; then echo; fi`, a `[[ … ]]` guard, a loop
+    over a different var) drops nothing and `known` survives; one binding
+    enumerable names (an `if`-body `d=…`, a `for` loop var, `printf -v g`) drops
+    exactly those; one whose targets can't be enumerated (a namespace-mutating
+    builtin, arithmetic assignment, a `declaration_command`, a dynamic name, or
+    any unmodelled node type) clears `known`. It recurses only statement
+    positions (`while read x` clears via the recursed condition; `case $x in`
+    skips the matched value) and stops at `SCOPE_BOUNDARY` nodes (subshell /
+    `$(…)` bindings are sealed). The same `collect_bindings` also tightened the
+    top-level `command` branch — `printf -v g` now drops only `g`, not all of
+    `known`.
 
 The resolved literal is fed through the **same** gate evaluation, so
 `f=--exec; find $f` still hits find's deny. No cross-sequence propagation (a
@@ -127,10 +143,10 @@ already approve with dynamic args; #3 only changes outcomes for commands where a
 dynamic positional currently wildcard-fires a gate (`find`, `git`, `sort`).
 
 **Touches.** New env threaded through `walk` and its handlers; `walk_assignment`
-(record), `walk_command` (resolve at token extraction); container/sequence
-handlers create, scope, and shrink the env (clear-all for the lazy grade; a
-collect-targets helper for the capable grade). Mirror in the tally walk
-(UI-only — a stale binding there mis-highlights, never mis-approves).
+(record), `walk_command` (resolve at token extraction); `update_known` shrinks
+the env via `collect_bindings`. Mirror in the tally walk is automatic —
+`tally_sequence` shares `update_known` (UI-only — a stale binding there
+mis-highlights, never mis-approves).
 
 ### Follow-up corrections (post-review, done)
 
@@ -207,9 +223,9 @@ parser, same fail-closed on parse error, same gates on inner leaves).
 
 `-l`/`-f`/`-x` alongside `-c` are fine (shell behaviour, not Claude-injected
 code). Add a small recursion-**depth cap** (~3) for `zsh -c 'zsh -c "…"'`.
-Inner function definitions still bail without the #2 function-walker — but
-inline `-c` bodies are overwhelmingly simple pipelines, so this fires without
-that dependency.
+A named function defined inside the `-c` body approves as a definition, but a
+call to it bails without #6's function-walker — inline `-c` bodies are
+overwhelmingly simple pipelines, though, so this fires without that dependency.
 
 **Touches.** `walk_command` (shell-`-c` branch, before the structured ask so the
 `c` gate doesn't pre-empt it); `ctx.depth` guard; mirror in `command_known_safe`.
@@ -261,6 +277,38 @@ walk ctx and special-cased for `cmd_name=="rm"` in `walk_command`;
 
 ---
 
+## #6 — resolve calls to locally-defined functions (todo)
+
+**Today.** A named `function_definition` auto-approves *as a definition* (body
+not walked). But a *call* is an ordinary `command` leaf — `foo` is not in the
+allowlist — so `foo() { grep x file }; foo` still prompts on the call.
+
+**Change.** Walk the body at the definition site, treating every `$var`
+(including positionals `$1`/`$@`) as **dynamic**; if it approves, record the name
+in a per-sequence function table (same left-to-right lifetime as #3's `known`). A
+later `command` whose name matches a recorded entry approves by the recorded
+decision instead of bailing. Redefinition rebinds; an unresolved call still
+bails.
+
+**Why it's sound.** Shell functions have dynamic scope — the body runs with the
+caller's variables and arguments, not the definition site's. So the body-walk
+inherits *no* `known` literals and treats all params as arbitrary, which the
+dynamic-token machinery already covers. A body that pipes `$1` into a gated
+position (`foo() { find . $1 }`) fails closed at definition time and is never
+recorded; a recorded function is therefore safe for **any** call arguments, so
+the call site needs no re-vetting of its args. Only *which leaves are walked*
+changes — every body leaf is still checked against deny/ask. Invariant held.
+
+**Touches.** A function table threaded alongside `known` in `walk_sequence`;
+`walk_command` records on a `function_definition` (body-walk) and resolves on a
+matching call name. Mirror in the tally walk.
+
+**Enables #2.** This is the "function-definition walking" #2 names as its
+prerequisite; with it in place, reading and walking a script *file* is the easy
+part on top.
+
+---
+
 ## #2 — walk into script *files* (parked)
 
 `zsh run-tests.zsh`: read the file, parse, walk. **Sound, not unsafe** — in this
@@ -268,18 +316,19 @@ architecture auto-approval fires synchronously with no human-wait window and ACP
 runs tool calls sequentially, so the TOCTOU gap between the plugin reading the
 file and the shell reading it has no writer in it.
 
-**Blocked on bail rate, not safety.** The walker has no `function_definition`
-handler (`walk` dispatch, lines ~1223–1257), so the first `foo(){…}` fails
-closed; real scripts also bail on `source`, on a harness command not in the
-allowlist (`nvim --headless`, `make`, `pytest`), or on any write redirect. The
-scripts that pass are the trivial all-allowlisted ones — already covered by a
-one-line `Bash(zsh run-tests.zsh)` allow in `.claude/settings.json`.
+**Blocked on bail rate, not safety.** A named `function_definition` approves as
+a definition but its body is not walked and a *call* to a local `foo` still
+bails (the call name is not in the allowlist); real scripts also bail on
+`source`, on a harness command not in the allowlist (`nvim --headless`, `make`,
+`pytest`), or on any write redirect. The scripts that pass are the trivial
+all-allowlisted ones — already covered by a one-line `Bash(zsh run-tests.zsh)`
+allow in `.claude/settings.json`.
 
-To make #2 beat that one-liner, first build **function-definition walking**:
-walk each `foo(){…}` body, record it, and make a call to a locally-defined `foo`
-recurse into the recorded body instead of bailing. That is the real work;
-reading the file is the easy part on top. Keep the walker language-agnostic
-enough (the body-walk in #5 and a future file-read share the "parse a body,
-recurse `walk`" shape) that a non-zsh extension needs no major refactor.
+To make #2 beat that one-liner, first build **#6** (local function-call
+resolution): walk each `foo(){…}` body, record it, and resolve a call to a
+locally-defined `foo` into the recorded body. That is the real work; reading the
+file is the easy part on top. Keep the walker language-agnostic enough (the
+body-walk in #5 and a future file-read share the "parse a body, recurse `walk`"
+shape) that a non-zsh extension needs no major refactor.
 
 Revisit only when wanting general safe-script approval across many scripts.

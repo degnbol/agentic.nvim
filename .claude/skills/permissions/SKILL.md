@@ -173,9 +173,11 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   `f=$(…); find . $f` escalate. The exception: a `$var` resolving to a literal
   bound earlier in the same straight-line sequence is matched as that literal
   (`f=/safe; find $f` approves, `f=--exec; find $f` denies — mechanism in
-  [references/parsing.md](references/parsing.md)). A value rebound across a
-  control-flow boundary, or a multi-word / glob / substitution value, stays
-  dynamic and prompts.
+  [references/parsing.md](references/parsing.md)). An intervening control-flow
+  sibling keeps the binding unless it actually rebinds the name
+  (`f=/safe; if c; then :; fi; find $f` approves; `…; then f=/danger; fi; …`
+  prompts). A multi-word / glob / substitution value, or a binding rebound by an
+  un-enumerable construct, stays dynamic and prompts.
 - A user *glob* deny in settings.json cannot get the dynamic-token wildcard
   treatment (only the typed structured gates can), so it keeps the pre-existing
   hole — express the gate structurally to close it.
