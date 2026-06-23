@@ -954,6 +954,17 @@ function ChatWidget:_create_buf_nrs()
     if not pcall(vim.treesitter.start, chat, "agentic") then
         pcall(vim.treesitter.start, chat, "markdown")
     end
+
+    -- Render LaTeX math as images via snacks.image. The chat is a scratch buffer
+    -- (no BufReadPre) opened at startup before any file is read, so snacks' own
+    -- BufReadPre-triggered doc-attach autocmd never fires for it. Attach
+    -- explicitly. Guarded so agentic.nvim runs standalone without snacks; a no-op
+    -- when image rendering is disabled (doc.attach self-gates on config.enabled).
+    local has_image, image = pcall(require, "snacks.image")
+    if has_image then
+        image.doc.attach(chat)
+    end
+
     pcall(vim.treesitter.start, todos, "markdown")
     pcall(vim.treesitter.start, code, "markdown")
     pcall(vim.treesitter.start, files, "markdown")

@@ -63,6 +63,10 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 Install the `bash` or `zsh` parser for shell command highlighting in chat. See `:help agentic-requirements-parsers`.
 
+### Math rendering (optional)
+
+If [`snacks.nvim`](https://github.com/folke/snacks.nvim)'s `image` module is installed and enabled, chat buffers attach to it automatically and LaTeX math (`$…$`, `$$…$$`) renders inline as images. Absent or disabled, it is a no-op. See snacks' `image` docs for its own requirements (graphics-capable terminal, ImageMagick, a LaTeX toolchain).
+
 ### OpenCode permission caveat
 
 OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve unless you opt in via its config. To route permission prompts through this plugin, set in `~/.config/opencode/opencode.json` (or `config.json`):
