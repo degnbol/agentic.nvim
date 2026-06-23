@@ -302,6 +302,20 @@
 
   "luarocks": { "read_only": [{ "positionals": ["search"] }] },
 
+  "basedpyright": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["createstub", "writebaseline", "gitlabcodequality"] }]
+  },
+  "pyright": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["createstub"] }]
+  },
+  "mypy": {
+    "safe_write": [{}],
+    "ask":        [{ "options": ["install-types"] }]
+  },
+  "shellcheck": { "read_only": [{}] },
+
   "gh": {
     "read_only": [
       { "positionals": ["alias", "list"] },

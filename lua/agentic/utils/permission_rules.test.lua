@@ -969,6 +969,68 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
+        --- Resolve auto-approval of `cmd` against the plugin defaults at `tier`.
+        --- @param tier agentic.PermAutoApprove
+        --- @param cmd string
+        --- @return boolean
+        local function approves_at(tier, cmd)
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = tier
+            PermissionRules.invalidate_cache()
+            return PermissionRules.should_auto_approve(cmd)
+        end
+
+        describe("uv run wrapper (safe_write tier)", function()
+            it("approves a bare `uv run <checker>` at the allow tier", function()
+                assert.is_true(approves_at("allow", "uv run basedpyright probe.py"))
+            end)
+
+            it("prompts the same command at the read-only tier (env sync writes)", function()
+                assert.is_false(approves_at("read-only", "uv run basedpyright probe.py"))
+            end)
+
+            it("prompts when the inner command is not approved", function()
+                assert.is_false(approves_at("allow", "uv run rm -rf /"))
+            end)
+
+            it("prompts when a code-injecting option is present", function()
+                assert.is_false(
+                    approves_at("allow", "uv run --with=evil basedpyright probe.py")
+                )
+            end)
+
+            it("approves a non-`run` subcommand by its own rule", function()
+                assert.is_true(approves_at("allow", "uv pip list"))
+            end)
+        end)
+
+        describe("checker and formatter commands", function()
+            it("approves a no-write checker at the read-only tier", function()
+                assert.is_true(approves_at("read-only", "basedpyright src.py"))
+                assert.is_true(approves_at("read-only", "selene src.lua"))
+                assert.is_true(approves_at("read-only", "shellcheck script.sh"))
+            end)
+
+            it("prompts on a checker's write/exec option", function()
+                -- basedpyright --writebaseline / --createstub / --gitlabcodequality
+                -- write files; mypy --install-types runs pip (arbitrary code).
+                assert.is_false(approves_at("allow", "basedpyright --writebaseline"))
+                assert.is_false(
+                    approves_at("allow", "basedpyright --gitlabcodequality out.json")
+                )
+                assert.is_false(approves_at("allow", "mypy --install-types"))
+            end)
+
+            it("treats a cache/file writer as safe_write, not read-only", function()
+                -- mypy writes .mypy_cache by default; formatters rewrite files.
+                for _, cmd in ipairs({ "mypy src.py", "stylua init.lua", "ruff format src.py" }) do
+                    assert.is_true(approves_at("allow", cmd))
+                    assert.is_false(approves_at("read-only", cmd))
+                end
+            end)
+        end)
+
         it("approves command from plugin defaults when auto_approve=allow", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false

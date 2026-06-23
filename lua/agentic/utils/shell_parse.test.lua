@@ -81,6 +81,26 @@ describe("ShellParse.extract_commands", function()
         it("walks an inline shell -c body", function()
             assert.same({ "rm -f y" }, render(ShellParse.extract_commands("zsh -c 'rm -f y'")))
         end)
+
+        it("unwraps a bare `uv run` to the inner command", function()
+            assert.same(
+                { "basedpyright probe.py" },
+                render(ShellParse.extract_commands("uv run basedpyright probe.py"))
+            )
+        end)
+
+        it("does not unwrap `uv run` with a code-injecting option", function()
+            -- `--with=evil` could install arbitrary code; the wrapper bails on
+            -- any option, leaving `uv` to match its own (non-`run`) allow rules.
+            assert.same(
+                { "uv --with=evil run basedpyright probe.py" },
+                render(ShellParse.extract_commands("uv run --with=evil basedpyright probe.py"))
+            )
+        end)
+
+        it("leaves non-`run` uv subcommands as a leaf", function()
+            assert.same({ "uv pip list" }, render(ShellParse.extract_commands("uv pip list")))
+        end)
     end)
 
     describe("control flow and pipelines", function()

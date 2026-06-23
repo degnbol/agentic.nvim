@@ -459,6 +459,8 @@ end
 --- @field flag_opts? string[] boolean options (consume themselves only)
 --- @field attached? string[] Lua patterns for self-contained forms — attached short value (`-oL`), `--long=value`, bare numeric (`-5`)
 --- @field positionals? integer count of fixed positional operands before the inner command (timeout's `DURATION` = 1); skipped by count, not inspected
+--- @field subcommand? string require this literal first positional (uv's `run`); options are consumed both before and after it, and a non-match falls through to the leaf matchers (so `uv pip`/`uv lock` keep their own allow rules)
+--- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the allow/safe_write tier — a read-only inner must not launder the command into a read-only one.
 
 --- Exec-wrappers: effect-neutral prefixes whose sole job is to launch the
 --- following command. Excluding a write option / requiring a positional makes
@@ -472,6 +474,18 @@ end
 --- rule (so they prompt) rather than recursed — and must NOT be given a blanket
 --- read-only entry in `permissions.json`, which would auto-approve whatever they
 --- launch without the matcher ever inspecting it.
+---
+--- `uv run COMMAND` is included because a *bare* `uv run` adds no arbitrary-code
+--- danger over running COMMAND directly — COMMAND is then judged on its own allow
+--- rules. It is not effect-neutral like timeout/stdbuf, though: it first syncs the
+--- project env, which may install the repo's already-declared deps. That sync is a
+--- recoverable write, so `writes = true` marks it `safe_write`-tier — the decision
+--- walk only recurses at the allow tier, never laundering a read-only inner into a
+--- read-only command. Transparency is further gated to the bare form: the empty
+--- option lists make `skip_wrapper_operands` bail on *any* dash token, so the
+--- code-injecting options (`--with PKG`, `-s`/`--script`, `--with-requirements`,
+--- which fetch arbitrary packages from the open PyPI index) bail to a prompt.
+--- `uvx`/`uv tool run` are excluded outright: they fetch an arbitrary package.
 --- @type table<string, agentic.utils.ShellParse.WrapperSpec>
 local EXEC_WRAPPERS = {
     -- [OPTION]... DURATION COMMAND
@@ -493,6 +507,9 @@ local EXEC_WRAPPERS = {
             "^%-%-error=",
         },
     },
+    -- run COMMAND — bare only (no option lists → any dash token bails); env
+    -- sync is a recoverable write, so it needs the allow tier (`writes`).
+    uv = { subcommand = "run", writes = true },
 }
 
 --- Consume an exec-wrapper's own operands per its spec and return the 1-based
@@ -510,20 +527,35 @@ local EXEC_WRAPPERS = {
 --- @param spec agentic.utils.ShellParse.WrapperSpec
 --- @return integer|nil inner_idx
 local function skip_wrapper_operands(args, spec)
-    local i = 1
-    while args[i] and args[i]:sub(1, 1) == "-" do
-        local opt = args[i]
-        if spec.value_opts and vim.tbl_contains(spec.value_opts, opt) then
-            i = i + 2 -- value is the next token (`-s KILL`)
-        elseif
-            -- boolean flag, or a self-contained form (`-oL`, `--signal=K`, `-5`)
-            (spec.flag_opts and vim.tbl_contains(spec.flag_opts, opt))
-            or (spec.attached and matches_any_lua_pattern(opt, spec.attached))
-        then
-            i = i + 1
-        else
-            return nil
+    --- Consume leading option tokens from index `i` per `spec`, returning the
+    --- next index, or nil on an unrecognised option (the fail-closed bail).
+    local function consume_options(i)
+        while args[i] and args[i]:sub(1, 1) == "-" do
+            local opt = args[i]
+            if spec.value_opts and vim.tbl_contains(spec.value_opts, opt) then
+                i = i + 2 -- value is the next token (`-s KILL`)
+            elseif
+                -- boolean flag, or self-contained form (`-oL`, `--signal=K`, `-5`)
+                (spec.flag_opts and vim.tbl_contains(spec.flag_opts, opt))
+                or (spec.attached and matches_any_lua_pattern(opt, spec.attached))
+            then
+                i = i + 1
+            else
+                return nil
+            end
         end
+        return i
+    end
+
+    local i = consume_options(1)
+    if i and spec.subcommand then
+        if args[i] ~= spec.subcommand then
+            return nil -- not the launcher subcommand → fall through to leaf
+        end
+        i = consume_options(i + 1)
+    end
+    if not i then
+        return nil
     end
     return i + (spec.positionals or 0)
 end
@@ -549,35 +581,38 @@ end
 --- @param src string
 --- @return string|nil inner
 --- @return agentic.utils.ShellParse.Origin|nil origin
+--- @return boolean writes whether the prefix has a recoverable side effect of its
+---         own (the wrapper's `writes` flag); false for shells (`-c` bodies are
+---         vetted command-by-command in the recursion).
 local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if SHELL_C_COMMANDS[cmd_name] then
         for i, arg in ipairs(args) do
             if arg:match("^%-[a-zA-Z]*c$") then
                 local body = args[i + 1]
                 if body ~= nil and not args_dynamic[i + 1] then
-                    return body, nil
+                    return body, nil, false
                 end
-                return nil, nil -- missing or dynamic body
+                return nil, nil, false -- missing or dynamic body
             end
         end
-        return nil, nil
+        return nil, nil, false
     end
 
     local spec = EXEC_WRAPPERS[cmd_name]
     if not spec then
-        return nil, nil
+        return nil, nil, false
     end
     local inner_idx = skip_wrapper_operands(args, spec)
     if not inner_idx then
-        return nil, nil
+        return nil, nil, false
     end
     local inner_node = arg_nodes[inner_idx]
     if not inner_node then
-        return nil, nil -- empty inner
+        return nil, nil, false -- empty inner
     end
     local sr, sc, inner_start_byte = inner_node:range(true)
     local _, _, _, _, _, node_end_byte = node:range(true)
-    return src:sub(inner_start_byte + 1, node_end_byte), { sr, sc }
+    return src:sub(inner_start_byte + 1, node_end_byte), { sr, sc }, spec.writes or false
 end
 
 -- ── Command extraction ───────────────────────────────────────────────────────

@@ -981,9 +981,16 @@ local function walk_command(node, src, ctx, known, funcs)
     -- inner command instead of treating the prefix as an opaque leaf. Must run
     -- before the structured matcher so a shell's `c` gate does not pre-empt the
     -- `-c` recursion. A body at the depth cap, or one that does not resolve,
-    -- falls through to the leaf matchers.
-    local inner = inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
-    if inner and ctx.depth < NESTED_MAX_DEPTH then
+    -- falls through to the leaf matchers. A `writes` wrapper (uv's env sync) is
+    -- safe_write-tier: recurse only at the allow tier, else fall through so the
+    -- inner's read_only class cannot launder the command into read-only.
+    local inner, _, writes =
+        inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    if
+        inner
+        and ctx.depth < NESTED_MAX_DEPTH
+        and (not writes or ctx.auto_approve == "allow")
+    then
         local root = parse_zsh(inner)
         if not root then
             return false
