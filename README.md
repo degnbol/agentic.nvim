@@ -63,6 +63,13 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 Install the `bash` or `zsh` parser for shell command highlighting in chat. See `:help agentic-requirements-parsers`.
 
+Code-fence and diff language labels are resolved through Neovim's registered
+filetype↔parser mappings (`vim.treesitter.language.get_lang`). A filetype whose
+parser name differs from it (`sh`→`bash`, `cs`→`c_sharp`) only labels correctly
+once that mapping is registered. [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter)
+registers these on parser install and is the recommended way to manage parsers.
+Without it, register mappings yourself via `vim.treesitter.language.register`.
+
 ### Math rendering (optional)
 
 If [`snacks.nvim`](https://github.com/folke/snacks.nvim)'s `image` module is installed and enabled, chat buffers attach to it automatically and LaTeX math (`$…$`, `$$…$$`) renders inline as images. Absent or disabled, it is a no-op. See snacks' `image` docs for its own requirements (graphics-capable terminal, ImageMagick, a LaTeX toolchain).

@@ -1,5 +1,3 @@
-local FileSystem = require("agentic.utils.file_system")
-
 --- @alias agentic.Theme.SpinnerState "generating" | "thinking" | "searching" | "busy"
 
 --- @class agentic.Theme
@@ -40,47 +38,6 @@ Theme.HL_GROUPS = {
     PICKER_DATE = "AgenticPickerDate",
     PICKER_DELIM = "AgenticPickerDelim",
     UNAPPROVED_COMMAND = "AgenticUnapprovedCommand",
-}
-
---- A lang map of extension to language identifier for markdown code fences
---- Keep only possible unknown mappings
-local lang_map = {
-    py = "python",
-    rb = "ruby",
-    rs = "rust",
-    kt = "kotlin",
-    htm = "html",
-    yml = "yaml",
-    jl = "julia",
-    sh = "bash",
-    cs = "c_sharp",
-    ex = "elixir",
-    exs = "elixir",
-    erl = "erlang",
-    ml = "ocaml",
-    mli = "ocaml",
-    pl = "perl",
-    pm = "perl",
-    hpp = "cpp",
-    hh = "cpp",
-    cc = "cpp",
-    cxx = "cpp",
-    hxx = "cpp",
-    sty = "latex",
-    typ = "typst",
-    fs = "fsharp",
-    fsi = "fsharp",
-    clj = "clojure",
-    cljs = "clojure",
-    ps1 = "powershell",
-    psm1 = "powershell",
-    sv = "systemverilog",
-    svh = "systemverilog",
-    vhd = "vhdl",
-    purs = "purescript",
-    typescriptreact = "tsx",
-    javascriptreact = "jsx",
-    md = "markdown",
 }
 
 local status_hl = {
@@ -158,16 +115,15 @@ function Theme.setup()
     end
 end
 
----Get language identifier from file path for markdown code fences
+--- Treesitter injection name for a path's markdown code fence, via neovim's
+--- own filetype engine. `vim.filetype.match` returns the filetype (`sh`);
+--- `get_lang` converts it to the parser/injection name (`bash`) the fence
+--- needs. Returns "" for unrecognised files (e.g. extensionless).
 --- @param file_path string
 --- @return string language
 function Theme.get_language_from_path(file_path)
-    local ext = FileSystem.get_file_extension(file_path)
-    if not ext or ext == "" then
-        return ""
-    end
-
-    return lang_map[ext] or ext
+    local ft = vim.filetype.match({ filename = file_path })
+    return ft and vim.treesitter.language.get_lang(ft) or ""
 end
 
 --- @param status string
