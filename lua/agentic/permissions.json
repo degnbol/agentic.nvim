@@ -223,8 +223,9 @@
     "read_only":  [{ "positionals": ["query"] }],
     "safe_write": [{}]
   },
-  "latexmk": { "safe_write": [{}] },
-  "tlmgr":   { "safe_write": [{}] },
+  "latexmk":   { "safe_write": [{}] },
+  "tlmgr":     { "safe_write": [{}] },
+  "kpsewhich": { "read_only":  [{}] },
 
   "javap": { "read_only": [{}] },
 
