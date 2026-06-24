@@ -82,33 +82,34 @@ Known passthrough fields: `additionalDirectories`, `tools`, `env`,
 Some fields are overridden after the spread: `cwd`, `includePartialMessages`,
 `allowDangerouslySkipPermissions`, `canUseTool`, `executable`.
 
-## Skills do not survive session resume
+## Invoked skills survive session resume
 
-A loaded skill is not retained across `session/load`. Invoking a skill writes
-three records to the SDK session JSONL (`~/.claude/projects/<cwd>/<id>.jsonl`):
-the assistant `tool_use` (`name:"Skill"`), a `tool_result` carrying only the
-stub string `"Launching skill: <name>"`, and a **separate `user` message with
+Invoking a skill writes three records to the SDK session JSONL
+(`~/.claude/projects/<cwd>/<id>.jsonl`): the assistant `tool_use`
+(`name:"Skill"`), a `tool_result` carrying only the stub string
+`"Launching skill: <name>"`, and a **separate `user` message with
 `isMeta:true`** holding the full `SKILL.md` body (linked back via
 `sourceToolUseID`). The body is the meta message, not the tool_result.
 
-The SDK strips `isMeta` messages when it rebuilds context from the session file
-on resume. In `sdk.mjs` the per-line reconstruction reader (`Od`) does
-`if(n.includes('"isMeta":true'))continue`, and the message-list builders apply
-`.filter(f=>!f.isMeta)` and an `isMeta` exclusion predicate. So after resume the
-model sees the `tool_use` + stub `tool_result` shell but **not** the instructions
-— the skill is effectively unloaded and must be re-invoked.
+That `isMeta` body is **retained** when the SDK rebuilds context on
+`session/load`. The resume chain (`loadConversationForResume` → `loadFullLog`
+→ `buildConversationChain` → `removeExtraFields`) walks the message chain and
+copies each record verbatim — none of those functions filter `isMeta`, and
+messages are not length-truncated on reconstruction. Verified behaviourally: a
+sentinel placed only in a skill body (never echoed in prose) was still recalled
+after a full process restart + `session/load`. A resumed model keeps the
+instructions; the skill does **not** need re-invoking.
 
-Compaction is the only transition that preserves skills, and only via a
-dedicated path: `createSkillAttachmentIfNeeded` re-attaches each invoked skill's
-head post-summary (see the `claude` skill `references/internals.md`
-§ "Post-compact attachments"). There is no resume-path equivalent.
+The `isMeta`-stripping code elsewhere in the SDK (`.filter(f => !f.isMeta)`,
+the `"isMeta":true` line skip) drives display-list building and last-prompt
+extraction for slash-command detection — not the resume context builder. Don't
+mistake it for resume behaviour.
 
-**Client implication.** On Path A (`session/load`) the reconstructed context is
-SDK-owned — see `provider-system` § "Chat buffer is UI only". The client cannot
-preserve a loaded skill across resume; the chat buffer still renders the old
-skill tool-call block, but that is UI only and the model's context no longer
-holds the body. A frontend that depends on a skill being active after resume
-must re-invoke it via `session/prompt`.
+On resume `restoreSkillStateFromMessages` also repopulates `STATE.invokedSkills`
+from any `invoked_skills` attachment, so a later compaction's
+`createSkillAttachmentIfNeeded` can re-attach the skill head (see the `claude`
+skill `references/internals.md` § "Post-compact attachments"). That map restore
+is independent of the body already being in the reconstructed context.
 
 ## fs/readTextFile and fs/writeTextFile — dead code
 
