@@ -261,7 +261,7 @@ describe("ToolCallRenderer", function()
             end
         )
 
-        it("bypasses diff rendering when Edit fails", function()
+        it("shows the reason below the diff (open) when Edit fails", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "tc-2",
@@ -275,20 +275,34 @@ describe("ToolCallRenderer", function()
                 failure_reason = { "Permission denied." },
             }
 
-            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            local lines, _, _, fold_anchor =
+                Renderer.prepare_block_lines(block, 0)
 
-            for _, line in ipairs(lines) do
-                assert.is_nil(line:match("old content"))
-                assert.is_nil(line:match("new content"))
-            end
-            local found = false
-            for _, line in ipairs(lines) do
-                if line == "Permission denied." then
-                    found = true
-                    break
+            -- The diff is kept (not replaced by the reason)...
+            local function index_of(needle)
+                for i, line in ipairs(lines) do
+                    if line == needle then
+                        return i
+                    end
                 end
             end
-            assert.is_true(found)
+            local old_i = index_of("old content")
+            local new_i = index_of("new content")
+            local reason_i = index_of("Permission denied.")
+            assert.is_not_nil(old_i)
+            assert.is_not_nil(new_i)
+            assert.is_not_nil(reason_i)
+
+            -- ...the reason renders below the diff, not in place of it...
+            assert.is_true(reason_i > new_i)
+
+            -- ...the diff fence carries the injection-suppressing fold marker...
+            local fence_i = old_i - 1
+            assert.is_not_nil(lines[fence_i]:match("difffold$"))
+
+            -- ...and the diff is never auto-closed, even on failure, so no
+            -- fold_anchor is returned (foldable-but-open).
+            assert.is_nil(fold_anchor)
         end)
 
         it(

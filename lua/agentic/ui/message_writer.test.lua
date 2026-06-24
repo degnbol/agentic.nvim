@@ -2224,6 +2224,215 @@ describe("agentic.ui.MessageWriter", function()
             })
             assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
         end)
+
+        --- An edit diff whose new content has ≥2 foldable structures: if the
+        --- diff fence injected `lua`, lua's folds.scm would fold `foo` and
+        --- `bar` separately (the sub-folds that sank the first attempt).
+        local diff_new = {
+            "local function foo()",
+            "    return 1",
+            "end",
+            "local function bar()",
+            "    return 2",
+            "end",
+        }
+
+        --- 1-indexed line of the diff fence carrying the `difffold` marker.
+        --- @return integer line
+        local function difffold_fence_line()
+            for i, line in
+                ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+            do
+                if line:match("difffold$") then
+                    return i
+                end
+            end
+            error("no difffold fence in buffer")
+        end
+
+        --- 1-indexed line of the next bare closing fence after `from`.
+        --- @param from integer
+        --- @return integer
+        local function closing_fence_after(from)
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            for i = from + 1, #lines do
+                if lines[i]:match("^`+$") then
+                    return i
+                end
+            end
+            error("no closing fence after line " .. from)
+        end
+
+        --- Wait for treesitter to recompute fold levels after the buffer edit
+        --- (scheduled, like the deferred fold close — see _close_fold).
+        --- @param line integer 1-indexed line expected inside a fold
+        local function wait_folded(line)
+            vim.wait(500, function()
+                return vim.fn.foldlevel(line) >= 1
+            end)
+        end
+
+        it("folds an edit diff as ONE block with no injected sub-folds", function()
+            writer:write_tool_call_block({
+                tool_call_id = "diff-onefold",
+                status = "completed",
+                kind = "create",
+                argument = "/tmp/agentic_difffold_probe.lua",
+                diff = { old = {}, new = diff_new },
+            })
+
+            local fence = difffold_fence_line()
+            local body_start = fence + 1
+            local body_end = closing_fence_after(fence) - 1
+            wait_folded(body_start)
+
+            -- No injected sub-fold: nothing inside the body exceeds level 1
+            -- (vim.fn.foldlevel forces foldexpr computation). A surviving lua
+            -- fold over `foo`/`bar` would report level 2.
+            for line = body_start, body_end do
+                assert.is_true(
+                    vim.fn.foldlevel(line) <= 1,
+                    "sub-fold at line " .. line
+                )
+            end
+
+            -- The whole body is a single fold: closing inside a function body
+            -- collapses the entire diff, not just that function.
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd((body_start + 1) .. "foldclose")
+            end)
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+            assert.equal(body_start, vim.fn.foldclosed(body_end))
+            -- The concealed delimiter stays outside the fold.
+            assert.equal(-1, vim.fn.foldclosed(fence))
+        end)
+
+        it("leaves an applied edit diff foldable but open", function()
+            writer:write_tool_call_block({
+                tool_call_id = "diff-open",
+                status = "completed",
+                kind = "create",
+                argument = "/tmp/agentic_difffold_open.lua",
+                diff = { old = {}, new = diff_new },
+            })
+
+            local body_start = difffold_fence_line() + 1
+            wait_folded(body_start)
+            -- Foldable (level 1) but open by default — no auto-close for a
+            -- non-failed edit, so `zc` works but nothing is collapsed.
+            assert.equal(1, vim.fn.foldlevel(body_start))
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+        end)
+
+        it("keeps the diff foldable-but-open and shows the reason when the edit fails", function()
+            writer:write_tool_call_block({
+                tool_call_id = "diff-fail",
+                status = "failed",
+                kind = "edit",
+                argument = "/tmp/agentic_difffold_fail.lua",
+                diff = { old = { "stub" }, new = diff_new },
+                failure_reason = { "User refused permission to run tool" },
+            })
+
+            local fence = difffold_fence_line()
+            assert.is_not_nil(fence)
+            local body_start = fence + 1
+            wait_folded(body_start)
+            -- Foldable (level 1) but never auto-closed, even on failure.
+            assert.equal(1, vim.fn.foldlevel(body_start))
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+
+            -- The reason renders below the diff, not in place of it.
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local reason_line
+            for i, line in ipairs(lines) do
+                if line == "User refused permission to run tool" then
+                    reason_line = i
+                end
+            end
+            assert.is_not_nil(reason_line)
+        end)
+
+        it("keeps the diff open and appends the reason on the in_progress→failed transition", function()
+            writer:write_tool_call_block({
+                tool_call_id = "diff-trans",
+                status = "in_progress",
+                kind = "edit",
+                argument = "/tmp/agentic_difffold_trans.lua",
+                diff = { old = { "stub" }, new = diff_new },
+            })
+            -- Open while in progress.
+            assert.equal(-1, vim.fn.foldclosed(difffold_fence_line() + 1))
+
+            writer:update_tool_call_block({
+                tool_call_id = "diff-trans",
+                status = "failed",
+                failure_reason = { "Load /coding skill first." },
+            })
+
+            local fence = difffold_fence_line()
+            assert.is_not_nil(fence)
+            wait_folded(fence + 1)
+            -- Still open after the transition — failure no longer auto-closes.
+            assert.equal(-1, vim.fn.foldclosed(fence + 1))
+
+            -- The diff was not discarded: its content survives the transition,
+            -- and the reason is appended beneath it.
+            local text =
+                table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+            assert.is_not_nil(text:find("local function foo()", 1, true))
+            assert.is_not_nil(text:find("Load /coding skill first.", 1, true))
+        end)
+
+        it("does not orphan diff highlights past the block on the failed transition", function()
+            -- Block is the LAST thing in the buffer (the live mid-turn case).
+            -- The failed re-render replaces block lines via set_lines; DIFF_ADD
+            -- line_hl_group extmarks migrate to EOF, past the pre-edit range, so
+            -- a clear after set_lines misses them and a diff-bg highlight bleeds
+            -- onto the trailing blank line. Clearing before set_lines fixes it.
+            writer:write_message(make_message_update("intro prose line"))
+            writer:write_tool_call_block({
+                tool_call_id = "diff-orphan",
+                status = "in_progress",
+                kind = "create",
+                argument = "/tmp/agentic_difffold_orphan.lua",
+                diff = { old = {}, new = diff_new },
+            })
+            writer:update_tool_call_block({
+                tool_call_id = "diff-orphan",
+                status = "failed",
+                failure_reason = { "short" },
+            })
+            -- No wait: the orphaned marks are the OLD highlights that survive
+            -- the synchronous clear+set_lines. The re-applied (correct) marks
+            -- land later via vim.schedule, but the bug is detectable now.
+
+            -- The diff body ends at the last added line; nothing below it
+            -- (reason fence, footer, trailing blank) may carry a diff highlight.
+            local last_diff_row
+            for i, l in
+                ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+            do
+                if l == "end" then
+                    last_diff_row = i - 1 -- 0-indexed; last added diff line
+                end
+            end
+            assert.is_not_nil(last_diff_row)
+
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DIFF_HIGHLIGHTS,
+                0,
+                -1,
+                {}
+            )
+            for _, m in ipairs(marks) do
+                assert.is_true(
+                    m[2] <= last_diff_row,
+                    "diff highlight orphaned at row " .. m[2]
+                )
+            end
+        end)
     end)
 
     describe("execute description title", function()

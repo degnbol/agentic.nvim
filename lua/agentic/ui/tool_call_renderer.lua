@@ -464,6 +464,11 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         tool_call_block.status == "failed"
         and failure_reason
         and #failure_reason > 0
+        -- Edit diffs handle their own failed case: the diff branch renders the
+        -- diff (folded closed) with the reason appended below, rather than
+        -- replacing the diff with the reason. Only non-diff kinds (execute,
+        -- read, search, fetch) use this reason-only path.
+        and not tool_call_block.diff
     then
         local fence = safe_fence(failure_reason)
         -- 0 means "never fold" (matches the success path).
@@ -602,12 +607,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             tool_call_block.cached_diff_blocks = diff_blocks
         end
 
-        -- The folds query keys on a `-fold` info-string suffix the writer
-        -- adds to mark foldable bodies. Diff fences are never folded, but the
-        -- inferred language is `lang_map[ext] or ext` (theme.lua), so a file
-        -- named `foo.x-fold` would otherwise emit a fence ending in `-fold`
-        -- and fold a diff the user needs to see. Strip the suffix so the
-        -- `-fold$` predicate cannot collide with a diff fence.
+        -- `lang` (inferred from the path) only decides markdown prose-wrapping
+        -- now; it is NOT the fence injection language. Strip any path-induced
+        -- `-fold` suffix (a file named `foo.x-fold`) so `wrap_diff_prose` keys
+        -- on the real language.
         local lang = Theme.get_language_from_path(argument):gsub("%-fold$", "")
         local wrap_diff_prose = lang == "markdown"
 
@@ -617,7 +620,14 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             vim.list_extend(fence_content, block.new_lines)
         end
         local fence = safe_fence(fence_content)
-        table.insert(lines, fence .. lang)
+        -- The `-difffold` marker makes the whole diff body foldable as ONE
+        -- block (folds.scm matches `fold$`) while suppressing language
+        -- injection (injections.scm excludes `difffold$`) — without it the
+        -- injected language's folds.scm shatters the diff into per-structure
+        -- sub-folds. Highlighting comes from block_col_hl extmarks instead.
+        -- The diff is foldable but always open by default (never auto-closed,
+        -- including on failure).
+        table.insert(lines, fence .. lang .. "-difffold")
 
         -- Load the target file buffer to enable context-aware syntax
         -- highlighting. The chat buffer's fence injection only sees the diff
@@ -923,6 +933,27 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         end
 
         table.insert(lines, fence)
+
+        -- A failed edit keeps the diff (open) and appends the reason beneath
+        -- it, so the user sees both what was attempted and why it failed. The
+        -- reason (rejection, hook denial, old_string-not-found) is short and
+        -- non-execute, so it gets the red ERROR_BODY highlight; the console
+        -- fence prevents markdown parsing of `--`/`*`.
+        if
+            tool_call_block.status == "failed"
+            and failure_reason
+            and #failure_reason > 0
+        then
+            local reason_fence = safe_fence(failure_reason)
+            table.insert(lines, reason_fence .. "console")
+            for _, reason_line in ipairs(failure_reason) do
+                table.insert(lines, reason_line)
+                --- @type agentic.ui.MessageWriter.HighlightRange
+                local range = { type = "error", line_index = #lines - 1 }
+                table.insert(highlight_ranges, range)
+            end
+            table.insert(lines, reason_fence)
+        end
     elseif kind == "fetch" or kind == "WebSearch" or kind == "SubAgent" then
         if tool_call_block.body then
             -- Fetch/WebSearch/SubAgent body is informational text the agent

@@ -206,11 +206,13 @@ local function show_layout(params, position)
         foldmethod = "expr",
         foldexpr = "v:lua.vim.treesitter.foldexpr()",
         foldenable = true,
-        -- foldlevel is intentionally NOT set here. The window inherits the
-        -- global (99) so nothing auto-closes: injected-language folds and our
-        -- own `*-fold` blocks both default open, and the writer closes only its
-        -- own blocks imperatively via :foldclose. A per-window foldlevel = 0
-        -- would close every injected fold too, hiding commands/diffs.
+        -- Set foldlevel high so nothing auto-closes: injected-language folds
+        -- and our own `*-fold` blocks both default open, and the writer closes
+        -- only its own blocks imperatively via :foldclose. This must be set
+        -- explicitly — a new window inherits window-local foldlevel from the
+        -- window it splits off, NOT the global default, so opening Agentic from
+        -- a window with a low foldlevel would otherwise collapse every block.
+        foldlevel = 99,
         foldminlines = 0,
         foldcolumn = "0",
         conceallevel = 2,

@@ -1109,8 +1109,13 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
     self:_with_modifiable_suppressed(function(bufnr)
         -- Diff blocks don't change after the initial render
-        -- only update status highlights - don't replace content
-        if already_has_diff then
+        -- only update status highlights - don't replace content.
+        -- Exception: the transition to `failed` re-renders so the failure
+        -- reason renders below the (open) diff (tool_call_renderer diff
+        -- branch). Re-extraction is safe — a failed file-mutating tool never
+        -- applied its change, so the file is unchanged and reproduces the
+        -- same diff.
+        if already_has_diff and tracker.status ~= "failed" then
             if old_end_row > vim.api.nvim_buf_line_count(bufnr) then
                 Logger.notify(
                     string.format(
@@ -1159,6 +1164,21 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         )
         Renderer.clear_status_namespace(bufnr, start_row, old_end_row)
 
+        -- Clear diff highlights BEFORE set_lines. `line_hl_group` (DIFF_ADD/
+        -- DIFF_DELETE) extmarks migrate to the edge of the replaced range when
+        -- set_lines runs — to EOF when the block is the last thing in the
+        -- buffer. A clear afterwards using the pre-edit range then misses the
+        -- migrated marks, leaving an orphaned diff-bg highlight on a line
+        -- outside the block. The re-render only runs for diffs on the failed
+        -- transition, which is why this only bit failed edits.
+        pcall(
+            vim.api.nvim_buf_clear_namespace,
+            bufnr,
+            Renderer.NS_DIFF_HIGHLIGHTS,
+            start_row,
+            old_end_row + 1
+        )
+
         vim.api.nvim_buf_set_lines(
             bufnr,
             start_row,
@@ -1196,14 +1216,6 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 self:_release_prose_pin()
             end
         end
-
-        pcall(
-            vim.api.nvim_buf_clear_namespace,
-            bufnr,
-            Renderer.NS_DIFF_HIGHLIGHTS,
-            start_row,
-            old_end_row + 1
-        )
 
         vim.schedule(function()
             if vim.api.nvim_buf_is_valid(bufnr) then

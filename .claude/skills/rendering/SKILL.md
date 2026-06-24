@@ -59,14 +59,19 @@ close. The info-string after the fence is set per kind:
 | Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | claude-agent-acp pre-wraps in its own console fence; `prepare_block_lines` unwraps an already-fenced execute body before re-wrapping. See acp skill § "Execute tool call rendering" |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent body | `markdown-fold` (multi-line) or `markdown` | Always folded + dimmed (sidecar) when multi-line; dim via `set_dim_range` (`AgenticDimmedBlock`) |
-| Diff content (edit/write/create) | language inferred from path, `-fold` suffix stripped | Never folded, never dimmed |
-| Failure reason | `console` | Replaces kind-specific body when `status == "failed"` |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block, open by default and never auto-closed (including on failure). No language injection (see below); highlighting via `block_col_hl` extmarks. `lang` now only drives markdown prose-wrapping |
+| Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (open) and append the reason beneath it |
 
-**The `-fold` suffix on the info-string is the fold signal.** It is appended
-in the writer (`prepare_block_lines`) when a body exceeds its per-kind
-threshold; `folds.scm` matches `%-fold$` on the language; `injections.scm`
-strips the suffix before resolving the injected parser so sidecar markdown
-still highlights correctly.
+**A `fold$`-suffixed info-string is the fold signal.** Two variants:
+`<lang>-fold` (sidecar bodies — appended by `prepare_block_lines` when a body
+exceeds its per-kind threshold) and `<lang>-difffold` (every edit diff).
+`folds.scm` matches `fold$` on the language. `injections.scm` strips a trailing
+`-fold` before resolving the injected parser (so sidecar markdown still
+highlights) but **excludes `difffold$` from injection entirely** — injecting the
+diff's base language ships its `folds.scm`, whose per-structure folds would
+shatter the diff into one fold per function/block. With no injection the diff
+folds as one block; its syntax colour comes from `block_col_hl` extmarks
+(`build_highlight_map`), which already override the injection at priority 200.
 
 **Downstream fence consumers must handle variable width.** Match `^\`+$`
 (any backtick-only line) instead of literal triple-backticks, and
@@ -75,8 +80,9 @@ existing pattern.
 
 ## Body folding
 
-The `-fold` suffix on `code_fence_content`'s parent fence is the only fold
-trigger. Mechanism is split across three files; read them in this order
+A `fold$`-suffixed info-string on `code_fence_content`'s parent fence is the
+only fold trigger (`<lang>-fold` for sidecar bodies, `<lang>-difffold` for edit
+diffs). Mechanism is split across three files; read them in this order
 when changing fold behaviour:
 
 1. `queries/agentic/folds.scm` — folds `code_fence_content`, not the whole
@@ -103,8 +109,10 @@ Adding a new foldable kind:
 2. Return the correct `fold_anchor` (offset within the returned `lines` to
    the first body line — the line *inside* the fold, not the fence
    delimiter).
-3. No changes needed to `folds.scm` or `injections.scm` — they match on
-   the `-fold` suffix generically.
+3. No changes needed to `folds.scm` or `injections.scm` — they match the
+   `fold$` suffix generically (use `<lang>-fold` to fold *and* inject the base
+   language; the `difffold` marker is the special case that suppresses
+   injection).
 
 ## Search match highlighting
 
