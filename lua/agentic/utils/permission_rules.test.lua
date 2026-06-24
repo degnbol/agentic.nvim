@@ -1227,17 +1227,16 @@ describe("PermissionRules", function()
         }
 
         describe("bails on substitution in non-recursed positions", function()
-            -- Bare `$(...)` in argument / for-list position is recursed (see
-            -- the "#4 argument-position substitution" block below). These
+            -- Bare `$(...)` (argument / for-list) and quoted `"$(...)"`
+            -- (#4b — see the dedicated blocks below) are recursed. These
             -- remaining positions either hide the substitution from the matcher
             -- or splice its output somewhere the dynamic-token machinery cannot
-            -- guard, so they still bail: substitution as the command name,
-            -- inside a string or concatenation, as a redirect target, in a
-            -- here-string, or in a command-prefix assignment value.
+            -- guard, so they still bail: substitution as the command name, in a
+            -- concatenation, as a redirect target, in a here-string, or in a
+            -- command-prefix assignment value.
             for _, cmd in ipairs({
                 "$(echo rm) -rf /",
                 "$(rm -rf /)",
-                'echo "$(rm -rf x)"',
                 "echo a$(whoami)b",
                 "ec$(echo ho) hi",
                 "cat > $(echo out)",
@@ -1673,6 +1672,50 @@ describe("PermissionRules", function()
             it("rejects a for-loop over a substitution with disallowed inner", function()
                 assert.is_false(
                     decide("for f in $(nope); do cat \"$f\"; done", ALLOW_CAT_LS)
+                )
+            end)
+        end)
+
+        -- #4b: a quoted `"$(cmd)"` argument is unwrapped to its inner
+        -- substitution and walked like the bare `$(cmd)` form — inner must
+        -- approve standalone, output splices as a dynamic token. Only a `string`
+        -- whose single named child is the substitution qualifies; concatenation
+        -- and multi-child strings stay bailed.
+        describe("#4b quoted command substitution", function()
+            local ALLOW_CAT_LS = {
+                allow = {
+                    "Bash(cat *)",
+                    "Bash(cat)",
+                    "Bash(ls *)",
+                    "Bash(ls)",
+                    "Bash(echo *)",
+                    "Bash(echo)",
+                },
+            }
+
+            it("approves cat \"$(ls)\" — the gate-free flip", function()
+                assert.is_true(decide('cat "$(ls)"', ALLOW_CAT_LS))
+            end)
+
+            it("rejects cat \"$(nope)\" — inner command not allowed", function()
+                assert.is_false(decide('cat "$(nope)"', ALLOW_CAT_LS))
+            end)
+
+            it("rejects cat \"$(ls > out)\" — inner write redirect fires", function()
+                assert.is_false(decide('cat "$(ls > out)"', ALLOW_CAT_LS))
+            end)
+
+            it("rejects cat \"pre$(ls)\" — concatenation has 2 named children", function()
+                assert.is_false(decide('cat "pre$(ls)"', ALLOW_CAT_LS))
+            end)
+
+            it("approves cat \"$(echo $(ls))\" — nested inner recurses", function()
+                assert.is_true(decide('cat "$(echo $(ls))"', ALLOW_CAT_LS))
+            end)
+
+            it("prompts on find \"$(echo -exec rm)\" — dynamic token wildcards find's -exec deny", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('find "$(echo -exec rm)"')
                 )
             end)
         end)
@@ -2355,7 +2398,12 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("prompts on base=/safe; find \"$(echo x)\" (quoted command sub bails)", function()
+            -- Post-#4b the quoted `"$(echo x)"` is walked and spliced as a
+            -- dynamic token; it prompts because that token wildcard-fires find's
+            -- `-exec` deny (the gate wildcard), not because the substitution
+            -- bails. The bare `find $(echo x)` already prompts the same way, so
+            -- #4b never flipped this boolean.
+            it("prompts on base=/safe; find \"$(echo x)\" (dynamic token wildcards find's -exec deny)", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve('base=/safe; find "$(echo x)"')
                 )

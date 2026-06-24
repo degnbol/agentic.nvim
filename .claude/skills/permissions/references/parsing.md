@@ -126,14 +126,18 @@ nested block.
    A bare `command_substitution` (`$(…)` / backticks) in **argument**,
    **for-list**, or **assignment-value/array-element** position recurses
    through `walk_substitution_inner`: its inner commands must approve
-   standalone (so `f=$(rm x)` and `cat $(rm x)` bail — `rm` not allowed). In
-   argument and for-list position the output is then spliced in as a *dynamic
-   token*, so a gated outer command still prompts — `find . $(echo -exec rm)`
-   approves the inner `echo` but the dynamic token wildcard-fires find's
-   `-exec` gate. Still bails (output is a control surface the dynamic-token
-   machinery can't guard): substitution as the command name (`$(echo rm) x`),
-   string-embedded or concatenated (`"$(…)"`, `a$(b)c`), process substitution
-   (`<(…)`), case value/pattern, and redirect target (`cat > $(echo f)`).
+   standalone (so `f=$(rm x)` and `cat $(rm x)` bail — `rm` not allowed). A
+   quoted `"$(…)"` in **argument** position (a `string` whose single named child
+   is the substitution) is unwrapped to that inner and walked the same way (#4b
+   — `cat "$(ls)"` approves). In argument and for-list position the output is
+   then spliced in as a *dynamic token*, so a gated outer command still prompts
+   — `find . $(echo -exec rm)` and `find "$(echo -exec rm)"` approve the inner
+   `echo` but the dynamic token wildcard-fires find's `-exec` gate. Still bails
+   (output is a control surface the dynamic-token machinery can't guard):
+   substitution as the command name (`$(echo rm) x`), concatenation
+   (`a$(b)c`, `"pre$(…)"`) or a multi-expansion quoted string (`"$a$b"`),
+   process substitution (`<(…)`), case value/pattern, a quoted `"$(…)"` for-list
+   item, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
    FD duplication (`2>&1`) are safe; any other file redirect bails. Env
    prefixes that hijack execution (`PATH=`, `LD_*`, `BASH_ENV`) bail.

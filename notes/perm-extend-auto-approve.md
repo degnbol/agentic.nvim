@@ -16,7 +16,7 @@ leaf is checked* against deny/ask.
 
 Build order: **#3, #4, #5, #6** (preserve the invariant, no new config, broad
 benefit; all done), **#7** (same tier — quoted-`"$var"` resolution, done) →
-**#4b** (quoted `"$(cmd)"`, same tier, todo — see end of #4) →
+**#4b** (quoted `"$(cmd)"`, same tier, done — see end of #4) →
 **#1** (off by default, narrow) → **#2** (parked, see end).
 
 A named `function_definition` already auto-approves *as a definition* (body not
@@ -77,26 +77,49 @@ command approves.
 `ls $var` and `ls $(...)` become identical *from the outside* (opaque dynamic
 token); they differ only *inside* (the substitution has inner code to vet).
 
-**Follow-on (#4b, todo) — quoted command substitution `"$(cmd)"`.** Only the
-*bare* `$(…)` argument is walked (line ~905 branch); a quoted `"$(cmd)"` is a
-`string` node, falls to the generic arg branch, and bails on
-`subtree_has_substitution`. So `ls $(git rev-parse --show-toplevel)` approves but
-`ls "$(git rev-parse --show-toplevel)"` prompts — the same backwardness #7 fixes
-for `"$var"`, still present for `"$(cmd)"`. Not a `resolved_var_name` change (that
-returns a *literal*); this needs #4's machinery — extend the line-905
-`command_substitution` branch to also peek into a single-named-child `string`,
-run `walk_substitution_inner`, and push a dynamic token. Mirror in
-`command_known_safe`.
+**Follow-on (#4b, done) — quoted command substitution `"$(cmd)"`.** A quoted
+`"$(cmd)"` parses as `command > string > command_substitution`, so before #4b the
+`string` landed in the `child:named()` arg branch and `subtree_has_substitution`
+bailed — `ls $(git rev-parse --show-toplevel)` approved but
+`ls "$(git rev-parse --show-toplevel)"` prompted, the same backwardness #7 fixed
+for `"$var"`. Not a `resolved_var_name` change (that returns a *literal*); it
+needs #4's machinery. Scope: command-**argument** position only; a quoted
+for-list item (`for f in "$(ls)"`) stays bailed — extend if a case appears.
 
-**Stays bailed** (output becomes a control surface the dynamic-token machinery
-can't guard):
-- **command-name** `$(echo rm) x` — output *is* the binary (`DYNAMIC_NAME_TYPES`).
-- **redirect target** `cat > $(echo f)` — output *is* a write path
-  (`redirect_is_safe`).
+**Shipped.** `walk_command` (~900) and `command_known_safe` (~1504) kept two
+byte-identical arg loops differing only in the inner-substitution checker
+(`walk_substitution_inner` vs `substitution_inner_clean`). Both were extracted
+into one `extract_args(node, src, ctx, known, inner_check)` →
+`args|nil, arg_nodes, args_dynamic, name_node` (nil `args` signals bail),
+collapsing the #4/#3/#7 arg-loop mirrors so #4b is a single-site edit (the
+divergent gate/highlight tails stay in each caller). The guard lives in
+`extract_args`'s `child:named()` branch as an `elseif` (no `goto`/`continue` in
+Lua): a `string` with `named_child_count() == 1` whose lone named child is a
+`command_substitution` recurses that inner through `inner_check` (it runs), then
+splices the inner's `$(…)` text (quote-stripped, like the bare branch) as a
+**dynamic** token. The three-part guard excludes `"pre$(cmd)"` and `"$a$b"`
+(≥2 named children) and `"${x:-$(cmd)}"` (single child is `expansion`) — all stay
+bailed via `subtree_has_substitution`. Quoting changes word-splitting
+(`"$(cmd)"` one term vs `$(cmd)` zero-or-many) but the spliced content is unknown
+either way, so the dynamic-token wildcarding gives the identical safety outcome.
 
-**Touches.** `walk_command`, `walk_for`, `literal_token` (signal "recurse" for a
-`command_substitution` arg child rather than returning nil). Mirror in
-`command_known_safe` / `tally_for` for the highlight pass.
+Stays bailed regardless: command-name `$(echo rm) x` (output is the binary),
+redirect target `cat > "$(echo f)"` (the `string` sits under `file_redirect`,
+never reaches the arg loop).
+
+**Tests** (`permission_rules.test.lua`, "#4b quoted command substitution"):
+`cat "$(ls)"` → approve (the gate-free flip), `cat "$(nope)"` → prompt,
+`cat "$(ls > out)"` → prompt, `cat "pre$(ls)"` → prompt (guard boundary),
+`cat "$(echo $(ls))"` → approve (nested), `find "$(echo -exec rm)"` → prompt
+(dynamic token wildcards find's `-exec` deny). `echo "$(rm -rf x)"` was dropped
+from the non-recursed-bail list (now a recursed position). The #7
+`find "$(echo x)"` assertion was kept with a relabelled rationale (post-#4b it
+prompts on the gate wildcard, not the substitution bail).
+
+**Docs updated:** `extract_args`/`walk_substitution_inner` docstrings, permissions
+SKILL dynamic-expansion bullet, `references/parsing.md` recurse/bail lists. The
+`resolved_var_name` docstring keeps `"$(cmd)"` in its excluded list (correct for
+that helper — it resolves a literal name, not the substitution).
 
 ---
 
@@ -390,7 +413,10 @@ dynamic-expansion limitation bullet. Tally mirror automatic.
   named child is `expansion_default`, not `simple_variable_name`). Locks the
   non-resolution boundary against a future loosening of the guard.
 - `base=/safe; find "$(echo x)"` → **prompt** (quoted command sub bails on
-  `subtree_has_substitution`; also pins #4b from silently leaking in).
+  `subtree_has_substitution`). Note: this is **not** a #4b tripwire — the bare
+  `find $(echo x)` already prompts via find's `-exec` deny (verified), so #4b
+  won't flip this boolean; post-#4b it prompts on the gate wildcard instead of
+  the bail. The genuine #4b witness is a gate-free command (`cat "$(ls)"`).
 
 **Optional follow-on (parked) — relax `is_safe_literal` for the quoted
 channel.** Because quoting suppresses splitting and globbing, a quoted `"$base"`

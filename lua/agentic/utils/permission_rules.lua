@@ -875,21 +875,29 @@ local walk
 --- @type fun(subst: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
 local walk_substitution_inner
 
---- Walk a `command`: validate the name and each argument by position
---- (substitution is recursed in argument position, bailed elsewhere), validate
---- env-prefix assignments, then combine the glob
---- and structured layers (composition rule in the `permissions` project skill).
---- `known` (optional) is the #3 constant environment of the enclosing sequence;
---- a bare `$name` bound in it resolves to its literal and becomes a static token.
---- `funcs` (optional) is the #6 set of function names defined and body-walked
---- clean earlier in the sequence; a call to one approves regardless of its args.
+--- Extract a `command` node's argument tokens — shared by `walk_command` (the
+--- mode-gated decision) and `command_known_safe` (the highlight tally), which
+--- differ only in how an inner command substitution is vetted, passed in as
+--- `inner_check`. Returns the parallel `args`/`arg_nodes`/`args_dynamic` streams
+--- plus the `command_name` node. `args` is nil on any structural bail (an
+--- env-hijack prefix, an unhandled substitution, an unextractable token).
+---
+--- A bare `$(…)` argument and a quoted `"$(…)"` (#4b: a `string` whose single
+--- named child is a `command_substitution`) both vet their inner via
+--- `inner_check` (it runs) and splice the inner's `$(…)` text as a dynamic
+--- token, so a gated outer command still prompts. Other substitution-bearing
+--- arguments (concatenation `a$(b)c`, process substitution `<(…)`, a multi-child
+--- quoted string) bail.
 --- @param node TSNode
 --- @param src string
---- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param ctx any walk or tally ctx — only threaded through to `inner_check`
 --- @param known table<string, string>|nil
---- @param funcs table<string, boolean>|nil
---- @return boolean
-local function walk_command(node, src, ctx, known, funcs)
+--- @param inner_check fun(subst: TSNode, src: string, ctx: any): boolean
+--- @return string[]|nil args
+--- @return TSNode[]|nil arg_nodes
+--- @return boolean[]|nil args_dynamic
+--- @return TSNode|nil name_node
+local function extract_args(node, src, ctx, known, inner_check)
     local name_node
     --- @type string[]
     local args = {}
@@ -908,19 +916,19 @@ local function walk_command(node, src, ctx, known, funcs)
                 not safe_assignment_name(child, src)
                 or subtree_has_substitution(child)
             then
-                return false
+                return nil
             end
         elseif t == "command_name" then
             -- A substitution-bearing name is dynamic; command_name_text returns
-            -- nil for it below and we bail.
+            -- nil for it at the call site and we bail.
             name_node = child
         elseif t == "command_substitution" then
             -- A bare `$(...)` argument: vet the inner command (it runs), then
             -- splice its output into the arg stream as a dynamic token. The
             -- dynamic flag makes the structured layer wildcard deny/ask, so a
             -- payload like `find . $(echo -exec rm)` still prompts.
-            if not walk_substitution_inner(child, src, ctx) then
-                return false
+            if not inner_check(child, src, ctx) then
+                return nil
             end
             table.insert(args, vim.treesitter.get_node_text(child, src))
             table.insert(arg_nodes, child)
@@ -937,22 +945,62 @@ local function walk_command(node, src, ctx, known, funcs)
                 table.insert(args, lit)
                 table.insert(arg_nodes, child)
                 table.insert(args_dynamic, false)
+            elseif
+                child:type() == "string"
+                and child:named_child_count() == 1
+                and child:named_child(0):type() == "command_substitution"
+            then
+                -- #4b: a quoted `"$(cmd)"`. Like the bare form, vet the inner (it
+                -- runs) and splice the inner's `$(…)` text as a dynamic token.
+                -- Quoting suppresses word-splitting (one term vs zero-or-many),
+                -- but the spliced token is unknown content either way, so the
+                -- dynamic-token wildcarding gives the identical safety outcome.
+                local inner = child:named_child(0) --[[@as TSNode]]
+                if not inner_check(inner, src, ctx) then
+                    return nil
+                end
+                table.insert(args, vim.treesitter.get_node_text(inner, src))
+                table.insert(arg_nodes, child)
+                table.insert(args_dynamic, true)
             else
-                -- Any other substitution-bearing argument (string-embedded
-                -- `"$(…)"`, concatenation `a$(b)c`, process substitution `<(…)`)
-                -- is not handled by the dynamic-token machinery — bail.
+                -- Any other substitution-bearing argument (concatenation
+                -- `a$(b)c`, process substitution `<(…)`, a multi-child quoted
+                -- string) is not handled by the dynamic-token machinery — bail.
                 if subtree_has_substitution(child) then
-                    return false
+                    return nil
                 end
                 local tok = literal_token(child, src)
                 if tok == nil then
-                    return false
+                    return nil
                 end
                 table.insert(args, tok)
                 table.insert(arg_nodes, child)
                 table.insert(args_dynamic, token_is_dynamic(child))
             end
         end
+    end
+    return args, arg_nodes, args_dynamic, name_node
+end
+
+--- Walk a `command`: validate the name and each argument by position
+--- (substitution is recursed in argument position, bailed elsewhere), validate
+--- env-prefix assignments, then combine the glob
+--- and structured layers (composition rule in the `permissions` project skill).
+--- `known` (optional) is the #3 constant environment of the enclosing sequence;
+--- a bare `$name` bound in it resolves to its literal and becomes a static token.
+--- `funcs` (optional) is the #6 set of function names defined and body-walked
+--- clean earlier in the sequence; a call to one approves regardless of its args.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param known table<string, string>|nil
+--- @param funcs table<string, boolean>|nil
+--- @return boolean
+local function walk_command(node, src, ctx, known, funcs)
+    local args, arg_nodes, args_dynamic, name_node =
+        extract_args(node, src, ctx, known, walk_substitution_inner)
+    if not args then
+        return false
     end
 
     if not name_node then
@@ -1140,9 +1188,11 @@ end
 --- matcher. In assignment position the output is captured into a variable
 --- (expansion deferred to a later use the matcher already cannot see through);
 --- in argument / for-list position the caller marks the spliced token dynamic,
---- so the structured layer wildcards deny/ask over it. The non-bare forms
---- (string-embedded `"$(…)"`, concatenation, process substitution) are bailed
---- by `subtree_has_substitution` at the call site before reaching here.
+--- so the structured layer wildcards deny/ask over it. A single-child quoted
+--- `"$(…)"` argument (#4b) is unwrapped to its inner `command_substitution` and
+--- passed here too. The remaining non-bare forms (concatenation `a$(b)c`,
+--- process substitution `<(…)`, a multi-child quoted string) are bailed by
+--- `subtree_has_substitution` at the call site before reaching here.
 --- @param subst TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
@@ -1494,55 +1544,10 @@ end
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
 local function command_known_safe(node, src, ctx, known, funcs)
-    local name_node
-    --- @type string[]
-    local args = {}
-    --- @type TSNode[]
-    local arg_nodes = {}
-    --- @type boolean[]
-    local args_dynamic = {}
-    for child in node:iter_children() do
-        local t = child:type()
-        if t == "variable_assignment" then
-            if
-                not safe_assignment_name(child, src)
-                or subtree_has_substitution(child)
-            then
-                return false
-            end
-        elseif t == "command_name" then
-            name_node = child
-        elseif t == "command_substitution" then
-            -- Mirror walk_command: a bare `$(...)` arg is known-safe only if its
-            -- inner tallies clean; then treat its output as a dynamic token.
-            if not substitution_inner_clean(child, src, ctx) then
-                return false
-            end
-            table.insert(args, vim.treesitter.get_node_text(child, src))
-            table.insert(arg_nodes, child)
-            table.insert(args_dynamic, true)
-        elseif child:named() then
-            -- Mirror walk_command's #3 resolution so a command whose only
-            -- "unapproved" token is a resolved benign `$var` is not highlighted.
-            local kname = known and resolved_var_name(child, src)
-            local lit = kname and known and known[kname] or nil
-            if lit ~= nil then
-                table.insert(args, lit)
-                table.insert(arg_nodes, child)
-                table.insert(args_dynamic, false)
-            else
-                if subtree_has_substitution(child) then
-                    return false
-                end
-                local tok = literal_token(child, src)
-                if tok == nil then
-                    return false
-                end
-                table.insert(args, tok)
-                table.insert(arg_nodes, child)
-                table.insert(args_dynamic, token_is_dynamic(child))
-            end
-        end
+    local args, arg_nodes, args_dynamic, name_node =
+        extract_args(node, src, ctx, known, substitution_inner_clean)
+    if not args then
+        return false
     end
 
     if not name_node then
