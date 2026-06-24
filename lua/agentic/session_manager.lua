@@ -21,6 +21,18 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 --- @class agentic._SessionManagerPrivate
 local P = {}
 
+-- Prepended to the first prompt after an ACP session/load resume. The SDK
+-- strips the isMeta SKILL.md bodies on resume but keeps the Skill tool-call
+-- shells, so the model wrongly believes loaded skills are still in context.
+-- This counters that belief. See .claude/skills/acp/references/claude-agent.md
+-- § "Skills do not survive session resume".
+local RESUME_NOTICE = table.concat({
+    "This session was resumed. Skill content loaded before the resume is **no",
+    "longer in your context**, even though the prior `Skill` tool calls are still",
+    "visible above. Do not treat those calls as evidence a skill is loaded;",
+    "re-invoke any skill before relying on its guidance.",
+}, " ")
+
 --- Tool call kinds that mutate files on disk.
 --- When these complete, buffers must be reloaded via checktime.
 local FILE_MUTATING_KINDS = {
@@ -78,6 +90,7 @@ end
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
+--- @field _resume_notice_pending? boolean Prepend the resume skill-loss notice to the next prompt
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _pending_load_cwd? string CWD for the deferred session/load
@@ -1489,6 +1502,15 @@ function SessionManager:_handle_input_submit_inner(input_text)
         text = input_text,
     })
 
+    -- Neutralize the false "skills still loaded" belief on the first prompt
+    -- after a resume. Prepended (position 1) so it stays before input_text —
+    -- the SDK reads slash commands from the last text block, so a trailing
+    -- notice would shadow /compact etc.
+    if self._resume_notice_pending then
+        self._resume_notice_pending = false
+        table.insert(prompt, 1, { type = "text", text = RESUME_NOTICE })
+    end
+
     table.insert(message_lines, "\n---\n")
 
     local user_message = ACPPayloads.generate_user_message(message_lines)
@@ -1840,6 +1862,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 end
 
                 self._restoring = false
+                self._resume_notice_pending = true
                 self.status_animation:stop()
 
                 -- Restore title from local history (ACP doesn't return it)
