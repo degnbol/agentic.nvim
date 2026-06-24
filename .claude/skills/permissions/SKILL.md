@@ -171,9 +171,10 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
 - **Dynamic expansion** at a gated command prompts rather than launders
   (a dynamic token wildcards deny/ask — see above), so `find . $f` and
   `f=$(…); find . $f` escalate. The exception: a `$var` resolving to a literal
-  bound earlier in the same straight-line sequence is matched as that literal
-  (`f=/safe; find $f` approves, `f=--exec; find $f` denies — mechanism in
-  [references/parsing.md](references/parsing.md)). An intervening control-flow
+  bound earlier in the same straight-line sequence is matched as that literal —
+  bare or single-word quoted (`f=/safe; find $f` and `find "$f"` approve,
+  `f=--exec; find $f` denies; concatenation `"$f/x"` and `"$(cmd)"` stay dynamic
+  — mechanism in [references/parsing.md](references/parsing.md)). An intervening control-flow
   sibling keeps the binding unless it actually rebinds the name
   (`f=/safe; if c; then :; fi; find $f` approves; `…; then f=/danger; fi; …`
   prompts). A multi-word / glob / substitution value, or a binding rebound by an

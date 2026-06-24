@@ -55,13 +55,15 @@ auto-approve something the gates would otherwise catch. So a token's concrete
 value is resolved wherever it provably can be, and falls back to a conservative
 "could be anything" otherwise.
 
-**Resolved** — a literal, or a bare `$name`/`${name}` bound to a *splitting-proof*
-literal (`is_safe_literal` — no IFS whitespace, glob/brace/tilde, or expansion
-trigger) earlier in the same straight-line sequence. `walk_sequence`/
-`tally_sequence` thread a per-sequence `known` environment left to right;
-`resolved_var_name` accepts only a lone `simple_variable_name`, so `$f[1]`,
-`${f:-x}`, and `"$f"` are excluded. The resolved value feeds the same gates, so
-`f=/safe; find $f` approves while `f=--exec; find $f` denies.
+**Resolved** — a literal, or a `$name`/`${name}` (bare or its single-word quoted
+form `"$name"`/`"${name}"`) bound to a *splitting-proof* literal (`is_safe_literal`
+— no IFS whitespace, glob/brace/tilde, or expansion trigger) earlier in the same
+straight-line sequence. `walk_sequence`/`tally_sequence` thread a per-sequence
+`known` environment left to right; `resolved_var_name` accepts only a lone
+`simple_variable_name` (recursing through a single-child `string` for the quoted
+form), so `$f[1]`, `${f:-x}`, concatenation `"$f/x"`, and `"$(cmd)"` are excluded.
+The resolved value feeds the same gates, so `f=/safe; find $f` and
+`find "$f"` approve while `f=--exec; find $f` denies.
 
 **Dynamic** — anything unresolvable: an unbound `$var`, an unquoted glob (`~` is
 exempt — it only yields a path, never a flag/subcommand), or substitution

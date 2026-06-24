@@ -15,7 +15,9 @@ it may change *what a token is* or *which leaves are walked*, never *whether a
 leaf is checked* against deny/ask.
 
 Build order: **#3, #4, #5, #6** (preserve the invariant, no new config, broad
-benefit; all done) → **#1** (off by default, narrow) → **#2** (parked, see end).
+benefit; all done), **#7** (same tier — quoted-`"$var"` resolution, done) →
+**#4b** (quoted `"$(cmd)"`, same tier, todo — see end of #4) →
+**#1** (off by default, narrow) → **#2** (parked, see end).
 
 A named `function_definition` already auto-approves *as a definition* (body not
 walked — defining never runs it; an anonymous `() { … }` executes immediately
@@ -74,6 +76,17 @@ command approves.
 
 `ls $var` and `ls $(...)` become identical *from the outside* (opaque dynamic
 token); they differ only *inside* (the substitution has inner code to vet).
+
+**Follow-on (#4b, todo) — quoted command substitution `"$(cmd)"`.** Only the
+*bare* `$(…)` argument is walked (line ~905 branch); a quoted `"$(cmd)"` is a
+`string` node, falls to the generic arg branch, and bails on
+`subtree_has_substitution`. So `ls $(git rev-parse --show-toplevel)` approves but
+`ls "$(git rev-parse --show-toplevel)"` prompts — the same backwardness #7 fixes
+for `"$var"`, still present for `"$(cmd)"`. Not a `resolved_var_name` change (that
+returns a *literal*); this needs #4's machinery — extend the line-905
+`command_substitution` branch to also peek into a single-named-child `string`,
+run `walk_substitution_inner`, and push a dynamic token. Mirror in
+`command_known_safe`.
 
 **Stays bailed** (output becomes a control surface the dynamic-token machinery
 can't guard):
@@ -314,6 +327,79 @@ recursion between functions does not resolve (each body-walk starts with empty
 **Enables #2.** This is the "function-definition walking" #2 names as its
 prerequisite; with it in place, reading and walking a script *file* is the easy
 part on top.
+
+---
+
+## #7 — resolve a standalone quoted `"$var"` (done)
+
+Direct extension of #3: same `known` env, same gate evaluation, one more token
+shape recognised.
+
+**Was.** `resolved_var_name` matched only a *bare* expansion node — a
+`variable_ref` / `expansion` / `simple_expansion` whose single named child is a
+`simple_variable_name`. A double-quoted `"$base"` parses as a `string` node
+wrapping that expansion (verified: `"$base"` → `string` > one `variable_ref`;
+`"${base}"` → `string` > one `expansion`), so it falls through to the else
+branch: `literal_token` emits the raw `"$base"` text and `token_is_dynamic`
+flags it. The token goes **dynamic** and wildcard-fires any deny/ask gate at the
+command, so `base=/path; find "$base"` prompts even though the bare
+`base=/path; find $base` approves. The safer, guaranteed-single-word quoting
+form gets the *more* conservative treatment — backwards.
+
+**Change (shipped).** In `resolved_var_name`, one branch: a `string` node with
+exactly one named child recurses on that child (`return resolved_var_name(child, src)`).
+The inner `variable_ref` / `expansion` then passes the existing
+`simple_variable_name` check. The `named_child_count() == 1` guard is what
+excludes concatenation — `"pre$base"` carries a `string_content` sibling and
+`"$a$b"` a second `variable_ref`, so both have ≥2 named children and stay
+dynamic. Both call sites (the walk at ~922 and the tally mirror at ~1515)
+consume `resolved_var_name`, so walk and highlight pick up the shape
+automatically.
+
+**Why it's sound (over-prompt only; invariant held).**
+- Resolution still reads `known[kname]`, populated by `update_known` *only* from
+  pure-literal assignments passing `is_safe_literal` — so the substituted value
+  is always a splitting-proof single word, fed through the **same** deny/ask
+  gates. `base=--exec; find "$base"` still denies (symmetry with the bare
+  `f=--exec; find $f`).
+- An unbound `"$base"` (kname set, `known[kname]` nil) falls through to today's
+  dynamic path → no regression.
+- Quoting suppresses word-splitting and globbing, so the quoted form can only
+  ever yield exactly one token equal to the literal we substitute. This
+  recognises a form we currently over-prompt; it does not widen the token-count
+  surface.
+
+**Stays bailed.** Concatenation (`"$base/dist"`), multiple expansions
+(`"$a$b"`), a quoted command substitution (`"$(cmd)"` — inner child is
+`command_substitution`, not an expansion type, so the recursion returns nil),
+and any unbound var. All unchanged: dynamic → prompt.
+
+**Touches.** `resolved_var_name` in `permission_rules.lua` (one recursive
+branch, ~4 lines). No config, no new state. Update its docstring (drop "a quoted
+`"$f"`" from the excluded-forms list) + `references/parsing.md` "Token
+expansion" section (line ~64, same `"$f"` exclusion) + the `permissions` SKILL's
+dynamic-expansion limitation bullet. Tally mirror automatic.
+
+**Tests** (`permission_rules.test.lua`, "#3 constant-literal propagation"):
+- `base=/safe/dir; find "$base"` → **approve** (the recovered case).
+- `base=--exec; find "$base"` → **prompt** (deny resolves through quoting too).
+- `find "$base"` (unbound) → **prompt** (no regression).
+- `base=/safe; find "$base/x"` → **prompt** (concatenation not resolved).
+- `base=/safe; find "${base}"` → **approve** (braced quoted form).
+- `base=/safe; find "${base:-x}"` → **prompt** (richer expansion: the single
+  named child is `expansion_default`, not `simple_variable_name`). Locks the
+  non-resolution boundary against a future loosening of the guard.
+- `base=/safe; find "$(echo x)"` → **prompt** (quoted command sub bails on
+  `subtree_has_substitution`; also pins #4b from silently leaking in).
+
+**Optional follow-on (parked) — relax `is_safe_literal` for the quoted
+channel.** Because quoting suppresses splitting and globbing, a quoted `"$base"`
+could safely resolve values carrying whitespace or glob metacharacters
+(`base="my dir/*.js"` → one literal arg). That needs a second "quote-safe"
+binding tier in `known` / `update_known` (today an assignment with a space is
+never recorded) consulted only in quoted position — more machinery for a rare
+value shape. Defer until a real case appears; the change above needs none of it
+(a plain path already passes `is_safe_literal`).
 
 ---
 

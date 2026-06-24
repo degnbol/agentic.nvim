@@ -2319,6 +2319,48 @@ describe("PermissionRules", function()
                 )
             end)
 
+            it("approves base=/safe/dir; find \"$base\" (quoted reference recovered)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve('base=/safe/dir; find "$base"')
+                )
+            end)
+
+            it("approves base=/safe; find \"${base}\" (braced quoted reference)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve('base=/safe; find "${base}"')
+                )
+            end)
+
+            it("prompts on base=--exec; find \"$base\" (deny resolves through quoting)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('base=--exec; find "$base"')
+                )
+            end)
+
+            it("prompts on find \"$base\" (unbound quoted var)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('find "$base"')
+                )
+            end)
+
+            it("prompts on base=/safe; find \"$base/x\" (concatenation not resolved)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('base=/safe; find "$base/x"')
+                )
+            end)
+
+            it("prompts on base=/safe; find \"${base:-x}\" (richer expansion not resolved)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('base=/safe; find "${base:-x}"')
+                )
+            end)
+
+            it("prompts on base=/safe; find \"$(echo x)\" (quoted command sub bails)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('base=/safe; find "$(echo x)"')
+                )
+            end)
+
             it("approves d=/repo; git -C $d log (resolved option value)", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve("d=/repo; git -C $d log")

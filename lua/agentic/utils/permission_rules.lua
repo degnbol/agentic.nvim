@@ -576,10 +576,17 @@ local function is_safe_literal(lit)
     return lit ~= "" and lit:match("^[%w%-_./=:+@,]+$") ~= nil
 end
 
---- The plain scalar name behind a bare `$name` / `${name}` reference, or nil for
---- any richer form (`$f[1]`, `${f:-x}`, `${#f}`, a quoted `"$f"`, …) that #3
---- substitution must not touch. A resolvable node has exactly one named child, a
---- `simple_variable_name`.
+--- The plain scalar name behind a bare `$name` / `${name}` reference or its
+--- single-word double-quoted form `"$name"` / `"${name}"`, or nil for any richer
+--- form (`$f[1]`, `${f:-x}`, `${#f}`, concatenation `"$f/x"`, `"$(cmd)"`, …) that
+--- #3 substitution must not touch. A resolvable node has exactly one named child,
+--- a `simple_variable_name`. A `string` node wrapping a single expansion recurses
+--- on that child: quoting suppresses word-splitting and globbing, so the quoted
+--- form yields exactly the one literal we substitute. The `named_child_count == 1`
+--- guard excludes concatenation (`"pre$f"` has a `string_content` sibling, `"$a$b"`
+--- a second expansion) and quoted command substitution (the inner child is
+--- `command_substitution`, not a `simple_variable_name`, so the recursion returns
+--- nil and the form stays dynamic).
 --- @param node TSNode
 --- @param src string
 --- @return string|nil
@@ -595,6 +602,11 @@ local function resolved_var_name(node, src)
             if c and c:type() == "simple_variable_name" then
                 return vim.treesitter.get_node_text(c, src)
             end
+        end
+    elseif t == "string" and node:named_child_count() == 1 then
+        local c = node:named_child(0)
+        if c then
+            return resolved_var_name(c, src)
         end
     end
     return nil
