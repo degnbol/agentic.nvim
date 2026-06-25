@@ -59,8 +59,8 @@ close. The info-string after the fence is set per kind:
 | Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | claude-agent-acp pre-wraps in its own console fence; `prepare_block_lines` unwraps an already-fenced execute body before re-wrapping. See acp skill § "Execute tool call rendering" |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent body | `markdown-fold` (multi-line) or `markdown` | Always folded + dimmed (sidecar) when multi-line; dim via `set_dim_range` (`AgenticDimmedBlock`) |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block, open by default and never auto-closed (including on failure). No language injection (see below); highlighting via `block_col_hl` extmarks. `lang` now only drives markdown prose-wrapping |
-| Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (open) and append the reason beneath it |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** at render (`fold_open` return): open normally, closed when the edit failed (e.g. rejected permission). The explicit open is required — a fold created after a closed one inherits the closed state under `foldmethod=expr`, so relying on the foldlevel default would leave applied edits collapsed after any earlier close (see `MessageWriter:_open_fold`). No language injection (see below); highlighting via `block_col_hl` extmarks. `lang` now only drives markdown prose-wrapping |
+| Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
 `<lang>-fold` (sidecar bodies — appended by `prepare_block_lines` when a body

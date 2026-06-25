@@ -77,7 +77,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
---- @field _pending_fold_closes integer[] Anchor extmark ids (NS_FOLD_ANCHORS) for `*-fold` fences written while no chat window was visible. Flushed (closed) by the BufWinEnter autocmd when the chat window reappears. Folds closed live (window visible) are not tracked here, so toggling the chat away and back never re-closes a fold the user opened.
+--- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -103,7 +103,7 @@ function MessageWriter:new(bufnr, status_animation)
         _prose_anchor_line = nil,
         _suppress_pin_release = false,
         _auto_scroll_paused = false,
-        _pending_fold_closes = {},
+        _pending_fold_ops = {},
     }, self)
 
     -- Listen for user scrolls. Our own programmatic scrolls and buffer
@@ -120,13 +120,13 @@ function MessageWriter:new(bufnr, status_animation)
         end,
     })
 
-    -- A fold written while the chat window was hidden never got its initial
-    -- close (fold state is window-local). Close those pending folds when the
-    -- chat window reappears.
+    -- A fold rendered while the chat window was hidden never got its initial
+    -- open/close (fold state is window-local). Apply those pending ops when
+    -- the chat window reappears.
     vim.api.nvim_create_autocmd("BufWinEnter", {
         buffer = bufnr,
         callback = function()
-            instance:flush_pending_fold_closes()
+            instance:flush_pending_fold_ops()
         end,
     })
 
@@ -824,22 +824,24 @@ function MessageWriter:_chat_window()
     return nil
 end
 
---- Mark the treesitter fold containing `anchor_row` to be closed. `anchor_row`
---- is the first body line of a `*-fold` block — a level-1 row that belongs
---- only to our fold (the fold spans `code_fence_content`, so the concealed
---- fence delimiters are level 0, outside it). The one-level :foldclose hits
---- exactly our block, leaving injected folds and other blocks untouched.
---- Anchoring on a body line (not the delimiter) also keeps the closed fold's
---- first screen row visible, so the `··· N lines ···` foldtext shows.
+--- Queue an open/close of the treesitter fold containing `anchor_row`.
+--- `anchor_row` is the first body line of a `*-fold`/`-difffold` block — a
+--- level-1 row that belongs only to our fold (the fold spans
+--- `code_fence_content`, so the concealed fence delimiters are level 0,
+--- outside it). The one-level :foldopen/:foldclose hits exactly our block,
+--- leaving injected folds and other blocks untouched. Anchoring on a body line
+--- (not the delimiter) also keeps a closed fold's first screen row visible, so
+--- the `··· N lines ···` foldtext shows.
 ---
---- An anchor extmark tracks the row across later edits, and the close is
---- deferred: treesitter recomputes fold levels on its own vim.schedule
---- callback after the buffer edit, so an immediate :foldclose races it
---- (E490 — verified). Scheduling our close after that callback (FIFO) lets
---- the recompute land first. The deferred flush also covers the case where
---- no chat window is visible yet — the anchor stays pending until BufWinEnter.
---- @param anchor_row integer 0-indexed buffer row of the `*-fold` block's first body line
-function MessageWriter:_close_fold(anchor_row)
+--- An anchor extmark tracks the row across later edits, and the op is deferred:
+--- treesitter recomputes fold levels on its own vim.schedule callback after the
+--- buffer edit, so an immediate :foldopen/:foldclose races it (E490 —
+--- verified). Scheduling after that callback (FIFO) lets the recompute land
+--- first. The deferred flush also covers the case where no chat window is
+--- visible yet — the anchor stays pending until BufWinEnter.
+--- @param anchor_row integer 0-indexed buffer row of the block's first body line
+--- @param open boolean Desired state — true opens the fold, false closes it
+function MessageWriter:_queue_fold(anchor_row, open)
     local id = vim.api.nvim_buf_set_extmark(
         self.bufnr,
         NS_FOLD_ANCHORS,
@@ -847,26 +849,42 @@ function MessageWriter:_close_fold(anchor_row)
         0,
         {}
     )
-    table.insert(self._pending_fold_closes, id)
+    table.insert(self._pending_fold_ops, { id = id, open = open })
     vim.schedule(function()
-        self:flush_pending_fold_closes()
+        self:flush_pending_fold_ops()
     end)
 end
 
---- Close every pending `*-fold` block (see _close_fold). Resolves each anchor
---- extmark's current row so edits since the write are accounted for. No-op
+--- See _queue_fold.
+--- @param anchor_row integer
+function MessageWriter:_close_fold(anchor_row)
+    self:_queue_fold(anchor_row, false)
+end
+
+--- Open the fold containing `anchor_row`. Edit diffs are foldable but render
+--- open; an explicit open is required because a fold created after a closed
+--- one inherits the closed state under foldmethod=expr (the foldexpr leak), so
+--- relying on the foldlevel default would leave applied edits collapsed after
+--- any earlier close (a long execute body, a rejected edit). See _queue_fold.
+--- @param anchor_row integer
+function MessageWriter:_open_fold(anchor_row)
+    self:_queue_fold(anchor_row, true)
+end
+
+--- Apply every pending fold op (see _queue_fold). Resolves each anchor
+--- extmark's current row so edits since the render are accounted for. No-op
 --- when nothing is pending. When no chat window exists yet the anchors stay
 --- pending so the BufWinEnter autocmd retries once the window reappears.
---- Closes are wrapped in `_suppress_pin_release` so the viewport shift from
---- collapsing a fold is not mistaken for a user scroll.
+--- Ops are wrapped in `_suppress_pin_release` so the viewport shift from
+--- collapsing/expanding a fold is not mistaken for a user scroll.
 --- Public so the BufWinEnter autocmd closure can reach it without tripping
 --- LuaLS's invisible-field check.
-function MessageWriter:flush_pending_fold_closes()
-    if #self._pending_fold_closes == 0 then
+function MessageWriter:flush_pending_fold_ops()
+    if #self._pending_fold_ops == 0 then
         return
     end
     if not vim.api.nvim_buf_is_valid(self.bufnr) then
-        self._pending_fold_closes = {}
+        self._pending_fold_ops = {}
         return
     end
     local win = self:_chat_window()
@@ -876,24 +894,30 @@ function MessageWriter:flush_pending_fold_closes()
 
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
-    for _, id in ipairs(self._pending_fold_closes) do
+    for _, op in ipairs(self._pending_fold_ops) do
         local pos = vim.api.nvim_buf_get_extmark_by_id(
             self.bufnr,
             NS_FOLD_ANCHORS,
-            id,
+            op.id,
             {}
         )
         if pos[1] then
             -- A missing fold (E490, fence not yet foldable) is non-fatal —
             -- the body just stays visible — so it is swallowed deliberately.
             pcall(vim.api.nvim_win_call, win, function()
-                vim.cmd(string.format("%dfoldclose", pos[1] + 1))
+                vim.cmd(
+                    string.format(
+                        "%d%s",
+                        pos[1] + 1,
+                        op.open and "foldopen" or "foldclose"
+                    )
+                )
             end)
         end
-        pcall(vim.api.nvim_buf_del_extmark, self.bufnr, NS_FOLD_ANCHORS, id)
+        pcall(vim.api.nvim_buf_del_extmark, self.bufnr, NS_FOLD_ANCHORS, op.id)
     end
     self._suppress_pin_release = prev_suppress
-    self._pending_fold_closes = {}
+    self._pending_fold_ops = {}
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
@@ -930,7 +954,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         local kind = tool_call_block.kind
 
-        local lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range =
+        local lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_open =
             Renderer.prepare_block_lines(
                 tool_call_block,
                 self:_get_wrap_width()
@@ -959,7 +983,11 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             Renderer.render_decorations(bufnr, start_row, end_row)
 
         if fold_anchor then
-            self:_close_fold(start_row + fold_anchor)
+            if fold_open then
+                self:_open_fold(start_row + fold_anchor)
+            else
+                self:_close_fold(start_row + fold_anchor)
+            end
         end
         if dim_range then
             local dim_id = Renderer.set_dim_range(
@@ -1111,10 +1139,10 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         -- Diff blocks don't change after the initial render
         -- only update status highlights - don't replace content.
         -- Exception: the transition to `failed` re-renders so the failure
-        -- reason renders below the (open) diff (tool_call_renderer diff
-        -- branch). Re-extraction is safe — a failed file-mutating tool never
-        -- applied its change, so the file is unchanged and reproduces the
-        -- same diff.
+        -- reason renders below the diff and the diff folds closed
+        -- (tool_call_renderer diff branch). Re-extraction is safe — a failed
+        -- file-mutating tool never applied its change, so the file is
+        -- unchanged and reproduces the same diff.
         if already_has_diff and tracker.status ~= "failed" then
             if old_end_row > vim.api.nvim_buf_line_count(bufnr) then
                 Logger.notify(
@@ -1136,7 +1164,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             return false
         end
 
-        local new_lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range =
+        local new_lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_open =
             Renderer.prepare_block_lines(tracker, self:_get_wrap_width())
 
         -- Compare content lines excluding the footer — the buffer's footer
@@ -1249,7 +1277,11 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             Renderer.render_decorations(bufnr, start_row, new_end_row)
 
         if fold_anchor then
-            self:_close_fold(start_row + fold_anchor)
+            if fold_open then
+                self:_open_fold(start_row + fold_anchor)
+            else
+                self:_close_fold(start_row + fold_anchor)
+            end
         end
         if dim_range then
             local dim_id = Renderer.set_dim_range(

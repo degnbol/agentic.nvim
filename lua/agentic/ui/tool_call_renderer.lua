@@ -349,8 +349,9 @@ end
 --- @return string[] lines Array of lines to render
 --- @return agentic.ui.MessageWriter.HighlightRange[] highlight_ranges
 --- @return agentic.utils.Ansi.Span[][]|nil ansi_highlights Per-line ANSI highlight spans (execute blocks only)
---- @return integer|nil fold_anchor 0-indexed offset within lines of the first body line of a `*-fold` fence — a line inside the fold (the fold spans `code_fence_content`, so the concealed fence delimiter is outside it). The writer closes the fold at this line via :foldclose. nil when the block is not foldable.
+--- @return integer|nil fold_anchor 0-indexed offset within lines of the first body line of a `*-fold`/`-difffold` fence — a line inside the fold (the fold spans `code_fence_content`, so the concealed fence delimiter is outside it). The writer applies fold state at this line via :foldopen/:foldclose. nil when the block is not foldable.
 --- @return [integer, integer]|nil dim_range Body row range to dim with AgenticDimmedBlock, 0-indexed offsets within lines
+--- @return boolean|nil fold_open Desired fold state when fold_anchor is set: true opens (applied edit diffs), false/nil closes (sidecar `*-fold` bodies, rejected edit diffs). The explicit open is required to defeat the foldexpr leak — see MessageWriter:_open_fold.
 function M.prepare_block_lines(tool_call_block, wrap_width)
     local kind = tool_call_block.kind
     local argument = M.strip_kind_prefix(kind, tool_call_block.argument)
@@ -441,6 +442,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     local highlight_ranges = {}
     --- @type integer|nil
     local fold_anchor
+    --- @type boolean|nil
+    local fold_open
     --- @type [integer, integer]|nil
     local dim_range
 
@@ -625,9 +628,15 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- injection (injections.scm excludes `difffold$`) — without it the
         -- injected language's folds.scm shatters the diff into per-structure
         -- sub-folds. Highlighting comes from block_col_hl extmarks instead.
-        -- The diff is foldable but always open by default (never auto-closed,
-        -- including on failure).
+        -- The diff is foldable; it renders open normally and closed only when
+        -- the edit failed (e.g. a rejected permission). The fold state is set
+        -- explicitly (fold_open) rather than left to the foldlevel default,
+        -- because a fold created after a closed one inherits the closed state
+        -- under foldmethod=expr — see MessageWriter:_open_fold.
         table.insert(lines, fence .. lang .. "-difffold")
+        -- First body line (fold spans code_fence_content), inserted below.
+        fold_anchor = #lines
+        fold_open = tool_call_block.status ~= "failed"
 
         -- Load the target file buffer to enable context-aware syntax
         -- highlighting. The chat buffer's fence injection only sees the diff
@@ -1064,7 +1073,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     table.insert(lines, "")
 
-    return lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range
+    return lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_open
 end
 
 -- ---------------------------------------------------------------------------

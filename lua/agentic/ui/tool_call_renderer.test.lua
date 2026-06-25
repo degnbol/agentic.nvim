@@ -261,7 +261,7 @@ describe("ToolCallRenderer", function()
             end
         )
 
-        it("shows the reason below the diff (open) when Edit fails", function()
+        it("shows the reason below the diff and folds it closed when Edit fails", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "tc-2",
@@ -275,7 +275,7 @@ describe("ToolCallRenderer", function()
                 failure_reason = { "Permission denied." },
             }
 
-            local lines, _, _, fold_anchor =
+            local lines, _, _, fold_anchor, _, fold_open =
                 Renderer.prepare_block_lines(block, 0)
 
             -- The diff is kept (not replaced by the reason)...
@@ -300,9 +300,10 @@ describe("ToolCallRenderer", function()
             local fence_i = old_i - 1
             assert.is_not_nil(lines[fence_i]:match("difffold$"))
 
-            -- ...and the diff is never auto-closed, even on failure, so no
-            -- fold_anchor is returned (foldable-but-open).
-            assert.is_nil(fold_anchor)
+            -- ...and a failed edit folds closed: fold_anchor points at the
+            -- first body line with fold_open = false.
+            assert.equal(old_i - 1, fold_anchor)
+            assert.is_false(fold_open)
         end)
 
         it(

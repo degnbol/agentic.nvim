@@ -2318,13 +2318,13 @@ describe("agentic.ui.MessageWriter", function()
 
             local body_start = difffold_fence_line() + 1
             wait_folded(body_start)
-            -- Foldable (level 1) but open by default — no auto-close for a
-            -- non-failed edit, so `zc` works but nothing is collapsed.
+            -- Foldable (level 1) and explicitly opened for a non-failed edit,
+            -- so `zc` works but nothing is collapsed.
             assert.equal(1, vim.fn.foldlevel(body_start))
             assert.equal(-1, vim.fn.foldclosed(body_start))
         end)
 
-        it("keeps the diff foldable-but-open and shows the reason when the edit fails", function()
+        it("closes the diff and shows the reason when the edit fails", function()
             writer:write_tool_call_block({
                 tool_call_id = "diff-fail",
                 status = "failed",
@@ -2337,10 +2337,9 @@ describe("agentic.ui.MessageWriter", function()
             local fence = difffold_fence_line()
             assert.is_not_nil(fence)
             local body_start = fence + 1
-            wait_folded(body_start)
-            -- Foldable (level 1) but never auto-closed, even on failure.
-            assert.equal(1, vim.fn.foldlevel(body_start))
-            assert.equal(-1, vim.fn.foldclosed(body_start))
+            wait_closed(body_start)
+            -- A failed (e.g. rejected) edit folds closed.
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
 
             -- The reason renders below the diff, not in place of it.
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -2353,7 +2352,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_not_nil(reason_line)
         end)
 
-        it("keeps the diff open and appends the reason on the in_progress→failed transition", function()
+        it("closes the diff and appends the reason on the in_progress→failed transition", function()
             writer:write_tool_call_block({
                 tool_call_id = "diff-trans",
                 status = "in_progress",
@@ -2372,9 +2371,9 @@ describe("agentic.ui.MessageWriter", function()
 
             local fence = difffold_fence_line()
             assert.is_not_nil(fence)
-            wait_folded(fence + 1)
-            -- Still open after the transition — failure no longer auto-closes.
-            assert.equal(-1, vim.fn.foldclosed(fence + 1))
+            wait_closed(fence + 1)
+            -- Folds closed after the failed transition.
+            assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
 
             -- The diff was not discarded: its content survives the transition,
             -- and the reason is appended beneath it.
@@ -2382,6 +2381,40 @@ describe("agentic.ui.MessageWriter", function()
                 table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
             assert.is_not_nil(text:find("local function foo()", 1, true))
             assert.is_not_nil(text:find("Load /coding skill first.", 1, true))
+        end)
+
+        it("opens an applied edit diff appended after a closed fold", function()
+            -- A closed fold poisons foldexpr: a fold created afterwards
+            -- inherits the closed state. The applied edit must come up open
+            -- anyway (regression for the rejected-edit fold leak).
+            writer:write_tool_call_block({
+                tool_call_id = "leak-exec",
+                status = "completed",
+                kind = "execute",
+                argument = "ls",
+                body = long_execute_body(),
+            })
+            local exec_fence = fold_fence_lines()[1]
+            wait_closed(exec_fence + 1)
+            assert.equal(exec_fence + 1, vim.fn.foldclosed(exec_fence + 1))
+
+            writer:write_tool_call_block({
+                tool_call_id = "leak-edit",
+                status = "completed",
+                kind = "create",
+                argument = "/tmp/agentic_difffold_leak.lua",
+                diff = { old = {}, new = diff_new },
+            })
+            local edit_body = difffold_fence_line() + 1
+            wait_folded(edit_body)
+            -- Foldable but open despite the preceding closed fold. The open is
+            -- deferred (like the close), so wait for it rather than racing.
+            vim.wait(500, function()
+                return vim.fn.foldclosed(edit_body) == -1
+            end)
+            assert.equal(-1, vim.fn.foldclosed(edit_body))
+            -- The earlier execute fold stays closed.
+            assert.equal(exec_fence + 1, vim.fn.foldclosed(exec_fence + 1))
         end)
 
         it("does not orphan diff highlights past the block on the failed transition", function()
