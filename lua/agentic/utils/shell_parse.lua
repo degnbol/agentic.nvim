@@ -568,9 +568,11 @@ end
 --- wrapper, missing/dynamic body, malformed operands, empty inner).
 ---
 --- The `-c` body comes quote-stripped from `args` (a `-c` may be the trailing
---- letter of a short-flag cluster like `-lc`, still consuming the next word);
---- origin is nil because its quote-stripped coordinates cannot be mapped back to
---- `src`. The wrapper inner is a raw substring of `src` (quotes/escapes intact)
+--- letter of a short-flag cluster like `-lc`, still consuming the next word). A
+--- single-quoted body (`raw_string`) is byte-identical to its source content, so
+--- it gets an origin (content start) and tally ranges map 1:1; any other quoting
+--- (double, `$'...'`, concatenation) processes the body and stays nil-origin. The
+--- wrapper inner is a raw substring of `src` (quotes/escapes intact)
 --- from the inner node's start to the wrapper command node's end, with the inner
 --- node's `(row, col)` as origin for translating tally ranges.
 --- @param cmd_name string command name, already path-stripped
@@ -590,7 +592,21 @@ local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
             if arg:match("^%-[a-zA-Z]*c$") then
                 local body = args[i + 1]
                 if body ~= nil and not args_dynamic[i + 1] then
-                    return body, nil, false
+                    -- A single-quoted body (`raw_string`) is byte-identical to
+                    -- its source content with no escape/expansion processing, so
+                    -- its coordinates map 1:1 — origin is the content start (one
+                    -- column past the opening quote). Any other quoting (double,
+                    -- $'...', concatenation) processes the body, so it has no
+                    -- faithful mapping and stays coarse (nil origin → whole-leaf
+                    -- highlight).
+                    local body_node = arg_nodes[i + 1]
+                    --- @type agentic.utils.ShellParse.Origin|nil
+                    local origin = nil
+                    if body_node:type() == "raw_string" then
+                        local sr, sc = body_node:range()
+                        origin = { sr, sc + 1 }
+                    end
+                    return body, origin, false
                 end
                 return nil, nil, false -- missing or dynamic body
             end

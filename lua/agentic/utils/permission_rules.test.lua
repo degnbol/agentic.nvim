@@ -2595,6 +2595,50 @@ describe("PermissionRules", function()
             )
         end)
 
+        it("returns only the unapproved inner of a single-quoted -c body", function()
+            with_perms(
+                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "zsh -c 'rm -rf /'"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("highlights the whole leaf for a double-quoted -c body", function()
+            with_perms(
+                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = 'zsh -c "rm -rf /"'
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal(cmd, span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("pinpoints the inner row of a multi-line single-quoted -c body", function()
+            with_perms(
+                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "zsh -c 'grep foo\nrm bar'"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    local r = ranges[1]
+                    assert.equal(1, r[1]) -- row 1 (rm bar), not row 0 (grep foo)
+                    assert.equal(
+                        "rm bar",
+                        vim.split(cmd, "\n")[r[1] + 1]:sub(r[2] + 1, r[4])
+                    )
+                end
+            )
+        end)
+
         it("does not return a safe_write leaf (intrinsically safe)", function()
             with_perms(
                 { allow = { "Bash(echo *)" } },
@@ -2730,18 +2774,6 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("highlights the whole leaf for an unsafe -c body (coarse)", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "sh -c 'rm x'"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal(cmd, span_text(cmd, ranges[1]))
-                end
-            )
-        end)
     end)
 
     describe("should_auto_approve exec-wrappers", function()

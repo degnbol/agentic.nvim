@@ -1533,9 +1533,11 @@ end
 --- tallied recursively. A wrapper inner returns its unapproved sub-ranges
 --- (translated into `src` coordinates) so the prompt pinpoints only the
 --- genuinely-unapproved part — e.g. `rm -rf /` in `timeout 5 rm -rf /`, not the
---- known-safe `timeout 5` prefix. The `-c` body has no faithful coordinate
---- mapping (quote-stripped), so it stays coarse: not-known-safe with no
---- sub-ranges, falling back to the whole-leaf highlight.
+--- known-safe `timeout 5` prefix. A single-quoted `-c` body (`raw_string`) maps
+--- 1:1 and is pinpointed the same way; any other quoting (double, `$'...'`,
+--- concatenation) processes the body, so it has no faithful coordinate mapping
+--- and stays coarse: not-known-safe with no sub-ranges, falling back to the
+--- whole-leaf highlight.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
@@ -1580,8 +1582,9 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return true
     end
 
-    -- Transparent prefix: known-safe iff the inner tallies clean. A wrapper
-    -- inner pinpoints its unapproved sub-ranges; the `-c` body stays coarse.
+    -- Transparent prefix: known-safe iff the inner tallies clean. A wrapper or
+    -- single-quoted `-c` body pinpoints its unapproved sub-ranges; other `-c`
+    -- quoting has no faithful mapping (nil origin) and stays coarse.
     local inner, origin =
         inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if inner and ctx.depth < NESTED_MAX_DEPTH then
