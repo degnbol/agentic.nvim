@@ -1456,21 +1456,64 @@ local function record(ranges, node)
     table.insert(ranges, { sr, sc, er, ec })
 end
 
---- Record every command/process substitution node in a subtree without
---- descending into it. Substitution is always a "look before OK" case (it runs
---- code the matcher cannot inspect), so it highlights wherever it appears
---- outside a command leaf (for-list, case value/pattern, assignment value,
---- test). Inside a `command` it is absorbed into the whole-command range.
+--- Tally a `command_substitution`'s inner statements into `out`. Returns false
+--- when the inner is structurally invalid (a child is not a
+--- `SUBSTITUTION_INNER_STATEMENT_TYPES`) or empty — the caller then falls back
+--- to a coarse whole-node highlight. A valid but unapproved inner returns true
+--- with its ranges in `out` (in `src` coordinates — the inner is parsed
+--- in-place, so no translation). Mirrors `walk_substitution_inner` for the
+--- highlight pass, replacing the old clean-check: a clean inner returns true
+--- with `out` empty (records nothing).
+--- @param subst TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param out agentic.utils.PermissionRules.Range[]
+--- @return boolean valid
+local function substitution_inner_collect(subst, src, ctx, out)
+    local saw_statement = false
+    for child in subst:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if not SUBSTITUTION_INNER_STATEMENT_TYPES[child:type()] then
+                return false
+            end
+            tally_walk(child, src, ctx, out)
+            saw_statement = true
+        end
+    end
+    return saw_statement
+end
+
+--- Record unapproved substitution ranges in a subtree without descending into a
+--- command leaf. A bare `command_substitution` (for-list, case value/pattern,
+--- assignment value, test) pinpoints its unapproved inner statements in-place
+--- (no translation — they are children of the same tree); an empty/invalid
+--- inner, process substitution, and any other `SUBSTITUTION_TYPE` stay
+--- whole-node. Inside a `command` substitution is absorbed into the
+--- whole-command range.
 --- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param ranges agentic.utils.PermissionRules.Range[]
-local function record_substitutions(node, ranges)
+local function record_substitutions(node, src, ctx, ranges)
+    if node:type() == "command_substitution" then
+        --- @type agentic.utils.PermissionRules.Range[]
+        local inner = {}
+        if substitution_inner_collect(node, src, ctx, inner) then
+            for _, r in ipairs(inner) do
+                table.insert(ranges, r)
+            end
+        else
+            record(ranges, node) -- empty/invalid inner: coarse
+        end
+        return
+    end
     if SUBSTITUTION_TYPES[node:type()] then
-        record(ranges, node)
+        record(ranges, node) -- process substitution etc.: coarse
         return
     end
     for child in node:iter_children() do
         if child:named() then
-            record_substitutions(child, ranges)
+            record_substitutions(child, src, ctx, ranges)
         end
     end
 end
@@ -1498,30 +1541,6 @@ local function translate_ranges(ranges, origin)
     return out
 end
 
---- Whether a `command_substitution`'s inner tallies clean: every inner
---- statement is a valid inner type AND records no unapproved range. Mirrors
---- `walk_substitution_inner` for the highlight pass, so an approved
---- `cmd $(...)` does not light up its whole leaf.
---- @param subst TSNode
---- @param src string
---- @param ctx agentic.utils.PermissionRules.TallyCtx
---- @return boolean
-local function substitution_inner_clean(subst, src, ctx)
-    local saw_statement = false
-    --- @type agentic.utils.PermissionRules.Range[]
-    local sub_ranges = {}
-    for child in subst:iter_children() do
-        if child:named() and child:type() ~= "comment" then
-            if not SUBSTITUTION_INNER_STATEMENT_TYPES[child:type()] then
-                return false
-            end
-            tally_walk(child, src, ctx, sub_ranges)
-            saw_statement = true
-        end
-    end
-    return saw_statement and #sub_ranges == 0
-end
-
 --- Whether a `command` leaf is known-safe: it matches a read_only/safe_write
 --- rule (glob or structured) AND no deny/ask rule, with no structural reason to
 --- bail (substitution in a non-bare position, env-hijack prefix, dynamic name,
@@ -1538,6 +1557,14 @@ end
 --- concatenation) processes the body, so it has no faithful coordinate mapping
 --- and stays coarse: not-known-safe with no sub-ranges, falling back to the
 --- whole-leaf highlight.
+---
+--- A dirty `$(...)` argument (bare or quoted `"$(...)"`) in an otherwise-safe
+--- leaf pinpoints its in-place inner the same way, but needs no translation —
+--- the inner is parsed as a child of the same tree, so its ranges are already
+--- in `src` coordinates. Collected during `extract_args` via the inner-check
+--- closure and returned at the tail. A leaf whose name itself is denied/unknown
+--- bails before the tail, discarding the accumulator (the whole leaf is the
+--- danger).
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
@@ -1546,8 +1573,17 @@ end
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
 local function command_known_safe(node, src, ctx, known, funcs)
-    local args, arg_nodes, args_dynamic, name_node =
-        extract_args(node, src, ctx, known, substitution_inner_clean)
+    --- @type agentic.utils.PermissionRules.Range[]
+    local subst_ranges = {}
+    local args, arg_nodes, args_dynamic, name_node = extract_args(
+        node,
+        src,
+        ctx,
+        known,
+        function(subst, s, c)
+            return substitution_inner_collect(subst, s, c, subst_ranges)
+        end
+    )
     if not args then
         return false
     end
@@ -1627,7 +1663,13 @@ local function command_known_safe(node, src, ctx, known, funcs)
         struct_safe = c.read_only or c.safe_write
     end
 
-    return glob_safe or struct_safe
+    local safe = glob_safe or struct_safe
+    if safe and #subst_ranges > 0 then
+        -- Otherwise-safe leaf whose only problem is a dirty substitution:
+        -- pinpoint the in-place inner instead of washing the whole leaf.
+        return false, subst_ranges
+    end
+    return safe
 end
 
 --- Recurse a non-sequence container (`pipeline`, `variable_assignments`): every
@@ -1719,9 +1761,9 @@ local function tally_redirected(node, src, ctx, ranges)
     end
 end
 
---- Tally a `for_statement`: a clean bare `$(...)` list item is approved; any
---- other list-item substitution records (it runs code that flows into body
---- args); the `do_group` body recurses.
+--- Tally a `for_statement`: a clean bare `$(...)` list item records nothing, a
+--- dirty one pinpoints its inner, any other list-item substitution records (it
+--- runs code that flows into body args); the `do_group` body recurses.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
@@ -1730,17 +1772,7 @@ local function tally_for(node, src, ctx, ranges)
     for child, field in node:iter_children() do
         if child:named() then
             if field == "value" then
-                -- A clean bare `$(...)` list item is approved (mirrors
-                -- walk_for) and does not highlight; any other substitution
-                -- records.
-                if
-                    not (
-                        child:type() == "command_substitution"
-                        and substitution_inner_clean(child, src, ctx)
-                    )
-                then
-                    record_substitutions(child, ranges)
-                end
+                record_substitutions(child, src, ctx, ranges)
             elseif field == "body" then
                 tally_walk(child, src, ctx, ranges)
             end
@@ -1773,7 +1805,7 @@ local function tally_case(node, src, ctx, ranges)
     for child, field in node:iter_children() do
         if child:named() and child:type() ~= "comment" then
             if field == "value" then
-                record_substitutions(child, ranges)
+                record_substitutions(child, src, ctx, ranges)
             elseif child:type() == "case_item" then
                 for item_child, item_field in child:iter_children() do
                     if
@@ -1781,7 +1813,7 @@ local function tally_case(node, src, ctx, ranges)
                         and item_child:type() ~= "comment"
                     then
                         if item_field == "value" then
-                            record_substitutions(item_child, ranges)
+                            record_substitutions(item_child, src, ctx, ranges)
                         else
                             tally_walk(item_child, src, ctx, ranges)
                         end
@@ -1795,7 +1827,7 @@ end
 function tally_walk(node, src, ctx, ranges)
     local t = node:type()
     if t == "test_command" then
-        record_substitutions(node, ranges)
+        record_substitutions(node, src, ctx, ranges)
     elseif t == "case_statement" then
         tally_case(node, src, ctx, ranges)
     elseif SEQUENCE_TYPES[t] or t == "do_group" or t == "compound_statement" then
@@ -1818,7 +1850,7 @@ function tally_walk(node, src, ctx, ranges)
     elseif t == "variable_assignment" then
         local value = node:field("value")[1]
         if value then
-            record_substitutions(value, ranges)
+            record_substitutions(value, src, ctx, ranges)
         end
     elseif t == "for_statement" then
         tally_for(node, src, ctx, ranges)

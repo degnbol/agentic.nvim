@@ -2659,13 +2659,30 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("returns the leaf when an arg substitution's inner is not approved", function()
-            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                local cmd = "echo $(whoami)"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.equal(cmd, span_text(cmd, ranges[1]))
-            end)
+        it("returns only the unapproved inner of an arg substitution", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "echo $(rm -rf /)"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("highlights the whole leaf when the command name is denied", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "rm $(rm -rf /)"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal(cmd, span_text(cmd, ranges[1]))
+                end
+            )
         end)
 
         it("returns nothing when an arg substitution's inner is approved", function()
@@ -2681,6 +2698,57 @@ describe("PermissionRules", function()
                     "for f in $(echo x); do echo \"$f\"; done"
                 )
                 assert.equal(0, #ranges)
+            end)
+        end)
+
+        it("returns only the unapproved inner of a quoted substitution", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = 'echo "$(rm -rf /)"'
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("returns only the unapproved inner of an assignment substitution", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "f=$(rm -rf /)"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("returns only the unapproved inner of a for-list substitution", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = "for f in $(rm -rf /); do echo hi; done"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("pinpoints a substitution inside a transparent prefix", function()
+            with_perms({
+                allow = { "Bash(echo *)", "Bash(timeout *)" },
+                deny = { "Bash(rm *)" },
+            }, nil, function()
+                local cmd = "timeout 5 echo $(rm -rf /)"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end)
         end)
 
