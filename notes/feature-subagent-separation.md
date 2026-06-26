@@ -181,4 +181,4 @@ that sidesteps the sign column but loses the explicit number.
   interleaved in wire order. Grouping by id is fine for marking/nesting; a
   per-window split must demux a single ordered stream.
 - **Turn-boundary reset.** The SubAgent registry is per-turn mutable state —
-  clear it at `append_separator` to avoid stale labels leaking across turns.
+  clear it at `finalize_turn` to avoid stale labels leaking across turns.
