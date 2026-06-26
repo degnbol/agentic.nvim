@@ -69,8 +69,8 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
 --- @field _last_message_type? string
---- @field _should_auto_scroll? boolean
---- @field _scroll_scheduled? boolean
+--- @field _should_auto_scroll? boolean The frozen scroll verdict captured before a write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so a verdict deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold.
+--- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
@@ -94,7 +94,7 @@ function MessageWriter:new(bufnr, status_animation)
         tool_call_blocks = {},
         _last_message_type = nil,
         _should_auto_scroll = nil,
-        _scroll_scheduled = false,
+        _scroll_callback_queued = false,
         _chunk_start_line = nil,
         _last_wrote_tool_call = false,
         _suppressing_rejection = false,
@@ -768,44 +768,69 @@ function MessageWriter:scroll_to_bottom()
     BufHelpers.scroll_down(wins[1])
 end
 
+--- Execute a scroll-to-bottom now: compute the prose-pin cap and scroll,
+--- wrapped in `_suppress_pin_release` so the synchronous WinScrolled from
+--- winrestview isn't mistaken for a user scroll. The flag is saved and
+--- restored (not hardcoded back to false) so this nests inside
+--- `flush_pending_fold_ops`'s own suppress wrap. Pure mechanics — callers
+--- own the gating (the captured verdict + the live `_auto_scroll_paused`).
+--- @param bufnr integer Buffer number to scroll
+function MessageWriter:_scroll_now(bufnr)
+    local wins = vim.fn.win_findbuf(bufnr)
+    if #wins == 0 then
+        return
+    end
+
+    -- topline is 1-indexed; _prose_anchor_line is 0-indexed.
+    local pause = Config.auto_scroll
+        and Config.auto_scroll.pause_on_prose ~= false
+    local max_topline = (pause and self._prose_anchor_line)
+            and (self._prose_anchor_line + 1)
+        or nil
+
+    local prev_suppress = self._suppress_pin_release
+    self._suppress_pin_release = true
+    BufHelpers.scroll_down(wins[1], max_topline)
+    self._suppress_pin_release = prev_suppress
+end
+
 --- Capture at-bottom / pin state, then schedule a scroll-to-bottom after
 --- the current synchronous write. Must be called **before** the write —
 --- a post-write check would see `botline < total_lines` (the write just
 --- grew the buffer past the viewport) and gate the scroll off.
---- Coalesces multiple calls per tick via `_scroll_scheduled`.
+--- Coalesces multiple calls per tick via `_scroll_callback_queued`.
+---
+--- When the write queued a fold op, the scroll is owned by
+--- `flush_pending_fold_ops` instead: that runs strictly after treesitter's
+--- fold-level recompute, so it measures the already-*closed* fold. Scrolling
+--- here would race the recompute and park the viewport at the unfolded bottom
+--- (the fold-vs-auto-scroll timing bug). The callback skips when fold ops are
+--- pending, leaving the verdict for flush to consume.
 --- @param bufnr integer Buffer number to scroll
 function MessageWriter:_auto_scroll(bufnr)
     if self._should_auto_scroll ~= true then
         self._should_auto_scroll = self:_check_auto_scroll(bufnr)
     end
 
-    if self._scroll_scheduled then
+    if self._scroll_callback_queued then
         return
     end
-    self._scroll_scheduled = true
+    self._scroll_callback_queued = true
 
     vim.schedule(function()
-        self._scroll_scheduled = false
+        self._scroll_callback_queued = false
 
-        if vim.api.nvim_buf_is_valid(bufnr) then
-            if self._should_auto_scroll then
-                local wins = vim.fn.win_findbuf(bufnr)
-                if #wins > 0 then
-                    -- topline is 1-indexed; _prose_anchor_line is 0-indexed.
-                    local pause = Config.auto_scroll
-                        and Config.auto_scroll.pause_on_prose ~= false
-                    local max_topline = (pause and self._prose_anchor_line)
-                            and (self._prose_anchor_line + 1)
-                        or nil
+        -- Fold-close owns the scroll on this tick — leave the verdict for it.
+        if #self._pending_fold_ops > 0 then
+            return
+        end
 
-                    -- Suppress the WinScrolled-driven pause for our own
-                    -- scroll. winrestview fires WinScrolled synchronously,
-                    -- so a flag around the call is race-free.
-                    self._suppress_pin_release = true
-                    BufHelpers.scroll_down(wins[1], max_topline)
-                    self._suppress_pin_release = false
-                end
-            end
+        if
+            vim.api.nvim_buf_is_valid(bufnr)
+            and self._should_auto_scroll
+            and not self._auto_scroll_paused
+        then
+            self:_scroll_now(bufnr)
         end
 
         self._should_auto_scroll = nil
@@ -918,6 +943,18 @@ function MessageWriter:flush_pending_fold_ops()
     end
     self._suppress_pin_release = prev_suppress
     self._pending_fold_ops = {}
+
+    -- The fold path's single scroll. The folds are now closed, so the
+    -- fold-aware scroll_down measures the collapsed height — `_auto_scroll`'s
+    -- callback skipped while these ops were pending and deferred to here.
+    -- Gate on the captured verdict and the live pause toggle (the verdict
+    -- could have deferred as far as the BufWinEnter retry — a wide gap for the
+    -- user to scroll away). Both are needed: the verdict freezes the pre-write
+    -- at-bottom snapshot, the toggle catches a scroll-away during the gap.
+    if self._should_auto_scroll and not self._auto_scroll_paused then
+        self:_scroll_now(self.bufnr)
+    end
+    self._should_auto_scroll = nil
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock

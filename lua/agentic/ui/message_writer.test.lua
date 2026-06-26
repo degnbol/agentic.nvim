@@ -187,7 +187,7 @@ describe("agentic.ui.MessageWriter", function()
             setup_buffer(20, 20)
 
             writer:_auto_scroll(bufnr)
-            assert.is_true(writer._scroll_scheduled)
+            assert.is_true(writer._scroll_callback_queued)
 
             local check_spy = spy.on(writer, "_check_auto_scroll")
             writer:_auto_scroll(bufnr)
@@ -281,7 +281,7 @@ describe("agentic.ui.MessageWriter", function()
                 setup_buffer(50, 50)
                 writer:_auto_scroll(bufnr)
                 assert.is_nil(writer._should_auto_scroll)
-                assert.is_false(writer._scroll_scheduled)
+                assert.is_false(writer._scroll_callback_queued)
 
                 schedule_stub:revert()
 
@@ -295,6 +295,72 @@ describe("agentic.ui.MessageWriter", function()
                 schedule_stub:revert()
             end
         )
+    end)
+
+    describe("fold-path scroll ownership", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it(
+            "callback skips the scroll and keeps the verdict when a fold op is pending",
+            function()
+                setup_buffer(50, 1)
+                -- A pending fold op stands in for a queued :foldclose.
+                writer._pending_fold_ops = { { id = 1, open = false } }
+                writer._should_auto_scroll = true
+
+                local scroll_spy = spy.on(writer, "_scroll_now")
+                writer:_auto_scroll(bufnr)
+
+                assert.equal(0, scroll_spy.call_count)
+                -- Verdict survives for flush_pending_fold_ops to consume.
+                assert.is_true(writer._should_auto_scroll)
+                scroll_spy:revert()
+            end
+        )
+
+        it("flush scrolls once the folds are closed, then clears the verdict", function()
+            setup_buffer(50, 1)
+            writer._should_auto_scroll = true
+
+            local scroll_spy = spy.on(writer, "_scroll_now")
+            -- A real fold anchor isn't needed — flush scrolls after draining
+            -- whatever ops are present, missing folds are swallowed.
+            local id =
+                vim.api.nvim_buf_set_extmark(bufnr, vim.api.nvim_create_namespace("agentic_fold_anchors"), 0, 0, {})
+            writer._pending_fold_ops = { { id = id, open = false } }
+            writer:flush_pending_fold_ops()
+
+            assert.equal(1, scroll_spy.call_count)
+            assert.is_nil(writer._should_auto_scroll)
+            scroll_spy:revert()
+        end)
+
+        it("flush does not scroll a scrolled-away user", function()
+            setup_buffer(50, 1)
+            writer._should_auto_scroll = true
+            writer._auto_scroll_paused = true
+
+            local scroll_spy = spy.on(writer, "_scroll_now")
+            local id =
+                vim.api.nvim_buf_set_extmark(bufnr, vim.api.nvim_create_namespace("agentic_fold_anchors"), 0, 0, {})
+            writer._pending_fold_ops = { { id = id, open = false } }
+            writer:flush_pending_fold_ops()
+
+            assert.equal(0, scroll_spy.call_count)
+            scroll_spy:revert()
+        end)
     end)
 
     describe("auto-scroll with public write methods", function()

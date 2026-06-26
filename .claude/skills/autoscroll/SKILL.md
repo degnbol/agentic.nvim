@@ -52,8 +52,8 @@ return to the bottom.
 | `_prose_anchor_line` | First prose chunk of a run, while not paused | Turn boundaries (`write_tool_call_block`, `append_separator`, `write_error_message`, `reset_turn_state`) and user-scroll-away (`on_user_scroll` → `_release_prose_pin`) |
 | `_auto_scroll_paused` | `on_user_scroll` when user is not at bottom | `on_user_scroll` when user reaches bottom — *only*. Survives turn boundaries |
 | `_suppress_pin_release` | `_with_modifiable_suppressed` and the deferred scroll callback | Same scope — wraps each synchronous write/scroll |
-| `_should_auto_scroll` | `_auto_scroll`, before the write — the frozen scroll *verdict* | The scheduled callback, after scrolling |
-| `_scroll_scheduled` | `_auto_scroll` — a callback is queued this tick | The scheduled callback (per-tick coalescing guard) |
+| `_should_auto_scroll` | `_auto_scroll`, before the write — the frozen scroll *verdict* | Whichever site executes the scroll — `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never on the callback's skip branch (fold op pending), so the verdict rides along to flush or the BufWinEnter retry |
+| `_scroll_callback_queued` | `_auto_scroll` — a callback is queued this tick | The scheduled callback (per-tick coalescing guard) |
 
 These last two are distinct roles, easily conflated:
 
@@ -64,9 +64,16 @@ These last two are distinct roles, easily conflated:
   write then invalidates by growing the buffer) and the prose-pin override.
   Neither is recomputable after the write, which is why it is captured and
   stored.
-- `_scroll_scheduled` is the **queue guard** — it only prevents
+- `_scroll_callback_queued` is the **queue guard** — it only prevents
   double-queuing the per-tick callback. It says nothing about whether the
   scroll will happen.
+
+When a write queues a fold op (closing a long execute body, etc.) the
+fold-close owns the single scroll. `flush_pending_fold_ops` runs strictly
+after treesitter's fold-level recompute, so it scrolls against the
+already-*closed* fold height; `_auto_scroll`'s callback skips that tick to
+avoid scrolling to the unfolded bottom. Mechanics live in `_scroll_now`,
+shared by both sites.
 
 Field docstrings live on the `MessageWriter` class declaration.
 
