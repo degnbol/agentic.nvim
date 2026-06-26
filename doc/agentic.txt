@@ -68,7 +68,7 @@ gap-fills, behaviour differences, and TUI features not available here.
 
 Install claude-agent-acp:
 >
-    pnpm add -g @zed-industries/claude-agent-acp
+    pnpm add -g @agentclientprotocol/claude-agent-acp
 <
 Or download a binary from the releases page.
 
@@ -585,7 +585,7 @@ is fg+bg in some colorschemes and fg-only in others; on a bare theme set an
 explicit `bg` for the wash to be visible.
 
 ==============================================================================
-9. AUTOCMDS                                              *agentic-autocmds*
+10. AUTOCMDS                                             *agentic-autocmds*
 
                                                *AgenticSessionChanged*
 User AgenticSessionChanged
@@ -602,13 +602,13 @@ User AgenticSessionChanged
 <
 
 ==============================================================================
-10. HEALTH CHECK                                          *agentic-health*
+11. HEALTH CHECK                                          *agentic-health*
 >vim
     :checkhealth agentic
 <
 
 ==============================================================================
-11. DEBUG MODE                                             *agentic-debug*
+12. DEBUG MODE                                             *agentic-debug*
 
 >lua
     require("agentic").setup({ debug = true })
@@ -617,14 +617,14 @@ User AgenticSessionChanged
 View logs with |:messages| or in `~/.cache/nvim/agentic_debug.log`.
 
 ==============================================================================
-12. COMPARISON WITH CLAUDE TUI                              *agentic-vs-tui*
+13. COMPARISON WITH CLAUDE TUI                              *agentic-vs-tui*
 
 This section documents how agentic.nvim differs from the native `claude`
 CLI (the Claude Code TUI). The comparison is against the TUI as of Claude
 Code v2.1.x.
 
 ------------------------------------------------------------------------------
-12.1 ADDITIONS                                    *agentic-vs-tui-additions*
+13.1 ADDITIONS                                    *agentic-vs-tui-additions*
 
 Features present here that the TUI does not have:
 
@@ -674,7 +674,7 @@ Session & workflow ~
   (e.g. incline.nvim, custom tablines).
 
 ------------------------------------------------------------------------------
-12.2 ACP PATCHES                                    *agentic-vs-tui-patches*
+13.2 ACP PATCHES                                    *agentic-vs-tui-patches*
 
 The following commands exist in the TUI but are not forwarded through
 ACP by claude-agent-acp. The plugin intercepts them locally. These are
@@ -693,7 +693,7 @@ gap-fills, not additions over the TUI:
   suggestions.
 
 ------------------------------------------------------------------------------
-12.3 FORWARDED TRANSPARENTLY                     *agentic-vs-tui-forwarded*
+13.3 FORWARDED TRANSPARENTLY                     *agentic-vs-tui-forwarded*
 
 Claude TUI commands advertised by claude-agent-acp via
 `available_commands_update` and not intercepted by the plugin. Type them
@@ -712,7 +712,7 @@ Provider-specific. Re-verify with the probe in
 `.claude/skills/acp/references/claude-agent.md` after bridge upgrades.
 
 ------------------------------------------------------------------------------
-12.4 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
+13.4 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
 
 Same feature, different behaviour:
 
@@ -724,7 +724,7 @@ Same feature, different behaviour:
   behaviour.
 
 ------------------------------------------------------------------------------
-12.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*
+13.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*
 
 TUI features this plugin does not currently provide:
 
