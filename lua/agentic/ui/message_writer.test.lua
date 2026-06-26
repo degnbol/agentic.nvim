@@ -469,11 +469,48 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(content:match("%S") ~= nil)
         end)
 
-        it("clears anchor on append_separator (turn end)", function()
+        local NS_TURN_USAGE =
+            vim.api.nvim_create_namespace("agentic_turn_usage")
+
+        local function usage_extmarks()
+            return vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                NS_TURN_USAGE,
+                0,
+                -1,
+                { details = true }
+            )
+        end
+
+        it("stamps a right-aligned footer for a non-zero turn", function()
+            writer:finalize_turn()
+            writer:set_turn_usage({ inputTokens = 1234, outputTokens = 420 })
+
+            local marks = usage_extmarks()
+            assert.equal(#marks, 1)
+            local vt = marks[1][4].virt_text
+            local text = vt and vt[1] and vt[1][1]
+            assert.equal(marks[1][4].virt_text_pos, "right_align")
+            assert.equal(text, "1.2k in · 0.4k out")
+        end)
+
+        it("renders nothing for an all-zero turn", function()
+            writer:finalize_turn()
+            writer:set_turn_usage({ inputTokens = 0, outputTokens = 0 })
+            assert.equal(#usage_extmarks(), 0)
+        end)
+
+        it("renders nothing for missing usage", function()
+            writer:finalize_turn()
+            writer:set_turn_usage(nil)
+            assert.equal(#usage_extmarks(), 0)
+        end)
+
+        it("clears anchor on finalize_turn (turn end)", function()
             writer:write_message_chunk(make_message_update("final answer"))
             assert.is_not_nil(writer._prose_anchor_line)
 
-            writer:append_separator()
+            writer:finalize_turn()
 
             assert.is_nil(writer._prose_anchor_line)
         end)
@@ -1400,7 +1437,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "append_separator reflow does not corrupt tool call block",
+            "finalize_turn reflow does not corrupt tool call block",
             function()
                 -- Simulate: agent streams message, then tool call, then separator
                 writer:write_message_chunk(
@@ -1417,7 +1454,7 @@ describe("agentic.ui.MessageWriter", function()
                 writer:write_tool_call_block(block)
 
                 -- This is what happens when the response ends
-                writer:append_separator()
+                writer:finalize_turn()
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
@@ -1482,7 +1519,7 @@ describe("agentic.ui.MessageWriter", function()
                     argument = "for colour in 31 32 33 34 35 36; do\n  printf 'hello'\ndone",
                 }
                 writer:write_tool_call_block(block)
-                writer:append_separator()
+                writer:finalize_turn()
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 

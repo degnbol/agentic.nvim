@@ -9,6 +9,10 @@ local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- Anchors a `*-fold` fence's opening line so a deferred close (chat window
 --- hidden at write time) lands on the right row after later edits shift it.
 local NS_FOLD_ANCHORS = vim.api.nvim_create_namespace("agentic_fold_anchors")
+--- Per-turn token-usage footer (right-aligned virt_text on the turn-boundary
+--- blank line). Own namespace so it stays out of the fold/tool clear paths;
+--- footers are stamped once and never updated or cleared.
+local NS_TURN_USAGE = vim.api.nvim_create_namespace("agentic_turn_usage")
 
 --- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
 --- @param k string|nil
@@ -442,9 +446,9 @@ function MessageWriter:write_error_action(text)
     end)
 end
 
---- Append trailing blank lines to separate from the next message.
---- If streamed chunks preceded this call, reflow their prose first.
-function MessageWriter:append_separator()
+--- Close out a turn: reset all per-turn state, reflow any streamed prose, and
+--- append the trailing blank line that separates this turn from the next.
+function MessageWriter:finalize_turn()
     -- Reset ALL per-turn state at the turn boundary. Any flag that was set
     -- during the turn must be cleared here, otherwise it silently corrupts
     -- subsequent turns (the "stuck 1 message behind" family of bugs).
@@ -458,6 +462,33 @@ function MessageWriter:append_separator()
         self:_reflow_chunks(bufnr, true)
         self:_append_lines({ "" })
     end)
+end
+
+--- Stamp the per-turn token-usage footer on the trailing blank line that
+--- `finalize_turn` just appended: dim, right-aligned virt_text like
+--- `1.2k in · 0.4k out`. No-ops on missing or all-zero usage (stalls, cancels,
+--- and silent upstream auth failures emit zeros — a "0" would mislead).
+--- @param usage { inputTokens?: number, outputTokens?: number }|nil
+function MessageWriter:set_turn_usage(usage)
+    if type(usage) ~= "table" then
+        return
+    end
+    local input = usage.inputTokens or 0
+    local output = usage.outputTokens or 0
+    if input == 0 and output == 0 then
+        return
+    end
+
+    if not vim.api.nvim_buf_is_valid(self.bufnr) then
+        return
+    end
+
+    local text = string.format("%.1fk in · %.1fk out", input / 1000, output / 1000)
+    local last_row = vim.api.nvim_buf_line_count(self.bufnr) - 1
+    vim.api.nvim_buf_set_extmark(self.bufnr, NS_TURN_USAGE, last_row, 0, {
+        virt_text = { { text, Theme.HL_GROUPS.TURN_USAGE } },
+        virt_text_pos = "right_align",
+    })
 end
 
 --- Reflow prose in the region written by write_message_chunk.
@@ -984,7 +1015,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
     self:_with_modifiable_suppressed(function(bufnr)
         -- Flush any pending prose reflow before writing the tool call block.
-        -- Without this, append_separator's _reflow_chunks would later process
+        -- Without this, finalize_turn's _reflow_chunks would later process
         -- a range that includes these tool call lines, destroying extmarks
         -- (decorations, status, range tracking) via nvim_buf_set_lines.
         self:_reflow_chunks(bufnr, true)

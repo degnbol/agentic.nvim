@@ -38,6 +38,7 @@ Theme.HL_GROUPS = {
     PICKER_DATE = "AgenticPickerDate",
     PICKER_DELIM = "AgenticPickerDelim",
     UNAPPROVED_COMMAND = "AgenticUnapprovedCommand",
+    TURN_USAGE = "AgenticTurnUsage",
 }
 
 local status_hl = {
@@ -106,6 +107,9 @@ function Theme.setup()
 
         -- Unapproved parts of an execute permission prompt
         { Theme.HL_GROUPS.UNAPPROVED_COMMAND, { link = "DiagnosticVirtualTextWarn" } },
+
+        -- Per-turn token-usage footer
+        { Theme.HL_GROUPS.TURN_USAGE, { link = "Comment" } },
     }
     -- stylua: ignore end
 

@@ -142,17 +142,17 @@ describe("auto-continue chunk flush", function()
             -- the follow-up prompt hits usage_limit.
             writer:write_message(user_message("First prompt."))
             writer:write_message_chunk(chunk("Working on it."))
-            writer:append_separator()
+            writer:finalize_turn()
 
             -- Turn 2: user prompt hits usage_limit. send_prompt's response
             -- callback in SessionManager runs write_error_message then
-            -- append_separator (line 1467 in session_manager.lua).
+            -- finalize_turn (line 1467 in session_manager.lua).
             writer:write_message(user_message("Second prompt."))
             writer:write_error_message(usage_limit_err())
             writer:write_error_action(
                 "Auto-continuing in 5h 30m. Press [c] to cancel."
             )
-            writer:append_separator()
+            writer:finalize_turn()
 
             -- Auto-continue timer fires hours later. _handle_input_submit
             -- writes the "## continue" user message, starts the thinking
@@ -182,7 +182,7 @@ describe("auto-continue chunk flush", function()
             writer:write_message_chunk(
                 chunk("Here's what I found in the file.")
             )
-            writer:append_separator()
+            writer:finalize_turn()
 
             local dump = table.concat(buf_text(bufnr), "\n")
 
@@ -231,14 +231,14 @@ describe("auto-continue chunk flush", function()
 
             -- Usage limit fires before the rejection boilerplate completes.
             writer:write_error_message(usage_limit_err())
-            writer:append_separator()
+            writer:finalize_turn()
 
             -- Auto-continue fires.
             writer:write_message(user_message("continue"))
             writer:write_message_chunk(
                 chunk("OK, picking a different approach.")
             )
-            writer:append_separator()
+            writer:finalize_turn()
 
             local dump = table.concat(buf_text(bufnr), "\n")
 

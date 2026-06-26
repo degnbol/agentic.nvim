@@ -489,7 +489,7 @@ function SessionManager:_display_context_usage()
     self.message_writer:write_message(
         ACPPayloads.generate_agent_message(table.concat(lines, "\n"))
     )
-    self.message_writer:append_separator()
+    self.message_writer:finalize_turn()
 end
 
 --- Rename the current session and update buffer name.
@@ -508,7 +508,7 @@ function SessionManager:_rename_session(new_title)
             string.format("Session renamed to: **%s**", trimmed)
         )
     )
-    self.message_writer:append_separator()
+    self.message_writer:finalize_turn()
 
     -- Persist the updated title
     self:_sync_history_context()
@@ -540,7 +540,7 @@ function SessionManager:_apply_trust_scope(scope)
             string.format("Trust scope set: **%s**", scope.display)
         )
     )
-    self.message_writer:append_separator()
+    self.message_writer:finalize_turn()
 
     local wide, reason = TrustSafety.is_wide_scope(scope)
     if wide then
@@ -564,7 +564,7 @@ function SessionManager:_clear_trust_scope()
     self.message_writer:write_message(
         ACPPayloads.generate_agent_message("Trust scope cleared.")
     )
-    self.message_writer:append_separator()
+    self.message_writer:finalize_turn()
 end
 
 --- @param prompt string
@@ -659,7 +659,7 @@ function SessionManager:_delete_session()
         self.message_writer:write_message(
             ACPPayloads.generate_agent_message("No active session to delete.")
         )
-        self.message_writer:append_separator()
+        self.message_writer:finalize_turn()
         return
     end
 
@@ -682,7 +682,7 @@ function SessionManager:_delete_session()
                     )
                 )
             )
-            self.message_writer:append_separator()
+            self.message_writer:finalize_turn()
         end
     end
 
@@ -1312,7 +1312,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         self.message_writer:write_message(
             ACPPayloads.generate_agent_message("Usage: `/rename <new name>`")
         )
-        self.message_writer:append_separator()
+        self.message_writer:finalize_turn()
         return
     end
 
@@ -1527,6 +1527,8 @@ function SessionManager:_handle_input_submit_inner(input_text)
         -- desynchronising the generating state ("stuck 1 message behind").
         self.is_generating = false
 
+        --- @type table|nil
+        local turn_usage
         if err then
             local error_type, reset_epoch =
                 self.message_writer:write_error_message(err)
@@ -1550,9 +1552,13 @@ function SessionManager:_handle_input_submit_inner(input_text)
         else
             self._retry_attempt = 0
             Recovery.surface_unexpected_response(self, response)
+            if type(response) == "table" then
+                turn_usage = response.usage
+            end
         end
 
-        self.message_writer:append_separator()
+        self.message_writer:finalize_turn()
+        self.message_writer:set_turn_usage(turn_usage)
         self.message_writer:scroll_to_bottom()
 
         self.status_animation:stop()

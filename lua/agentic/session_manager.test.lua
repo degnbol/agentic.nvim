@@ -932,7 +932,8 @@ describe("agentic.SessionManager", function()
                     write_error_message = function()
                         return nil, nil
                     end,
-                    append_separator = noop,
+                    finalize_turn = noop,
+                    set_turn_usage = noop,
                     scroll_to_bottom = noop,
                     is_near_bottom = empty,
                     tool_call_blocks = {},
@@ -1212,7 +1213,7 @@ describe("agentic.SessionManager", function()
                     write_message = spy.new(function(_, msg)
                         table.insert(writes, msg)
                     end),
-                    append_separator = spy.new(function() end),
+                    finalize_turn = spy.new(function() end),
                     write_error_action = spy.new(function(_, msg)
                         table.insert(errors, msg)
                     end),

@@ -574,6 +574,7 @@ All groups use `default = true` so user definitions take priority.
     `AgenticSpinnerBusy`           |Comment|                      Busy spinner
     `AgenticDimmedBlock`           (set in ftplugin)             Dimmed fence lines
     `AgenticUnapprovedCommand`     |DiagnosticVirtualTextWarn|   Non-known-safe parts of an execute permission prompt
+    `AgenticTurnUsage`             |Comment|                      Per-turn token-usage footer
 
 `AgenticUnapprovedCommand` washes the leaves and structural parts of an
 `execute` permission prompt that are not known-safe (anything not matching a

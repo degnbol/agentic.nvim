@@ -122,7 +122,7 @@ describe("turn desync (stuck 1 message behind)", function()
                 tool_update("tc-1", "completed", { "file contents" })
             )
             writer:write_message_chunk(chunk("Here are the results."))
-            writer:append_separator()
+            writer:finalize_turn()
 
             assert.is_true(buf_contains(bufnr, "Here are the results."))
         end)
@@ -140,7 +140,7 @@ describe("turn desync (stuck 1 message behind)", function()
                     )
                 )
                 -- Turn 1 ends (SubAgent still in_progress — no update)
-                writer:append_separator()
+                writer:finalize_turn()
 
                 assert.is_true(
                     buf_contains(bufnr, "running in the background"),
@@ -154,7 +154,7 @@ describe("turn desync (stuck 1 message behind)", function()
                     )
                 )
                 writer:write_message_chunk(chunk("\n\nResult data line 1"))
-                writer:append_separator()
+                writer:finalize_turn()
 
                 assert.is_true(
                     buf_contains(bufnr, "background task has completed"),
@@ -188,7 +188,7 @@ describe("turn desync (stuck 1 message behind)", function()
                 )
 
                 -- Turn 1 ends (no further tool calls)
-                writer:append_separator()
+                writer:finalize_turn()
 
                 -- Turn 2: user sends a new prompt, provider responds normally
                 -- Note: no tool call between turns — this is the edge case
@@ -222,7 +222,7 @@ describe("turn desync (stuck 1 message behind)", function()
                         "The user doesn't want to proceed with this operation."
                     )
                 )
-                writer:append_separator()
+                writer:finalize_turn()
 
                 -- Turn 2 starts with a tool call → clears _suppressing_rejection
                 writer:write_tool_call_block(
@@ -243,15 +243,15 @@ describe("turn desync (stuck 1 message behind)", function()
             -- Simulate the double vim.schedule race:
             -- Turn 1 messages
             writer:write_message_chunk(chunk("Turn 1 response text"))
-            writer:append_separator()
+            writer:finalize_turn()
 
             -- Turn 2 messages
             writer:write_message_chunk(chunk("Turn 2 response text"))
-            writer:append_separator()
+            writer:finalize_turn()
 
             -- Turn 3 messages (submitted quickly)
             writer:write_message_chunk(chunk("Turn 3 response text"))
-            writer:append_separator()
+            writer:finalize_turn()
 
             -- All three turns should be visible
             assert.is_true(
