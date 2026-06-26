@@ -52,7 +52,21 @@ return to the bottom.
 | `_prose_anchor_line` | First prose chunk of a run, while not paused | Turn boundaries (`write_tool_call_block`, `append_separator`, `write_error_message`, `reset_turn_state`) and user-scroll-away (`on_user_scroll` → `_release_prose_pin`) |
 | `_auto_scroll_paused` | `on_user_scroll` when user is not at bottom | `on_user_scroll` when user reaches bottom — *only*. Survives turn boundaries |
 | `_suppress_pin_release` | `_with_modifiable_suppressed` and the deferred scroll callback | Same scope — wraps each synchronous write/scroll |
-| `_should_auto_scroll` / `_scroll_scheduled` | `_auto_scroll` (per-call coalescing) | The scheduled callback |
+| `_should_auto_scroll` | `_auto_scroll`, before the write — the frozen scroll *verdict* | The scheduled callback, after scrolling |
+| `_scroll_scheduled` | `_auto_scroll` — a callback is queued this tick | The scheduled callback (per-tick coalescing guard) |
+
+These last two are distinct roles, easily conflated:
+
+- `_should_auto_scroll` is a **verdict, not the toggle.** It is
+  `_check_auto_scroll`'s result frozen *before* the write — so it is not the
+  same as `not _auto_scroll_paused`. The toggle is one input; the verdict
+  also captures whether the viewport was at the trailing edge (which the
+  write then invalidates by growing the buffer) and the prose-pin override.
+  Neither is recomputable after the write, which is why it is captured and
+  stored.
+- `_scroll_scheduled` is the **queue guard** — it only prevents
+  double-queuing the per-tick callback. It says nothing about whether the
+  scroll will happen.
 
 Field docstrings live on the `MessageWriter` class declaration.
 
