@@ -201,6 +201,34 @@ override what you need.
     Auto-approve read-only tool calls (Read, Grep, Glob) without prompting,
     regardless of target path.
 
+                                              *agentic-config-permissions-tbl*
+`permissions` table
+    Bash command auto-approval patterns. Precedence between the kinds and how
+    `structured` merges over the bundled rules are documented in
+    |agentic-compound-commands|.
+    `use_plugin_defaults`   boolean (default: true)
+        Load the bundled patterns from `permissions.json`.
+    `use_claude_settings`   boolean (default: true)
+        Merge `Bash(...)` patterns from Claude's settings.json files.
+    `auto_approve`          `"allow"` | `"read-only"` | nil (default: `"allow"`)
+        Selects which pattern kinds are auto-approved.
+    `read_only`             string list (default: {})
+        Additional read-only `Bash(...)` glob patterns.
+    `safe_write`            string list (default: {})
+        Additional safe-write glob patterns.
+    `deny`                  string list (default: {})
+        Additional deny patterns.
+    `ask`                   string list (default: {})
+        Additional ask patterns.
+    `structured`            table (default: {})
+        Cmd-keyed structured rules merged over the bundled defaults.
+    `highlight_unapproved`  boolean (default: true)
+        Highlight the non-known-safe parts of an execute prompt while shown.
+
+                                     *agentic-config-auto_approve_trust_scope*
+`auto_approve_trust_scope` boolean (default: true)
+    Gate the per-session `/trust` scope check.
+
 ------------------------------------------------------------------------------
 4.7 SESSION RESTORE                          *agentic-config-session-restore*
 
