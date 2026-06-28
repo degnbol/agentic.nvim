@@ -217,9 +217,11 @@ override what you need.
     `safe_write`            string list (default: {})
         Additional safe-write glob patterns.
     `deny`                  string list (default: {})
-        Additional deny patterns.
+        Deny `Bash(...)` glob patterns. Take precedence over all other
+        fields and reject the command immediately (no prompt; it never runs).
     `ask`                   string list (default: {})
-        Additional ask patterns.
+        Ask patterns. Withhold approval and prompt (override allow, lower
+        precedence than deny).
     `structured`            table (default: {})
         Cmd-keyed structured rules merged over the bundled defaults.
     `highlight_unapproved`  boolean (default: true)
@@ -523,7 +525,9 @@ permission request arrives and `auto_approve_compound_commands` is true:
    asks: `(glob_allow OR structured_allow) AND NOT (glob_deny OR
    structured_deny OR glob_ask OR structured_ask)`.
 
-Deny/ask always take precedence over allow (same as upstream). Which allow
+Deny/ask always take precedence over allow (same as upstream), and differ in
+outcome: a `deny` match rejects the command immediately (no prompt; it never
+runs), while `ask` only withholds approval so the command prompts. Which allow
 rules count depends on `Config.permissions.auto_approve`: "allow" admits
 read-only + safe-write rules, "read-only" admits read-only only, nil admits
 none. Compiled patterns and the bundled file are cached with mtime-based
@@ -534,7 +538,8 @@ gate-kind arrays — `read_only`, `safe_write`, `ask`, `deny` — and each gate
 constrains `options` (literal flag identifiers) and/or `positionals`
 (literal or glob, matched in order). The kind name encodes the policy:
 `read_only` auto-approves at "read-only"/"allow", `safe_write` only at
-"allow", `ask` always prompts, `deny` always vetoes. Add or override rules
+"allow", `ask` withholds approval and prompts, `deny` rejects immediately
+(no prompt, the command never runs). Add or override rules
 via `Config.permissions.structured`, deep-merged over the bundled defaults —
 a cmd key replaces that command's bundled kind-arrays wholesale, and
 `vim.NIL` disables the bundled entry: >lua

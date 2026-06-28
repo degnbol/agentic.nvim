@@ -1895,7 +1895,7 @@ describe("PermissionRules", function()
         end)
 
         it(
-            "does not auto-approve mlr -I foo even at auto_approve = 'allow' (deny wins)",
+            "does not auto-approve mlr -I foo even at auto_approve = 'allow' (ask wins)",
             function()
                 Config.permissions.auto_approve = "allow"
                 PermissionRules.invalidate_cache()
@@ -2537,6 +2537,43 @@ describe("PermissionRules", function()
                 assert.is_false(PermissionRules.should_auto_approve("find $f"))
             end)
         end)
+
+        -- Reject pass: a concrete deny gate rejects outright (no prompt). ask
+        -- and unknown commands fall through to should_auto_reject == false (the
+        -- approve walk then decides prompt vs approve).
+        describe("should_auto_reject", function()
+            local rejected = {
+                "find . -delete",
+                "fd -x rm",
+                "date -s '2020-01-01'",
+                'awk \'BEGIN{system("rm -rf /")}\'',
+                "rm -f x",
+                "rm -rf x", -- clustered force flag
+                "ls | find . -delete", -- deny leaf in a pipeline
+                "ls && find . -delete", -- deny leaf in an && chain
+                "echo $(find . -delete)", -- deny leaf in a substitution
+                "timeout 5 rm -f x", -- deny survives a transparent wrapper
+            }
+            for _, cmd in ipairs(rejected) do
+                it("rejects: " .. cmd, function()
+                    assert.is_true(PermissionRules.should_auto_reject(cmd))
+                end)
+            end
+
+            local not_rejected = {
+                "ls -la", -- clean read-only
+                "rm x", -- plain rm is ask, not deny
+                "sed -i 's/a/b/' f", -- in-place edit is ask, not deny
+                "mlr -I foo", -- in-place edit is ask, not deny
+                "rm $flags x", -- concrete-only: dynamic token does not reject
+                "rm -rf / |", -- parse failure: fail-closed to prompt, not reject
+            }
+            for _, cmd in ipairs(not_rejected) do
+                it("does not reject: " .. cmd, function()
+                    assert.is_false(PermissionRules.should_auto_reject(cmd))
+                end)
+            end
+        end)
     end)
 
     describe("tally_unapproved", function()
@@ -2897,7 +2934,7 @@ describe("PermissionRules", function()
         local prompt = {
             "timeout 5 rm -rf /", -- inner not allowed (deny)
             "time rm x",
-            "timeout 5 sed -i 's/x/y/' f", -- deny survives wrapper
+            "timeout 5 sed -i 's/x/y/' f", -- ask survives wrapper
             "timeout 5 PATH=/evil grep foo", -- inner env hijacker
             "/usr/bin/time -o out grep foo", -- write option
             "timeout 5 grep foo > out", -- write redirect

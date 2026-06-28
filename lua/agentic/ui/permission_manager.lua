@@ -255,8 +255,9 @@ end
 --- Independent checks (any can approve):
 --- 1. Read-only tool kinds ("read", "search") — always safe regardless of path.
 --- 2. Skill loading ("Skill") — injects a SKILL.md into context, no mutation.
---- 3. Compound Bash commands — every pipe/chain segment must match an allow
----    pattern from settings.json with no deny/ask match.
+--- 3. Compound Bash commands — a concrete `deny` match on any executed leaf
+---    rejects outright (no prompt); otherwise every leaf must match an allow
+---    pattern with no deny/ask match to approve.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 --- @return boolean handled
@@ -310,6 +311,9 @@ function PermissionManager:_try_auto_approve(request, callback)
         local command = raw_input and raw_input.command
         if not command and tracker and kind_key(tracker.kind) == "execute" then
             command = tracker.argument
+        end
+        if command and PermissionRules.should_auto_reject(command) then
+            return auto_reject(request, callback, "deny rule: " .. command)
         end
         if command and PermissionRules.should_auto_approve(command) then
             return auto_approve(

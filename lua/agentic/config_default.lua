@@ -423,9 +423,17 @@ local ConfigDefault = {
         bell = false,
     },
 
-    --- Auto-approve Bash permission requests when every segment of a compound
-    --- command (split on |, &&, ||, ;) individually matches an allow pattern
-    --- from ~/.claude/settings.json. Supplements the provider's built-in check.
+    --- Auto-approve Bash/execute permission requests by parsing each command
+    --- with the zsh treesitter grammar and classifying every leaf
+    --- independently — pipelines, &&/||/; chains, loops, conditionals,
+    --- redirects, env-prefixes and command substitutions are all checked
+    --- structurally. Approves only when every leaf matches an allow rule (the
+    --- bundled structured `permissions.json`, plus glob patterns from
+    --- settings.json and `Config.permissions`) with no deny/ask match. Strictly
+    --- more precise than the provider's whole-string glob check, which prompts
+    --- even when each segment is individually allowed.
+    --- (Name is historical — "compound commands" is one case the parser
+    --- handles, not the whole of it.)
     auto_approve_compound_commands = true,
 
     --- Auto-approve read-only tool calls (Read, Grep, Glob — ACP kinds "read"
@@ -448,8 +456,8 @@ local ConfigDefault = {
     ---   nil — no patterns auto-approved (still respects deny/ask)
     --- @field read_only string[] Additional read-only patterns (Bash(...) glob format)
     --- @field safe_write string[] Additional safe-write patterns
-    --- @field deny string[] Additional deny patterns (override read_only and safe_write)
-    --- @field ask string[] Ask patterns (trigger prompt, lower precedence than deny)
+    --- @field deny string[] Deny patterns (Bash(...) glob format) — take precedence over all other fields and REJECT the command immediately (no prompt, the command never runs)
+    --- @field ask string[] Ask patterns — withhold approval and prompt (override allow, lower precedence than deny)
     --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
     --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of the auto_approve switches).
     permissions = {

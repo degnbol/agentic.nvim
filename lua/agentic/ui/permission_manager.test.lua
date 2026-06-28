@@ -445,25 +445,28 @@ describe("agentic.ui.PermissionManager", function()
         end)
 
         it("execute reject_always scopes to the rejected command", function()
+            -- Uses an ask-tier command (git commit) so the first request
+            -- prompts; a deny command (e.g. rm -rf) would auto-reject before
+            -- the cache and never give the user a reject-always choice.
             local cb1 = spy.new(function() end)
             pm:add_request(
-                make_execute_request("rm -rf /tmp/junk", "tc-exec-5"),
+                make_execute_request("git commit -m junk", "tc-exec-5"),
                 cb1 --[[@as function]]
             )
             pm:_complete_request("reject-always")
 
             local cb2 = spy.new(function() end)
             pm:add_request(
-                make_execute_request("rm -rf /tmp/junk", "tc-exec-6"),
+                make_execute_request("git commit -m junk", "tc-exec-6"),
                 cb2 --[[@as function]]
             )
             assert.spy(cb2).was.called(1)
             assert.is_true(cb2:called_with("reject-once"))
 
-            -- A different rm invocation is not cached, so it prompts.
+            -- A different git invocation is not cached, so it prompts.
             local cb3 = spy.new(function() end)
             pm:add_request(
-                make_execute_request("rm -rf /tmp/other", "tc-exec-7"),
+                make_execute_request("git commit -m other", "tc-exec-7"),
                 cb3 --[[@as function]]
             )
             assert.spy(cb3).was.called(0)
@@ -1032,6 +1035,87 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
 
             Config.auto_approve_trust_scope = original
+        end)
+    end)
+
+    describe("auto-reject deny commands", function()
+        local Config = require("agentic.config")
+        local PermissionRules = require("agentic.utils.permission_rules")
+        local orig_read_json
+        local orig_auto_approve
+        local orig_use_plugin
+        local orig_use_claude
+        local orig_compound
+
+        --- @param command string
+        --- @param tool_call_id string
+        --- @return agentic.acp.RequestPermission
+        local function make_execute_request(command, tool_call_id)
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = tool_call_id,
+                    kind = "execute",
+                    rawInput = { command = command } --[[@as agentic.acp.RawInput]],
+                },
+                options = {
+                    { optionId = "allow-once", name = "Allow once", kind = "allow_once" },
+                    { optionId = "reject-once", name = "Reject once", kind = "reject_once" },
+                },
+            }
+        end
+
+        before_each(function()
+            orig_read_json = PermissionRules.read_json
+            --- @diagnostic disable-next-line: duplicate-set-field
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return nil
+                end
+                return orig_read_json(path)
+            end
+            orig_auto_approve = Config.permissions.auto_approve
+            orig_use_plugin = Config.permissions.use_plugin_defaults
+            orig_use_claude = Config.permissions.use_claude_settings
+            orig_compound = Config.auto_approve_compound_commands
+            Config.permissions.auto_approve = "allow"
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = true
+            Config.auto_approve_compound_commands = true
+            PermissionRules.invalidate_cache()
+        end)
+
+        after_each(function()
+            PermissionRules.read_json = orig_read_json
+            Config.permissions.auto_approve = orig_auto_approve
+            Config.permissions.use_plugin_defaults = orig_use_plugin
+            Config.permissions.use_claude_settings = orig_use_claude
+            Config.auto_approve_compound_commands = orig_compound
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("rejects a deny command without prompting", function()
+            local cb = spy.new(function() end)
+            local prompted = pm:add_request(
+                make_execute_request("find . -delete", "tc-deny-1"),
+                cb --[[@as function]]
+            )
+            assert.is_false(prompted)
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("reject-once"))
+            assert.is_nil(pm.current_request)
+        end)
+
+        it("prompts an ask command instead of rejecting", function()
+            local cb = spy.new(function() end)
+            local prompted = pm:add_request(
+                make_execute_request("git commit -m x", "tc-ask-1"),
+                cb --[[@as function]]
+            )
+            assert.is_true(prompted)
+            assert.spy(cb).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
         end)
     end)
 end)

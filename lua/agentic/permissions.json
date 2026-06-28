@@ -54,6 +54,12 @@
   "ack":       { "read_only": [{}] },
   "pdfgrep":   { "read_only": [{}] },
 
+  "ast-grep": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["U", "update-all", "i", "interactive"] },
+                  { "positionals": ["new"] }]
+  },
+
   "pdftotext": { "read_only": [{ "positionals": ["*.pdf", "-"] }] },
 
   "find": {
@@ -106,7 +112,7 @@
 
   "sort": {
     "read_only": [{}],
-    "deny":      [{ "options": ["o", "output"] }]
+    "ask":       [{ "options": ["o", "output"] }]
   },
 
   "uniq": { "read_only": [{}] },
@@ -188,7 +194,7 @@
 
   "sed": {
     "read_only": [{}],
-    "deny":      [{ "options": ["i", "in-place"] }]
+    "ask":       [{ "options": ["i", "in-place"] }]
   },
 
   "awk": {
@@ -404,8 +410,8 @@
 
   "mlr": {
     "read_only": [{}],
-    "deny":      [{ "options": ["I", "in-place"] }],
-    "ask":       [{ "positionals": ["split"] },
+    "ask":       [{ "options": ["I", "in-place"] },
+                  { "positionals": ["split"] },
                   { "positionals": ["tee"] }]
   },
 
@@ -464,14 +470,14 @@
 
   "ruff": {
     "safe_write": [{}],
-    "deny":       [{ "options": ["fix", "fix-only"] }]
+    "ask":        [{ "options": ["fix", "fix-only"] }]
   },
 
   "selene": { "read_only": [{}] },
 
   "stylua": {
     "safe_write": [{}],
-    "deny":       [{ "options": ["replace"] }]
+    "ask":        [{ "options": ["replace"] }]
   },
 
   "tree-sitter": { "safe_write": [{}] },
@@ -498,5 +504,8 @@
   "blender": { "safe_write": [{ "options": ["background"] }] },
   "pymol":   { "safe_write": [{}] },
 
-  "rm": { "ask": [{}] }
+  "rm": {
+    "ask":  [{}],
+    "deny": [{ "options": ["f", "force"] }]
+  }
 }

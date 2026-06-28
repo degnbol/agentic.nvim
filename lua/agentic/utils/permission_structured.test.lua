@@ -950,4 +950,70 @@ describe("PermissionStructured", function()
             assert.is_false(c.deny)
         end)
     end)
+
+    -- ------------------------------------------------------------------
+    -- Concrete-only deny — deny_leaf(entries, parsed)
+    -- ------------------------------------------------------------------
+    describe("deny_leaf", function()
+        local find_deny = { find = { deny = { { options = { "exec" } } } } }
+
+        it("true when a concrete deny gate matches", function()
+            assert.is_true(
+                PermissionStructured.deny_leaf(
+                    find_deny,
+                    parsed("find", { ".", "-exec", "rm", "{}" })
+                )
+            )
+        end)
+
+        it("false when no deny gate matches", function()
+            assert.is_false(
+                PermissionStructured.deny_leaf(
+                    find_deny,
+                    parsed("find", { ".", "-name", "x" })
+                )
+            )
+        end)
+
+        it("ignores ask gates (only deny rejects)", function()
+            assert.is_false(
+                PermissionStructured.deny_leaf(
+                    { sed = { ask = { { options = { "i" } } } } },
+                    parsed("sed", { "-i", "s/a/b/", "f" })
+                )
+            )
+        end)
+
+        -- Concrete-only divergence from decide_leaf: a dynamic flag token
+        -- wildcards the deny gate for decide_leaf (escalates to a prompt) but
+        -- NOT for deny_leaf (must stay concrete so it falls through to approve).
+        describe("dynamic token does not satisfy a deny gate", function()
+            local rm_force = { rm = { deny = { { options = { "f", "force" } } } } }
+            --- @type agentic.ParsedLeaf
+            local dynamic_flag =
+                { cmd_name = "rm", args = { "$flags", "x" }, args_dynamic = { true, false } }
+
+            it("decide_leaf wildcards it to deny", function()
+                assert.equal(
+                    "deny",
+                    PermissionStructured.decide_leaf(rm_force, dynamic_flag, "allow")
+                )
+            end)
+
+            it("deny_leaf stays concrete (false)", function()
+                assert.is_false(
+                    PermissionStructured.deny_leaf(rm_force, dynamic_flag)
+                )
+            end)
+
+            it("deny_leaf rejects a concrete -f", function()
+                assert.is_true(
+                    PermissionStructured.deny_leaf(
+                        rm_force,
+                        parsed("rm", { "-f", "x" })
+                    )
+                )
+            end)
+        end)
+    end)
 end)

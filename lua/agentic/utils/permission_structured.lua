@@ -42,7 +42,9 @@ local M = {}
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
 --- `read_only` approves at "read-only"|"allow", `safe_write` only at "allow",
---- `ask` always prompts, `deny` always vetoes. Each is an array of gates.
+--- `ask` withholds approval and prompts, `deny` rejects immediately (no prompt,
+--- the command never runs — see `PermissionRules.should_auto_reject`). Each is an
+--- array of gates.
 --- @class agentic.StructuredCmdEntry
 --- @field read_only?  agentic.PermGate[]
 --- @field safe_write? agentic.PermGate[]
@@ -740,6 +742,32 @@ function M.classify_leaf(entries, parsed)
         end
     end
     return result
+end
+
+--- Concrete-only deny check for the reject pass. True iff some deny gate matches
+--- under CONCRETE matching — a dynamic token NEVER satisfies a deny gate here.
+--- This deliberately diverges from `decide_leaf`/`classify_leaf`, which wildcard
+--- dynamic tokens so a laundered payload (`rm $flags x`) escalates to a prompt:
+--- the reject pass runs first and its fallback is a hard reject with no prompt,
+--- so a maybe-deny must fall through to the approve walk (where the dynamic token
+--- withholds approval and prompts) rather than hard-reject here. Concreteness is
+--- obtained by handing `build_exist_ctx` an empty dynamic mask, so every helper
+--- treats all tokens as static — no parallel matcher needed.
+--- @param entries agentic.StructuredEntries
+--- @param parsed agentic.ParsedLeaf
+--- @return boolean
+function M.deny_leaf(entries, parsed)
+    local ctx = build_exist_ctx(parsed.args, {})
+    local relevant = relevant_entries(entries, parsed.cmd_name)
+    local function exist(gate)
+        return gate_matches_existential(gate, ctx)
+    end
+    for _, e in ipairs(relevant) do
+        if any_gate(e.deny, exist) then
+            return true
+        end
+    end
+    return false
 end
 
 return M

@@ -12,7 +12,7 @@ description:
 
 # Permissions
 
-## Two-tier system (we are tier 2)
+## Two-step system
 
 The ACP provider's SDK runs its own permission check first — settings.json
 allow/deny/ask, working-directory membership, path safety. Only if that
@@ -23,6 +23,13 @@ only decide how to handle what it escalates as `ask`. Every layer below
 reduces prompt fatigue inside that escalation surface; the one exception
 that *grants* new authorisation is `/trust`, which compensates with
 git-recoverability gates.
+
+This bounds our `deny` too: a bundled/structured `deny` only fires on the SDK's
+`ask` escalation surface. A command the SDK auto-approves (e.g. the user
+allow-lists `Bash(find:*)` in settings.json) never reaches us, so our deny can't
+block it. For an *unconditional* block the user must also add a settings.json
+`deny` rule (SDK-enforced, tier 1). Our deny is a backstop on the escalation
+surface, not a hard guarantee.
 
 State is per-session. Everything below clears on `/new`, session cancel,
 or tabpage close.
@@ -105,7 +112,9 @@ correctness model.)
 one that mutates disk or executes arbitrary code as its normal action is
 `safe_write`, with write-causing options/subcommands carved out as `ask`/`deny`.
 The kind name encodes the policy — `read_only` approves at "read-only"/"allow",
-`safe_write` only at "allow", `ask`/`deny` are unconditional. Users override via
+`safe_write` only at "allow", `ask` and `deny` are both unconditional but differ
+in outcome: **`ask` withholds approval and prompts; `deny` rejects immediately
+(no prompt, the command never runs)**. Users override via
 `Config.permissions.structured` (deep-merged over the bundled defaults; a cmd
 key replaces that command's bundled kind-arrays wholesale, `vim.NIL` disables
 it).
@@ -148,6 +157,16 @@ allow is union; the allow set resolves per `Config.permissions.auto_approve`
 `nil` = no allow rules). A leaf approves only when every layer that votes
 against it stays silent.
 
+Deny additionally **short-circuits to a rejection**: a separate existential pass
+(`PermissionRules.should_auto_reject`, run by the manager *before*
+`should_auto_approve`) rejects the whole command — no prompt — as soon as any one
+executed leaf matches a concrete deny gate. Ask only *withholds approval* (the
+command still prompts). The deny pass is **concrete-only**: a dynamic token
+(`$var`, glob) does NOT satisfy a deny gate there, so `rm $flags x` falls through
+to the approve walk and prompts, while `rm -f x` rejects. A parse failure returns
+false (prompt, not reject) — unparseable commands fail closed to a prompt, never
+a silent reject.
+
 #### Known limitations (uncatchable — fall through to a prompt)
 
 A command whose write/exec intent is hidden inside an opaque token cannot
@@ -159,15 +178,16 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   body is opaque (no sed parser/injection). A glob carve-out in the
   positional is unsound (GNU sed needs no space after `e`, accepts a bare
   `e` or an address prefix, `s///e` allows any delimiter/flag order). Kept
-  in `read_only` with a `deny` on `-i` only.
+  in `read_only` with an `ask` on `-i` only (in-place edit is a legitimate
+  mutation the user may want — prompt, don't reject).
 - **`awk`** script body via `-f scriptfile` or DSL — opaque. The
   `awk` `deny` on positional `*system*` is a parser-independent backstop
   (catches an inline `system(...)` in the script positional).
 - **`mlr`** write verbs reached past a `then` chain (`mlr cat then tee x`)
   or inside a `put`/`filter` DSL string — positional matching is
   index-based and sees only the first verb, and the DSL body is one opaque
-  positional. The `ask` on `split`/`tee` and `deny` on `-I` catch only the
-  direct forms.
+  positional. The `ask` on `split`/`tee` and `-I` catches only the direct
+  forms.
 - **Dynamic expansion** at a gated command prompts rather than launders
   (a dynamic token wildcards deny/ask — see above), so `find . $f` and
   `f=$(…); find . $f` escalate. The exception: a `$var` resolving to a literal

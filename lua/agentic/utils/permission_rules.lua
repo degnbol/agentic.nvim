@@ -1077,6 +1077,9 @@ local function walk_command(node, src, ctx, known, funcs)
             parsed,
             ctx.auto_approve
         )
+        -- In the APPROVE walk deny and ask both collapse to "not approved". The
+        -- distinction (deny rejects with no prompt, ask prompts) is enforced
+        -- earlier by `should_auto_reject` — see the reject walk below.
         if structured == "deny" or structured == "ask" then
             return false
         end
@@ -1909,6 +1912,152 @@ function M.tally_unapproved(command)
     local ranges = {}
     tally_walk(root, command, ctx, ranges)
     return ranges
+end
+
+-- ── Reject walk (deny rules reject immediately, no prompt) ───────────────────
+--
+-- A third traversal, parallel to the decision `walk` and the highlight
+-- `tally_walk`. A `deny` gate must REJECT a command outright (no prompt), whereas
+-- the decision walk collapses deny and ask into a single "not approved →
+-- prompt". Reject is EXISTENTIAL (any one executed leaf matching a concrete deny
+-- rejects the whole command), so it is a separate first-deny-wins pass rather
+-- than a tri-state retrofit of the universal-AND decision walk.
+--
+-- Deny matching is CONCRETE-ONLY (see `PermissionStructured.deny_leaf`): a
+-- dynamic token never satisfies a deny gate, so `rm $flags x` is not rejected —
+-- it falls through to the approve walk, which wildcards the dynamic token,
+-- withholds approval, and prompts. Net: concrete deny rejects,
+-- laundered/uncertain deny prompts.
+
+--- @alias agentic.utils.PermissionRules.RejectCtx { deny: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer }
+
+--- Forward declaration — `reject_walk` and `command_is_denied` are mutually
+--- recursive (a transparent-prefix wrapper re-walks its inner command).
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.RejectCtx): boolean
+local reject_walk
+
+--- Whether a single `command` leaf is a concrete deny: a glob deny pattern from
+--- settings.json/Config, or a structured deny gate (concrete-only). A transparent
+--- prefix (`timeout … cmd`, `sh -c '…'`) re-walks its inner command so a wrapped
+--- deny still rejects. Returns false on any extraction bail — the leaf's own
+--- denial cannot be established, and any executed substitution inside it is
+--- visited separately by `reject_walk`'s child recursion.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.RejectCtx
+--- @return boolean
+local function command_is_denied(node, src, ctx)
+    local args, arg_nodes, args_dynamic, name_node =
+        extract_args(node, src, ctx, nil, function()
+            return true
+        end)
+    if not args or not name_node then
+        return false
+    end
+    local name = command_name_text(name_node, src)
+    if not name then
+        return false
+    end
+    local cmd_name = M.strip_command_path(name)
+
+    -- Transparent prefix: a deny buried under `timeout`/`sh -c` still rejects.
+    local inner =
+        inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    if inner and ctx.depth < NESTED_MAX_DEPTH then
+        local root = parse_zsh(inner)
+        if
+            root
+            and reject_walk(
+                root,
+                inner,
+                vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
+            )
+        then
+            return true
+        end
+    end
+
+    local leaf = name
+    if #args > 0 then
+        leaf = leaf .. " " .. table.concat(args, " ")
+    end
+    if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
+        return true
+    end
+
+    if next(ctx.structured_entries) ~= nil then
+        local PermissionStructured =
+            require("agentic.utils.permission_structured")
+        return PermissionStructured.deny_leaf(ctx.structured_entries, {
+            cmd_name = cmd_name,
+            args = args,
+            args_dynamic = args_dynamic,
+        })
+    end
+    return false
+end
+
+--- Walk the parse tree, returning true on the first executed `command` leaf that
+--- is a concrete deny. Recurses into every executed position — pipelines,
+--- &&/||/; chains, loops, conditionals, redirected bodies, and command
+--- substitutions — by descending into all named children. A
+--- `function_definition` is skipped: defining a function never runs its body (a
+--- later call laundering through it falls to the approve walk, which prompts).
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.RejectCtx
+--- @return boolean
+reject_walk = function(node, src, ctx)
+    local t = node:type()
+    if t == "function_definition" then
+        return false
+    end
+    if t == "command" and command_is_denied(node, src, ctx) then
+        return true
+    end
+    for child in node:iter_children() do
+        if child:named() and child:type() ~= "comment" then
+            if reject_walk(child, src, ctx) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+--- Whether a Bash command must be REJECTED outright (a `deny` rule matched), as
+--- opposed to merely not-approved. Parses with the zsh grammar and returns true
+--- if any executed leaf is a concrete deny (a structured `deny` gate or a glob
+--- deny pattern). Concrete-only — a dynamic token does not trigger a reject (it
+--- falls through to the approve walk's prompt). Fail-closed-to-PROMPT: no parser,
+--- a parse error, or an over-long command returns false so the command prompts
+--- rather than silently rejecting.
+--- @param command string
+--- @return boolean
+function M.should_auto_reject(command)
+    if type(command) ~= "string" or command == "" then
+        return false
+    end
+    if #command > 65536 then
+        return false
+    end
+
+    local deny = M.get_deny_patterns()
+    local structured_entries = M.get_structured_entries()
+    if #deny == 0 and next(structured_entries) == nil then
+        return false
+    end
+
+    local root = parse_zsh(command)
+    if not root then
+        return false
+    end
+
+    return reject_walk(root, command, {
+        deny = deny,
+        structured_entries = structured_entries,
+        depth = 0,
+    })
 end
 
 --- Check if a Bash command should be auto-approved. Parses the command with the
