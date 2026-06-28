@@ -5,6 +5,7 @@
   "df":        { "read_only": [{}] },
   "file":      { "read_only": [{}] },
   "stat":      { "read_only": [{}] },
+  "nm":        { "read_only": [{}] },
   "wc":        { "read_only": [{}] },
   "column":    { "read_only": [{}] },
   "eza":       { "read_only": [{}] },
