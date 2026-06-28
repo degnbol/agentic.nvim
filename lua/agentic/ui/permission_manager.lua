@@ -306,22 +306,16 @@ function PermissionManager:_try_auto_approve(request, callback)
     -- rawInput.command is nil; the actual command lives in the prior
     -- tool_call_update tracker as `argument` — see acp skill
     -- `references/opencode.md` § "Permission request shape" finding 3.
-    if Config.auto_approve_compound_commands then
-        local raw_input = tool_call.rawInput
-        local command = raw_input and raw_input.command
-        if not command and tracker and kind_key(tracker.kind) == "execute" then
-            command = tracker.argument
-        end
-        if command and PermissionRules.should_auto_reject(command) then
-            return auto_reject(request, callback, "deny rule: " .. command)
-        end
-        if command and PermissionRules.should_auto_approve(command) then
-            return auto_approve(
-                request,
-                callback,
-                "compound command: " .. command
-            )
-        end
+    local raw_input = tool_call.rawInput
+    local command = raw_input and raw_input.command
+    if not command and tracker and kind_key(tracker.kind) == "execute" then
+        command = tracker.argument
+    end
+    if command and PermissionRules.should_auto_reject(command) then
+        return auto_reject(request, callback, "deny rule: " .. command)
+    end
+    if command and PermissionRules.should_auto_approve(command) then
+        return auto_approve(request, callback, "compound command: " .. command)
     end
 
     -- Client-side allow_always/reject_always cache (provider persistence unreliable via ACP)

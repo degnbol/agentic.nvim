@@ -190,12 +190,6 @@ override what you need.
 ------------------------------------------------------------------------------
 4.6 PERMISSIONS                                *agentic-config-permissions*
 
-                              *agentic-config-auto_approve_compound_commands*
-`auto_approve_compound_commands` boolean (default: true)
-    Auto-approve Bash permission requests when every segment of a compound
-    command individually matches an allow pattern. See
-    |agentic-compound-commands| for details.
-
                                 *agentic-config-auto_approve_read_only_tools*
 `auto_approve_read_only_tools` boolean (default: true)
     Auto-approve read-only tool calls (Read, Grep, Glob) without prompting,
@@ -501,7 +495,7 @@ https://github.com/anthropics/claude-code/issues/16561
 
 agentic.nvim adds a client-side layer that parses every Bash command with the
 `zsh` treesitter grammar and matches its leaves individually. When a Bash
-permission request arrives and `auto_approve_compound_commands` is true:
+permission request arrives:
 
 1. Parse the command with the `zsh` treesitter grammar. An absent parser,
    a parse error, or a malformed/truncated tree fails closed → prompt.
@@ -556,12 +550,6 @@ a cmd key replaces that command's bundled kind-arrays wholesale, and
         },
     })
 <
-Disable the whole compound layer with: >lua
-    require("agentic").setup({
-        auto_approve_compound_commands = false,
-    })
-<
-
 Implementation: `lua/agentic/utils/permission_rules.lua`
 
 ==============================================================================

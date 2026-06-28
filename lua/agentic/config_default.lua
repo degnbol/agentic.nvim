@@ -423,19 +423,6 @@ local ConfigDefault = {
         bell = false,
     },
 
-    --- Auto-approve Bash/execute permission requests by parsing each command
-    --- with the zsh treesitter grammar and classifying every leaf
-    --- independently — pipelines, &&/||/; chains, loops, conditionals,
-    --- redirects, env-prefixes and command substitutions are all checked
-    --- structurally. Approves only when every leaf matches an allow rule (the
-    --- bundled structured `permissions.json`, plus glob patterns from
-    --- settings.json and `Config.permissions`) with no deny/ask match. Strictly
-    --- more precise than the provider's whole-string glob check, which prompts
-    --- even when each segment is individually allowed.
-    --- (Name is historical — "compound commands" is one case the parser
-    --- handles, not the whole of it.)
-    auto_approve_compound_commands = true,
-
     --- Auto-approve read-only tool calls (Read, Grep, Glob — ACP kinds "read"
     --- and "search") without prompting, regardless of target path. These tools
     --- cannot mutate the filesystem.

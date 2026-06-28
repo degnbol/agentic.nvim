@@ -54,8 +54,9 @@ Provider sends "session/request_permission"
 ## Four auto-approval mechanisms
 
 All in `PermissionManager._try_auto_approve()`. Independent — any one can
-approve or reject; first decision wins. Each layer has its own
-`Config.auto_approve_*` master switch (all default `true`).
+approve or reject; first decision wins. Read-only tools, skills, and trust
+scope each have a `Config.auto_approve_*` master switch (all default `true`);
+shell command parsing always runs (no switch — see mechanism 2).
 
 ### 1. Read-only tools (`Config.auto_approve_read_only_tools`)
 
@@ -70,14 +71,18 @@ read-only kind, approve anyway. This catches opencode raising
 underlying read tool. See the acp skill's `references/opencode.md`
 § "Permission request shape" finding 1.
 
-### 2. Shell command parsing (`Config.auto_approve_compound_commands`)
+### 2. Shell command parsing (always on)
 
 Each `Bash`/`execute` command is parsed with the **zsh treesitter grammar**
 and every leaf classified independently, so pipelines, loops, conditionals,
 redirects, and env-prefixes are all checked structurally — catching evasions a
-whole-string glob cannot see. (The config key keeps the historical name
-`auto_approve_compound_commands`; compound commands are one case the parser
-handles, not the whole of it.) This fills a provider gap: the SDK matches the
+whole-string glob cannot see. This runs unconditionally with no master switch:
+the parser only ever turns the provider's SDK `ask` escalations into approvals
+for provably-safe commands or rejections for provably-dangerous ones — both
+strictly better than the prompt you'd get otherwise, with no safety downside
+(the SDK runs its own check underneath). "Confirm every shell command" is
+achieved by leaving the allow rules empty. This fills a provider gap: the SDK
+matches the
 entire command string against each `Bash(...)` pattern, so `grep foo | head -20`
 prompts even when both `Bash(grep *)` and `Bash(head *)` are allowed.
 `PermissionRules` (`lua/agentic/utils/permission_rules.lua`) walks the parse

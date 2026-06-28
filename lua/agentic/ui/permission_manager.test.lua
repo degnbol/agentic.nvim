@@ -1045,7 +1045,6 @@ describe("agentic.ui.PermissionManager", function()
         local orig_auto_approve
         local orig_use_plugin
         local orig_use_claude
-        local orig_compound
 
         --- @param command string
         --- @param tool_call_id string
@@ -1077,11 +1076,9 @@ describe("agentic.ui.PermissionManager", function()
             orig_auto_approve = Config.permissions.auto_approve
             orig_use_plugin = Config.permissions.use_plugin_defaults
             orig_use_claude = Config.permissions.use_claude_settings
-            orig_compound = Config.auto_approve_compound_commands
             Config.permissions.auto_approve = "allow"
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
-            Config.auto_approve_compound_commands = true
             PermissionRules.invalidate_cache()
         end)
 
@@ -1090,7 +1087,6 @@ describe("agentic.ui.PermissionManager", function()
             Config.permissions.auto_approve = orig_auto_approve
             Config.permissions.use_plugin_defaults = orig_use_plugin
             Config.permissions.use_claude_settings = orig_use_claude
-            Config.auto_approve_compound_commands = orig_compound
             PermissionRules.invalidate_cache()
         end)
 
