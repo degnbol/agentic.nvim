@@ -7,7 +7,7 @@ STYLUA   ?= $(shell which stylua 2>/dev/null || echo "$(HOME)/.local/share/nvim/
 PROJECT ?= .
 LOGDIR  ?= .luals-log
 
-.PHONY: luals selene selene-file format-check format format-file check test validate install-git-hooks
+.PHONY: luals selene selene-file format-check format format-file check test validate helptags install-git-hooks
 
 # Each test file runs in a fresh nvim process so module-level state, stubs,
 # autocmds, and `vim.schedule`-queued callbacks cannot leak between files.
@@ -43,6 +43,12 @@ luals:
 		echo "Checking $$dir..."; \
 		VIMRUNTIME="$$VIMRUNTIME" "$(LUALS)" --check "$$dir" --checklevel=Warning --configpath="$(CURDIR)/.luarc.json" || exit 1; \
 	done
+
+# Vimdoc tag validation — duplicate/malformed tags break :help navigation.
+# pcall + cq so a tag error exits nonzero instead of hanging headless nvim
+# (a bare `-c helptags` would abort before reaching `-c qa`).
+helptags:
+	@$(NVIM) --headless -c "lua local ok,err=pcall(vim.cmd,'helptags doc'); if ok then vim.cmd('qa') else io.stderr:write(tostring(err)) vim.cmd('cq') end"
 
 # Selene linter
 selene:
@@ -80,11 +86,15 @@ validate:
 	rc_selene=$$?; \
 	echo "selene: $$rc_selene (took $$(($$(date +%s) - start))s) - log: .local/agentic_selene_output.log"; \
 	start=$$(date +%s); \
+	make helptags > .local/agentic_helptags_output.log 2>&1; \
+	rc_helptags=$$?; \
+	echo "helptags: $$rc_helptags (took $$(($$(date +%s) - start))s) - log: .local/agentic_helptags_output.log"; \
+	start=$$(date +%s); \
 	make test > .local/agentic_test_output.log 2>&1; \
 	rc_test=$$?; \
 	echo "test: $$rc_test (took $$(($$(date +%s) - start))s) - log: .local/agentic_test_output.log"; \
 	echo "Total: $$(($$(date +%s) - total_start))s"; \
-	if [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_test -ne 0 ]; then \
+	if [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ]; then \
 		echo "Validation failed! Check log files for details."; \
 		exit 1; \
 	fi
