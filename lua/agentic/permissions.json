@@ -130,6 +130,13 @@
     "ask":       [{ "options": ["i", "inplace", "in-place"] }]
   },
   "xq":      { "read_only": [{}] },
+
+  "sqlite3": {
+    "read_only": [
+      { "options": ["readonly"], "leading_options": ["safe"] }
+    ]
+  },
+
   "xmllint": { "read_only": [{}] },
   "xxd":     { "read_only": [{}] },
   "hexdump": { "read_only": [{}] },

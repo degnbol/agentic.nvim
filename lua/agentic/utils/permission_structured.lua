@@ -26,6 +26,10 @@ local M = {}
 --- @alias agentic.PermDecision "allow" | "ask" | "deny" | nil
 --- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
 
+--- Composition: a gate's present fields are ANDed; identifiers within one
+--- `options`/`leading_options` list are ORed; gates within a kind-array are ORed.
+--- To require two distinct flags *together*, split them across `options` and
+--- `leading_options` — listing both in one `options` array matches either.
 --- @class agentic.PermGate
 --- @field options?     string[] -- flag identifiers (dashless), matched
 ---        order-free over every flag anywhere in the command.
