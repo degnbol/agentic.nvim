@@ -141,6 +141,7 @@
   "shasum":    { "read_only": [{}] },
   "sha256sum": { "read_only": [{}] },
   "cksum":     { "read_only": [{}] },
+  "uuidgen":   { "read_only": [{}] },
 
   "man":     { "read_only": [{}] },
   "info":    { "read_only": [{}] },
