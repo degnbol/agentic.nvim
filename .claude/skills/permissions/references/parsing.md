@@ -132,12 +132,15 @@ nested block.
    — `cat "$(ls)"` approves). In argument and for-list position the output is
    then spliced in as a *dynamic token*, so a gated outer command still prompts
    — `find . $(echo -exec rm)` and `find "$(echo -exec rm)"` approve the inner
-   `echo` but the dynamic token wildcard-fires find's `-exec` gate. Still bails
+   `echo` but the dynamic token wildcard-fires find's `-exec` gate. A process
+   substitution `<(…)`/`>(…)` in **argument** position also recurses through
+   `walk_substitution_inner`, then splices a *static* `/dev/fd` placeholder (it
+   expands to a `/dev/fd/N` path, never a flag or subcommand). Still bails
    (output is a control surface the dynamic-token machinery can't guard):
    substitution as the command name (`$(echo rm) x`), concatenation
    (`a$(b)c`, `"pre$(…)"`) or a multi-expansion quoted string (`"$a$b"`),
-   process substitution (`<(…)`), case value/pattern, a quoted `"$(…)"` for-list
-   item, and redirect target (`cat > $(echo f)`).
+   process substitution outside argument position, case value/pattern, a quoted
+   `"$(…)"` for-list item, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
    FD duplication (`2>&1`) are safe; any other file redirect bails. Env
    prefixes that hijack execution (`PATH=`, `LD_*`, `BASH_ENV`) bail.

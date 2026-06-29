@@ -1031,6 +1031,28 @@ describe("PermissionRules", function()
             end)
         end)
 
+        describe("process substitution", function()
+            it("approves a read-only command with read-only procsub inners", function()
+                -- `<(…)` expands to a /dev/fd path; the inner `sort`s
+                -- recurse-approve, so the whole command auto-approves.
+                assert.is_true(
+                    approves_at("read-only", "diff <(sort a.tsv) <(sort b.tsv)")
+                )
+            end)
+
+            it("prompts when a procsub inner is not in any allow list", function()
+                assert.is_false(
+                    approves_at("allow", "diff <(sort a.tsv) <(rm -rf /)")
+                )
+            end)
+
+            it("rejects when a procsub inner hits a deny gate", function()
+                assert.is_false(
+                    approves_at("allow", "diff <(find . -exec rm {} +) <(sort b)")
+                )
+            end)
+        end)
+
         it("approves command from plugin defaults when auto_approve=allow", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
@@ -1254,12 +1276,11 @@ describe("PermissionRules", function()
             -- describe blocks below); a top-level `test_command` is a
             -- side-effect-free predicate that walks; a brace group runs
             -- sequentially in the current shell so it walks like a `list`
-            -- (covered separately below). The remaining cases (`!`, subshell,
-            -- process substitution) stay rejected.
+            -- (covered separately below). The remaining cases (`!`, subshell)
+            -- stay rejected. Process substitution recurses (see the #4 block).
             for _, cmd in ipairs({
                 "! rm x",
                 "( rm -rf x )",
-                "cat <(ls)",
             }) do
                 it("rejects " .. cmd, function()
                     assert.is_false(decide(cmd, ALLOW))
@@ -1653,8 +1674,12 @@ describe("PermissionRules", function()
                 assert.is_false(decide("cat $(echo $(rm x))", ALLOW_CAT_LS))
             end)
 
-            it("rejects process substitution — only command substitution recurses", function()
-                assert.is_false(decide("cat <(ls)", ALLOW_CAT_LS))
+            it("approves process substitution — inner recurses, arg is a /dev/fd path", function()
+                assert.is_true(decide("cat <(ls)", ALLOW_CAT_LS))
+            end)
+
+            it("rejects process substitution with a disallowed inner", function()
+                assert.is_false(decide("cat <(rm x)", ALLOW_CAT_LS))
             end)
 
             it("approves a for-loop over a substitution list", function()

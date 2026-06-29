@@ -885,9 +885,11 @@ local walk_substitution_inner
 --- A bare `$(…)` argument and a quoted `"$(…)"` (#4b: a `string` whose single
 --- named child is a `command_substitution`) both vet their inner via
 --- `inner_check` (it runs) and splice the inner's `$(…)` text as a dynamic
---- token, so a gated outer command still prompts. Other substitution-bearing
---- arguments (concatenation `a$(b)c`, process substitution `<(…)`, a multi-child
---- quoted string) bail.
+--- token, so a gated outer command still prompts. Process substitution `<(…)` /
+--- `>(…)` also vets its inner via `inner_check`, but splices a *static*
+--- `/dev/fd` placeholder — it always expands to a `/dev/fd/N` path, never a flag
+--- or subcommand, so it can't launder a gate token. Other substitution-bearing
+--- arguments (concatenation `a$(b)c`, a multi-child quoted string) bail.
 --- @param node TSNode
 --- @param src string
 --- @param ctx any walk or tally ctx — only threaded through to `inner_check`
@@ -933,6 +935,20 @@ local function extract_args(node, src, ctx, known, inner_check)
             table.insert(args, vim.treesitter.get_node_text(child, src))
             table.insert(arg_nodes, child)
             table.insert(args_dynamic, true)
+        elseif t == "process_substitution" then
+            -- `<(cmd)` / `>(cmd)`: vet the inner command(s) (they run), then
+            -- splice a concrete `/dev/fd` placeholder. The arg always expands to
+            -- a single `/dev/fd/N` path — structurally a path, never a flag or
+            -- subcommand — so unlike `$(…)` output it cannot launder a gate token
+            -- and stays static (a dynamic splice would wildcard-fire the outer
+            -- command's deny/ask gates and over-prompt). `>(…)` is the same node
+            -- type and equally safe: a writing inner still bails on the recursion.
+            if not inner_check(child, src, ctx) then
+                return nil
+            end
+            table.insert(args, "/dev/fd")
+            table.insert(arg_nodes, child)
+            table.insert(args_dynamic, false)
         elseif child:named() then
             -- #3: a bare `$name`/`${name}` bound to a splitting-proof literal
             -- earlier in this straight-line sequence resolves to that literal and
@@ -1193,8 +1209,11 @@ end
 --- in argument / for-list position the caller marks the spliced token dynamic,
 --- so the structured layer wildcards deny/ask over it. A single-child quoted
 --- `"$(…)"` argument (#4b) is unwrapped to its inner `command_substitution` and
---- passed here too. The remaining non-bare forms (concatenation `a$(b)c`,
---- process substitution `<(…)`, a multi-child quoted string) are bailed by
+--- passed here too. A process substitution `<(…)` / `>(…)` node is also passed
+--- here — its inner commands are this node's named children, so the same
+--- iteration vets them (the caller then splices a static `/dev/fd` placeholder
+--- rather than a dynamic token). The remaining non-bare forms (concatenation
+--- `a$(b)c`, a multi-child quoted string) are bailed by
 --- `subtree_has_substitution` at the call site before reaching here.
 --- @param subst TSNode
 --- @param src string

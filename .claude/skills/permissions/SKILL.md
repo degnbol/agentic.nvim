@@ -135,9 +135,11 @@ it).
   branch — each body command must itself approve. A bare `command_substitution`
   in argument, for-list, or assignment-value position recurses: its inner must
   approve standalone, and its output is spliced as a dynamic token so a gated
-  outer command still prompts. Substitution as the command name, string-embedded
-  or concatenated, process substitution (`<(…)`), case value/pattern, or
-  redirect target still bails (see [references/parsing.md](references/parsing.md)).
+  outer command still prompts. Process substitution `<(…)`/`>(…)` in argument
+  position likewise recurses its inner, splicing a static `/dev/fd` placeholder.
+  Substitution as the command name, string-embedded or concatenated, process
+  substitution outside argument position, case value/pattern, or redirect target
+  still bails (see [references/parsing.md](references/parsing.md)).
 - **Redirects and env-prefixes classified structurally.** `> /dev/null` and FD
   duplication (`2>&1`) are safe; any other file redirect bails. Execution-hijack
   env prefixes (`PATH=`, `LD_*`, `BASH_ENV`) bail. This runs regardless of
