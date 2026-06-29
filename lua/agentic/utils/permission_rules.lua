@@ -16,7 +16,7 @@ local subtree_has_substitution = ShellParse.subtree_has_substitution
 local safe_assignment_name = ShellParse.safe_assignment_name
 local token_is_dynamic = ShellParse.token_is_dynamic
 local redirect_is_safe = ShellParse.redirect_is_safe
-local redirect_write_target = ShellParse.redirect_write_target
+local redirect_write_dest = ShellParse.redirect_write_dest
 local inner_source = ShellParse.inner_source
 local CONTAINER_TYPES = ShellParse.CONTAINER_TYPES
 local SUBSTITUTION_TYPES = ShellParse.SUBSTITUTION_TYPES
@@ -555,10 +555,10 @@ end
 --- that does not clear still blocks approval). `path` may be relative — the
 --- policy layer resolves it against cwd.
 --- @class agentic.utils.PermissionRules.Effect
---- @field kind "write" Mutation kind (only redirect writes for now)
+--- @field kind "write"|"delete" Mutation kind (redirect write, or an `rm` operand)
 --- @field path string Concrete target path
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[] }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], tmp_cleanup: boolean }
 
 --- Container types that are straight-line statement sequences — #3
 --- constant-literal propagation threads a per-sequence `known` environment
@@ -886,6 +886,11 @@ local walk
 --- @type fun(subst: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
 local walk_substitution_inner
 
+--- Forward declaration — `walk_sequence` dispatches a `redirected_statement`
+--- here (threading the per-sequence `known` env), but it is defined further down.
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx, known: table<string, string>|nil): boolean
+local walk_redirected
+
 --- True for a double-quoted `string` whose only expansions are command
 --- substitutions (#4b generalised): at least one `command_substitution` named
 --- child and every named child is `string_content` or `command_substitution`.
@@ -1097,6 +1102,52 @@ local function walk_command(node, src, ctx, known, funcs)
         return false
     end
 
+    -- #1 Step B: under `/trust tmp` + `tmp_cleanup`, an `rm` emits a delete
+    -- effect per concrete operand instead of bailing to the structured `ask`.
+    -- A dash-token rm parses as an option (it never deletes a file for it), so
+    -- only `--`-trailing words and plain words are operands. A dynamic operand
+    -- (`rm $x`) cannot be pinned to a literal → bail like a dynamic redirect.
+    -- The policy layer (`_bash_effects_clear`) then requires each operand to be
+    -- under a tmp root AND correlated with an earlier create/write in the same
+    -- command. With `tmp_cleanup` off this branch is skipped and rm prompts.
+    --
+    -- This is a fallback for an `rm` that would otherwise prompt: an explicit
+    -- glob allow (`Bash(rm *)`) approves it cleanly with no effect, so it is not
+    -- intercepted here (the effect would make `should_auto_approve` withhold the
+    -- user's own allow). `rm -f`/`--force` never reaches this walk under normal
+    -- flow — `should_auto_reject` runs first and rejects it (force is a
+    -- structured deny gate, no longer carved out for tmp).
+    if
+        ctx.tmp_cleanup
+        and cmd_name == "rm"
+        and args_dynamic ~= nil
+        and not M.matches_any_pattern(leaf, ctx.allow)
+    then
+        local operands = {}
+        local end_of_options = false
+        for i, a in ipairs(args) do
+            local is_operand = end_of_options
+                or (a:sub(1, 1) ~= "-")
+                or a == "-"
+            if a == "--" and not end_of_options then
+                end_of_options = true
+                is_operand = false
+            end
+            if is_operand then
+                if args_dynamic[i] then
+                    return false
+                end
+                table.insert(operands, a)
+            end
+        end
+        if #operands > 0 then
+            for _, p in ipairs(operands) do
+                table.insert(ctx.effects, { kind = "delete", path = p })
+            end
+            return true
+        end
+    end
+
     -- #6: a call to a function defined earlier in this straight-line sequence.
     -- Its body was walked clean at definition time with every parameter dynamic,
     -- so the body is safe for ANY call arguments — the call needs no re-vetting
@@ -1181,7 +1232,15 @@ local function walk_function_definition(node, src, ctx, funcs)
     end
     local name = vim.treesitter.get_node_text(name_node, src)
     local body = node:field("body")[1]
-    funcs[name] = (body and walk(body, src, ctx)) or nil
+    -- Defining a function never runs its body, so any file-mutating effect in
+    -- it must NOT leak into the outer command's effects. Walk with a throwaway
+    -- effects list. A body that emits effects (e.g. an `rm`) cannot be vetted at
+    -- definition time — the policy layer that clears effects only sees the outer
+    -- command — so such a body is treated as unsafe and the name is not recorded.
+    local body_effects = {}
+    local body_ctx = vim.tbl_extend("force", ctx, { effects = body_effects })
+    funcs[name] = (body and walk(body, src, body_ctx) and #body_effects == 0)
+        or nil
     return true
 end
 
@@ -1210,6 +1269,11 @@ local function walk_sequence(node, src, ctx)
                 ok = walk_command(child, src, ctx, known, funcs)
             elseif t == "function_definition" then
                 ok = walk_function_definition(child, src, ctx, funcs)
+            elseif t == "redirected_statement" then
+                -- Thread `known` so a redirect target `$f`/`"$f"` bound earlier in
+                -- this sequence resolves to its literal (the generic `walk`
+                -- dispatcher drops the per-sequence env).
+                ok = walk_redirected(child, src, ctx, known)
             else
                 ok = walk(child, src, ctx)
             end
@@ -1228,8 +1292,9 @@ end
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param known table<string, string>|nil constant environment of the enclosing sequence
 --- @return boolean
-local function walk_redirected(node, src, ctx)
+function walk_redirected(node, src, ctx, known)
     for child, field in node:iter_children() do
         if field == "body" then
             if not walk(child, src, ctx) then
@@ -1242,10 +1307,22 @@ local function walk_redirected(node, src, ctx)
             if not redirect_is_safe(child, src) then
                 -- A concrete file-write redirect (`cmd > /tmp/x`) is not bailed
                 -- but emitted as a write effect; the policy layer clears it
-                -- against the trust scope. A target it cannot pin to a literal
-                -- (dynamic / unmodelled) still bails.
-                local target = redirect_write_target(child, src)
-                if not target then
+                -- against the trust scope. The destination is resolved to a
+                -- literal exactly as an `rm` operand is (so the two correlate for
+                -- the intra-command create-then-delete check): a `$var` bound to a
+                -- literal earlier in the sequence resolves through `known`, a
+                -- quoted literal is quote-stripped. A target left dynamic (unbound
+                -- var, glob) or unmodelled still bails.
+                local dest = redirect_write_dest(child, src)
+                if not dest then
+                    return false
+                end
+                local kname = known and resolved_var_name(dest, src)
+                local target = kname and known and known[kname] or nil
+                if target == nil and not token_is_dynamic(dest) then
+                    target = literal_token(dest, src)
+                end
+                if target == nil then
                     return false
                 end
                 table.insert(
@@ -1525,7 +1602,7 @@ end
 -- known-safe iff it matches a read_only/safe_write rule AND no deny/ask rule, so
 -- a `safe_write` like `git add` never lights up even in read-only mode.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer }
+--- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[] }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -1658,6 +1735,9 @@ end
 --- @param funcs table<string, boolean>|nil #6 recorded function names of the enclosing sequence
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
+--- @return string|nil leaf #stripped, rememberable leaf signature; non-nil only
+---   when unapproved purely for lack of an allow match (never on a deny/ask or
+---   structural/substitution bail)
 local function command_known_safe(node, src, ctx, known, funcs)
     --- @type agentic.utils.PermissionRules.Range[]
     local subst_ranges = {}
@@ -1719,7 +1799,10 @@ local function command_known_safe(node, src, ctx, known, funcs)
         tally_walk(
             root,
             inner,
-            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 }),
+            -- Fresh `leaves`: the inner is vetted only to decide this leaf's
+            -- safety, so its leaves must not leak into the outer rememberable
+            -- set (an unsafe inner makes the whole leaf non-rememberable).
+            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1, leaves = {} }),
             body_ranges
         )
         if #body_ranges == 0 then
@@ -1755,7 +1838,12 @@ local function command_known_safe(node, src, ctx, known, funcs)
         -- pinpoint the in-place inner instead of washing the whole leaf.
         return false, subst_ranges
     end
-    return safe
+    if not safe then
+        -- Reached only when no deny/ask/structural bail fired above: the leaf is
+        -- unapproved purely for lack of an allow match, so it is rememberable.
+        return false, nil, leaf
+    end
+    return true
 end
 
 --- Recurse a non-sequence container (`pipeline`, `variable_assignments`): every
@@ -1789,7 +1877,7 @@ local function tally_sequence(node, src, ctx, ranges)
         if child:named() and child:type() ~= "comment" then
             local t = child:type()
             if t == "command" then
-                local safe, sub_ranges =
+                local safe, sub_ranges, leaf =
                     command_known_safe(child, src, ctx, known, funcs)
                 if not safe then
                     if sub_ranges then
@@ -1798,6 +1886,9 @@ local function tally_sequence(node, src, ctx, ranges)
                         end
                     else
                         record(ranges, child)
+                        if leaf then
+                            table.insert(ctx.leaves, leaf)
+                        end
                     end
                 end
             elseif t == "function_definition" then
@@ -1811,7 +1902,14 @@ local function tally_sequence(node, src, ctx, ranges)
                     --- @type agentic.utils.PermissionRules.Range[]
                     local body_ranges = {}
                     if body then
-                        tally_walk(body, src, ctx, body_ranges)
+                        -- Fresh `leaves`: a definition is not run, so its body
+                        -- leaves are not rememberable execution positions.
+                        tally_walk(
+                            body,
+                            src,
+                            vim.tbl_extend("force", ctx, { leaves = {} }),
+                            body_ranges
+                        )
                     end
                     -- Record on clean, un-record on unsafe redefinition.
                     funcs[name] = (body and #body_ranges == 0) or nil
@@ -1921,7 +2019,7 @@ function tally_walk(node, src, ctx, ranges)
     elseif CONTAINER_TYPES[t] then
         tally_children(node, src, ctx, ranges)
     elseif t == "command" then
-        local safe, sub_ranges = command_known_safe(node, src, ctx)
+        local safe, sub_ranges, leaf = command_known_safe(node, src, ctx)
         if not safe then
             if sub_ranges then
                 for _, r in ipairs(sub_ranges) do
@@ -1929,6 +2027,9 @@ function tally_walk(node, src, ctx, ranges)
                 end
             else
                 record(ranges, node)
+                if leaf then
+                    table.insert(ctx.leaves, leaf)
+                end
             end
         end
     elseif t == "redirected_statement" then
@@ -1956,30 +2057,40 @@ function tally_walk(node, src, ctx, ranges)
     end
 end
 
---- Tally the byte ranges of the parts of a Bash command that are NOT known-safe
---- — the leaves and structural nodes the permission prompt is asking about. The
---- highlight binds to the displayed (reformatted) command, so coordinates are
---- relative to `command`'s own lines (0-indexed rows, byte cols), matching
---- tree-sitter's `node:range()`.
+--- Find every part of a Bash command that is NOT known-safe — the leaves and
+--- structural nodes the permission prompt is asking about. Find-all (every
+--- branch), unlike the first-bail decision `walk`. Two consumers:
 ---
---- Returns `nil` when the command does not parse (no parser / parse error) so
---- the caller can fall back to highlighting the whole block; an empty list means
---- it parsed and nothing needs attention (bare prompt). This is pure UI — it
---- never grants anything and binds to the *displayed* text, whereas the decision
---- walk binds to the raw `rawInput.command` (see notes/perm-highlight…).
+--- * The highlighter reads `ranges` — byte ranges relative to `command`'s own
+---   lines (0-indexed rows, byte cols, matching `node:range()`). It binds to the
+---   *displayed* (reformatted) command, whereas the decision walk binds to the
+---   raw `rawInput.command`.
+--- * The allow-always collector reads `leaves`/`complete`: `leaves` are the
+---   stripped signatures of parts unapproved purely for lack of an allow match
+---   (rememberable as session-local allow patterns); `complete` is true iff
+---   *every* unapproved part was such a leaf — false signals the manager to keep
+---   the whole-command fallback for deny/ask-gated or structural parts.
+---
+--- `ranges` is `nil` when the command does not parse (no parser / parse error)
+--- so the highlighter can fall back to highlighting the whole block; an empty
+--- list means it parsed and nothing needs attention (bare prompt). On any
+--- non-parse path `leaves` is empty and `complete` is false. Pure analysis — it
+--- never grants anything.
 --- @param command string
---- @return agentic.utils.PermissionRules.Range[]|nil
+--- @return agentic.utils.PermissionRules.Range[]|nil ranges
+--- @return string[] leaves
+--- @return boolean complete
 function M.tally_unapproved(command)
     if type(command) ~= "string" or command == "" then
-        return nil
+        return nil, {}, false
     end
     if #command > 65536 then
-        return nil
+        return nil, {}, false
     end
 
     local root = parse_zsh(command)
     if not root then
-        return nil
+        return nil, {}, false
     end
 
     --- @type agentic.utils.PermissionRules.TallyCtx
@@ -1990,11 +2101,15 @@ function M.tally_unapproved(command)
         ask = M.get_ask_patterns(),
         structured_entries = M.get_structured_entries(),
         depth = 0,
+        leaves = {},
     }
     --- @type agentic.utils.PermissionRules.Range[]
     local ranges = {}
     tally_walk(root, command, ctx, ranges)
-    return ranges
+    -- Each clean leaf records exactly one range and collects one signature;
+    -- every other unapproved part records ≥1 range and no signature. So the
+    -- counts match iff every unapproved part was a rememberable leaf.
+    return ranges, ctx.leaves, #ctx.leaves == #ranges
 end
 
 -- ── Reject walk (deny rules reject immediately, no prompt) ───────────────────
@@ -2157,10 +2272,14 @@ end
 --- at the policy layer before approval — `ok` alone is not approval (see
 --- permission_manager's `_bash_effects_clear`). Empty effects means a pure
 --- read/no-write command that approves on `ok` alone.
+---
+--- `extra_allow` injects session-remembered leaf patterns on top of the
+--- configured allow rules; they widen approval only, never override a deny/ask.
 --- @param command string
+--- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
 --- @return boolean ok
 --- @return agentic.utils.PermissionRules.Effect[] effects
-function M.evaluate(command)
+function M.evaluate(command, extra_allow)
     if type(command) ~= "string" or command == "" then
         return false, {}
     end
@@ -2170,7 +2289,13 @@ function M.evaluate(command)
         return false, {}
     end
 
+    -- `get_allow_patterns` returns a fresh list each call, so appending the
+    -- session-remembered leaves here is safe and keeps the empty-rules guard
+    -- below honest: with remembered leaves `#allow > 0`, so it iterates.
     local allow = M.get_allow_patterns()
+    if extra_allow then
+        vim.list_extend(allow, extra_allow)
+    end
     local structured_entries = M.get_structured_entries()
     -- Skip the parse entirely when neither layer has any allow source — the
     -- walker has nothing to approve against.
@@ -2193,6 +2318,7 @@ function M.evaluate(command)
         auto_approve = Config.permissions.auto_approve,
         depth = 0,
         effects = effects,
+        tmp_cleanup = Config.permissions.tmp_cleanup,
     })
     return ok, effects
 end
@@ -2201,10 +2327,24 @@ end
 --- is structurally approvable AND produces no file-mutating effects (a redirect
 --- write needs `/trust tmp` to clear — see `evaluate` / `_bash_effects_clear`).
 --- @param command string
+--- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil session-remembered leaf patterns (forwarded to `evaluate`)
 --- @return boolean
-function M.should_auto_approve(command)
-    local ok, effects = M.evaluate(command)
+function M.should_auto_approve(command, extra_allow)
+    local ok, effects = M.evaluate(command, extra_allow)
     return ok and #effects == 0
+end
+
+--- Compile a single command leaf into an exact-match allow pattern (no glob
+--- wildcarding), for injecting a session-remembered leaf into `evaluate`'s allow
+--- list. Built from the path-stripped leaf so it matches the same form
+--- `matches_any_pattern` compares against (which strips the bin-dir prefix per
+--- segment).
+--- @param leaf string
+--- @return agentic.utils.PermissionRules.CompiledPattern
+function M.literal_pattern(leaf)
+    local stripped = M.strip_command_path(leaf)
+    local escaped = stripped:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")
+    return { original = stripped, lua_pattern = "^" .. escaped .. "$" }
 end
 
 --- Invalidate cached patterns (forces re-read on next check).

@@ -844,13 +844,16 @@ describe("PermissionRules", function()
         local orig_plugin
         local orig_claude
         local orig_read_json
+        local orig_cleanup
 
         before_each(function()
             Config = require("agentic.config")
             orig_plugin = Config.permissions.use_plugin_defaults
             orig_claude = Config.permissions.use_claude_settings
+            orig_cleanup = Config.permissions.tmp_cleanup
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
+            Config.permissions.tmp_cleanup = false
 
             orig_read_json = PermissionRules.read_json
             -- Only stub settings.json paths, let plugin permissions.json load
@@ -866,6 +869,7 @@ describe("PermissionRules", function()
         after_each(function()
             Config.permissions.use_plugin_defaults = orig_plugin
             Config.permissions.use_claude_settings = orig_claude
+            Config.permissions.tmp_cleanup = orig_cleanup
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
         end)
@@ -965,9 +969,108 @@ describe("PermissionRules", function()
             assert.equal(0, #effects)
         end)
 
+        -- A redirect target is resolved to a literal the same way an `rm`
+        -- operand is, so a write and a later delete on the same path correlate.
+        it("evaluate: a quoted-literal redirect target is quote-stripped", function()
+            local ok, effects = PermissionRules.evaluate([[echo x > "/tmp/x"]])
+            assert.is_true(ok)
+            assert.equal("/tmp/x", effects[1].path)
+        end)
+
+        it("evaluate: a redirect target resolves through a known literal", function()
+            local ok, effects =
+                PermissionRules.evaluate("f=/tmp/x; echo y > $f")
+            assert.is_true(ok)
+            assert.equal("/tmp/x", effects[1].path)
+        end)
+
+        it("evaluate: a quoted known-var redirect target resolves", function()
+            local ok, effects =
+                PermissionRules.evaluate([[f=/tmp/x; echo y > "$f"]])
+            assert.is_true(ok)
+            assert.equal("/tmp/x", effects[1].path)
+        end)
+
+        it("evaluate: an unbound-var redirect target bails (no effect)", function()
+            -- Previously emitted the raw `$f` as the path (never matched a tmp
+            -- root, never correlated). Now bails like any dynamic target.
+            local ok, effects = PermissionRules.evaluate("echo y > $f")
+            assert.is_false(ok)
+            assert.equal(0, #effects)
+        end)
+
+        it("evaluate: known-var write then rm correlate on the resolved path", function()
+            Config.permissions.tmp_cleanup = true
+            local ok, effects =
+                PermissionRules.evaluate([[f=/tmp/x; echo y > "$f"; rm "$f"]])
+            assert.is_true(ok)
+            assert.equal(2, #effects)
+            assert.equal("write", effects[1].kind)
+            assert.equal("/tmp/x", effects[1].path)
+            assert.equal("delete", effects[2].kind)
+            assert.equal("/tmp/x", effects[2].path)
+        end)
+
         it("evaluate: an unapproved command with a redirect is not ok", function()
             local ok = PermissionRules.evaluate("danger > /tmp/x")
             assert.is_false(ok)
+        end)
+
+        -- #1 Step B: under tmp_cleanup, rm emits ordered delete effects instead
+        -- of bailing to the structured `ask`; the policy layer correlates them
+        -- against earlier writes and the tmp scope.
+        it("evaluate: rm emits a delete effect under tmp_cleanup", function()
+            Config.permissions.tmp_cleanup = true
+            local ok, effects = PermissionRules.evaluate("rm /tmp/x")
+            assert.is_true(ok)
+            assert.equal(1, #effects)
+            assert.equal("delete", effects[1].kind)
+            assert.equal("/tmp/x", effects[1].path)
+        end)
+
+        it("evaluate: rm bails to a prompt without tmp_cleanup", function()
+            local ok, effects = PermissionRules.evaluate("rm /tmp/x")
+            assert.is_false(ok)
+            assert.equal(0, #effects)
+        end)
+
+        it("evaluate: redirect-write then rm emits write then delete", function()
+            Config.permissions.tmp_cleanup = true
+            local ok, effects =
+                PermissionRules.evaluate("echo x > /tmp/f; rm /tmp/f")
+            assert.is_true(ok)
+            assert.equal(2, #effects)
+            assert.equal("write", effects[1].kind)
+            assert.equal("delete", effects[2].kind)
+            assert.equal("/tmp/f", effects[2].path)
+        end)
+
+        it("evaluate: rm flags are options, only operands emit effects", function()
+            Config.permissions.tmp_cleanup = true
+            local ok, effects = PermissionRules.evaluate("rm -rf /tmp/d")
+            assert.is_true(ok)
+            assert.equal(1, #effects)
+            assert.equal("/tmp/d", effects[1].path)
+        end)
+
+        it("evaluate: a dynamic rm operand bails (no effect)", function()
+            Config.permissions.tmp_cleanup = true
+            local ok, effects = PermissionRules.evaluate("rm $x")
+            assert.is_false(ok)
+            assert.equal(0, #effects)
+        end)
+
+        it("evaluate: rm -- treats a trailing dash-word as an operand", function()
+            Config.permissions.tmp_cleanup = true
+            local ok, effects = PermissionRules.evaluate("rm -- -weird")
+            assert.is_true(ok)
+            assert.equal("-weird", effects[1].path)
+        end)
+
+        it("should_auto_reject: rm -f always rejects", function()
+            assert.is_true(PermissionRules.should_auto_reject("rm -f /tmp/x"))
+            Config.permissions.tmp_cleanup = true
+            assert.is_true(PermissionRules.should_auto_reject("rm -f /tmp/x"))
         end)
     end)
 
@@ -3005,6 +3108,145 @@ describe("PermissionRules", function()
             end)
         end)
 
+        describe("leaves / complete", function()
+            it("collects both no-allow-rule leaves, complete", function()
+                with_perms({ allow = {} }, nil, function()
+                    local ranges, leaves, complete =
+                        PermissionRules.tally_unapproved("frob a | nope b")
+                    assert.equal(2, #ranges)
+                    assert.same({ "frob a", "nope b" }, leaves)
+                    assert.is_true(complete)
+                end)
+            end)
+
+            it("is incomplete for a write redirect", function()
+                with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                    local _, leaves, complete =
+                        PermissionRules.tally_unapproved("grep foo > out.txt")
+                    assert.same({}, leaves)
+                    assert.is_false(complete)
+                end)
+            end)
+
+            it("is incomplete for a dirty-substitution leaf", function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local _, leaves, complete =
+                            PermissionRules.tally_unapproved("echo $(rm -rf /)")
+                        assert.same({}, leaves)
+                        assert.is_false(complete)
+                    end
+                )
+            end)
+
+            -- Q2: an ask-gated leaf is NOT rememberable — it must drop `complete`
+            -- so the manager keeps the whole-command fallback (else the identical
+            -- block re-prompts forever, the injected allow being gated by `ask`).
+            it("is incomplete for an ask-gated leaf", function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, ask = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local _, leaves, complete =
+                            PermissionRules.tally_unapproved("echo hi; rm x")
+                        assert.same({}, leaves)
+                        assert.is_false(complete)
+                    end
+                )
+            end)
+
+            it("collects the clean leaf but is incomplete alongside a redirect", function()
+                with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                    local _, leaves, complete =
+                        PermissionRules.tally_unapproved("frob a > out.txt")
+                    assert.same({ "frob a" }, leaves)
+                    assert.is_false(complete)
+                end)
+            end)
+
+            it("returns empty leaves and incomplete on parse failure", function()
+                with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                    local ranges, leaves, complete =
+                        PermissionRules.tally_unapproved("echo 'unterminated")
+                    assert.is_nil(ranges)
+                    assert.same({}, leaves)
+                    assert.is_false(complete)
+                end)
+            end)
+        end)
+
+    end)
+
+    describe("literal_pattern / remembered-leaf injection", function()
+        local Config = require("agentic.config")
+
+        --- Evaluate `cmd` with only the injected allow globs active (plugin
+        --- defaults off, settings.json stubbed empty), passing `extra_allow`
+        --- through to the decision walk.
+        local function approves(allow, deny, cmd, extra_allow)
+            local orig_read_json = PermissionRules.read_json
+            local orig_plugin = Config.permissions.use_plugin_defaults
+            Config.permissions.use_plugin_defaults = false
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = { allow = allow, deny = deny } }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+            local ok, result = pcall(
+                PermissionRules.should_auto_approve,
+                cmd,
+                extra_allow
+            )
+            PermissionRules.read_json = orig_read_json
+            Config.permissions.use_plugin_defaults = orig_plugin
+            PermissionRules.invalidate_cache()
+            if not ok then
+                error(result)
+            end
+            return result
+        end
+
+        it("matches its own occurrence (path-stripped)", function()
+            local pat = PermissionRules.literal_pattern("/usr/bin/foo --x")
+            assert.is_true(
+                approves({}, nil, "/usr/bin/foo --x", { pat })
+            )
+        end)
+
+        it("does not widen to a different invocation", function()
+            local pat = PermissionRules.literal_pattern("foo --x")
+            assert.is_false(approves({}, nil, "foo --y", { pat }))
+        end)
+
+        it("approves only when every leaf is remembered or ruled", function()
+            assert.is_false(
+                approves({}, nil, "a; b", { PermissionRules.literal_pattern("b") })
+            )
+            assert.is_true(approves({}, nil, "a; b", {
+                PermissionRules.literal_pattern("a"),
+                PermissionRules.literal_pattern("b"),
+            }))
+        end)
+
+        it("never overrides a deny gate", function()
+            assert.is_false(approves(
+                {},
+                { "Bash(rm *)" },
+                "rm x",
+                { PermissionRules.literal_pattern("rm x") }
+            ))
+        end)
+
+        -- Merge-before-guard: an empty remembered set leaves #allow == 0, so the
+        -- evaluate guard still short-circuits (bails) exactly as before.
+        it("is a no-op with an empty remembered set", function()
+            assert.is_false(approves({}, nil, "a", {}))
+            assert.is_false(approves({}, nil, "a"))
+        end)
     end)
 
     describe("should_auto_approve exec-wrappers", function()

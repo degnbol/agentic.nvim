@@ -242,10 +242,23 @@ explicit design trade.
 Matched cache entries always send `allow_once` / `reject_once` back to
 the provider (mirrors the other auto-approval checks).
 
+**Execute `allow_always` remembers leaves, not the whole string.** On an
+execute prompt it harvests the individual safe-but-unruled leaves
+(`tally_unapproved`) into `_execute_leaf_allow`, injected as session allow
+patterns so a later block sharing them auto-approves. Deny/ask-gated or
+structural parts aren't rememberable (`complete = false`), so the
+whole-command `_always_cache` entry is also kept as a fallback. `reject_always`
+stays whole-command.
+
 ### 4. Trust scope (`/trust`, `Config.auto_approve_trust_scope`)
 
 Per-session scope for file-scoped tool kinds (edit, write, create, delete,
-move). User picks a scope via `/trust`:
+move). The user picks a scope via `/trust`; the `tmp` scope is also activated
+automatically at session start when `Config.permissions.trust_tmp` is on
+(default), so scratch operations work out of the box. `SessionManager:_apply_default_trust`
+(called from `new_session` and `load_acp_session`) sets it silently — no chat
+message, headers still update — and never overrides a scope the user set this
+session.
 
 | Argument | Meaning |
 |---|---|
@@ -262,7 +275,10 @@ also the first scope to gate a **second mutation producer**: alongside ACP file
 edits, Bash redirect writes now feed the same policy oracle.
 `PermissionRules.evaluate` extracts them as `write` effects — see its docstring
 and `PermissionManager._bash_effects_clear` for the extraction and per-effect
-tmp check. `delete` effects + cross-command cleanup are Step B, not yet shipped.
+tmp check. Under `Config.permissions.tmp_cleanup` (default on), deletes are also
+cleared, correlated to a write/create earlier in the **same** command
+(intra-command only — no cross-command ledger yet). The rm-delete fallback in
+`walk_command` documents the per-command delete-emission mechanics.
 
 **Scope membership is necessary but not sufficient** — the orchestrator
 (`PermissionManager._check_trust`) layers six safety properties on top:

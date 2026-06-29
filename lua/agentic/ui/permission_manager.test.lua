@@ -494,6 +494,89 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
+        it("allow_always remembers a clean leaf without a whole-command entry", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("frobnicate a", "tc-leaf-1"),
+                cb1 --[[@as function]]
+            )
+            assert.is_not_nil(pm.current_request) -- unknown command prompts
+            pm:_complete_request("allow-always")
+
+            -- A single clean leaf is fully rememberable, so no whole-command
+            -- fallback is stored — only the leaf is remembered.
+            assert.is_true(pm._execute_leaf_allow["frobnicate a"])
+            assert.same({}, pm._always_cache)
+
+            -- The same leaf, reached through a different surrounding block,
+            -- auto-approves without re-prompting.
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("frobnicate a", "tc-leaf-2"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(1)
+            assert.is_true(cb2:called_with("allow-once"))
+        end)
+
+        it("a later block prompts only about its still-unknown leaf", function()
+            pm:add_request(
+                make_execute_request("frobnicate a", "tc-leaf-3"),
+                (spy.new(function() end)) --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+
+            -- frobnicate a is now remembered; a block adding a new unknown leaf
+            -- still prompts (it is not fully approvable).
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("frobnicate a; otherthing b", "tc-leaf-4"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("allow_always on an ask-gated block keeps the whole-command fallback", function()
+            local cb1 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("git commit -m foo", "tc-leaf-5"),
+                cb1 --[[@as function]]
+            )
+            assert.is_not_nil(pm.current_request) -- ask-tier prompts
+            pm:_complete_request("allow-always")
+
+            -- The ask-gated leaf is not rememberable, so the whole-command
+            -- cache must hold for the identical block.
+            assert.same({}, pm._execute_leaf_allow)
+            local cb2 = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("git commit -m foo", "tc-leaf-6"),
+                cb2 --[[@as function]]
+            )
+            assert.spy(cb2).was.called(1)
+            assert.is_true(cb2:called_with("allow-once"))
+        end)
+
+        it("clear() resets remembered leaves", function()
+            pm:add_request(
+                make_execute_request("frobnicate a", "tc-leaf-7"),
+                (spy.new(function() end)) --[[@as function]]
+            )
+            pm:_complete_request("allow-always")
+            pm:clear()
+
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_execute_request("frobnicate a", "tc-leaf-8"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(0)
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("reject-once")
+        end)
+
         --- @param kind string
         --- @param raw_input table|nil
         --- @param tool_call_id string
@@ -1117,7 +1200,17 @@ describe("agentic.ui.PermissionManager", function()
 
     describe("_bash_effects_clear (tmp scope)", function()
         local TrustSafety = require("agentic.utils.trust_safety")
+        local Config = require("agentic.config")
         local tmp_path = vim.uv.os_tmpdir() .. "/agentic_effects_test"
+        local orig_cleanup
+
+        before_each(function()
+            orig_cleanup = Config.permissions.tmp_cleanup
+            Config.permissions.tmp_cleanup = false
+        end)
+        after_each(function()
+            Config.permissions.tmp_cleanup = orig_cleanup
+        end)
 
         it("empty effects clear regardless of scope", function()
             pm._trust_scope = nil
@@ -1161,6 +1254,40 @@ describe("agentic.ui.PermissionManager", function()
                 pm:_bash_effects_clear({ { kind = "write", path = link } })
             vim.uv.fs_unlink(link)
             assert.is_false(cleared)
+        end)
+
+        it("a delete does not clear without tmp_cleanup", function()
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            assert.is_false(pm:_bash_effects_clear({
+                { kind = "write", path = tmp_path },
+                { kind = "delete", path = tmp_path },
+            }))
+        end)
+
+        it("a delete clears when correlated with an earlier write", function()
+            Config.permissions.tmp_cleanup = true
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            assert.is_true(pm:_bash_effects_clear({
+                { kind = "write", path = tmp_path },
+                { kind = "delete", path = tmp_path },
+            }))
+        end)
+
+        it("an uncorrelated delete does not clear", function()
+            Config.permissions.tmp_cleanup = true
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            assert.is_false(pm:_bash_effects_clear({
+                { kind = "delete", path = tmp_path },
+            }))
+        end)
+
+        it("a delete of an uncreated path does not clear", function()
+            Config.permissions.tmp_cleanup = true
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            assert.is_false(pm:_bash_effects_clear({
+                { kind = "write", path = tmp_path },
+                { kind = "delete", path = tmp_path .. "_other" },
+            }))
         end)
     end)
 end)

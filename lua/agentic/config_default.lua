@@ -449,6 +449,8 @@ local ConfigDefault = {
     --- @field ask string[] Ask patterns — withhold approval and prompt (override allow, lower precedence than deny)
     --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
     --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of the auto_approve switches).
+    --- @field tmp_cleanup boolean Under `/trust tmp`, auto-approve a plain `rm` of scratch files created earlier in the same Bash command (intra-command correlation only). `rm -f`/`--force` always rejects regardless.
+    --- @field trust_tmp boolean Activate the `/trust tmp` scope automatically at session start, so writes (and, with `tmp_cleanup`, deletes) of scratch files under a tmp root auto-approve without a manual `/trust tmp`. Requires `auto_approve_trust_scope`.
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
@@ -459,6 +461,8 @@ local ConfigDefault = {
         ask = {},
         structured = {},
         highlight_unapproved = true,
+        tmp_cleanup = true,
+        trust_tmp = true,
     },
 
     auto_approve_trust_scope = true,

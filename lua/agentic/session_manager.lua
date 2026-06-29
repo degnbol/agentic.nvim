@@ -556,6 +556,25 @@ function SessionManager:_apply_trust_scope(scope)
     end
 end
 
+--- Activate the default `/trust tmp` scope at session start when
+--- `permissions.trust_tmp` is on. Silent (no chat message — it would fire on
+--- every new session); the headers still update so the scope is visible. A
+--- scope the user set this session is left untouched.
+function SessionManager:_apply_default_trust()
+    if
+        not (Config.auto_approve_trust_scope and Config.permissions.trust_tmp)
+    then
+        return
+    end
+    if self.permission_manager:get_trust_scope() then
+        return
+    end
+    local cwd = vim.uv.cwd() or vim.fn.getcwd()
+    local scope = TrustSafety.build_tmp_scope(cwd)
+    self.permission_manager:set_trust_scope(scope)
+    self:_push_trust_to_headers(scope.display)
+end
+
 --- Clear the active trust scope.
 function SessionManager:_clear_trust_scope()
     self.permission_manager:clear_trust_scope()
@@ -1668,6 +1687,7 @@ function SessionManager:new_session(opts)
         self.session_id = response.sessionId
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
+        self:_apply_default_trust()
         vim.api.nvim_exec_autocmds("User", {
             pattern = "AgenticSessionChanged",
             data = { session_id = response.sessionId },
@@ -1820,6 +1840,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.session_id = session_id
     self.chat_history.session_id = session_id
     self.chat_history.timestamp = os.time()
+    self:_apply_default_trust()
     vim.api.nvim_exec_autocmds("User", {
         pattern = "AgenticSessionChanged",
         data = { session_id = session_id },

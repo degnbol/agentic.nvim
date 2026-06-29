@@ -239,6 +239,7 @@ describe("agentic.SessionManager", function()
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _cancel_session = SessionManager._cancel_session,
                 _build_handlers = SessionManager._build_handlers,
+                _apply_default_trust = noop,
                 _on_session_update = noop,
                 _on_tool_call = noop,
                 _on_tool_call_update = noop,
@@ -1303,6 +1304,76 @@ describe("agentic.SessionManager", function()
                 end
             end
             assert.equal(0, warn_count)
+        end)
+    end)
+
+    describe("_apply_default_trust", function()
+        --- @type table
+        local pm
+        --- @type agentic.SessionManager
+        local session
+        --- @type integer
+        local test_bufnr
+        local orig_auto, orig_trust_tmp
+
+        before_each(function()
+            local SessionManagerModule = require("agentic.session_manager")
+            test_bufnr = vim.api.nvim_create_buf(false, true)
+            orig_auto = Config.auto_approve_trust_scope
+            orig_trust_tmp = Config.permissions.trust_tmp
+            Config.auto_approve_trust_scope = true
+            Config.permissions.trust_tmp = true
+
+            pm = {
+                get_trust_scope = spy.new(function()
+                    return nil
+                end),
+                set_trust_scope = spy.new(function() end),
+            }
+            session = {
+                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                permission_manager = pm,
+                widget = {
+                    buf_nrs = { chat = test_bufnr },
+                    tab_page_id = vim.api.nvim_get_current_tabpage(),
+                },
+                _push_trust_to_headers = SessionManagerModule._push_trust_to_headers,
+                _apply_default_trust = SessionManagerModule._apply_default_trust,
+            } --[[@as agentic.SessionManager]]
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(test_bufnr, { force = true })
+            vim.t.agentic_headers = nil
+            Config.auto_approve_trust_scope = orig_auto
+            Config.permissions.trust_tmp = orig_trust_tmp
+        end)
+
+        it("activates a tmp scope when both flags are on and none is set", function()
+            session:_apply_default_trust()
+            assert.equal(1, pm.set_trust_scope.call_count)
+            local scope = pm.set_trust_scope.calls[1][2]
+            assert.equal("tmp", scope.kind)
+        end)
+
+        it("leaves a user-set scope untouched", function()
+            pm.get_trust_scope = spy.new(function()
+                return { kind = "repo" }
+            end)
+            session:_apply_default_trust()
+            assert.equal(0, pm.set_trust_scope.call_count)
+        end)
+
+        it("does nothing when trust_tmp is off", function()
+            Config.permissions.trust_tmp = false
+            session:_apply_default_trust()
+            assert.equal(0, pm.set_trust_scope.call_count)
+        end)
+
+        it("does nothing when auto_approve_trust_scope is off", function()
+            Config.auto_approve_trust_scope = false
+            session:_apply_default_trust()
+            assert.equal(0, pm.set_trust_scope.call_count)
         end)
     end)
 end)

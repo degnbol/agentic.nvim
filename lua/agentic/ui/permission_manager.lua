@@ -32,6 +32,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
 --- @field permission_float agentic.ui.PermissionFloat
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
+--- @field _execute_leaf_allow table<string, boolean> Session-remembered execute leaves vouched for via allow_always
 --- @field _trust_scope? agentic.utils.TrustSafety.Scope Active trust scope (set by /trust)
 --- @field _edit_records table<string, agentic.utils.TrustSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
 --- @field _pending_edits table<string, { path: string, start_line: integer, new_lines: string[] }> Range data captured at tool_call time, promoted to _edit_records on completion
@@ -51,6 +52,7 @@ function PermissionManager:new(message_writer, buf_nrs, tab_page_id)
         current_request = nil,
         keymap_info = {},
         _always_cache = {},
+        _execute_leaf_allow = {},
         _trust_scope = nil,
         _edit_records = {},
         _pending_edits = {},
@@ -250,6 +252,36 @@ local function auto_reject(request, callback, reason)
     return false
 end
 
+--- Resolve the shell command of an execute permission request. `rawInput.command`
+--- may be nil (opencode sends `metadata: {}`); the command then lives in the
+--- prior tool_call_update tracker as `argument` — see acp skill
+--- `references/opencode.md` § "Permission request shape" finding 3.
+--- @param request agentic.acp.RequestPermission
+--- @return string|nil command
+function PermissionManager:_request_command(request)
+    local tool_call = request.toolCall
+    local raw_input = tool_call and tool_call.rawInput
+    local command = raw_input and raw_input.command
+    if not command and tool_call then
+        local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
+        if tracker and kind_key(tracker.kind) == "execute" then
+            command = tracker.argument
+        end
+    end
+    return command
+end
+
+--- Compile the session-remembered execute leaves into allow patterns to inject
+--- into the decision walk. Empty set → empty list (a no-op merge in `evaluate`).
+--- @return agentic.utils.PermissionRules.CompiledPattern[]
+function PermissionManager:_remembered_leaf_patterns()
+    local patterns = {}
+    for leaf in pairs(self._execute_leaf_allow) do
+        table.insert(patterns, PermissionRules.literal_pattern(leaf))
+    end
+    return patterns
+end
+
 --- Try to auto-approve a permission request without user interaction.
 ---
 --- Independent checks (any can approve):
@@ -302,20 +334,13 @@ function PermissionManager:_try_auto_approve(request, callback)
     end
 
     -- Compound Bash commands: check each segment against settings.json rules.
-    -- Opencode sends `metadata: {}` for shell permissions, so the request's
-    -- rawInput.command is nil; the actual command lives in the prior
-    -- tool_call_update tracker as `argument` — see acp skill
-    -- `references/opencode.md` § "Permission request shape" finding 3.
-    local raw_input = tool_call.rawInput
-    local command = raw_input and raw_input.command
-    if not command and tracker and kind_key(tracker.kind) == "execute" then
-        command = tracker.argument
-    end
+    local command = self:_request_command(request)
     if command and PermissionRules.should_auto_reject(command) then
         return auto_reject(request, callback, "deny rule: " .. command)
     end
     if command then
-        local ok, effects = PermissionRules.evaluate(command)
+        local ok, effects =
+            PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
         if ok and self:_bash_effects_clear(effects) then
             return auto_approve(
                 request,
@@ -452,6 +477,13 @@ end
 --- with no concrete writes auto-approves on structural grounds alone, as
 --- before). A non-empty list requires an active `tmp` trust scope and every
 --- effect — symlink endpoints included — to land strictly under a tmp root.
+---
+--- The effects list is **ordered**, so a `delete` is correlated intra-command:
+--- it clears only when an earlier `write`/`create` in the same list targeted
+--- the same resolved path (and `Config.permissions.tmp_cleanup` is on). tmp
+--- scratch is git-unrecoverable, so a delete is only safe when we know it was
+--- this command's own scratch — there is no cross-command session ledger yet,
+--- so `rm /tmp/x` in a later command still prompts.
 --- @param effects agentic.utils.PermissionRules.Effect[]
 --- @return boolean
 function PermissionManager:_bash_effects_clear(effects)
@@ -469,6 +501,8 @@ function PermissionManager:_bash_effects_clear(effects)
         return false
     end
     local cwd = vim.uv.cwd() or ""
+    --- Resolved paths created/written earlier in this same command.
+    local created = {}
     for _, eff in ipairs(effects) do
         local path = eff.path
         if path:sub(1, 1) ~= "/" then
@@ -484,9 +518,16 @@ function PermissionManager:_bash_effects_clear(effects)
         if real ~= orig and not TrustSafety.is_under_tmp(real, scope.tmp_roots) then
             return false
         end
-        local args = { tmp = true, exists = vim.uv.fs_stat(orig) ~= nil }
-        if not TrustSafety.safe_for_kind(eff.kind, args) then
-            return false
+        if eff.kind == "delete" then
+            if not (Config.permissions.tmp_cleanup and created[orig]) then
+                return false
+            end
+        else
+            local args = { tmp = true, exists = vim.uv.fs_stat(orig) ~= nil }
+            if not TrustSafety.safe_for_kind(eff.kind, args) then
+                return false
+            end
+            created[orig] = true
         end
     end
     return true
@@ -836,13 +877,32 @@ function PermissionManager:_complete_request(option_id)
             break
         end
     end
-    if kind_key(selected_kind) == "allow_always" or kind_key(selected_kind) == "reject_always" then
-        local cache_key = self:_build_cache_key(current.request.toolCall)
-        if cache_key then
-            local action = selected_kind == "allow_always" and "allow"
-                or "reject"
-            self._always_cache[cache_key] = action
-            Logger.debug("PermissionManager: cached", action, "for", cache_key)
+    local selected = kind_key(selected_kind)
+    if selected == "allow_always" or selected == "reject_always" then
+        -- Allow-always on an execute prompt remembers the individual safe-but-
+        -- unruled leaves, so a later block sharing them auto-approves. Only the
+        -- non-leaf parts (deny/ask-gated, structural) need the whole-command
+        -- fallback — `complete` reports whether any such part remains.
+        local store_whole = true
+        if selected == "allow_always" then
+            local command = self:_request_command(current.request)
+            if command then
+                local _, leaves, complete =
+                    PermissionRules.tally_unapproved(command)
+                for _, leaf in ipairs(leaves) do
+                    self._execute_leaf_allow[leaf] = true
+                end
+                store_whole = not complete
+            end
+        end
+
+        if store_whole then
+            local cache_key = self:_build_cache_key(current.request.toolCall)
+            if cache_key then
+                local action = selected == "allow_always" and "allow" or "reject"
+                self._always_cache[cache_key] = action
+                Logger.debug("PermissionManager: cached", action, "for", cache_key)
+            end
         end
     end
 
@@ -881,6 +941,7 @@ function PermissionManager:clear()
 
     self.queue = {}
     self._always_cache = {}
+    self._execute_leaf_allow = {}
     self._trust_scope = nil
     self._edit_records = {}
     self._pending_edits = {}
