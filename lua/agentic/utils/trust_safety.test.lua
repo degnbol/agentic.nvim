@@ -624,5 +624,69 @@ describe("agentic.utils.trust_safety", function()
             })
             assert.is_false(wide)
         end)
+
+        it("never warns for a tmp scope", function()
+            assert.is_false(TrustSafety.is_wide_scope({
+                kind = "tmp",
+                display = "tmp scratch",
+                cwd = "/repo",
+            }))
+        end)
+    end)
+
+    describe("tmp scope", function()
+        it("tmp_roots includes a realpath'd /tmp", function()
+            local roots = TrustSafety.tmp_roots()
+            assert.is_true(#roots >= 1)
+            -- /tmp realpaths to /private/tmp on macOS, /tmp on Linux.
+            local has_tmp = false
+            for _, r in ipairs(roots) do
+                if r == "/tmp" or r == "/private/tmp" then
+                    has_tmp = true
+                end
+            end
+            assert.is_true(has_tmp)
+        end)
+
+        it("is_under_tmp matches paths strictly under a root", function()
+            local roots = { "/private/tmp", "/var/folders/ab/T" }
+            assert.is_true(
+                TrustSafety.is_under_tmp("/private/tmp/scratch.txt", roots)
+            )
+            assert.is_true(
+                TrustSafety.is_under_tmp("/var/folders/ab/T/x/y", roots)
+            )
+        end)
+
+        it("is_under_tmp rejects the root itself and outside paths", function()
+            local roots = { "/private/tmp" }
+            assert.is_false(TrustSafety.is_under_tmp("/private/tmp", roots))
+            assert.is_false(TrustSafety.is_under_tmp("/etc/passwd", roots))
+            -- A `..` escape collapses out of the root.
+            assert.is_false(
+                TrustSafety.is_under_tmp("/private/tmp/../etc/x", roots)
+            )
+        end)
+
+        it("build_tmp_scope yields a tmp scope with resolved roots", function()
+            local scope = TrustSafety.build_tmp_scope("/repo")
+            assert.equal("tmp", scope.kind)
+            assert.is_true(#scope.tmp_roots >= 1)
+        end)
+
+        it("safe_for_kind: tmp write/create are unconditionally safe", function()
+            -- tmp short-circuits before any git field, even on an existing,
+            -- untracked, dirty file (the worst case for the git-backed branch).
+            local args = {
+                tmp = true,
+                exists = true,
+                tracked = false,
+                has_unstaged_hunks = true,
+                hunks = {},
+                claude_owned_ranges = {},
+            }
+            assert.is_true(TrustSafety.safe_for_kind("write", args))
+            assert.is_true(TrustSafety.safe_for_kind("create", args))
+        end)
     end)
 end)

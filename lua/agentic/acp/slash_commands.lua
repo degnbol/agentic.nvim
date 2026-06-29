@@ -51,7 +51,7 @@ function SlashCommands.setCommands(bufnr, available_commands)
         trust = {
             word = "trust",
             menu = "Set edit trust scope",
-            info = "Set scope for auto-approving edits. Subcommands: repo, here, off, or a path/glob",
+            info = "Set scope for auto-approving edits. Subcommands: repo, here, tmp, off, or a path/glob",
         },
     }
 

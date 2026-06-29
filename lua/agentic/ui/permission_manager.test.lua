@@ -1114,4 +1114,53 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
     end)
+
+    describe("_bash_effects_clear (tmp scope)", function()
+        local TrustSafety = require("agentic.utils.trust_safety")
+        local tmp_path = vim.uv.os_tmpdir() .. "/agentic_effects_test"
+
+        it("empty effects clear regardless of scope", function()
+            pm._trust_scope = nil
+            assert.is_true(pm:_bash_effects_clear({}))
+        end)
+
+        it("a write under tmp clears with /trust tmp active", function()
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            assert.is_true(
+                pm:_bash_effects_clear({ { kind = "write", path = tmp_path } })
+            )
+        end)
+
+        it("a write outside tmp does not clear", function()
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            assert.is_false(
+                pm:_bash_effects_clear({ { kind = "write", path = "/repo/x" } })
+            )
+        end)
+
+        it("a tmp write does not clear without a tmp scope", function()
+            pm._trust_scope = nil
+            assert.is_false(
+                pm:_bash_effects_clear({ { kind = "write", path = tmp_path } })
+            )
+        end)
+
+        it("a non-tmp trust scope does not clear tmp writes", function()
+            pm._trust_scope = TrustSafety.compile_path_scope("/repo", "/repo")
+            assert.is_false(
+                pm:_bash_effects_clear({ { kind = "write", path = tmp_path } })
+            )
+        end)
+
+        it("a tmp symlink resolving outside tmp does not clear", function()
+            local link = vim.uv.os_tmpdir() .. "/agentic_evil_link"
+            vim.uv.fs_unlink(link)
+            vim.uv.fs_symlink("/etc/passwd", link)
+            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
+            local cleared =
+                pm:_bash_effects_clear({ { kind = "write", path = link } })
+            vim.uv.fs_unlink(link)
+            assert.is_false(cleared)
+        end)
+    end)
 end)

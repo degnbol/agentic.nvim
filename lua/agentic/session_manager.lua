@@ -580,13 +580,14 @@ end
 --- Open the /trust selector menu (no argument form).
 function SessionManager:_show_trust_picker()
     local cwd = vim.uv.cwd() or vim.fn.getcwd()
-    --- @type { kind: "repo"|"here"|"path"|"off", label: string }[]
+    --- @type { kind: "repo"|"here"|"tmp"|"path"|"off", label: string }[]
     local items = {
         { kind = "repo", label = "Git-tracked files in repo" },
         {
             kind = "here",
             label = string.format("Git-tracked files under %s", cwd),
         },
+        { kind = "tmp", label = "Scratch files under tmp" },
         { kind = "path", label = "Path or glob…" },
         { kind = "off", label = "Off" },
     }
@@ -634,6 +635,11 @@ function SessionManager:_handle_trust_command(arg)
     end
 
     local cwd = vim.uv.cwd() or vim.fn.getcwd()
+
+    if arg == "tmp" then
+        self:_apply_trust_scope(TrustSafety.build_tmp_scope(cwd))
+        return
+    end
 
     if arg == "repo" or arg == "here" then
         local git_root = GitFiles.get_git_root(cwd)

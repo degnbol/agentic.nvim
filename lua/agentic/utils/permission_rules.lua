@@ -16,6 +16,7 @@ local subtree_has_substitution = ShellParse.subtree_has_substitution
 local safe_assignment_name = ShellParse.safe_assignment_name
 local token_is_dynamic = ShellParse.token_is_dynamic
 local redirect_is_safe = ShellParse.redirect_is_safe
+local redirect_write_target = ShellParse.redirect_write_target
 local inner_source = ShellParse.inner_source
 local CONTAINER_TYPES = ShellParse.CONTAINER_TYPES
 local SUBSTITUTION_TYPES = ShellParse.SUBSTITUTION_TYPES
@@ -547,7 +548,17 @@ end
 -- 2026-06-12). They can drift across grammar versions — re-verify with a
 -- parse-tree dump after upgrading the parser.
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer }
+--- A file-mutating leaf the walker pinned to a concrete literal path. The walk
+--- still bails structurally on everything it cannot model; a leaf that *can* be
+--- modelled as a recoverable mutation is emitted here instead of bailing, for
+--- the policy layer to clear against a trust scope (over-prompt-only: an effect
+--- that does not clear still blocks approval). `path` may be relative — the
+--- policy layer resolves it against cwd.
+--- @class agentic.utils.PermissionRules.Effect
+--- @field kind "write" Mutation kind (only redirect writes for now)
+--- @field path string Concrete target path
+
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[] }
 
 --- Container types that are straight-line statement sequences — #3
 --- constant-literal propagation threads a per-sequence `known` environment
@@ -1225,11 +1236,22 @@ local function walk_redirected(node, src, ctx)
                 return false
             end
         elseif child:named() then
-            if
-                child:type() ~= "file_redirect"
-                or not redirect_is_safe(child, src)
-            then
+            if child:type() ~= "file_redirect" then
                 return false
+            end
+            if not redirect_is_safe(child, src) then
+                -- A concrete file-write redirect (`cmd > /tmp/x`) is not bailed
+                -- but emitted as a write effect; the policy layer clears it
+                -- against the trust scope. A target it cannot pin to a literal
+                -- (dynamic / unmodelled) still bails.
+                local target = redirect_write_target(child, src)
+                if not target then
+                    return false
+                end
+                table.insert(
+                    ctx.effects,
+                    { kind = "write", path = target }
+                )
             end
         end
     end
@@ -2128,16 +2150,24 @@ end
 --- command name, subshell, brace group, negation) bails. Loops and if/case
 --- control flow recurse into every branch. Fail-closed — an absent parser, a
 --- parse error, or a truncated/malformed tree all return false.
+---
+--- `ok` means structurally approvable; the second return is the ordered list of
+--- concrete file-mutating effects (redirect writes) the command would produce.
+--- A structurally-ok command with effects STILL requires every effect to clear
+--- at the policy layer before approval — `ok` alone is not approval (see
+--- permission_manager's `_bash_effects_clear`). Empty effects means a pure
+--- read/no-write command that approves on `ok` alone.
 --- @param command string
---- @return boolean
-function M.should_auto_approve(command)
+--- @return boolean ok
+--- @return agentic.utils.PermissionRules.Effect[] effects
+function M.evaluate(command)
     if type(command) ~= "string" or command == "" then
-        return false
+        return false, {}
     end
     -- A pathologically long generated command could make parsing slow on this
     -- cold path. 64 KB is far above any real command — refuse rather than parse.
     if #command > 65536 then
-        return false
+        return false, {}
     end
 
     local allow = M.get_allow_patterns()
@@ -2145,22 +2175,36 @@ function M.should_auto_approve(command)
     -- Skip the parse entirely when neither layer has any allow source — the
     -- walker has nothing to approve against.
     if #allow == 0 and next(structured_entries) == nil then
-        return false
+        return false, {}
     end
 
     local root = parse_zsh(command)
     if not root then
-        return false
+        return false, {}
     end
 
-    return walk(root, command, {
+    --- @type agentic.utils.PermissionRules.Effect[]
+    local effects = {}
+    local ok = walk(root, command, {
         allow = allow,
         deny = M.get_deny_patterns(),
         ask = M.get_ask_patterns(),
         structured_entries = structured_entries,
         auto_approve = Config.permissions.auto_approve,
         depth = 0,
+        effects = effects,
     })
+    return ok, effects
+end
+
+--- Whether a command auto-approves on its own, with no trust scope. True iff it
+--- is structurally approvable AND produces no file-mutating effects (a redirect
+--- write needs `/trust tmp` to clear — see `evaluate` / `_bash_effects_clear`).
+--- @param command string
+--- @return boolean
+function M.should_auto_approve(command)
+    local ok, effects = M.evaluate(command)
+    return ok and #effects == 0
 end
 
 --- Invalidate cached patterns (forces re-read on next check).

@@ -251,8 +251,18 @@ move). User picks a scope via `/trust`:
 |---|---|
 | `repo` | Any git-tracked file in the current repo |
 | `here` | Tracked files under the activation cwd |
+| `tmp` | Scratch files strictly under a tmp root (`/tmp`, `$TMPDIR`) |
 | `off` | Clear |
 | any other | Literal path or `vim.glob.to_lpeg` glob |
+
+The `tmp` scope is git-agnostic — recoverability is "ephemeral by convention",
+not git, so clobbering scratch is not loss of work (`TrustSafety.build_tmp_scope`,
+`is_under_tmp`; `safe_for_kind` short-circuits write/create on `args.tmp`). It is
+also the first scope to gate a **second mutation producer**: alongside ACP file
+edits, Bash redirect writes now feed the same policy oracle.
+`PermissionRules.evaluate` extracts them as `write` effects — see its docstring
+and `PermissionManager._bash_effects_clear` for the extraction and per-effect
+tmp check. `delete` effects + cross-command cleanup are Step B, not yet shipped.
 
 **Scope membership is necessary but not sufficient** — the orchestrator
 (`PermissionManager._check_trust`) layers six safety properties on top:

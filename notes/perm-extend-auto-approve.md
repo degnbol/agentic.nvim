@@ -2,9 +2,10 @@
 
 > **Sequencing.** Builds on the shipped treesitter walker
 > (`lua/agentic/utils/permission_rules.lua` + `permission_structured.lua`;
-> overview in the `permissions` project skill). Each item below is an addition
-> inside that walker, not a new subsystem. Grounded in the walker as of
-> 2026-06-17.
+> overview in the `permissions` project skill). Every item but #1 is an addition
+> inside that walker, not a new subsystem; #1 splits the walker into an effect
+> producer and routes the effects through the existing `/trust` policy oracle.
+> Grounded in the walker as of 2026-06-17.
 
 ## The invariant every item must preserve
 
@@ -19,7 +20,9 @@ benefit; all done), **#7** (same tier — quoted-`"$var"` resolution, done) →
 **#4b** (quoted `"$(cmd)"`, same tier, done — see end of #4) →
 **#4b-general** (string-embedded `"text $(cmd)"`, sibling of #4b, done — see
 `perm-string-embedded-substitution.md`) →
-**#1** (off by default, narrow) → **#2** (parked, see end).
+**#1** (tmp work unified into `/trust`; the one item that crosses out of the
+walker into the trust/policy layer — step A non-destructive done, step B opt-in
+todo) → **#2** (parked, see end).
 
 A named `function_definition` already auto-approves *as a definition* (body not
 walked — defining never runs it; an anonymous `() { … }` executes immediately
@@ -269,48 +272,128 @@ overwhelmingly simple pipelines, though, so this fires without that dependency.
 
 ---
 
-## #1 — `rm` of Claude's own scratch (`scratch_rm`) (todo)
+## #1 — tmp work as a `/trust` scope (Step A done; Step B todo)
 
-**Today.** `rm` is unconditionally `ask`; any non-`/dev/null` redirect bails. The
-whole Bash system is path-agnostic — no notion of a safe path (only `/trust`,
-for ACP file-edit kinds, is path-aware).
+**Today.** Two parallel notions of "is this mutation safe": the Bash walker is
+path-agnostic (every non-`/dev/null` redirect bails, `rm` is `ask` and `rm -f`
+denies), and `/trust` is path-aware but only for ACP file-edit kinds
+(edit/write/create/delete/move). tmp scratch — Claude writing a command's output
+to `/tmp/x`, reading it, removing it — is the common case neither covers without
+a hand-written `Bash(...)` allow.
 
-**Change.** A `scratch_rm` config enum (default `"off"`), mirroring
-`Config.permissions.auto_approve`:
+**Framing.** tmp auto-approval *is* `/trust` run on tmp; the only policy
+difference is the recoverability backing. A repo's `/trust` leans on git (undo
+via `git checkout`); tmp has no git, so its safety comes from "ephemeral by
+convention" for writes and from "we created it this session" for deletes. So this
+is not a new subsystem — it is `/trust` with one extra recoverability branch,
+plus a second *producer* of mutation-effects (Bash, alongside the existing ACP
+tool calls). It is the one item in this note that crosses out of the walker.
 
-| value | a `rm <literal>` auto-approves when the resolved path is… |
-|---|---|
-| `"off"` (default) | never — scratch files persist as a record |
-| `"authored"` | in the **session author-ledger** *and* under a temp root |
-| `"temp"` | under a temp root (authored or not) |
+### Architecture: producer / policy split
 
-- **Author-ledger** = the set of paths Claude wrote this session via write /
-  create / edit tool calls, harvested from the in-plugin tracker
-  (`message_writer.tool_call_blocks[*].argument` — the same field
-  `_try_record_edit_range` reads). No SDK hook, no `session_id` correlation.
-- **Temp root** = strictly *under* `/tmp` or `$TMPDIR` (macOS `$TMPDIR` is
-  `/var/folders/…`, where `mktemp` actually writes).
-- **rm caps**: never the bare root, never a path containing `..`, `-rf` only on a
-  strict subpath; resolve `realpath` and require *both* the literal and its
-  realpath in scope (symlink escape); TOCTOU re-stat before approving (reuse the
-  `TrustSafety` gates that `/trust` already carries).
-- **Composes with #3**: `d=/tmp/x; …; rm -r $d` resolves `$d`→`/tmp/x` first.
+The walker must **not** know about tmp, git, or scope. Split the two concerns:
 
-**Accepted residual.** `f=$(mktemp); echo x > $f; rm $f` — `mktemp`'s path is a
-runtime-random value returned on stdout, never observed, never propagatable. So
-mktemp-based scratch still prompts under any setting. This is unavoidable
-without stdout capture.
+- **Walker = pure effect extractor.** It returns `(structural_ok, effects)` where
+  `effects` is an *ordered* list of `{kind, path}` for the file-mutating leaves it
+  can pin to a **concrete literal** (#3 resolution applies): a redirect target →
+  `write`, an `rm` arg → `delete`, `touch`/`mkdir` → `create`. A path it cannot
+  pin (dynamic `$x`, glob) is emitted with `path = <dynamic>`; the policy consumer
+  then can't clear it → prompt (over-prompt-only preserved). `structural_ok`
+  carries every *non-file* verdict exactly as today — eval/source, exec-hijack env
+  prefix, non-allowlisted command, etc. still bail structurally. Redirects and
+  `rm` move *out* of the structural bail into `effects`. Approve the command iff
+  `structural_ok AND every effect clears`.
+- **Policy consumer = `TrustSafety.safe_for_kind`** — the same oracle
+  `_check_trust` already calls for ACP tool calls, now fed by two producers (one
+  effect from a tool call, N effects from a Bash command). `is_under_tmp`,
+  git-recoverability, and the session ledger all live here, in one place. No
+  parallel "is this path safe" logic in the walker.
 
-**Why off by default.** Auto-approving a *destructive* op is more aggressive than
-the existing `auto_approve_*` switches (which default `true` but only approve
-non-destructive things), and a user may want scratch files kept as an audit
-trail. The flag is a **preference gate**, not a safety gate — safety is fully
-established by the ledger∩temp-root intersection.
+### Recoverability policy (the one new branch in `safe_for_kind`)
 
-**Touches.** `config_default.lua` (`scratch_rm`); `PermissionManager` (own the
-author-ledger; build from the tracker); a scratch-`rm` resolver threaded into the
-walk ctx and special-cased for `cmd_name=="rm"` in `walk_command`;
-`TrustSafety`/`GitFiles` (reuse symlink + TOCTOU helpers).
+| kind | repo scope (git-backed) | tmp scope |
+|---|---|---|
+| write / create | new file, or tracked + clean | **safe** — clobbering tmp scratch is not loss of work |
+| delete | tracked + clean | **only if created this session** — git can't restore it, so we must *know* it was Claude's own scratch |
+
+Still gated, for every tmp effect, by the existing `/trust` safety properties:
+symlink realpath also under tmp, strictly *under* a tmp root (never the root
+itself, no `..`), and TOCTOU re-stat. **Temp root** = strictly under `/tmp`
+(→`/private/tmp`) or `$TMPDIR` (macOS `/var/folders/…/T`), resolved once via
+`vim.uv.os_tmpdir()` + realpath.
+
+**"Created this session"** has two tiers:
+- *Intra-command* (no state): the effects list is ordered, so
+  `cmd > /tmp/x; rm /tmp/x` shows `create(/tmp/x)` before `delete(/tmp/x)` in one
+  list → the consumer clears the delete. Covers the dominant "write a file and rm
+  it in the same call" case with zero session state.
+- *Cross-command* (session ledger): a `rm /tmp/x` in a *later* command needs a
+  per-session set of paths created, fed by approved `create`/`write` effects from
+  **both** Bash and ACP. This is the only new mutable state and the only place a
+  stale entry could mislead.
+
+### Activation and gates
+
+- tmp **writes**: active `/trust tmp` scope (session opt-in). A `tmp` keyword for
+  `/trust` is sugar over the literal-path scope that already exists, resolving to
+  *all* roots (incl. mac's `$TMPDIR`, which a literal `/tmp` glob misses). No
+  config flag — non-destructive.
+- tmp **deletes**: active `/trust tmp` **and** `Config.permissions.tmp_cleanup`
+  (default `false`). Two gates because a tmp delete is unrecoverable: a standing
+  opt-in to auto-cleanup on top of the session scope. This flag also carries the
+  `rm -f`/`--force` deny override — sound only because the user explicitly opted
+  in to destructive loss in tmp; the carve must also fire in `reject_walk`, since
+  `-f` denies *before* the approve walk runs.
+
+### Why it's sound (invariant held)
+
+The walker change only reclassifies redirect/`rm` leaves from "bail" to "emit an
+effect"; an effect that doesn't clear still bails. A dynamic path never clears
+(emitted `<dynamic>`). Deny/ask gates on the *command* are untouched except the
+explicit, double-gated `rm -f` tmp carve. So the surface only ever *adds*
+approvals for concrete tmp paths under an active opt-in — never removes a
+deny/ask check. Composes with #3: `d=/tmp/x; …; rm -r $d` resolves `$d`→`/tmp/x`
+before the effect is built.
+
+### Accepted residual
+
+`f=$(mktemp); echo x > $f; rm $f` — `mktemp`'s path is a runtime-random value on
+stdout, never observed, never propagatable, so it stays `<dynamic>` and prompts
+under any setting. Unavoidable without stdout capture.
+
+### Build order
+
+- **Step A — writes (done).** Walker exposes effects via a new `evaluate` →
+  `(ok, effects)` (the old `should_auto_approve` is kept as a boolean convenience
+  = `ok and #effects==0`, so the pre-existing tests stay untouched). Redirect
+  writes become `write` effects in `walk_redirected` (`redirect_write_target` in
+  `shell_parse.lua` pins the literal; dynamic/unmodelled still bails). `tmp` scope
+  kind: `build_tmp_scope`/`is_under_tmp`/`tmp_roots` in `trust_safety.lua`,
+  `safe_for_kind` short-circuits write/create on `args.tmp`; `_bash_effects_clear`
+  in the manager resolves each effect's symlink pair and requires both endpoints
+  strictly under a tmp root. `/trust tmp` keyword + picker entry. Non-destructive
+  — no ledger, no flag, no deny override.
+- **Step B — deletes.** `delete` effects + intra-command correlation + session
+  ledger + `tmp_cleanup` flag + the `-f` carve in `reject_walk`.
+
+### Touches
+
+`permission_rules.lua` (walk return contract → `(structural_ok, effects)`,
+threaded through `walk`/handlers; redirect + `rm` become effect emitters);
+`trust_safety.lua` (`is_under_tmp`, tmp branch in `safe_for_kind`); `permission_
+manager.lua` (clear Bash effects via `safe_for_kind`; own the session ledger;
+feed it from approved create/write effects, Bash + ACP); `/trust` command parser
+(`tmp` keyword); `config_default.lua` (`permissions.tmp_cleanup`).
+
+### Open decisions
+
+1. **Session ledger now, or intra-command-only first?** Lean intra-command-only
+   (the cited case is intra-command; the ledger is the sole new state). Add the
+   ledger when a cross-command tmp `rm` actually bites.
+2. **Effects-list refactor of the walker return contract** — confirmed worth it:
+   Step B needs ordered create/delete anyway, so building it once is the
+   non-duplicated path. (A write-only feature alone could have been a ~5-line
+   inline predicate in `redirect_is_safe`; `rm` is what forces the list.)
 
 ---
 
@@ -431,24 +514,25 @@ value shape. Defer until a real case appears; the change above needs none of it
 
 ---
 
-## #2 — walk into script *files* (parked)
+## #2 — walk into script *files*
 
-`zsh run-tests.zsh`: read the file, parse, walk. **Sound, not unsafe** — in this
-architecture auto-approval fires synchronously with no human-wait window and ACP
-runs tool calls sequentially, so the TOCTOU gap between the plugin reading the
-file and the shell reading it has no writer in it.
+Moved to its own note: [perm-walk-into-scripts.md](perm-walk-into-scripts.md).
+It folds in the in-block create-then-run case (`echo "ls" > f.sh; zsh f.sh`)
+that a `Bash(...)` allow can't express, and supersedes the parked framing here.
 
-**Blocked on bail rate, not safety.** With **#6** done, a call to a locally-
-defined `foo` now resolves, but real scripts still bail on `source`, on a
-harness command not in the allowlist (`nvim --headless`, `make`, `pytest`), or
-on any write redirect. The scripts that pass are the trivial all-allowlisted
-ones — already covered by a one-line `Bash(zsh run-tests.zsh)` allow in
-`.claude/settings.json`.
+---
 
-The function-call-resolution prerequisite (#6) is in place; reading and walking
-the file is the easy part on top (the #5 `-c` body-walk and a future file-read
-share the "parse a body, recurse `walk`" shape, so a non-zsh extension needs no
-major refactor). What remains for #2 to beat the one-liner is closing the
-`source` / harness-command / write-redirect bail rate, not new walker machinery.
+## Cleanup — strip plan-number tags from durable artifacts (do last)
 
-Revisit only when wanting general safe-script approval across many scripts.
+The `#3`/`#4`/`#4b`/`#5`/`#6`/`#7` tags in this plan leaked into durable code
+and skill prose, where they index *this ephemeral note* and go stale the moment
+it is deleted. Once the features above are settled, strip every tag from:
+
+- `permission_rules.lua` comments and `permission_rules.test.lua` block names.
+- The permissions skill prose (`SKILL.md`, `references/parsing.md`, including the
+  `#4b` breadcrumb in the arg-token-text table).
+
+Keep the self-describing text; reword inline shorthand (`#3's known` → `the
+per-sequence constant environment`). Commit linkage is git blame's job, not a
+comment's. Do **not** promote this plan into the skill to keep the tags alive —
+code must not reference skills.

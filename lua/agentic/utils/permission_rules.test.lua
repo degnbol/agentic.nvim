@@ -925,6 +925,50 @@ describe("PermissionRules", function()
                 PermissionRules.should_auto_approve("env cat /etc/hosts")
             )
         end)
+
+        -- evaluate() surfaces a concrete file-write redirect as an effect (ok,
+        -- but needs a /trust tmp scope to clear) instead of bailing. The policy
+        -- layer (permission_manager) then decides; should_auto_approve, which
+        -- has no scope, stays false for these.
+        it("evaluate: emits a write effect for an output redirect", function()
+            local ok, effects =
+                PermissionRules.evaluate("cat /etc/hosts > /tmp/x")
+            assert.is_true(ok)
+            assert.equal(1, #effects)
+            assert.equal("write", effects[1].kind)
+            assert.equal("/tmp/x", effects[1].path)
+        end)
+
+        it("evaluate: emits a write effect for an append redirect", function()
+            local ok, effects = PermissionRules.evaluate("echo x >> /tmp/log")
+            assert.is_true(ok)
+            assert.equal("/tmp/log", effects[1].path)
+        end)
+
+        it("evaluate: a nested redirect inside $() emits an effect", function()
+            local ok, effects = PermissionRules.evaluate("cat $(ls > /tmp/o)")
+            assert.is_true(ok)
+            assert.equal("/tmp/o", effects[1].path)
+        end)
+
+        it("evaluate: no effect for /dev/null or fd dup", function()
+            local ok, effects = PermissionRules.evaluate("ls /tmp 2>/dev/null")
+            assert.is_true(ok)
+            assert.equal(0, #effects)
+        end)
+
+        it("evaluate: a dynamic redirect target bails (no effect)", function()
+            -- A target the walker cannot pin to a literal stays a structural
+            -- bail — over-prompt, never a launderable effect.
+            local ok, effects = PermissionRules.evaluate("cat > $(echo out)")
+            assert.is_false(ok)
+            assert.equal(0, #effects)
+        end)
+
+        it("evaluate: an unapproved command with a redirect is not ok", function()
+            local ok = PermissionRules.evaluate("danger > /tmp/x")
+            assert.is_false(ok)
+        end)
     end)
 
     describe("config permissions", function()

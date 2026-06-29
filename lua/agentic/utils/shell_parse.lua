@@ -401,6 +401,46 @@ local function redirect_is_safe(fr, src)
     return vim.treesitter.get_node_text(dest, src) == "/dev/null"
 end
 
+--- The concrete file-write target of a redirect that `redirect_is_safe`
+--- rejects, or nil when there is nothing pinnable to write to. nil means
+--- "bail" (caller falls through to a prompt); a string is the literal path the
+--- redirect would truncate/append to, surfaced as a `write` effect so the
+--- policy layer can clear it against a trust scope (see permission_manager's
+--- `_bash_effects_clear`).
+---
+--- Returns nil for the forms `redirect_is_safe` already approves (input `<`, fd
+--- duplication, `/dev/null`) and for any target it cannot pin to a literal (a
+--- substitution in the destination). The returned path may be relative — the
+--- policy layer resolves it against cwd.
+--- @param fr TSNode
+--- @param src string
+--- @return string|nil
+local function redirect_write_target(fr, src)
+    local op, dest
+    for child, field in fr:iter_children() do
+        if field == "destination" then
+            dest = child
+        elseif not child:named() then
+            op = child:type()
+        end
+    end
+    if not dest or subtree_has_substitution(dest) then
+        return nil
+    end
+    if op == "<" then
+        return nil
+    end
+    local dt = dest:type()
+    if (op == ">&" or op == "<&") and (dt == "file_descriptor" or dt == "number") then
+        return nil
+    end
+    local text = vim.treesitter.get_node_text(dest, src)
+    if text == "/dev/null" then
+        return nil
+    end
+    return text
+end
+
 -- ── Parsing ──────────────────────────────────────────────────────────────────
 
 --- Parse a command string with the zsh grammar. Returns the root node, or nil
@@ -830,6 +870,7 @@ M.literal_token = literal_token
 M.token_is_dynamic = token_is_dynamic
 M.command_name_text = command_name_text
 M.redirect_is_safe = redirect_is_safe
+M.redirect_write_target = redirect_write_target
 M.inner_source = inner_source
 M.CONTAINER_TYPES = CONTAINER_TYPES
 M.SUBSTITUTION_TYPES = SUBSTITUTION_TYPES

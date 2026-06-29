@@ -19,10 +19,11 @@ local M = {}
 --- @field size? integer
 
 --- @class agentic.utils.TrustSafety.Scope
---- @field kind "repo"|"here"|"path"
+--- @field kind "repo"|"here"|"path"|"tmp"
 --- @field display string Original user input or reserved literal
 --- @field cwd string Activation cwd (anchors "here", relative paths)
 --- @field glob_matcher? fun(path: string): boolean Compiled matcher for "path"
+--- @field tmp_roots? string[] Resolved tmp roots (kind == "tmp")
 
 --- Top-level directories that are too coarse to silently auto-approve.
 --- Used by `is_wide_scope` for the WARN notification.
@@ -104,6 +105,66 @@ function M.build_reserved_scope(kind, cwd, git_root)
         kind = kind,
         display = string.format("recoverable edits under %s", where),
         cwd = cwd,
+    }
+    return scope
+end
+
+--- The deduplicated temp roots: `/tmp` and the platform `$TMPDIR` (macOS
+--- `/var/folders/.../T`), each in **both** its literal and realpath form.
+--- Both are needed because a candidate path is only realpathed at its leaf
+--- (`resolve_symlink_pair`), not through a symlinked parent — so on macOS
+--- `/tmp/x` stays `/tmp/x` (matches the literal `/tmp` root) while a path
+--- captured under `/private/tmp` matches the realpath root.
+--- @return string[]
+function M.tmp_roots()
+    local roots = {}
+    local seen = {}
+    local function add(p)
+        if not p or p == "" then
+            return
+        end
+        local root = normalize(p):gsub("/+$", "")
+        if root ~= "" and not seen[root] then
+            seen[root] = true
+            table.insert(roots, root)
+        end
+    end
+    for _, p in ipairs({ "/tmp", vim.uv.os_tmpdir() }) do
+        add(p)
+        add(vim.uv.fs_realpath(p))
+    end
+    return roots
+end
+
+--- True iff `path` lies strictly under one of `roots` (the root itself does not
+--- count). `path` is normalised (collapsing `..`); symlink resolution is the
+--- caller's job (pass both the original and its realpath).
+--- @param path string
+--- @param roots string[]
+--- @return boolean
+function M.is_under_tmp(path, roots)
+    local norm = normalize(path):gsub("/+$", "")
+    for _, root in ipairs(roots) do
+        if vim.startswith(norm, root .. "/") then
+            return true
+        end
+    end
+    return false
+end
+
+--- Build a "tmp" scope: auto-approve mutations of scratch files under any tmp
+--- root. Recoverability comes from "ephemeral by convention", not git, so
+--- `safe_for_kind` short-circuits on `args.tmp`.
+--- @param cwd string Activation cwd
+--- @return agentic.utils.TrustSafety.Scope
+function M.build_tmp_scope(cwd)
+    local roots = M.tmp_roots()
+    --- @type agentic.utils.TrustSafety.Scope
+    local scope = {
+        kind = "tmp",
+        display = "tmp scratch (" .. table.concat(roots, ", ") .. ")",
+        cwd = cwd,
+        tmp_roots = roots,
     }
     return scope
 end
@@ -405,6 +466,7 @@ end
 --- @field claude_owned_ranges agentic.utils.TrustSafety.Range[] Verified ranges
 --- @field is_pure_addition? boolean diff.old is a contiguous subsequence of diff.new
 --- @field write_all? boolean Write replaces the entire file (diff.all)
+--- @field tmp? boolean Path is inside a tmp scope (write/create unconditionally safe)
 --- @field dest? agentic.utils.TrustSafety.KindArgs Destination state for `move`
 
 --- Per-kind safety predicate. See the `permissions` skill § "Trust scope"
@@ -415,6 +477,9 @@ end
 --- @return string|nil reason
 function M.safe_for_kind(kind, args)
     if kind == "create" then
+        if args.tmp then
+            return true, "tmp scratch create"
+        end
         if args.exists then
             return false, "file already exists"
         end
@@ -422,6 +487,9 @@ function M.safe_for_kind(kind, args)
     end
 
     if kind == "write" then
+        if args.tmp then
+            return true, "tmp scratch write"
+        end
         if not args.exists then
             return true, "write new file"
         end

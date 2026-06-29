@@ -314,8 +314,15 @@ function PermissionManager:_try_auto_approve(request, callback)
     if command and PermissionRules.should_auto_reject(command) then
         return auto_reject(request, callback, "deny rule: " .. command)
     end
-    if command and PermissionRules.should_auto_approve(command) then
-        return auto_approve(request, callback, "compound command: " .. command)
+    if command then
+        local ok, effects = PermissionRules.evaluate(command)
+        if ok and self:_bash_effects_clear(effects) then
+            return auto_approve(
+                request,
+                callback,
+                "compound command: " .. command
+            )
+        end
     end
 
     -- Client-side allow_always/reject_always cache (provider persistence unreliable via ACP)
@@ -415,6 +422,10 @@ function PermissionManager:_path_in_trust_scope(path)
         return false
     end
 
+    if scope.kind == "tmp" then
+        return TrustSafety.is_under_tmp(path, scope.tmp_roots)
+    end
+
     if scope.kind == "path" and scope.glob_matcher then
         return scope.glob_matcher(path) == true
     end
@@ -432,6 +443,51 @@ function PermissionManager:_path_in_trust_scope(path)
             cwd = cwd .. "/"
         end
         return vim.startswith(path, cwd)
+    end
+    return true
+end
+
+--- Whether every file-mutating effect a Bash command would produce clears
+--- against the active trust scope. Empty effects → trivially clear (a command
+--- with no concrete writes auto-approves on structural grounds alone, as
+--- before). A non-empty list requires an active `tmp` trust scope and every
+--- effect — symlink endpoints included — to land strictly under a tmp root.
+--- @param effects agentic.utils.PermissionRules.Effect[]
+--- @return boolean
+function PermissionManager:_bash_effects_clear(effects)
+    if #effects == 0 then
+        return true
+    end
+    local scope = self._trust_scope
+    if
+        not (
+            Config.auto_approve_trust_scope
+            and scope
+            and scope.kind == "tmp"
+        )
+    then
+        return false
+    end
+    local cwd = vim.uv.cwd() or ""
+    for _, eff in ipairs(effects) do
+        local path = eff.path
+        if path:sub(1, 1) ~= "/" then
+            path = vim.fs.joinpath(cwd, path)
+        end
+        local orig, real = TrustSafety.resolve_symlink_pair(path)
+        if not orig then
+            return false
+        end
+        if not TrustSafety.is_under_tmp(orig, scope.tmp_roots) then
+            return false
+        end
+        if real ~= orig and not TrustSafety.is_under_tmp(real, scope.tmp_roots) then
+            return false
+        end
+        local args = { tmp = true, exists = vim.uv.fs_stat(orig) ~= nil }
+        if not TrustSafety.safe_for_kind(eff.kind, args) then
+            return false
+        end
     end
     return true
 end
@@ -514,21 +570,26 @@ function PermissionManager:_check_trust(tool_call)
 
     local scope = self._trust_scope --[[@as agentic.utils.TrustSafety.Scope]]
     local git_root = nil
-    if scope.kind ~= "path" then
+    if scope.kind == "repo" or scope.kind == "here" then
         git_root = GitFiles.get_git_root(scope.cwd)
         if not git_root then
             return false, "no git root for scope"
         end
-    else
+    elseif scope.kind == "path" then
         -- For path scope, infer git root from the file's location for hunk
         -- detection. Failure is fine — without a git root we treat the file
         -- as untracked, which will still allow create/new-file paths.
         git_root = GitFiles.get_git_root(vim.fs.dirname(orig))
     end
+    -- tmp scope is git-agnostic: clobbering scratch is not loss of work, so
+    -- `safe_for_kind` short-circuits on `args.tmp` before any git field.
 
     local source_args = self:_build_kind_args(tool_call, orig, git_root)
     if not source_args then
         return false, "could not build source args"
+    end
+    if scope.kind == "tmp" then
+        source_args.tmp = true
     end
 
     --- @type agentic.utils.TrustSafety.StatSnapshot|nil
@@ -555,6 +616,9 @@ function PermissionManager:_check_trust(tool_call)
             self:_build_kind_args(tool_call, d_orig, dest_git_root)
         if not dest_args then
             return false, "could not build destination args"
+        end
+        if scope.kind == "tmp" then
+            dest_args.tmp = true
         end
         source_args.dest = dest_args
     end
