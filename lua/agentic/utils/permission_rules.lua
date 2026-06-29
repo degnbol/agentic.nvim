@@ -875,6 +875,29 @@ local walk
 --- @type fun(subst: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx): boolean
 local walk_substitution_inner
 
+--- True for a double-quoted `string` whose only expansions are command
+--- substitutions (#4b generalised): at least one `command_substitution` named
+--- child and every named child is `string_content` or `command_substitution`.
+--- A `$var`/`${…}`/arithmetic child (dynamic-unresolvable) or any other node
+--- fails the whitelist, so the caller bails. Pure-literal strings (no
+--- substitution) return false and stay concrete literal tokens.
+--- @param node TSNode
+--- @return boolean
+local function string_subst_only(node)
+    local saw_subst = false
+    for c in node:iter_children() do
+        if c:named() then
+            local t = c:type()
+            if t == "command_substitution" then
+                saw_subst = true
+            elseif t ~= "string_content" then
+                return false
+            end
+        end
+    end
+    return saw_subst
+end
+
 --- Extract a `command` node's argument tokens — shared by `walk_command` (the
 --- mode-gated decision) and `command_known_safe` (the highlight tally), which
 --- differ only in how an inner command substitution is vetted, passed in as
@@ -978,9 +1001,28 @@ local function extract_args(node, src, ctx, known, inner_check)
                 table.insert(args, vim.treesitter.get_node_text(inner, src))
                 table.insert(arg_nodes, child)
                 table.insert(args_dynamic, true)
+            elseif child:type() == "string" and string_subst_only(child) then
+                -- #4b generalised: a quoted string mixing literal text with one
+                -- or more command substitutions (`"count: $(ls)"`). Vet every
+                -- inner (they run), then splice the whole quoted string as ONE
+                -- dynamic token — raw text, quotes kept (unlike #4b's strip; the
+                -- token is dynamic so the structured matcher wildcards it and
+                -- ignores its text). A gated outer command's deny/ask still
+                -- wildcard-fires at this index.
+                for sub in child:iter_children() do
+                    if
+                        sub:type() == "command_substitution"
+                        and not inner_check(sub, src, ctx)
+                    then
+                        return nil
+                    end
+                end
+                table.insert(args, vim.treesitter.get_node_text(child, src))
+                table.insert(arg_nodes, child)
+                table.insert(args_dynamic, true)
             else
                 -- Any other substitution-bearing argument (concatenation
-                -- `a$(b)c`, process substitution `<(…)`, a multi-child quoted
+                -- `a$(b)c`, process substitution `<(…)`, a `$var`-mixed quoted
                 -- string) is not handled by the dynamic-token machinery — bail.
                 if subtree_has_substitution(child) then
                     return nil

@@ -17,6 +17,8 @@ leaf is checked* against deny/ask.
 Build order: **#3, #4, #5, #6** (preserve the invariant, no new config, broad
 benefit; all done), **#7** (same tier — quoted-`"$var"` resolution, done) →
 **#4b** (quoted `"$(cmd)"`, same tier, done — see end of #4) →
+**#4b-general** (string-embedded `"text $(cmd)"`, sibling of #4b, done — see
+`perm-string-embedded-substitution.md`) →
 **#1** (off by default, narrow) → **#2** (parked, see end).
 
 A named `function_definition` already auto-approves *as a definition* (body not

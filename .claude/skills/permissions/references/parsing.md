@@ -94,6 +94,26 @@ the matched value) and stops at subshell / `$(…)` boundaries (those bindings a
 sealed). `known` is sequence-local; a binding never leaks into or out of a
 nested block.
 
+## Arg token text — quote handling by class
+
+A leaf's arg tokens (the `args` strings, joined for the glob matcher) are
+quote-handled by *class*, not uniformly. The rule that matters: the strip only
+applies to a **concrete literal** feeding literal matching; a token that is
+dynamic or mixed keeps its quotes, because its text is never literal-matched
+(the structured matcher wildcards a dynamic token and ignores its text).
+
+| String form | Stored token | Why |
+|---|---|---|
+| Pure literal `"rm"` (`string_content` only) | `rm` (stripped) | A concrete literal must not evade a literal gate by keeping quotes. |
+| Mixed `"pre$f"` (`string_content` + expansion) | `"pre$f"` (raw, quoted) | Dynamic — text isn't literal-matched; raw text preserves glob matching. `literal_token`'s mixed branch. |
+| Pure substitution `"$(ls)"` (quoted, single child, no literal) | `$(ls)` (inner, no quotes) | Its own branch (the `#4b` case in code/commits); no literal part to preserve. |
+| Literal + substitution `"count: $(ls)"` | `"count: $(ls)"` (raw, quoted) | Same class as `"pre$f"` — mixed + dynamic, so keep quotes. |
+
+The pure-substitution row's stripped form is the one that looks inconsistent
+with the mixed-string rows; it is deliberate (that string has no literal to
+keep) and keeps its own branch — do not unify it with the mixed-string
+handling.
+
 ## Pipeline
 
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
@@ -129,16 +149,23 @@ nested block.
    standalone (so `f=$(rm x)` and `cat $(rm x)` bail — `rm` not allowed). A
    quoted `"$(…)"` in **argument** position (a `string` whose single named child
    is the substitution) is unwrapped to that inner and walked the same way (#4b
-   — `cat "$(ls)"` approves). In argument and for-list position the output is
+   — `cat "$(ls)"` approves). #4b generalises to a quoted string mixing literal
+   text with one or more substitutions and nothing else (`echo "count: $(ls)"`,
+   `cat "pre$(ls)"`, `echo "a $(ls) b $(wc -l)"`): every inner recurses, then the
+   *whole quoted argument* splices as one dynamic token (quotes kept, since a
+   dynamic token's text is ignored). A `$var`/`${…}`/arithmetic child fails the
+   `string_content`-or-`command_substitution` whitelist and bails. In argument
+   and for-list position the output is
    then spliced in as a *dynamic token*, so a gated outer command still prompts
-   — `find . $(echo -exec rm)` and `find "$(echo -exec rm)"` approve the inner
+   — `find . $(echo -exec rm)` and `find . "x$(echo -exec rm)"` approve the inner
    `echo` but the dynamic token wildcard-fires find's `-exec` gate. A process
    substitution `<(…)`/`>(…)` in **argument** position also recurses through
    `walk_substitution_inner`, then splices a *static* `/dev/fd` placeholder (it
    expands to a `/dev/fd/N` path, never a flag or subcommand). Still bails
    (output is a control surface the dynamic-token machinery can't guard):
-   substitution as the command name (`$(echo rm) x`), concatenation
-   (`a$(b)c`, `"pre$(…)"`) or a multi-expansion quoted string (`"$a$b"`),
+   substitution as the command name (`$(echo rm) x`), unquoted concatenation
+   (`a$(b)c`) or a quoted string mixing `$var`/`${…}`/arithmetic with text
+   (`"$a$b"`, `"x$y$(ls)"`),
    process substitution outside argument position, case value/pattern, a quoted
    `"$(…)"` for-list item, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and

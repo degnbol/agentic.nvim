@@ -1705,7 +1705,8 @@ describe("PermissionRules", function()
         -- substitution and walked like the bare `$(cmd)` form — inner must
         -- approve standalone, output splices as a dynamic token. Only a `string`
         -- whose single named child is the substitution qualifies; concatenation
-        -- and multi-child strings stay bailed.
+        -- with `$var` and process substitution stay bailed. The generalised
+        -- form — literal text + one or more substitutions — is covered below.
         describe("#4b quoted command substitution", function()
             local ALLOW_CAT_LS = {
                 allow = {
@@ -1730,8 +1731,8 @@ describe("PermissionRules", function()
                 assert.is_false(decide('cat "$(ls > out)"', ALLOW_CAT_LS))
             end)
 
-            it("rejects cat \"pre$(ls)\" — concatenation has 2 named children", function()
-                assert.is_false(decide('cat "pre$(ls)"', ALLOW_CAT_LS))
+            it("approves cat \"pre$(ls)\" — literal prefix, see generalised block", function()
+                assert.is_true(decide('cat "pre$(ls)"', ALLOW_CAT_LS))
             end)
 
             it("approves cat \"$(echo $(ls))\" — nested inner recurses", function()
@@ -1742,6 +1743,49 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve('find "$(echo -exec rm)"')
                 )
+            end)
+        end)
+
+        -- #4b generalised: a quoted string mixing literal text with one or more
+        -- command substitutions. Every inner is vetted; the whole quoted arg
+        -- splices as a single dynamic token (quotes kept). A `$var` child or any
+        -- non-substitution expansion is out of scope and bails.
+        describe("#4b string-embedded command substitution", function()
+            local ALLOW_SUBST = {
+                allow = {
+                    "Bash(echo *)",
+                    "Bash(echo)",
+                    "Bash(ls *)",
+                    "Bash(ls)",
+                    "Bash(wc *)",
+                    "Bash(wc)",
+                },
+            }
+
+            it("approves echo \"count: $(ls)\" — literal prefix", function()
+                assert.is_true(decide('echo "count: $(ls)"', ALLOW_SUBST))
+            end)
+
+            it("approves echo \"$(ls) done\" — literal suffix", function()
+                assert.is_true(decide('echo "$(ls) done"', ALLOW_SUBST))
+            end)
+
+            it("approves echo \"a $(ls) b $(wc -l) c\" — multiple substitutions", function()
+                assert.is_true(decide('echo "a $(ls) b $(wc -l) c"', ALLOW_SUBST))
+            end)
+
+            it("rejects echo \"x $(rm y)\" — inner command not allowed", function()
+                assert.is_false(decide('echo "x $(rm y)"', ALLOW_SUBST))
+            end)
+
+            it("prompts on find . \"x$(echo -exec rm)\" — dynamic token wildcards find's -exec deny", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('find . "x$(echo -exec rm)"')
+                )
+            end)
+
+            it("bails on echo \"x $y $(ls)\" — $var child is out of scope", function()
+                assert.is_false(decide('echo "x $y $(ls)"', ALLOW_SUBST))
             end)
         end)
 
@@ -2772,6 +2816,19 @@ describe("PermissionRules", function()
                     local ranges = PermissionRules.tally_unapproved(cmd)
                     assert.equal(1, #ranges)
                     assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
+        end)
+
+        it("pinpoints the inner of a string-embedded substitution", function()
+            with_perms(
+                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                nil,
+                function()
+                    local cmd = 'echo "x $(rm y)"'
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm y", span_text(cmd, ranges[1]))
                 end
             )
         end)
