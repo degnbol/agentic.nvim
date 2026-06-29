@@ -21,8 +21,8 @@ benefit; all done), **#7** (same tier — quoted-`"$var"` resolution, done) →
 **#4b-general** (string-embedded `"text $(cmd)"`, sibling of #4b, done — see
 `perm-string-embedded-substitution.md`) →
 **#1** (tmp work unified into `/trust`; the one item that crosses out of the
-walker into the trust/policy layer — step A non-destructive done, step B opt-in
-todo) → **#2** (parked, see end).
+walker into the trust/policy layer — step A writes + step B deletes both done,
+the latter intra-command-only) → **#2** (parked, see end).
 
 A named `function_definition` already auto-approves *as a definition* (body not
 walked — defining never runs it; an anonymous `() { … }` executes immediately
@@ -272,7 +272,7 @@ overwhelmingly simple pipelines, though, so this fires without that dependency.
 
 ---
 
-## #1 — tmp work as a `/trust` scope (Step A done; Step B todo)
+## #1 — tmp work as a `/trust` scope (Step A + Step B done)
 
 **Today.** Two parallel notions of "is this mutation safe": the Bash walker is
 path-agnostic (every non-`/dev/null` redirect bails, `rm` is `ask` and `rm -f`
@@ -293,16 +293,16 @@ tool calls). It is the one item in this note that crosses out of the walker.
 
 The walker must **not** know about tmp, git, or scope. Split the two concerns:
 
-- **Walker = pure effect extractor.** It returns `(structural_ok, effects)` where
+- **Walker = pure effect extractor.** It returns `(ok, effects)` where
   `effects` is an *ordered* list of `{kind, path}` for the file-mutating leaves it
   can pin to a **concrete literal** (#3 resolution applies): a redirect target →
   `write`, an `rm` arg → `delete`, `touch`/`mkdir` → `create`. A path it cannot
-  pin (dynamic `$x`, glob) is emitted with `path = <dynamic>`; the policy consumer
-  then can't clear it → prompt (over-prompt-only preserved). `structural_ok`
+  pin (dynamic `$x`, glob) bails rather than emitting an effect, so the command
+  prompts (over-prompt-only preserved). `ok`
   carries every *non-file* verdict exactly as today — eval/source, exec-hijack env
   prefix, non-allowlisted command, etc. still bail structurally. Redirects and
   `rm` move *out* of the structural bail into `effects`. Approve the command iff
-  `structural_ok AND every effect clears`.
+  `ok AND every effect clears`.
 - **Policy consumer = `TrustSafety.safe_for_kind`** — the same oracle
   `_check_trust` already calls for ACP tool calls, now fed by two producers (one
   effect from a tool call, N effects from a Bash command). `is_under_tmp`,
@@ -334,66 +334,135 @@ itself, no `..`), and TOCTOU re-stat. **Temp root** = strictly under `/tmp`
 
 ### Activation and gates
 
-- tmp **writes**: active `/trust tmp` scope (session opt-in). A `tmp` keyword for
-  `/trust` is sugar over the literal-path scope that already exists, resolving to
-  *all* roots (incl. mac's `$TMPDIR`, which a literal `/tmp` glob misses). No
-  config flag — non-destructive.
+- tmp **writes**: active `/trust tmp` scope. A `tmp` keyword for `/trust` is sugar
+  over the literal-path scope that already exists, resolving to *all* roots (incl.
+  mac's `$TMPDIR`, which a literal `/tmp` glob misses).
 - tmp **deletes**: active `/trust tmp` **and** `Config.permissions.tmp_cleanup`
-  (default `false`). Two gates because a tmp delete is unrecoverable: a standing
-  opt-in to auto-cleanup on top of the session scope. This flag also carries the
-  `rm -f`/`--force` deny override — sound only because the user explicitly opted
-  in to destructive loss in tmp; the carve must also fire in `reject_walk`, since
-  `-f` denies *before* the approve walk runs.
+  (default `true`). Step B's intra-command correlation bounds a delete to a file
+  the *same command* just created under tmp.
+- **`rm -f`/`--force` always rejects** — no tmp carve. `should_auto_reject` runs
+  before the approve walk and rejects on rm's structured force-deny gate
+  unconditionally; force is unrecoverable, so it never auto-approves even for a
+  tmp path. (Earlier this flag carried a path-aware deny-suppression carve; that
+  was dropped in favour of the simpler always-reject rule.)
+- **Startup activation**: `Config.permissions.trust_tmp` (default `true`) activates
+  the `/trust tmp` scope at session start so tmp scratch is trusted out of the box,
+  gated by `auto_approve_trust_scope`. `SessionManager:_apply_default_trust` (called
+  from both `new_session` and `load_acp_session` once the session id is set) sets
+  the scope silently — no chat message — and pushes it to the headers state. A
+  scope the user set this session is left untouched. (Simpler than the originally
+  planned general `startup_commands` list — only tmp trust was needed.)
 
 ### Why it's sound (invariant held)
 
 The walker change only reclassifies redirect/`rm` leaves from "bail" to "emit an
-effect"; an effect that doesn't clear still bails. A dynamic path never clears
-(emitted `<dynamic>`). Deny/ask gates on the *command* are untouched except the
-explicit, double-gated `rm -f` tmp carve. So the surface only ever *adds*
-approvals for concrete tmp paths under an active opt-in — never removes a
-deny/ask check. Composes with #3: `d=/tmp/x; …; rm -r $d` resolves `$d`→`/tmp/x`
-before the effect is built.
+effect"; an effect that doesn't clear still bails. A dynamic path never clears —
+it bails (`walk_redirected`/`redirect_write_dest` return nil; the `rm` branch
+returns false on a dynamic operand), never laundered through a sentinel `<dynamic>`
+token. Deny/ask gates on the *command* are untouched (`rm -f`/`--force` rejects
+outright, no tmp carve). So the surface only ever *adds* approvals for concrete
+tmp paths under an active opt-in — never removes a deny/ask check. Composes with
+#3: `d=/tmp/x; …; rm -r $d` resolves `$d`→`/tmp/x` before the effect is built.
 
 ### Accepted residual
 
-`f=$(mktemp); echo x > $f; rm $f` — `mktemp`'s path is a runtime-random value on
-stdout, never observed, never propagatable, so it stays `<dynamic>` and prompts
-under any setting. Unavoidable without stdout capture.
+A **dynamic filename component** keeps the whole pattern prompting:
+`f=$(mktemp)`, `f=/tmp/x_$$.txt` (PID), `f=/tmp/x_$RANDOM` — `f` is not a known
+literal, so `$f` stays dynamic at both the redirect target and the `rm` operand,
+and both bail. This is not merely unimplemented: a dynamic path component can't
+be proven to stay under tmp (a suffix expanding to `../../etc/x` escapes the
+root), so prefix-based membership on the static `/tmp/...` head is **unsound**.
+Auto-approving these would need stdout/runtime capture and is out of scope.
+
+Note this is the common real shape — agents lean on `mktemp`/`$$` for scratch —
+so the intra-command feature mostly fires for fully-literal paths
+(`echo x > /tmp/test.sh; rm /tmp/test.sh`).
 
 ### Build order
 
 - **Step A — writes (done).** Walker exposes effects via a new `evaluate` →
   `(ok, effects)` (the old `should_auto_approve` is kept as a boolean convenience
   = `ok and #effects==0`, so the pre-existing tests stay untouched). Redirect
-  writes become `write` effects in `walk_redirected` (`redirect_write_target` in
-  `shell_parse.lua` pins the literal; dynamic/unmodelled still bails). `tmp` scope
+  writes become `write` effects in `walk_redirected` (`redirect_write_dest` in
+  `shell_parse.lua` returns the destination node, which `walk_redirected` resolves
+  to a literal; dynamic/unmodelled still bails). `tmp` scope
   kind: `build_tmp_scope`/`is_under_tmp`/`tmp_roots` in `trust_safety.lua`,
   `safe_for_kind` short-circuits write/create on `args.tmp`; `_bash_effects_clear`
   in the manager resolves each effect's symlink pair and requires both endpoints
   strictly under a tmp root. `/trust tmp` keyword + picker entry. Non-destructive
   — no ledger, no flag, no deny override.
-- **Step B — deletes.** `delete` effects + intra-command correlation + session
-  ledger + `tmp_cleanup` flag + the `-f` carve in `reject_walk`.
+- **Step B — deletes (done, intra-command only).** A non-force `rm` not otherwise
+  glob-allowed emits ordered `delete` effects per concrete operand in
+  `walk_command` (dash-tokens are options rm never deletes a file for, so only
+  `--`-trailing and plain words are operands; a dynamic operand bails like a
+  dynamic redirect). The emission is a **fallback after the allow check** — an
+  explicit `Bash(rm *)` allow approves rm cleanly with no effect (else the effect
+  would withhold the user's own allow). `_bash_effects_clear` clears a `delete`
+  only when an earlier `write`/`create` in the **same effects list** targeted the
+  same resolved path (intra-command correlation) AND `Config.permissions.tmp_cleanup`
+  is on. A function-definition body is walked with a throwaway effects list and is
+  recorded as a safe call target only if it emits **no** effects — defining never
+  runs the body, so an `rm` in it cannot be vetted by the policy layer (which sees
+  only the outer command). `rm -f`/`--force` is rejected outright by
+  `should_auto_reject` (no tmp carve). `tmp_cleanup` threaded into `WalkCtx` only.
+  **Deferred:** the cross-command session ledger (Follow-up #2), and
+  `touch`/`mkdir` → `create` effects (the dominant create source is a redirect
+  `write`).
 
 ### Touches
 
-`permission_rules.lua` (walk return contract → `(structural_ok, effects)`,
+`permission_rules.lua` (walk return contract → `(ok, effects)`,
 threaded through `walk`/handlers; redirect + `rm` become effect emitters);
 `trust_safety.lua` (`is_under_tmp`, tmp branch in `safe_for_kind`); `permission_
 manager.lua` (clear Bash effects via `safe_for_kind`; own the session ledger;
 feed it from approved create/write effects, Bash + ACP); `/trust` command parser
-(`tmp` keyword); `config_default.lua` (`permissions.tmp_cleanup`).
+(`tmp` keyword); `session_manager.lua` (`_apply_default_trust`, called from
+`new_session` + `load_acp_session`); `config_default.lua`
+(`permissions.tmp_cleanup`, `permissions.trust_tmp`).
 
 ### Open decisions
 
-1. **Session ledger now, or intra-command-only first?** Lean intra-command-only
-   (the cited case is intra-command; the ledger is the sole new state). Add the
-   ledger when a cross-command tmp `rm` actually bites.
+1. **Session ledger now, or intra-command-only first?** Resolved: shipped
+   intra-command-only (the cited case is intra-command; the ledger is the sole
+   new state). Cross-command ledger → Follow-up #2.
 2. **Effects-list refactor of the walker return contract** — confirmed worth it:
    Step B needs ordered create/delete anyway, so building it once is the
    non-duplicated path. (A write-only feature alone could have been a ~5-line
    inline predicate in `redirect_is_safe`; `rm` is what forces the list.)
+
+### Follow-ups (found testing Step A/B — for another agent)
+
+1. **Redirect-target resolution (Step A defect, done).** `redirect_write_target`
+   returned raw `get_node_text`, pinning only a **bare literal** target. A quoted
+   literal (`> "/tmp/x"`) and any variable (`> $f` / `> "$f"`) emitted a path that
+   never passed tmp membership and never correlated with the `rm` operand (which
+   *is* resolved, via `extract_args`), so `f=/tmp/x; echo >"$f"; rm "$f"` prompted
+   even though the literal `echo >/tmp/x; rm /tmp/x` worked. **Fix shipped:**
+   `shell_parse.redirect_write_target` is now `redirect_write_dest`, returning the
+   destination **node** (parser knowledge); `walk_redirected` takes `known` and
+   resolves the node to a literal — `resolved_var_name` + `known` lookup for a
+   bound `$f`/`"$f"`, `literal_token` quote-strip for a quoted literal, bail on a
+   dynamic/unbound target (previously emitted the raw `$f`). `walk_sequence` routes
+   a `redirected_statement` straight to `walk_redirected` so the per-sequence env
+   reaches it (the generic `walk` dispatcher passes `known=nil`, preserving the
+   old bare-literal behaviour where no sequence env exists). Tests under
+   "should_auto_approve with redirect" (quoted-literal, known-var bare/quoted,
+   unbound-var bail, write-then-rm correlation).
+2. **Cross-command session ledger (the dominant real-world gap).** Agents
+   typically run the write and the `rm` as **separate** Bash tool calls, so the
+   intra-command effects list never holds both — a later-command `rm /tmp/x`
+   prompts. This is the deferred ledger from Open decision #1; it is what actually
+   bites in practice, more than any single-command case. A per-session set of
+   tmp paths created by approved `write`/`create` effects (Bash + ACP) clears a
+   later `delete`. Sole new mutable state; stale-entry risk is the design care.
+3. **`cd` tracking for relative effect paths.** `_bash_effects_clear` joins a
+   relative effect path against `vim.uv.cwd()` (the editor cwd), and the walker
+   ignores `cd`. A command has a knowable cwd: thread a current-dir through
+   `walk_sequence` like #3's `known` (a literal `cd /abs` sets it; `cd $dynamic`,
+   `cd -`, `pushd` clear it) and resolve relative effect paths against that. This
+   is **not** `$PWD` expansion (env knowledge) — it is straight-line dataflow,
+   same shape and soundness as #3. Rarely bites tmp (scratch paths are usually
+   absolute), so lower priority than 1–2.
 
 ---
 
