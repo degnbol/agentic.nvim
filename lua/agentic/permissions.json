@@ -47,6 +47,11 @@
   "false":     { "read_only": [{}] },
   "help":      { "read_only": [{}] },
   "sleep":     { "read_only": [{}] },
+  "break":     { "read_only": [{}] },
+  "continue":  { "read_only": [{}] },
+  "return":    { "read_only": [{}] },
+  "shift":     { "read_only": [{}] },
+  "read":      { "read_only": [{}] },
 
   "grep":      { "read_only": [{}] },
   "rg":        { "read_only": [{}] },
