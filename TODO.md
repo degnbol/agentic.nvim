@@ -1,7 +1,7 @@
 # TODO
 
-Release strategy and versioning: see [`RELEASING.md`](RELEASING.md). Path
-to `v0.1.0` is to drive the Bugs section below to empty (or "Known
+Release strategy and versioning: see [`RELEASING.md`](RELEASING.md). The
+path to `v0.1.0` is to drive the Bugs section below to empty (or "Known
 minor").
 
 ## Bugs
@@ -15,11 +15,10 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 ### Rendering
 
-- Edit injection for no filetype.
-If we edit a file without filetype the chat shows bare triple ticks without a language annotation. It should be able to get the filetype from shebang.
-
-- Show more verbose info in chat: full model details when loading a new model (on startup and all other model loading situations, e.g. when switching model).
-  Similarly, show the model's context, how much did the CLAUDE.md and system prompts fill up it's context?
+- Edit injection for no filetype: planned in
+  [`notes/feature-edit-fence-filetype.md`](notes/feature-edit-fence-filetype.md).
+  Replace the hand-rolled `lang_map` with `vim.filetype.match` + `get_lang`;
+  covers `justfile`/`Dockerfile` and (via `contents`) shebangs.
 
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
 
@@ -535,6 +534,31 @@ generalise `$(...)` recursion, flow-sensitive literal propagation, walking
 `zsh -c '…'` bodies, and `rm` of Claude's own scratch (`scratch_rm`, off by
 default). Walking into script *files* (the original item here) + function
 walking is parked there — sound but blocked on a function-definition walker.
+
+## Auto-allow non-zsh
+
+Consider if it would be a huge unrealistic endevour to extend the auto-allow system from zsh to other languages.
+python injected code snippets are common, and for me so are lua through headless nvim.
+Is there any pre-existing tool, etc., that can check safety of a python snippet so we don't have to write checks for every possible command or function?
+
+## Auto-/login
+
+With some interval claude will ask for user to run /login to refresh credentials.
+
+In the plugin currently this shows as:
+```
+Failed to authenticate. API Error: 401 Invalid authentication credentials
+### Error
+
+Internal error: Failed to authenticate. API Error: 401 Invalid authentication
+credentials
+```
+
+Which is not that helpful. Caching the login approach (there are 3 or more 
+options) and other info from successful login could maybe help towards a more 
+automatic future login.
+Re-authenticating is infrequent, so making the whole process fully automatic is low priority.
+But if the /login command can be called in the plugin, then a simple improvement would be to replace the unhelpful error, with a nvim builtin yes/no prompt for running /login.
 
 ## Agents don't understand handover
 
