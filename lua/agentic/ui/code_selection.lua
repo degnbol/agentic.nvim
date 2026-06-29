@@ -205,7 +205,7 @@ function CodeSelection.get_selected_text()
             start_line = start_line,
             end_line = end_line,
             file_path = FileSystem.to_smart_path(buf_name),
-            file_type = Theme.get_language_from_path(buf_name),
+            file_type = Theme.get_language_from_path(buf_name, lines),
         }
 
         return selection

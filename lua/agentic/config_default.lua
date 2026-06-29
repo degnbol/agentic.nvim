@@ -409,11 +409,13 @@ local ConfigDefault = {
     --- @field execute_max_lines integer
     --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.
+    --- @field create_max_lines integer Fold a created-file diff closed when it exceeds this many lines (0 = always open). Edits are never auto-collapsed.
     tool_call_display = {
         search_max_lines = 8,
         execute_max_lines = 25,
         execute_formatter = "shfmt",
         diff_context_max_lines = 5000,
+        create_max_lines = 50,
     },
 
     --- Notification settings

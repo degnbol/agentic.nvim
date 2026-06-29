@@ -306,6 +306,51 @@ describe("ToolCallRenderer", function()
             assert.is_false(fold_open)
         end)
 
+        describe("create collapse", function()
+            local Config = require("agentic.config")
+            local original
+
+            before_each(function()
+                original = Config.tool_call_display.create_max_lines
+                Config.tool_call_display.create_max_lines = 3
+            end)
+
+            after_each(function()
+                Config.tool_call_display.create_max_lines = original
+            end)
+
+            --- @param diff agentic.ui.MessageWriter.ToolCallDiff
+            --- @return boolean|nil fold_open
+            local function fold_open_for(diff)
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-create",
+                    kind = "create",
+                    argument = "/tmp/foo.lua",
+                    status = "completed",
+                    diff = diff,
+                }
+                local _, _, _, _, _, fold_open =
+                    Renderer.prepare_block_lines(block, 0)
+                return fold_open
+            end
+
+            it("folds a large created file closed", function()
+                assert.is_false(fold_open_for({ old = {}, new = { "a", "b", "c", "d" } }))
+            end)
+
+            it("leaves a small created file open", function()
+                assert.is_true(fold_open_for({ old = {}, new = { "a", "b" } }))
+            end)
+
+            it("never collapses an edit, even when large", function()
+                assert.is_true(fold_open_for({
+                    old = { "x" },
+                    new = { "a", "b", "c", "d" },
+                }))
+            end)
+        end)
+
         it(
             "renders execute failure as plain console without red tint",
             function()

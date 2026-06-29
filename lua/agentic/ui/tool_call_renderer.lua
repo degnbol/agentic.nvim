@@ -614,7 +614,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- now; it is NOT the fence injection language. Strip any path-induced
         -- `-fold` suffix (a file named `foo.x-fold`) so `wrap_diff_prose` keys
         -- on the real language.
-        local lang = Theme.get_language_from_path(argument):gsub("%-fold$", "")
+        local lang = Theme.get_language_from_path(argument, tool_call_block.diff.new)
+            :gsub("%-fold$", "")
         local wrap_diff_prose = lang == "markdown"
 
         local fence_content = {}
@@ -636,7 +637,17 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         table.insert(lines, fence .. lang .. "-difffold")
         -- First body line (fold spans code_fence_content), inserted below.
         fold_anchor = #lines
-        fold_open = tool_call_block.status ~= "failed"
+        -- A created file's diff is the whole file, so collapse large ones
+        -- closed; an edit shows only fragments and is never auto-collapsed.
+        local is_create = not tool_call_block.diff.old
+            or #tool_call_block.diff.old == 0
+        local create_max = Config.tool_call_display
+                and Config.tool_call_display.create_max_lines
+            or 0
+        local collapse = is_create
+            and create_max > 0
+            and #tool_call_block.diff.new > create_max
+        fold_open = tool_call_block.status ~= "failed" and not collapse
 
         -- Load the target file buffer to enable context-aware syntax
         -- highlighting. The chat buffer's fence injection only sees the diff
@@ -662,13 +673,22 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 if vim.api.nvim_buf_is_loaded(b) then
                     -- Reparse cost grows with file length; skip the feature
                     -- entirely above the configured threshold rather than
-                    -- block the render thread on huge files.
-                    local lc = vim.api.nvim_buf_line_count(b)
+                    -- block the render thread on huge files. A create's buffer
+                    -- is empty (not on disk yet) so its line count is 1 — gate
+                    -- on the diff line count instead.
+                    local lc = is_create and #tool_call_block.diff.new
+                        or vim.api.nvim_buf_line_count(b)
                     if lc <= max_lines then
                         local ok_p, parser = pcall(vim.treesitter.get_parser, b)
                         if ok_p and parser then
                             target_bufnr = b
+                            -- On-disk file: content detection already ran.
                             target_lang = parser:lang()
+                        elseif lang ~= "" then
+                            target_bufnr = b
+                            -- Create: empty buffer has no filetype, so use the
+                            -- content-detected language.
+                            target_lang = lang
                         end
                     end
                 end
