@@ -19,7 +19,8 @@ Build order: **#3, #4, #5, #6** (preserve the invariant, no new config, broad
 benefit; all done), **#7** (same tier — quoted-`"$var"` resolution, done) →
 **#4b** (quoted `"$(cmd)"`, same tier, done — see end of #4) →
 **#4b-general** (string-embedded `"text $(cmd)"`, sibling of #4b, done — see
-`perm-string-embedded-substitution.md`) →
+end of #4) → **#4c** (process substitution `<(cmd)`/`>(cmd)`, same tier,
+done — see end of #4) →
 **#1** (tmp work unified into `/trust`; the one item that crosses out of the
 walker into the trust/policy layer — step A writes + step B deletes both done,
 the latter intra-command-only) → **#2** (parked, see end).
@@ -125,6 +126,23 @@ prompts on the gate wildcard, not the substitution bail).
 SKILL dynamic-expansion bullet, `references/parsing.md` recurse/bail lists. The
 `resolved_var_name` docstring keeps `"$(cmd)"` in its excluded list (correct for
 that helper — it resolves a literal name, not the substitution).
+
+**Follow-on (#4b-general, done) — string-embedded substitution `"text $(cmd)"`.**
+Generalises #4b's single-child guard: a quoted argument mixing literal text with
+one or more command substitutions (`echo "count: $(ls)"`) now vets every inner
+standalone and splices the **whole quoted arg** as one dynamic token, instead of
+bailing on the multi-child string. A `$var`/`${…}`/arithmetic child fails the
+whitelist and still bails (`"x$y$(ls)"`). Same one-directional safety: a gated
+outer command's deny/ask still wildcard-fires on the dynamic token
+(`find . "x$(echo -exec rm)"` prompts). No standalone note — folded here.
+
+**Follow-on (#4c, done) — process substitution `<(cmd)`/`>(cmd)`.** A process
+substitution always expands to a `/dev/fd/N` path — never a flag or subcommand —
+so an argument-position `<(…)`/`>(…)` recurses its inner through
+`walk_substitution_inner` (must approve standalone) and splices a **static
+`/dev/fd` placeholder** (not dynamic — the expansion shape is known). So
+`diff <(sort a) <(sort b)` approves while `diff <(rm x)` bails. Argument position
+only; process substitution elsewhere still bails.
 
 ---
 
