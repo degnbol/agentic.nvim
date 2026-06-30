@@ -3320,4 +3320,173 @@ describe("PermissionRules", function()
             end)
         end
     end)
+
+    describe("script file walk (Step A)", function()
+        local written = {}
+
+        --- Write `content` to file `path` (Lua's `assert` is shadowed by the
+        --- luassert helper here, so error explicitly on open failure).
+        local function write_file(path, content)
+            local f = io.open(path, "w")
+            if not f then
+                error("could not open " .. path)
+            end
+            f:write(content)
+            f:close()
+        end
+
+        --- Write `content` to a fresh temp `.sh` and return its absolute path.
+        local function script(content)
+            local path = vim.fn.tempname() .. ".sh"
+            write_file(path, content)
+            table.insert(written, path)
+            return path
+        end
+
+        local orig_read_json
+        before_each(function()
+            orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(ls *)", "Bash(grep *)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+        end)
+        after_each(function()
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+            for _, path in ipairs(written) do
+                os.remove(path)
+            end
+            written = {}
+        end)
+
+        it("approves `zsh <file>` whose body is all-allowed", function()
+            local path = script("ls -la\ngrep foo bar\n")
+            assert.is_true(PermissionRules.should_auto_approve("zsh " .. path))
+        end)
+
+        it("does not approve a body with a non-allowed command", function()
+            local path = script("ls /tmp\nmake build\n")
+            assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
+        end)
+
+        it("approves `source <file>` / `. <file>` on a slash path", function()
+            local path = script("ls /tmp\n")
+            assert.is_true(
+                PermissionRules.should_auto_approve("source " .. path)
+            )
+            assert.is_true(PermissionRules.should_auto_approve(". " .. path))
+        end)
+
+        it("bails `source <name>` without a slash", function()
+            assert.is_false(PermissionRules.should_auto_approve("source foo"))
+        end)
+
+        it("`eval` still bails", function()
+            assert.is_false(PermissionRules.should_auto_approve("eval 'ls'"))
+        end)
+
+        it("bails a dynamic script path", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("zsh $UNBOUND_SCRIPT")
+            )
+        end)
+
+        it("recurses a sourced helper transitively", function()
+            local helper = script("ls /tmp\n")
+            local main = script("ls /tmp\nsource " .. helper .. "\n")
+            assert.is_true(PermissionRules.should_auto_approve("zsh " .. main))
+        end)
+
+        it("bails `source` when a sibling .zwc shadows the file", function()
+            local path = script("ls /tmp\n")
+            write_file(path .. ".zwc", "compiled")
+            table.insert(written, path .. ".zwc")
+            assert.is_false(
+                PermissionRules.should_auto_approve("source " .. path)
+            )
+            -- `zsh <file>` runs the text, ignoring the .zwc.
+            assert.is_true(PermissionRules.should_auto_approve("zsh " .. path))
+        end)
+
+        it("a self-sourcing cycle terminates and bails", function()
+            local path = vim.fn.tempname() .. ".sh"
+            write_file(path, "ls /tmp\nsource " .. path .. "\n")
+            table.insert(written, path)
+            assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
+        end)
+
+        it("bails an oversize body (> 64 KB)", function()
+            local path = script(string.rep("ls /tmp\n", 9000))
+            assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
+        end)
+
+        it("surfaces a body's write effect; no scope → not approved", function()
+            local path = script("ls /tmp > /tmp/scratch_step_a\n")
+            local ok, effects = PermissionRules.evaluate("zsh " .. path)
+            assert.is_true(ok)
+            assert.equal("write", effects[1].kind)
+            assert.equal("/tmp/scratch_step_a", effects[1].path)
+            assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
+        end)
+
+        it("taint: bails reading a path written earlier in the command", function()
+            -- Disk holds safe bytes, but the in-block redirect overwrites the
+            -- file before it runs — walking disk would judge stale content.
+            local path = script("ls /tmp\n")
+            local ok = PermissionRules.evaluate(
+                "ls /tmp > " .. path .. "; zsh " .. path
+            )
+            assert.is_false(ok)
+        end)
+
+        it("taint: a write AFTER the execute does not bail (reads disk)", function()
+            local path = script("ls /tmp\n")
+            local ok, effects = PermissionRules.evaluate(
+                "zsh " .. path .. "; ls /tmp > " .. path
+            )
+            assert.is_true(ok)
+            assert.equal("write", effects[1].kind)
+        end)
+
+        it("taint: bails when write target and script path differ only by a parent symlink", function()
+            -- Producer writes via the symlinked dir, executor reads via the
+            -- real dir — same inode, two name strings. A lexical-only resolver
+            -- would miss the correlation and approve stale disk bytes.
+            local real_dir = vim.fn.tempname()
+            vim.uv.fs_mkdir(real_dir, 493) -- 0755
+            local link_dir = vim.fn.tempname()
+            vim.uv.fs_symlink(real_dir, link_dir)
+            write_file(real_dir .. "/f.sh", "ls /tmp\n")
+            table.insert(written, real_dir .. "/f.sh")
+            table.insert(written, link_dir)
+            table.insert(written, real_dir)
+            local ok = PermissionRules.evaluate(
+                "ls /tmp > " .. link_dir .. "/f.sh; zsh " .. real_dir .. "/f.sh"
+            )
+            assert.is_false(ok)
+        end)
+
+        it("tally: a clean body yields no ranges", function()
+            local path = script("ls /tmp\n")
+            local ranges = PermissionRules.tally_unapproved("zsh " .. path)
+            assert.equal(0, #ranges)
+        end)
+
+        it("tally: an unsafe body washes the whole leaf, not rememberable", function()
+            local path = script("make build\n")
+            local ranges, leaves, complete =
+                PermissionRules.tally_unapproved("zsh " .. path)
+            assert.equal(1, #ranges)
+            assert.equal(0, #leaves)
+            assert.is_false(complete)
+        end)
+    end)
 end)

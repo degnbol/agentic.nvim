@@ -671,6 +671,63 @@ local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     return src:sub(inner_start_byte + 1, node_end_byte), { sr, sc }, spec.writes or false
 end
 
+--- Resolve a path token to a canonical absolute path: tilde/`..` collapsed, a
+--- relative path joined against cwd, then symlinks in the parent resolved.
+--- Shared so a redirect's write target and a script execution resolve
+--- identically — the permission walk's intra-command taint check correlates the
+--- two by string equality, which is unsound if they normalise differently. The
+--- target itself may not exist yet (a redirect creates it), so only the parent
+--- is `fs_realpath`'d: that unifies symlinked roots like `/tmp` → `/private/tmp`
+--- (macOS) so `> /tmp/f` and `zsh /private/tmp/f` correlate. Lexical-only
+--- `vim.fs.normalize` leaves them distinct and lets the second write slip the
+--- taint scan (under-prompt). Degrades to the lexical form when the parent is
+--- missing.
+--- @param path string
+--- @return string
+local function resolve_against_cwd(path)
+    if path:sub(1, 1) ~= "/" and path:sub(1, 1) ~= "~" then
+        path = (vim.uv.cwd() or "") .. "/" .. path
+    end
+    path = vim.fs.normalize(path)
+    local real_parent = vim.uv.fs_realpath(vim.fs.dirname(path))
+    return real_parent and real_parent .. "/" .. vim.fs.basename(path) or path
+end
+
+--- Resolve the on-disk script a command would execute for the two non-`-c`
+--- forms that run a file's contents: `zsh|bash|sh|dash <file>` and
+--- `source|. <file>`. Returns the cwd-resolved absolute path, or nil to bail
+--- (the caller falls through to a prompt) — the caller reads the bytes,
+--- re-parses, and walks them, the same shape as the `-c` body recursion.
+---
+--- nil for: any other command; a missing, dynamic, or option-leading first arg
+--- (a shell flag / `--`, or the `-c` that `inner_source` already owns). For
+--- `source`/`.` two extra gates close body-swap holes that `zsh <file>` does not
+--- have: the arg must contain a slash (a bare name searches `$path`, which is not
+--- knowable from the token), and no sibling `<path>.zwc` may exist (zsh runs the
+--- compiled bytecode over the `.sh` text we would read).
+--- @param cmd_name string path-stripped command name
+--- @param args string[] quote-stripped arg tokens
+--- @param args_dynamic boolean[]
+--- @return string|nil path
+local function script_file_source(cmd_name, args, args_dynamic)
+    local is_source = cmd_name == "source" or cmd_name == "."
+    if not (SHELL_C_COMMANDS[cmd_name] or is_source) then
+        return nil
+    end
+    local arg = args[1]
+    if arg == nil or args_dynamic[1] or arg:sub(1, 1) == "-" then
+        return nil
+    end
+    if is_source and not arg:find("/", 1, true) then
+        return nil
+    end
+    local path = resolve_against_cwd(arg)
+    if is_source and vim.uv.fs_stat(path .. ".zwc") then
+        return nil
+    end
+    return path
+end
+
 -- ── Command extraction ───────────────────────────────────────────────────────
 
 --- Split a raw token into a record's flags/args buckets. Short clusters
@@ -872,6 +929,8 @@ M.command_name_text = command_name_text
 M.redirect_is_safe = redirect_is_safe
 M.redirect_write_dest = redirect_write_dest
 M.inner_source = inner_source
+M.script_file_source = script_file_source
+M.resolve_against_cwd = resolve_against_cwd
 M.CONTAINER_TYPES = CONTAINER_TYPES
 M.SUBSTITUTION_TYPES = SUBSTITUTION_TYPES
 M.SUBSTITUTION_INNER_STATEMENT_TYPES = SUBSTITUTION_INNER_STATEMENT_TYPES

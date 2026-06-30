@@ -45,40 +45,46 @@ the shell never executes. Source of truth, in order:
 
 1. **Path written earlier in this command** → use the **reconstructed written
    content**, never disk. If it can't be reconstructed → bail.
-2. **Otherwise** → read disk. ACP runs tool calls sequentially, but the read
-   happens at approval-decision time and the shell `open()`s after the callback
-   returns, so a `run_in_background` execute block or the user's editor could
-   mutate the file in that window. Close it the way `/trust` already does (safety
-   property #4): capture mtime+size at read time, re-stat just before approving,
-   bail on any change. The `-c` body had no file, so this TOCTOU vector is new to
-   the on-disk path.
+2. **Otherwise** → read disk. The window between read and the shell's `open()`
+   is **not** closed by a re-stat (the plan originally proposed copying `/trust`
+   safety property #4). `/trust`'s re-stat earns its keep because that flow has an
+   *async* gap — the user can sit in a diff-preview tabpage between the safety
+   check and the callback. The auto-approve path here is synchronous: `evaluate`
+   reads, then `callback` fires with no await between, so the bytes read are the
+   bytes judged. A re-stat would run microseconds after the read and could not
+   touch the only residual window — the post-callback IPC to the shell's `open()`,
+   which no client-side check can close. So no re-stat; `read_script` documents
+   this at the read site.
 
 ### The taint interlock (the safety core)
 
-Thread an ordered `written` map in `ctx` (sibling of `ctx.effects`), populated
-where a write effect is emitted (`walk_redirected`, after `redirect_write_dest`
-gives the destination node and `walk_redirected` resolves it to a literal path):
+This is the one new under-prompt vector and ships **with Step A**, not after it:
+`echo evil > f.sh; zsh f.sh` (under a tmp `/trust` scope clearing the producer
+write — and `echo`/`cat`/`printf` are bundled `read_only`, so this is reachable
+out of the box) would otherwise walk disk's *stale* bytes, approve them, and run
+the freshly-written `evil`. Step A without this bail is strictly worse than the
+status quo, which prompted.
 
-- first write to a path → `written[path] = <reconstructed content>` or
-  `TAINTED`;
-- any **second** write to the same path → `TAINTED` (the "bail if multiple
-  writes" the task names).
-
-At an executing leaf (`zsh file.sh`, `source file.sh`), resolve the script path
-(literal, or #3-resolved `$var`) and consult `written[path]`:
-
-| `written[path]` | action |
-|---|---|
-| absent | read disk + walk |
-| reconstructed content | walk that content (no disk read) |
-| `TAINTED` | **bail** (prompt) |
+**Step A (bail only).** At an executing leaf (`zsh file.sh`, `source file.sh`),
+resolve the script path (literal, or #3-resolved `$var`) and scan the already-
+accumulated `ctx.effects` for a `write` to the same resolved path (compared via
+the shared `resolve_against_cwd`, so the redirect target and the script path
+normalise identically). A prior write → **bail** (prompt); otherwise read disk +
+walk. No new `ctx` field — the ordered, shared `ctx.effects` already carries it.
 
 Ordering falls out of the left-to-right `walk_sequence` for free:
-`echo x > f.sh; zsh f.sh` populates `written[f.sh]` on the first sibling before
-the second sibling reads it; `zsh f.sh; echo x > f.sh` (write *after* execute)
-leaves `written` empty at execute time → reads the real on-disk bytes the shell
-runs. Threading `written` through nested sequences over-taints (shared table
-reference, like `effects`) — over-prompt, safe.
+`echo x > f.sh; zsh f.sh` has the write in `ctx.effects` before the second
+sibling's read; `zsh f.sh; echo x > f.sh` (write *after* execute) has empty
+effects at execute time → reads the real on-disk bytes the shell runs. The shared
+`ctx.effects` reference over-taints through nested sequences — over-prompt, safe.
+
+**Step B (reconstruction).** To turn the bail into an approval, the execute leaf
+needs the *written content* to walk, which `ctx.effects` does not carry (effects
+have a path, no bytes). Step B threads a `written` map (path → reconstructed
+content or `TAINTED`), populated in `walk_redirected` alongside the write effect:
+first write → content-or-`TAINTED`, any second write → `TAINTED`. The leaf then
+consults `written[path]` (reconstructed → walk it, no disk read; `TAINTED` →
+bail; absent → read disk), superseding Step A's effects scan.
 
 ### Content reconstruction scope (deliberately small)
 
@@ -133,22 +139,25 @@ reconstructable origin.
   cap as the `-c` path.
 - A dynamic script path (`zsh $f` with `$f` unresolved) stays dynamic → bail.
 - The only new under-prompt vector is judging wrong bytes; the taint interlock
-  closes it (in-block writes never read disk; unreconstructable writes bail), the
-  TOCTOU re-stat closes the read-then-exec window, and the `source`/`.` `.zwc` gate
-  closes the compiled-form swap.
+  closes it (a path written earlier in the command bails — Step B walks the
+  reconstructed bytes instead), and the `source`/`.` `.zwc` gate closes the
+  compiled-form swap. The read→approve path is synchronous, so there is no
+  read-then-exec window a client-side re-stat could close (see content question
+  point 2).
 - The reject pass (`should_auto_reject`/`command_is_denied`) is **not** extended
   into files — only the approve and tally walks recurse. A script body holding a
   concrete deny (`rm -rf /`) therefore *prompts* rather than auto-rejecting (the
   approve walk hits the deny gate, fails to approve, falls through). Pure
   over-prompt; extending reject would duplicate the read+taint machinery on a walk
-  that runs before `ctx.written` exists.
+  that runs before any taint state (`ctx.effects` in Step A, `ctx.written` in
+  Step B) is accumulated.
 
 ## Reading the file safely
 
 `vim.uv.fs_stat` first: regular file only (a fifo/`/dev/*` would hang or mislead),
-size under the existing 64 KB cap, then `vim.uv.fs_read`. Resolve relative paths
-against cwd. Not a regular file, oversize, or unreadable → bail. Re-stat before
-approving (TOCTOU, above).
+size under the existing 64 KB cap, then `vim.uv.fs_read` (`read_script`). Resolve
+relative paths against cwd. Not a regular file, oversize, or unreadable → bail.
+No re-stat (content question point 2).
 
 **`source`/`.` resolution gates** (not needed for `zsh file.sh`):
 
@@ -193,27 +202,34 @@ kind: a generated ephemeral script has no stable name to allowlist at all.
 
 ## Build order
 
-- **Step A — on-disk walk.** `script_file_source(cmd_name, node, args, …)` in
-  `shell_parse.lua` returning the literal path for `zsh|bash|sh|dash <file>`
-  (no `-c`) and `source|. <file>`; a branch in `walk_command` (mirrored in
-  `command_known_safe`) that reads + `parse_zsh` + recurses, behind the
-  `fs_stat`/size guards and the re-stat. Lift `source`/`.` out of the unconditional
-  `CODE_TAKING_BUILTINS` bail *only* when a literal file arg resolves (`eval`
-  stays bailing); `script_file_source` enforces the source/. gates (slash required,
-  no sibling `.zwc`). The `collect_command` copy of the bail (`extract_commands`)
-  is left as-is — it has no live caller. Non-destructive; no new state, no config.
-- **Step B — taint + heredoc reconstruction.** `ctx.written` map; populate it in
+- **Step A — on-disk walk + taint bail (shipped).**
+  `script_file_source(cmd_name, args, args_dynamic)` in `shell_parse.lua` returns
+  the cwd-resolved path for `zsh|bash|sh|dash <file>` (no `-c`) and
+  `source|. <file>` (with the source/. gates: slash required, no sibling `.zwc`);
+  `read_script` does the `fs_stat`/size-guarded read. A branch in `walk_command`
+  (mirrored in `command_known_safe`) lifts `source`/`.` out of the
+  `CODE_TAKING_BUILTINS` bail *only* when the file resolves (`eval` stays
+  bailing), scans `ctx.effects` for a prior write to the same path (the taint
+  bail — required for soundness, see § The taint interlock), then reads +
+  `parse_zsh` + recurses. `resolve_against_cwd` is shared so the redirect target
+  and script path normalise identically. The `collect_command` copy of the bail
+  (`extract_commands`) is left as-is — it has no live caller.
+- **Step B — heredoc reconstruction (deferred).** Replace Step A's effects scan
+  with a `ctx.written` map (path → content or `TAINTED`), populated in
   `walk_redirected` (which must now handle the `heredoc_redirect` child and
-  correlate it with the sibling `file_redirect` target); consult it at the execute
-  leaf; the heredoc reconstructor (echo a later add-on). This is what flips the
-  `cat > f.sh <<'EOF' … EOF; zsh f.sh` example.
+  correlate it with the sibling `file_redirect` target); the heredoc
+  reconstructor (echo a later add-on). This is what flips the
+  `cat > f.sh <<'EOF' … EOF; zsh f.sh` example from a prompt to an approval.
 
 ## Touches
 
-`shell_parse.lua` (`script_file_source`; echo-literal content reconstructor);
-`permission_rules.lua` (`walk_command` execute-leaf branch + `command_known_safe`
-mirror; `ctx.written` threaded like `ctx.effects`; `walk_redirected` populates it;
-`source`/`.` conditional un-bail); tests in `permission_rules.test.lua`.
+Step A (shipped): `shell_parse.lua` (`script_file_source`, `resolve_against_cwd`);
+`permission_rules.lua` (`read_script`; `walk_command` execute-leaf branch with the
+`ctx.effects` taint scan + `command_known_safe` mirror; `source`/`.` conditional
+un-bail); tests in `permission_rules.test.lua`.
+Step B (deferred): `shell_parse.lua` echo-literal reconstructor; `permission_rules.lua`
+`ctx.written` map threaded like `ctx.effects`, `walk_redirected` populates it
+(correlating the `heredoc_redirect` body with the sibling `file_redirect` target).
 
 ## Decided
 

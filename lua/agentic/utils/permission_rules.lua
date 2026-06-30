@@ -18,6 +18,8 @@ local token_is_dynamic = ShellParse.token_is_dynamic
 local redirect_is_safe = ShellParse.redirect_is_safe
 local redirect_write_dest = ShellParse.redirect_write_dest
 local inner_source = ShellParse.inner_source
+local script_file_source = ShellParse.script_file_source
+local resolve_against_cwd = ShellParse.resolve_against_cwd
 local CONTAINER_TYPES = ShellParse.CONTAINER_TYPES
 local SUBSTITUTION_TYPES = ShellParse.SUBSTITUTION_TYPES
 local SUBSTITUTION_INNER_STATEMENT_TYPES =
@@ -1056,6 +1058,30 @@ local function extract_args(node, src, ctx, known, inner_check)
     return args, arg_nodes, args_dynamic, name_node
 end
 
+--- Read a script file's bytes for recursive walking. Regular file under the
+--- 64 KB cap only — a fifo/device would hang or mislead, oversize bails like the
+--- `-c` length cap. Any stat/size/read failure returns nil → the caller bails to
+--- a prompt (fail-closed). No re-stat against the eventual `open()`: the walk →
+--- approve callback path is synchronous, so the bytes read here are the bytes
+--- judged, and the post-callback IPC window to the shell's open is not closeable
+--- client-side anyway (unlike the `/trust` path, whose re-stat guards an async
+--- diff-preview gap).
+--- @param path string resolved absolute path
+--- @return string|nil
+local function read_script(path)
+    local st = vim.uv.fs_stat(path)
+    if not st or st.type ~= "file" or st.size > 65536 then
+        return nil
+    end
+    local fd = vim.uv.fs_open(path, "r", 438)
+    if not fd then
+        return nil
+    end
+    local data = vim.uv.fs_read(fd, st.size, 0)
+    vim.uv.fs_close(fd)
+    return data --[[@as string|nil]]
+end
+
 --- Walk a `command`: validate the name and each argument by position
 --- (substitution is recursed in argument position, bailed elsewhere), validate
 --- env-prefix assignments, then combine the glob
@@ -1085,7 +1111,12 @@ local function walk_command(node, src, ctx, known, funcs)
         return false
     end
     local cmd_name = M.strip_command_path(name)
-    if CODE_TAKING_BUILTINS[cmd_name] then
+    -- A non-`-c` script execution (`zsh file.sh`, `source ./file.sh`) resolves
+    -- to a literal path; the recursion below reads + walks it. This lifts
+    -- `source`/`.` out of the unconditional code-taking bail only when the file
+    -- resolves (`eval`, and an unresolved `source`, still bail).
+    local script_path = script_file_source(cmd_name, args, args_dynamic)
+    if CODE_TAKING_BUILTINS[cmd_name] and not script_path then
         return false
     end
 
@@ -1178,6 +1209,41 @@ local function walk_command(node, src, ctx, known, funcs)
         return walk(
             root,
             inner,
+            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
+        )
+    end
+
+    -- Non-`-c` script execution: read the on-disk bytes and walk them like a
+    -- `-c` body. Every body leaf hits the same deny/ask gates and emits its own
+    -- effects into the shared `ctx.effects` (so a script writing outside a trust
+    -- scope still bails); a sourced helper recurses transitively. An
+    -- unreadable/oversize/unparseable body bails. Unlike the `-c` recursion (a
+    -- shrinking substring), files can cycle (`a.sh` sources `b.sh` sources
+    -- `a.sh`), so NESTED_MAX_DEPTH is the actual termination guard here.
+    if script_path and ctx.depth < NESTED_MAX_DEPTH then
+        -- Taint: a redirect earlier in this command may have written this very
+        -- path. The SDK applies nothing before approval, so disk still holds
+        -- stale bytes — reading them would judge content the shell never runs
+        -- (e.g. `echo evil > f.sh; zsh f.sh`, where f.sh's write clears under a
+        -- tmp scope). Bail. (Reconstructing the written bytes to walk *those*
+        -- instead — the `cat > f.sh <<EOF … EOF; zsh f.sh` case — is a later
+        -- increment; until then the create-then-run prompts.)
+        for _, eff in ipairs(ctx.effects) do
+            if eff.kind == "write" and resolve_against_cwd(eff.path) == script_path then
+                return false
+            end
+        end
+        local body = read_script(script_path)
+        if not body then
+            return false
+        end
+        local root = parse_zsh(body)
+        if not root then
+            return false
+        end
+        return walk(
+            root,
+            body,
             vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
         )
     end
@@ -1762,7 +1828,10 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false
     end
     local cmd_name = M.strip_command_path(name)
-    if CODE_TAKING_BUILTINS[cmd_name] then
+    -- Mirror of walk_command: a non-`-c` script execution lifts source/. out of
+    -- the code-taking bail when the file resolves; the recursion below tallies it.
+    local script_path = script_file_source(cmd_name, args, args_dynamic)
+    if CODE_TAKING_BUILTINS[cmd_name] and not script_path then
         return false
     end
 
@@ -1812,6 +1881,30 @@ local function command_known_safe(node, src, ctx, known, funcs)
             return false, translate_ranges(body_ranges, origin)
         end
         return false
+    end
+
+    -- Non-`-c` script execution: tally the on-disk body. Clean → known-safe. A
+    -- file body has no representation in the chat buffer (no origin to anchor
+    -- ranges to — see notes/perm-walk-into-scripts.md § Out of scope), so an
+    -- unsafe body washes the whole leaf and is not rememberable (no leaf return).
+    if script_path and ctx.depth < NESTED_MAX_DEPTH then
+        local body = read_script(script_path)
+        if not body then
+            return false
+        end
+        local root = parse_zsh(body)
+        if not root then
+            return false
+        end
+        --- @type agentic.utils.PermissionRules.Range[]
+        local body_ranges = {}
+        tally_walk(
+            root,
+            body,
+            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1, leaves = {} }),
+            body_ranges
+        )
+        return #body_ranges == 0
     end
 
     local glob_safe = M.matches_any_pattern(leaf, ctx.read_only)
