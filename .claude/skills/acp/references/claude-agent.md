@@ -131,6 +131,17 @@ Two-tier permission check:
 2. **ACP bridge** (`canUseTool`): Only called when SDK returns `ask`. Sends
    `session/request_permission` to the client.
 
+`auto` mode is a third gate that sits between these two. When the session's
+permission mode is `auto`, an SDK-internal model classifier resolves each
+otherwise-`ask` tool call to allow/deny *before* `canUseTool` runs, so the
+client sees no `request_permission` for classifier-approved calls and the
+client's own auto-approval (allow-always cache, compound-Bash matching,
+`/trust`) becomes redundant for those — same dead-code shape as the read-only
+pre-approval above, but covering writes too. Per-action denials don't prompt
+the client; only the consecutive/total-denial backstop halts the turn. For
+auto-mode config and rule semantics (`autoMode` settings block, classifier
+tiers), see the global `claude` skill and official auto-mode docs.
+
 If `Read(**)` is in settings.json allow list, the SDK auto-approves reads
 internally and `canUseTool` is never called. The client never sees a
 `request_permission` for reads.
@@ -404,7 +415,12 @@ capability. As of `@agentclientprotocol/claude-agent-acp` 0.39.0,
 
 It is **model-conditional** — appended only when the current model reports
 `supportsEffort` with a non-empty `supportedEffortLevels`; models without effort
-support get no option. Versions through 0.29.0 returned only `mode` and `model`.
+support get no option. The `mode` option's value set is also model-conditional:
+`buildAvailableModes` adds `auto` only when `ModelInfo.supportsAutoMode === true`
+(e.g. present on Opus/Sonnet, absent on Haiku), alongside the always-present
+`default`, `acceptEdits`, `plan` (and `bypassPermissions` when not running as
+root). On a model switch the bridge clamps a now-unavailable mode back to
+`default`.
 
 **It is runtime-mutable, mirroring the TUI's `/effort`.** Clients change it via
 the ACP `session/set_config_option` method (`acp-agent.js:1037`), which calls
