@@ -212,7 +212,7 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   concatenation `"$f/x"` is not statically resolved — it stays a dynamic token
   (approves at a read-only command, prompts at a gated one).
   A quoted command substitution `"$(cmd)"` is walked and spliced as a dynamic
-  token like the bare `$(cmd)` (#4b) — `cat "$(ls)"` approves, `find "$(echo
+  token like the bare `$(cmd)` — `cat "$(ls)"` approves, `find "$(echo
   -exec rm)"` still prompts (mechanism in
   [references/parsing.md](references/parsing.md)). An intervening control-flow
   sibling keeps the binding unless it actually rebinds the name

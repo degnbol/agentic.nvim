@@ -565,13 +565,13 @@ end
 
 --- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean, for_budget: integer }
 
---- Maximum number of body walks a literal for-loop may unroll into (#9). Nested
+--- Maximum number of body walks a literal for-loop may unroll into. Nested
 --- literal loops multiply, so the budget is divided down each level; a loop whose
 --- value count exceeds the remaining budget falls back to the single dynamic walk
---- (the safe direction — never widens beyond #8).
+--- (the safe direction — never widens beyond the dynamic-token floor).
 local FOR_UNROLL_CAP = 64
 
---- Container types that are straight-line statement sequences — #3
+--- Container types that are straight-line statement sequences —
 --- constant-literal propagation threads a per-sequence `known` environment
 --- through these (and `do_group`) left to right. The decision/tally walks route
 --- these to `walk_sequence`/`tally_sequence` (checked *before* `CONTAINER_TYPES`,
@@ -590,7 +590,7 @@ local SEQUENCE_TYPES = {
 --- value must yield exactly one word identical to itself — no IFS whitespace, no
 --- glob/brace/tilde metacharacter, no expansion trigger. Paths, flags, and
 --- `option=value` tokens qualify; anything richer keeps `$f` dynamic. This is the
---- soundness guard for #3 substitution: a multi-word or glob value would
+--- soundness guard for constant-literal substitution: a multi-word or glob value would
 --- word-split / expand and change which tokens the matcher sees.
 --- @param lit string
 --- @return boolean
@@ -601,7 +601,7 @@ end
 --- The plain scalar name behind a bare `$name` / `${name}` reference or its
 --- single-word double-quoted form `"$name"` / `"${name}"`, or nil for any richer
 --- form (`$f[1]`, `${f:-x}`, `${#f}`, concatenation `"$f/x"`, `"$(cmd)"`, …) that
---- #3 substitution must not touch. A resolvable node has exactly one named child,
+--- constant-literal substitution must not touch. A resolvable node has exactly one named child,
 --- a `simple_variable_name`. A `string` node wrapping a single expansion recurses
 --- on that child: quoting suppresses word-splitting and globbing, so the quoted
 --- form yields exactly the one literal we substitute. The `named_child_count == 1`
@@ -744,7 +744,7 @@ local STATEMENT_CONTAINER = {
 }
 
 --- Collect the variable names a control-flow sibling could rebind in the
---- enclosing sequence (#3 capable grade), accumulating them into `targets`.
+--- enclosing sequence (the capable grade), accumulating them into `targets`.
 --- Returns `false` to signal *clear-all* — the construct contains a binding
 --- whose target set cannot be enumerated (a namespace-mutating builtin, a
 --- dynamic / subscripted assignment name, arithmetic assignment, a
@@ -873,7 +873,7 @@ end
 --- what rebinds: a child *preserves* `known` only when provably inert, and
 --- everything else drops only the binding(s) it could touch. A pure-literal
 --- `variable_assignment` records `known[name]=lit`; a non-literal one drops
---- just that name. Every other child is handed to `collect_bindings` (#3
+--- just that name. Every other child is handed to `collect_bindings` (the
 --- capable grade): a plain command or a binding-free control-flow construct
 --- drops nothing (`f=…; if c; then :; fi; find $f` keeps `f`), one that binds
 --- enumerable names (`printf -v g`, an `if`-body assignment, a `for` loop var)
@@ -932,8 +932,9 @@ local walk_substitution_inner
 local walk_redirected
 
 --- True for a double-quoted `string` whose only expansions are command
---- substitutions (#4b generalised): at least one `command_substitution` named
---- child and every named child is `string_content` or `command_substitution`.
+--- substitutions (string-embedded command substitution): at least one
+--- `command_substitution` named child and every named child is `string_content`
+--- or `command_substitution`.
 --- A `$var`/`${…}`/arithmetic child (dynamic-unresolvable) or any other node
 --- fails the whitelist, so the caller bails. Pure-literal strings (no
 --- substitution) return false and stay concrete literal tokens.
@@ -961,7 +962,7 @@ end
 --- plus the `command_name` node. `args` is nil on any structural bail (an
 --- env-hijack prefix, an unhandled substitution, an unextractable token).
 ---
---- A bare `$(…)` argument and a quoted `"$(…)"` (#4b: a `string` whose single
+--- A bare `$(…)` argument and a quoted `"$(…)"` (a `string` whose single
 --- named child is a `command_substitution`) both vet their inner via
 --- `inner_check` (it runs) and splice the inner's `$(…)` text as a dynamic
 --- token, so a gated outer command still prompts. Process substitution `<(…)` /
@@ -1029,7 +1030,7 @@ local function extract_args(node, src, ctx, known, inner_check)
             table.insert(arg_nodes, child)
             table.insert(args_dynamic, false)
         elseif child:named() then
-            -- #3: a bare `$name`/`${name}` bound to a splitting-proof literal
+            -- a bare `$name`/`${name}` bound to a splitting-proof literal
             -- earlier in this straight-line sequence resolves to that literal and
             -- becomes static, so a benign value (`f=/safe; find $f`) no longer
             -- wildcard-fires a gate. The literal feeds the same gates, so
@@ -1045,7 +1046,7 @@ local function extract_args(node, src, ctx, known, inner_check)
                 and child:named_child_count() == 1
                 and child:named_child(0):type() == "command_substitution"
             then
-                -- #4b: a quoted `"$(cmd)"`. Like the bare form, vet the inner (it
+                -- a quoted `"$(cmd)"`. Like the bare form, vet the inner (it
                 -- runs) and splice the inner's `$(…)` text as a dynamic token.
                 -- Quoting suppresses word-splitting (one term vs zero-or-many),
                 -- but the spliced token is unknown content either way, so the
@@ -1058,10 +1059,10 @@ local function extract_args(node, src, ctx, known, inner_check)
                 table.insert(arg_nodes, child)
                 table.insert(args_dynamic, true)
             elseif child:type() == "string" and string_subst_only(child) then
-                -- #4b generalised: a quoted string mixing literal text with one
-                -- or more command substitutions (`"count: $(ls)"`). Vet every
-                -- inner (they run), then splice the whole quoted string as ONE
-                -- dynamic token — raw text, quotes kept (unlike #4b's strip; the
+                -- a quoted string mixing literal text with one or more command
+                -- substitutions (`"count: $(ls)"`). Vet every inner (they run),
+                -- then splice the whole quoted string as ONE dynamic token — raw
+                -- text, quotes kept (unlike the single-child strip; the
                 -- token is dynamic so the structured matcher wildcards it and
                 -- ignores its text). A gated outer command's deny/ask still
                 -- wildcard-fires at this index.
@@ -1083,7 +1084,7 @@ local function extract_args(node, src, ctx, known, inner_check)
                 if subtree_has_substitution(child) then
                     return nil
                 end
-                -- #8: a `concatenation` whose every part is a safe literal or a
+                -- a `concatenation` whose every part is a safe literal or a
                 -- `known`-bound var (`base=/safe; head $base/x`) resolves to the
                 -- joined literal and feeds the gates as a static token. A glob,
                 -- unbound var, or richer expansion part leaves `joined` nil and
@@ -1140,9 +1141,9 @@ end
 --- (substitution is recursed in argument position, bailed elsewhere), validate
 --- env-prefix assignments, then combine the glob
 --- and structured layers (composition rule in the `permissions` project skill).
---- `known` (optional) is the #3 constant environment of the enclosing sequence;
+--- `known` (optional) is the per-sequence constant environment of the enclosing sequence;
 --- a bare `$name` bound in it resolves to its literal and becomes a static token.
---- `funcs` (optional) is the #6 set of function names defined and body-walked
+--- `funcs` (optional) is the set of function names defined and body-walked
 --- clean earlier in the sequence; a call to one approves regardless of its args.
 --- @param node TSNode
 --- @param src string
@@ -1187,7 +1188,7 @@ local function walk_command(node, src, ctx, known, funcs)
         return false
     end
 
-    -- #1 Step B: under `/trust tmp` + `tmp_cleanup`, an `rm` emits a delete
+    -- Under `/trust tmp` + `tmp_cleanup`, an `rm` emits a delete
     -- effect per concrete operand instead of bailing to the structured `ask`.
     -- A dash-token rm parses as an option (it never deletes a file for it), so
     -- only `--`-trailing words and plain words are operands. A dynamic operand
@@ -1233,7 +1234,7 @@ local function walk_command(node, src, ctx, known, funcs)
         end
     end
 
-    -- #6: a call to a function defined earlier in this straight-line sequence.
+    -- a call to a function defined earlier in this straight-line sequence.
     -- Its body was walked clean at definition time with every parameter dynamic,
     -- so the body is safe for ANY call arguments — the call needs no re-vetting
     -- of how the function uses them. The arguments were still walked above (a
@@ -1334,7 +1335,7 @@ local function walk_command(node, src, ctx, known, funcs)
     return M.matches_any_pattern(leaf, ctx.allow)
 end
 
---- Walk a named `function_definition` in sequence context (#6). Defining a named
+--- Walk a named `function_definition` in sequence context. Defining a named
 --- function never runs its body, so the definition always approves; the body's
 --- cleanliness only decides whether a later *call* resolves. Body-walk it as a
 --- fresh sequence (every `$var`/positional dynamic, no inherited `known` literals
@@ -1370,14 +1371,14 @@ end
 
 --- Walk a straight-line statement sequence (`program`, `list`, an `if`/`elif`/
 --- `else` body, a `do_group`, or a brace group / function body
---- `compound_statement`), threading the #3 constant environment and the #6
+--- `compound_statement`), threading the constant environment and the
 --- function table left to right: a pure-literal assignment binds a name, a
 --- function definition records a body-walked-clean name, and a later `command`
 --- resolves bare `$name` references and recorded calls against them. Both are
 --- sequence-local — nested blocks reached via `walk(child)` start fresh, so
 --- neither a binding nor a function name leaks across sequences.
 ---
---- `seed` (optional, #9) pre-binds names in the constant environment — a for-loop
+--- `seed` (optional) pre-binds names in the constant environment — a for-loop
 --- unrolls its body once per literal value by calling this with `{ [loopvar] =
 --- value }`. `update_known` still runs per body statement, so a body that rebinds
 --- the loop var drops the seed exactly as its rebinding rules dictate.
@@ -1529,7 +1530,7 @@ end
 --- (expansion deferred to a later use the matcher already cannot see through);
 --- in argument / for-list position the caller marks the spliced token dynamic,
 --- so the structured layer wildcards deny/ask over it. A single-child quoted
---- `"$(…)"` argument (#4b) is unwrapped to its inner `command_substitution` and
+--- `"$(…)"` argument is unwrapped to its inner `command_substitution` and
 --- passed here too. A process substitution `<(…)` / `>(…)` node is also passed
 --- here — its inner commands are this node's named children, so the same
 --- iteration vets them (the caller then splices a static `/dev/fd` placeholder
@@ -1609,11 +1610,11 @@ local function walk_assignment(node, src, ctx)
 end
 
 --- Walk a `for_statement`. When every list item is a splitting-proof literal and
---- the loop var is a plain name (#9), unroll: walk the body once per value with
+--- the loop var is a plain name, unroll: walk the body once per value with
 --- the var pre-bound, so a gated body command (`find -exec`) is checked against
 --- each concrete value and the loop approves iff every value approves. A
 --- non-literal list (substitution / glob / expansion) or a value count over the
---- remaining budget falls back to the single dynamic walk (#4/#8): a bare
+--- remaining budget falls back to the single dynamic walk: a bare
 --- `command_substitution` item runs via `walk_substitution_inner`, any other
 --- substitution-bearing item bails, and the body walks once with the loop var
 --- dynamic (a laundered payload caught at the use site). Unnamed children
@@ -1642,7 +1643,7 @@ local function walk_for(node, src, ctx)
         return false
     end
 
-    -- #9: unroll a fully-literal list with a plain loop var, bounded by budget.
+    -- unroll a fully-literal list with a plain loop var, bounded by budget.
     local budget = ctx.for_budget or FOR_UNROLL_CAP
     if var_name and var_name:match("^[%w_]+$") and #items > 0 then
         --- @type string[]
@@ -1794,7 +1795,7 @@ function walk(node, src, ctx)
     elseif t == "function_definition" then
         -- Reached outside a sequence (rare): defining a *named* function never
         -- runs its body, so it approves without a body-walk; an anonymous
-        -- (`() { … }`, no `name`) executes immediately and fails closed. The #6
+        -- (`() { … }`, no `name`) executes immediately and fails closed. The
         -- body-walk-and-record happens in `walk_sequence` (the common path),
         -- which has the `funcs` table; here there is none to record into.
         return node:field("name")[1] ~= nil
@@ -1949,8 +1950,8 @@ end
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
---- @param known table<string, string>|nil #3 constant environment of the enclosing sequence
---- @param funcs table<string, boolean>|nil #6 recorded function names of the enclosing sequence
+--- @param known table<string, string>|nil constant environment of the enclosing sequence
+--- @param funcs table<string, boolean>|nil recorded function names of the enclosing sequence
 --- @return boolean known_safe
 --- @return agentic.utils.PermissionRules.Range[]|nil sub_ranges
 --- @return string|nil leaf #stripped, rememberable leaf signature; non-nil only
@@ -1999,7 +2000,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false
     end
 
-    -- #6: a call to a function recorded earlier in this sequence is known-safe
+    -- a call to a function recorded earlier in this sequence is known-safe
     -- (mirrors walk_command — body vetted at definition time for any args).
     if funcs and funcs[cmd_name] then
         return true
@@ -2105,9 +2106,9 @@ local function tally_children(node, src, ctx, ranges)
     end
 end
 
---- Tally a straight-line sequence, threading the #3 constant environment so a
+--- Tally a straight-line sequence, threading the constant environment so a
 --- command whose only "unapproved" token is a resolved benign `$var` is not
---- highlighted (mirrors `walk_sequence`). `seed` (optional, #9) pre-binds names,
+--- highlighted (mirrors `walk_sequence`). `seed` (optional) pre-binds names,
 --- for a for-loop body unrolled per literal value. UI-only — a stale binding here
 --- can only mis-highlight, never mis-approve.
 --- @param node TSNode
@@ -2193,7 +2194,7 @@ local function tally_redirected(node, src, ctx, ranges)
 end
 
 --- Tally a `for_statement`. Mirrors `walk_for`: a fully-literal list with a plain
---- loop var unrolls the body once per value (#9), so a body command highlighted
+--- loop var unrolls the body once per value, so a body command highlighted
 --- for one binding but not another is caught; ranges are deduped across values
 --- (one binding highlighting a span is enough). Otherwise the list items record
 --- their substitutions (a clean bare `$(...)` records nothing, a dirty one

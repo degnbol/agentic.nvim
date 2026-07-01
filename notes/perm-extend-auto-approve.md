@@ -23,7 +23,8 @@ end of #4) → **#4c** (process substitution `<(cmd)`/`>(cmd)`, same tier,
 done — see end of #4) →
 **#1** (tmp work unified into `/trust`; the one item that crosses out of the
 walker into the trust/policy layer — step A writes + step B deletes both done,
-the latter intra-command-only) → **#2** (parked, see end).
+the latter intra-command-only) → **#2** (walk into script files, done — moved to
+its own note, since deleted on completion).
 
 A named `function_definition` already auto-approves *as a definition* (body not
 walked — defining never runs it; an anonymous `() { … }` executes immediately
@@ -55,7 +56,9 @@ constant-literal propagation" + a tally case). The two post-review corrections (
 `printf` over-prompt fix + a soundness-coupling docstring/test; see "Follow-up
 corrections" under #3) are also done. The capable grade — a control-flow-sibling
 collect-targets scan instead of clear-all — is now done (`collect_bindings`
-field-aware walk; see the "capable grade" sub-bullet under #3). Remaining: #2.
+field-aware walk; see the "capable grade" sub-bullet under #3). Every numbered
+item is now done; the only remaining work is the tag-stripping Cleanup (last
+section).
 
 ---
 
@@ -524,9 +527,9 @@ body, or to a function defined in a subshell does not resolve. Forward/mutual
 recursion between functions does not resolve (each body-walk starts with empty
 `funcs`).
 
-**Enables #2.** This is the "function-definition walking" #2 names as its
-prerequisite; with it in place, reading and walking a script *file* is the easy
-part on top.
+**Enabled #2.** This was the "function-definition walking" #2 named as its
+prerequisite; with it in place, reading and walking a script *file* (#2, now
+done) was the easy part on top.
 
 ---
 
@@ -780,25 +783,30 @@ diverge from decisions.
 
 ---
 
-## #2 — walk into script *files*
+## #2 — walk into script *files* (done)
 
-Moved to its own note: [perm-walk-into-scripts.md](perm-walk-into-scripts.md).
-It folds in the in-block create-then-run case (`echo "ls" > f.sh; zsh f.sh`)
-that a `Bash(...)` allow can't express, and supersedes the parked framing here.
+Shipped in a separate note (`perm-walk-into-scripts.md`), since deleted on
+completion. Step A walks a script *file* passed to an interpreter; Step B
+reconstructs a heredoc for the in-block create-then-run case
+(`echo "ls" > f.sh; zsh f.sh`) that a `Bash(...)` allow can't express. Verified
+live: Edit a script under `/tmp` then `bash /tmp/x.sh` runs without a permission
+prompt (the walker vets the literal body and approves the invocation).
 
 ---
 
-## Cleanup — strip plan-number tags from durable artifacts (do last)
+## Cleanup — strip plan-number tags from durable artifacts (done)
 
-The `#3`/`#4`/`#4b`/`#5`/`#6`/`#7`/`#8`/`#9` tags in this plan leaked into durable code
-and skill prose, where they index *this ephemeral note* and go stale the moment
-it is deleted. Once the features above are settled, strip every tag from:
+The `#1`/`#3`/`#4`/`#4b`/`#5`/`#6`/`#7`/`#8`/`#9` tags leaked into durable code and
+skill prose, where they indexed *this ephemeral note* and would go stale the
+moment it is deleted. All 48 were stripped (self-describing text kept, inline
+shorthand reworded, e.g. `#3's known` → `the per-sequence constant environment`)
+from:
 
-- `permission_rules.lua` comments and `permission_rules.test.lua` block names.
-- The permissions skill prose (`SKILL.md`, `references/parsing.md`, including the
-  `#4b` breadcrumb in the arg-token-text table).
+- `permission_rules.lua` comments/docstrings and `permission_rules.test.lua`
+  block names (22 + 20).
+- The permissions skill prose (`SKILL.md`, `references/parsing.md` — 1 + 5).
 
-Keep the self-describing text; reword inline shorthand (`#3's known` → `the
-per-sequence constant environment`). Commit linkage is git blame's job, not a
-comment's. Do **not** promote this plan into the skill to keep the tags alive —
-code must not reference skills.
+`grep -rnE '#[0-9]+[a-z]?'` over all four now returns nothing. Commit linkage is
+git blame's job, not a comment's. This plan was **not** promoted into the skill
+to keep the tags alive — code must not reference skills. With every numbered item
+and this cleanup done, the note itself is now safe to delete.

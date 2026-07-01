@@ -130,7 +130,7 @@ dynamic or mixed keeps its quotes, because its text is never literal-matched
 |---|---|---|
 | Pure literal `"rm"` (`string_content` only) | `rm` (stripped) | A concrete literal must not evade a literal gate by keeping quotes. |
 | Mixed `"pre$f"` (`string_content` + expansion) | `"pre$f"` (raw, quoted) | Dynamic — text isn't literal-matched; raw text preserves glob matching. `literal_token`'s mixed branch. |
-| Pure substitution `"$(ls)"` (quoted, single child, no literal) | `$(ls)` (inner, no quotes) | Its own branch (the `#4b` case in code/commits); no literal part to preserve. |
+| Pure substitution `"$(ls)"` (quoted, single child, no literal) | `$(ls)` (inner, no quotes) | Its own branch (the quoted-command-substitution case); no literal part to preserve. |
 | Literal + substitution `"count: $(ls)"` | `"count: $(ls)"` (raw, quoted) | Same class as `"pre$f"` — mixed + dynamic, so keep quotes. |
 
 The pure-substitution row's stripped form is the one that looks inconsistent
@@ -155,10 +155,11 @@ handling.
    *pattern* must be substitution-free too — both run code during the match
    (`case $(rm x) in $(rm y)) …`).
    A **named** `function_definition` (`foo() { … }`, `function foo { … }`)
-   always approves *as a definition* — defining never runs the body. #6 adds
-   *call* resolution: the body is also walked as a fresh sequence (every
-   `$var`/positional dynamic), and on a clean walk the name is recorded in a
-   per-sequence function table (same left-to-right lifetime as #3's `known`). A
+   always approves *as a definition* — defining never runs the body.
+   Locally-defined-function *call* resolution adds this: the body is also walked
+   as a fresh sequence (every `$var`/positional dynamic), and on a clean walk the
+   name is recorded in a per-sequence function table (same left-to-right lifetime
+   as the per-sequence `known`). A
    later `command` whose name matches a recorded entry approves regardless of
    its call arguments — the body was vetted for arbitrary args, though a
    side-effecting argument substitution (`foo $(rm x)`) is still walked and
@@ -172,8 +173,8 @@ handling.
    through `walk_substitution_inner`: its inner commands must approve
    standalone (so `f=$(rm x)` and `cat $(rm x)` bail — `rm` not allowed). A
    quoted `"$(…)"` in **argument** position (a `string` whose single named child
-   is the substitution) is unwrapped to that inner and walked the same way (#4b
-   — `cat "$(ls)"` approves). #4b generalises to a quoted string mixing literal
+   is the substitution) is unwrapped to that inner and walked the same way
+   (`cat "$(ls)"` approves). This generalises to a quoted string mixing literal
    text with one or more substitutions and nothing else (`echo "count: $(ls)"`,
    `cat "pre$(ls)"`, `echo "a $(ls) b $(wc -l)"`): every inner recurses, then the
    *whole quoted argument* splices as one dynamic token (quotes kept, since a

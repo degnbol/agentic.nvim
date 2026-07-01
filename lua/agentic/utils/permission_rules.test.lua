@@ -545,7 +545,7 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
-        describe("#6 calls to locally-defined functions", function()
+        describe("calls to locally-defined functions", function()
             local orig_read_json
             before_each(function()
                 orig_read_json = PermissionRules.read_json
@@ -624,7 +624,7 @@ describe("PermissionRules", function()
             end)
 
             it("does not leak a function name into a nested sequence", function()
-                -- funcs is per-sequence (same scoping as #3's `known`): the
+                -- funcs is per-sequence (same scoping as the per-sequence `known`): the
                 -- `if` body is a fresh sequence, so a parent definition does not
                 -- resolve there. Accepted residual — over-prompts, never under.
                 assert.is_false(
@@ -1016,7 +1016,7 @@ describe("PermissionRules", function()
             assert.is_false(ok)
         end)
 
-        -- #1 Step B: under tmp_cleanup, rm emits ordered delete effects instead
+        -- Under tmp_cleanup, rm emits ordered delete effects instead
         -- of bailing to the structured `ask`; the policy layer correlates them
         -- against earlier writes and the tmp scope.
         it("evaluate: rm emits a delete effect under tmp_cleanup", function()
@@ -1397,7 +1397,7 @@ describe("PermissionRules", function()
 
         describe("bails on substitution in non-recursed positions", function()
             -- Bare `$(...)` (argument / for-list) and quoted `"$(...)"`
-            -- (#4b — see the dedicated blocks below) are recursed. These
+            -- (see the dedicated blocks below) are recursed. These
             -- remaining positions either hide the substitution from the matcher
             -- or splice its output somewhere the dynamic-token machinery cannot
             -- guard, so they still bail: substitution as the command name, in a
@@ -1424,7 +1424,8 @@ describe("PermissionRules", function()
             -- side-effect-free predicate that walks; a brace group runs
             -- sequentially in the current shell so it walks like a `list`
             -- (covered separately below). The remaining cases (`!`, subshell)
-            -- stay rejected. Process substitution recurses (see the #4 block).
+            -- stay rejected. Process substitution recurses (see the
+            -- command-substitution block).
             for _, cmd in ipairs({
                 "! rm x",
                 "( rm -rf x )",
@@ -1438,7 +1439,7 @@ describe("PermissionRules", function()
         describe("brace group walks like a sequence", function()
             -- A `{ …; }` brace group runs its contents in the current shell,
             -- so its decision equals that of the contained list (the node that
-            -- also forms a #6 function body).
+            -- also forms a function body).
             it("approves when every contained command is allowed", function()
                 assert.is_true(decide("{ echo hi; rm x; }", ALLOW))
             end)
@@ -1684,7 +1685,7 @@ describe("PermissionRules", function()
 
         -- Phase 2: assignment-position command substitution and loops.
         -- (Argument / for-list substitution is now recursed too — see the
-        -- "#4 argument-position command substitution" block below.) These
+        -- "argument-position command substitution" block below.) These
         -- tests focus on the assignment positives and on the negatives that
         -- remain unsafe.
         describe("Phase 2 (assignment-position substitution and loops)", function()
@@ -1769,11 +1770,11 @@ describe("PermissionRules", function()
             end)
         end)
 
-        -- #4: a bare `$(...)` in argument or for-list position is recursed —
+        -- a bare `$(...)` in argument or for-list position is recursed —
         -- the inner command must approve on its own, and its output splices
         -- into the surrounding stream as a dynamic token (so a gated outer
         -- command still wildcard-prompts; see the use-site blocks below).
-        describe("#4 argument-position command substitution", function()
+        describe("argument-position command substitution", function()
             local ALLOW_CAT_LS = {
                 allow = {
                     "Bash(cat *)",
@@ -1848,13 +1849,13 @@ describe("PermissionRules", function()
             end)
         end)
 
-        -- #4b: a quoted `"$(cmd)"` argument is unwrapped to its inner
+        -- a quoted `"$(cmd)"` argument is unwrapped to its inner
         -- substitution and walked like the bare `$(cmd)` form — inner must
         -- approve standalone, output splices as a dynamic token. Only a `string`
         -- whose single named child is the substitution qualifies; concatenation
         -- with `$var` and process substitution stay bailed. The generalised
         -- form — literal text + one or more substitutions — is covered below.
-        describe("#4b quoted command substitution", function()
+        describe("quoted command substitution", function()
             local ALLOW_CAT_LS = {
                 allow = {
                     "Bash(cat *)",
@@ -1893,11 +1894,11 @@ describe("PermissionRules", function()
             end)
         end)
 
-        -- #4b generalised: a quoted string mixing literal text with one or more
+        -- a quoted string mixing literal text with one or more
         -- command substitutions. Every inner is vetted; the whole quoted arg
         -- splices as a single dynamic token (quotes kept). A `$var` child or any
         -- non-substitution expansion is out of scope and bails.
-        describe("#4b string-embedded command substitution", function()
+        describe("string-embedded command substitution", function()
             local ALLOW_SUBST = {
                 allow = {
                     "Bash(echo *)",
@@ -2561,11 +2562,11 @@ describe("PermissionRules", function()
             end)
         end)
 
-        -- #3: a `$var` bound to a splitting-proof literal earlier in the same
+        -- a `$var` bound to a splitting-proof literal earlier in the same
         -- straight-line sequence resolves to that literal (static), so a benign
         -- value no longer wildcard-fires a gate — while the literal feeds the
         -- SAME gates, and any non-inert sibling clears the binding (over-prompt).
-        describe("#3 constant-literal propagation", function()
+        describe("constant-literal propagation", function()
             it("approves f=/safe/dir; find $f (benign value recovered)", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve("f=/safe/dir; find $f")
@@ -2614,11 +2615,11 @@ describe("PermissionRules", function()
                 )
             end)
 
-            -- Post-#4b the quoted `"$(echo x)"` is walked and spliced as a
-            -- dynamic token; it prompts because that token wildcard-fires find's
-            -- `-exec` deny (the gate wildcard), not because the substitution
-            -- bails. The bare `find $(echo x)` already prompts the same way, so
-            -- #4b never flipped this boolean.
+            -- With quoted-substitution handling the quoted `"$(echo x)"` is walked
+            -- and spliced as a dynamic token; it prompts because that token
+            -- wildcard-fires find's `-exec` deny (the gate wildcard), not because
+            -- the substitution bails. The bare `find $(echo x)` already prompts
+            -- the same way, so quoted-substitution handling never flipped this boolean.
             it("prompts on base=/safe; find \"$(echo x)\" (dynamic token wildcards find's -exec deny)", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve('base=/safe; find "$(echo x)"')
@@ -2691,7 +2692,7 @@ describe("PermissionRules", function()
                 )
             end)
 
-            -- #3 capable grade: a control-flow sibling drops only the names it
+            -- capable grade: a control-flow sibling drops only the names it
             -- could rebind, not all of `known`.
             it("approves f=/safe; if true; then echo hi; fi; find $f (binding-free if preserves)", function()
                 assert.is_true(
@@ -2754,7 +2755,7 @@ describe("PermissionRules", function()
             end)
         end)
 
-        describe("#8 concatenation token shape", function()
+        describe("concatenation token shape", function()
             it("approves head -40 $d/SKILL.md (dynamic token, empty read_only gate)", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve("head -40 $d/SKILL.md")
@@ -2818,12 +2819,13 @@ describe("PermissionRules", function()
             end)
         end)
 
-        -- #9: a for-loop over an all-literal list unrolls the body once per value
-        -- with the loop var pre-bound (#8 resolves the body concatenation against
-        -- it), so a gated body command is checked per value; the loop approves iff
-        -- every value approves. A non-literal list or an over-budget value count
-        -- falls back to the single dynamic walk (#4/#8 floor).
-        describe("#9 for-loop literal unroll", function()
+        -- a for-loop over an all-literal list unrolls the body once per value
+        -- with the loop var pre-bound (concatenation resolution resolves the body
+        -- concatenation against it), so a gated body command is checked per value;
+        -- the loop approves iff every value approves. A non-literal list or an
+        -- over-budget value count falls back to the single dynamic walk (the
+        -- dynamic-token floor).
+        describe("for-loop literal unroll", function()
             it("approves for d in acp permissions provider-system; do find . $d/SKILL.md; done (all values are positional paths)", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
@@ -2840,7 +2842,7 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("approves for d in acp permissions; do head $d/SKILL.md; done (also passes via #8 alone)", function()
+            it("approves for d in acp permissions; do head $d/SKILL.md; done (also passes via concatenation resolution alone)", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "for d in acp permissions; do head $d/SKILL.md; done"
@@ -3151,7 +3153,7 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("does not highlight a #3-resolved benign $var (bundled defaults)", function()
+        it("does not highlight a constant-resolved benign $var (bundled defaults)", function()
             -- `find $f` resolves to /safe (known-safe via the bundled find rule),
             -- so only the unknown command highlights. Without the constant-
             -- propagation mirror, $f would wildcard-fire find's -exec deny and
