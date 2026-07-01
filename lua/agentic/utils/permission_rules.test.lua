@@ -2818,6 +2818,66 @@ describe("PermissionRules", function()
             end)
         end)
 
+        -- #9: a for-loop over an all-literal list unrolls the body once per value
+        -- with the loop var pre-bound (#8 resolves the body concatenation against
+        -- it), so a gated body command is checked per value; the loop approves iff
+        -- every value approves. A non-literal list or an over-budget value count
+        -- falls back to the single dynamic walk (#4/#8 floor).
+        describe("#9 for-loop literal unroll", function()
+            it("approves for d in acp permissions provider-system; do find . $d/SKILL.md; done (all values are positional paths)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "for d in acp permissions provider-system; do find . $d/SKILL.md; done"
+                    )
+                )
+            end)
+
+            it("prompts on for d in acp -delete; do find . $d; done (one value trips find's deny)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "for d in acp -delete; do find . $d; done"
+                    )
+                )
+            end)
+
+            it("approves for d in acp permissions; do head $d/SKILL.md; done (also passes via #8 alone)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "for d in acp permissions; do head $d/SKILL.md; done"
+                    )
+                )
+            end)
+
+            it("prompts on for f in $(ls); do find . $f; done (non-literal list → dynamic fallback)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "for f in $(ls); do find . $f; done"
+                    )
+                )
+            end)
+
+            -- Nested literal loops multiply: outer 9 values (≤64) divides the
+            -- budget to floor(64/9)=7, so the inner 9-value loop exceeds it and
+            -- falls back to the dynamic walk, where the gated body prompts.
+            it("prompts on nested literal loops beyond the product cap with a gated body", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do find . $b; done; done"
+                    )
+                )
+            end)
+
+            -- A body that rebinds the loop var drops the seed (update_known runs
+            -- per body statement), so the subsequent use is dynamic again.
+            it("prompts on for d in acp; do d=$x; find . $d; done (body rebinds the loop var to dynamic)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "for d in acp; do d=$x; find . $d; done"
+                    )
+                )
+            end)
+        end)
+
         -- Reject pass: a concrete deny gate rejects outright (no prompt). ask
         -- and unknown commands fall through to should_auto_reject == false (the
         -- approve walk then decides prompt vs approve).

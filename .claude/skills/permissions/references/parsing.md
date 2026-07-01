@@ -75,6 +75,16 @@ $base/x` resolves to `-o/x`, whose short-flag clustering hits sort's write gate
 approves. A quoted concatenation `"$f/x"` (a `string` node) is *not* statically
 resolved and stays dynamic.
 
+A **for-loop over an all-literal list** (`is_safe_literal` per item, plain loop
+var) is another `known` source: `walk_for` unrolls the body once per value,
+seeding `walk_sequence` with `{ [loopvar] = value }`, and approves iff every
+value approves. So `for d in acp permissions; do find . $d/SKILL.md; done`
+resolves each body reference to a concrete path and approves, while `for d in acp
+-delete; do find . $d; done` binds `d=-delete` on one pass and prompts (find's
+deny gate). Nested literal loops divide a shared `ctx.for_budget` (`FOR_UNROLL_CAP
+= 64`) per level; a non-literal list (`for f in $(ls)`) or an over-budget count
+falls back to a single dynamic-token walk of the body.
+
 **Dynamic** — anything unresolvable: an unbound `$var`, an unquoted glob (`~` is
 exempt — it only yields a path, never a flag/subcommand), substitution output,
 or a substitution-free unquoted concatenation with a glob/unbound-var/expansion

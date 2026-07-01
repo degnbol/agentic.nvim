@@ -563,7 +563,13 @@ end
 --- @field kind "write"|"delete" Mutation kind (redirect write, or an `rm` operand)
 --- @field path string Concrete target path
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean, for_budget: integer }
+
+--- Maximum number of body walks a literal for-loop may unroll into (#9). Nested
+--- literal loops multiply, so the budget is divided down each level; a loop whose
+--- value count exceeds the remaining budget falls back to the single dynamic walk
+--- (the safe direction — never widens beyond #8).
+local FOR_UNROLL_CAP = 64
 
 --- Container types that are straight-line statement sequences — #3
 --- constant-literal propagation threads a per-sequence `known` environment
@@ -1370,13 +1376,19 @@ end
 --- resolves bare `$name` references and recorded calls against them. Both are
 --- sequence-local — nested blocks reached via `walk(child)` start fresh, so
 --- neither a binding nor a function name leaks across sequences.
+---
+--- `seed` (optional, #9) pre-binds names in the constant environment — a for-loop
+--- unrolls its body once per literal value by calling this with `{ [loopvar] =
+--- value }`. `update_known` still runs per body statement, so a body that rebinds
+--- the loop var drops the seed exactly as its rebinding rules dictate.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param seed table<string, string>|nil
 --- @return boolean
-local function walk_sequence(node, src, ctx)
+local function walk_sequence(node, src, ctx, seed)
     --- @type table<string, string>
-    local known = {}
+    local known = seed and vim.tbl_extend("force", {}, seed) or {}
     --- @type table<string, boolean>
     local funcs = {}
     for child in node:iter_children() do
@@ -1596,33 +1608,31 @@ local function walk_assignment(node, src, ctx)
     return true
 end
 
---- Walk a `for_statement`: each list item is a literal / glob / expansion or a
---- bare `command_substitution` (recursed via `walk_substitution_inner`); any
---- other substitution-bearing item bails. Then the `do_group` body recurses,
---- where the loop var is already dynamic so a laundered payload is caught at
---- the use site. Unnamed children (the `for`/`in`/`do`/`;` keywords and
---- separators) are ignored even when the grammar tags them with the same field
---- as a named sibling.
+--- Walk a `for_statement`. When every list item is a splitting-proof literal and
+--- the loop var is a plain name (#9), unroll: walk the body once per value with
+--- the var pre-bound, so a gated body command (`find -exec`) is checked against
+--- each concrete value and the loop approves iff every value approves. A
+--- non-literal list (substitution / glob / expansion) or a value count over the
+--- remaining budget falls back to the single dynamic walk (#4/#8): a bare
+--- `command_substitution` item runs via `walk_substitution_inner`, any other
+--- substitution-bearing item bails, and the body walks once with the loop var
+--- dynamic (a laundered payload caught at the use site). Unnamed children
+--- (`for`/`in`/`do`/`;` keywords and separators) are ignored even when the
+--- grammar tags them with the same field as a named sibling.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @return boolean
 local function walk_for(node, src, ctx)
-    local body
+    local var_name, body
+    --- @type TSNode[]
+    local items = {}
     for child, field in node:iter_children() do
         if child:named() then
-            if field == "value" then
-                -- A bare `$(...)` list item is vetted like an argument
-                -- substitution: it runs, and its output becomes loop values
-                -- that enter the body as the already-dynamic loop var. Any
-                -- other substitution-bearing item bails.
-                if child:type() == "command_substitution" then
-                    if not walk_substitution_inner(child, src, ctx) then
-                        return false
-                    end
-                elseif subtree_has_substitution(child) then
-                    return false
-                end
+            if field == "variable" then
+                var_name = vim.treesitter.get_node_text(child, src)
+            elseif field == "value" then
+                table.insert(items, child)
             elseif field == "body" then
                 body = child
             end
@@ -1630,6 +1640,46 @@ local function walk_for(node, src, ctx)
     end
     if not body then
         return false
+    end
+
+    -- #9: unroll a fully-literal list with a plain loop var, bounded by budget.
+    local budget = ctx.for_budget or FOR_UNROLL_CAP
+    if var_name and var_name:match("^[%w_]+$") and #items > 0 then
+        --- @type string[]
+        local values = {}
+        local all_literal = true
+        for _, item in ipairs(items) do
+            local lit = pure_literal_token(item, src)
+            if lit and is_safe_literal(lit) then
+                table.insert(values, lit)
+            else
+                all_literal = false
+                break
+            end
+        end
+        if all_literal and #values <= budget then
+            local sub_budget = math.max(1, math.floor(budget / #values))
+            local sub_ctx =
+                vim.tbl_extend("force", ctx, { for_budget = sub_budget })
+            for _, v in ipairs(values) do
+                if not walk_sequence(body, src, sub_ctx, { [var_name] = v }) then
+                    return false
+                end
+            end
+            return true
+        end
+    end
+
+    -- Fallback: validate list-item substitutions, then walk the body once with
+    -- the loop var dynamic.
+    for _, item in ipairs(items) do
+        if item:type() == "command_substitution" then
+            if not walk_substitution_inner(item, src, ctx) then
+                return false
+            end
+        elseif subtree_has_substitution(item) then
+            return false
+        end
     end
     return walk(body, src, ctx)
 end
@@ -1770,7 +1820,7 @@ end
 -- known-safe iff it matches a read_only/safe_write rule AND no deny/ask rule, so
 -- a `safe_write` like `git add` never lights up even in read-only mode.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[] }
+--- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -2057,15 +2107,17 @@ end
 
 --- Tally a straight-line sequence, threading the #3 constant environment so a
 --- command whose only "unapproved" token is a resolved benign `$var` is not
---- highlighted (mirrors `walk_sequence`). UI-only — a stale binding here can only
---- mis-highlight, never mis-approve.
+--- highlighted (mirrors `walk_sequence`). `seed` (optional, #9) pre-binds names,
+--- for a for-loop body unrolled per literal value. UI-only — a stale binding here
+--- can only mis-highlight, never mis-approve.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param ranges agentic.utils.PermissionRules.Range[]
-local function tally_sequence(node, src, ctx, ranges)
+--- @param seed table<string, string>|nil
+local function tally_sequence(node, src, ctx, ranges, seed)
     --- @type table<string, string>
-    local known = {}
+    local known = seed and vim.tbl_extend("force", {}, seed) or {}
     --- @type table<string, boolean>
     local funcs = {}
     for child in node:iter_children() do
@@ -2140,22 +2192,75 @@ local function tally_redirected(node, src, ctx, ranges)
     end
 end
 
---- Tally a `for_statement`: a clean bare `$(...)` list item records nothing, a
---- dirty one pinpoints its inner, any other list-item substitution records (it
---- runs code that flows into body args); the `do_group` body recurses.
+--- Tally a `for_statement`. Mirrors `walk_for`: a fully-literal list with a plain
+--- loop var unrolls the body once per value (#9), so a body command highlighted
+--- for one binding but not another is caught; ranges are deduped across values
+--- (one binding highlighting a span is enough). Otherwise the list items record
+--- their substitutions (a clean bare `$(...)` records nothing, a dirty one
+--- pinpoints its inner, any other runs code flowing into body args) and the body
+--- recurses once with the loop var dynamic.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param ranges agentic.utils.PermissionRules.Range[]
 local function tally_for(node, src, ctx, ranges)
+    local var_name, body
+    --- @type TSNode[]
+    local items = {}
     for child, field in node:iter_children() do
         if child:named() then
-            if field == "value" then
-                record_substitutions(child, src, ctx, ranges)
+            if field == "variable" then
+                var_name = vim.treesitter.get_node_text(child, src)
+            elseif field == "value" then
+                table.insert(items, child)
             elseif field == "body" then
-                tally_walk(child, src, ctx, ranges)
+                body = child
             end
         end
+    end
+
+    local budget = ctx.for_budget or FOR_UNROLL_CAP
+    if body and var_name and var_name:match("^[%w_]+$") and #items > 0 then
+        --- @type string[]
+        local values = {}
+        local all_literal = true
+        for _, item in ipairs(items) do
+            local lit = pure_literal_token(item, src)
+            if lit and is_safe_literal(lit) then
+                table.insert(values, lit)
+            else
+                all_literal = false
+                break
+            end
+        end
+        if all_literal and #values <= budget then
+            local sub_ctx = vim.tbl_extend(
+                "force",
+                ctx,
+                { for_budget = math.max(1, math.floor(budget / #values)) }
+            )
+            local seen = {}
+            for _, v in ipairs(values) do
+                --- @type agentic.utils.PermissionRules.Range[]
+                local per_value = {}
+                tally_sequence(body, src, sub_ctx, per_value, { [var_name] = v })
+                for _, r in ipairs(per_value) do
+                    local key = table.concat(r, ",")
+                    if not seen[key] then
+                        seen[key] = true
+                        table.insert(ranges, r)
+                    end
+                end
+            end
+            return
+        end
+    end
+
+    for _, item in ipairs(items) do
+        record_substitutions(item, src, ctx, ranges)
+    end
+    if body then
+        tally_walk(body, src, ctx, ranges)
     end
 end
 
@@ -2297,6 +2402,7 @@ function M.tally_unapproved(command)
         structured_entries = M.get_structured_entries(),
         depth = 0,
         leaves = {},
+        for_budget = FOR_UNROLL_CAP,
     }
     --- @type agentic.utils.PermissionRules.Range[]
     local ranges = {}
@@ -2515,6 +2621,7 @@ function M.evaluate(command, extra_allow)
         effects = effects,
         written = {},
         tmp_cleanup = Config.permissions.tmp_cleanup,
+        for_budget = FOR_UNROLL_CAP,
     })
     return ok, effects
 end

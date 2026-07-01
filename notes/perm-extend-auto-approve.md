@@ -33,7 +33,8 @@ functions.
 Newest additions: **#8** (concatenation token shape — `$d/x` splices as one
 token, static when its parts are known literals else dynamic; **done**) → **#9**
 (a for-loop var over an all-literal list resolves per value through the gates;
-depends on #8). #9 recovers gated commands (`find -exec`) inside literal loops.
+depends on #8; **done**). #9 recovers gated commands (`find -exec`) inside
+literal loops.
 
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
 mirrored in `command_known_safe`; tests under "inline shell -c body").
@@ -54,8 +55,7 @@ constant-literal propagation" + a tally case). The two post-review corrections (
 `printf` over-prompt fix + a soundness-coupling docstring/test; see "Follow-up
 corrections" under #3) are also done. The capable grade — a control-flow-sibling
 collect-targets scan instead of clear-all — is now done (`collect_bindings`
-field-aware walk; see the "capable grade" sub-bullet under #3). Remaining:
-#2, #9.
+field-aware walk; see the "capable grade" sub-bullet under #3). Remaining: #2.
 
 ---
 
@@ -706,9 +706,9 @@ resolution match the decision walk with no separate change.
 
 ---
 
-## #9 — resolve a for-loop var over a literal list
+## #9 — resolve a for-loop var over a literal list (done)
 
-**Today.** `walk_for` recurses into the body via the generic `walk(body)`, which
+**Was.** `walk_for` recursed into the body via the generic `walk(body)`, which
 routes to `walk_sequence` with a fresh `known` — the loop var is never bound, so
 a body reference is dynamic even when the list is entirely literal (`for d in
 acp permissions provider-system; do find . $d/SKILL.md; done`). #8 lets that
@@ -717,22 +717,27 @@ but a gated command (`find` with `-exec`/`-delete`) over-prompts, because the
 dynamic wildcard cannot see that none of the three values is a flag. The value
 is not truly dynamic — it provably ranges over a finite set of literals.
 
-**Change.** When every for-list item is a safe-literal `word` (no substitution,
-glob, or expansion; passes `is_safe_literal`) and the value count is within a
-cap, walk the body **once per value** with `known` seeded `{ [loopvar] = value
-}`; approve iff every pass approves. Otherwise fall back to the current single
-dynamic walk (#8's floor). This reuses the entire single-value machinery — the
-per-value walk is an ordinary sequence walk with one pre-bound literal.
+**Shipped.** When the loop var is a plain name and every for-list item resolves
+via `pure_literal_token` + `is_safe_literal` (no substitution, glob, expansion,
+or multi-word value) and the value count is within the remaining budget,
+`walk_for` walks the body **once per value** via `walk_sequence(body, src,
+sub_ctx, { [loopvar] = value })`; approves iff every pass approves. Otherwise it
+falls back to the current single dynamic walk (#8's floor). This reuses the
+entire single-value machinery — the per-value walk is an ordinary sequence walk
+with one pre-bound literal.
 
-- **Plumbing.** Give `walk_sequence` an optional seed-`known` parameter and call
-  it directly from `walk_for` for the `do_group` body (bypassing the generic
+- **Plumbing.** `walk_sequence` gained an optional `seed`-`known` parameter, and
+  `walk_for` calls it directly for the `do_group` body (bypassing the generic
   dispatcher, as `walk_redirected` is already special-cased inside
   `walk_sequence`). `update_known` still runs per body statement, so a body that
   rebinds the loop var (`d=$(…)`) drops the seed exactly as its rebinding rules
   dictate.
-- **Product cap.** Nested literal loops multiply (`for a … do for b …`) — cap
-  the total body-walk count and fall back to the dynamic walk on overflow (the
-  safe direction).
+- **Product cap.** Nested literal loops multiply (`for a … do for b …`). A single
+  `ctx.for_budget` (`FOR_UNROLL_CAP = 64`) is divided by the value count at each
+  level (`floor(budget / #values)`) before recursing, and a loop whose value
+  count exceeds the remaining budget falls back to the dynamic walk (the safe
+  direction). So a `9 × 9` nest unrolls the outer (budget 64) but the inner
+  (budget 7) exceeds and falls back.
 
 **Why it's sound (over-prompt only; invariant held).**
 - Each iteration binds the loop var to exactly one list element — a for-list
@@ -741,29 +746,37 @@ per-value walk is an ordinary sequence walk with one pre-bound literal.
   single word, identical to a #3 pure-literal assignment.
 - Every value is fed through the *same* gates via an ordinary body walk.
   `is_safe_literal` admits flags (`-delete` matches its charset), so `for d in
-  acp -delete; do find . $d` binds `d=-delete` on one pass and rejects. Approval
-  requires *all* values to pass, so a single dangerous value blocks the loop.
+  acp -delete; do find . $d` binds `d=-delete` on one pass and that pass fails to
+  approve (find's `-delete` deny gate). Approval requires *all* values to pass, so
+  a single dangerous value blocks the loop. (This is a *withhold-approval* → the
+  command prompts, not an outright reject: `should_auto_reject` is concrete-only
+  and does not unroll — same asymmetry as #3's `f=--exec; find $f`.)
 - A non-literal list item (substitution/glob/expansion) or cap overflow falls
   back to the dynamic walk — never widens beyond #8.
 
 **Depends on #8.** The body concatenation must resolve for the per-value binding
 to matter; #8's static branch consumes the seeded `known`.
 
-**Touches.** `walk_for` + `walk_sequence` (seed param) in `permission_rules.lua`;
-the tally mirror `tally_for`/`tally_sequence` (`:2098`, `:2192`) must mirror the
-per-value walk or highlights diverge from decisions.
+**Touches.** `walk_for` + `walk_sequence` (seed param) + `FOR_UNROLL_CAP` +
+`for_budget` threaded through `WalkCtx`/`TallyCtx` in `permission_rules.lua`; the
+tally mirror `tally_for`/`tally_sequence` unrolls the same way and dedups ranges
+across values (one binding highlighting a span is enough) so highlights don't
+diverge from decisions.
 
-**Tests** (`permission_rules.test.lua`):
+**Tests** (`permission_rules.test.lua`, "#9 for-loop literal unroll"):
 - `for d in acp permissions provider-system; do find . $d/SKILL.md; done` →
   **approve** (all values resolve to positional paths).
-- `for d in acp -delete; do find . $d; done` → **reject** (one value trips
-  find's deny).
+- `for d in acp -delete; do find . $d; done` → **prompt** (one value binds
+  `d=-delete` and trips find's deny → withholds approval; not a hard reject —
+  see the soundness note above).
 - `for d in acp permissions; do head $d/SKILL.md; done` → **approve** (guards the
   layering — also passes via #8 alone).
 - `for f in $(ls); do find . $f; done` → **prompt** (non-literal list → dynamic
   fallback; #4's behaviour, regression guard).
-- nested `for a in x y; do for b in p q; do …` beyond cap → **fallback** (prompt
-  when the body is gated).
+- nested `9 × 9` literal loops with a gated body → **prompt** (outer unrolls,
+  inner exceeds the divided budget and falls back to the dynamic walk).
+- `for d in acp; do d=$x; find . $d; done` → **prompt** (body rebinds the loop
+  var to a dynamic value, dropping the seed).
 
 ---
 
