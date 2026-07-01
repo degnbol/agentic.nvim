@@ -1,8 +1,14 @@
 # claude-agent-acp SDK internals
 
 Reference for provider-specific behaviour of `claude-agent-acp` (Zed's ACP
-bridge wrapping `@anthropic-ai/claude-agent-sdk`). This documents bridge/SDK
-internals — not the ACP protocol itself (see SKILL.md for that).
+bridge wrapping `@anthropic-ai/claude-agent-sdk`). This documents bridge and
+SDK-as-shipped internals — not the ACP protocol itself (see SKILL.md for that).
+
+The shared Claude *engine* mechanism (tool-execution pipeline, the PreToolUse
+hook/permission-decision merge, tool-definition internals, memory/rule loading)
+is not ACP-specific and lives in the global `claude` skill's `references/`
+(`internals.md`, `rule-loading.md`); it is cross-referenced here, not
+duplicated. This file adds the bridge/transport layer on top.
 
 > Some sections illustrate consequences with concrete file paths from the
 > agentic.nvim plugin (e.g. `lua/agentic/...`). Treat those as concrete
@@ -77,10 +83,21 @@ const options = { ...userProvidedOptions, cwd: params.cwd, ... };
 ```
 
 Known passthrough fields: `additionalDirectories`, `tools`, `env`,
-`disallowedTools`, `hooks`, `mcpServers`, `permissionMode`, `maxThinkingTokens`.
+`disallowedTools`, `mcpServers`, `maxThinkingTokens`.
 
-Some fields are overridden after the spread: `cwd`, `includePartialMessages`,
-`allowDangerouslySkipPermissions`, `canUseTool`, `executable`.
+Some fields are overridden after the spread and **cannot** be set this way:
+`cwd`, `includePartialMessages`, `allowDangerouslySkipPermissions`,
+`canUseTool`, `executable`, and `permissionMode` (set at `acp-agent.js:1976`
+from `permissions.defaultMode`, clobbering any `_meta` value — for the working
+channels see § "Permission mode over ACP"). Verified against 0.44.0.
+
+`hooks` is spread (`acp-agent.js:1993`) but is a **trap for command hooks**: SDK
+`options.hooks` is typed `Partial<Record<HookEvent, HookCallbackMatcher[]>>`
+whose matchers hold `HookCallback` *functions* (`sdk.d.ts:807, 1486`) — not the
+settings-file `{type:"command", command, …}` JSON shape (a different type,
+`Settings.hooks`, `sdk.d.ts:4658`). A JSON command hook passed via `_meta` is
+silently dropped; command hooks must come from a `settingSources` file (see
+§ "settings.json paths").
 
 ## Invoked skills survive session resume
 
@@ -140,7 +157,27 @@ client's own auto-approval (allow-always cache, compound-Bash matching,
 pre-approval above, but covering writes too. Per-action denials don't prompt
 the client; only the consecutive/total-denial backstop halts the turn. For
 auto-mode config and rule semantics (`autoMode` settings block, classifier
-tiers), see the global `claude` skill and official auto-mode docs.
+tiers) — and the general hook-decision-vs-classifier merge asymmetry a client
+can exploit via a PreToolUse hook — see the global `claude` skill (the merge is
+in `references/internals.md` § "PreToolUse decision vs the permission resolver")
+and official auto-mode docs.
+
+### Permission mode over ACP
+
+`_meta.claudeCode.options.permissionMode` is ignored (clobbered — see § "Session
+creation via _meta passthrough"). Two working channels:
+
+- **`permissions.defaultMode: "auto"`** in a `settingSources` file — applied at
+  session creation.
+- **`session/set_mode {sessionId, modeId:"auto"}`** post-creation. A plain `{}`
+  ack confirms the switch (an unavailable mode throws instead); it emits a
+  `config_option_update` notification, **not** `current_mode_update` (that one
+  comes from `session/set_config_option`).
+
+`auto` is only offered when the model supports it. At session creation the bridge
+**silently clamps** `auto` to `default` for non-supporting models (e.g. Haiku),
+logging an error (`acp-agent.js:2108-2134`) — a configured `auto` may not be in
+effect depending on the resolved model.
 
 If `Read(**)` is in settings.json allow list, the SDK auto-approves reads
 internally and `canUseTool` is never called. The client never sees a
@@ -455,9 +492,5 @@ and the SDK runs the same trigger/consumer pipeline as the TUI
 
 For mechanism details — `nestedMemoryAttachmentTriggers`,
 `FileReadTool`-only population, mid-turn consumption, glob-match
-constraints, once-per-session dedup — see the global `claude` skill
-`references/internals.md` § "Memory and rule loading".
-
-For verifying that a rule's content actually reached the model
-(introspective prompts return false negatives), see the same file
-§ "Verifying rule fire".
+constraints, once-per-session dedup, and the read-before-edit gate — see
+the global `claude` skill `references/rule-loading.md`.
