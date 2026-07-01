@@ -441,6 +441,58 @@ local function redirect_write_dest(fr, src)
     return dest
 end
 
+--- True iff the redirect operator is a plain truncating `>` (not `>>` append,
+--- `&>`, `>|`, or an input/fd form). Heredoc content reconstruction needs a full
+--- truncate — only then does the written file equal the heredoc body, with no
+--- prior bytes prepended/appended.
+--- @param fr TSNode file_redirect node
+--- @return boolean
+local function redirect_is_truncate(fr)
+    for child in fr:iter_children() do
+        if not child:named() then
+            return child:type() == ">"
+        end
+    end
+    return false
+end
+
+--- The verbatim text of a `heredoc_redirect`'s body, or nil if the body carries
+--- an expansion (`<<EOF` with `$var`/`$(…)`), which the shell runs at *write*
+--- time and must therefore bail. A quoted `<<'EOF'` always parses as pure text
+--- (no named children). An empty body → "".
+--- @param hr TSNode heredoc_redirect node
+--- @param src string
+--- @return string|nil
+local function heredoc_pure_body(hr, src)
+    for child in hr:iter_children() do
+        if child:type() == "heredoc_body" then
+            if child:named_child_count() > 0 then
+                return nil
+            end
+            return vim.treesitter.get_node_text(child, src)
+        end
+    end
+    return ""
+end
+
+--- True iff the command node is exactly `cat` with no arguments or env-prefix —
+--- the only form whose stdout equals its heredoc stdin verbatim. Any operand
+--- (`cat -n`), filter (`grep x`), or other command transforms the bytes, so the
+--- written file would not equal the heredoc body.
+--- @param cmd TSNode|nil command node (the redirected_statement body)
+--- @param src string
+--- @return boolean
+local function is_bare_cat(cmd, src)
+    if not cmd or cmd:type() ~= "command" or cmd:named_child_count() ~= 1 then
+        return false
+    end
+    local name_node = cmd:field("name")[1]
+    if not name_node then
+        return false
+    end
+    return vim.fs.basename(vim.treesitter.get_node_text(name_node, src)) == "cat"
+end
+
 -- ── Parsing ──────────────────────────────────────────────────────────────────
 
 --- Parse a command string with the zsh grammar. Returns the root node, or nil
@@ -928,6 +980,9 @@ M.token_is_dynamic = token_is_dynamic
 M.command_name_text = command_name_text
 M.redirect_is_safe = redirect_is_safe
 M.redirect_write_dest = redirect_write_dest
+M.redirect_is_truncate = redirect_is_truncate
+M.heredoc_pure_body = heredoc_pure_body
+M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source
 M.resolve_against_cwd = resolve_against_cwd

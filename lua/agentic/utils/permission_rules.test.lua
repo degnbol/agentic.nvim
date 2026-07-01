@@ -3489,4 +3489,145 @@ describe("PermissionRules", function()
             assert.is_false(complete)
         end)
     end)
+
+    describe("script file walk (Step B — heredoc reconstruction)", function()
+        local written = {}
+
+        local function write_file(path, content)
+            local f = io.open(path, "w")
+            if not f then
+                error("could not open " .. path)
+            end
+            f:write(content)
+            f:close()
+        end
+
+        --- Write `content` to a fresh temp `.sh` and return its absolute path.
+        local function script(content)
+            local path = vim.fn.tempname() .. ".sh"
+            write_file(path, content)
+            table.insert(written, path)
+            return path
+        end
+
+        --- A temp `.sh` path that is NOT created on disk — a script generated
+        --- inline by the command under test, so reconstruction is the only way
+        --- its body can be walked.
+        local function ghost()
+            return vim.fn.tempname() .. ".sh"
+        end
+
+        --- `cat > path <<'DELIM' … DELIM\nzsh path` for a quoted (literal) heredoc.
+        local function create_run(path, body, op, delim)
+            op = op or ">"
+            delim = delim or "'EOF'"
+            return ("cat %s %s <<%s\n%sEOF\nzsh %s"):format(
+                op,
+                path,
+                delim,
+                body,
+                path
+            )
+        end
+
+        local orig_read_json
+        before_each(function()
+            orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            -- `Bash(cat)` (bare, no args) so a heredoc passthrough
+                            -- body approves; the reconstructed body uses `ls`.
+                            allow = { "Bash(ls *)", "Bash(grep *)", "Bash(cat)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+        end)
+        after_each(function()
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+            for _, path in ipairs(written) do
+                os.remove(path)
+            end
+            written = {}
+        end)
+
+        it("approves a create-then-run whose heredoc body is all-allowed", function()
+            -- The script never touches disk; only the reconstructed heredoc body
+            -- can clear the `zsh` leaf.
+            local path = ghost()
+            local ok = PermissionRules.evaluate(create_run(path, "ls /tmp\n"))
+            assert.is_true(ok)
+        end)
+
+        it("bails a create-then-run whose heredoc body is not allowed", function()
+            local path = ghost()
+            local ok = PermissionRules.evaluate(create_run(path, "make build\n"))
+            assert.is_false(ok)
+        end)
+
+        it("walks reconstructed bytes, not stale disk content", function()
+            -- Disk holds a disallowed body; the heredoc rewrites it to an allowed
+            -- one. Approving proves the walk reads the reconstruction, not disk.
+            local path = script("make build\n")
+            local ok = PermissionRules.evaluate(create_run(path, "ls /tmp\n"))
+            assert.is_true(ok)
+            -- And the inverse: an allowed disk body cannot rescue a disallowed
+            -- reconstruction.
+            local path2 = script("ls /tmp\n")
+            local ok2 =
+                PermissionRules.evaluate(create_run(path2, "make build\n"))
+            assert.is_false(ok2)
+        end)
+
+        it("taint: a non-`cat` producer (grep) is not reconstructable", function()
+            local path = ghost()
+            local ok = PermissionRules.evaluate(
+                ("grep x > %s <<'EOF'\nls /tmp\nEOF\nzsh %s"):format(path, path)
+            )
+            assert.is_false(ok)
+        end)
+
+        it("taint: a `>>` append is not reconstructable", function()
+            local path = ghost()
+            local ok =
+                PermissionRules.evaluate(create_run(path, "ls /tmp\n", ">>"))
+            assert.is_false(ok)
+        end)
+
+        it("bails an expanding heredoc (substitution runs at write time)", function()
+            -- An unquoted `<<EOF` with `$(…)` runs the substitution when the file
+            -- is written, so the redirect itself must bail.
+            local path = ghost()
+            local ok = PermissionRules.evaluate(
+                ("cat > %s <<EOF\n$(make build)\nEOF\nzsh %s"):format(path, path)
+            )
+            assert.is_false(ok)
+        end)
+
+        it("taint: a second write to the same path drops the reconstruction", function()
+            -- The heredoc records reconstructable bytes; a later redirect to the
+            -- same path (before the `zsh`) overwrites them → the path taints and
+            -- the `zsh` leaf bails rather than walking the now-stale bytes.
+            local path = ghost()
+            local ok = PermissionRules.evaluate(
+                ("cat > %s <<'EOF'\nls /tmp\nEOF\nls /tmp > %s\nzsh %s"):format(
+                    path,
+                    path,
+                    path
+                )
+            )
+            assert.is_false(ok)
+        end)
+
+        it("approves a pure-text heredoc as stdin with no write", function()
+            -- No redirect to a file, so no write effect — fully auto-approvable.
+            local ok = PermissionRules.should_auto_approve("cat <<'EOF'\nls /tmp\nEOF")
+            assert.is_true(ok)
+        end)
+    end)
 end)

@@ -78,13 +78,14 @@ sibling's read; `zsh f.sh; echo x > f.sh` (write *after* execute) has empty
 effects at execute time → reads the real on-disk bytes the shell runs. The shared
 `ctx.effects` reference over-taints through nested sequences — over-prompt, safe.
 
-**Step B (reconstruction).** To turn the bail into an approval, the execute leaf
-needs the *written content* to walk, which `ctx.effects` does not carry (effects
-have a path, no bytes). Step B threads a `written` map (path → reconstructed
-content or `TAINTED`), populated in `walk_redirected` alongside the write effect:
-first write → content-or-`TAINTED`, any second write → `TAINTED`. The leaf then
-consults `written[path]` (reconstructed → walk it, no disk read; `TAINTED` →
-bail; absent → read disk), superseding Step A's effects scan.
+**Step B (reconstruction, shipped).** To turn the bail into an approval, the
+execute leaf needs the *written content* to walk, which `ctx.effects` does not
+carry (effects have a path, no bytes). Step B threads a `ctx.written` map
+(cwd-resolved path → reconstructed content or `false` for taint), populated in
+`walk_redirected` alongside the write effect: first write → content-or-taint, any
+second write → taint. The leaf then consults `written[path]` (reconstructed →
+walk it, no disk read; `false` → bail; absent → read disk), superseding Step A's
+effects scan.
 
 ### Content reconstruction scope (deliberately small)
 
@@ -95,19 +96,20 @@ only for the forms whose stdout is statically known from literal operands.
   a multi-line script inline uses a heredoc, not `echo`. The body is a verbatim
   `heredoc_body` text leaf, so there is no escape/space-join semantics to model —
   cleaner than echo. Three structural gates:
-  - **`heredoc_body:named_child_count() == 0`** — the body is pure text. A quoted
-    delimiter (`<<'EOF'`) always parses this way; an unquoted `<<EOF` with a
-    `$var`/`$(…)` carries the expansion as a *named child* (and that substitution
-    runs at **write** time), so this single check rejects every expanding body.
-    Free from the grammar.
-  - **bare `cat`** (no operands) — only a verbatim stdin→stdout pass-through makes
-    the body equal the file. `grep x > f <<'EOF'` has the identical tree but writes
-    grep's *filtered* output → `TAINTED`.
-  - **`>` truncate, single `file_redirect`** — target pinned by
-    `redirect_write_dest` on the sibling `file_redirect`; `>>` or multiple
-    redirects → `TAINTED` (see `>>` append below). `walk_redirected` must now
-    correlate the `heredoc_redirect` body with that sibling target — today it bails
-    on any non-`file_redirect` child.
+  - **`heredoc_body:named_child_count() == 0`** — the body is pure text
+    (`heredoc_pure_body`). A quoted delimiter (`<<'EOF'`) always parses this way;
+    an unquoted `<<EOF` with a `$var`/`$(…)` carries the expansion as a *named
+    child* (and that substitution runs at **write** time), so this single check
+    rejects every expanding body — and `walk_redirected` bails there, since the
+    expansion runs regardless of any write. Free from the grammar.
+  - **bare `cat`** (no operands, `is_bare_cat`) — only a verbatim stdin→stdout
+    pass-through makes the body equal the file. `grep x > f <<'EOF'` has the
+    identical tree but writes grep's *filtered* output → taint.
+  - **`>` truncate, single `file_redirect`** (`redirect_is_truncate`) — target
+    pinned by `redirect_write_dest` on the sibling `file_redirect`; `>>` or
+    multiple redirects → taint (see `>>` append below). `walk_redirected` gathers
+    the body command, all `file_redirect` targets, and the heredoc in one pass,
+    then correlates them after the loop.
 - **`echo <literals> > f.sh`** — a later add-on, not the first cut: it only ever
   produces a *one-line* script, which overlaps with `zsh -c` (#5). content =
   operands joined by space + `\n`, gated on **no flag** (`-n`/`-e`/`-E`) **and no
@@ -197,7 +199,7 @@ kind: a generated ephemeral script has no stable name to allowlist at all.
   chat buffer, so there is nothing to anchor ranges to. The script-file recursion
   runs in the decision walk only; on the tally side the leaf stays whole-leaf
   highlighted. No origin plumbing for file bodies.
-- `echo`/`printf` reconstruction (follow-ons above; heredoc is the first cut).
+- `echo`/`printf` reconstruction (follow-ons above; heredoc shipped, these deferred).
 - Recursing a `cat other > f.sh` producer into another file read.
 
 ## Build order
@@ -209,27 +211,34 @@ kind: a generated ephemeral script has no stable name to allowlist at all.
   `read_script` does the `fs_stat`/size-guarded read. A branch in `walk_command`
   (mirrored in `command_known_safe`) lifts `source`/`.` out of the
   `CODE_TAKING_BUILTINS` bail *only* when the file resolves (`eval` stays
-  bailing), scans `ctx.effects` for a prior write to the same path (the taint
-  bail — required for soundness, see § The taint interlock), then reads +
+  bailing), consults the taint state for the resolved path, then reads +
   `parse_zsh` + recurses. `resolve_against_cwd` is shared so the redirect target
   and script path normalise identically. The `collect_command` copy of the bail
-  (`extract_commands`) is left as-is — it has no live caller.
-- **Step B — heredoc reconstruction (deferred).** Replace Step A's effects scan
-  with a `ctx.written` map (path → content or `TAINTED`), populated in
-  `walk_redirected` (which must now handle the `heredoc_redirect` child and
-  correlate it with the sibling `file_redirect` target); the heredoc
-  reconstructor (echo a later add-on). This is what flips the
-  `cat > f.sh <<'EOF' … EOF; zsh f.sh` example from a prompt to an approval.
+  (`extract_commands`) is left as-is — it has no live caller. (Step A originally
+  scanned `ctx.effects` for the taint bail; Step B superseded that with the
+  `ctx.written` consult below.)
+- **Step B — heredoc reconstruction (shipped).** `ctx.written` (cwd-resolved path
+  → content or `false`) replaces Step A's effects scan, threaded like
+  `ctx.effects` and populated in `walk_redirected`, which now gathers the body,
+  every `file_redirect`, and the `heredoc_redirect` in one pass and correlates
+  them after the loop. The `walk_command` execute leaf consults `written[path]`
+  (string → walk it; `false` → bail; nil → read disk). This flips the
+  `cat > f.sh <<'EOF' … EOF; zsh f.sh` example from a prompt to an approval; a
+  non-pure-text heredoc bails in `walk_redirected` (the expansion runs at write
+  time). `echo`/`printf` reconstruction stays deferred (out of scope above).
 
 ## Touches
 
 Step A (shipped): `shell_parse.lua` (`script_file_source`, `resolve_against_cwd`);
-`permission_rules.lua` (`read_script`; `walk_command` execute-leaf branch with the
-`ctx.effects` taint scan + `command_known_safe` mirror; `source`/`.` conditional
-un-bail); tests in `permission_rules.test.lua`.
-Step B (deferred): `shell_parse.lua` echo-literal reconstructor; `permission_rules.lua`
-`ctx.written` map threaded like `ctx.effects`, `walk_redirected` populates it
-(correlating the `heredoc_redirect` body with the sibling `file_redirect` target).
+`permission_rules.lua` (`read_script`; `walk_command` execute-leaf branch +
+`command_known_safe` mirror; `source`/`.` conditional un-bail); tests in
+`permission_rules.test.lua`.
+Step B (shipped): `shell_parse.lua` (`redirect_is_truncate`, `heredoc_pure_body`,
+`is_bare_cat`); `permission_rules.lua` (`ctx.written` map threaded like
+`ctx.effects`; `walk_redirected` rewritten to gather + correlate body/redirects/
+heredoc and populate `ctx.written`; `walk_command` execute leaf consults it;
+`walk_function_definition` isolates a fresh `written`); tests in
+`permission_rules.test.lua`.
 
 ## Decided
 

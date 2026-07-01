@@ -17,6 +17,9 @@ local safe_assignment_name = ShellParse.safe_assignment_name
 local token_is_dynamic = ShellParse.token_is_dynamic
 local redirect_is_safe = ShellParse.redirect_is_safe
 local redirect_write_dest = ShellParse.redirect_write_dest
+local redirect_is_truncate = ShellParse.redirect_is_truncate
+local heredoc_pure_body = ShellParse.heredoc_pure_body
+local is_bare_cat = ShellParse.is_bare_cat
 local inner_source = ShellParse.inner_source
 local script_file_source = ShellParse.script_file_source
 local resolve_against_cwd = ShellParse.resolve_against_cwd
@@ -560,7 +563,7 @@ end
 --- @field kind "write"|"delete" Mutation kind (redirect write, or an `rm` operand)
 --- @field path string Concrete target path
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], tmp_cleanup: boolean }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean }
 
 --- Container types that are straight-line statement sequences — #3
 --- constant-literal propagation threads a per-sequence `known` environment
@@ -1221,21 +1224,24 @@ local function walk_command(node, src, ctx, known, funcs)
     -- shrinking substring), files can cycle (`a.sh` sources `b.sh` sources
     -- `a.sh`), so NESTED_MAX_DEPTH is the actual termination guard here.
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
-        -- Taint: a redirect earlier in this command may have written this very
-        -- path. The SDK applies nothing before approval, so disk still holds
-        -- stale bytes — reading them would judge content the shell never runs
-        -- (e.g. `echo evil > f.sh; zsh f.sh`, where f.sh's write clears under a
-        -- tmp scope). Bail. (Reconstructing the written bytes to walk *those*
-        -- instead — the `cat > f.sh <<EOF … EOF; zsh f.sh` case — is a later
-        -- increment; until then the create-then-run prompts.)
-        for _, eff in ipairs(ctx.effects) do
-            if eff.kind == "write" and resolve_against_cwd(eff.path) == script_path then
+        -- A redirect earlier in this command may have written this very path.
+        -- The SDK applies nothing before approval, so disk holds stale-or-absent
+        -- bytes — reading them would judge content the shell never runs. The
+        -- ordered `ctx.written` (populated in `walk_redirected`) is consulted by
+        -- the cwd-resolved path: reconstructed bytes (a `cat > f.sh <<'EOF' … EOF`
+        -- heredoc) are walked directly; an unreconstructable write (`echo`, `>>`,
+        -- a second write) is `false` and bails; an absent entry reads disk.
+        local body
+        local written = ctx.written[script_path]
+        if written == false then
+            return false
+        elseif type(written) == "string" then
+            body = written
+        else
+            body = read_script(script_path)
+            if not body then
                 return false
             end
-        end
-        local body = read_script(script_path)
-        if not body then
-            return false
         end
         local root = parse_zsh(body)
         if not root then
@@ -1304,7 +1310,8 @@ local function walk_function_definition(node, src, ctx, funcs)
     -- definition time — the policy layer that clears effects only sees the outer
     -- command — so such a body is treated as unsafe and the name is not recorded.
     local body_effects = {}
-    local body_ctx = vim.tbl_extend("force", ctx, { effects = body_effects })
+    local body_ctx =
+        vim.tbl_extend("force", ctx, { effects = body_effects, written = {} })
     funcs[name] = (body and walk(body, src, body_ctx) and #body_effects == 0)
         or nil
     return true
@@ -1353,50 +1360,100 @@ local function walk_sequence(node, src, ctx)
 end
 
 --- Walk a `redirected_statement`: the body (command/pipeline/list) must pass,
---- and every redirect must be a safe form. Heredoc/herestring redirects are
---- unmodelled and bail.
+--- and every redirect must be a safe form. A herestring (and any non-file,
+--- non-heredoc redirect) is unmodelled and bails.
+---
+--- Two side-channels feed the downstream script-file walk (`walk_command`):
+--- every concrete file write emits a `ctx.effects` entry (cleared against a
+--- trust scope by the policy layer), and `ctx.written` maps each written path
+--- (cwd-resolved) to the bytes the file will hold — reconstructed content for a
+--- `cat > f.sh <<'EOF' … EOF` heredoc, else `false` (taint) for a write whose
+--- output is not statically known. A later `zsh f.sh` consults that map instead
+--- of judging stale disk bytes.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @param known table<string, string>|nil constant environment of the enclosing sequence
 --- @return boolean
 function walk_redirected(node, src, ctx, known)
+    local body_node
+    --- @type { key: string, truncate: boolean }[] cwd-resolved write targets
+    local writes = {}
+    local heredoc_count = 0
+    local heredoc_text = nil
+
     for child, field in node:iter_children() do
         if field == "body" then
+            body_node = child
             if not walk(child, src, ctx) then
                 return false
             end
         elseif child:named() then
-            if child:type() ~= "file_redirect" then
+            local t = child:type()
+            if t == "heredoc_redirect" then
+                -- A non-pure-text body (`<<EOF` with `$var`/`$(…)`) runs its
+                -- expansion at write time → bail. A pure-text body is inert as
+                -- stdin and is the reconstruction source for a `cat >` passthrough.
+                local text = heredoc_pure_body(child, src)
+                if text == nil then
+                    return false
+                end
+                heredoc_count = heredoc_count + 1
+                heredoc_text = text
+            elseif t == "file_redirect" then
+                if not redirect_is_safe(child, src) then
+                    -- A concrete file-write redirect (`cmd > /tmp/x`) is not
+                    -- bailed but emitted as a write effect; the policy layer
+                    -- clears it against the trust scope. The destination is
+                    -- resolved to a literal exactly as an `rm` operand is (so the
+                    -- two correlate for the intra-command create-then-delete
+                    -- check): a `$var` bound to a literal earlier in the sequence
+                    -- resolves through `known`, a quoted literal is quote-stripped.
+                    -- A target left dynamic (unbound var, glob) or unmodelled
+                    -- still bails.
+                    local dest = redirect_write_dest(child, src)
+                    if not dest then
+                        return false
+                    end
+                    local kname = known and resolved_var_name(dest, src)
+                    local target = kname and known and known[kname] or nil
+                    if target == nil and not token_is_dynamic(dest) then
+                        target = literal_token(dest, src)
+                    end
+                    if target == nil then
+                        return false
+                    end
+                    table.insert(ctx.effects, { kind = "write", path = target })
+                    table.insert(writes, {
+                        key = resolve_against_cwd(target),
+                        truncate = redirect_is_truncate(child),
+                    })
+                end
+            else
                 return false
             end
-            if not redirect_is_safe(child, src) then
-                -- A concrete file-write redirect (`cmd > /tmp/x`) is not bailed
-                -- but emitted as a write effect; the policy layer clears it
-                -- against the trust scope. The destination is resolved to a
-                -- literal exactly as an `rm` operand is (so the two correlate for
-                -- the intra-command create-then-delete check): a `$var` bound to a
-                -- literal earlier in the sequence resolves through `known`, a
-                -- quoted literal is quote-stripped. A target left dynamic (unbound
-                -- var, glob) or unmodelled still bails.
-                local dest = redirect_write_dest(child, src)
-                if not dest then
-                    return false
-                end
-                local kname = known and resolved_var_name(dest, src)
-                local target = kname and known and known[kname] or nil
-                if target == nil and not token_is_dynamic(dest) then
-                    target = literal_token(dest, src)
-                end
-                if target == nil then
-                    return false
-                end
-                table.insert(
-                    ctx.effects,
-                    { kind = "write", path = target }
-                )
-            end
         end
+    end
+
+    -- `cat > f.sh <<'EOF' … EOF` writes the verbatim heredoc body to f.sh (cat is
+    -- a stdin→stdout passthrough). Reconstructable only for that exact shape: a
+    -- bare `cat`, exactly one truncating write, exactly one pure-text heredoc.
+    -- `grep`, `>>`, or multiple redirects yield no content, so the target taints.
+    local content = nil
+    if
+        heredoc_count == 1
+        and #writes == 1
+        and writes[1].truncate
+        and is_bare_cat(body_node, src)
+    then
+        content = heredoc_text
+    end
+    for _, w in ipairs(writes) do
+        -- A second write to a path overwrites the first's reconstruction → taint.
+        -- `content` is non-nil only when there is exactly one write (the gate
+        -- above), so it applies to this single key when unset.
+        ctx.written[w.key] = ctx.written[w.key] == nil and (content or false)
+            or false
     end
     return true
 end
@@ -2411,6 +2468,7 @@ function M.evaluate(command, extra_allow)
         auto_approve = Config.permissions.auto_approve,
         depth = 0,
         effects = effects,
+        written = {},
         tmp_cleanup = Config.permissions.tmp_cleanup,
     })
     return ok, effects
