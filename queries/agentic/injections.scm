@@ -13,8 +13,15 @@
 ; With no injection the diff folds as one block; highlighting comes from
 ; block_col_hl extmarks (tool_call_renderer build_highlight_map), which already
 ; override the injection at priority 200 on any loadable diff.
+;
+; This rule fires ONLY on `-fold`-suffixed fences (#lua-match? below). Plain
+; ```python / ```bash fences are already injected by the inherited markdown rule
+; above, so matching them here too would inject the same language twice. The
+; suffixed languages ("markdown-fold") aren't real parsers, so the inherited
+; rule no-ops on them and this rule is what actually resolves them.
 (fenced_code_block
   (info_string (language) @injection.language)
   (code_fence_content) @injection.content
+  (#lua-match? @injection.language "%-fold$")
   (#not-lua-match? @injection.language "difffold$")
   (#gsub! @injection.language "%-fold$" ""))
