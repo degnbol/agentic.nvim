@@ -628,6 +628,35 @@ local function resolved_var_name(node, src)
     return nil
 end
 
+--- Join an all-static `concatenation` (`$base/x`) to its literal, or nil if any
+--- part is not statically knowable. A part qualifies as an inert literal
+--- (`pure_literal_token` succeeds) or a `$name`/`${name}`/`"$name"` bound to a
+--- safe literal in `known`; every joined part must pass `is_safe_literal`, so a
+--- glob (`*.js`), unbound var, or richer expansion part → nil and the caller
+--- keeps the concatenation dynamic. Command-substitution parts never reach here
+--- (bailed by `subtree_has_substitution` at the call site).
+--- @param node TSNode
+--- @param src string
+--- @param known table<string, string>
+--- @return string|nil
+local function resolved_concatenation(node, src, known)
+    local parts = {}
+    for c in node:iter_children() do
+        if c:named() then
+            local part = pure_literal_token(c, src)
+            if part == nil then
+                local kname = resolved_var_name(c, src)
+                part = kname and known[kname] or nil
+            end
+            if part == nil or not is_safe_literal(part) then
+                return nil
+            end
+            table.insert(parts, part)
+        end
+    end
+    return table.concat(parts)
+end
+
 --- Builtins whose normal action rebinds the shell namespace into the enclosing
 --- scope. `collect_bindings` returns clear-all for any of these (the bindings
 --- can't be enumerated from a token scan), with `printf` carved out — its
@@ -1042,19 +1071,35 @@ local function extract_args(node, src, ctx, known, inner_check)
                 table.insert(arg_nodes, child)
                 table.insert(args_dynamic, true)
             else
-                -- Any other substitution-bearing argument (concatenation
-                -- `a$(b)c`, process substitution `<(…)`, a `$var`-mixed quoted
-                -- string) is not handled by the dynamic-token machinery — bail.
+                -- A command-substitution-bearing argument (concatenation
+                -- `a$(b)c`, a `$var`-mixed quoted string) is not handled by the
+                -- dynamic-token machinery — bail.
                 if subtree_has_substitution(child) then
                     return nil
                 end
-                local tok = literal_token(child, src)
-                if tok == nil then
-                    return nil
+                -- #8: a `concatenation` whose every part is a safe literal or a
+                -- `known`-bound var (`base=/safe; head $base/x`) resolves to the
+                -- joined literal and feeds the gates as a static token. A glob,
+                -- unbound var, or richer expansion part leaves `joined` nil and
+                -- falls to `literal_token`, which emits the raw text as one
+                -- dynamic token (`head $d/x`) — same word-split surface as `$d`.
+                local joined = known
+                    and child:type() == "concatenation"
+                    and resolved_concatenation(child, src, known)
+                    or nil
+                if joined then
+                    table.insert(args, joined)
+                    table.insert(arg_nodes, child)
+                    table.insert(args_dynamic, false)
+                else
+                    local tok = literal_token(child, src)
+                    if tok == nil then
+                        return nil
+                    end
+                    table.insert(args, tok)
+                    table.insert(arg_nodes, child)
+                    table.insert(args_dynamic, token_is_dynamic(child))
                 end
-                table.insert(args, tok)
-                table.insert(arg_nodes, child)
-                table.insert(args_dynamic, token_is_dynamic(child))
             end
         end
     end

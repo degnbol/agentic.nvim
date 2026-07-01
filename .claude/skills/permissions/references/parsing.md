@@ -61,13 +61,27 @@ form `"$name"`/`"${name}"`) bound to a *splitting-proof* literal (`is_safe_liter
 straight-line sequence. `walk_sequence`/`tally_sequence` thread a per-sequence
 `known` environment left to right; `resolved_var_name` accepts only a lone
 `simple_variable_name` (recursing through a single-child `string` for the quoted
-form), so `$f[1]`, `${f:-x}`, concatenation `"$f/x"`, and `"$(cmd)"` are excluded.
-The resolved value feeds the same gates, so `f=/safe; find $f` and
-`find "$f"` approve while `f=--exec; find $f` denies.
+form), so `$f[1]`, `${f:-x}`, quoted concatenation `"$f/x"`, and `"$(cmd)"` are
+excluded. The resolved value feeds the same gates, so `f=/safe; find $f` and
+`find "$f"` approve while `f=--exec; find $f` denies. An **unquoted**
+concatenation (`$d/x`, a `concatenation` node) is resolved by a separate
+`resolved_concatenation` pass in `extract_args`, not `resolved_var_name`: it joins
+each part — an inert `pure_literal_token` part or a `known`-bound var — requiring
+every part to pass `is_safe_literal`, else the whole token stays dynamic.
+`base=/safe; head $base/x` resolves to `/safe/x` (approves); `base=-o; sort
+$base/x` resolves to `-o/x`, whose short-flag clustering hits sort's write gate
+(prompts). The `/x` suffix means the join can never *be* a bare flag, so
+`base=--exec; find $base/x` → `--exec/x` (unknown find predicate, not `-exec`) —
+approves. A quoted concatenation `"$f/x"` (a `string` node) is *not* statically
+resolved and stays dynamic.
 
 **Dynamic** — anything unresolvable: an unbound `$var`, an unquoted glob (`~` is
-exempt — it only yields a path, never a flag/subcommand), or substitution
-output. Treated as satisfying any `options` requirement and any positional at or
+exempt — it only yields a path, never a flag/subcommand), substitution output,
+or a substitution-free unquoted concatenation with a glob/unbound-var/expansion
+part (`head $d/SKILL.md` — the whole `$d/SKILL.md` splices as one dynamic token
+via `literal_token`'s raw-text fallback; `token_is_dynamic` recurses its children
+so a nested `-ex"$x"c` counts too). Treated as satisfying any `options`
+requirement and any positional at or
 after its reachable index, so a payload laundered through `$f` at a gated command
 prompts — guarding the bare (`find $f`), assignment (`f=$(…); find . $f`), and
 loop-body (`for f in *.txt; do find . $f`) vectors at the single use site.
@@ -163,9 +177,10 @@ handling.
    `walk_substitution_inner`, then splices a *static* `/dev/fd` placeholder (it
    expands to a `/dev/fd/N` path, never a flag or subcommand). Still bails
    (output is a control surface the dynamic-token machinery can't guard):
-   substitution as the command name (`$(echo rm) x`), unquoted concatenation
-   (`a$(b)c`) or a quoted string mixing `$var`/`${…}`/arithmetic with text
-   (`"$a$b"`, `"x$y$(ls)"`),
+   substitution as the command name (`$(echo rm) x`), an unquoted concatenation
+   *bearing a command substitution* (`a$(b)c` — a substitution-free one like
+   `$d/x` splices as a token instead, see "Token expansion") or a quoted string
+   mixing `$var`/`${…}`/arithmetic with text (`"$a$b"`, `"x$y$(ls)"`),
    process substitution outside argument position, case value/pattern, a quoted
    `"$(…)"` for-list item, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and

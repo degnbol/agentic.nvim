@@ -2754,6 +2754,70 @@ describe("PermissionRules", function()
             end)
         end)
 
+        describe("#8 concatenation token shape", function()
+            it("approves head -40 $d/SKILL.md (dynamic token, empty read_only gate)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("head -40 $d/SKILL.md")
+                )
+            end)
+
+            it("approves ls -la $d (bare dynamic unchanged — regression guard)", function()
+                assert.is_true(PermissionRules.should_auto_approve("ls -la $d"))
+            end)
+
+            it("prompts on find . $d/x (dynamic wildcard fires find's -exec deny)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("find . $d/x")
+                )
+            end)
+
+            it("approves base=/safe; head $base/x (static resolution)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("base=/safe; head $base/x")
+                )
+            end)
+
+            -- A dangerous literal still hits the gate after static resolution.
+            -- `-o` glues its value (`-o/x`), so short-flag clustering extracts the
+            -- `o` candidate and sort's write gate fires. This is the sound
+            -- symmetry with `f=--exec; find $f`.
+            it("prompts on base=-o; sort $base/x (resolved literal hits sort's write gate)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("base=-o; sort $base/x")
+                )
+            end)
+
+            -- A concatenation suffix (`/x`) can never reconstruct a bare gate flag:
+            -- the resolved `--exec/x` is a single long token that does not
+            -- prefix-match find's `exec` option (long options need `=` to split a
+            -- value), and `find --exec/x` is an unknown predicate at runtime, not
+            -- the `-exec` action. So it approves — safe, unlike the bare
+            -- `f=--exec; find $f` where `$f` resolves to exactly `-exec`.
+            it("approves base=--exec; find $base/x (suffix neutralises — cannot be a bare flag)", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("base=--exec; find $base/x")
+                )
+            end)
+
+            it("approves head $d/*.js (glob part keeps it dynamic, empty gate)", function()
+                assert.is_true(PermissionRules.should_auto_approve("head $d/*.js"))
+            end)
+
+            it("prompts on rm $d/*.js (glob part → dynamic wildcards rm's gate)", function()
+                assert.is_false(PermissionRules.should_auto_approve("rm $d/*.js"))
+            end)
+
+            it("prompts on cat a$(b)c (command-sub concatenation stays bailed)", function()
+                assert.is_false(PermissionRules.should_auto_approve("cat a$(b)c"))
+            end)
+
+            it("prompts on echo x > $d/f (dynamic redirect target still bails)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve("echo x > $d/f")
+                )
+            end)
+        end)
+
         -- Reject pass: a concrete deny gate rejects outright (no prompt). ask
         -- and unknown commands fall through to should_auto_reject == false (the
         -- approve walk then decides prompt vs approve).

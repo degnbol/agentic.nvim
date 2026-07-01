@@ -293,7 +293,17 @@ local function literal_token(node, src)
         return table.concat(parts)
     end
     if t == "concatenation" then
-        return pure_literal_token(node, src)
+        local pure = pure_literal_token(node, src)
+        if pure ~= nil then
+            return pure
+        end
+        -- A concatenation gluing an expansion to literals (`$d/x`) has no pure
+        -- form; emit raw text so it splices as one token (flagged dynamic by
+        -- token_is_dynamic). A command-substitution part is rejected upstream.
+        if subtree_has_substitution(node) then
+            return nil
+        end
+        return vim.treesitter.get_node_text(node, src)
     end
     if DYNAMIC_NAME_TYPES[t] then
         -- A bare expansion as an arg (`ls $f`) — emit raw source text so the
@@ -317,9 +327,11 @@ end
 --- all-`string_content` string, a literal `concatenation`, `brace_expression`)
 --- are static. A `~`-prefixed path is a plain `word` in this grammar and
 --- expands only to a path (never a flag or subcommand), so it stays static.
---- Only called on tokens `literal_token` already accepted, so substitution-
---- bearing nodes (rejected at the command level) never reach here, and a
---- `concatenation` that survived is necessarily all-literal.
+--- A `concatenation` bearing an expansion/glob part (`$d/x`, `$d/*.js`) is
+--- dynamic: `literal_token` now emits its raw text, so the same post-expansion
+--- word-split surface as a bare `$d` must wildcard the deny/ask gates.
+--- Command-substitution-bearing nodes (rejected at the command level) never
+--- reach here.
 --- @param node TSNode
 --- @return boolean
 local function token_is_dynamic(node)
@@ -336,6 +348,19 @@ local function token_is_dynamic(node)
     if t == "string" then
         for c in node:iter_children() do
             if c:named() and c:type() ~= "string_content" then
+                return true
+            end
+        end
+    end
+    if t == "concatenation" then
+        -- Recurse: an expansion may be a direct child (`$d/x`) or nested inside a
+        -- `string`/`concatenation` child (`-ex"$x"c`), which the branches above
+        -- already detect. Any dynamic part makes the whole token dynamic. Do NOT
+        -- flatten this into a direct-child type check: `-ex"$x"c` hides its `$x`
+        -- inside a `string` child, so a flat check reports static and the raw
+        -- token approves past a deny gate — unsound (regression-tested).
+        for c in node:iter_children() do
+            if c:named() and token_is_dynamic(c) then
                 return true
             end
         end

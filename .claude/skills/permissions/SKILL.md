@@ -204,7 +204,13 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   `f=$(…); find . $f` escalate. The exception: a `$var` resolving to a literal
   bound earlier in the same straight-line sequence is matched as that literal —
   bare or single-word quoted (`f=/safe; find $f` and `find "$f"` approve,
-  `f=--exec; find $f` denies; concatenation `"$f/x"` stays dynamic and prompts).
+  `f=--exec; find $f` denies). An **unquoted** concatenation `$d/x` also splices
+  as one token: static when every part is a safe literal or bound var
+  (`base=/safe; head $base/x` approves; `base=-o; sort $base/x` resolves to
+  `-o/x`, which hits sort's write gate), else dynamic (`head $d/SKILL.md`
+  approves at a read-only command; `find . $d/x` prompts). A **quoted**
+  concatenation `"$f/x"` is not statically resolved — it stays a dynamic token
+  (approves at a read-only command, prompts at a gated one).
   A quoted command substitution `"$(cmd)"` is walked and spliced as a dynamic
   token like the bare `$(cmd)` (#4b) — `cat "$(ls)"` approves, `find "$(echo
   -exec rm)"` still prompts (mechanism in

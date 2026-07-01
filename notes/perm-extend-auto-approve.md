@@ -31,10 +31,9 @@ and bails). **#6** (done) builds on that to also approve *calls* to such
 functions.
 
 Newest additions: **#8** (concatenation token shape — `$d/x` splices as one
-token, static when its parts are known literals else dynamic) → **#9** (a
-for-loop var over an all-literal list resolves per value through the gates;
-depends on #8). **#8 first** — it unblocks the read-only majority; #9 recovers
-gated commands (`find -exec`) inside literal loops.
+token, static when its parts are known literals else dynamic; **done**) → **#9**
+(a for-loop var over an all-literal list resolves per value through the gates;
+depends on #8). #9 recovers gated commands (`find -exec`) inside literal loops.
 
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
 mirrored in `command_known_safe`; tests under "inline shell -c body").
@@ -56,7 +55,7 @@ constant-literal propagation" + a tally case). The two post-review corrections (
 corrections" under #3) are also done. The capable grade — a control-flow-sibling
 collect-targets scan instead of clear-all — is now done (`collect_bindings`
 field-aware walk; see the "capable grade" sub-bullet under #3). Remaining:
-#1, #2, #8, #9.
+#2, #9.
 
 ---
 
@@ -607,9 +606,9 @@ value shape. Defer until a real case appears; the change above needs none of it
 
 ---
 
-## #8 — resolve concatenation token shape (`$d/x`) — do first
+## #8 — resolve concatenation token shape (`$d/x`) — done
 
-**Today.** `head -40 $d/SKILL.md` prompts while `ls -la $d` approves — the only
+**Was.** `head -40 $d/SKILL.md` prompted while `ls -la $d` approved — the only
 difference is the token shape. `$d/SKILL.md` parses as a `concatenation`
 (`variable_ref($d)` + `word(/SKILL.md)`). It carries no *command* substitution,
 so it passes the `subtree_has_substitution` bail in `extract_args`
@@ -633,13 +632,21 @@ statically when it can and falling to dynamic otherwise:
 - **Bailed** — a part is a command/process substitution (`a$(b)c`): unchanged,
   caught by `subtree_has_substitution` in `extract_args` before these helpers.
 
-Mechanically: add a `concatenation` branch to `token_is_dynamic` (true when a
-named child is `variable_ref`/`simple_expansion`/`expansion`/
-`arithmetic_expansion`/`glob_pattern`), and to `literal_token` (return raw node
-text instead of nil when the concatenation is non-pure). The static-resolution
-branch reads `known`, so it lives beside the `resolved_var_name` lookup in
-`extract_args`' `child:named()` arm (or extend `resolved_var_name` to return a
-joined literal for an all-resolvable concatenation).
+**Shipped.** `literal_token`'s `concatenation` branch tries `pure_literal_token`
+first (an all-literal concatenation stays pure/static as before) and, when that
+returns nil for a substitution-free concatenation, emits the raw node text so it
+splices as one token. `token_is_dynamic` gained a `concatenation` branch that
+**recurses** over named children — an expansion may be a direct child (`$d/x`)
+or nested inside a `string`/`concatenation` child (`-ex"$x"c`, which the existing
+`string` branch detects). The recursion (not a flat direct-child type list) is
+load-bearing: a flat check wrongly classified `-ex"$x"c` as static and let it
+approve past a deny gate. Static resolution is a new local
+`resolved_concatenation(node, src, known)` in `permission_rules.lua`, called from
+the `else` arm of `extract_args`: it joins each part (an inert `pure_literal_token`
+part or a `known`-bound var via `resolved_var_name`), requiring every joined part
+to pass `is_safe_literal`, else returns nil and the token falls through to the
+dynamic splice. Not folded into `resolved_var_name` (which returns a *name* to
+look up, not a joined value).
 
 **Why it's sound (over-prompt only; invariant held).**
 - A concatenation bearing an unbound var/glob has the same post-expansion
@@ -651,31 +658,51 @@ joined literal for an all-resolvable concatenation).
 - The static branch reads only `known` literals (populated solely from
   `is_safe_literal` pure-literal assignments) joined with inert literal words,
   so the result is a splitting-proof single word fed through the same gates.
-  `base=--exec; find $base/x` still denies.
+  A dangerous *cluster-glued* value is still caught: `base=-o; sort $base/x`
+  resolves to `-o/x`, whose short-flag clustering extracts the `o` candidate, so
+  sort's write gate fires and it prompts.
 
-**Redirect site — no regression.** `walk_redirected` (`:1420`) calls
-`literal_token(dest)` only when `not token_is_dynamic(dest)`. Making
-`token_is_dynamic` true for a dynamic concatenation means a dynamic redirect
-target (`cmd > $d/f`) skips `literal_token` → `target = nil` → bails, exactly as
-today (a dynamic write target must bail). Confirm in tests.
+**One prediction corrected.** The plan expected `base=--exec; find $base/x` to
+prompt "by symmetry with `f=--exec; find $f`". It actually **approves**, and that
+is sound: the `/x` suffix means the token can never *be* a bare gate flag — it
+resolves to `--exec/x`, a single long token that does not prefix-match find's
+`exec` option (long options need `=` to split a value), and `find --exec/x` is an
+unknown predicate at runtime, not the `-exec` action. Only a bare `$f` (no
+suffix) can resolve to exactly `-exec`; a concatenation suffix structurally
+neutralises that. The genuine gate-through-resolution witness is the `sort -o`
+case above, where short-flag clustering *does* recover the flag from a glued
+value.
 
-**Touches.** `token_is_dynamic` + `literal_token` in `shell_parse.lua`; the
-`else` arm of `extract_args` in `permission_rules.lua` (`~1044`) picks up the
-dynamic token automatically. Tally mirror: `command_known_safe`/`tally_sequence`
-reuse both helpers, so token shape is automatic; the `known`-based static branch
-needs the tally arg extractor to thread `known` the same way — confirm parity.
+**Redirect site — no regression.** `walk_redirected` calls `literal_token(dest)`
+only when `not token_is_dynamic(dest)`. `token_is_dynamic` now true for a dynamic
+concatenation means a dynamic redirect target (`echo x > $d/f`) skips
+`literal_token` → `target = nil` → bails, as before. A *static* concatenation
+redirect target (`base=/tmp; echo x > $base/f`) still bails too — the redirect
+site does not consume `resolved_concatenation`; #8's static resolution is
+argument-position only.
 
-**Tests** (`permission_rules.test.lua`):
+**Touches.** `token_is_dynamic` + `literal_token` in `shell_parse.lua`;
+`resolved_concatenation` + the `else` arm of `extract_args` in
+`permission_rules.lua`. The tally mirror is automatic — `command_known_safe`
+shares `extract_args` (already threads `known`), so token shape and static
+resolution match the decision walk with no separate change.
+
+**Tests** (`permission_rules.test.lua`, "#8 concatenation token shape"):
 - `head -40 $d/SKILL.md` → **approve** (empty `read_only` gate, dynamic token).
 - `ls -la $d` → **approve** (regression guard — bare dynamic, unchanged).
-- `find . $d/x` → **prompt** (dynamic wildcard fires find's `-exec`/`-delete`
-  deny/ask — the case #9 recovers).
+- `find . $d/x` → **prompt** (dynamic wildcard fires find's `-exec` deny —
+  the case #9 recovers).
 - `base=/safe; head $base/x` → **approve** (static resolution).
-- `base=--exec; find $base/x` → **prompt/deny** (static resolution through the
-  gate; symmetry with `f=--exec; find $f`).
-- `head $d/*.js` → **approve**; `rm $d/*.js` → **reject** (glob part → dynamic).
+- `base=-o; sort $base/x` → **prompt** (resolved `-o/x` hits sort's write gate —
+  the sound gate-through-resolution witness).
+- `base=--exec; find $base/x` → **approve** (suffix neutralises — see correction
+  above; can never be a bare flag).
+- `head $d/*.js` → **approve**; `rm $d/*.js` → **prompt** (glob part → dynamic;
+  the reject pass is concrete-only, and rm's `{}` ask always prompts anyway — so
+  "prompt", not the plan's loose "reject").
 - `cat a$(b)c` → **prompt** (command-sub concatenation stays bailed).
-- `cmd > $d/f` → **prompt** (dynamic redirect target still bails).
+- `echo x > $d/f` → **prompt** (dynamic redirect target still bails; a real
+  allowlisted command, so it exercises the redirect path rather than a name bail).
 
 ---
 
