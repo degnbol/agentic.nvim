@@ -108,4 +108,34 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             end
         )
     end)
+
+    describe("subagent edit diff on the initial tool_call", function()
+        -- Subagent (Task) tool calls carry kind + rawInput on the INITIAL
+        -- tool_call (nothing streams an empty one first), so the diff must be
+        -- built there — not only on tool_call_update as for top-level edits.
+        it("builds the diff from rawInput on the tool_call path", function()
+            local msg = make_adapter():__build_tool_call_message({
+                toolCallId = "tc-edit",
+                kind = "edit",
+                status = "pending",
+                title = "Edit /tmp/f.lua",
+                rawInput = {
+                    file_path = "/tmp/f.lua",
+                    old_string = "old line",
+                    new_string = "new line",
+                },
+                content = {
+                    {
+                        type = "diff",
+                        path = "/tmp/f.lua",
+                        oldText = "old line",
+                        newText = "new line",
+                    },
+                },
+            })
+
+            assert.same({ "new line" }, msg.diff.new)
+            assert.same({ "old line" }, msg.diff.old)
+        end)
+    end)
 end)

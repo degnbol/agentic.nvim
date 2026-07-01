@@ -106,6 +106,13 @@ whether treesitter has disabled it (default) or a user re-enables it with
 `vim.bo.syntax = 'ON'`. No deferred freezing, no cleanup passes. Blocks remain
 tracked after terminal status.
 
+### rawInput on tool_call vs update (claude-agent-acp)
+
+Subagent (Task) calls carry `rawInput` on the initial `tool_call`; top-level
+calls carry it on the refining `tool_call_update`. The claude adapter enriches
+both build paths (`__apply_raw_input`) — else subagent edits render without a
+diff. Why: the `acp` skill's `claude-agent.md` § "Tool call emission".
+
 ## Key design rules for adapters
 
 - **Updates are partial:** Only send what changed. MessageWriter merges onto the
@@ -323,6 +330,12 @@ but a case-sensitive lookup table (e.g. `READ_ONLY_KINDS["Read"]`) silently
 misses. Any kind-based dispatch must lowercase before lookup, or compose a
 table that includes both casings. The chat heading is not a reliable signal
 that the right `kind` arrived — `display_kind` hides the difference.
+
+### Subagent tool calls render inline (parentToolUseId ignored)
+
+Forwarded subagent (Task) notifications carry `_meta.claudeCode.parentToolUseId`,
+but the plugin does not read it, so subagent tool calls render inline in the
+top-level feed rather than nested under their Task block.
 
 ### Permission optionId is opaque
 

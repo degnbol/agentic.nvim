@@ -78,15 +78,26 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
     ACPClient.__handle_tool_call(self, session_id, update)
 end
 
---- Lift the Bash description out of the initial execute tool_call body. The
---- base builds the message from `content`, which for Bash is the description
---- (tools.js). See `lift_execute_description`.
+--- Build the initial tool_call message, layering the same rawInput enrichment
+--- as `__build_tool_call_update` on top of the base message.
+---
+--- Subagent (Task) tool calls carry `kind` + `rawInput` (and the edit diff) on
+--- the INITIAL tool_call — nothing streams an empty one first, unlike top-level
+--- calls whose diff arrives on a later tool_call_update. Without applying the
+--- enrichment here, subagent Edit/Write calls render with no diff.
 --- @protected
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 --- @return agentic.ui.MessageWriter.ToolCallBlock message
 function ClaudeAgentACPAdapter:__build_tool_call_message(update)
     local message = ACPClient.__build_tool_call_message(self, update)
-    if message.kind == "execute" then
+    local had_raw_input = update.rawInput
+        and not vim.tbl_isempty(update.rawInput)
+    self:__apply_raw_input(message, update)
+    -- Top-level execute tool_calls arrive with empty rawInput (input streams
+    -- separately), so __apply_raw_input's execute branch is skipped — lift the
+    -- description echo out of the body here. Subagent execute carries rawInput
+    -- and is already lifted inside __apply_raw_input.
+    if message.kind == "execute" and not had_raw_input then
         lift_execute_description(message, update.rawInput)
     end
     return message
@@ -108,9 +119,23 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         message.failure_reason = self:extract_failure_reason(update.rawOutput)
     end
 
+    self:__apply_raw_input(message, update)
+
+    return message
+end
+
+--- Enrich a tool-call message from claude-agent-acp's rawInput fields (file
+--- path, edit diff, read range, fetch/subagent/skill/slash-command remaps,
+--- search pattern, execute description). Shared by the initial `tool_call` and
+--- follow-up `tool_call_update` paths — see `__build_tool_call_message` for
+--- why the tool_call path needs it too.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
     local rawInput = update.rawInput
     if not rawInput or vim.tbl_isempty(rawInput) then
-        return message
+        return
     end
 
     local kind = update.kind
@@ -205,8 +230,6 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
             lift_execute_description(message, rawInput)
         end
     end
-
-    return message
 end
 
 --- Claude-agent-acp sends tool call updates without status, so we need to overload to handle it

@@ -354,6 +354,33 @@ prose. The bridge does not reorder blocks (`promptToClaude`,
 `acp-agent.js:1422`); its own `LOCAL_ONLY_COMMANDS` check
 (`acp-agent.js:294`) covers only `/context`/`/heapdump`/`/extra-usage`.
 
+## Tool call emission — which notification carries rawInput
+
+The bridge surfaces each tool call on whichever notification *first* mentions
+its id, tracked in the session's `emittedToolCalls` set (`toAcpNotifications`,
+`acp-agent.js`). `kind`, `rawInput`, and (for Edit/Write) the optimistic diff
+ride that first message:
+
+- **Top-level, streamed:** `content_block_start` emits an empty `tool_call`
+  (`status:"pending"`, no input yet), marking the id. The consolidated
+  assistant message then arrives with `alreadyEmitted` true → the full
+  `rawInput` is sent as a refining `tool_call_update` (the `refine` branch of
+  `toolCallNotification`).
+- **Subagent (Task):** subagent messages are never streamed live — streaming and
+  usage snapshots are gated on `parent_tool_use_id === null` and the SDK emits no
+  partial `stream_event`s for subagents. The consolidated message is the first
+  surface → the full `rawInput` (with diff) rides the initial `tool_call`.
+
+A frontend that reads `rawInput` (e.g. to build an edit diff) must handle it on
+the `tool_call` path as well as `tool_call_update`, or subagent edits arrive
+with no diff.
+
+The per-id PostToolUse hook emits a further `tool_call_update` carrying the real
+`structuredPatch` for Edit/Write, but with no `kind` and no top-level `rawInput`
+(only `_meta.claudeCode.{toolName,toolResponse}` and a `content:[{type:"diff"}]`
+block) — see § "Edit tool". Frontends keying on `kind`/`rawInput` drop it, so
+the rendered diff is the model's optimistic edit, not the disk-verified patch.
+
 ## Edit tool (`str_replace_based_edit_tool`)
 
 The formal Anthropic API name is `str_replace_based_edit_tool`
