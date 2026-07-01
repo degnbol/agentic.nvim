@@ -204,8 +204,8 @@ local ConfigDefault = {
             },
             change_mode = {
                 {
-                    "<S-Tab>",
-                    mode = { "i", "n", "v" },
+                    "<localLeader>m",
+                    mode = { "n", "v" },
                 },
             },
             continue = "<localLeader>c",
@@ -215,7 +215,7 @@ local ConfigDefault = {
             toggle_auto_scroll = "<localLeader>a",
             goto_chat_bottom = "<localLeader>G",
             switch_provider = "<localLeader>s",
-            switch_model = "<localLeader>m",
+            switch_model = "<localLeader>M",
         },
 
         --- Keys bindings for the prompt buffer

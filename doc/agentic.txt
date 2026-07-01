@@ -400,12 +400,12 @@ configurable via `keymaps` in |agentic-configuration|.
 Applied to all buffers in the widget (chat, prompt, panels).
 
     Key              Mode    Description ~
-    `<S-Tab>`          n/v/i   Switch agent mode
+    `<localLeader>m`   n/v     Switch agent mode
     `<C-c>`            n/i     Stop generation
     `<localLeader>c`   n       Send "Continue"
     `<localLeader>R`   n       Restore session
     `<localLeader>s`   n       Switch provider
-    `<localLeader>m`   n       Switch model
+    `<localLeader>M`   n       Switch model
     `<localLeader>q`   n       Close widget
     `<localLeader>!`   n       Restart session
     `<localLeader>a`   n       Toggle auto-scroll
