@@ -30,6 +30,12 @@ walked — defining never runs it; an anonymous `() { … }` executes immediatel
 and bails). **#6** (done) builds on that to also approve *calls* to such
 functions.
 
+Newest additions: **#8** (concatenation token shape — `$d/x` splices as one
+token, static when its parts are known literals else dynamic) → **#9** (a
+for-loop var over an all-literal list resolves per value through the gates;
+depends on #8). **#8 first** — it unblocks the read-only majority; #9 recovers
+gated commands (`find -exec`) inside literal loops.
+
 **#5 is done** (`shell_c_body` / `parse_zsh` + the `-c` branch in `walk_command`,
 mirrored in `command_known_safe`; tests under "inline shell -c body").
 
@@ -50,7 +56,7 @@ constant-literal propagation" + a tally case). The two post-review corrections (
 corrections" under #3) are also done. The capable grade — a control-flow-sibling
 collect-targets scan instead of clear-all — is now done (`collect_bindings`
 field-aware walk; see the "capable grade" sub-bullet under #3). Remaining:
-#1, #2.
+#1, #2, #8, #9.
 
 ---
 
@@ -601,6 +607,139 @@ value shape. Defer until a real case appears; the change above needs none of it
 
 ---
 
+## #8 — resolve concatenation token shape (`$d/x`) — do first
+
+**Today.** `head -40 $d/SKILL.md` prompts while `ls -la $d` approves — the only
+difference is the token shape. `$d/SKILL.md` parses as a `concatenation`
+(`variable_ref($d)` + `word(/SKILL.md)`). It carries no *command* substitution,
+so it passes the `subtree_has_substitution` bail in `extract_args`
+(`permission_rules.lua:~1048`), but `literal_token` → `pure_literal_token`
+returns nil (a `$var` part isn't pure), so `extract_args` bails to a prompt.
+`token_is_dynamic` also has no `concatenation` branch (returns false). A
+concatenation bearing an expansion is therefore neither resolved nor recognised
+as a token — it hard-bails, whereas the bare `$d` in the same position splices
+as a dynamic token and approves.
+
+**Change.** Handle a substitution-free `concatenation` as one token, resolving
+statically when it can and falling to dynamic otherwise:
+
+- **Static** — every part resolves to a safe literal: an inert `word`/`number`/
+  `raw_string`, or a `$name`/`${name}` bound in `known` via `is_safe_literal`.
+  Splice the joined literal as a **static** token (`base=/safe; head $base/x` →
+  `head /safe/x`). This is the substrate #9 consumes.
+- **Dynamic** — any part is an unbound var, glob, or `${…}` richer form: splice
+  the whole concatenation's raw text as **one dynamic token** (`args_dynamic[i]
+  = true`), exactly like a bare `$d`.
+- **Bailed** — a part is a command/process substitution (`a$(b)c`): unchanged,
+  caught by `subtree_has_substitution` in `extract_args` before these helpers.
+
+Mechanically: add a `concatenation` branch to `token_is_dynamic` (true when a
+named child is `variable_ref`/`simple_expansion`/`expansion`/
+`arithmetic_expansion`/`glob_pattern`), and to `literal_token` (return raw node
+text instead of nil when the concatenation is non-pure). The static-resolution
+branch reads `known`, so it lives beside the `resolved_var_name` lookup in
+`extract_args`' `child:named()` arm (or extend `resolved_var_name` to return a
+joined literal for an all-resolvable concatenation).
+
+**Why it's sound (over-prompt only; invariant held).**
+- A concatenation bearing an unbound var/glob has the same post-expansion
+  word-split surface as a bare `$d` — unquoted `$d/x` with `d="-e y"` splits to
+  `-e` and `y/x`, so it *can* introduce a leading flag, which is precisely what
+  the dynamic-token wildcard already models (satisfies any deny/ask option or
+  positional at or after its index; never widens allow). Dynamic splicing is
+  identical safety to the bare form, strictly fewer prompts.
+- The static branch reads only `known` literals (populated solely from
+  `is_safe_literal` pure-literal assignments) joined with inert literal words,
+  so the result is a splitting-proof single word fed through the same gates.
+  `base=--exec; find $base/x` still denies.
+
+**Redirect site — no regression.** `walk_redirected` (`:1420`) calls
+`literal_token(dest)` only when `not token_is_dynamic(dest)`. Making
+`token_is_dynamic` true for a dynamic concatenation means a dynamic redirect
+target (`cmd > $d/f`) skips `literal_token` → `target = nil` → bails, exactly as
+today (a dynamic write target must bail). Confirm in tests.
+
+**Touches.** `token_is_dynamic` + `literal_token` in `shell_parse.lua`; the
+`else` arm of `extract_args` in `permission_rules.lua` (`~1044`) picks up the
+dynamic token automatically. Tally mirror: `command_known_safe`/`tally_sequence`
+reuse both helpers, so token shape is automatic; the `known`-based static branch
+needs the tally arg extractor to thread `known` the same way — confirm parity.
+
+**Tests** (`permission_rules.test.lua`):
+- `head -40 $d/SKILL.md` → **approve** (empty `read_only` gate, dynamic token).
+- `ls -la $d` → **approve** (regression guard — bare dynamic, unchanged).
+- `find . $d/x` → **prompt** (dynamic wildcard fires find's `-exec`/`-delete`
+  deny/ask — the case #9 recovers).
+- `base=/safe; head $base/x` → **approve** (static resolution).
+- `base=--exec; find $base/x` → **prompt/deny** (static resolution through the
+  gate; symmetry with `f=--exec; find $f`).
+- `head $d/*.js` → **approve**; `rm $d/*.js` → **reject** (glob part → dynamic).
+- `cat a$(b)c` → **prompt** (command-sub concatenation stays bailed).
+- `cmd > $d/f` → **prompt** (dynamic redirect target still bails).
+
+---
+
+## #9 — resolve a for-loop var over a literal list
+
+**Today.** `walk_for` recurses into the body via the generic `walk(body)`, which
+routes to `walk_sequence` with a fresh `known` — the loop var is never bound, so
+a body reference is dynamic even when the list is entirely literal (`for d in
+acp permissions provider-system; do find . $d/SKILL.md; done`). #8 lets that
+body concatenation splice as a dynamic token, so a read-only command approves;
+but a gated command (`find` with `-exec`/`-delete`) over-prompts, because the
+dynamic wildcard cannot see that none of the three values is a flag. The value
+is not truly dynamic — it provably ranges over a finite set of literals.
+
+**Change.** When every for-list item is a safe-literal `word` (no substitution,
+glob, or expansion; passes `is_safe_literal`) and the value count is within a
+cap, walk the body **once per value** with `known` seeded `{ [loopvar] = value
+}`; approve iff every pass approves. Otherwise fall back to the current single
+dynamic walk (#8's floor). This reuses the entire single-value machinery — the
+per-value walk is an ordinary sequence walk with one pre-bound literal.
+
+- **Plumbing.** Give `walk_sequence` an optional seed-`known` parameter and call
+  it directly from `walk_for` for the `do_group` body (bypassing the generic
+  dispatcher, as `walk_redirected` is already special-cased inside
+  `walk_sequence`). `update_known` still runs per body statement, so a body that
+  rebinds the loop var (`d=$(…)`) drops the seed exactly as its rebinding rules
+  dictate.
+- **Product cap.** Nested literal loops multiply (`for a … do for b …`) — cap
+  the total body-walk count and fall back to the dynamic walk on overflow (the
+  safe direction).
+
+**Why it's sound (over-prompt only; invariant held).**
+- Each iteration binds the loop var to exactly one list element — a for-list
+  literal word is one iteration value with no re-splitting, and `is_safe_literal`
+  rules out IFS/glob, so the seeded `known[var]` is a genuine splitting-proof
+  single word, identical to a #3 pure-literal assignment.
+- Every value is fed through the *same* gates via an ordinary body walk.
+  `is_safe_literal` admits flags (`-delete` matches its charset), so `for d in
+  acp -delete; do find . $d` binds `d=-delete` on one pass and rejects. Approval
+  requires *all* values to pass, so a single dangerous value blocks the loop.
+- A non-literal list item (substitution/glob/expansion) or cap overflow falls
+  back to the dynamic walk — never widens beyond #8.
+
+**Depends on #8.** The body concatenation must resolve for the per-value binding
+to matter; #8's static branch consumes the seeded `known`.
+
+**Touches.** `walk_for` + `walk_sequence` (seed param) in `permission_rules.lua`;
+the tally mirror `tally_for`/`tally_sequence` (`:2098`, `:2192`) must mirror the
+per-value walk or highlights diverge from decisions.
+
+**Tests** (`permission_rules.test.lua`):
+- `for d in acp permissions provider-system; do find . $d/SKILL.md; done` →
+  **approve** (all values resolve to positional paths).
+- `for d in acp -delete; do find . $d; done` → **reject** (one value trips
+  find's deny).
+- `for d in acp permissions; do head $d/SKILL.md; done` → **approve** (guards the
+  layering — also passes via #8 alone).
+- `for f in $(ls); do find . $f; done` → **prompt** (non-literal list → dynamic
+  fallback; #4's behaviour, regression guard).
+- nested `for a in x y; do for b in p q; do …` beyond cap → **fallback** (prompt
+  when the body is gated).
+
+---
+
 ## #2 — walk into script *files*
 
 Moved to its own note: [perm-walk-into-scripts.md](perm-walk-into-scripts.md).
@@ -611,7 +750,7 @@ that a `Bash(...)` allow can't express, and supersedes the parked framing here.
 
 ## Cleanup — strip plan-number tags from durable artifacts (do last)
 
-The `#3`/`#4`/`#4b`/`#5`/`#6`/`#7` tags in this plan leaked into durable code
+The `#3`/`#4`/`#4b`/`#5`/`#6`/`#7`/`#8`/`#9` tags in this plan leaked into durable code
 and skill prose, where they index *this ephemeral note* and go stale the moment
 it is deleted. Once the features above are settled, strip every tag from:
 
