@@ -179,6 +179,100 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_on_session_update: session_info_update", function()
+        --- @param title string
+        --- @return agentic.acp.SessionInfoUpdateMessage
+        local function info_update(title)
+            return { sessionUpdate = "session_info_update", title = title }
+        end
+
+        --- @param current_title string Title already on the session
+        --- @param user_renamed boolean Whether the user issued /rename
+        local function make_session(current_title, user_renamed)
+            local set_title_spy = spy.new(function() end)
+            local save_spy = spy.new(function() end)
+            local session = {
+                _title_user_set = user_renamed,
+                chat_history = {
+                    title = current_title,
+                    save = save_spy,
+                },
+                widget = {
+                    set_chat_title = set_title_spy,
+                },
+                _sync_history_context = function() end,
+                _on_session_update = SessionManager._on_session_update,
+            } --[[@as agentic.SessionManager]]
+            return session, set_title_spy, save_spy
+        end
+
+        it(
+            "adopts the auto-summary, overriding a first-prompt title",
+            function()
+                local session, set_title_spy, save_spy =
+                    make_session("do the thing", false)
+
+                session:_on_session_update(info_update("Fix the parser bug"))
+
+                assert.equal("Fix the parser bug", session.chat_history.title)
+                assert.spy(set_title_spy).was.called(1)
+                assert.equal("Fix the parser bug", set_title_spy.calls[1][2])
+                assert.spy(save_spy).was.called(1)
+            end
+        )
+
+        it("keeps a /rename'd title (never clobbers a user title)", function()
+            local session, set_title_spy, save_spy =
+                make_session("My renamed session", true)
+
+            session:_on_session_update(info_update("Auto generated summary"))
+
+            assert.equal("My renamed session", session.chat_history.title)
+            assert.spy(set_title_spy).was.called(0)
+            assert.spy(save_spy).was.called(0)
+        end)
+
+        it("ignores an empty pushed title", function()
+            local session, set_title_spy, save_spy = make_session("", false)
+
+            session:_on_session_update(info_update(""))
+
+            assert.equal("", session.chat_history.title)
+            assert.spy(set_title_spy).was.called(0)
+            assert.spy(save_spy).was.called(0)
+        end)
+
+        it("clears _title_user_set on session reset (/new, /clear)", function()
+            local Recovery = require("agentic.session_recovery")
+            local SlashCommands = require("agentic.acp.slash_commands")
+            local stubs = {
+                spy.stub(Recovery, "remove_reauth_keymap"),
+                spy.stub(Recovery, "cancel_health_check_timer"),
+                spy.stub(Recovery, "cancel_retry_timer"),
+                spy.stub(SlashCommands, "setCommands"),
+            }
+
+            local session = {
+                session_id = nil, -- skip the cancel/clear-content block
+                _title_user_set = true, -- as if the user had /rename'd
+                permission_manager = { clear = function() end },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    set_chat_title = function() end,
+                },
+                _cancel_session = SessionManager._cancel_session,
+            } --[[@as agentic.SessionManager]]
+
+            session:_cancel_session()
+
+            assert.is_false(session._title_user_set)
+
+            for _, s in ipairs(stubs) do
+                s:revert()
+            end
+        end)
+    end)
+
     describe("_do_load_acp_session: _restoring flag", function()
         --- @type TestStub
         local schedule_stub

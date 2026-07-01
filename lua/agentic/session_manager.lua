@@ -76,6 +76,7 @@ end
 --- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
+--- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
@@ -426,6 +427,19 @@ function SessionManager:_on_session_update(update)
         }
 
         self:_update_chat_header()
+    elseif update.sessionUpdate == "session_info_update" then
+        -- Provider pushes the SDK's background-generated title at turn-end.
+        -- Adopt it unless the user has chosen a title via /rename.
+        if
+            update.title
+            and update.title ~= ""
+            and not self._title_user_set
+        then
+            self.chat_history.title = update.title
+            self.widget:set_chat_title(update.title)
+            self:_sync_history_context()
+            self.chat_history:save()
+        end
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
         Logger.notify(
@@ -501,6 +515,7 @@ function SessionManager:_rename_session(new_title)
     end
 
     self.chat_history.title = trimmed
+    self._title_user_set = true
     self.widget:set_chat_title(trimmed)
 
     self.message_writer:write_message(
@@ -1879,6 +1894,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 ChatHistory.load(session_id, function(history)
                     if history and history.title and history.title ~= "" then
                         self.chat_history.title = history.title
+                        self._title_user_set = true
                         self.widget:set_chat_title(history.title)
                     end
                 end)
@@ -1962,6 +1978,7 @@ function SessionManager:_cancel_session()
     self._plan_exit_pending = false
 
     self.chat_history = ChatHistory:new()
+    self._title_user_set = false -- Fresh session: allow provider auto-summary again
     self.widget:set_chat_title(nil) -- Reset buffer name to default
     self._history_to_send = nil
     self._pending_input = nil
@@ -2261,6 +2278,7 @@ function SessionManager:restore_from_history(history, opts)
     -- Show restored session title in buffer name
     local restored_title = self.chat_history.title
     if restored_title and restored_title ~= "" then
+        self._title_user_set = true
         self.widget:set_chat_title(restored_title)
     end
 

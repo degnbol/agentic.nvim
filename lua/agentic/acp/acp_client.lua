@@ -1273,6 +1273,11 @@ return ACPClient
 --- @field sessionUpdate "config_option_update"
 --- @field configOptions agentic.acp.ConfigOption[]
 
+--- @class agentic.acp.SessionInfoUpdateMessage
+--- @field sessionUpdate "session_info_update"
+--- @field title string SDK-maintained title (`/rename`'d or auto-generated)
+--- @field updatedAt? string ISO 8601 timestamp of the session file
+
 --- @alias agentic.acp.SessionUpdateMessage
 --- | agentic.acp.UserMessageChunk
 --- | agentic.acp.AgentMessageChunk
@@ -1284,6 +1289,7 @@ return ACPClient
 --- | agentic.acp.CurrentModeUpdate
 --- | agentic.acp.UsageUpdate
 --- | agentic.acp.ConfigOptionsUpdate
+--- | agentic.acp.SessionInfoUpdateMessage
 
 --- @class agentic.acp.PermissionOption
 --- @field optionId string
