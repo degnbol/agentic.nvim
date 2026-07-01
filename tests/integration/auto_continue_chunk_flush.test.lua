@@ -156,7 +156,7 @@ describe("auto-continue chunk flush", function()
 
             -- Auto-continue timer fires hours later. _handle_input_submit
             -- writes the "## continue" user message, starts the thinking
-            -- spinner, and calls send_prompt.
+            -- status indicator, and calls send_prompt.
             writer:write_message(user_message("continue"))
 
             -- Provider streams response: prose, then a Read tool call that

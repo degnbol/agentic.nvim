@@ -1,5 +1,3 @@
---- @alias agentic.Theme.SpinnerState "generating" | "thinking" | "searching" | "busy"
-
 --- @class agentic.Theme
 local Theme = {}
 
@@ -17,10 +15,6 @@ Theme.HL_GROUPS = {
     STATUS_COMPLETED = "AgenticStatusCompleted",
     STATUS_FAILED = "AgenticStatusFailed",
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
-    SPINNER_GENERATING = "AgenticSpinnerGenerating",
-    SPINNER_THINKING = "AgenticSpinnerThinking",
-    SPINNER_SEARCHING = "AgenticSpinnerSearching",
-    SPINNER_BUSY = "AgenticSpinnerBusy",
 
     TOOL_KIND = "AgenticToolKind",
     TOOL_ARGUMENT = "AgenticToolArgument",
@@ -46,13 +40,6 @@ local status_hl = {
     in_progress = Theme.HL_GROUPS.STATUS_PENDING,
     completed = Theme.HL_GROUPS.STATUS_COMPLETED,
     failed = Theme.HL_GROUPS.STATUS_FAILED,
-}
-
-local spinner_hl = {
-    generating = Theme.HL_GROUPS.SPINNER_GENERATING,
-    thinking = Theme.HL_GROUPS.SPINNER_THINKING,
-    searching = Theme.HL_GROUPS.SPINNER_SEARCHING,
-    busy = Theme.HL_GROUPS.SPINNER_BUSY,
 }
 
 function Theme.setup()
@@ -99,12 +86,6 @@ function Theme.setup()
         { Theme.HL_GROUPS.PICKER_DATE, { link = "Comment" } },
         { Theme.HL_GROUPS.PICKER_DELIM, { link = "Delimiter" } },
 
-        -- Spinner highlights
-        { Theme.HL_GROUPS.SPINNER_GENERATING, { link = "DiagnosticWarn" } },
-        { Theme.HL_GROUPS.SPINNER_THINKING, { link = "Special" } },
-        { Theme.HL_GROUPS.SPINNER_SEARCHING, { link = "DiagnosticInfo" } },
-        { Theme.HL_GROUPS.SPINNER_BUSY, { link = "Comment" } },
-
         -- Unapproved parts of an execute permission prompt
         { Theme.HL_GROUPS.UNAPPROVED_COMMAND, { link = "DiagnosticVirtualTextWarn" } },
 
@@ -138,12 +119,6 @@ end
 --- @return string hl_group
 function Theme.get_status_hl_group(status)
     return status_hl[status] or "Comment"
-end
-
---- @param state agentic.Theme.SpinnerState
---- @return string hl_group
-function Theme.get_spinner_hl_group(state)
-    return spinner_hl[state] or Theme.HL_GROUPS.SPINNER_GENERATING
 end
 
 return Theme

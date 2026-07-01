@@ -69,7 +69,7 @@ end
 --- @field agent agentic.acp.ACPClient
 --- @field message_writer agentic.ui.MessageWriter
 --- @field permission_manager agentic.ui.PermissionManager
---- @field status_animation agentic.ui.StatusAnimation
+--- @field status_indicator agentic.ui.StatusIndicator
 --- @field file_list agentic.ui.FileList
 --- @field code_selection agentic.ui.CodeSelection
 --- @field diagnostics_list agentic.ui.DiagnosticsList
@@ -175,7 +175,7 @@ function SessionManager:new(tab_page_id)
     local FileList = require("agentic.ui.file_list")
     local MessageWriter = require("agentic.ui.message_writer")
     local PermissionManager = require("agentic.ui.permission_manager")
-    local StatusAnimation = require("agentic.ui.status_animation")
+    local StatusIndicator = require("agentic.ui.status_indicator")
     local TodoList = require("agentic.ui.todo_list")
     local AgentConfigOptions = require("agentic.acp.agent_config_options")
 
@@ -259,9 +259,9 @@ function SessionManager:new(tab_page_id)
         end
     end
 
-    self.status_animation = StatusAnimation:new(self.widget.buf_nrs.chat)
+    self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.chat)
     self.message_writer =
-        MessageWriter:new(self.widget.buf_nrs.chat, self.status_animation)
+        MessageWriter:new(self.widget.buf_nrs.chat, self.status_indicator)
     self.permission_manager =
         PermissionManager:new(self.message_writer, self.widget.buf_nrs, tab_page_id)
 
@@ -349,7 +349,7 @@ function SessionManager:_on_session_update(update)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
         self.message_writer:write_message_chunk(update)
-        self.status_animation:start("generating")
+        self.status_indicator:start("generating")
 
         if update.content and update.content.text then
             self.chat_history:append_agent_text({
@@ -360,7 +360,7 @@ function SessionManager:_on_session_update(update)
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
         self.message_writer:write_message_chunk(update)
-        self.status_animation:start("thinking")
+        self.status_indicator:start("thinking")
 
         if update.content and update.content.text then
             self.chat_history:append_agent_text({
@@ -463,7 +463,7 @@ function SessionManager:_refresh()
         -- If a turn IS active, this is harmless: the next response callback
         -- will set is_generating = false anyway.
         self.is_generating = false
-        self.status_animation:stop()
+        self.status_indicator:stop()
     end
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display
@@ -786,7 +786,7 @@ function SessionManager:_build_handlers(opts)
 
         on_tool_call_update = function(tool_call_update)
             self:_on_tool_call_update(tool_call_update)
-            self.status_animation:reposition()
+            self.status_indicator:reposition()
         end,
 
         on_stdout_text = function(text)
@@ -804,7 +804,7 @@ end
 --- @param skip_history boolean|nil Skip chat history storage (e.g. during session/load replay)
 function SessionManager:_on_tool_call(tool_call, skip_history)
     self.message_writer:write_tool_call_block(tool_call)
-    self.status_animation:reposition()
+    self.status_indicator:reposition()
 
     if not skip_history then
         --- @type agentic.ui.ChatHistory.ToolCall
@@ -940,7 +940,7 @@ local PLAN_IMPLEMENT_ID = "__plan_implement__"
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 function SessionManager:_on_request_permission(request, callback)
-    self.status_animation:stop()
+    self.status_indicator:stop()
 
     -- Detect ExitPlanMode permission via the tracked tool call block
     local tracker =
@@ -1020,7 +1020,7 @@ function SessionManager:_on_request_permission(request, callback)
             not self.permission_manager.current_request
             and #self.permission_manager.queue == 0
         then
-            self.status_animation:start("generating")
+            self.status_indicator:start("generating")
         end
     end
 
@@ -1129,7 +1129,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         not self.permission_manager.current_request
         and #self.permission_manager.queue == 0
     then
-        self.status_animation:start("generating")
+        self.status_indicator:start("generating")
     end
 end
 
@@ -1543,7 +1543,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     }
     self.chat_history:add_message(user_msg)
 
-    self.status_animation:start("thinking")
+    self.status_indicator:start("thinking")
 
     P.invoke_hook("on_prompt_submit", {
         prompt = input_text,
@@ -1601,7 +1601,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         self.message_writer:set_turn_usage(turn_usage)
         self.message_writer:scroll_to_bottom()
 
-        self.status_animation:stop()
+        self.status_indicator:stop()
 
         self:_notify_attention("[done]")
 
@@ -1651,7 +1651,7 @@ function SessionManager:new_session(opts)
     -- same model; the pending-initial-model flush below still gets deduped.
     self._announced_model_id = nil
 
-    self.status_animation:start("busy")
+    self.status_indicator:start("busy")
 
     local handlers = self:_build_handlers()
 
@@ -1675,7 +1675,7 @@ function SessionManager:new_session(opts)
             return
         end
 
-        self.status_animation:stop()
+        self.status_indicator:stop()
 
         if err or not response then
             -- no log here, already logged in create_session
@@ -1850,7 +1850,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.widget:set_chat_title(nil)
     self._history_to_send = nil
 
-    self.status_animation:start("busy")
+    self.status_indicator:start("busy")
 
     self.session_id = session_id
     self.chat_history.session_id = session_id
@@ -1888,7 +1888,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 end
 
                 self._restoring = false
-                self.status_animation:stop()
+                self.status_indicator:stop()
 
                 -- Restore title from local history (ACP doesn't return it)
                 ChatHistory.load(session_id, function(history)
@@ -1942,7 +1942,7 @@ end
 function SessionManager:_fallback_restore_from_local(session_id)
     ChatHistory.load(session_id, function(history, load_err)
         if load_err or not history then
-            self.status_animation:stop()
+            self.status_indicator:stop()
             Logger.notify(
                 "No local history found for session " .. session_id:sub(1, 8),
                 vim.log.levels.WARN

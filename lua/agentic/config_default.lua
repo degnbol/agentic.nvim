@@ -273,20 +273,6 @@ local ConfigDefault = {
         permission = { "1", "2", "3", "4", "5" },
     },
 
-    -- stylua: ignore start
-    --- @class agentic.UserConfig.SpinnerChars
-    --- @field generating string[]
-    --- @field thinking string[]
-    --- @field searching string[]
-    --- @field busy string[]
-    spinner_chars = {
-        generating = { "·", "✢", "✳", "∗", "✻", "✽" },
-        thinking = { "🤔", "🤨" },
-        searching = { "🔎. . .", ". 🔎. .", ". . 🔎." },
-        busy = { "⡀", "⠄", "⠂", "⠁", "⠈", "⠐", "⠠", "⢀", "⣀", "⢄", "⢂", "⢁", "⢈", "⢐", "⢠", "⣠", "⢤", "⢢", "⢡", "⢨", "⢰", "⣰", "⢴", "⢲", "⢱", "⢸", "⣸", "⢼", "⢺", "⢹", "⣹", "⢽", "⢻", "⣻", "⢿", "⣿", },
-    },
-    -- stylua: ignore end
-
     --- Icons used to identify tool call states
     --- @class agentic.UserConfig.StatusIcons
     status_icons = {

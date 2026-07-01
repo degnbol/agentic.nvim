@@ -3,43 +3,45 @@
 ---
 --- ## Usage
 --- ```lua
---- local StatusAnimation = require("agentic.ui.status_animation")
---- local animator = StatusAnimation:new(bufnr)
---- animator:start("generating")
+--- local StatusIndicator = require("agentic.ui.status_indicator")
+--- local indicator = StatusIndicator:new(bufnr)
+--- indicator:start("generating")
 --- -- later...
---- animator:stop()
+--- indicator:stop()
 --- ```
 ---
---- ponytail: static text, no animation loop. Add a timer in _render_frame if
---- animated spinner frames are ever wanted.
+--- ponytail: static text, no animation loop. Add a timer that cycles frames in
+--- _render_frame if an animated indicator is ever wanted.
 
-local NS_ANIMATION = vim.api.nvim_create_namespace("agentic_animation")
+local NS_STATUS = vim.api.nvim_create_namespace("agentic_status")
 
---- @class agentic.ui.StatusAnimation
+--- @alias agentic.ui.StatusIndicator.State "generating" | "thinking" | "searching" | "busy"
+
+--- @class agentic.ui.StatusIndicator
 --- @field _bufnr number Buffer number where the indicator is rendered
---- @field _state? agentic.Theme.SpinnerState Current state label
+--- @field _state? agentic.ui.StatusIndicator.State Current state label
 --- @field _extmark_id? number Current extmark ID
-local StatusAnimation = {}
-StatusAnimation.__index = StatusAnimation
+local StatusIndicator = {}
+StatusIndicator.__index = StatusIndicator
 
 --- @param bufnr number
---- @return agentic.ui.StatusAnimation
-function StatusAnimation:new(bufnr)
+--- @return agentic.ui.StatusIndicator
+function StatusIndicator:new(bufnr)
     local instance = setmetatable({
         _bufnr = bufnr,
         _state = nil,
         _extmark_id = nil,
-    }, StatusAnimation)
+    }, StatusIndicator)
 
     return instance
 end
 
---- Start the animation with the given state.
+--- Show the indicator with the given state.
 --- If the state is unchanged, just repositions the extmark to the current
 --- buffer bottom without a delete/recreate cycle (avoids visual flicker
 --- during streaming when called on every chunk).
---- @param state agentic.Theme.SpinnerState
-function StatusAnimation:start(state)
+--- @param state agentic.ui.StatusIndicator.State
+function StatusIndicator:start(state)
     if self._state == state and self._extmark_id then
         self:_render_frame()
         return
@@ -51,14 +53,14 @@ function StatusAnimation:start(state)
     self:_render_frame()
 end
 
-function StatusAnimation:stop()
+function StatusIndicator:stop()
     self._state = nil
 
     if self._extmark_id then
         pcall(
             vim.api.nvim_buf_del_extmark,
             self._bufnr,
-            NS_ANIMATION,
+            NS_STATUS,
             self._extmark_id
         )
     end
@@ -68,21 +70,21 @@ end
 
 --- Whether a status indicator is currently rendered.
 --- @return boolean
-function StatusAnimation:is_active()
+function StatusIndicator:is_active()
     return self._state ~= nil and self._extmark_id ~= nil
 end
 
 --- Move the extmark to the current buffer bottom without changing state.
---- No-op if no animation is active. Call after any buffer modification that
+--- No-op if no indicator is active. Call after any buffer modification that
 --- appends lines (tool call blocks, separators, etc.) to keep the status
 --- indicator pinned to the bottom.
-function StatusAnimation:reposition()
+function StatusIndicator:reposition()
     if self._state and self._extmark_id then
         self:_render_frame()
     end
 end
 
-function StatusAnimation:_render_frame()
+function StatusIndicator:_render_frame()
     if not self._state or not vim.api.nvim_buf_is_valid(self._bufnr) then
         return
     end
@@ -90,11 +92,11 @@ function StatusAnimation:_render_frame()
     local line_num = math.max(0, vim.api.nvim_buf_line_count(self._bufnr) - 1)
 
     self._extmark_id =
-        vim.api.nvim_buf_set_extmark(self._bufnr, NS_ANIMATION, line_num, 0, {
+        vim.api.nvim_buf_set_extmark(self._bufnr, NS_STATUS, line_num, 0, {
             id = self._extmark_id,
             virt_lines = { { { " " .. self._state, "NonText" } } },
             virt_lines_above = false,
         })
 end
 
-return StatusAnimation
+return StatusIndicator

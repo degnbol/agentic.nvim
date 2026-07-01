@@ -77,7 +77,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
---- @field _status_animation? agentic.ui.StatusAnimation Reference for auto-scroll virt_lines awareness
+--- @field _status_indicator? agentic.ui.StatusIndicator Reference for auto-scroll virt_lines awareness
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
@@ -86,9 +86,9 @@ local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
 --- @param bufnr integer
---- @param status_animation? agentic.ui.StatusAnimation
+--- @param status_indicator? agentic.ui.StatusIndicator
 --- @return agentic.ui.MessageWriter
-function MessageWriter:new(bufnr, status_animation)
+function MessageWriter:new(bufnr, status_indicator)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         error("Invalid buffer number: " .. tostring(bufnr))
     end
@@ -103,7 +103,7 @@ function MessageWriter:new(bufnr, status_animation)
         _last_wrote_tool_call = false,
         _suppressing_rejection = false,
         _rejection_buffer = "",
-        _status_animation = status_animation,
+        _status_indicator = status_indicator,
         _prose_anchor_line = nil,
         _suppress_pin_release = false,
         _auto_scroll_paused = false,

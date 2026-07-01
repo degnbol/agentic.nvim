@@ -589,10 +589,6 @@ All groups use `default = true` so user definitions take priority.
     `AgenticMention`               @string.special.path          Mention body
     `AgenticErrorHeading`          |DiagnosticError|              Error heading
     `AgenticErrorBody`             |DiagnosticVirtualTextError|   Error body
-    `AgenticSpinnerGenerating`     |DiagnosticWarn|               Generating spinner
-    `AgenticSpinnerThinking`       |Special|                      Thinking spinner
-    `AgenticSpinnerSearching`      |DiagnosticInfo|               Searching spinner
-    `AgenticSpinnerBusy`           |Comment|                      Busy spinner
     `AgenticDimmedBlock`           (set in ftplugin)             Dimmed fence lines
     `AgenticUnapprovedCommand`     |DiagnosticVirtualTextWarn|   Non-known-safe parts of an execute permission prompt
     `AgenticTurnUsage`             |Comment|                      Per-turn token-usage footer

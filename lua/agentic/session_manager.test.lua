@@ -310,7 +310,7 @@ describe("agentic.SessionManager", function()
                     write_message = noop,
                     tool_call_blocks = {},
                 },
-                status_animation = { start = noop, stop = noop },
+                status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = nil,
                     timestamp = nil,
@@ -897,7 +897,7 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 _try_record_edit_range = function() end,
-                status_animation = { start = function() end },
+                status_indicator = { start = function() end },
                 _show_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
             } --[[@as agentic.SessionManager]]
@@ -1033,7 +1033,7 @@ describe("agentic.SessionManager", function()
                     is_near_bottom = empty,
                     tool_call_blocks = {},
                 },
-                status_animation = { start = noop, stop = noop },
+                status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     add_message = noop,
                     save = noop,
@@ -1193,7 +1193,7 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 tab_page_id = 1,
                 _destroyed = false,
-                status_animation = { start = noop, stop = noop },
+                status_indicator = { start = noop, stop = noop },
                 message_writer = { tool_call_blocks = {} },
                 -- nil chat window => unfocused => bell would ring if notified
                 widget = { win_nrs = { chat = nil } },
