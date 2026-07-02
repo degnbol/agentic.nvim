@@ -12,27 +12,6 @@ local M = {}
 --- @type table<string, agentic.utils.GitFiles.Cache>
 local caches = {}
 
---- Resolve git root for a given directory. Returns absolute path or nil.
---- @param cwd string
---- @return string|nil
-function M.get_git_root(cwd)
-    local result = vim.system({
-        "git",
-        "-C",
-        cwd,
-        "rev-parse",
-        "--show-toplevel",
-    }, { text = true }):wait()
-    if result.code ~= 0 then
-        return nil
-    end
-    local root = vim.trim(result.stdout)
-    if root == "" then
-        return nil
-    end
-    return root
-end
-
 --- Resolve the worktree's actual index file path. For `git worktree`
 --- checkouts, `.git` is a file pointing to `.git/worktrees/<name>/`, and the
 --- index lives under that path — `.git/index` is wrong.

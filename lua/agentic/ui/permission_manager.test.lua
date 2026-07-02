@@ -757,7 +757,7 @@ describe("agentic.ui.PermissionManager", function()
         --- @type TestStub
         local diff_hunks_stub
         --- @type TestStub
-        local get_git_root_stub
+        local git_root_stub
 
         --- @param tool_call_id string
         --- @param kind agentic.acp.ToolKind
@@ -816,8 +816,8 @@ describe("agentic.ui.PermissionManager", function()
             diff_hunks_stub = spy.stub(GitFiles, "diff_hunks")
             diff_hunks_stub:returns({})
 
-            get_git_root_stub = spy.stub(GitFiles, "get_git_root")
-            get_git_root_stub:returns("/repo")
+            git_root_stub = spy.stub(vim.fs, "root")
+            git_root_stub:returns("/repo")
         end)
 
         after_each(function()
@@ -826,7 +826,7 @@ describe("agentic.ui.PermissionManager", function()
             read_disk_stub:revert()
             is_tracked_stub:revert()
             diff_hunks_stub:revert()
-            get_git_root_stub:revert()
+            git_root_stub:revert()
         end)
 
         it("falls through when no scope is set", function()

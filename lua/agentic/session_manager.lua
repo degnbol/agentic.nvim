@@ -10,7 +10,6 @@ local Config = require("agentic.config")
 local DiffPreview = require("agentic.ui.diff_preview")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local FileSystem = require("agentic.utils.file_system")
-local GitFiles = require("agentic.utils.git_files")
 local Logger = require("agentic.utils.logger")
 local Recovery = require("agentic.session_recovery")
 local SlashCommands = require("agentic.acp.slash_commands")
@@ -676,7 +675,7 @@ function SessionManager:_handle_trust_command(arg)
     end
 
     if arg == "repo" or arg == "here" then
-        local git_root = GitFiles.get_git_root(cwd)
+        local git_root = vim.fs.root(cwd, ".git")
         if not git_root then
             self.message_writer:write_error_action(
                 string.format("/trust %s: no git repository at %s.", arg, cwd)

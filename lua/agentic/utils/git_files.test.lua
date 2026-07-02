@@ -63,34 +63,6 @@ describe("agentic.utils.git_files", function()
         fs_stat_stub:revert()
     end)
 
-    describe("get_git_root", function()
-        it("returns trimmed toplevel on success", function()
-            responses[key_of({
-                "git",
-                "-C",
-                "/repo/sub",
-                "rev-parse",
-                "--show-toplevel",
-            })] =
-                { code = 0, stdout = "/repo\n", stderr = "" }
-
-            assert.equal("/repo", GitFiles.get_git_root("/repo/sub"))
-        end)
-
-        it("returns nil when git fails", function()
-            responses[key_of({
-                "git",
-                "-C",
-                "/not-a-repo",
-                "rev-parse",
-                "--show-toplevel",
-            })] =
-                { code = 128, stdout = "", stderr = "fatal: not a git repo" }
-
-            assert.is_nil(GitFiles.get_git_root("/not-a-repo"))
-        end)
-    end)
-
     describe("is_tracked", function()
         local function set_repo(git_root, index_rel, tracked_paths)
             responses[key_of({

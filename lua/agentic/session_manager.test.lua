@@ -1275,16 +1275,14 @@ describe("agentic.SessionManager", function()
         local errors
 
         local SessionManagerModule
-        local GitFiles
 
         before_each(function()
             SessionManagerModule = require("agentic.session_manager")
-            GitFiles = require("agentic.utils.git_files")
 
             select_stub = spy.stub(vim.ui, "select")
             input_stub = spy.stub(vim.ui, "input")
             notify_stub = spy.stub(Logger, "notify")
-            git_root_stub = spy.stub(GitFiles, "get_git_root")
+            git_root_stub = spy.stub(vim.fs, "root")
             git_root_stub:returns("/repo")
 
             test_bufnr = vim.api.nvim_create_buf(false, true)

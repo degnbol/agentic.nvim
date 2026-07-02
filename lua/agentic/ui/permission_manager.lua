@@ -455,7 +455,7 @@ function PermissionManager:_path_in_trust_scope(path)
         return scope.glob_matcher(path) == true
     end
 
-    local git_root = GitFiles.get_git_root(scope.cwd)
+    local git_root = vim.fs.root(scope.cwd, ".git")
     if not git_root then
         return false
     end
@@ -612,7 +612,7 @@ function PermissionManager:_check_trust(tool_call)
     local scope = self._trust_scope --[[@as agentic.utils.TrustSafety.Scope]]
     local git_root = nil
     if scope.kind == "repo" or scope.kind == "here" then
-        git_root = GitFiles.get_git_root(scope.cwd)
+        git_root = vim.fs.root(scope.cwd, ".git")
         if not git_root then
             return false, "no git root for scope"
         end
@@ -620,7 +620,7 @@ function PermissionManager:_check_trust(tool_call)
         -- For path scope, infer git root from the file's location for hunk
         -- detection. Failure is fine — without a git root we treat the file
         -- as untracked, which will still allow create/new-file paths.
-        git_root = GitFiles.get_git_root(vim.fs.dirname(orig))
+        git_root = vim.fs.root(vim.fs.dirname(orig), ".git")
     end
     -- tmp scope is git-agnostic: clobbering scratch is not loss of work, so
     -- `safe_for_kind` short-circuits on `args.tmp` before any git field.
@@ -652,7 +652,7 @@ function PermissionManager:_check_trust(tool_call)
         end
         dest_snap = TrustSafety.stat_snapshot(d_orig)
         local dest_git_root = git_root
-            or GitFiles.get_git_root(vim.fs.dirname(d_orig))
+            or vim.fs.root(vim.fs.dirname(d_orig), ".git")
         local dest_args =
             self:_build_kind_args(tool_call, d_orig, dest_git_root)
         if not dest_args then
