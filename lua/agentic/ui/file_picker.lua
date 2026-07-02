@@ -306,11 +306,11 @@ function FilePicker:_build_scan_commands()
         table.insert(commands, vim.list_extend({}, FilePicker.CMD_FD))
     end
 
-    if vim.fn.executable(FilePicker.CMD_GIT[1]) == 1 then
-        local _ = vim.fn.system("git rev-parse --git-dir 2>/dev/null")
-        if vim.v.shell_error == 0 then
-            table.insert(commands, vim.list_extend({}, FilePicker.CMD_GIT))
-        end
+    if
+        vim.fn.executable(FilePicker.CMD_GIT[1]) == 1
+        and vim.fs.root(vim.uv.cwd() or 0, ".git")
+    then
+        table.insert(commands, vim.list_extend({}, FilePicker.CMD_GIT))
     end
 
     return commands
