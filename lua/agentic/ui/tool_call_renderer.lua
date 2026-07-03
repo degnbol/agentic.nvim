@@ -327,6 +327,19 @@ local function try_external_formatter(cmd)
     return formatted
 end
 
+--- Memoized results of format_long_command. Each execute block is rendered at
+--- least twice (initial tool_call + completed tool_call_update, more when
+--- output streams across updates) with an immutable command, so without this
+--- every render re-spawns the synchronous shfmt subprocess. Keyed on the
+--- formatter setting *and* command text: the formatter can be reconfigured
+--- mid-session, so a command cached under one formatter must not be reused
+--- under another. Identical commands under the same formatter share a result
+--- across separate tool calls.
+--- ponytail: unbounded, one entry per distinct (formatter, command) rendered
+--- this session; add an LRU cap if command variety ever bloats memory.
+--- @type table<string, string>
+local format_cache = {}
+
 --- Format a shell command for display. First splits long single-line commands
 --- at top-level operators (|, &&, ||, ;), then runs the external formatter
 --- (shfmt) to clean up indentation of the result. The order matters: shfmt
@@ -335,8 +348,17 @@ end
 --- @param cmd string
 --- @return string
 local function format_long_command(cmd)
+    local formatter = Config.tool_call_display
+        and Config.tool_call_display.execute_formatter
+    local key = tostring(formatter) .. "\0" .. cmd
+    local cached = format_cache[key]
+    if cached ~= nil then
+        return cached
+    end
     local split = split_at_operators(cmd)
-    return try_external_formatter(split) or split
+    local formatted = try_external_formatter(split) or split
+    format_cache[key] = formatted
+    return formatted
 end
 
 -- ---------------------------------------------------------------------------
