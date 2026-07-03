@@ -106,6 +106,34 @@ describe("agentic.utils.TextWrap", function()
             assert.equal("supercalifragilisticexpialidocious", result[1])
         end)
 
+        it("never wraps inside an inline code span", function()
+            local line =
+                "run the `git commit -m msg` command and then push it upstream"
+            local result = TextWrap.wrap_prose({ line }, 30)
+            -- The whole span stays on one output line.
+            local has_span = false
+            for _, l in ipairs(result) do
+                if l:match("`git commit %-m msg`") then
+                    has_span = true
+                end
+            end
+            assert.is_true(has_span, "code span was broken up")
+        end)
+
+        it("keeps an oversized code span whole rather than splitting it", function()
+            local line = "prefix `one two three four five six seven` suffix"
+            local result = TextWrap.wrap_prose({ line }, 20)
+            local joined = table.concat(result, " "):gsub("%s+", " ")
+            assert.equal(line, joined)
+            local has_span = false
+            for _, l in ipairs(result) do
+                if l:match("`one two three four five six seven`") then
+                    has_span = true
+                end
+            end
+            assert.is_true(has_span, "oversized span was broken up")
+        end)
+
         it("formats markdown tables with aligned columns", function()
             local lines = {
                 "| Name | Value |",

@@ -33,15 +33,41 @@ local function wrap_line(line, width)
 
     -- Walk words with byte positions so we can map sub-lines back to the
     -- original. gmatch gives us words but not positions; find in a loop does.
+    -- Inline code spans (`...`) are kept as a single word even when they
+    -- contain spaces — a wrap must never fall inside backticks.
     local words = {} ---@type { text: string, start: integer }[]
+    local len = #line
     local pos = 1
-    while pos <= #line do
-        local s, e = line:find("%S+", pos)
+    while pos <= len do
+        local s = line:find("%S", pos)
         if not s then
             break
         end
-        words[#words + 1] = { text = line:sub(s, e), start = s - 1 }
-        pos = e + 1
+        -- Consume a maximal non-space run, but swallow whitespace that lives
+        -- inside a closed backtick span so the span stays atomic.
+        local i = s
+        while i <= len do
+            local ch = line:sub(i, i)
+            if ch == "`" then
+                local run_end = i
+                while run_end <= len and line:sub(run_end, run_end) == "`" do
+                    run_end = run_end + 1
+                end
+                local delim = line:sub(i, run_end - 1)
+                local _, close_e = line:find(delim, run_end, true)
+                if close_e then
+                    i = close_e + 1
+                else
+                    i = run_end -- unclosed: treat backticks as literal text
+                end
+            elseif ch:match("%s") then
+                break
+            else
+                i = i + 1
+            end
+        end
+        words[#words + 1] = { text = line:sub(s, i - 1), start = s - 1 }
+        pos = i
     end
 
     local result = {}
