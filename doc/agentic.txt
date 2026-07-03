@@ -411,6 +411,16 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>a`   n       Toggle auto-scroll
     `<localLeader>G`   n       Scroll chat to bottom (keeps current window focused)
 
+`<localLeader>c` is a canned-prompt binding: it sends the fixed text
+"Continue" to the session. These live in `keymaps.prompts`, a key-to-text
+map applied to every widget buffer. Add entries to bind more fixed prompts.
+A value may be `{ prompt, mode, desc }` for mode and description control.
+Set a key to `vim.NIL` or "" to disable an inherited binding — plain `nil`
+does not disable it. >lua
+    require("agentic").setup {
+        keymaps = { prompts = { ["<localLeader>y"] = "Go ahead." } },
+    }
+<
 ------------------------------------------------------------------------------
 6.2 PROMPT KEYMAPS                               *agentic-keymaps-prompt*
 

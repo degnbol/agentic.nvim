@@ -757,14 +757,34 @@ function ChatWidget:_bind_keymaps()
             { desc = "Agentic: Stop generation" }
         )
 
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.continue,
-            bufnr,
-            function()
-                require("agentic").send_prompt("Continue")
-            end,
-            { desc = "Agentic: Send 'Continue' prompt" }
-        )
+        for lhs, spec in pairs(Config.keymaps.prompts) do
+            local prompt
+            if type(spec) == "string" then
+                prompt = spec
+            elseif type(spec) == "table" then
+                prompt = spec.prompt
+            end
+
+            -- vim.NIL, nil, and "" all fall through to skip. is_keymap_disabled
+            -- is unusable here: it reports `#{prompt=...} == 0` as disabled,
+            -- silently dropping every table-form entry.
+            if prompt and prompt ~= "" then
+                local km = (type(spec) == "table" and spec.mode)
+                        and { { lhs, mode = spec.mode } }
+                    or lhs
+                local desc = (type(spec) == "table" and spec.desc)
+                    or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
+
+                -- Send via this widget's own session (self.on_submit_input ==
+                -- session:_handle_input_submit), not send_prompt: a buffer-local
+                -- map only fires from a focused widget window, so the session
+                -- already exists and is visible — avoids send_prompt's
+                -- get_session_for_tab_page(nil, …) auto-spawn branch.
+                BufHelpers.multi_keymap_set(km, bufnr, function()
+                    self.on_submit_input(prompt)
+                end, { desc = desc })
+            end
+        end
 
         BufHelpers.multi_keymap_set(
             Config.keymaps.widget.restart_session,

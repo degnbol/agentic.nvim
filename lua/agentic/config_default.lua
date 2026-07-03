@@ -43,8 +43,11 @@
 
 --- @alias agentic.UserConfig.KeymapValue string | string[] | (string | agentic.UserConfig.KeymapEntry)[]
 
+--- @alias agentic.UserConfig.PromptSpec string | { prompt: string, mode?: string|string[], desc?: string }
+
 --- @class agentic.UserConfig.Keymaps
 --- @field widget table<string, agentic.UserConfig.KeymapValue>
+--- @field prompts table<string, agentic.UserConfig.PromptSpec>
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
 --- @field chat table<string, agentic.UserConfig.KeymapValue>
 --- @field diff_preview table<string, string>
@@ -216,7 +219,6 @@ local ConfigDefault = {
                     mode = { "n", "v" },
                 },
             },
-            continue = "<localLeader>c",
             restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
             refresh = "",
@@ -224,6 +226,17 @@ local ConfigDefault = {
             goto_chat_bottom = "<localLeader>G",
             switch_provider = "<localLeader>s",
             switch_model = "<localLeader>M",
+        },
+
+        --- Send a fixed prompt to this widget's session. key → prompt text
+        --- (or { prompt, mode?, desc? } for mode/desc control). Applied to
+        --- every widget buffer, so these only exist while a session is open.
+        --- Merges by key, so user entries add to these defaults. Set a key to
+        --- vim.NIL or "" to disable an inherited entry — plain `nil` does NOT
+        --- disable (a nil value is absent from the table, so the merge keeps
+        --- the default).
+        prompts = {
+            ["<localLeader>c"] = "Continue",
         },
 
         --- Keys bindings for the prompt buffer

@@ -128,6 +128,35 @@ describe("object utils", function()
         end
     )
 
+    it("appends prompt keymaps to the defaults instead of replacing", function()
+        local default_config = {
+            keymaps = { prompts = { ["<localLeader>c"] = "Continue" } },
+        }
+        local user_config = {
+            keymaps = { prompts = { ["<localLeader>y"] = "Go ahead." } },
+        }
+
+        local merged = Object.merge_config(default_config, user_config)
+
+        assert.same({
+            ["<localLeader>c"] = "Continue",
+            ["<localLeader>y"] = "Go ahead.",
+        }, merged.keymaps.prompts)
+    end)
+
+    it("disables an inherited prompt keymap via vim.NIL", function()
+        local default_config = {
+            keymaps = { prompts = { ["<localLeader>c"] = "Continue" } },
+        }
+        local user_config = {
+            keymaps = { prompts = { ["<localLeader>c"] = vim.NIL } },
+        }
+
+        local merged = Object.merge_config(default_config, user_config)
+
+        assert.is_true(merged.keymaps.prompts["<localLeader>c"] == vim.NIL)
+    end)
+
     describe("handles nil gracefully", function()
         it("handles nil for keymaps", function()
             local default_config = {
