@@ -421,6 +421,22 @@ to subscribers via `on_stdout_text`. This is wired through `ACPClient` →
 Currently no known ACP provider emits useful non-JSON stdout, but the
 infrastructure exists for future use.
 
+### Prompt loop stall — no client-side fix
+
+The claude-agent-acp bridge can stall its prompt generator for one turn:
+`agent_message_chunk` / `tool_call` / `tool_call_update` silently stop reaching
+the client while `session/request_permission` keeps working, and the missing
+content flushes on the next user prompt. The mechanism and upstream issues are in
+the `acp` skill's `claude-agent.md` § "Prompt loop stall". The bytes never leave
+the bridge, so:
+
+- **Nothing in `MessageWriter` or the dispatch layer can fix it** — the content
+  never arrives. Client-layer tests in isolation cannot reproduce it.
+- **Do not add client-side state resets** ("redraw", reset turn state) as a
+  "fix" — they don't touch the bridge's stalled generator.
+- Viable workarounds are upstream-level: respawn the subprocess before
+  auto-continue (Path C `respawn_after_usage_limit`), re-prepending history.
+
 ### Silent upstream failure — opencode + litellm
 
 Observed 2026-04-23 with opencode configured against a litellm backend using an

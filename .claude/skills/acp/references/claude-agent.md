@@ -10,10 +10,6 @@ is not ACP-specific and lives in the global `claude` skill's `references/`
 (`internals.md`, `rule-loading.md`); it is cross-referenced here, not
 duplicated. This file adds the bridge/transport layer on top.
 
-> Some sections illustrate consequences with concrete file paths from the
-> agentic.nvim plugin (e.g. `lua/agentic/...`). Treat those as concrete
-> examples; the surrounding analysis applies to any ACP frontend.
-
 ## Source locations
 
 - **claude-agent-acp bridge** (npm install, readable JS): resolve the install
@@ -26,11 +22,6 @@ duplicated. This file adds the bridge/transport layer on top.
 - **claude-agent-sdk** is bundled inside the bridge — same `dist/` subtree. The
   SDK's own npm package (`@anthropic-ai/claude-agent-sdk`) is at the prefix's
   `node_modules/@anthropic-ai/`.
-- **Claude Code TUI source** (private + public): cloned at
-  `~/Documents/agentic/claude/` with `claude-code-private/src/` (TUI source,
-  including `services/`, `assistant/`, `bridge/`) and `claude-code-public/`
-  (changelog, plugins, scripts). Useful for understanding TUI-only behaviour
-  not visible through ACP.
 
 ## Architecture
 
@@ -83,7 +74,8 @@ const options = { ...userProvidedOptions, cwd: params.cwd, ... };
 ```
 
 Known passthrough fields: `additionalDirectories`, `tools`, `env`,
-`disallowedTools`, `mcpServers`, `maxThinkingTokens`.
+`disallowedTools`, `mcpServers`, `maxThinkingTokens`, `settings` (see
+§ "Registering a command hook without a settings file").
 
 Some fields are overridden after the spread and **cannot** be set this way:
 `cwd`, `includePartialMessages`, `allowDangerouslySkipPermissions`,
@@ -91,13 +83,49 @@ Some fields are overridden after the spread and **cannot** be set this way:
 from `permissions.defaultMode`, clobbering any `_meta` value — for the working
 channels see § "Permission mode over ACP"). Verified against 0.44.0.
 
-`hooks` is spread (`acp-agent.js:1993`) but is a **trap for command hooks**: SDK
-`options.hooks` is typed `Partial<Record<HookEvent, HookCallbackMatcher[]>>`
-whose matchers hold `HookCallback` *functions* (`sdk.d.ts:807, 1486`) — not the
-settings-file `{type:"command", command, …}` JSON shape (a different type,
-`Settings.hooks`, `sdk.d.ts:4658`). A JSON command hook passed via `_meta` is
-silently dropped; command hooks must come from a `settingSources` file (see
-§ "settings.json paths").
+`options.hooks` is spread but is a **trap for command hooks**: it is typed
+`Partial<Record<HookEvent, HookCallbackMatcher[]>>` whose matchers hold
+`HookCallback` *functions* (`sdk.d.ts:1455`) — not the settings-file
+`{type:"command", command, …}` JSON shape. A JSON command hook passed via
+`_meta.claudeCode.options.hooks` is silently dropped, and a client cannot send a
+*function* over JSON-RPC. This does **not** require a settings file, though — a
+command hook can be registered fileless via `options.settings` (next section).
+
+## Registering a command hook without a settings file
+
+`options.settings` accepts an **inline `Settings` object**, not only a path
+(`sdk.d.ts:1793-1809`): it loads into the "flag" tier — highest priority among
+user-controlled settings, equivalent to the `--settings` CLI flag. `Settings.hooks`
+(`sdk.d.ts:4797`) is exactly the settings-file command-hook JSON shape
+(`{ matcher, hooks: [{ type:"command", command, if?, once?, timeout? }] }`) — a
+different key from the function-typed `options.hooks` above. The bridge forwards
+`_meta.claudeCode.options.settings` unchanged (`...userProvidedOptions`; the
+`!userProvidedOptions?.settings` guard only suppresses the bridge's own
+modelConfig injection), and the SDK JSON-serializes it into the CLI's `flagInline`
+tier. So
+
+```js
+_meta.claudeCode.options.settings = {
+  hooks: { PreToolUse: [{ matcher: "Bash",
+    hooks: [{ type: "command", command: "/abs/path/hook.sh" }] }] },
+}
+```
+
+registers a PreToolUse command hook **per-session, in memory, with nothing
+written to disk**. It is scoped to exactly the sessions the client creates (no
+leakage to plain `claude` CLI or other frontends, which never receive the
+`_meta`).
+
+Verified end-to-end on SDK 0.3.197: an inline `permissionDecision:"deny"` hook
+failed a Bash call with all `.claude/settings*` files moved aside, so inline
+settings were the only possible source.
+
+Caveats: (1) passing `settings` skips the bridge's `CLAUDE_MODEL_CONFIG`
+injection (the guard above) — include `modelOverrides`/`availableModels` in the
+same blob if you rely on Bedrock model overrides. (2) `applyFlagSettings`
+(`sdk.d.ts:2272`) merges flag settings mid-session, but no ACP method exposes
+arbitrary flag settings (the bridge wires only effort/model), so `session/new`
+`_meta` is the channel.
 
 ## Invoked skills survive session resume
 
@@ -293,55 +321,36 @@ That is the entire symptom profile.
 
 ### What can make the generator stall
 
-The inner `claude` CLI subprocess (spawned by `query()` in
-`@anthropic-ai/claude-agent-sdk`'s `ProcessTransport`) is *persistent*
-across prompts for a session — `acp-agent.js:1126` creates
-`session.query` once at session creation and holds it in
-`sessions[sessionId]` (`:1189-1210`). It is only closed on substrings
-like `"ProcessTransport"`, `"terminated process"`, or
-`"process exited with"` in the error message (`:600-609`). Generic
-`RequestError.internalError` thrown on e.g. a usage-limit result
-(`:449-450`) does **not** close the generator — the bridge's `finally`
-only resets `session.promptRunning = false` (`:615`).
+The inner `claude` CLI subprocess (spawned by `query()` in the SDK's
+`ProcessTransport`) is *persistent* across prompts — `acp-agent.js:1126` creates
+`session.query` once at session creation (`:1189-1210`). It is only closed on
+error substrings like `"ProcessTransport"`, `"terminated process"`,
+`"process exited with"` (`:600-609`); a generic `RequestError.internalError`
+(e.g. a usage-limit result, `:449-450`) does **not** close it — the `finally`
+only resets `promptRunning = false` (`:615`). So a wedged generator persists
+across subsequent prompts.
 
-Known stall triggers (upstream issues):
+Known stall triggers (upstream):
 
 - [`agentclientprotocol/claude-agent-acp#551`](https://github.com/agentclientprotocol/claude-agent-acp/issues/551) —
-  after a cancelled turn, the next prompt returns `end_turn` with
-  zeroed usage and **no chunks**; the prompt after *that* delivers the
-  response in full. Symptom-shape match.
+  after a cancelled turn the next prompt returns `end_turn`, zero usage, no
+  chunks; the one after delivers in full.
 - [`agentclientprotocol/claude-agent-acp#497`](https://github.com/agentclientprotocol/claude-agent-acp/issues/497) —
-  `prompt()` blocks forever on `session.query.next()` when the binary
-  stops emitting `session_state_changed(idle)`.
+  `prompt()` blocks forever on `session.query.next()` when the binary stops
+  emitting `session_state_changed(idle)`.
 - [`anthropics/claude-code#33949`](https://github.com/anthropics/claude-code/issues/33949) —
-  no SSE idle watchdog inside the CLI. TCP half-open (NAT drop,
-  load-balancer idle close) leaves the CLI's upstream streaming call
-  hung indefinitely. Would outlive any multi-hour idle.
+  no SSE idle watchdog; a half-open TCP leaves the upstream streaming call hung
+  indefinitely.
 - [`anthropics/anthropic-sdk-typescript#867`](https://github.com/anthropics/anthropic-sdk-typescript/issues/867) —
-  `messages.stream()` has no idle timeout; `for await` blocks forever
-  if the server stops sending events.
+  `messages.stream()` has no idle timeout; `for await` blocks forever if events
+  stop.
 
-`keep_alive` messages over the SDK's inter-process channel **are**
-silently dropped in the SDK reader — a keepalive exists but is not
-observable from the bridge, so a stuck generator can't be detected
-from outside without polling for response absence.
-
-### Client implications
-
-- **There is nothing in the client's MessageWriter / dispatch layer can
-  do** — the bytes never leave the bridge. Tests that drive client-side
-  layers in isolation cannot reproduce the production symptom.
-- **Viable workarounds are upstream-level**: tear down and respawn the
-  claude-agent-acp subprocess before attempting auto-continue (losing
-  session state unless history is re-prepended for session restore).
-- **Diagnostic from outside**: a stalled generator is indistinguishable
-  from a slow-but-working one without timing heuristics. The
-  subscriber sees no `session/update` between `session/prompt`
-  send and response. A watchdog (e.g. "if no `session/update` within
-  N seconds after `session/prompt`, assume stall") is possible but
-  heuristic — no protocol-level signal.
-- **Do not add client-side state resets ("redraw", reset turn state, etc.)
-  as a "fix"** — these do not touch the bridge's stalled generator.
+`keep_alive` messages are silently dropped in the SDK reader, so a stuck
+generator can't be detected from outside without polling for response absence.
+A stalled generator is indistinguishable from a slow-but-working one — the only
+signal is the absence of `session/update` between `session/prompt` and its
+response, so any watchdog is heuristic. Fixes are upstream-level; for why a
+client cannot work around it, see the `provider-system` skill.
 
 ## Slash command recognition uses the last text block
 
@@ -504,10 +513,12 @@ at session creation only, with no mid-session ACP method).
 
 ## settings.json paths
 
-The SDK reads from these sources (in order, via `settingSources`):
-- **user**: `~/.claude/settings.json`
-- **project**: `{cwd}/.claude/settings.json`
-- **local**: `{cwd}/.claude/settings.local.json`
+The bridge enables `settingSources: ["user", "project", "local"]` —
+`~/.claude/settings.json`, `{cwd}/.claude/settings.json`,
+`{cwd}/.claude/settings.local.json`. For the full source list and the precedence
+rule (local > project > user, managed > all — *not* the commonly repeated
+"user > project > local"), see the global `claude` skill
+`references/internals.md` § "Settings-source precedence".
 
 ## Path-scoped rules (`.claude/rules/*.md`)
 
