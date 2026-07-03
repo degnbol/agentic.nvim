@@ -131,14 +131,13 @@ scope. Implementation lives in `PermissionManager`, `PermissionRules`,
 Event pipeline, session-update routing, tool-call lifecycle, adapter
 override points, execute rendering, and known ACP limitations live in
 the `provider-system` project skill. Load it before any work in
-`lua/agentic/acp/`. The global `acp` skill covers the ACP protocol
-spec itself, not our implementation.
+`lua/agentic/acp/`.
 
 ### Upstream issues (claude-agent-sdk)
 
 - **anthropics/claude-code#35298** — Skills with `paths` triggers crashed
   Read/Write/Edit for files outside cwd. Fixed in SDK 0.2.104 / claude-agent-acp
-  0.27.0. See @.claude/skills/acp/references/claude-agent.md
+  0.27.0.
 
 ## Testing
 

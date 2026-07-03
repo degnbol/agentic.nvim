@@ -63,10 +63,7 @@ leak, scheduler-wakeup, etc.), not a single underlying bug. The shared
 **The bug lives in `claude-agent-acp` (the bridge) or its inner
 `@anthropic-ai/claude-agent-sdk`, not in the plugin.** Confirmed by
 code inspection against `claude-agent-acp` 0.29.0 and
-`@anthropic-ai/claude-agent-sdk` 0.2.111. See
-`@.claude/skills/acp/references/claude-agent.md` §
-"Prompt loop stall — silent notification loss with working
-permissions" for the full explanation.
+`@anthropic-ai/claude-agent-sdk` 0.2.111.
 
 Summary of the asymmetry (this IS real, just at the bridge layer, not
 the plugin's dispatch layer as an earlier revision of this file

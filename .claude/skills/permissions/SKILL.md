@@ -68,8 +68,7 @@ Fallback for the kind check: if `request.toolCall.kind` does not match,
 but the tracker entry from the prior `tool_call` notification has a
 read-only kind, approve anyway. This catches opencode raising
 `external_directory` (kind="other") under the same `toolCallId` as the
-underlying read tool. See the acp skill's `references/opencode.md`
-§ "Permission request shape" finding 1.
+underlying read tool.
 
 ### 2. Shell command parsing (always on)
 
