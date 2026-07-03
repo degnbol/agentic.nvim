@@ -12,8 +12,8 @@ propagation and `CLAUDE_CODE_SESSION_ID == session_id` routing end-to-end.
 Merge-asymmetry and
 permission-flow claims are sourced from the `acp` skill's
 `references/claude-agent.md`; the env/session-id **routing** facts in "Resolved
-by source" are compiled-binary spike results **not yet in that reference** (they
-must be recorded there before an implementer can re-derive the socket routing).
+by source" are now **recorded there** (§ "Hook process environment"), so an implementer
+can re-derive the socket routing.
 The two Phase-0 source verifications the earlier draft worried about are now
 **done** (see "Resolved by source" below).
 
@@ -85,14 +85,13 @@ Never emit `defer` — it is print-mode-only and ignored in interactive ACP
   `allow` reaches branch (f) and bypasses the classifier. Only a settings
   `ask`/`deny` rule or the SDK's built-in safety check (`Z2H`, branches d/e)
   sends an allowed command onward — which is the desired behaviour anyway.
-- **`AGENTIC_SOCK` reaches the hook.** *(Spike result — not in claude-agent.md;
-  record it there.)* `createSession` builds the SDK query with
+- **`AGENTIC_SOCK` reaches the hook.** *(Recorded in claude-agent.md §
+  "Hook process environment".)* `createSession` builds the SDK query with
   `env: {...process.env, ...}` and hooks spawn with `{...process.env, ...}`, so
   env set at the bridge spawn (nvim → bridge → SDK CLI → hook) propagates. The
   SDK also documents `${ENV_VAR}` substitution in hook command strings.
-- **`CLAUDE_CODE_SESSION_ID` == the ACP `session_id`.** *(Spike result — not in
-  claude-agent.md; the entire socket-routing scheme rests on this, so record it
-  there.)* The bridge mints the
+- **`CLAUDE_CODE_SESSION_ID` == the ACP `session_id`.** *(Recorded in
+  claude-agent.md § "Hook process environment".)* The bridge mints the
   session id (`randomUUID`), feeds it to the SDK as `resume:`, and the SDK echoes
   it back as `message.session_id` on the notifications the client keys on.
   `CLAUDE_CODE_SESSION_ID` (in the hook env) is that same string, so the hook
