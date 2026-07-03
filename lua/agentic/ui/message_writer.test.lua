@@ -92,6 +92,27 @@ describe("agentic.ui.MessageWriter", function()
         }
     end
 
+    describe("emit_divider", function()
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("appends a --- separator after content", function()
+            writer:write_message_chunk(make_message_update("subagent prose"))
+            writer:emit_divider()
+            assert.is_true(vim.tbl_contains(buffer_lines(), "---"))
+        end)
+
+        it("no-ops when nothing was written since the last divider", function()
+            writer:write_message_chunk(make_message_update("prose"))
+            writer:emit_divider()
+            local after_first = buffer_lines()
+
+            writer:emit_divider()
+            assert.same(after_first, buffer_lines())
+        end)
+    end)
+
     describe("_check_auto_scroll", function()
         it("returns true when cursor is on the last line", function()
             setup_buffer(50, 50)

@@ -67,8 +67,13 @@ end
 --- @field widget agentic.ui.ChatWidget
 --- @field agent agentic.acp.ACPClient
 --- @field message_writer agentic.ui.MessageWriter
+--- @field subagent_writer agentic.ui.MessageWriter Writer bound to the subagents buffer; receives all subagent (Task) content
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field status_indicator agentic.ui.StatusIndicator
+--- @field subagent_status_indicator agentic.ui.StatusIndicator Working indicator for the subagents buffer, shown while any top-level Task is open
+--- @field _tool_call_owner table<string, boolean> toolCallId -> true when the block lives in the subagents buffer (set on the initial tool_call, read by _writer_for)
+--- @field _open_tasks table<string, true> toolCallId -> true for each open top-level Task this turn; subagent indicator shows while non-empty
+--- @field _subagent_win_opened_this_turn boolean Guards a single auto-open per turn so a manual close is not undone by later subagent activity
 --- @field file_list agentic.ui.FileList
 --- @field code_selection agentic.ui.CodeSelection
 --- @field diagnostics_list agentic.ui.DiagnosticsList
@@ -192,6 +197,9 @@ function SessionManager:new(tab_page_id)
         _plan_exit_pending = false,
         _retry_attempt = 0,
         _checktime_scheduled = false,
+        _tool_call_owner = {},
+        _open_tasks = {},
+        _subagent_win_opened_this_turn = false,
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
         _announced_model_id = nil,
@@ -261,8 +269,22 @@ function SessionManager:new(tab_page_id)
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.chat)
     self.message_writer =
         MessageWriter:new(self.widget.buf_nrs.chat, self.status_indicator)
-    self.permission_manager =
-        PermissionManager:new(self.message_writer, self.widget.buf_nrs, tab_page_id)
+
+    self.subagent_status_indicator =
+        StatusIndicator:new(self.widget.buf_nrs.subagent)
+    self.subagent_writer = MessageWriter:new(
+        self.widget.buf_nrs.subagent,
+        self.subagent_status_indicator
+    )
+
+    self.permission_manager = PermissionManager:new(
+        self.message_writer,
+        self.widget.buf_nrs,
+        tab_page_id,
+        function(tool_call_id)
+            return self:_writer_for(tool_call_id)
+        end
+    )
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
 
@@ -338,6 +360,92 @@ function SessionManager:new(tab_page_id)
     return self
 end
 
+--- Resolve which MessageWriter owns a tool call. Ownership is recorded on the
+--- initial `tool_call` (see `_on_tool_call`); updates and permission lookups
+--- resolve through here rather than re-reading the wire tag, which is not
+--- reliably present on later notifications.
+--- @param tool_call_id string
+--- @return agentic.ui.MessageWriter
+function SessionManager:_writer_for(tool_call_id)
+    if self._tool_call_owner[tool_call_id] then
+        return self.subagent_writer
+    end
+    return self.message_writer
+end
+
+--- The status indicator paired with the writer that owns a tool call.
+--- @param tool_call_id string
+--- @return agentic.ui.StatusIndicator
+function SessionManager:_indicator_for(tool_call_id)
+    if self._tool_call_owner[tool_call_id] then
+        return self.subagent_status_indicator
+    end
+    return self.status_indicator
+end
+
+--- Whether a session update carries the subagent (Task) tag.
+--- @param update agentic.acp.SessionUpdateMessage
+--- @return boolean
+local function is_subagent_update(update)
+    return update._meta ~= nil
+        and update._meta.claudeCode ~= nil
+        and update._meta.claudeCode.parentToolUseId ~= nil
+end
+
+--- Reveal the subagents split on first subagent activity of the turn. Opens at
+--- most once per turn so a manual close is not undone by later chunks.
+function SessionManager:_ensure_subagent_window()
+    if not Config.windows.subagent.display then
+        return
+    end
+    if self._subagent_win_opened_this_turn then
+        return
+    end
+    self._subagent_win_opened_this_turn = true
+    self.widget:open_subagent_window()
+end
+
+--- Mark a top-level Task as open (idempotent): reveal the subagents split and
+--- show its working indicator. Called on the Task's initial `tool_call` AND on
+--- refining `tool_call_update`s — a streamed top-level Task's kind only resolves
+--- to SubAgent once `rawInput` arrives on an update, not on the empty initial
+--- `tool_call`, so the first surface that resolves the kind wins. Set membership
+--- makes repeat calls a no-op.
+--- @param tool_call_id string
+function SessionManager:_mark_task_open(tool_call_id)
+    if self._open_tasks[tool_call_id] then
+        return
+    end
+    self._open_tasks[tool_call_id] = true
+    self.subagent_status_indicator:start("generating")
+    self:_ensure_subagent_window()
+end
+
+--- Mark a top-level Task as closed (idempotent): when the last open Task closes,
+--- stop the subagents indicator and optionally auto-close the split. The
+--- membership guard makes a duplicated terminal `tool_call_update` harmless —
+--- without it a double close would stop the indicator while a sibling Task is
+--- still running.
+--- @param tool_call_id string
+function SessionManager:_mark_task_closed(tool_call_id)
+    if not self._open_tasks[tool_call_id] then
+        return
+    end
+    self._open_tasks[tool_call_id] = nil
+    -- Separate this finished subagent's detour from the next, during the turn
+    -- (before the main agent reacts to its report). The membership guard above
+    -- makes a duplicated terminal update harmless; emit_divider itself no-ops
+    -- when nothing was written since the last separator.
+    self.subagent_writer:emit_divider()
+    if next(self._open_tasks) ~= nil then
+        return
+    end
+    self.subagent_status_indicator:stop()
+    if Config.windows.subagent.auto_close then
+        self.widget:close_subagent_window()
+    end
+end
+
 --- @param update agentic.acp.SessionUpdateMessage
 function SessionManager:_on_session_update(update)
     -- order the IF blocks in order of likeliness to be called for performance
@@ -347,26 +455,40 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        self.message_writer:write_message_chunk(update)
-        self.status_indicator:start("generating")
+        if is_subagent_update(update) then
+            -- Subagent prose: route to the subagents buffer, not chat history
+            -- (interim subagent detail is not persisted — see the feature note).
+            self:_ensure_subagent_window()
+            self.subagent_writer:write_message_chunk(update)
+            self.subagent_status_indicator:reposition()
+        else
+            self.message_writer:write_message_chunk(update)
+            self.status_indicator:start("generating")
 
-        if update.content and update.content.text then
-            self.chat_history:append_agent_text({
-                type = "agent",
-                text = update.content.text,
-                provider_name = self.agent.provider_config.name,
-            })
+            if update.content and update.content.text then
+                self.chat_history:append_agent_text({
+                    type = "agent",
+                    text = update.content.text,
+                    provider_name = self.agent.provider_config.name,
+                })
+            end
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
-        self.message_writer:write_message_chunk(update)
-        self.status_indicator:start("thinking")
+        if is_subagent_update(update) then
+            self:_ensure_subagent_window()
+            self.subagent_writer:write_message_chunk(update)
+            self.subagent_status_indicator:reposition()
+        else
+            self.message_writer:write_message_chunk(update)
+            self.status_indicator:start("thinking")
 
-        if update.content and update.content.text then
-            self.chat_history:append_agent_text({
-                type = "thought",
-                text = update.content.text,
-                provider_name = self.agent.provider_config.name,
-            })
+            if update.content and update.content.text then
+                self.chat_history:append_agent_text({
+                    type = "thought",
+                    text = update.content.text,
+                    provider_name = self.agent.provider_config.name,
+                })
+            end
         end
     elseif update.sessionUpdate == "user_message_chunk" then
         -- Arrives during session/load replay (ACPClient filters it out in
@@ -463,12 +585,15 @@ function SessionManager:_refresh()
         -- will set is_generating = false anyway.
         self.is_generating = false
         self.status_indicator:stop()
+        self.subagent_status_indicator:stop()
     end
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display
     -- (rejection suppression, chunk tracking, etc.). Cosmetic-only effect
     -- mid-turn; essential for recovering from a stuck state between turns.
+    -- Both writers are reset — the cross-turn flag hazard applies per buffer.
     self.message_writer:reset_turn_state()
+    self.subagent_writer:reset_turn_state()
 end
 
 --- Display context usage info locally (intercepted /context command)
@@ -785,7 +910,7 @@ function SessionManager:_build_handlers(opts)
 
         on_tool_call_update = function(tool_call_update)
             self:_on_tool_call_update(tool_call_update)
-            self.status_indicator:reposition()
+            self:_indicator_for(tool_call_update.tool_call_id):reposition()
         end,
 
         on_stdout_text = function(text)
@@ -802,10 +927,27 @@ end
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
 --- @param skip_history boolean|nil Skip chat history storage (e.g. during session/load replay)
 function SessionManager:_on_tool_call(tool_call, skip_history)
-    self.message_writer:write_tool_call_block(tool_call)
-    self.status_indicator:reposition()
+    local is_subagent = tool_call.parent_tool_use_id ~= nil
+    if is_subagent then
+        self._tool_call_owner[tool_call.tool_call_id] = true
+        self:_ensure_subagent_window()
+    end
 
-    if not skip_history then
+    self:_writer_for(tool_call.tool_call_id):write_tool_call_block(tool_call)
+    self:_indicator_for(tool_call.tool_call_id):reposition()
+
+    -- A top-level Task spawn (untagged, kind SubAgent) drives the subagents
+    -- working indicator for its whole open interval and reveals the split. Its
+    -- own block stays in the main chat; its children populate the subagents
+    -- buffer. Grandchildren keep the parent Task open, so nesting needs no
+    -- special-casing. Kind usually resolves on the update, not here (see
+    -- _on_tool_call_update), but mark open here too for the case it arrives now.
+    if not is_subagent and kind_key(tool_call.kind) == "subagent" then
+        self:_mark_task_open(tool_call.tool_call_id)
+    end
+
+    -- Persist only main-agent tool calls; subagent interim is not restored.
+    if not skip_history and not is_subagent then
         --- @type agentic.ui.ChatHistory.ToolCall
         local tool_msg = {
             type = "tool_call",
@@ -846,7 +988,7 @@ function SessionManager:_try_record_edit_range(tool_call_id)
     if self.permission_manager:has_edit_range(tool_call_id) then
         return
     end
-    local tracker = self.message_writer.tool_call_blocks[tool_call_id]
+    local tracker = self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
     if not tracker or kind_key(tracker.kind) ~= "edit" then
         return
     end
@@ -942,8 +1084,8 @@ function SessionManager:_on_request_permission(request, callback)
     self.status_indicator:stop()
 
     -- Detect ExitPlanMode permission via the tracked tool call block
-    local tracker =
-        self.message_writer.tool_call_blocks[request.toolCall.toolCallId]
+    local tool_call_id = request.toolCall.toolCallId
+    local tracker = self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
     local is_plan_exit = tracker
         and kind_key(tracker.kind) == "switch_mode"
         and tracker.argument == "Normal"
@@ -1012,7 +1154,7 @@ function SessionManager:_on_request_permission(request, callback)
         self:_show_diff_in_buffer(request.toolCall.toolCallId, is_rejection)
 
         if is_rejection then
-            self.message_writer:suppress_next_rejection()
+            self:_writer_for(tool_call_id):suppress_next_rejection()
         end
 
         if
@@ -1056,37 +1198,59 @@ end
 --- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
-    self.message_writer:update_tool_call_block(tool_call_update)
-    self:_try_record_edit_range(tool_call_update.tool_call_id)
+    local id = tool_call_update.tool_call_id
+    local is_subagent = self._tool_call_owner[id] == true
+    local writer = self:_writer_for(id)
 
-    --- @type agentic.ui.ChatHistory.ToolCall
-    local tool_call = {
-        type = "tool_call",
-        tool_call_id = tool_call_update.tool_call_id,
-        status = tool_call_update.status,
-        description = tool_call_update.description,
-        body = tool_call_update.body,
-        diff = tool_call_update.diff,
-    }
+    writer:update_tool_call_block(tool_call_update)
+    self:_try_record_edit_range(id)
 
-    self.chat_history:update_tool_call(tool_call_update.tool_call_id, tool_call)
+    -- Persist only main-agent tool calls; subagent interim is not restored.
+    if not is_subagent then
+        --- @type agentic.ui.ChatHistory.ToolCall
+        local tool_call = {
+            type = "tool_call",
+            tool_call_id = id,
+            status = tool_call_update.status,
+            description = tool_call_update.description,
+            body = tool_call_update.body,
+            diff = tool_call_update.diff,
+        }
+        self.chat_history:update_tool_call(id, tool_call)
+    end
 
     -- pre-emptively clear diff preview when tool call update is received, as it's either done or failed
     local is_rejection = tool_call_update.status == "failed"
-    self:_show_diff_in_buffer(tool_call_update.tool_call_id, is_rejection)
+    self:_show_diff_in_buffer(id, is_rejection)
 
     -- Remove the permission request if the tool call failed before user granted it
     if tool_call_update.status == "failed" then
-        self.permission_manager:remove_request_by_tool_call_id(
-            tool_call_update.tool_call_id
-        )
-        self.permission_manager:drop_pending_edit(tool_call_update.tool_call_id)
+        self.permission_manager:remove_request_by_tool_call_id(id)
+        self.permission_manager:drop_pending_edit(id)
     end
 
     if tool_call_update.status == "completed" then
-        self.permission_manager:finalize_edit_range(
-            tool_call_update.tool_call_id
-        )
+        self.permission_manager:finalize_edit_range(id)
+    end
+
+    -- A top-level Task drives the subagents indicator over its open interval.
+    -- Its kind only resolves to SubAgent once rawInput arrives on an update (the
+    -- streamed initial tool_call is empty), so this update is normally where the
+    -- Task is first marked open; the terminal update releases it.
+    local task_tracker = writer.tool_call_blocks[id]
+    if
+        not is_subagent
+        and task_tracker
+        and kind_key(task_tracker.kind) == "subagent"
+    then
+        if
+            tool_call_update.status == "completed"
+            or tool_call_update.status == "failed"
+        then
+            self:_mark_task_closed(id)
+        else
+            self:_mark_task_open(id)
+        end
     end
 
     -- Reload buffers when file-mutating tool calls complete.
@@ -1095,8 +1259,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- autocmds (FileChangedShell → BufReadPost → LSP → treesitter) that
     -- can overwhelm the event loop and crash neovim.
     if tool_call_update.status == "completed" then
-        local tracker =
-            self.message_writer.tool_call_blocks[tool_call_update.tool_call_id]
+        local tracker = writer.tool_call_blocks[id]
         if tracker and tracker.kind and FILE_MUTATING_KINDS[kind_key(tracker.kind)] then
 
             if not self._checktime_scheduled then
@@ -1124,8 +1287,11 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         end
     end
 
+    -- The subagents indicator is Task-counter driven, so only refresh the main
+    -- indicator here (for main-agent tool activity).
     if
-        not self.permission_manager.current_request
+        not is_subagent
+        and not self.permission_manager.current_request
         and #self.permission_manager.queue == 0
     then
         self.status_indicator:start("generating")
@@ -1558,6 +1724,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
     self.is_generating = true
 
+    -- Tool-call ownership and the subagent auto-open guard are per-turn.
+    self._tool_call_owner = {}
+    self._open_tasks = {}
+    self._subagent_win_opened_this_turn = false
+
     self.agent:send_prompt(self.session_id, prompt, function(response, err)
         -- This callback already runs inside vim.schedule (from _handle_message).
         -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
@@ -1599,6 +1770,13 @@ function SessionManager:_handle_input_submit_inner(input_text)
         self.message_writer:finalize_turn()
         self.message_writer:set_turn_usage(turn_usage)
         self.message_writer:scroll_to_bottom()
+
+        -- Reset the subagents buffer's per-turn flags too (mandatory — the
+        -- cross-turn flag hazard is per writer) and clear its indicator. The
+        -- turn separator is emitted per-Task in _mark_task_closed, not here.
+        self.subagent_writer:finalize_turn()
+        self.subagent_status_indicator:stop()
+        self._open_tasks = {}
 
         self.status_indicator:stop()
 
@@ -2135,7 +2313,7 @@ function SessionManager:_show_diff_in_buffer(tool_call_id, is_rejection)
     end
 
     local tracker = tool_call_id
-        and self.message_writer.tool_call_blocks[tool_call_id]
+        and self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
 
     -- Strip debounced diffs: when the user approves an edit, the provider
     -- re-sends it instantly — the diff frame is identical.

@@ -111,7 +111,7 @@ tracked after terminal status.
 Subagent (Task) calls carry `rawInput` on the initial `tool_call`; top-level
 calls carry it on the refining `tool_call_update`. The claude adapter enriches
 both build paths (`__apply_raw_input`) — else subagent edits render without a
-diff. Why: the `acp` skill's `claude-agent.md` § "Tool call emission".
+diff.
 
 ## Key design rules for adapters
 
@@ -304,8 +304,7 @@ The plugin's `AgentConfigOptions:set_options` already dispatches on
 is captured into `self.thought_level`. A `/effort`-equivalent selector is now
 unblocked: it would read `self.thought_level.options` and send the chosen value
 via `session/set_config_option`. Provider-specific — non-Claude bridges may not
-emit it. See the `acp` skill's `references/claude-agent.md` § "ConfigOptions —
-`thought_level` (effort)".
+emit it.
 
 ### Mode switch kind inconsistency (claude-agent-acp)
 
@@ -331,11 +330,15 @@ misses. Any kind-based dispatch must lowercase before lookup, or compose a
 table that includes both casings. The chat heading is not a reliable signal
 that the right `kind` arrived — `display_kind` hides the difference.
 
-### Subagent tool calls render inline (parentToolUseId ignored)
+### Subagent content routed to a second buffer (parentToolUseId)
 
-Forwarded subagent (Task) notifications carry `_meta.claudeCode.parentToolUseId`,
-but the plugin does not read it, so subagent tool calls render inline in the
-top-level feed rather than nested under their Task block.
+Forwarded subagent (Task) notifications carry `_meta.claudeCode.parentToolUseId`
+(present ⟺ subagent content). `SessionManager` routes tagged message/thought
+chunks to a dedicated `subagent_writer` (bound to `buf_nrs.subagent`) and records
+tool-call ownership on the initial `tool_call` via `_writer_for`; the Task spawn
+block itself stays in the main chat. The subagents split auto-opens on first
+subagent activity of a turn. claude-agent-acp only — untagged providers never
+populate the second buffer. See `notes/feature-subagent-separation.md`.
 
 ### Permission optionId is opaque
 
@@ -426,9 +429,8 @@ infrastructure exists for future use.
 The claude-agent-acp bridge can stall its prompt generator for one turn:
 `agent_message_chunk` / `tool_call` / `tool_call_update` silently stop reaching
 the client while `session/request_permission` keeps working, and the missing
-content flushes on the next user prompt. The mechanism and upstream issues are in
-the `acp` skill's `claude-agent.md` § "Prompt loop stall". The bytes never leave
-the bridge, so:
+content flushes on the next user prompt. The stall is upstream in the bridge's
+prompt generator — the bytes never leave the bridge, so:
 
 - **Nothing in `MessageWriter` or the dispatch layer can fix it** — the content
   never arrives. Client-layer tests in isolation cannot reproduce it.

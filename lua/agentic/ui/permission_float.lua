@@ -87,12 +87,12 @@ function PermissionFloat._anchor_position(
     return row, col
 end
 
---- Find the chat window for this float's tab page. Returns nil if the
---- widget is hidden on this tab (no chat window in this tab page contains
---- the chat buffer).
+--- Find the window showing `bufnr` on this float's tab page. Returns nil if
+--- that buffer is not visible on this tab (e.g. the widget or subagents split
+--- is hidden).
+--- @param bufnr integer
 --- @return integer|nil
-function PermissionFloat:_find_chat_winid()
-    local bufnr = self.message_writer.bufnr
+function PermissionFloat:_find_chat_winid(bufnr)
     for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
         if vim.api.nvim_win_get_tabpage(winid) == self._tab_page_id then
             return winid
@@ -245,13 +245,15 @@ end
 --- option mapping (key index -> option id) used by PermissionManager to bind
 --- widget keymaps.
 ---
---- No-op (returns nil) when the chat window is hidden on this tab. The
+--- No-op (returns nil) when the anchor buffer is hidden on this tab. The
 --- caller still records `current_request` so widget reopen can re-trigger
 --- the prompt.
 --- @param options agentic.acp.PermissionOption[]
+--- @param anchor_bufnr? integer Buffer whose window the float anchors to (defaults to the main chat buffer)
 --- @return table<integer, string>|nil option_mapping
-function PermissionFloat:open(options)
-    local chat_winid = self:_find_chat_winid()
+function PermissionFloat:open(options, anchor_bufnr)
+    local chat_winid =
+        self:_find_chat_winid(anchor_bufnr or self.message_writer.bufnr)
     if not chat_winid then
         return nil
     end

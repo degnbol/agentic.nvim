@@ -160,6 +160,12 @@ local ConfigDefault = {
     --- @field max_height number
     --- @field win_opts? agentic.UserConfig.WinOpts
 
+    --- @class agentic.UserConfig.Windows.Subagent
+    --- @field display boolean Route subagent (Task) work into a separate split beside the chat
+    --- @field width string|number Split width: fraction (0-1), "N%", or column count
+    --- @field auto_close boolean Close the split when all subagents in the turn finish
+    --- @field win_opts? agentic.UserConfig.WinOpts
+
     --- `"tab"` opens the widget in a dedicated tabpage (no file window),
     --- closes the tab on hide. `"right"`, `"left"`, `"bottom"` split in the
     --- current tab next to the existing windows.
@@ -177,6 +183,7 @@ local ConfigDefault = {
     --- @field files agentic.UserConfig.Windows.Files
     --- @field diagnostics agentic.UserConfig.Windows.Diagnostics
     --- @field todos agentic.UserConfig.Windows.Todos
+    --- @field subagent agentic.UserConfig.Windows.Subagent
     windows = {
         position = "right",
         width = "50%",
@@ -189,6 +196,7 @@ local ConfigDefault = {
         files = { max_height = 10, win_opts = {} },
         diagnostics = { max_height = 10, win_opts = {} },
         todos = { display = true, max_height = 10, win_opts = {} },
+        subagent = { display = true, width = "40%", auto_close = false, win_opts = {} },
     },
 
     --- @type agentic.UserConfig.Keymaps

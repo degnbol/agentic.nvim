@@ -74,6 +74,21 @@ function SessionRegistry.destroy_session(tab_page_id)
     end
 end
 
+--- Find the PermissionManager whose ACP session matches `session_id`, across
+--- all tabpages (hence all providers — one bridge per provider, all sharing
+--- the same $AGENTIC_SOCK, so a hook RPC must resolve globally, not per-tab).
+--- Linear scan; there is at most a handful of live sessions.
+--- @param session_id string
+--- @return agentic.ui.PermissionManager|nil
+function SessionRegistry.permission_manager_for_session(session_id)
+    for _, session in pairs(SessionRegistry.sessions) do
+        if session and session.session_id == session_id then
+            return session.permission_manager
+        end
+    end
+    return nil
+end
+
 --- @param on_selected fun(provider_name: agentic.UserConfig.ProviderName|nil) Callback that will be called with the selected provider name, if any
 function SessionRegistry.select_provider(on_selected)
     local available_providers = ACPHealth.get_default_provider_names()

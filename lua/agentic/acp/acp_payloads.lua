@@ -102,10 +102,12 @@ return M
 --- @class agentic.acp.AgentMessageChunk
 --- @field sessionUpdate "agent_message_chunk"
 --- @field content agentic.acp.Content
+--- @field public _meta? agentic.acp.ClaudeMeta
 
 --- @class agentic.acp.AgentThoughtChunk
 --- @field sessionUpdate "agent_thought_chunk"
 --- @field content agentic.acp.Content
+--- @field public _meta? agentic.acp.ClaudeMeta
 
 --- @class agentic.acp.ResourceLinkContent
 --- @field type "resource_link"

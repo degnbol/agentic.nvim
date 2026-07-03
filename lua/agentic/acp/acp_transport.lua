@@ -88,6 +88,13 @@ function M.create_stdio_transport(config, callbacks)
         env_map["NODE_NO_WARNINGS"] = "1"
         env_map["IS_AI_TERMINAL"] = "1"
 
+        -- Socket this nvim listens on, so a PreToolUse hook (grandchild of the
+        -- bridge) can RPC back into the live editor to run the permission
+        -- ladder. Propagates nvim -> bridge -> SDK CLI -> hook via the
+        -- inherited environment. See permission_hook.lua.
+        env_map["AGENTIC_SOCK"] = vim.v.servername ~= "" and vim.v.servername
+            or vim.fn.serverstart()
+
         -- Apply user-provided env overrides/additions (overwrites defaults)
         if env then
             for k, v in pairs(env) do

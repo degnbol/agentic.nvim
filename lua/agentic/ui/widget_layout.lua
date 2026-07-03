@@ -173,6 +173,35 @@ local function open_or_resize_dynamic_window(
     WindowDecoration.render_header(bufnr, window_name)
 end
 
+--- Window-local options for a chat-style scrolling buffer (folds, conceal,
+--- signcolumn). Shared by the main `chat` window and the `subagent` split so
+--- both render tool-call blocks and folds identically.
+--- @param is_bottom boolean
+--- @return table<string, any>
+local function chat_win_opts(is_bottom)
+    return {
+        scrolloff = 4,
+        winfixheight = is_bottom,
+        winfixwidth = not is_bottom,
+        signcolumn = "yes:1",
+        foldmethod = "expr",
+        foldexpr = "v:lua.vim.treesitter.foldexpr()",
+        foldenable = true,
+        -- Set foldlevel high so nothing auto-closes: injected-language folds
+        -- and our own `*-fold` blocks both default open, and the writer closes
+        -- only its own blocks imperatively via :foldclose. This must be set
+        -- explicitly — a new window inherits window-local foldlevel from the
+        -- window it splits off, NOT the global default, so opening Agentic from
+        -- a window with a low foldlevel would otherwise collapse every block.
+        foldlevel = 99,
+        foldminlines = 0,
+        foldcolumn = "0",
+        conceallevel = 2,
+        concealcursor = "n",
+        foldtext = 'v:lua.require("agentic.ui.foldtext").foldtext()',
+    }
+end
+
 --- @param params agentic.ui.WidgetLayout.Params
 --- @param position agentic.UserConfig.Windows.Position
 local function show_layout(params, position)
@@ -198,27 +227,13 @@ local function show_layout(params, position)
         chat_opts.width = WidgetLayout.calculate_width(Config.windows.width)
     end
 
-    get_or_create_window(win_nrs, "chat", buf_nrs.chat, chat_opts, {
-        scrolloff = 4,
-        winfixheight = is_bottom,
-        winfixwidth = not is_bottom,
-        signcolumn = "yes:1",
-        foldmethod = "expr",
-        foldexpr = "v:lua.vim.treesitter.foldexpr()",
-        foldenable = true,
-        -- Set foldlevel high so nothing auto-closes: injected-language folds
-        -- and our own `*-fold` blocks both default open, and the writer closes
-        -- only its own blocks imperatively via :foldclose. This must be set
-        -- explicitly — a new window inherits window-local foldlevel from the
-        -- window it splits off, NOT the global default, so opening Agentic from
-        -- a window with a low foldlevel would otherwise collapse every block.
-        foldlevel = 99,
-        foldminlines = 0,
-        foldcolumn = "0",
-        conceallevel = 2,
-        concealcursor = "n",
-        foldtext = 'v:lua.require("agentic.ui.foldtext").foldtext()',
-    })
+    get_or_create_window(
+        win_nrs,
+        "chat",
+        buf_nrs.chat,
+        chat_opts,
+        chat_win_opts(is_bottom)
+    )
 
     -- Input window: right splits below chat with height, bottom splits right
     -- of chat with computed stack width
@@ -349,6 +364,47 @@ function WidgetLayout.close(win_nrs)
             )
         end
     end
+end
+
+--- Open the subagent split beside the chat window, reusing the chat window
+--- options so it renders tool-call blocks and folds identically. No-op when
+--- already open or when the chat window is not visible.
+--- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+function WidgetLayout.open_subagent(win_nrs, buf_nrs)
+    local existing = win_nrs.subagent
+    if existing and vim.api.nvim_win_is_valid(existing) then
+        return
+    end
+
+    local chat_winid = win_nrs.chat
+    if not chat_winid or not vim.api.nvim_win_is_valid(chat_winid) then
+        return
+    end
+
+    local is_bottom = Config.windows.position == "bottom"
+    local chat_width = vim.api.nvim_win_get_width(chat_winid)
+    local width = calculate_dimension(
+        Config.windows.subagent.width,
+        chat_width,
+        DefaultConfig.windows.subagent.width
+    )
+    width = math.max(1, math.min(width, chat_width - 1))
+
+    -- The subagent is always a vertical (`right`) split, so its width must be
+    -- fixed regardless of the chat's orientation — chat_win_opts leaves
+    -- winfixwidth false in bottom layout (where the chat itself fixes height).
+    local win_opts = chat_win_opts(is_bottom)
+    win_opts.winfixwidth = true
+
+    win_nrs.subagent = open_win(
+        buf_nrs.subagent,
+        false,
+        { win = chat_winid, split = "right", width = width },
+        "subagent",
+        win_opts
+    )
+    WindowDecoration.render_header(buf_nrs.subagent, "subagent")
 end
 
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs

@@ -1290,4 +1290,77 @@ describe("agentic.ui.PermissionManager", function()
             }))
         end)
     end)
+
+    describe("decide (pure ladder verdict)", function()
+        --- @type agentic.UserConfig
+        local Config
+
+        before_each(function()
+            Config = require("agentic.config")
+        end)
+
+        it("allows read-only kinds", function()
+            assert.equal("allow", pm:decide("read", { toolCallId = "t" }))
+            assert.equal("allow", pm:decide("search", { toolCallId = "t" }))
+        end)
+
+        it("allows skill loads", function()
+            assert.equal("allow", pm:decide("skill", { toolCallId = "t" }))
+        end)
+
+        it("denies a settings-denied bash command", function()
+            assert.equal(
+                "deny",
+                pm:decide("execute", {
+                    toolCallId = "t",
+                    rawInput = { command = "rm -rf /" },
+                })
+            )
+        end)
+
+        it("returns nil for an unprovable bash command", function()
+            assert.is_nil(pm:decide("execute", {
+                toolCallId = "t",
+                rawInput = { command = "python -c 'print(1)'" },
+            }))
+        end)
+
+        it("honours the allow_always cache", function()
+            pm._always_cache["execute:echo hi"] = "allow"
+            assert.equal(
+                "allow",
+                pm:decide("execute", {
+                    toolCallId = "t",
+                    kind = "execute",
+                    rawInput = { command = "echo hi" },
+                })
+            )
+        end)
+
+        it("honours the reject_always cache", function()
+            pm._always_cache["execute:secret"] = "reject"
+            assert.equal(
+                "deny",
+                pm:decide("execute", {
+                    toolCallId = "t",
+                    kind = "execute",
+                    rawInput = { command = "secret" },
+                })
+            )
+        end)
+
+        it("returns nil with no matching rule", function()
+            assert.is_nil(pm:decide("edit", {
+                toolCallId = "t",
+                rawInput = { file_path = "/some/repo/file.lua" },
+            }))
+        end)
+
+        it("read-only auto-approval respects the config toggle", function()
+            local original = Config.auto_approve_read_only_tools
+            Config.auto_approve_read_only_tools = false
+            assert.is_nil(pm:decide("read", { toolCallId = "t" }))
+            Config.auto_approve_read_only_tools = original
+        end)
+    end)
 end)

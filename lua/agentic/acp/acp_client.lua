@@ -3,6 +3,38 @@ local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
 local transport_module = require("agentic.acp.acp_transport")
 
+-- Absolute path to the PreToolUse hook script (plugin_root/hooks/...). This
+-- file is lua/agentic/acp/acp_client.lua, so :h:h:h:h is the plugin root.
+local PERMISSION_HOOK = vim.fn.fnamemodify(
+    debug.getinfo(1, "S").source:sub(2),
+    ":h:h:h:h"
+) .. "/hooks/permission_hook.sh"
+
+--- Build the `_meta.claudeCode.options` blob shared by session/new and
+--- session/load. Includes the inline PreToolUse permission hook (flag-tier
+--- settings, nothing written to disk) so the deterministic ladder gates
+--- auto-mode's classifier. Claude-only namespace — other bridges ignore it.
+--- See notes/PLAN-auto-mode-integration.md § "Hook registration (no file)".
+--- @param additional_dirs string[]
+--- @return table
+local function build_claude_options(additional_dirs)
+    return {
+        additionalDirectories = additional_dirs,
+        settings = {
+            hooks = {
+                PreToolUse = {
+                    {
+                        matcher = "Bash|Write|Edit",
+                        hooks = {
+                            { type = "command", command = PERMISSION_HOOK },
+                        },
+                    },
+                },
+            },
+        },
+    }
+end
+
 --[[
 CRITICAL: Type annotations in this file are essential for Lua Language Server support.
 DO NOT REMOVE them. Only update them if the underlying types change.
@@ -579,6 +611,12 @@ function ACPClient:__build_tool_call_message(update)
         status = update.status,
         argument = update.title,
         body = self:extract_content_body(update),
+        -- Present ⟺ this tool call belongs to a subagent (Task). Read only on
+        -- the initial tool_call — updates omit it, so ownership is resolved
+        -- from the block created here (see SessionManager:_writer_for).
+        parent_tool_use_id = update._meta
+            and update._meta.claudeCode
+            and update._meta.claudeCode.parentToolUseId,
     }
 
     return message
@@ -881,9 +919,7 @@ function ACPClient:create_session(handlers, callback)
         mcpServers = {},
         _meta = {
             claudeCode = {
-                options = {
-                    additionalDirectories = additional_dirs,
-                },
+                options = build_claude_options(additional_dirs),
             },
         },
     }, function(result, err)
@@ -951,9 +987,7 @@ function ACPClient:load_session(
         mcpServers = mcp_servers or {},
         _meta = {
             claudeCode = {
-                options = {
-                    additionalDirectories = additional_dirs,
-                },
+                options = build_claude_options(additional_dirs),
             },
         },
     }, function(result, err)
@@ -1234,6 +1268,11 @@ return ACPClient
 --- @field params? { sessionId: string, update: agentic.acp.SessionUpdateMessage }
 --- @field error? agentic.acp.ACPError
 
+--- claude-agent-acp per-notification metadata. `parentToolUseId` is set on
+--- subagent (Task) notifications — present ⟺ subagent content.
+--- @class agentic.acp.ClaudeMeta
+--- @field claudeCode? { parentToolUseId?: string, toolName?: string, toolResponse?: any }
+
 --- @class agentic.acp.ToolCallMessage
 --- @field sessionUpdate "tool_call"
 --- @field toolCallId string
@@ -1243,6 +1282,7 @@ return ACPClient
 --- @field content? agentic.acp.ACPToolCallContent[]
 --- @field locations? agentic.acp.ToolCallLocation[]
 --- @field rawInput? agentic.acp.RawInput
+--- @field public _meta? agentic.acp.ClaudeMeta
 
 --- @class agentic.acp.ToolCallUpdate
 --- @field sessionUpdate "tool_call_update"

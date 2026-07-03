@@ -11,6 +11,9 @@ local WINDOW_HEADERS = {
     chat = {
         title = "󰻞 Agentic Chat",
     },
+    subagent = {
+        title = "󰚩 Subagents",
+    },
     input = { title = "󰦨 Prompt" },
     code = {
         title = "󰪸 Selected Code Snippets",

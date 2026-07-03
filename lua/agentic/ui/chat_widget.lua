@@ -5,7 +5,7 @@ local Logger = require("agentic.utils.logger")
 local WindowDecoration = require("agentic.ui.window_decoration")
 local WidgetLayout = require("agentic.ui.widget_layout")
 
---- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"
+--- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"subagent"
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
@@ -921,9 +921,36 @@ function ChatWidget:_bind_send_keymaps()
     end
 end
 
+--- Apply the chat-buffer rendering setup (agentic treesitter parser + snacks
+--- image attach) so a buffer renders tool-call blocks and prose like the main
+--- chat. Shared by the `chat` and `subagent` buffers.
+--- @param bufnr integer
+local function setup_chat_buffer(bufnr)
+    -- Chat parses as the private `agentic` language so its folds query is
+    -- isolated from real markdown buffers (see init.lua). Fall back to markdown
+    -- if the agentic language could not be registered.
+    if not pcall(vim.treesitter.start, bufnr, "agentic") then
+        pcall(vim.treesitter.start, bufnr, "markdown")
+    end
+
+    -- Render LaTeX math as images via snacks.image. The chat is a scratch buffer
+    -- (no BufReadPre) opened at startup before any file is read, so snacks' own
+    -- BufReadPre-triggered doc-attach autocmd never fires for it. Attach
+    -- explicitly. Guarded so agentic.nvim runs standalone without snacks; a no-op
+    -- when image rendering is disabled (doc.attach self-gates on config.enabled).
+    local has_image, image = pcall(require, "snacks.image")
+    if has_image then
+        image.doc.attach(bufnr)
+    end
+end
+
 --- @return agentic.ui.ChatWidget.BufNrs
 function ChatWidget:_create_buf_nrs()
     local chat = self:_create_new_buf({
+        filetype = "AgenticChat",
+    })
+
+    local subagent = self:_create_new_buf({
         filetype = "AgenticChat",
     })
 
@@ -948,22 +975,13 @@ function ChatWidget:_create_buf_nrs()
         modifiable = true,
     })
 
-    -- Chat parses as the private `agentic` language so its folds query is
-    -- isolated from real markdown buffers (see init.lua). Fall back to markdown
-    -- if the agentic language could not be registered.
-    if not pcall(vim.treesitter.start, chat, "agentic") then
-        pcall(vim.treesitter.start, chat, "markdown")
-    end
+    setup_chat_buffer(chat)
+    setup_chat_buffer(subagent)
 
-    -- Render LaTeX math as images via snacks.image. The chat is a scratch buffer
-    -- (no BufReadPre) opened at startup before any file is read, so snacks' own
-    -- BufReadPre-triggered doc-attach autocmd never fires for it. Attach
-    -- explicitly. Guarded so agentic.nvim runs standalone without snacks; a no-op
-    -- when image rendering is disabled (doc.attach self-gates on config.enabled).
-    local has_image, image = pcall(require, "snacks.image")
-    if has_image then
-        image.doc.attach(chat)
-    end
+    -- Both are AgenticChat-filetype buffers; a buffer-local marker lets external
+    -- UI (e.g. incline) pick the right headers entry to title each window.
+    vim.b[chat].agentic_window = "chat"
+    vim.b[subagent].agentic_window = "subagent"
 
     pcall(vim.treesitter.start, todos, "markdown")
     pcall(vim.treesitter.start, code, "markdown")
@@ -974,6 +992,7 @@ function ChatWidget:_create_buf_nrs()
     --- @type agentic.ui.ChatWidget.BufNrs
     local buf_nrs = {
         chat = chat,
+        subagent = subagent,
         todos = todos,
         code = code,
         files = files,
@@ -1091,6 +1110,17 @@ end
 --- @param panel_name agentic.ui.ChatWidget.PanelNames
 function ChatWidget:close_optional_window(panel_name)
     WidgetLayout.close_optional_window(self.win_nrs, panel_name)
+end
+
+--- Open the subagent split beside the chat (no-op if already open or the chat
+--- window is hidden). Used to reveal subagent work on demand.
+function ChatWidget:open_subagent_window()
+    WidgetLayout.open_subagent(self.win_nrs, self.buf_nrs)
+end
+
+--- Close the subagent split if open, keeping the buffer.
+function ChatWidget:close_subagent_window()
+    self:close_optional_window("subagent")
 end
 
 --- Filetypes that should be excluded when finding fallback windows

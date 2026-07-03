@@ -25,7 +25,8 @@ local PERMISSION_KIND_PRIORITY = {
 }
 
 --- @class agentic.ui.PermissionManager
---- @field message_writer agentic.ui.MessageWriter Reference to MessageWriter instance
+--- @field message_writer agentic.ui.MessageWriter Main-chat writer; default when no per-tool-call resolver is set
+--- @field _writer_for? fun(tool_call_id: string): agentic.ui.MessageWriter Resolves the writer owning a tool call (main vs subagent); falls back to message_writer
 --- @field _buf_nrs agentic.ui.ChatWidget.BufNrs All widget buffer numbers for keymap application
 --- @field queue table[] Queue of pending requests {toolCallId, request, callback}
 --- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
@@ -42,10 +43,12 @@ PermissionManager.__index = PermissionManager
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @param tab_page_id integer
+--- @param writer_for? fun(tool_call_id: string): agentic.ui.MessageWriter Resolver for the writer owning a tool call (main vs subagent)
 --- @return agentic.ui.PermissionManager
-function PermissionManager:new(message_writer, buf_nrs, tab_page_id)
+function PermissionManager:new(message_writer, buf_nrs, tab_page_id, writer_for)
     local instance = setmetatable({
         message_writer = message_writer,
+        _writer_for = writer_for,
         _buf_nrs = buf_nrs or { chat = message_writer.bufnr },
         permission_float = PermissionFloat:new(message_writer, buf_nrs, tab_page_id),
         queue = {},
@@ -59,6 +62,18 @@ function PermissionManager:new(message_writer, buf_nrs, tab_page_id)
     }, self)
 
     return instance
+end
+
+--- The MessageWriter owning a tool call. Subagent tool-call blocks live in the
+--- subagents buffer, so tracker lookups and the float anchor must resolve
+--- through here rather than assuming the main chat writer.
+--- @param tool_call_id string
+--- @return agentic.ui.MessageWriter
+function PermissionManager:_writer(tool_call_id)
+    if self._writer_for then
+        return self._writer_for(tool_call_id)
+    end
+    return self.message_writer
 end
 
 --- ACP tool kinds that are guaranteed read-only (no filesystem mutations).
@@ -169,7 +184,7 @@ function PermissionManager:_build_cache_key(tool_call)
     local raw_input = tool_call.rawInput
     if kind == "execute" and not (raw_input and raw_input.command) then
         local tracker =
-            self.message_writer.tool_call_blocks[tool_call.toolCallId]
+            self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
         if tracker and kind_key(tracker.kind) == "execute" and tracker.argument then
             raw_input = vim.tbl_extend(
                 "force",
@@ -254,8 +269,7 @@ end
 
 --- Resolve the shell command of an execute permission request. `rawInput.command`
 --- may be nil (opencode sends `metadata: {}`); the command then lives in the
---- prior tool_call_update tracker as `argument` — see acp skill
---- `references/opencode.md` § "Permission request shape" finding 3.
+--- prior tool_call_update tracker as `argument`.
 --- @param request agentic.acp.RequestPermission
 --- @return string|nil command
 function PermissionManager:_request_command(request)
@@ -263,7 +277,7 @@ function PermissionManager:_request_command(request)
     local raw_input = tool_call and tool_call.rawInput
     local command = raw_input and raw_input.command
     if not command and tool_call then
-        local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
+        local tracker = self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
         if tracker and kind_key(tracker.kind) == "execute" then
             command = tracker.argument
         end
@@ -282,14 +296,78 @@ function PermissionManager:_remembered_leaf_patterns()
     return patterns
 end
 
---- Try to auto-approve a permission request without user interaction.
+--- Run the deterministic permission ladder and return its verdict, with **no**
+--- ACP-side effect (no callback, no auto_approve/auto_reject). This is the
+--- single source of truth shared by the `canUseTool` path (`_try_auto_approve`)
+--- and the auto-mode PreToolUse hook RPC.
 ---
---- Independent checks (any can approve):
+--- Independent checks (any can decide):
 --- 1. Read-only tool kinds ("read", "search") — always safe regardless of path.
---- 2. Skill loading ("Skill") — injects a SKILL.md into context, no mutation.
+--- 2. Skill loading ("skill") — injects a SKILL.md into context, no mutation.
 --- 3. Compound Bash commands — a concrete `deny` match on any executed leaf
----    rejects outright (no prompt); otherwise every leaf must match an allow
----    pattern with no deny/ask match to approve.
+---    → "deny"; otherwise every leaf matching an allow pattern with no deny/ask
+---    → "allow".
+--- 4. allow_always/reject_always client cache.
+--- 5. Trust scope for file-scoped kinds.
+---
+--- Tracker-free by contract: `kind` and `diff` are passed in (the tracker may
+--- be unpopulated at hook time). `command` is read straight from
+--- `tool_call.rawInput.command`; opencode's tracker fallbacks are applied by
+--- the `_try_auto_approve` caller before it delegates here.
+--- @param kind string|nil ACP tool kind
+--- @param tool_call agentic.acp.ToolCall
+--- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff for the trust check
+--- @return "allow"|"deny"|nil
+function PermissionManager:decide(kind, tool_call, diff)
+    local kind_lc = kind_key(kind)
+
+    if Config.auto_approve_read_only_tools and READ_ONLY_KINDS[kind_lc] then
+        return "allow"
+    end
+
+    if Config.auto_approve_skills and kind_lc == "skill" then
+        return "allow"
+    end
+
+    local command = tool_call.rawInput and tool_call.rawInput.command
+    if command and PermissionRules.should_auto_reject(command) then
+        return "deny"
+    end
+    if command then
+        local ok, effects =
+            PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
+        if ok and self:_bash_effects_clear(effects) then
+            return "allow"
+        end
+    end
+
+    local cache_key = self:_build_cache_key(tool_call)
+    if cache_key then
+        local cached = self._always_cache[cache_key]
+        if cached == "allow" then
+            return "allow"
+        elseif cached == "reject" then
+            return "deny"
+        end
+    end
+
+    if
+        Config.auto_approve_trust_scope
+        and self._trust_scope
+        and FILE_SCOPED_KINDS[kind_lc]
+    then
+        if self:_check_trust(kind_lc, tool_call, diff) then
+            return "allow"
+        end
+    end
+
+    return nil
+end
+
+--- Try to auto-approve/reject a permission request without user interaction.
+--- Resolves the tracker-derived inputs `decide` deliberately won't read (kind
+--- and command for opencode's re-kinded / metadata-less requests, and the edit
+--- diff), delegates the verdict to `decide`, then fires the ACP callback.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 --- @return boolean handled
@@ -299,98 +377,36 @@ function PermissionManager:_try_auto_approve(request, callback)
         return false
     end
 
-    -- Read-only tools: always approve (no filesystem mutation possible).
-    -- Check the request kind first; fall back to the tracker's kind for
-    -- providers that raise secondary permissions under the same toolCallId
-    -- with a different kind. opencode raises `external_directory` with
-    -- kind="other" before the underlying tool's own permission, sharing
-    -- toolCallId — see acp skill `references/opencode.md` § "Permission
-    -- request shape" finding 1.
-    local kind_lc = kind_key(tool_call.kind)
-    local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
+    -- opencode raises `external_directory` with kind="other" before the
+    -- underlying tool's own permission, sharing toolCallId — prefer a
+    -- read-only/skill tracker kind so those still auto-approve.
+    local tracker = self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
+    local kind = tool_call.kind
     local tracker_kind_lc = tracker and kind_key(tracker.kind) or ""
-    if
-        Config.auto_approve_read_only_tools
-        and (
-            (kind_lc ~= "" and READ_ONLY_KINDS[kind_lc])
-            or (tracker_kind_lc ~= "" and READ_ONLY_KINDS[tracker_kind_lc])
-        )
-    then
-        return auto_approve(
-            request,
-            callback,
-            "read-only tool kind: " .. (tracker_kind_lc ~= "" and tracker_kind_lc or kind_lc)
-        )
+    if READ_ONLY_KINDS[tracker_kind_lc] or tracker_kind_lc == "skill" then
+        kind = tracker.kind
     end
 
-    -- Skill loading: always approve. Loading a skill injects a SKILL.md into
-    -- context — no filesystem mutation. Covers users who don't have `Skill` in
-    -- their settings.json allow list, so the SDK escalates it as `ask`.
-    if
-        Config.auto_approve_skills
-        and (kind_lc == "skill" or tracker_kind_lc == "skill")
-    then
-        return auto_approve(request, callback, "skill load")
-    end
-
-    -- Compound Bash commands: check each segment against settings.json rules.
+    -- opencode sends metadata:{} on shell requests; the command lives in the
+    -- tracker as `argument`. Inject it so `decide` (and its cache-key build)
+    -- see a command without reading the tracker themselves.
     local command = self:_request_command(request)
-    if command and PermissionRules.should_auto_reject(command) then
-        return auto_reject(request, callback, "deny rule: " .. command)
-    end
-    if command then
-        local ok, effects =
-            PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
-        if ok and self:_bash_effects_clear(effects) then
-            return auto_approve(
-                request,
-                callback,
-                "compound command: " .. command
-            )
-        end
+    if command and not (tool_call.rawInput and tool_call.rawInput.command) then
+        tool_call = vim.tbl_extend("force", {}, tool_call) --[[@as agentic.acp.ToolCall]]
+        tool_call.rawInput = vim.tbl_extend(
+            "force",
+            tool_call.rawInput or {},
+            { command = command }
+        ) --[[@as agentic.acp.RawInput]]
     end
 
-    -- Client-side allow_always/reject_always cache (provider persistence unreliable via ACP)
-    local cache_key = self:_build_cache_key(tool_call)
-    if cache_key then
-        local cached = self._always_cache[cache_key]
-        if cached == "allow" then
-            return auto_approve(
-                request,
-                callback,
-                "cached allow_always: " .. cache_key
-            )
-        elseif cached == "reject" then
-            return auto_reject(
-                request,
-                callback,
-                "cached reject_always: " .. cache_key
-            )
-        end
+    local diff = tracker and tracker.diff
+    local verdict = self:decide(kind, tool_call, diff)
+    if verdict == "allow" then
+        return auto_approve(request, callback, "ladder verdict: allow")
+    elseif verdict == "deny" then
+        return auto_reject(request, callback, "ladder verdict: deny")
     end
-
-    -- Trust scope: scoped auto-approval for file-scoped tool kinds when the
-    -- target lies inside the user's /trust scope AND the change is recoverable
-    -- (new file, or tracked file with clean / Claude-owned hunks).
-    if
-        Config.auto_approve_trust_scope
-        and self._trust_scope
-        and FILE_SCOPED_KINDS[kind_lc]
-    then
-        local ok, reason = self:_check_trust(tool_call)
-        if ok then
-            return auto_approve(
-                request,
-                callback,
-                "trust scope: "
-                    .. self._trust_scope.display
-                    .. " ("
-                    .. reason
-                    .. ")"
-            )
-        end
-    end
-
     return false
 end
 
@@ -539,8 +555,9 @@ end
 --- @param tool_call agentic.acp.ToolCall
 --- @param path string Absolute, normalised path (post-symlink for orig)
 --- @param git_root string|nil Git root for the scope, or nil for kind="path"
+--- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff, passed in so this stays tracker-free (see `decide`)
 --- @return agentic.utils.TrustSafety.KindArgs|nil
-function PermissionManager:_build_kind_args(tool_call, path, git_root)
+function PermissionManager:_build_kind_args(tool_call, path, git_root, diff)
     local snap = TrustSafety.stat_snapshot(path)
     local tracked = git_root ~= nil and GitFiles.is_tracked(path, git_root)
     local hunks = (tracked and snap.exists)
@@ -557,9 +574,6 @@ function PermissionManager:_build_kind_args(tool_call, path, git_root)
             Logger.debug("trust: could not read", path, err)
         end
     end
-
-    local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
-    local diff = tracker and tracker.diff
 
     local edit_range = TrustSafety.edit_target_range(diff, file_lines)
     local owned = TrustSafety.claude_owned_ranges(
@@ -585,10 +599,12 @@ end
 
 --- Orchestrator for the trust check: symlink resolution → scope match →
 --- stat snapshot → git state → safety predicate → mtime revalidation.
+--- @param kind_lc string Normalised tool kind (passed in — see `decide`)
 --- @param tool_call agentic.acp.ToolCall
+--- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff, threaded to `_build_kind_args`
 --- @return boolean ok
 --- @return string reason
-function PermissionManager:_check_trust(tool_call)
+function PermissionManager:_check_trust(kind_lc, tool_call, diff)
     local raw = tool_call.rawInput
     local source_path = raw_input_path(raw)
     if not source_path then
@@ -625,7 +641,7 @@ function PermissionManager:_check_trust(tool_call)
     -- tmp scope is git-agnostic: clobbering scratch is not loss of work, so
     -- `safe_for_kind` short-circuits on `args.tmp` before any git field.
 
-    local source_args = self:_build_kind_args(tool_call, orig, git_root)
+    local source_args = self:_build_kind_args(tool_call, orig, git_root, diff)
     if not source_args then
         return false, "could not build source args"
     end
@@ -635,7 +651,7 @@ function PermissionManager:_check_trust(tool_call)
 
     --- @type agentic.utils.TrustSafety.StatSnapshot|nil
     local dest_snap = nil
-    if kind_key(tool_call.kind) == "move" then
+    if kind_lc == "move" then
         local dest = raw_input_destination(raw)
         if not dest then
             return false, "move missing destination"
@@ -664,7 +680,7 @@ function PermissionManager:_check_trust(tool_call)
         source_args.dest = dest_args
     end
 
-    local ok, reason = TrustSafety.safe_for_kind(kind_key(tool_call.kind), source_args)
+    local ok, reason = TrustSafety.safe_for_kind(kind_lc, source_args)
     if not ok then
         return false, reason or "unsafe"
     end
@@ -794,7 +810,8 @@ function PermissionManager:_process_next()
     local callback = item[3]
     local sorted_options = self._sort_permission_options(request.options)
 
-    local option_mapping = self.permission_float:open(sorted_options)
+    local option_mapping =
+        self.permission_float:open(sorted_options, self:_writer(toolCallId).bufnr)
     self:_apply_unapproved_highlight(request)
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
@@ -822,7 +839,7 @@ function PermissionManager:_apply_unapproved_highlight(request)
     if not tool_call then
         return
     end
-    local tracker = self.message_writer.tool_call_blocks[tool_call.toolCallId]
+    local tracker = self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
     local tracker_kind_lc = tracker and kind_key(tracker.kind) or ""
     if kind_key(tool_call.kind) ~= "execute" and tracker_kind_lc ~= "execute" then
         return
@@ -830,17 +847,20 @@ function PermissionManager:_apply_unapproved_highlight(request)
     if not tracker then
         return
     end
-    local bufnr = self.message_writer.bufnr
+    local bufnr = self:_writer(tool_call.toolCallId).bufnr
     if bufnr then
         PermissionHighlight.apply(bufnr, NS_PERMISSION_HIGHLIGHT, tracker)
     end
 end
 
---- Clear the unapproved-command highlight from this manager's chat buffer.
+--- Clear the unapproved-command highlight. The highlight may sit in either the
+--- main or the subagents buffer, so clear the current request's owning buffer
+--- (falling back to main); clearing an empty namespace is a no-op.
 function PermissionManager:_clear_unapproved_highlight()
-    local bufnr = self.message_writer.bufnr
-    if bufnr then
-        PermissionHighlight.clear(bufnr, NS_PERMISSION_HIGHLIGHT)
+    local id = self.current_request and self.current_request.toolCallId
+    local writer = id and self:_writer(id) or self.message_writer
+    if writer.bufnr then
+        PermissionHighlight.clear(writer.bufnr, NS_PERMISSION_HIGHLIGHT)
     end
 end
 

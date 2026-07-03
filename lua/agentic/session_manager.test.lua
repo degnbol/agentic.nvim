@@ -900,6 +900,8 @@ describe("agentic.SessionManager", function()
                 status_indicator = { start = function() end },
                 _show_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
+                _tool_call_owner = {},
+                _writer_for = SessionManager._writer_for,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -1033,7 +1035,9 @@ describe("agentic.SessionManager", function()
                     is_near_bottom = empty,
                     tool_call_blocks = {},
                 },
+                subagent_writer = { finalize_turn = noop },
                 status_indicator = { start = noop, stop = noop },
+                subagent_status_indicator = { stop = noop },
                 chat_history = {
                     add_message = noop,
                     save = noop,
@@ -1195,6 +1199,8 @@ describe("agentic.SessionManager", function()
                 _destroyed = false,
                 status_indicator = { start = noop, stop = noop },
                 message_writer = { tool_call_blocks = {} },
+                _tool_call_owner = {},
+                _writer_for = SessionManager._writer_for,
                 -- nil chat window => unfocused => bell would ring if notified
                 widget = { win_nrs = { chat = nil } },
                 permission_manager = {
@@ -1396,6 +1402,121 @@ describe("agentic.SessionManager", function()
                 end
             end
             assert.equal(0, warn_count)
+        end)
+    end)
+
+    describe("subagent Task tracking", function()
+        --- @type TestSpy
+        local start_spy
+        --- @type TestSpy
+        local stop_spy
+        --- @type TestSpy
+        local close_win_spy
+        --- @type TestSpy
+        local divider_spy
+        local orig_auto_close
+
+        --- @return agentic.SessionManager
+        local function make_session()
+            start_spy = spy.new(function() end)
+            stop_spy = spy.new(function() end)
+            close_win_spy = spy.new(function() end)
+            divider_spy = spy.new(function() end)
+            return {
+                _open_tasks = {},
+                subagent_status_indicator = {
+                    start = start_spy,
+                    stop = stop_spy,
+                },
+                subagent_writer = { emit_divider = divider_spy },
+                widget = { close_subagent_window = close_win_spy },
+                _ensure_subagent_window = function() end,
+                _mark_task_open = SessionManager._mark_task_open,
+                _mark_task_closed = SessionManager._mark_task_closed,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        before_each(function()
+            orig_auto_close = Config.windows.subagent.auto_close
+        end)
+
+        after_each(function()
+            Config.windows.subagent.auto_close = orig_auto_close
+        end)
+
+        it("marks a task open, starts the indicator", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+
+            assert.is_true(session._open_tasks["task-1"])
+            assert.spy(start_spy).was.called(1)
+        end)
+
+        it("open is idempotent (repeat calls don't restart)", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_open("task-1")
+
+            assert.spy(start_spy).was.called(1)
+        end)
+
+        it("stops the indicator only when the last task closes", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_open("task-2")
+
+            session:_mark_task_closed("task-1")
+            assert.spy(stop_spy).was.called(0)
+
+            session:_mark_task_closed("task-2")
+            assert.spy(stop_spy).was.called(1)
+        end)
+
+        it("close is idempotent — a duplicated terminal update is harmless", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_open("task-2")
+
+            -- task-1 closes twice (e.g. consolidated + PostToolUse update)
+            session:_mark_task_closed("task-1")
+            session:_mark_task_closed("task-1")
+
+            -- sibling still open, so the indicator must not have stopped
+            assert.spy(stop_spy).was.called(0)
+            assert.is_true(session._open_tasks["task-2"])
+            -- membership guard also protects the divider: closed once, not twice
+            assert.spy(divider_spy).was.called(1)
+        end)
+
+        it("emits one divider per closing task", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_open("task-2")
+
+            session:_mark_task_closed("task-1")
+            session:_mark_task_closed("task-2")
+
+            -- each finished subagent gets its own separator (emit_divider itself
+            -- no-ops when nothing was written since the last one)
+            assert.spy(divider_spy).was.called(2)
+        end)
+
+        it("auto-closes the split on last close when configured", function()
+            Config.windows.subagent.auto_close = true
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_closed("task-1")
+
+            assert.spy(close_win_spy).was.called(1)
+        end)
+
+        it("leaves the split open when auto_close is off", function()
+            Config.windows.subagent.auto_close = false
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_closed("task-1")
+
+            assert.spy(close_win_spy).was.called(0)
         end)
     end)
 

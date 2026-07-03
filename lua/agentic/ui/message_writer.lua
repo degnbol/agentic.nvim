@@ -63,6 +63,7 @@ end
 --- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
 --- @field diff_tab? integer Tabpage ID of the diff preview tab (set by SessionManager)
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
+--- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
 
 --- Known prefix of the rejection boilerplate injected by the provider after
 --- a permission denial. Streamed as agent_message_chunk but meant for the
@@ -82,6 +83,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
+--- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -108,6 +110,7 @@ function MessageWriter:new(bufnr, status_indicator)
         _suppress_pin_release = false,
         _auto_scroll_paused = false,
         _pending_fold_ops = {},
+        _last_divider_line = nil,
     }, self)
 
     -- Listen for user scrolls. Our own programmatic scrolls and buffer
@@ -447,7 +450,7 @@ function MessageWriter:write_error_action(text)
 end
 
 --- Close out a turn: reset all per-turn state, reflow any streamed prose, and
---- append the trailing blank line that separates this turn from the next.
+--- append a trailing blank line.
 function MessageWriter:finalize_turn()
     -- Reset ALL per-turn state at the turn boundary. Any flag that was set
     -- during the turn must be cleared here, otherwise it silently corrupts
@@ -462,6 +465,26 @@ function MessageWriter:finalize_turn()
         self:_reflow_chunks(bufnr, true)
         self:_append_lines({ "" })
     end)
+    self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
+end
+
+--- Append a `---` separator to mark the end of one subagent's detour in the
+--- subagents buffer. No-op if nothing was written since the last separator (a
+--- Task that streamed no interim content gets none). Unlike `finalize_turn`
+--- this touches no cross-turn state, so it is safe to call mid-turn — the
+--- subagent lifecycle fires it per Task as each one closes.
+function MessageWriter:emit_divider()
+    if not vim.api.nvim_buf_is_valid(self.bufnr) then
+        return
+    end
+    if vim.api.nvim_buf_line_count(self.bufnr) == self._last_divider_line then
+        return
+    end
+    self:_with_modifiable_suppressed(function(bufnr)
+        self:_reflow_chunks(bufnr, true)
+        self:_append_lines({ "", "---", "" })
+    end)
+    self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
 end
 
 --- Stamp the per-turn token-usage footer on the trailing blank line that
@@ -552,11 +575,9 @@ end
 --- Some ACP providers stream chunks instead of full messages
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message_chunk(update)
-    -- Hide thinking chunks from chat
-    if update.sessionUpdate == "agent_thought_chunk" then
-        return
-    end
-
+    -- Thought chunks flow through as prose. _on_session_update routes them to
+    -- the writer for the agent that produced them (main → chat, subagent →
+    -- subagents window), so each window shows its own agent's thinking.
     local text = update.content
         and update.content.type == "text"
         and update.content.text --[[@as string]]

@@ -2,183 +2,269 @@
 
 ## Problem
 
-When Claude spawns a subagent (the `Task` tool), the subagent's prose,
-thinking, and tool calls render in the chat identically to and interleaved
-with the main agent's. Multiple parallel subagents mix together with no way
-to tell which call belongs to which agent.
+When Claude spawns a subagent (the `Task` tool), the subagent's prose and tool
+calls render inline in the main chat, interleaved with the main agent's own
+output. There is no way to tell which content is the main agent's and which is a
+subagent's, and parallel subagents mix together. The user also cannot steer a
+running subagent — over ACP, `session/prompt` addresses the session as a whole
+(routed to the main agent), and a `Task` subagent is an autonomous, one-way,
+view-only detour.
 
-## The wire signal (claude-agent-acp)
+## v1: split subagent work into a second buffer
 
-The bridge runs every subagent in the *same* ACP session as the main agent
-but tags each notification with the spawning `Task` tool's id. In
-`acp-agent.js`, the SDK message's `parent_tool_use_id` is `null` for
-top-level (main agent) messages and set to the parent Task's `tool_use_id`
-for subagent messages. `toAcpNotifications(...)` stamps it onto **every**
-notification type it emits — `agent_message_chunk`, `agent_thought_chunk`,
-`tool_call`, `tool_call_update`, and terminal sub-notifications — as
-`update._meta.claudeCode.parentToolUseId`. Top-level messages omit the field.
+Route all subagent content into a dedicated **`subagents`** buffer, shown in a
+vertical split beside the main **`chat`** buffer. The main chat then holds only
+main-agent content, so "main vs subagent" is answered by *which buffer you are
+reading* — no per-line marker needed. The subagents buffer accumulates the full
+session (like the main chat); telling parallel subagents apart *within* it is
+deferred to v2.
 
-Routing rule:
+## The wire signal (`parentToolUseId`)
+
+Verified against `claude-agent-acp` 0.54.1 (`dist/acp-agent.js`).
+
+Every subagent notification is tagged with the spawning `Task` tool's id in
+`update._meta.claudeCode.parentToolUseId`; top-level (main-agent) notifications
+omit the field.
 
 | Origin | `_meta.claudeCode.parentToolUseId` |
 | --- | --- |
 | Main agent | absent |
-| Subagent spawned by Task `toolu_X` | `"toolu_X"` |
-| Parallel subagent spawned by Task `toolu_Y` | `"toolu_Y"` |
+| Subagent spawned by `Task` `toolu_X` | `"toolu_X"` |
+| Grandchild subagent (spawned by a subagent) | its *immediate* parent's `Task` id (non-null) |
 
-The grouping key is ready-made: each `Task` spawn has a unique
-`tool_use_id`, and that id is exactly the `toolCallId` of the `SubAgent`
-block the plugin already renders for the parent (detected in
-`claude_agent_acp_adapter.lua` — `kind == "SubAgent"` /
-`rawInput.subagent_type`). Its `subagent_type` + `description` give a human
-label.
+- Live streaming goes through `streamEventToAcpNotifications` (`:3837`), which
+  passes `parentToolUseId: message.parent_tool_use_id` **unconditionally** into
+  `toAcpNotifications`. So subagent prose, thinking, and tool calls all stream
+  to the client, each tagged. (Thinking is currently dropped by the plugin —
+  see "Show subagent thinking in the subagents buffer" below.)
+- The consolidated `assistant`-message path (`:1564`) *drops* subagent
+  text/thinking — but only to avoid double-emitting what already streamed live.
+- The routing key is a boolean: **`parentToolUseId` present ⟺ subagent content.**
+  A repo-wide grep for `parentToolUseId` returns zero hits — nothing reads it
+  today.
 
-## Why it currently mixes
+### The `Task` block and result stay in the main chat
 
-The plugin never reads `_meta`. The full `update` object carries it intact
-all the way through (`acp_client.lua __handle_session_update` →
-`session_manager.lua _on_session_update` → `message_writer:write_message_chunk`,
-and the adapter's `__build_tool_call_update`), but no code copies
-`parentToolUseId` onto the rendered block or chunk. A repo-wide grep for
-`parentToolUseId` returns zero hits.
+The subagent-spawn tool is **`Task`** (singular; *not* the `TaskCreate/Update/
+List/Get` todo tools). Its `tool_use` is emitted by the main agent, so its
+message has `parent_tool_use_id === null` — both the initial `tool_call` and the
+completed `tool_call_update` are **untagged** → main chat. The completed update
+sets `rawOutput` to the subagent's **final report**, which the plugin already
+renders as the `SubAgent` block body (`claude_agent_acp_adapter.lua:116`,
+`extract_content_body`; SubAgent kind detection at `:156-166`).
+
+So the split falls exactly right with no extra work: **main chat = the `Task`
+spawn block + the subagent's final result; subagents buffer = the working
+detail** (interim prose + the subagent's own tool calls).
+
+## Routing: one ownership map
+
+Tool-call *updates* are partial and the `parentToolUseId` tag is not reliably
+present on them (the completed `tool_call_update` often omits `_meta`, like it
+omits `argument`). Re-reading the tag per message would split a tool-call block
+across buffers. Instead, resolve by **ownership**:
+
+- **Message/thought chunks** route by tag directly — each streamed chunk is
+  self-contained and carries its own `parentToolUseId`.
+- **Tool-call blocks** route phase-1 by tag: on the initial `tool_call`, read
+  `parentToolUseId`, pick the writer, create the block in that writer's
+  `tool_call_blocks`. That writer now **owns** the `toolCallId`.
+- **Everything after** — `tool_call_update`, permission lookups, the float
+  anchor, edit-range recording, and the direct `tool_call_blocks[id]` reads at
+  `session_manager.lua:835/932/1085/2122` — resolves the writer via a single
+  `SessionManager:_writer_for(tool_call_id)` helper, never by re-reading a tag.
+
+This makes routing immune to whether the bridge tags updates at all.
+
+### Two `MessageWriter` instances
+
+`MessageWriter:new(bufnr, status_indicator)` is fully buffer-bound — every piece
+of state (the `tool_call_blocks` tracker, auto-scroll, prose anchor, fold ops,
+`WinScrolled` autocmd) lives per-instance on one bufnr, with no shared module
+state. So the clean design is two instances:
+
+- `self.message_writer` → `buf_nrs.chat` (main), as today.
+- `self.subagent_writer` → `buf_nrs.subagent` (new).
+- `writer_for(update)`: `parentToolUseId` present → `subagent_writer`, else main.
+
+Each keeps its own tracker/auto-scroll/fold state; `MessageWriter`'s internals
+are untouched. A single writer mutating `self.bufnr` per chunk would corrupt the
+tracker (which maps `toolCallId → line position` in one buffer) — not viable.
+
+## The `subagents` buffer
+
+- **Clone of the chat buffer's setup, not a plain panel.** It renders tool-call
+  blocks + prose exactly like the main chat, so `_create_buf_nrs` gives it
+  `filetype = "AgenticChat"`, `treesitter.start(…, "agentic")`, and the
+  `snacks.image` attach — same as `chat` (`chat_widget.lua:926-966`). The
+  `todos/code/files/diagnostics` panels are plain markdown; the subagents buffer
+  is not.
+- **Accumulates the full session** like the main chat. `reset_turn_state` runs
+  on **both** writers each turn (mandatory — `MessageWriter` cross-turn flags
+  are a hazard if not reset), but resets flags only, never buffer content.
+- **`---` divider at turn end.** A trimmed `finalize_turn` on the subagent writer
+  emits a divider (no usage footer) — a cheap per-turn separator that, with the
+  usual one-subagent-per-turn, effectively separates one detour from the next.
+- **Own `StatusIndicator`** (the static "generating" indicator, not a spinner —
+  see `status_indicator.lua`), so main and subagents each show their own working
+  state independently (both can show at once). Driven by a **set of open
+  top-level `Task` ids** (`_open_tasks`): a `Task` is marked open on the first
+  notification whose kind resolves to `SubAgent`, and released on its
+  `completed`/`failed` update; indicator on while the set is non-empty. This is
+  the authoritative "a subagent is running" signal (a subagent's lifetime *is*
+  its `Task`'s open interval), not a chunk-arrival guess. A **set, not a
+  counter**, for two reasons: a streamed top-level `Task`'s initial `tool_call`
+  arrives with empty `rawInput`, so its kind only resolves to `SubAgent` on the
+  refining `tool_call_update` (marking open must therefore fire on either
+  surface, idempotently); and set membership makes a duplicated terminal update
+  harmless (a counter would drop twice and stop the indicator while a sibling
+  `Task` still runs). Grandchildren keep the parent `Task` open, so nesting needs
+  no special-casing.
+
+## Window lifecycle
+
+A vertical split of the main chat (default ~50/50, allocation configurable via
+`Config.windows.subagent`). It is a **fixed-size scrolling split** structurally
+like the main chat (the `subagent_writer` scrolls internally via its own
+auto-scroll) — *not* a content-sized dynamic panel like `code`/`files`, which
+would need a relayout per streamed chunk.
+
+- **Auto-open** on first subagent activity of a turn.
+- **Manual close** by default; `Config.windows.subagent.auto_close` (default
+  false) closes it when the active-`Task` count returns to 0.
+- A `_subagent_win_opened_this_turn` flag (reset at turn start) makes auto-open
+  fire at most once per turn, so a manual close is not undone by later subagent
+  activity in the same turn. (With `auto_close = true` this also means a second
+  Task in the same turn will not re-open the split — an acceptable edge for a
+  non-default option; re-open would need a `WinClosed` autocmd to tell a manual
+  close from the auto-close.)
+
+## Permissions
+
+Subagent tool calls **do** escalate `request_permission` over ACP (confirmed
+live). Integration is the *same* ownership model, extended:
+
+- **One queue, no concurrency.** One `PermissionManager` per tab, one queue, one
+  float; requests serialize (`permission_manager.lua:765-782`). Main and
+  subagent escalations arrive on one ACP session and cannot prompt
+  simultaneously. Do **not** add a second manager.
+- **Float anchors to the owning window.** `PermissionFloat._find_chat_winid`
+  (`permission_float.lua:254`) hardcodes `message_writer.bufnr`, so a subagent
+  prompt would pop over the main chat. Resolve the anchor from
+  `_writer_for(request.toolCall.toolCallId).bufnr` instead. (`parentToolUseId`
+  on the permission payload is unverified and unnecessary — ownership by
+  `toolCallId` answers main-vs-subagent authoritatively.)
+- **Keymaps.** The numbered response keys are bound over `pairs(self._buf_nrs)`
+  (`:1031`), so adding the subagent buffer to `buf_nrs`/`PanelNames` covers it
+  for free.
+- **Tracker lookups.** Route the permission-path `tool_call_blocks[id]` reads
+  through `_writer_for` (`permission_manager.lua:172/266/310/561/825`,
+  `session_manager.lua:850/947/1100/2139`, plus the `message_writer.bufnr`
+  highlight sites at `permission_manager.lua:833/840`). The subtlest is
+  trust-scope edit-range recording (`_try_record_edit_range:850`), which silently
+  no-ops for subagent edits if left on the main writer.
 
 ## Provider scope
 
-This is **claude-agent-acp only**. opencode runs subagents in an internal SDK
-session not registered with the ACP bridge; their streaming and permission
-events are dropped, and the subagent's output arrives bundled as the body of
-the parent `task` tool's `completed` update (see `opencode-subagent-fix.md`).
-There is nothing to demux for opencode — the subagent is already one opaque
-block. Other providers are untested. The plumbing must degrade gracefully
-(treat absent `parentToolUseId` as main-agent), which also covers opencode.
+**claude-agent-acp only.** opencode runs subagents in an internal SDK session
+not registered with the ACP bridge; their streaming and permission events are
+dropped and the subagent's output arrives bundled in the parent `task` tool's
+`completed` block (see `opencode-subagent-fix.md`) — untagged, so it stays in
+the main chat. The whole design keys on tag-presence, so non-Claude providers
+simply never populate the subagents buffer. Nothing to build for graceful
+degradation.
 
-## Plumbing plan
+## Follow-up fixes
 
-Make the owning-agent id available on every rendered unit, without yet
-deciding how to display it.
+### Show subagent thinking in the subagents buffer
 
-1. **Capture at the adapter.** In `ClaudeAgentACPAdapter`, read
-   `update._meta and update._meta.claudeCode and
-   update._meta.claudeCode.parentToolUseId` in `__handle_tool_call`,
-   `__build_tool_call_update`, and copy it onto the built
-   `ToolCallBlock`/`ToolCallBase` as a new field (e.g. `parent_tool_call_id`).
-   Base-class default: nil.
-2. **Capture for message chunks.** `agent_message_chunk` /
-   `agent_thought_chunk` reach `MessageWriter:write_message_chunk(update)`
-   with `_meta` intact — read it there (or normalise once at the
-   `acp_client`/`session_manager` boundary so non-Claude providers stay
-   uniform). Decide one read site to avoid scattering `_meta` access.
-3. **Track the SubAgent registry.** When a `SubAgent` tool-call block is
-   written, record `toolCallId → { subagent_type, description }` on the
-   `MessageWriter` (per-instance, cleared at turn boundary — see CLAUDE.md
-   "Cross-turn state hazards"). Children look up their label by
-   `parent_tool_call_id`.
+Thinking prose renders in neither window. `MessageWriter:write_message_chunk`
+drops every `agent_thought_chunk` up front (`message_writer.lua:563-566`) and
+returns before rendering, so the thought render is a no-op on *both* writers even
+though `_on_session_update` already routes thought chunks to the right writer
+(subagent → `subagent_writer:write_message_chunk` (478), main →
+`message_writer:write_message_chunk` (481), at `session_manager.lua:475-491`).
+The bridge streams both agents' thinking live, subagent thinking tagged with
+`parentToolUseId` (`streamEventToAcpNotifications`), so the data arrives — the
+writer just discards it.
 
-This is the whole shared substrate. Every UI option below consumes the same
-`parent_tool_call_id` field + registry.
+Goal: **each window shows its own agent's thinking**, so parallel main/subagent
+work each indicate when their agent is thinking. Both arms already route to the
+right writer and fire a per-window thinking indicator (main `status_indicator`
+482; subagent indicator driven by `_open_tasks`). So the whole fix is:
 
-## Starting point: gutter agent number
+- Delete the unconditional drop in `write_message_chunk` (563-566). Thought
+  content is `{type:"text",text:…}`, so it flows through the existing prose path
+  on whichever writer it was already routed to. There is no thought-specific
+  formatting (dim/italic/"Thinking" header) to add or lose. Both arms of
+  `_on_session_update` are left as-is.
 
-Keep the marker out of the buffer text. The chat buffer is markdown (the
-`agentic` treesitter clone), so any in-text device — indent, blockquote `>`,
-a label line — becomes real bytes that interfere with yank, `safe_fence`,
-folding, and the sign-column borders. The gutter is the one channel that is
-already non-textual decoration.
+Side note: today the early return means `_last_message_type` is never set to
+`agent_thought_chunk`, so the thought→message `"\n\n"` separation
+(`message_writer.lua:606-613`) has never fired. Deleting the drop activates it on
+both writers — the desired separation, previously-dead code.
 
-Show a small per-turn ordinal: **blank for the main agent, `1` for the first
-SubAgent block seen, `2` for the next**, and so on. Assigned in spawn order
-on the SubAgent registry (§ plumbing step 3). Per-turn, not per-session, so
-the numbers stay small and reset at the turn boundary — two turns each having
-an "agent 1" is unambiguous because the turn divider separates them.
+### Emit the `---` divider when the subagent finishes, not at turn end
 
-The spawning `SubAgent` tool-call block is main-agent content
-(`parent_tool_call_id` nil), but its `toolCallId` is what the children
-reference. Annotate that block with the same number as a spawn marker, so the
-launch point and the launched agent's work share an identifier.
+The divider currently rides `finalize_turn` (`session_manager.lua:1778`, gated on
+`_subagent_wrote_this_turn`), which only runs in the `session/prompt` response
+callback — *after* the main agent reacts to the subagent's summary, so it appears
+late. Move it onto the subagent-side lifecycle tracking (`_open_tasks` /
+`_mark_task_closed`, `session_manager.lua:434-446`), which fires on the Task's
+`completed`/`failed` update — during the turn, strictly before the turn callback
+(JSON-RPC ordering).
 
-Colour derived from the number reinforces the distinction for parallel
-agents, but the number carries it alone (robust past 2-3 agents and for
-colour-blind users).
+- Drop the `divider = …` option from the `finalize_turn` call at 1778, but keep
+  the call itself — it still does the mandatory per-writer cross-turn flag reset
+  (see § The subagents buffer). Without the option it appends a bare `""`, not a
+  divider.
+- Emit the divider per-Task in `_mark_task_closed`, **after** the
+  `self._open_tasks[id] = nil` line and the idempotent-membership guard (so a
+  duplicated terminal update can't double-emit). Extract the append into a small
+  `MessageWriter:emit_divider` — do **not** reuse `finalize_turn`, which also
+  resets five cross-turn flags and flushes reflow (`message_writer.lua:455-473`),
+  none of which is safe mid-turn.
+- **Gate on "wrote something", per subagent writer.** `_mark_task_closed` fires
+  for every closing `SubAgent` Task, including one that streamed no interim
+  content — an unguarded emit would stamp a divider into an empty window. Carry
+  the current `_subagent_wrote_this_turn` intent over as a per-writer "grew since
+  last divider" check inside `emit_divider` (e.g. skip if the buffer's line count
+  is unchanged since the last divider), so a no-interim-content subagent gets no
+  separator.
+- **Parallel subagents:** they share one interleaved buffer (per-agent separation
+  is deferred to v2), so with N concurrent Tasks a close-time divider can land
+  mid-stream of a still-running sibling. Known-imprecise until v2; moot at the
+  usual one-subagent-per-turn. Grandchildren are `is_subagent`, so they skip
+  `_mark_task_open/closed` entirely and correctly emit no divider.
 
-### Key open question: where the number goes
+## Deferred to v2
 
-The sign column already holds tool-call border glyphs (`╭─ │ ╰─`), and
-`sign_text` is capped at 2 cells — full. Prose chunks have a free gutter, but
-a subagent's *tool-call* lines do not. This is the same number-column vs
-border contention `feature-diff-line-numbers.md` hit; its answer is a
-`statuscolumn` function that decides per row whether to render a border glyph,
-a number, or both. The two features would share that implementation. Resolve
-this before building — `line_hl_group` (per-agent line tint) is a fallback
-that sidesteps the sign column but loses the explicit number.
+- **Distinguishing agents within the subagents buffer.** A per-turn ordinal in
+  the sign column (blank main / `1`, `2`, … per subagent), assigned in spawn
+  order via a `toolCallId → {number, label}` registry cleared at the turn
+  boundary. The sign column already holds tool-call borders (`╭─ │ ╰─`, capped at
+  2 cells), so a number forces a `statuscolumn` function shared with
+  `feature-diff-line-numbers.md` — resolve that contention there. A
+  `line_hl_group` per-agent tint is a fallback that sidesteps the sign column but
+  loses the explicit number. None of this is needed while it is usually one
+  subagent per turn.
+- **Per-agent labels** (`subagent_type` + `description`) as an inline header when
+  a new agent's content first appears in the buffer.
+- **Focus-by-folding** within the subagents buffer: a keymap that folds every
+  block not owned by agent N, reusing `MessageWriter:_close_fold`. Only worth it
+  if parallel-subagent interleave proves confusing.
+- **Explicit persistence across reloads.** v1 is best-effort: Path A
+  (`session/load`) *may* replay tagged subagent chunks (verify); Path B
+  (`restore_from_history`) collapses history to a prose prefix, so subagent
+  interim is lost. The main chat's `Task` results survive either way. Serialising
+  and replaying the second buffer is a clean v2 add if the loss annoys.
 
-## Out of scope (future UI ideas)
+## Non-issues
 
-- **Nesting under the SubAgent block.** Fold child tool calls beneath the
-  parent's block using the existing treesitter body folding. The user flagged
-  this can nest too deep; it also needs a way to insert children at the
-  parent's position rather than the buffer tail (streaming arrives in wire
-  order, not grouped).
-- **A subagent surface.** Move subagent output off the main chat. Do *not*
-  tie window count to agent count — a window per subagent breaks under many
-  parallel agents. Scalable variants, both leaning on the gutter number to
-  separate agents *within* one surface:
-  - **One shared subagent buffer** in the widget (fits the existing
-    `ChatWidget:_create_buf_nrs` multi-buffer pattern — chat, input, todos,
-    code, files, diagnostics already coexist). All subagent chunks demux into
-    it by parent id, numbered; the main chat keeps only main-agent content.
-  - **Focus-by-folding.** Subagent work stays inline (gutter-numbered) — no
-    rewrite, no demux. Focusing agent N folds the other agents' work closed;
-    the buffer stays canonical and it reverses by reopening the folds. Scales:
-    more agents means more folded blocks, not more windows.
-
-    A subagent's work is *not* contiguous (interleaved with the main agent and
-    other subagents in wire order), so there is no single per-agent container.
-    Fold per *block* instead and close every block owned by the other agents —
-    each block is contiguous, so it folds; an agent just owns many small folds.
-
-    Two mechanisms for the per-block fold:
-    - **Treesitter container folds** (keeps the current design). The query
-      provides foldability structurally; the writer closes only the containers
-      it tagged as owned by agents ≠ N — exactly the existing
-      `MessageWriter:_close_fold` pattern (deferred `:{line}foldclose`, which
-      dodges the treesitter foldlevel-recompute race / E490). Preserves the
-      built-in `vim.treesitter.foldexpr()` and its incremental updates.
-
-      Tool-call blocks already carry this container: each is a `### Kind` ATX
-      heading, i.e. a markdown `section`, so adding `(section) @fold` to
-      `folds.scm` makes them foldable with no new markup, folding from the
-      visible heading line. Two gaps remain. (1) Agent prose runs are bare
-      paragraphs with no heading (thinking chunks are hidden, so only prose
-      matters) — they need a container that folds yet renders transparently
-      when *open* (a fence turns prose to code; a heading adds a visible line).
-      (2) A markdown section runs heading → next heading, so a `### Kind`
-      section greedily absorbs trailing bare prose; under parallel subagents
-      that prose can belong to a *different* agent, so a section fold would
-      hide the wrong owner's content. Precise folding needs an explicit block
-      *end* boundary, not just the heading. The `---` divider is no help here
-      — it is a `thematic_break` emitted only between body updates *inside* a
-      tool call's fence (`message_writer.lua:1044`), not a section boundary.
-    - **Window-local manual folds** in a focus window on the same buffer
-      (`foldmethod=manual`), folding the non-focused agents' ranges from the
-      gutter extmarks. Folds arbitrary ranges, so prose needs no container, and
-      the main window's treesitter folds stay untouched. Cost: a side window,
-      and no incremental fold updates in that view.
-
-    An agent-aware foldexpr in the main window is the worst trade of the three
-    — it forfeits the incremental updates the current design relies on.
-- **Inline text separators.** A labelled divider (`── subagent 1:
-  code-reviewer ──`) when the active agent changes between consecutive
-  writes. Markdown-native but it adds buffer text, so it carries the yank and
-  fence concerns the gutter number avoids.
-
-## Caveats before building
-
-- **Deep nesting.** A subagent can spawn its own subagent, so
-  `parent_tool_use_id` forms a chain. The bridge carries only the
-  *immediate* parent; a tree view would have to reconstruct ancestry from
-  the chain of SubAgent blocks.
-- **Interleaved ordering.** Parallel subagents' notifications arrive
-  interleaved in wire order. Grouping by id is fine for marking/nesting; a
-  per-window split must demux a single ordered stream.
-- **Turn-boundary reset.** The SubAgent registry is per-turn mutable state —
-  clear it at `finalize_turn` to avoid stale labels leaking across turns.
+- **Deep nesting.** No tree, ever — only two windows. Any non-null
+  `parentToolUseId` (at any depth) → subagents buffer. A grandchild `Task` is
+  itself tagged, so its spawn block and result also land there; only the
+  top-level `Task` (parent null) stays in the main chat. The `parentToolUseId`
+  chain only matters if a tree view is ever built.
+- **Concurrent prompts.** Serialized by the single permission queue (above).
