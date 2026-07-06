@@ -143,7 +143,13 @@ handling.
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
    failure, or any error node → prompt. The zsh parser is a hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
-   builtins (`eval`/`source`/`.`). Anonymous separators
+   builtins (`eval`/`source`/`.`). A **transparent prefix** is not a leaf:
+   `inner_source` slices out its inner command and re-walks that on its own
+   merits (mis-slice fails closed → prompt). These are a fixed allowlist — a
+   shell `-c <body>` (`zsh`/`bash`/`sh`/`dash`) and the exec-wrappers `timeout`,
+   `time`, `stdbuf`, `uv run`, `xargs`. `xargs` additionally appends a trailing
+   dynamic stdin token, so a gated inner (`xargs sort` → `-o`) prompts while
+   read-only inners approve. Anonymous separators
    (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
    (`for`, `while`, `until`) recurse: every body command must itself approve,
    and a `for` list item is a literal, glob, or a bare `command_substitution`

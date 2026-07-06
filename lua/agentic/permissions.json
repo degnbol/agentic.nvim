@@ -14,8 +14,6 @@
   "mdfind":    { "read_only": [{}] },
   "locate":    { "read_only": [{}] },
 
-  "xargs":     { "read_only": [{ "positionals": ["ls"] }] },
-
   "which":     { "read_only": [{}] },
   "whereis":   { "read_only": [{}] },
   "type":      { "read_only": [{}] },

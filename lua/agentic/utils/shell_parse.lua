@@ -587,10 +587,16 @@ end
 --- launcher is unsound. Other launchers are deliberately NOT here: `env` and
 --- `nohup` can set an execution-hijacking var (`PATH`, `LD_PRELOAD`) or write
 --- `nohup.out`; `command`/`builtin`/`exec` alter `PATH`/the shell process;
---- `xargs`/`parallel` run a command per input. These are left to match no allow
---- rule (so they prompt) rather than recursed — and must NOT be given a blanket
---- read-only entry in `permissions.json`, which would auto-approve whatever they
---- launch without the matcher ever inspecting it.
+--- `parallel` runs a command per input (its own `{}` DSL, remote exec via
+--- `--sshlogin`). It is left to match no allow rule (so it prompts) rather than
+--- recursed — and must NOT be given a blanket read-only entry in `permissions.json`,
+--- which would auto-approve whatever it launches without the matcher inspecting it.
+---
+--- `xargs COMMAND` recurses like `timeout`, with one difference: xargs appends
+--- stdin items to COMMAND at runtime, so `inner_source` appends a trailing dynamic
+--- token (`$__xargs_stdin`) modelling them. It wildcards deny/ask and never widens
+--- allow, so a gated inner (`xargs sort` → `-o`) prompts while read-only inners
+--- still approve.
 ---
 --- `uv run COMMAND` is included because a *bare* `uv run` adds no arbitrary-code
 --- danger over running COMMAND directly — COMMAND is then judged on its own allow
@@ -627,6 +633,24 @@ local EXEC_WRAPPERS = {
     -- run COMMAND — bare only (no option lists → any dash token bails); env
     -- sync is a recoverable write, so it needs the allow tier (`writes`).
     uv = { subcommand = "run", writes = true },
+    -- [OPTION]... COMMAND [ARGS]... — inner classified on its own merits; the
+    -- runtime stdin items are modelled by a dynamic token appended in
+    -- `inner_source`. Common flags only; mis-slice fails closed (see docstring).
+    xargs = {
+        value_opts = {
+            "-I", "-n", "-P", "-a", "-L",
+            "--arg-file", "--replace", "--max-args", "--max-procs", "--max-lines",
+        },
+        flag_opts = {
+            "-0", "-r", "-t",
+            "--null", "--no-run-if-empty", "--verbose",
+        },
+        attached = {
+            "^%-I", "^%-i", "^%-n%d", "^%-P%d", "^%-L%d",
+            "^%-%-arg%-file=", "^%-%-replace=",
+            "^%-%-max%-args=", "^%-%-max%-procs=", "^%-%-max%-lines=",
+        },
+    },
 }
 
 --- Consume an exec-wrapper's own operands per its spec and return the 1-based
@@ -745,7 +769,13 @@ local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     end
     local sr, sc, inner_start_byte = inner_node:range(true)
     local _, _, _, _, _, node_end_byte = node:range(true)
-    return src:sub(inner_start_byte + 1, node_end_byte), { sr, sc }, spec.writes or false
+    local inner = src:sub(inner_start_byte + 1, node_end_byte)
+    if cmd_name == "xargs" then
+        -- Model the runtime stdin items as a dynamic token (see EXEC_WRAPPERS).
+        -- The obscure name avoids resolving against an earlier sequence binding.
+        inner = inner .. " $__xargs_stdin"
+    end
+    return inner, { sr, sc }, spec.writes or false
 end
 
 --- Resolve a path token to a canonical absolute path: tilde/`..` collapsed, a
