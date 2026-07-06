@@ -1,4 +1,11 @@
 {
+  "*": {
+    "read_only": [
+      { "options": ["help", "version"] },
+      { "positionals": ["list*"] }
+    ]
+  },
+
   "ls":        { "read_only": [{}] },
   "tree":      { "read_only": [{}] },
   "du":        { "read_only": [{}] },
@@ -29,6 +36,7 @@
   "tail":      { "read_only": [{}] },
   "less":      { "read_only": [{}] },
   "zless":     { "read_only": [{}] },
+  "gunzip":    { "read_only": [{ "options": ["c"]}] },
   "gzcat":     { "read_only": [{}] },
   "bzcat":     { "read_only": [{}] },
   "xzcat":     { "read_only": [{}] },
@@ -246,13 +254,6 @@
   "kpsewhich": { "read_only":  [{}] },
 
   "javap": { "read_only": [{}] },
-
-  "*": {
-    "read_only": [
-      { "options": ["help", "version"] },
-      { "positionals": ["list*"] }
-    ]
-  },
 
   "brew": {
     "read_only": [
