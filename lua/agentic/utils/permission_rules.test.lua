@@ -2090,6 +2090,22 @@ describe("PermissionRules", function()
             )
         end)
 
+        it("auto-approves git stash list", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("git stash list")
+            )
+        end)
+
+        it("does not auto-approve bare git stash (unlisted)", function()
+            assert.is_false(PermissionRules.should_auto_approve("git stash"))
+        end)
+
+        it("does not auto-approve git stash drop (explicit ask)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("git stash drop stash@{0}")
+            )
+        end)
+
         it("auto-approves pdftotext foo.pdf -", function()
             assert.is_true(
                 PermissionRules.should_auto_approve("pdftotext foo.pdf -")
