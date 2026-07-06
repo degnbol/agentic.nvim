@@ -292,6 +292,7 @@
     "read_only": [
       { "positionals": ["info"] },
       { "positionals": ["list"] },
+      { "positionals": ["ls"  ] },
       { "positionals": ["view"] }
     ]
   },
