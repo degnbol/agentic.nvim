@@ -273,6 +273,233 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_on_session_update: usage_update budget", function()
+        --- @param fields table|nil Extra usage_update fields (cost, _meta)
+        --- @return agentic.acp.UsageUpdate
+        local function usage_update(fields)
+            return vim.tbl_extend("force", {
+                sessionUpdate = "usage_update",
+                used = 1000,
+                size = 200000,
+            }, fields or {}) --[[@as agentic.acp.UsageUpdate]]
+        end
+
+        --- @return agentic.SessionManager
+        local function make_session()
+            return {
+                _update_chat_header = function() end,
+                _on_session_update = SessionManager._on_session_update,
+                _budget_status = SessionManager._budget_status,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("captures _meta rate-limit into _budget", function()
+            local session = make_session()
+
+            session:_on_session_update(usage_update({
+                _meta = {
+                    ["_claude/rateLimit"] = {
+                        rateLimitType = "five_hour",
+                        utilization = 0.5,
+                        resetsAt = os.time() + 9000,
+                    },
+                },
+            }))
+
+            assert.equal("five_hour", session._budget.rateLimitType)
+            assert.equal(0.5, session._budget.utilization)
+        end)
+
+        it("keeps prior _budget when the update has no _meta", function()
+            local session = make_session()
+            session._budget = { rateLimitType = "five_hour" }
+
+            session:_on_session_update(usage_update())
+
+            assert.equal("five_hour", session._budget.rateLimitType)
+        end)
+
+        it("preserves prior cost when the update omits it", function()
+            local session = make_session()
+            session._usage = {
+                used = 1,
+                size = 2,
+                cost = { amount = 1.5, currency = "USD" },
+            }
+
+            session:_on_session_update(usage_update())
+
+            assert.equal(1.5, session._usage.cost.amount)
+        end)
+
+        it("clears _budget on session reset (/new, /clear)", function()
+            local Recovery = require("agentic.session_recovery")
+            local SlashCommands = require("agentic.acp.slash_commands")
+            local stubs = {
+                spy.stub(Recovery, "remove_reauth_keymap"),
+                spy.stub(Recovery, "cancel_health_check_timer"),
+                spy.stub(Recovery, "cancel_retry_timer"),
+                spy.stub(SlashCommands, "setCommands"),
+            }
+
+            local session = {
+                session_id = nil, -- skip the cancel/clear-content block
+                _budget = { rateLimitType = "five_hour" },
+                permission_manager = { clear = function() end },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    set_chat_title = function() end,
+                },
+                _cancel_session = SessionManager._cancel_session,
+                _budget_status = SessionManager._budget_status,
+            } --[[@as agentic.SessionManager]]
+
+            session:_cancel_session()
+
+            assert.is_nil(session._budget)
+            assert.is_nil(session:_budget_status())
+
+            for _, s in ipairs(stubs) do
+                s:revert()
+            end
+        end)
+    end)
+
+    describe("_budget_status", function()
+        --- @param budget agentic.acp.RateLimitInfo|nil
+        --- @return agentic.SessionManager
+        local function make_session(budget)
+            return {
+                _budget = budget,
+                _budget_status = SessionManager._budget_status,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("on pace at half window: overshoot ≈ 1.0", function()
+            local session = make_session({
+                rateLimitType = "five_hour",
+                utilization = 0.5,
+                resetsAt = os.time() + 2.5 * 3600,
+            })
+
+            local util, overshoot = session:_budget_status()
+
+            assert.equal(0.5, util)
+            assert.is_true(math.abs(overshoot - 1.0) < 0.01)
+        end)
+
+        it("too fast: 90% used at 20% elapsed → overshoot > 1", function()
+            local session = make_session({
+                rateLimitType = "five_hour",
+                utilization = 0.9,
+                resetsAt = os.time() + 4 * 3600,
+            })
+
+            local _, overshoot = session:_budget_status()
+
+            assert.is_true(overshoot > 1)
+        end)
+
+        it("no verdict at the top of a fresh window (frac < 0.05)", function()
+            local session = make_session({
+                rateLimitType = "five_hour",
+                utilization = 0.1,
+                resetsAt = os.time() + 5 * 3600 - 1,
+            })
+
+            local util, overshoot = session:_budget_status()
+
+            assert.equal(0.1, util)
+            assert.is_nil(overshoot)
+        end)
+
+        it("normalises 0–100 utilization to a fraction", function()
+            local session = make_session({
+                rateLimitType = "five_hour",
+                utilization = 50,
+                resetsAt = os.time() + 2.5 * 3600,
+            })
+
+            local util = session:_budget_status()
+
+            assert.equal(0.5, util)
+        end)
+
+        it("normalises millisecond resetsAt", function()
+            local session = make_session({
+                rateLimitType = "five_hour",
+                utilization = 0.5,
+                resetsAt = (os.time() + 2.5 * 3600) * 1000,
+            })
+
+            local util, overshoot = session:_budget_status()
+
+            assert.equal(0.5, util)
+            assert.is_true(math.abs(overshoot - 1.0) < 0.01)
+        end)
+
+        it(
+            "steady-state event without utilization: resets only",
+            function()
+                -- Real observed payload: status "allowed" carries no
+                -- utilization; overageStatus "rejected" = no overage credits.
+                local session = make_session({
+                    status = "allowed",
+                    rateLimitType = "five_hour",
+                    resetsAt = os.time() + 3600,
+                    overageStatus = "rejected",
+                    isUsingOverage = false,
+                })
+
+                local util, overshoot, resets = session:_budget_status()
+
+                assert.is_nil(util)
+                assert.is_nil(overshoot)
+                assert.is_not_nil(resets)
+            end
+        )
+
+        it("bails to nil when rateLimitType is missing", function()
+            local session = make_session({
+                utilization = 0.5,
+                resetsAt = os.time() + 3600,
+            })
+
+            assert.is_nil(session:_budget_status())
+        end)
+
+        it("overage: utilization but no pace verdict", function()
+            local session = make_session({
+                rateLimitType = "overage",
+                utilization = 0.3,
+                resetsAt = os.time() + 3600,
+            })
+
+            local util, overshoot = session:_budget_status()
+
+            assert.equal(0.3, util)
+            assert.is_nil(overshoot)
+        end)
+
+        it("isUsingOverage suppresses the pace verdict", function()
+            local session = make_session({
+                rateLimitType = "five_hour",
+                utilization = 0.9,
+                resetsAt = os.time() + 4 * 3600,
+                isUsingOverage = true,
+            })
+
+            local util, overshoot = session:_budget_status()
+
+            assert.equal(0.9, util)
+            assert.is_nil(overshoot)
+        end)
+
+        it("nil budget → nil", function()
+            assert.is_nil(make_session(nil):_budget_status())
+        end)
+    end)
+
     describe("_do_load_acp_session: _restoring flag", function()
         --- @type TestStub
         local schedule_stub

@@ -391,6 +391,12 @@ local ConfigDefault = {
     --- incline.nvim) that renders its own per-window labels.
     winbar = true,
 
+    --- Show the claude.ai subscription rate-limit budget in the chat header
+    --- (binding window utilisation + reset countdown, warns when the current
+    --- pace overshoots the window). Only populated under claude.ai
+    --- subscription auth. Set false to hide.
+    budget_display = true,
+
     --- Customize window headers for each panel in the chat widget.
     --- Each header can be either:
     --- 1. A table with title field

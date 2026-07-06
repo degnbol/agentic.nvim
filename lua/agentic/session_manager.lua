@@ -88,6 +88,7 @@ end
 --- @field _pending_load_cwd? string CWD for the deferred session/load
 --- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
+--- @field _budget? agentic.acp.RateLimitInfo Last known subscription rate-limit budget (claude.ai auth only)
 --- @field _last_prompt? string
 --- @field _destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
@@ -544,8 +545,15 @@ function SessionManager:_on_session_update(update)
         self._usage = {
             used = update.used,
             size = update.size,
-            cost = update.cost,
+            -- Rate-limit-triggered updates omit cost; keep the last known value.
+            cost = update.cost or (self._usage and self._usage.cost),
         }
+
+        -- Most usage_updates carry no rate-limit meta; keep the last known.
+        local rl = update._meta and update._meta["_claude/rateLimit"]
+        if rl then
+            self._budget = rl
+        end
 
         self:_update_chat_header()
     elseif update.sessionUpdate == "session_info_update" then
@@ -1385,6 +1393,41 @@ function SessionManager:_handle_model_change(model_id, is_legacy)
     end
 end
 
+--- Stateless pace check on the last known rate-limit budget (`_budget`).
+--- "On pace" ⇔ utilization ≈ elapsed fraction of the window; overshoot is the
+--- projected end-of-window utilization assuming uniform spend (>1 = at the
+--- current average rate the limit is hit before it resets). Steady-state
+--- events (`status = "allowed"`) omit `utilization` — the CLI attaches it only
+--- to its own threshold warnings (`allowed_warning`) — so util/overshoot are
+--- nil most of the time while resets stays available for the countdown.
+--- Units confirmed from a live event + the CLI bundle: utilization 0–1,
+--- resetsAt epoch seconds; the >1 and >1e12 guards stay as cheap insurance.
+--- @return number|nil util Window utilization 0–1, nil when the event omitted it
+--- @return number|nil overshoot Projected end-of-window utilization; nil = no pace verdict
+--- @return number|nil resets Epoch seconds when the window refills, nil if budget unknown
+function SessionManager:_budget_status()
+    local b = self._budget
+    if not b or not b.resetsAt or not b.rateLimitType then
+        return nil
+    end
+    local resets = b.resetsAt > 1e12 and b.resetsAt / 1000 or b.resetsAt
+    if not b.utilization then
+        return nil, nil, resets
+    end
+    local util = b.utilization > 1 and b.utilization / 100 or b.utilization
+    -- Overage is a credit bucket, not a fixed rolling window — no pace verdict.
+    if b.rateLimitType == "overage" or b.isUsingOverage then
+        return util, nil, resets
+    end
+    local dur = b.rateLimitType == "five_hour" and 5 * 3600 or 7 * 24 * 3600
+    local elapsed = dur - (resets - os.time())
+    local frac = elapsed / dur
+    -- Below 5% elapsed the ratio is dominated by noise (frac→0 ⇒ overshoot
+    -- explodes and would false-warn at the top of every window). Don't judge yet.
+    local overshoot = frac >= 0.05 and util / math.min(frac, 1) or nil
+    return util, overshoot, resets
+end
+
 function SessionManager:_update_chat_header()
     local parts = {}
 
@@ -1408,6 +1451,36 @@ function SessionManager:_update_chat_header()
     if self._usage and self._usage.size > 0 then
         local used_k = math.floor(self._usage.used / 1000 + 0.5)
         table.insert(parts, string.format("%dk", used_k))
+    end
+
+    -- Subscription rate-limit budget: "5h 42%·1h05m", or "5h·1h05m" while
+    -- utilization is unknown (steady-state events omit it). The header is a
+    -- plain concatenated string escaped for winbar, so no per-segment
+    -- highlight is possible — the warn signal rides a leading glyph instead
+    -- of colour. "allowed_warning" is the CLI's own threshold-based pace
+    -- warning; it doubles as ⚠ when we can't compute overshoot ourselves.
+    -- (b.overageStatus == "rejected" just means no overage credits — ignored.)
+    local b = self._budget
+    if Config.budget_display and b then
+        local util, overshoot, resets = self:_budget_status()
+        if resets then
+            local label = b.rateLimitType == "five_hour" and "5h" or "wk"
+            local mins = math.max(0, math.floor((resets - os.time()) / 60))
+            local reset = mins >= 60
+                    and string.format("%dh%02dm", math.floor(mins / 60), mins % 60)
+                or string.format("%dm", mins)
+            local mark = b.status == "rejected" and "✕"
+                or (b.status == "allowed_warning" or (overshoot and overshoot > 1))
+                    and "⚠"
+                or ""
+            local util_str = util
+                    and string.format(" %d%%", math.floor(util * 100 + 0.5))
+                or ""
+            table.insert(
+                parts,
+                string.format("%s%s%s·%s", mark, label, util_str, reset)
+            )
+        end
     end
 
     local context = #parts > 0 and table.concat(parts, " · ") or nil
@@ -2160,6 +2233,7 @@ function SessionManager:_cancel_session()
     self._history_to_send = nil
     self._pending_input = nil
     self._usage = nil
+    self._budget = nil
 end
 
 --- Switch to a different ACP provider while preserving chat UI and history.

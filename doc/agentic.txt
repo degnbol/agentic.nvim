@@ -262,6 +262,15 @@ override what you need.
     Set |winbar| on widget windows. Disable if using an external plugin
     (e.g. incline.nvim) for per-window labels.
 
+                                             *agentic-config-budget_display*
+`budget_display` boolean (default: true)
+    Show the claude.ai subscription rate-limit budget in the chat header:
+    the binding window ("5h" five-hour or "wk" weekly), the time until it
+    resets, and the utilisation percentage when available. A warning
+    triangle marks a pace that would hit the limit before the reset; a
+    cross marks rejected requests. Only shown under claude.ai
+    subscription auth.
+
                                                     *agentic-config-headers*
 `headers` table
     Customise window headers per panel. Each entry can be a table with a
