@@ -292,6 +292,7 @@
 
   "npm": {
     "read_only": [
+      { "positionals": ["root"] },
       { "positionals": ["info"] },
       { "positionals": ["list"] },
       { "positionals": ["ls"  ] },
