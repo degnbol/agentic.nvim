@@ -272,6 +272,11 @@
       { "positionals": ["doc"] },
       { "positionals": ["metadata"] },
       { "positionals": ["tree"] }
+    ],
+    "safe_write": [
+      { "positionals": ["check"] },
+      { "positionals": ["clippy"] },
+      { "positionals": ["fmt"] }
     ]
   },
 
@@ -339,6 +344,116 @@
     "ask":        [{ "options": ["install-types"] }]
   },
   "shellcheck": { "read_only": [{}] },
+
+  "luacheck":             { "read_only": [{}] },
+  "lua-language-server":  { "read_only": [{}] },
+  "bash-language-server": { "read_only": [{}] },
+  "harper-ls":            { "read_only": [{}] },
+  "texlab":               { "read_only": [{}] },
+  "chktex":               { "read_only": [{}] },
+  "pylint":               { "read_only": [{}] },
+  "flake8":               { "read_only": [{}] },
+  "bandit":               { "read_only": [{}] },
+  "yamllint":             { "read_only": [{}] },
+  "vale":                 { "read_only": [{}] },
+  "hadolint":             { "read_only": [{}] },
+  "actionlint":           { "read_only": [{}] },
+  "lintr":                { "read_only": [{}] },
+
+  "markdownlint": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["fix"] }]
+  },
+  "typos": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "write-changes"] }]
+  },
+  "codespell": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "write-changes"] }]
+  },
+  "clang-tidy": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["fix", "fix-errors", "fix-notes"] }]
+  },
+  "golangci-lint": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["fix"] }]
+  },
+  "sqlfluff": {
+    "read_only": [{}],
+    "ask":       [{ "positionals": ["fix"] },
+                  { "positionals": ["format"] }]
+  },
+
+  "shfmt": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w"] }]
+  },
+  "clang-format": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["i"] }]
+  },
+  "gofmt": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w"] }]
+  },
+  "goimports": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w"] }]
+  },
+  "latexindent": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "o", "overwrite", "output", "outputfile"] }]
+  },
+  "typstyle": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["i", "inplace"] }]
+  },
+  "prettier": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "write"] }]
+  },
+  "prettierd": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["w", "write"] }]
+  },
+  "eslint": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["fix"] }]
+  },
+  "eslint_d": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["fix"] }]
+  },
+  "biome": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["write", "fix", "apply", "apply-unsafe"] }]
+  },
+
+  "rustfmt":  { "safe_write": [{}] },
+  "black":    { "safe_write": [{}] },
+  "isort":    { "safe_write": [{}] },
+  "yamlfmt":  { "safe_write": [{}] },
+  "mdformat": { "safe_write": [{}] },
+  "typstfmt": { "safe_write": [{}] },
+  "styler":   { "safe_write": [{}] },
+  "tsc":      { "safe_write": [{}] },
+
+  "taplo": {
+    "read_only":  [{ "positionals": ["lint"] },
+                   { "positionals": ["get"] }],
+    "safe_write": [{ "positionals": ["format"] },
+                   { "positionals": ["fmt"] }]
+  },
+  "tinymist": { "read_only": [{ "positionals": ["lsp"] }] },
+
+  "docker": { "read_only": [{ "positionals": ["images"] }] },
+  "go":     { "read_only": [{ "positionals": ["vet"] }] },
+  "air": {
+    "read_only":  [{ "positionals": ["check"] }],
+    "safe_write": [{ "positionals": ["format"] }]
+  },
 
   "gh": {
     "read_only": [
@@ -479,7 +594,10 @@
     "safe_write": [
       { "positionals": ["test"] },
       { "positionals": ["test-file"] },
-      { "positionals": ["validate"] }
+      { "positionals": ["validate"] },
+      { "positionals": ["format"] },
+      { "positionals": ["luacheck"] },
+      { "positionals": ["luals"] }
     ]
   },
 
