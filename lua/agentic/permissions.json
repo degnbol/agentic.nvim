@@ -100,6 +100,7 @@
       { "positionals": ["tag"] },
       { "positionals": ["ls-files"] },
       { "positionals": ["ls-tree"] },
+      { "positionals": ["check-ignore"] },
       { "positionals": ["cat-file"] },
       { "positionals": ["grep"] },
       { "positionals": ["config"], "options": ["get"] },
