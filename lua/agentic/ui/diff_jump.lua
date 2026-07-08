@@ -42,8 +42,9 @@ end
 
 --- Map a chat (row, col) inside a diff block to a target file position.
 --- The renderer emits hunks in order; within each hunk, all "old" lines
---- come before all "new" lines (see tool_call_renderer.lua:783-829). We
---- replay that order to count rows per pair without storing extra state.
+--- come before all "new" lines (see `insert_diff_line` in
+--- tool_call_renderer.lua). We replay that order to count rows per pair
+--- without storing extra state.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @param block_start_row integer 0-indexed first row of the block in chat buffer
 --- @param chat_row integer 0-indexed
@@ -101,8 +102,9 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
         return nil
     end
 
-    -- Layout: header (1) + `argument` (1) + opening fence (1).
-    local body_offset = block_start_row + 3
+    -- Layout: collapsed header (1) + opening fence (1). The filename now
+    -- lives on the header line, so there is no separate `argument` row.
+    local body_offset = block_start_row + 2
     local row_in_body = chat_row - body_offset
 
     local first_target = {

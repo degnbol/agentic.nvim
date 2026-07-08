@@ -69,6 +69,75 @@ function M.parse_read_range(argument)
     return path, { offset = na, limit = nb - na + 1 }
 end
 
+--- Per-kind glyph shown on the collapsed tool-call heading in place of the
+--- kind word. Keyed on the lowercased kind; unlisted kinds fall back to
+--- DEFAULT_GLYPH. edit and write intentionally share identity (both arrive as
+--- kind == "edit", distinguished only by diff content).
+--- @type table<string, string>
+local KIND_GLYPHS = {
+    read = "󰈈",
+    edit = "󰏫",
+    execute = "󰆍",
+    search = "󰍉",
+    fetch = "󰖟",
+    websearch = "󰖟",
+    subagent = "󰚩",
+}
+local DEFAULT_GLYPH = "󰒓"
+
+--- @param kind string
+--- @return string
+local function kind_glyph(kind)
+    return KIND_GLYPHS[vim.trim(kind):lower()] or DEFAULT_GLYPH
+end
+
+--- Truncate `s` to at most `width` display columns, appending "…" (which
+--- occupies the final column) when the string is cut. Returns `s` unchanged
+--- when it already fits or `width` is not positive.
+--- @param s string
+--- @param width integer
+--- @return string
+local function truncate_display(s, width)
+    if width <= 0 or vim.fn.strdisplaywidth(s) <= width then
+        return s
+    end
+    local budget = width - 1
+    local out = vim.fn.strcharpart(s, 0, budget)
+    while #out > 0 and vim.fn.strdisplaywidth(out) > budget do
+        out = vim.fn.strcharpart(out, 0, vim.fn.strchars(out) - 1)
+    end
+    return out .. "…"
+end
+
+--- Build the collapsed tool-call heading: `` ### <glyph> `name` ``. The glyph
+--- carries the kind identity (the kind word is dropped); `name` is the
+--- informative content (filename / description / command) that
+--- treesitter-context pins as a breadcrumb. `name` is backtick-wrapped so
+--- markdown inline parsing (emphasis on `_`, stray `` ` ``) cannot corrupt the
+--- heading. An empty `name` yields a glyph-only heading (`### <glyph>`) — used
+--- before the argument has streamed in, and for execute calls with no model
+--- description (the command already shows in the fence below). When `truncate`
+--- is set, `name` is clamped to a single screen line: `wrap_width` (or 80 when
+--- soft-wrapping) minus the `` ### <glyph> `` prefix and one cell for the
+--- ellipsis.
+--- @param kind string
+--- @param name string
+--- @param wrap_width integer
+--- @param truncate boolean
+--- @return string
+local function collapsed_header(kind, name, wrap_width, truncate)
+    local prefix = string.format("### %s", kind_glyph(kind))
+    if name == "" then
+        return prefix
+    end
+    if truncate then
+        local budget = (wrap_width > 0 and wrap_width or 80)
+            - vim.fn.strdisplaywidth(prefix .. " ")
+        name = truncate_display(name, budget)
+    end
+    return string.format("%s `%s`", prefix, name)
+end
+
 --- Return a backtick fence string long enough to avoid clashing with any
 --- literal backtick runs inside `body_lines`.
 --- @param body_lines string[]
@@ -430,51 +499,46 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     --- @type string[]
     local lines
-    local header = string.format("### %s", M.display_kind(kind))
     if kind == "execute" then
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
         local fence = safe_fence(cmd_lines)
-        lines = { header }
-        -- Model-provided description renders as a title line above the command.
+        -- Head shows the model's description; when absent it stays glyph-only
+        -- rather than repeating the command (which renders in the fence below).
         local description = tool_call_block.description
-        if description and description ~= "" then
-            vim.list_extend(
-                lines,
-                vim.split(description, "\n", { plain = true })
-            )
-        end
-        table.insert(lines, fence .. shell_fence_lang(argument, shell_lang()))
+        local head_name = (description and description ~= "")
+                and vim.split(description, "\n", { plain = true })[1]
+            or ""
+        lines = {
+            collapsed_header(kind, head_name, wrap_width, true),
+            fence .. shell_fence_lang(argument, shell_lang()),
+        }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)
     elseif kind == "search" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
         local fence = safe_fence(cmd_lines)
-        lines = { header, fence .. shell_fence_lang(argument, "bash") }
+        lines = {
+            collapsed_header(kind, cmd_lines[1], wrap_width, true),
+            fence .. shell_fence_lang(argument, "bash"),
+        }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)
     elseif kind == "fetch" then
         -- Fetch argument is "URL prompt" — show only the URL. The prompt
         -- is repeated in the body (model instructions to itself).
         local url = argument:match("^(%S+)")
-        if url then
-            lines = { header, string.format("`%s`", url) }
-        else
-            argument = argument:gsub("\n", "\\n")
-            lines = { header, string.format("`%s`", argument) }
-        end
+        local name = url or (argument:gsub("\n", "\\n"))
+        lines = { collapsed_header(kind, name, wrap_width, false) }
     elseif argument == "" then
-        -- Argument hasn't streamed in yet (placeholder suppressed in adapter).
-        -- Render a blank line to hold the layout until the next update.
-        lines = { header, "" }
+        -- Argument hasn't streamed in yet (placeholder suppressed in adapter);
+        -- the glyph-only head holds the layout until the next update.
+        lines = { collapsed_header(kind, "", wrap_width, false) }
     else
-        -- Sanitize argument to prevent newlines
-        -- nvim_buf_set_lines doesn't accept array items with embedded newlines
+        -- Sanitize argument to prevent embedded newlines — nvim_buf_set_lines
+        -- rejects array items containing "\n".
         argument = argument:gsub("\n", "\\n")
-        lines = {
-            header,
-            string.format("`%s`", argument),
-        }
+        lines = { collapsed_header(kind, argument, wrap_width, false) }
     end
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]
@@ -1168,9 +1232,10 @@ function M.apply_block_highlights(
     if #highlight_ranges > 0 then
         M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
     elseif kind ~= "edit" and kind ~= "switch_mode" then
-        -- Header is "### Kind" (1 line) for execute/search, or "### Kind" +
-        -- "`argument`" (2 lines) for others. Skip both before body content.
-        local body_start = start_row + 2
+        -- The collapsed head is a single "### <glyph> `name`" line, so body
+        -- content starts one row below it. Execute/search override this to
+        -- skip their command fence (found below).
+        local body_start = start_row + 1
         if kind == "execute" or kind == "search" then
             -- Find the closing fence to skip the command code fence. The
             -- fence width is dynamic (safe_fence bumps it past any backtick
@@ -1463,65 +1528,6 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                 buffer_line,
                 hl_range.block_col_hl
             )
-        end
-    end
-end
-
---- Apply syntax highlighting to a tool call header line.
---- Header format: "### Kind" — highlights the kind portion with TOOL_KIND.
---- When `description` is given (execute blocks), the lines directly under the
---- header are the description title and are left unhighlighted (default chat
---- colour). Otherwise the next line is `` `argument` `` and gets TOOL_ARGUMENT
---- highlight.
---- @param bufnr integer
---- @param line_row integer 0-indexed row of the "### Kind" line
---- @param ns integer Namespace to use for extmarks
---- @param description? string Title rendered under the header (execute only)
-function M.apply_tool_header_syntax(bufnr, line_row, ns, description)
-    local line =
-        vim.api.nvim_buf_get_lines(bufnr, line_row, line_row + 1, false)[1]
-    if not line then
-        return
-    end
-
-    -- "### Kind" — highlight the kind after "### "
-    local prefix = line:match("^###%s+")
-    if prefix then
-        vim.api.nvim_buf_set_extmark(bufnr, ns, line_row, #prefix, {
-            end_col = #line,
-            hl_group = Theme.HL_GROUPS.TOOL_KIND,
-            priority = 200,
-        })
-    end
-
-    if description and description ~= "" then
-        -- Title lines sit at line_row+1 .. line_row+n, before the command
-        -- fence. They render in the default chat colour (no highlight) — the
-        -- description is normal prose, not de-emphasised sidecar content.
-        -- Return so the argument-backtick logic below doesn't run on them.
-        return
-    end
-
-    -- Next line: "`argument`" — highlight the argument text inside backticks
-    local arg_line =
-        vim.api.nvim_buf_get_lines(bufnr, line_row + 1, line_row + 2, false)[1]
-    if arg_line then
-        local bt_start = arg_line:find("`")
-        if bt_start then
-            local bt_end = arg_line:find("`", bt_start + 1)
-            if bt_end then
-                vim.api.nvim_buf_set_extmark(
-                    bufnr,
-                    ns,
-                    line_row + 1,
-                    bt_start,
-                    {
-                        end_col = bt_end - 1,
-                        hl_group = Theme.HL_GROUPS.TOOL_ARGUMENT,
-                        priority = 200,
-                    }
-                )
-            end
         end
     end
 end

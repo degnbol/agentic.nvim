@@ -560,6 +560,13 @@ automatic future login.
 Re-authenticating is infrequent, so making the whole process fully automatic is low priority.
 But if the /login command can be called in the plugin, then a simple improvement would be to replace the unhelpful error, with a nvim builtin yes/no prompt for running /login.
 
+## trust git rm
+
+Under the concept of /trust we have recoverable edits.
+`git rm` kind of falls under that category, i.e. without -f/--force we can recover.
+Should we expand the /trust command to not just consider Edit calls, but to include such execution calls?
+This may just be expanding the permissions.json list to have a new category, so it's read_only, safe_write, recoverable, ask, then deny.
+
 ## Agents don't understand handover
 
 When talking to one agent then switching the new one doesn't understand a change of model occurred. Update: the models really have no idea who they are.

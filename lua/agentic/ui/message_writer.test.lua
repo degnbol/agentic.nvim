@@ -4,6 +4,10 @@ local spy = require("tests.helpers.spy")
 local Config = require("agentic.config")
 local Renderer = require("agentic.ui.tool_call_renderer")
 
+-- Collapsed tool-call heading glyphs (mirror KIND_GLYPHS in the renderer).
+local G_READ = "󰈈"
+local G_EXEC = "󰆍"
+
 describe("agentic.ui.MessageWriter", function()
     --- @type agentic.ui.MessageWriter
     local MessageWriter
@@ -883,7 +887,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### Execute", lines[1])
+            assert.equal("### " .. G_EXEC, lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
@@ -909,7 +913,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "renders the execute description as a title above the command",
+            "renders the execute description as the collapsed heading name",
             function()
                 --- @type agentic.ui.MessageWriter.ToolCallBlock
                 local block = {
@@ -923,15 +927,14 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-                assert.equal("### Execute", lines[1])
-                assert.equal("List the temp directory", lines[2])
-                assert.equal("```bash", lines[3])
-                assert.equal("ls -la /tmp", lines[4])
-                assert.equal("```", lines[5])
+                assert.equal("### " .. G_EXEC .. " `List the temp directory`", lines[1])
+                assert.equal("```bash", lines[2])
+                assert.equal("ls -la /tmp", lines[3])
+                assert.equal("```", lines[4])
                 -- Single console fence around the body — no nested/double wrap.
-                assert.equal("```console", lines[6])
-                assert.equal("total 16", lines[7])
-                assert.equal("```", lines[8])
+                assert.equal("```console", lines[5])
+                assert.equal("total 16", lines[6])
+                assert.equal("```", lines[7])
             end
         )
 
@@ -959,7 +962,7 @@ describe("agentic.ui.MessageWriter", function()
                     openers = openers + 1
                 end
                 assert.equal(1, openers)
-                assert.equal("### Execute", lines[1])
+                assert.equal("### " .. G_EXEC, lines[1])
                 assert.equal("```bash", lines[2])
                 assert.equal("echo hi", lines[3])
                 assert.equal("```", lines[4])
@@ -980,7 +983,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### Execute", lines[1])
+            assert.equal("### " .. G_EXEC, lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
@@ -989,7 +992,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "renders non-execute tool call with argument on separate line",
+            "renders non-execute tool call with argument on the collapsed heading",
             function()
                 --- @type agentic.ui.MessageWriter.ToolCallBlock
                 local block = {
@@ -1002,8 +1005,8 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-                assert.equal("### Read", lines[1])
-                assert.equal("`/tmp/file.txt`", lines[2])
+                assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+                assert.equal("Read 1 lines", lines[2])
             end
         )
 
@@ -1019,8 +1022,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### Read", lines[1])
-            assert.equal("`/tmp/file.txt`", lines[2])
+            assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
         end)
 
         it("extracts range from argument into read_range", function()
@@ -1035,9 +1037,8 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### Read", lines[1])
-            assert.equal("`/tmp/file.txt`", lines[2])
-            assert.equal("Read 100 lines (1 - 100)", lines[3])
+            assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+            assert.equal("Read 100 lines (1 - 100)", lines[2])
         end)
 
         it("shows line range in read info when read_range is set", function()
@@ -1053,9 +1054,8 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### Read", lines[1])
-            assert.equal("`/tmp/file.txt`", lines[2])
-            assert.equal("Read 3 lines (10 - 12)", lines[3])
+            assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+            assert.equal("Read 3 lines (10 - 12)", lines[2])
         end)
 
         it("creates highlight ranges for pure insertion hunks", function()
@@ -1103,7 +1103,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### Execute", lines[1])
+            assert.equal("### " .. G_EXEC, lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("cd /some/very/long/project/path &&", lines[3])
             assert.equal("npm install --save-dev typescript &&", lines[4])
@@ -1336,7 +1336,7 @@ describe("agentic.ui.MessageWriter", function()
                     vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 -- Header should be present
-                assert.equal("### Execute", lines_after_write[1])
+                assert.equal("### " .. G_EXEC, lines_after_write[1])
                 -- Code fence and split command
                 assert.equal("```bash", lines_after_write[2])
                 assert.equal(
@@ -1372,7 +1372,7 @@ describe("agentic.ui.MessageWriter", function()
                     vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 -- Header still present
-                assert.equal("### Execute", lines_after_update[1])
+                assert.equal("### " .. G_EXEC, lines_after_update[1])
                 assert.equal("```bash", lines_after_update[2])
 
                 -- Body output should be present
@@ -1510,12 +1510,12 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-                -- Find "### Execute" header
+                -- Find the collapsed execute header
                 local found_header = false
                 local found_fence = false
                 local found_command = false
                 for _, line in ipairs(lines) do
-                    if line == "### Execute" then
+                    if line == "### " .. G_EXEC then
                         found_header = true
                     end
                     if line == "```bash" then
@@ -1578,7 +1578,7 @@ describe("agentic.ui.MessageWriter", function()
                 local found_header = false
                 local found_fence = false
                 for _, line in ipairs(lines) do
-                    if line == "### Execute" then
+                    if line == "### " .. G_EXEC then
                         found_header = true
                     end
                     if line == "```bash" then
@@ -2623,13 +2623,13 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("execute description title", function()
+    describe("execute description heading", function()
         before_each(function()
             Config.tool_call_display.execute_formatter = false
         end)
 
         it(
-            "renders description as a title and a single body fence across the update",
+            "renders description as the heading name and a single body fence across the update",
             function()
                 local output = {}
                 for i = 1, Config.tool_call_display.execute_max_lines + 5 do
@@ -2656,9 +2656,12 @@ describe("agentic.ui.MessageWriter", function()
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
                 local text = table.concat(lines, "\n")
 
-                -- Description sits between the header and the command fence.
+                -- Description is the collapsed heading name, directly above
+                -- the command fence.
                 assert.is_not_nil(
-                    text:match("### Execute\nDemo execute folding\n```bash")
+                    text:match(
+                        "### " .. G_EXEC .. " `Demo execute folding`\n```bash"
+                    )
                 )
                 -- No accumulation divider, no double-wrapped console fence.
                 assert.is_nil(text:match("\n%-%-%-\n"))
@@ -2670,23 +2673,17 @@ describe("agentic.ui.MessageWriter", function()
                 end
                 assert.equal(1, openers)
 
-                -- Description line is left unhighlighted (default chat colour),
-                -- not dimmed with a Comment highlight.
-                local desc_row = 1
+                -- The heading name is left to treesitter (@markup.raw on the
+                -- backtick code span) — the renderer applies no NS_STATUS
+                -- overlay on the head line.
                 local marks = vim.api.nvim_buf_get_extmarks(
                     bufnr,
                     Renderer.NS_STATUS,
-                    { desc_row, 0 },
-                    { desc_row, -1 },
+                    { 0, 0 },
+                    { 0, -1 },
                     { details = true }
                 )
-                local has_comment = false
-                for _, m in ipairs(marks) do
-                    if m[4] and m[4].hl_group == "Comment" then
-                        has_comment = true
-                    end
-                end
-                assert.is_false(has_comment)
+                assert.equal(0, #marks)
             end
         )
     end)

@@ -40,6 +40,20 @@ local function kind_key(k)
     return vim.trim(k):lower()
 end
 
+--- Build the chat-buffer lines for a user prompt: the first line becomes the
+--- `##` heading (so treesitter-context pins it as the turn's breadcrumb),
+--- remaining lines follow as body.
+--- @param text string Raw prompt text
+--- @return string[] lines
+local function prompt_heading_lines(text)
+    local prompt_lines = vim.split(text, "\n", { plain = true })
+    local lines = { "## " .. prompt_lines[1] }
+    for i = 2, #prompt_lines do
+        table.insert(lines, prompt_lines[i])
+    end
+    return lines
+end
+
 --- Safely invoke a user-configured hook
 --- @param hook_name "on_prompt_submit" | "on_response_complete" | "on_permission_request"
 --- @param data table
@@ -511,11 +525,10 @@ function SessionManager:_on_session_update(update)
             then
                 -- System metadata injected into the prompt — skip
             else
-                local user_message = ACPPayloads.generate_user_message({
-                    "##",
-                    text,
-                    "\n---\n",
-                })
+                local message_lines = prompt_heading_lines(text)
+                table.insert(message_lines, "\n---\n")
+                local user_message =
+                    ACPPayloads.generate_user_message(message_lines)
                 self.message_writer:write_message(user_message)
                 self.chat_history:add_message({
                     type = "user",
@@ -1647,11 +1660,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     end
 
     --- The message to be written to the chat widget
-    local message_lines = {
-        "##",
-    }
-
-    table.insert(message_lines, input_text)
+    local message_lines = prompt_heading_lines(input_text)
 
     if not is_slash_command and not self.code_selection:is_empty() then
         table.insert(message_lines, "\n- **Selected code**:\n")

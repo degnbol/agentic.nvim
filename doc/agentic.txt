@@ -596,8 +596,7 @@ All groups use `default = true` so user definitions take priority.
     `AgenticStatusCompleted`       |DiagnosticVirtualTextOk|      Completed tool call
     `AgenticStatusFailed`          |DiagnosticVirtualTextError|   Failed tool call
     `AgenticCodeBlockFence`        |NonText|                      Code fences
-    `AgenticToolKind`              |Function|                     Tool kind heading
-    `AgenticToolArgument`          |String|                       Tool argument
+    `AgenticHeading`               @punctuation.special          Chat section heading markers (## / ###)
     `AgenticSearchMatch`           |Search|                       Search match
     `AgenticGrepPath`              @string.special.path          Grep file path
     `AgenticGrepLineNr`            |LineNr|                       Grep line number

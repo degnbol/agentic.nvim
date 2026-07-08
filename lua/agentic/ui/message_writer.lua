@@ -652,10 +652,14 @@ function MessageWriter:write_message_chunk(update)
         text = "\n\n" .. text
     end
 
-    -- Add blank line before text that follows a tool call block,
-    -- so responses between tool calls have visual breathing room
+    -- Prose that resumes after a tool call must close the tool section so
+    -- treesitter-context stops pinning the tool's filename while the user
+    -- reads the summary. Emit an empty `###` heading (no inline child, so
+    -- context.scm never captures it) ahead of the prose, plus the blank line
+    -- for visual breathing room. Once per prose run — the flag resets after
+    -- the first chunk.
     if self._last_wrote_tool_call then
-        text = "\n" .. text
+        text = "\n###\n\n" .. text
         self._last_wrote_tool_call = false
     end
 
@@ -736,7 +740,13 @@ function MessageWriter:write_message_chunk(update)
             for line = self._chunk_start_line, scan_end do
                 local content =
                     vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
-                if content and content:match("%S") then
+                -- Skip the leading blank and the empty `###` section boundary
+                -- inserted before a post-tool-call prose run; pin real prose.
+                if
+                    content
+                    and content:match("%S")
+                    and not content:match("^#+%s*$")
+                then
                     self._prose_anchor_line = line
                     break
                 end
@@ -1133,12 +1143,6 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
 
-        Renderer.apply_tool_header_syntax(
-            bufnr,
-            start_row,
-            Renderer.NS_STATUS,
-            tool_call_block.description
-        )
         Renderer.apply_status_footer(bufnr, end_row, tool_call_block.status)
 
         if is_final_status(tool_call_block.status) then
@@ -1412,12 +1416,6 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             table.insert(tracker.decoration_extmark_ids, dim_id)
         end
 
-        Renderer.apply_tool_header_syntax(
-            bufnr,
-            start_row,
-            Renderer.NS_STATUS,
-            tracker.description
-        )
         Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)
 
         if is_final_status(tracker.status) then

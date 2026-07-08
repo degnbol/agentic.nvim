@@ -16,8 +16,7 @@ Theme.HL_GROUPS = {
     STATUS_FAILED = "AgenticStatusFailed",
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
 
-    TOOL_KIND = "AgenticToolKind",
-    TOOL_ARGUMENT = "AgenticToolArgument",
+    HEADING = "AgenticHeading",
     DIMMED_BLOCK = "AgenticDimmedBlock",
     SEARCH_MATCH = "AgenticSearchMatch",
     GREP_PATH = "AgenticGrepPath",
@@ -57,9 +56,14 @@ function Theme.setup()
         { Theme.HL_GROUPS.STATUS_FAILED, { link = "DiagnosticVirtualTextError" } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
 
-        -- Tool call header highlights
-        { Theme.HL_GROUPS.TOOL_KIND, { link = "Function" } },
-        { Theme.HL_GROUPS.TOOL_ARGUMENT, { link = "String" } },
+        -- Chat section heading markers (`##` prompt, `###` tool call). Linked
+        -- from the chat window's winhighlight (`@markup.heading.N.agentic`),
+        -- which the markdown highlighter captures over the `##`/`###` marker
+        -- only — the heading text is remapped to Normal there, and the
+        -- tool-call name keeps its markdown_inline `@markup.raw` colour. So
+        -- being a heading (a treesitter-context anchor) is decoupled from
+        -- looking important. Retarget this group to restyle the markers.
+        { Theme.HL_GROUPS.HEADING, { link = "@punctuation.special" } },
 
         -- Sidecar body dim (fetch/WebSearch/SubAgent output)
         { Theme.HL_GROUPS.DIMMED_BLOCK, { link = "Comment" } },

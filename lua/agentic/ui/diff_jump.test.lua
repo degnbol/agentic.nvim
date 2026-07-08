@@ -58,16 +58,15 @@ describe("diff_jump", function()
                 )
 
                 -- Layout for non-markdown diff (block_start_row = 0):
-                --   row 0: ### Edit
-                --   row 1: `/file.lua`
-                --   row 2: ```lua
-                --   row 3: beta             ← old
-                --   row 4: gamma            ← old
-                --   row 5: delta            ← old
-                --   row 6: BETA             ← new
-                --   row 7: GAMMA            ← new   (cursor here, col 3)
-                --   row 8: DELTA            ← new
-                local target = DiffJump.compute_target(block, 0, 7, 3)
+                --   row 0: ### <glyph> `/file.lua`
+                --   row 1: ```lua
+                --   row 2: beta             ← old
+                --   row 3: gamma            ← old
+                --   row 4: delta            ← old
+                --   row 5: BETA             ← new
+                --   row 6: GAMMA            ← new   (cursor here, col 3)
+                --   row 7: DELTA            ← new
+                local target = DiffJump.compute_target(block, 0, 6, 3)
 
                 assert.is_not_nil(target)
                 ---@cast target -nil
@@ -86,12 +85,11 @@ describe("diff_jump", function()
             local block = make_edit_block({ "b", "c" }, {})
 
             -- Layout (non-markdown):
-            --   row 0: ### Edit
-            --   row 1: `/file.lua`
-            --   row 2: ```lua
-            --   row 3: b   ← old (cursor here)
-            --   row 4: c   ← old
-            local target = DiffJump.compute_target(block, 0, 3, 0)
+            --   row 0: ### <glyph> `/file.lua`
+            --   row 1: ```lua
+            --   row 2: b   ← old (cursor here)
+            --   row 3: c   ← old
+            local target = DiffJump.compute_target(block, 0, 2, 0)
 
             assert.is_not_nil(target)
             ---@cast target -nil
@@ -107,14 +105,13 @@ describe("diff_jump", function()
                 local block = make_edit_block({ "old1", "old2" }, { "new1", "new2" })
 
                 -- Layout:
-                --   row 0: ### Edit
-                --   row 1: `/file.lua`
-                --   row 2: ```lua
-                --   row 3: old1   ← old (cursor here, col 2)
-                --   row 4: old2   ← old
-                --   row 5: new1   ← new
-                --   row 6: new2   ← new
-                local target = DiffJump.compute_target(block, 0, 3, 2)
+                --   row 0: ### <glyph> `/file.lua`
+                --   row 1: ```lua
+                --   row 2: old1   ← old (cursor here, col 2)
+                --   row 3: old2   ← old
+                --   row 4: new1   ← new
+                --   row 5: new2   ← new
+                local target = DiffJump.compute_target(block, 0, 2, 2)
 
                 assert.is_not_nil(target)
                 ---@cast target -nil
@@ -131,7 +128,7 @@ describe("diff_jump", function()
 
             local block = make_edit_block({ "b" }, { "B" })
 
-            -- Cursor on block_start_row (### Edit header)
+            -- Cursor on block_start_row (collapsed edit header)
             local target = DiffJump.compute_target(block, 0, 0, 0)
 
             assert.is_not_nil(target)
@@ -170,13 +167,12 @@ describe("diff_jump", function()
 
             -- New-file diff: start_line = 1.
             -- Layout:
-            --   row 0: ### Edit
-            --   row 1: `/file.lua`
-            --   row 2: ```lua
-            --   row 3: L1   (cursor here, col 1)
-            --   row 4: L2
-            --   row 5: L3
-            local target = DiffJump.compute_target(block, 0, 5, 1)
+            --   row 0: ### <glyph> `/file.lua`
+            --   row 1: ```lua
+            --   row 2: L1   (cursor here, col 1)
+            --   row 3: L2
+            --   row 4: L3
+            local target = DiffJump.compute_target(block, 0, 4, 1)
 
             assert.is_not_nil(target)
             ---@cast target -nil
@@ -192,12 +188,11 @@ describe("diff_jump", function()
             block.argument = "/notes.md"
 
             -- Layout (markdown, fenced like other languages):
-            --   row 0: ### Edit
-            --   row 1: `/notes.md`
-            --   row 2: ```md
-            --   row 3: old md line   ← old
-            --   row 4: new md line   ← new (cursor here)
-            local target = DiffJump.compute_target(block, 0, 4, 4)
+            --   row 0: ### <glyph> `/notes.md`
+            --   row 1: ```md
+            --   row 2: old md line   ← old
+            --   row 3: new md line   ← new (cursor here)
+            local target = DiffJump.compute_target(block, 0, 3, 4)
 
             assert.is_not_nil(target)
             ---@cast target -nil
