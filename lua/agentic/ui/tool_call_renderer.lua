@@ -7,6 +7,7 @@ local FileSystem = require("agentic.utils.file_system")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local Treesitter = require("agentic.utils.treesitter")
+local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 
 local NS_TOOL_BLOCKS = vim.api.nvim_create_namespace("agentic_tool_blocks")
 local NS_DECORATIONS = vim.api.nvim_create_namespace("agentic_tool_decorations")
@@ -91,6 +92,22 @@ end
 --- @return string
 local function shell_lang()
     return vim.fs.basename(os.getenv("SHELL") or vim.o.shell)
+end
+
+--- Fence info-string for a shell command. Normally the shell label, but the
+--- chat buffer injects that label as the tree-sitter-zsh parser (zsh is aliased
+--- to bash), which hangs the editor forever on the `${…/…[…)` shape (see
+--- ZshParseGuard). Fall back to a non-injecting "text" label on that shape so
+--- the command still renders — it loses syntax colouring, matching the
+--- fail-open guards on the diff-highlight paths.
+--- @param argument string Shell command text
+--- @param lang string Shell label to use when the command is safe to inject
+--- @return string
+local function shell_fence_lang(argument, lang)
+    if ZshParseGuard.contains_hang_trigger(argument) then
+        return "text"
+    end
+    return lang
 end
 
 --- Check if a command string starts with a grep-family tool.
@@ -427,13 +444,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 vim.split(description, "\n", { plain = true })
             )
         end
-        table.insert(lines, fence .. shell_lang())
+        table.insert(lines, fence .. shell_fence_lang(argument, shell_lang()))
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)
     elseif kind == "search" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
         local fence = safe_fence(cmd_lines)
-        lines = { header, fence .. "bash" }
+        lines = { header, fence .. shell_fence_lang(argument, "bash") }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)
     elseif kind == "fetch" then

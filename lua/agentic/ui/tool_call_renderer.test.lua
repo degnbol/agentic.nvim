@@ -565,6 +565,64 @@ describe("ToolCallRenderer", function()
         end)
     end)
 
+    describe("shell command fence label", function()
+        -- The `${…/…[…)` shape hangs the tree-sitter-zsh parser forever; the
+        -- chat buffer injects the command fence's label as that parser, so a
+        -- shell label on this command would freeze the editor. Built from char
+        -- codes so the literal shape never reaches shell tooling.
+        local HANG_CMD = "c=" .. string.char(36, 123, 120, 47, 47, 91, 94, 41, 93, 125)
+
+        --- First labelled fence line's info string (the command fence; a bare
+        --- closing fence has no label and is skipped).
+        --- @param lines string[]
+        --- @return string|nil
+        local function first_fence_label(lines)
+            for _, line in ipairs(lines) do
+                local label = line:match("^`+(%S+)$")
+                if label then
+                    return label
+                end
+            end
+            return nil
+        end
+
+        it("uses a non-injecting label for a hang-trigger execute command", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-hang",
+                kind = "execute",
+                argument = HANG_CMD,
+                status = "completed",
+            }
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert.equal("text", first_fence_label(lines))
+        end)
+
+        it("uses a non-injecting label for a hang-trigger search command", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "search-hang",
+                kind = "search",
+                argument = "rg '" .. HANG_CMD .. "'",
+                status = "completed",
+            }
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert.equal("text", first_fence_label(lines))
+        end)
+
+        it("keeps the shell label for a benign command", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-ok",
+                kind = "execute",
+                argument = "rg -n foo file",
+                status = "completed",
+            }
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+            assert.are_not.equal("text", first_fence_label(lines))
+        end)
+    end)
+
     describe("execute ANSI highlight placement", function()
         --- Find the row of the extmark whose hl_group starts with prefix.
         --- @param bufnr integer
