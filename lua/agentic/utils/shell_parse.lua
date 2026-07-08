@@ -561,9 +561,16 @@ local ORACLE_TIMEOUT_MS = 5000
 
 --- Whether the zsh grammar terminates when parsing `body`, proven by parsing it
 --- in a killable subprocess. Returns false on timeout (the hang), spawn/parse
---- failure, or a missing parser — all fail-closed for the caller. `wait()` uses
---- `fast_only`, so it blocks the main thread without dispatching deferred events
---- (RPC/autocmds/scheduled fns) — no re-entrancy into the permission decision.
+--- failure, or a missing parser — all fail-closed for the caller.
+---
+--- Re-entrancy: `SystemObj:wait` polls with `vim.wait(…, fast_only=true)`, which
+--- DOES run libuv callbacks — the ACP transport's `uv` `read_start` fires and
+--- parses provider bytes during this wait — but does NOT dispatch neovim's
+--- deferred queue (`vim.schedule`, autocmds). Every state-mutating ACP handler
+--- (`session/update`, `session/request_permission`) is `vim.schedule`-deferred
+--- (see `acp_client`), so it runs only after this returns, never re-entering the
+--- in-flight permission walk. The synchronous read-callback work is inert here
+--- (byte accumulation + JSON decode + enqueue).
 --- @param body string
 --- @return boolean
 local function oracle_terminates(body)
