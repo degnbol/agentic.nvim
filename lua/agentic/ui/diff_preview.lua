@@ -6,6 +6,7 @@ local HunkNavigation = require("agentic.ui.hunk_navigation")
 local Logger = require("agentic.utils.logger")
 local Theme = require("agentic.theme")
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
+local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 
 --- Displays the edit tool call diff in the actual buffer using virtual lines and highlights
 --- @class agentic.ui.DiffPreview
@@ -61,6 +62,12 @@ local function build_highlight_map(lines, lang)
     end
 
     local content = table.concat(lines, "\n")
+
+    -- A zsh-hang trigger in the diffed content would freeze the editor at
+    -- parse() (see zsh_parse_guard); skip highlighting rather than parse it.
+    if ZshParseGuard.contains_hang_trigger(content) then
+        return nil
+    end
 
     local ok, parser = pcall(vim.treesitter.get_string_parser, content, lang)
     if not ok or not parser then

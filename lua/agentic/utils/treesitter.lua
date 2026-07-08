@@ -9,6 +9,8 @@
 --- @class agentic.utils.Treesitter
 local M = {}
 
+local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
+
 --- Parse `new_lines` spliced into the buffer's full content, then extract
 --- highlight captures for just the new_lines rows. The result maps
 --- 0-indexed row-within-new_lines to a byte-col → capture-name map.
@@ -44,6 +46,11 @@ function M.build_highlight_map(bufnr, lang, splice_start, splice_end, new_lines)
     vim.list_extend(reconstructed, suffix)
 
     local source = table.concat(reconstructed, "\n")
+    -- A zsh-hang trigger anywhere in the reconstructed file would freeze the
+    -- editor at parse() (see zsh_parse_guard); skip highlighting instead.
+    if ZshParseGuard.contains_hang_trigger(source) then
+        return nil
+    end
     local ok_lang, lang_tree =
         pcall(vim.treesitter.get_string_parser, source, lang)
     if not ok_lang or not lang_tree then

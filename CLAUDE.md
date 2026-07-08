@@ -19,25 +19,10 @@ Provider-specific behaviour (e.g. which tools the SDK auto-approves vs
 escalates) is adapter-dependent — see the `provider-system` project
 skill.
 
-## Debugging at runtime
+## Debugging
 
-`Logger.debug()` (prints to `:messages`) is gated by `Config.debug`.
-`Logger.debug_to_file()` (appends to `~/.cache/nvim/agentic_debug.log`) is
-gated by `Config.log`. Both default to `false` and are independent — enable
-`log` alone for file logging without screen distraction. For temporary
-diagnostics that must fire unconditionally, use `io.open` directly:
-
-```lua
-do
-    local f = io.open("/tmp/agentic_diag.log", "a")
-    if f then
-        f:write(string.format("%s %s\n", os.date("%H:%M:%S"), msg))
-        f:close()
-    end
-end
-```
-
-Remove before committing. Never leave `io.open` debug logging in production code.
+For runtime debugging (logging, diagnostics) and recurring misdiagnosed
+symptoms (freezes/hangs, chat display desync), load the `issues` skill.
 
 ## Multi-tabpage architecture
 

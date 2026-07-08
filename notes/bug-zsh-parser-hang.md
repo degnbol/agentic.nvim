@@ -58,8 +58,11 @@ Wrap in `timeout -s KILL 8` — plain `timeout` (SIGTERM) will not stop it.
   highlight. Path for the Edit-to-`identifiers.zsh` freeze.
 - `lua/agentic/utils/treesitter.lua:48` — context-aware highlight reconstruct.
 
-The `pcall` in `parse_zsh` and the fail-open in `build_highlight_map` wrap
-`get_string_parser` (cheap), **not** `parse()` (the loop) — they do nothing here.
+Originally unguarded: the `pcall` in `parse_zsh` and the fail-open in
+`build_highlight_map` wrapped `get_string_parser` (cheap), **not** `parse()`
+(the loop), so they did nothing here. All three now bail before `parse()` via
+the layer-1 guard (#4); the walk-into-scripts body parse also has the layer-2
+subprocess oracle.
 
 ## Ruled out (do not re-chase)
 
@@ -138,20 +141,51 @@ cases). Verified the full file now parses to completion headless; the only
 remaining match of the shape is the explanatory comment (lexed as a comment, so
 harmless).
 
-### 4. Isolate tree-sitter so a bad grammar can't take down the editor (important)
+### 4. Isolate tree-sitter so a bad grammar can't take down the editor — DONE
 
 A third-party grammar must degrade to "no highlighting / failed walk", never a
-frozen editor. `pcall`/`timeout` cannot interrupt a synchronous C parse. Durable
-fix: run each `get_string_parser(…):parse()` on untrusted content in a
-**killable subprocess** (`nvim --headless -l parse.lua` under `timeout -s KILL`),
-treating timeout as "unparseable" — fail highlighting cosmetically, fail-closed
-for the permission walk. Covers the three entry points above and any future
-grammar bug.
+frozen editor. **Confirmed (headless):** no in-process mechanism can interrupt
+this hang — not `pcall`, not `timeout`'s SIGTERM, and not neovim's async-parse
+chunk timeout (`parse(range, on_parse)`, 3 ms chunks + `redrawtime` abort). The
+async path still SIGKILLs on the reproducer: the C reduce loop never reaches a
+cancellation checkpoint, so the first chunk enters C and never returns to the
+coroutine. An OS-level kill is the *only* viable interrupt.
 
-### 5. Async parsing (lower priority)
+Shipped as two layers:
 
-Parsing runs on the UI thread; even a slow-but-terminating parse blocks it.
-Consider off-thread/async parsing. Lower priority than 1-4.
+- **Layer 1 — cheap universal tripwire (`lua/agentic/utils/zsh_parse_guard.lua`).**
+  `contains_hang_trigger(src)` is the #2 regex ported to a Lua pattern; it runs
+  before every parse. Wired into `parse_zsh` (→ nil, fail-closed prompt) and
+  both `build_highlight_map`s (`diff_preview.lua`, `utils/treesitter.lua` → nil,
+  fail-open no highlight). This closes the **known** bug on all four entry
+  points — including the diff-highlight path that caused the *Edit* freeze,
+  which a walker-only fix would have missed — at ~µs cost, no subprocess.
+- **Layer 2 — killable subprocess oracle (`ShellParse.parse_zsh_untrusted`,
+  script `utils/zsh_parse_oracle.lua`).** Guards the two walk-into-scripts
+  file-body parses (arbitrary on-disk content, the incident path, exposed to
+  *unknown* future grammar bugs). Parses the body in `vim.system(nvim …
+  -l oracle):wait(5000)`; a non-terminating grammar bug is SIGKILLed and treated
+  as unparseable (nil → prompt). Only fires when a command sources/executes a
+  script, so common Bash decisions pay nothing. **`SystemObj:wait` uses
+  `vim.wait(…, fast_only=true)`** — it SIGKILLs on timeout ("cannot be caught")
+  and does *not* dispatch deferred events (RPC/autocmds/`vim.schedule`), so it
+  blocks the main thread without re-entering the permission decision. (This
+  refines the earlier "no event-loop-pump on the Bash path" note under *Ruled
+  out*: a `fast_only` wait does not reintroduce that re-entrancy.)
+
+Not covered: unknown hangs on the *display* paths and on command/`-c` text
+(layer 1 catches only the known shape there). Accepted — display fails
+cosmetically, and command text is short and user-reviewed. A per-parse
+subprocess on those hot paths was judged disproportionate.
+
+### 5. Async parsing — DOES NOT fix this bug class (tested)
+
+The async parse API (`parser:parse(true, on_parse_cb)`) was tested against the
+reproducer headless: still exit 137 (SIGKILL). It splits work into 3 ms chunks
+and aborts at `redrawtime`, but the abort is only checked *between* chunks — a C
+reduce loop that never yields never gets checked. Async parsing helps only
+*slow-but-terminating* parses (keeps the UI responsive during a big-but-finite
+parse); it cannot rescue an uninterruptible loop. Not a substitute for #4.
 
 ## Artifacts
 

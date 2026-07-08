@@ -9,6 +9,7 @@ local M = {}
 -- module's `extract_commands` builds the flat command list from them.
 local ShellParse = require("agentic.utils.shell_parse")
 local parse_zsh = ShellParse.parse_zsh
+local parse_zsh_untrusted = ShellParse.parse_zsh_untrusted
 local literal_token = ShellParse.literal_token
 local pure_literal_token = ShellParse.pure_literal_token
 local command_name_text = ShellParse.command_name_text
@@ -1295,7 +1296,9 @@ local function walk_command(node, src, ctx, known, funcs)
                 return false
             end
         end
-        local root = parse_zsh(body)
+        -- Untrusted on-disk (or reconstructed) content: parse under the
+        -- subprocess termination guard so a grammar hang can't freeze the editor.
+        local root = parse_zsh_untrusted(body)
         if not root then
             return false
         end
@@ -2045,7 +2048,9 @@ local function command_known_safe(node, src, ctx, known, funcs)
         if not body then
             return false
         end
-        local root = parse_zsh(body)
+        -- Untrusted on-disk content: parse under the subprocess termination
+        -- guard so a grammar hang can't freeze the editor.
+        local root = parse_zsh_untrusted(body)
         if not root then
             return false
         end

@@ -9,12 +9,15 @@
 --- `extract_commands` builds the flat command list on the same primitives, so
 --- there is exactly one implementation of each.
 ---
---- Zero plugin requires (only `vim.treesitter`) so it loads under `nvim -u NONE`
---- with just the plugin on the runtimepath — no `Config`/runtime pulled in.
+--- No `Config`/runtime requires (only `vim.treesitter` and the pure-Lua
+--- `zsh_parse_guard`) so it loads under `nvim -u NONE` with just the plugin on
+--- the runtimepath.
 ---
 --- Node-type names are pinned to the installed tree-sitter-zsh grammar (verified
 --- 2026-06-18). They can drift across grammar versions — re-verify with a
 --- parse-tree dump after upgrading the parser.
+
+local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 
 local M = {}
 
@@ -523,9 +526,18 @@ end
 --- Parse a command string with the zsh grammar. Returns the root node, or nil
 --- on missing parser / parse error / any error node (fail-closed). Shared by the
 --- decision walk, the tally walk, and the inline `-c` body recursion.
+---
+--- Bails before parsing on the tree-sitter-zsh hang trigger (see
+--- `zsh_parse_guard`): `parse()` would never return and no in-process mechanism
+--- can interrupt it, so a nil here (fail-closed → prompt) is the only safe
+--- outcome. Untrusted file bodies get an additional out-of-process guard — see
+--- `parse_zsh_untrusted`.
 --- @param src string
 --- @return TSNode|nil
 local function parse_zsh(src)
+    if ZshParseGuard.contains_hang_trigger(src) then
+        return nil
+    end
     local ok, root = pcall(function()
         local parser = vim.treesitter.get_string_parser(src, "zsh")
         return parser:parse(true)[1]:root()
@@ -534,6 +546,63 @@ local function parse_zsh(src)
         return nil
     end
     return root
+end
+
+--- Absolute path to the headless parse-termination oracle script (sibling file).
+local ORACLE_SCRIPT = vim.fn.fnamemodify(
+    debug.getinfo(1, "S").source:sub(2),
+    ":h"
+) .. "/zsh_parse_oracle.lua"
+
+--- Upper bound on a legitimate parse of a 64 KB body. A terminating parse is
+--- ~100 ms; this only bounds how long the editor blocks before SIGKILLing a
+--- genuinely-hung grammar.
+local ORACLE_TIMEOUT_MS = 5000
+
+--- Whether the zsh grammar terminates when parsing `body`, proven by parsing it
+--- in a killable subprocess. Returns false on timeout (the hang), spawn/parse
+--- failure, or a missing parser — all fail-closed for the caller. `wait()` uses
+--- `fast_only`, so it blocks the main thread without dispatching deferred events
+--- (RPC/autocmds/scheduled fns) — no re-entrancy into the permission decision.
+--- @param body string
+--- @return boolean
+local function oracle_terminates(body)
+    local parser_so = vim.api.nvim_get_runtime_file("parser/zsh.so", false)[1]
+    if not parser_so then
+        return false
+    end
+    local done = vim
+        .system({
+            vim.v.progpath,
+            "--headless",
+            "-u",
+            "NONE",
+            "-l",
+            ORACLE_SCRIPT,
+            parser_so,
+        }, { stdin = body })
+        :wait(ORACLE_TIMEOUT_MS)
+    return done.code == 0 and done.signal == 0
+end
+
+--- Parse an untrusted file body (a sourced/executed script read from disk) with
+--- a subprocess termination guard on top of `parse_zsh`. The known hang trigger
+--- is rejected cheaply in-process; any *other* non-terminating grammar bug is
+--- caught by proving termination in a killable subprocess first, because a C
+--- parse loop cannot be interrupted in-process (see notes/bug-zsh-parser-hang.md
+--- § 4). Timeout / spawn failure / missing parser fail closed (nil → the walk
+--- prompts). Once termination is proven the body is parsed in-process to return
+--- the walkable tree.
+--- @param body string
+--- @return TSNode|nil
+function M.parse_zsh_untrusted(body)
+    if ZshParseGuard.contains_hang_trigger(body) then
+        return nil
+    end
+    if not oracle_terminates(body) then
+        return nil
+    end
+    return parse_zsh(body)
 end
 
 -- ── Transparent prefixes (exec-wrappers, inline `-c`) ────────────────────────

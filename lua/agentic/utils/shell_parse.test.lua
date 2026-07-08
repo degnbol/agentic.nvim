@@ -138,4 +138,32 @@ describe("ShellParse.extract_commands", function()
             assert.same({}, ShellParse.extract_commands("# just a comment"))
         end)
     end)
+
+    describe("zsh-hang trigger (must not reach parse())", function()
+        -- parse() never returns on this input and no in-process mechanism can
+        -- interrupt the C loop, so parse_zsh must bail before parsing. If the
+        -- guard regressed, this test would hang the whole suite rather than fail.
+        it("parse_zsh returns nil without hanging", function()
+            assert.equal(nil, ShellParse.parse_zsh("c=${x//[^)]}"))
+        end)
+
+        it("extract_commands bails fail-closed on the trigger", function()
+            assert.equal(nil, ShellParse.extract_commands("c=${x//[^)]}"))
+        end)
+    end)
+
+    describe("parse_zsh_untrusted (subprocess termination guard)", function()
+        it("returns a walkable root for a normal script body", function()
+            -- Exercises the full oracle round-trip: subprocess proves the parse
+            -- terminates, then it is re-parsed in-process.
+            local root =
+                ShellParse.parse_zsh_untrusted("ls /tmp\ngrep foo bar\n")
+            assert.is_not_nil(root)
+            assert.equal("program", root:type())
+        end)
+
+        it("returns nil on the hang trigger (never reaches the oracle)", function()
+            assert.equal(nil, ShellParse.parse_zsh_untrusted("c=${x//[^)]}"))
+        end)
+    end)
 end)

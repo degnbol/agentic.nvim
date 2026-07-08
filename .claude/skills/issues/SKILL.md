@@ -1,20 +1,40 @@
 ---
 name: issues
-description: Recurring agentic.nvim bug-class descriptions that keep being misdiagnosed. Use when the user reports chat display out of sync, content appearing late, streaming chunks missing, tool call frames missing, or any recurring agentic.nvim UI symptom they describe as "the same thing as before / we've had this many times". Read the matching symptom file in references/ and match the user's description against the "Observed" and "Missing" lists before proposing a fix. Do not propose fixes that appear under "Do not fix this with".
+description: Debugging agentic.nvim at runtime, plus its recurring misdiagnosed bug-classes. Use when adding logging or diagnostics (Logger.debug, debug_to_file, temporary io.open), or when the user reports the editor hanging, freezing, going unresponsive, or SIGKILLed (exit 137, no crash dump); chat display out of sync, content appearing late, streaming chunks or tool-call frames missing; or any symptom they call "the same thing as before / we've had this many times". Read it BEFORE diagnosing any freeze/hang or adding debug output. Match the user's report against a reference file's "Observed"/"Missing" lists before proposing a fix; do not propose fixes under "Do not fix this with".
 ---
 
-# Agentic.nvim — known recurring issues
+# Agentic.nvim — debugging and known recurring issues
 
-Collection of bug-class descriptions that have been misdiagnosed multiple
-times across sessions.
+## Runtime debugging
 
-## When the user signals a recurring issue
+`Logger.debug()` (prints to `:messages`) is gated by `Config.debug`.
+`Logger.debug_to_file()` (appends to `~/.cache/nvim/agentic_debug.log`) is
+gated by `Config.log`. Both default to `false` and are independent — enable
+`log` alone for file logging without screen distraction. For temporary
+diagnostics that must fire unconditionally, use `io.open` directly:
 
-Phrases to watch for: "same thing as before", "we've had this many times",
-"this keeps happening", "we've seen this before", "recurring", or similar
-language pointing at prior sessions' work.
+```lua
+do
+    local f = io.open("/tmp/agentic_diag.log", "a")
+    if f then
+        f:write(string.format("%s %s\n", os.date("%H:%M:%S"), msg))
+        f:close()
+    end
+end
+```
 
-**Mandatory first step when triggered by that phrasing:**
+Remove before committing. Never leave `io.open` debug logging in production code.
+
+## Known recurring issues
+
+Bug-class descriptions (in `references/`, listed under Index below) that have
+been misdiagnosed across multiple sessions. For a freeze/hang, read the matching
+reference first.
+
+When the user signals a *recurring* symptom — "same thing as before", "we've had
+this many times", "this keeps happening", "we've seen this before", "recurring",
+or similar language pointing at prior sessions' work — the **mandatory first
+step** is:
 
 1. **Search git history** before touching anything. The phrase means the user
    expects you to find what was already tried. Run:
@@ -36,6 +56,10 @@ failure mode. Do the search even if you think you recognise the symptom.
 
 ## Index
 
+- `references/treesitter-hang.md` — editor freezes and is SIGKILLed (exit 137,
+  no crash dump). A tree-sitter grammar bug spins the parser's C loop forever;
+  uninterruptible. Repeatedly misdiagnosed as a permission deadlock or render
+  stall. Rule this out before any other freeze/hang hypothesis.
 - `references/chunk-flush.md` — chat content
   (agent_message_chunks, tool call frames) is missing during the wait and only
   appears when the user submits a new prompt. NOT a redraw issue. NOT the
