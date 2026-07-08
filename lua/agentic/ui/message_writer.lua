@@ -24,6 +24,33 @@ local function kind_key(k)
     return vim.trim(k):lower()
 end
 
+--- Synchronously materialise treesitter injections for a buffer row range.
+--- The chat buffer's highlighter parses injections asynchronously under the
+--- 'redrawtime' budget (see `:h vim.treesitter` / languagetree `_async_parse`),
+--- yielding at 3ms steps. A heavy redraw can yield before reaching a block's
+--- injected fence — e.g. an execute command's ```zsh — leaving it with only
+--- the parent markup highlight until some unrelated later reparse. A
+--- callback-less `parse(range)` runs to completion with no time budget, so the
+--- injection child trees are created deterministically; it short-circuits to a
+--- no-op when the range is already valid, so calling it on a finalised block is
+--- free when nothing was deferred.
+--- @param bufnr integer
+--- @param start_row integer 0-indexed first row of the block
+--- @param end_row integer 0-indexed last row of the block
+local function materialize_injections(bufnr, start_row, end_row)
+    local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
+    if ok and parser then
+        parser:parse({ start_row, end_row })
+    end
+end
+
+--- Tool call statuses that will not change again (safe to force a final parse).
+--- @param status string|nil
+--- @return boolean
+local function is_final_status(status)
+    return status == "completed" or status == "failed"
+end
+
 --- @class agentic.ui.MessageWriter.HighlightRange
 --- @field type "comment"|"error"|"old"|"new"|"new_modification" Type of highlight to apply
 --- @field line_index integer Line index relative to returned lines (0-based)
@@ -1114,6 +1141,10 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         )
         Renderer.apply_status_footer(bufnr, end_row, tool_call_block.status)
 
+        if is_final_status(tool_call_block.status) then
+            materialize_injections(bufnr, start_row, end_row)
+        end
+
         self:_append_lines({ "" })
         self._last_wrote_tool_call = true
     end)
@@ -1388,6 +1419,10 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             tracker.description
         )
         Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)
+
+        if is_final_status(tracker.status) then
+            materialize_injections(bufnr, start_row, new_end_row)
+        end
     end)
 end
 
