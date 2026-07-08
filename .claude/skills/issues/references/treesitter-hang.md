@@ -38,8 +38,9 @@ The confirmed grammar bug: an unescaped close-paren inside a bracket class withi
 a `${var/pat}` / `${var//pat}` substitution (`c=${x//[^)]}`) loops the
 tree-sitter-zsh GLR reduce. Any bare `)` in a bracket class inside a substitution
 hangs; escaped `\)`, open-paren `[^(]`, and paren-in-class outside a substitution
-are safe. Bug is in `georgeharker/tree-sitter-zsh` (no fixed upstream release as
-of 2026-07-08).
+are safe. Bug is in `georgeharker/tree-sitter-zsh`, reported upstream as
+[issue #37](https://github.com/georgeharker/tree-sitter-zsh/issues/37) (open as
+of 2026-07-08); watch it for a grammar fix that would let the guards be removed.
 
 ## Entry points and current guards
 
