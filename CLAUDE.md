@@ -3,7 +3,7 @@
 Neovim plugin providing AI chat interface via ACP (Agent Client Protocol).
 Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim).
 
-- Neovim v0.11.0+, LuaJIT 2.1 (Lua 5.1)
+- Neovim v0.12.0+, LuaJIT 2.1 (Lua 5.1)
 - `goto`/`::label::` forbidden (Selene parser limitation)
 - Never use `vim.notify` directly — use `Logger.notify`
 - Logger has only `debug()`, `debug_to_file()`, and `notify()` — no warn/error/info

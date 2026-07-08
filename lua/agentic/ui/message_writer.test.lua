@@ -761,6 +761,37 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
+            "no-ops without error when topline sits on the last line",
+            function()
+                -- The last line alone is taller than the window (wraps to
+                -- ~34 rows > winheight=20) and the viewport already starts
+                -- on it, so no forward scroll is possible. The tail-does-
+                -- not-fit height check cannot short-circuit here, so this
+                -- pins the `old_topline >= last_line` guard: without it the
+                -- search would start below the last line and compute an
+                -- out-of-range target.
+                local lines = {}
+                for i = 1, 5 do
+                    lines[i] = "line " .. i
+                end
+                lines[6] = string.rep("x", 2000)
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+                vim.wo[winid].wrap = true
+                vim.api.nvim_win_set_cursor(winid, { 6, 0 })
+                vim.api.nvim_win_call(winid, function()
+                    vim.fn.winrestview({ topline = 6 })
+                end)
+                vim.cmd("redraw")
+
+                BufHelpers.scroll_down(winid, nil)
+
+                local info = vim.fn.getwininfo(winid)[1]
+                assert.equal(6, info.topline)
+            end
+        )
+
+        it(
             "stays put when closed folds collapse buffer to fit window",
             function()
                 -- 30 buffer lines with lines 2..16 collapsed into one screen

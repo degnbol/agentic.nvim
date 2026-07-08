@@ -180,17 +180,46 @@ function BufHelpers.scroll_down(winid, max_topline)
     -- in winheight. `nvim_win_text_height` accounts for closed folds,
     -- wrap, virt_lines, and diff filler. Height is monotonically
     -- non-increasing in t, so binary search.
+    --
+    -- `max_height` caps the line walk one screen past the comparison
+    -- threshold, making each call O(winheight) rather than O(buffer)
+    -- (with conceal active, height depends on a per-line treesitter
+    -- query, so an uncapped near-whole-buffer measurement on every
+    -- streamed update is O(n²) across a stream). The returned height
+    -- may overshoot the cap — the boundary line is counted whole — but
+    -- with cap = threshold + 1 that only happens once the height is
+    -- already > threshold, so the `> threshold` test is preserved.
     local function height_to_last(t)
         return vim.api.nvim_win_text_height(winid, {
             start_row = t - 1,
             end_row = last_line - 1,
+            max_height = effective_winheight + 1,
         }).all
     end
+
+    -- Steady states short-circuit before any measurement; scroll_down
+    -- never scrolls upward, so each of these leaves the viewport as-is.
+    if max_topline and max_topline <= old_topline then
+        return -- pinned viewport already at or past the cap
+    end
+    if old_topline >= last_line then
+        -- Tail line is already at/above the top: no forward scroll is
+        -- possible (reachable when the last line alone overflows the
+        -- window). Returning here also guarantees `old_topline <
+        -- last_line` below, keeping every measurement range in bounds; a
+        -- buffer that shrinks below its topline never gets this far
+        -- because vim clamps the reported topline back into range first.
+        return
+    end
+    if height_to_last(old_topline) <= effective_winheight then
+        return -- tail already fits from the current topline
+    end
+
+    -- The tail does not fit from old_topline, so the natural target is
+    -- strictly below it: search (old_topline, last_line].
     local natural_target
-    if height_to_last(1) <= effective_winheight then
-        natural_target = 1
-    else
-        local lo, hi = 1, last_line
+    do
+        local lo, hi = old_topline + 1, last_line
         while lo < hi do
             local mid = math.floor((lo + hi) / 2)
             if height_to_last(mid) > effective_winheight then
@@ -202,13 +231,7 @@ function BufHelpers.scroll_down(winid, max_topline)
         natural_target = lo
     end
 
-    local target = math.max(
-        old_topline,
-        math.min(max_topline or math.huge, natural_target)
-    )
-    if target == old_topline then
-        return
-    end
+    local target = math.min(max_topline or math.huge, natural_target)
 
     -- Cursor stays inside the visible viewport so vim's redraw does not
     -- override `target`. When the natural target is in effect, last_line
@@ -230,6 +253,7 @@ function BufHelpers.scroll_down(winid, max_topline)
             local h = vim.api.nvim_win_text_height(winid, {
                 start_row = target - 1,
                 end_row = mid - 1,
+                max_height = cursor_height + 1,
             }).all
             if h > cursor_height then
                 hi = mid - 1

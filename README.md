@@ -50,7 +50,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 ## Requirements
 
-- Neovim v0.11.0+
+- Neovim v0.12.0+
 - ACP provider(s)
   - Claude: [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp). install via e.g.
     - `npm install -g @agentclientprotocol/claude-agent-acp` or
