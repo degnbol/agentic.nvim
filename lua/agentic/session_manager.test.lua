@@ -1253,6 +1253,7 @@ describe("agentic.SessionManager", function()
                 },
                 message_writer = {
                     write_message = noop,
+                    write_user_prompt = noop,
                     write_error_message = function()
                         return nil, nil
                     end,

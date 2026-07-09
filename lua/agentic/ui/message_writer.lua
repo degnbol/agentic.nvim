@@ -114,6 +114,14 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
+--- Namespace for prompt-heading marker extmarks: placed at write time on each
+--- user prompt's `## ` heading line. Drives both the `❯` sign and `[[`/`]]`
+--- navigation, replacing the old text-scan on `line == "##"` (dead since the
+--- heading became `## <first line>`). Global namespace + buffer-scoped marks is
+--- sanctioned by .claude/rules/multi-tabpage.md (mirrors Renderer.NS_TOOL_BLOCKS).
+MessageWriter.NS_PROMPT_MARKERS =
+    vim.api.nvim_create_namespace("agentic_prompt_signs")
+
 --- @param bufnr integer
 --- @param status_indicator? agentic.ui.StatusIndicator
 --- @return agentic.ui.MessageWriter
@@ -298,6 +306,69 @@ function MessageWriter:write_message(update)
     self:_with_modifiable_suppressed(function()
         self:_append_lines(lines)
         self:_append_lines({ "" })
+    end)
+end
+
+--- Build the chat-buffer lines for a user prompt: the first line becomes the
+--- `## ` heading (so treesitter-context pins it as the turn's breadcrumb),
+--- remaining lines follow as body.
+--- @param text string Raw prompt text
+--- @return string[] lines
+local function prompt_heading_lines(text)
+    local prompt_lines = vim.split(text, "\n", { plain = true })
+    local lines = { "## " .. prompt_lines[1] }
+    for i = 2, #prompt_lines do
+        table.insert(lines, prompt_lines[i])
+    end
+    return lines
+end
+
+--- Write a user prompt to the chat buffer and mark its heading line with a
+--- prompt-marker extmark (drives the `❯` sign and `[[`/`]]` navigation).
+--- Standalone rather than delegating to write_message: it owns the `---`
+--- separator and needs the heading row post-append to place the marker.
+--- @param text string Raw prompt text (first line becomes the `## ` heading)
+--- @param extra_lines string[]|nil Display-only lines appended after the prompt
+---        body (selected code / referenced files / diagnostics)
+function MessageWriter:write_user_prompt(text, extra_lines)
+    local lines = prompt_heading_lines(text)
+    vim.list_extend(lines, extra_lines or {})
+    table.insert(lines, "\n---\n")
+
+    local flat = vim.split(table.concat(lines, "\n"), "\n", { plain = true })
+    flat = TextWrap.wrap_prose(flat, self:_get_wrap_width())
+
+    self:_auto_scroll(self.bufnr)
+
+    self:_with_modifiable_suppressed(function(bufnr)
+        -- Flush pending prose reflow first. right_gravity=false survives
+        -- appends but NOT a set_lines over the mark row, and prompt writes do
+        -- not reset _chunk_start_line, so during replay (thought → prompt →
+        -- thought) a later reflow range could span the heading and drag the
+        -- marker. Mirrors the guard in write_tool_call_block.
+        self:_reflow_chunks(bufnr, true)
+
+        self:_append_lines(flat)
+        self:_append_lines({ "" })
+
+        -- Compute the heading row AFTER the append: on an empty buffer
+        -- _append_lines replaces row 0 rather than appending, so a pre-capture
+        -- would be off by one (session/load replay clears the buffer before
+        -- the first chunk). The -1 accounts for the trailing blank just added.
+        local heading_row = vim.api.nvim_buf_line_count(bufnr) - #flat - 1
+
+        -- The sign rides on the marker itself, so there is no separate scan.
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            MessageWriter.NS_PROMPT_MARKERS,
+            heading_row,
+            0,
+            {
+                right_gravity = false,
+                sign_text = "❯ ",
+                sign_hl_group = "NonText",
+            }
+        )
     end)
 end
 
@@ -1108,7 +1179,13 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         tool_call_block.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, end_row)
 
-        if fold_anchor then
+        -- Gated to final render, mirroring materialize_injections below. The
+        -- block is torn down and rebuilt on every streaming set_lines, so an
+        -- ungated fold op re-fires each render only to be redone — pure churn.
+        -- Deferring both open and close to completion applies fold state once,
+        -- when the block is stable, and removes the mid-stream :foldclose that
+        -- is the suspected seed for the foldexpr leak (see _open_fold).
+        if fold_anchor and is_final_status(tool_call_block.status) then
             if fold_open then
                 self:_open_fold(start_row + fold_anchor)
             else
@@ -1400,7 +1477,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         tracker.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, new_end_row)
 
-        if fold_anchor then
+        -- Gated to final render — see the matching block in write_tool_call_block.
+        if fold_anchor and is_final_status(tracker.status) then
             if fold_open then
                 self:_open_fold(start_row + fold_anchor)
             else

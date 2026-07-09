@@ -637,11 +637,13 @@ describe("SessionRestore", function()
     describe("replay_messages", function()
         it("replays user and agent messages", function()
             local write_message_spy = spy.new(function() end)
+            local write_prompt_spy = spy.new(function() end)
             local write_chunk_spy = spy.new(function() end)
             local write_tool_spy = spy.new(function() end)
 
             local writer = {
                 write_message = write_message_spy,
+                write_user_prompt = write_prompt_spy,
                 write_message_chunk = write_chunk_spy,
                 write_tool_call_block = write_tool_spy,
             }
@@ -654,7 +656,8 @@ describe("SessionRestore", function()
                 }
             )
 
-            assert.equal(2, write_message_spy.call_count)
+            assert.equal(1, write_prompt_spy.call_count)
+            assert.equal(1, write_message_spy.call_count)
         end)
 
         it("replays thought chunks", function()

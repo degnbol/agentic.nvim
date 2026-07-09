@@ -332,14 +332,7 @@ end
 function SessionRestore.replay_messages(writer, messages)
     for _, msg in ipairs(messages) do
         if msg.type == "user" then
-            local message_lines = {
-                "##",
-                msg.text,
-                "\n---\n",
-            }
-            local user_message =
-                ACPPayloads.generate_user_message(message_lines)
-            writer:write_message(user_message)
+            writer:write_user_prompt(msg.text)
         elseif msg.type == "agent" then
             local agent_message = ACPPayloads.generate_agent_message(msg.text)
             writer:write_message(agent_message)

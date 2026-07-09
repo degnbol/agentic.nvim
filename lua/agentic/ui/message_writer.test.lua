@@ -117,6 +117,56 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("write_user_prompt", function()
+        --- 0-indexed rows carrying a prompt marker, traversal order.
+        local function marker_rows()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                MessageWriter.NS_PROMPT_MARKERS,
+                0,
+                -1,
+                {}
+            )
+            local rows = {}
+            for _, mark in ipairs(marks) do
+                table.insert(rows, mark[2])
+            end
+            return rows
+        end
+
+        local function line_at(row)
+            return vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        end
+
+        it("marks the heading row when writing into a non-empty buffer", function()
+            writer:write_message(make_message_update("prior agent prose"))
+            local before = vim.api.nvim_buf_line_count(bufnr)
+
+            writer:write_user_prompt("Hello there")
+
+            assert.same({ before }, marker_rows())
+            assert.equal("## Hello there", line_at(before))
+        end)
+
+        it("marks row 0 when the buffer is empty", function()
+            writer:write_user_prompt("First prompt")
+
+            assert.same({ 0 }, marker_rows())
+            assert.equal("## First prompt", line_at(0))
+        end)
+
+        it("keeps the marker on the heading across a chunk reflow", function()
+            writer:write_message_chunk(make_message_update("thinking one"))
+            writer:write_user_prompt("The prompt")
+            writer:write_message_chunk(make_message_update("thinking two"))
+            writer:finalize_turn()
+
+            local rows = marker_rows()
+            assert.equal(1, #rows)
+            assert.equal("## The prompt", line_at(rows[1]))
+        end)
+    end)
+
     describe("_check_auto_scroll", function()
         it("returns true when cursor is on the last line", function()
             setup_buffer(50, 50)

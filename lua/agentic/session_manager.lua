@@ -40,20 +40,6 @@ local function kind_key(k)
     return vim.trim(k):lower()
 end
 
---- Build the chat-buffer lines for a user prompt: the first line becomes the
---- `##` heading (so treesitter-context pins it as the turn's breadcrumb),
---- remaining lines follow as body.
---- @param text string Raw prompt text
---- @return string[] lines
-local function prompt_heading_lines(text)
-    local prompt_lines = vim.split(text, "\n", { plain = true })
-    local lines = { "## " .. prompt_lines[1] }
-    for i = 2, #prompt_lines do
-        table.insert(lines, prompt_lines[i])
-    end
-    return lines
-end
-
 --- Safely invoke a user-configured hook
 --- @param hook_name "on_prompt_submit" | "on_response_complete" | "on_permission_request"
 --- @param data table
@@ -525,11 +511,7 @@ function SessionManager:_on_session_update(update)
             then
                 -- System metadata injected into the prompt — skip
             else
-                local message_lines = prompt_heading_lines(text)
-                table.insert(message_lines, "\n---\n")
-                local user_message =
-                    ACPPayloads.generate_user_message(message_lines)
-                self.message_writer:write_message(user_message)
+                self.message_writer:write_user_prompt(text)
                 self.chat_history:add_message({
                     type = "user",
                     text = text,
@@ -1659,11 +1641,12 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    --- The message to be written to the chat widget
-    local message_lines = prompt_heading_lines(input_text)
+    --- Display-only lines appended after the prompt body in the chat widget
+    --- (heading and separator are owned by MessageWriter:write_user_prompt)
+    local extra_lines = {}
 
     if not is_slash_command and not self.code_selection:is_empty() then
-        table.insert(message_lines, "\n- **Selected code**:\n")
+        table.insert(extra_lines, "\n- **Selected code**:\n")
 
         table.insert(prompt, {
             type = "text",
@@ -1713,7 +1696,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
                 })
 
                 table.insert(
-                    message_lines,
+                    extra_lines,
                     string.format(
                         "```%s %s#L%d-L%d\n%s\n```",
                         selection.file_type,
@@ -1728,7 +1711,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     end
 
     if not is_slash_command and not self.file_list:is_empty() then
-        table.insert(message_lines, "\n- **Referenced files**:")
+        table.insert(extra_lines, "\n- **Referenced files**:")
 
         local files = self.file_list:get_files()
         self.file_list:clear()
@@ -1737,14 +1720,14 @@ function SessionManager:_handle_input_submit_inner(input_text)
             table.insert(prompt, ACPPayloads.create_file_content(file_path))
 
             table.insert(
-                message_lines,
+                extra_lines,
                 string.format("  - @%s", FileSystem.to_smart_path(file_path))
             )
         end
     end
 
     if not is_slash_command and not self.diagnostics_list:is_empty() then
-        table.insert(message_lines, "\n- **Diagnostics**:")
+        table.insert(extra_lines, "\n- **Diagnostics**:")
 
         local diagnostics = self.diagnostics_list:get_diagnostics()
         self.diagnostics_list:clear()
@@ -1767,7 +1750,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
 
         for _, summary_line in ipairs(formatted_diagnostics.summary_lines) do
-            table.insert(message_lines, summary_line)
+            table.insert(extra_lines, summary_line)
         end
     end
 
@@ -1776,10 +1759,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         text = input_text,
     })
 
-    table.insert(message_lines, "\n---\n")
-
-    local user_message = ACPPayloads.generate_user_message(message_lines)
-    self.message_writer:write_message(user_message)
+    self.message_writer:write_user_prompt(input_text, extra_lines)
 
     --- @type agentic.ui.ChatHistory.UserMessage
     local user_msg = {

@@ -634,6 +634,91 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
+    describe("prompt navigation", function()
+        local MessageWriter = require("agentic.ui.message_writer")
+        local widget
+        local writer
+
+        before_each(function()
+            vim.cmd("tabnew")
+            widget = ChatWidget:new(
+                vim.api.nvim_get_current_tabpage(),
+                spy.new(function() end) --[[@as function]]
+            )
+            widget:show()
+            vim.api.nvim_set_current_win(widget.win_nrs.chat)
+            writer = MessageWriter:new(widget.buf_nrs.chat)
+        end)
+
+        after_each(function()
+            pcall(function()
+                widget:destroy()
+            end)
+            pcall(function()
+                vim.cmd("tabclose")
+            end)
+        end)
+
+        --- 0-indexed rows carrying a prompt marker.
+        local function marker_rows()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                widget.buf_nrs.chat,
+                MessageWriter.NS_PROMPT_MARKERS,
+                0,
+                -1,
+                {}
+            )
+            return vim.tbl_map(function(m)
+                return m[2]
+            end, marks)
+        end
+
+        local function press(keys)
+            vim.api.nvim_feedkeys(keys, "x", false)
+        end
+
+        --- @return integer cursor_row 0-indexed
+        local function cursor_row()
+            return vim.api.nvim_win_get_cursor(0)[1] - 1
+        end
+
+        it("[[ and ]] land on markers and skip agent ## headings", function()
+            writer:write_user_prompt("First prompt")
+            writer:write_message({
+                sessionUpdate = "agent_message_chunk",
+                content = { type = "text", text = "## Not a prompt\nbody" },
+            })
+            writer:write_user_prompt("Second prompt")
+
+            local rows = marker_rows()
+            assert.equal(2, #rows)
+            local first, second = rows[1], rows[2]
+
+            -- From the bottom, [[ walks back through both prompts, never the
+            -- agent-authored ## line.
+            vim.api.nvim_win_set_cursor(
+                0,
+                { vim.api.nvim_buf_line_count(widget.buf_nrs.chat), 0 }
+            )
+            press("[[")
+            assert.equal(second, cursor_row())
+            press("[[")
+            assert.equal(first, cursor_row())
+
+            press("]]")
+            assert.equal(second, cursor_row())
+        end)
+
+        it("clear() removes prompt markers", function()
+            writer:write_user_prompt("A prompt")
+            assert.equal(1, #marker_rows())
+
+            widget:clear()
+
+            assert.same({}, marker_rows())
+        end)
+    end)
+
     describe("partial_send", function()
         local widget
         local submit_spy

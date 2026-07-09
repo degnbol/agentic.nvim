@@ -2,6 +2,7 @@ local Config = require("agentic.config")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
+local MessageWriter = require("agentic.ui.message_writer")
 local WindowDecoration = require("agentic.ui.window_decoration")
 local WidgetLayout = require("agentic.ui.widget_layout")
 
@@ -220,6 +221,16 @@ function ChatWidget:clear()
             end
         end)
     end
+
+    -- set_lines collapses prompt markers onto (0,0) without deleting them, so
+    -- stale marks would make [[/]] jump to a phantom prompt at the top. Clear
+    -- them explicitly (they are rebuilt when prompts are re-written on restore).
+    vim.api.nvim_buf_clear_namespace(
+        self.buf_nrs.chat,
+        MessageWriter.NS_PROMPT_MARKERS,
+        0,
+        -1
+    )
 end
 
 --- Deletes all buffers and removes them from memory
@@ -511,7 +522,7 @@ function ChatWidget:_initialize()
 
     self:_bind_keymaps()
     self:_setup_write_submit()
-    self:_setup_prompt_signs()
+    self:_setup_prompt_navigation()
 
     -- I only want to trigger a full close of the chat widget when closing the chat or the input buffers, the others are auxiliary
     for _, bufnr in ipairs({
@@ -610,43 +621,54 @@ function ChatWidget:_setup_write_submit()
     end
 end
 
---- Mark user prompts with signs and [[ / ]] navigation in the chat buffer
-function ChatWidget:_setup_prompt_signs()
-    local PROMPT_NS = vim.api.nvim_create_namespace("agentic_prompt_signs")
+--- Wire up [[ / ]] navigation between user prompts in the chat buffer.
+--- Prompt heading rows are marked with extmarks in NS_PROMPT_MARKERS at write
+--- time (see MessageWriter:write_user_prompt); the `❯` sign rides on the same
+--- marks. Navigation reads the marks, so agent-authored `## ` headings are
+--- never treated as prompts.
+function ChatWidget:_setup_prompt_navigation()
     local chat_buf = self.buf_nrs.chat
 
-    local function place_prompt_signs()
-        vim.api.nvim_buf_clear_namespace(chat_buf, PROMPT_NS, 0, -1)
-        local lines = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
-        for i, line in ipairs(lines) do
-            if line == "##" then
-                vim.api.nvim_buf_set_extmark(chat_buf, PROMPT_NS, i - 1, 0, {
-                    sign_text = "❯ ",
-                    sign_hl_group = "NonText",
-                })
+    --- Row of the nearest prompt marker relative to the cursor.
+    --- @param forward boolean true = smallest row > cursor, false = greatest < cursor
+    --- @return integer|nil row 0-indexed
+    local function adjacent_prompt_row(forward)
+        local cur = vim.api.nvim_win_get_cursor(0)[1] - 1
+        local marks = vim.api.nvim_buf_get_extmarks(
+            chat_buf,
+            MessageWriter.NS_PROMPT_MARKERS,
+            0,
+            -1,
+            {}
+        )
+        local best
+        for _, mark in ipairs(marks) do
+            local row = mark[2]
+            if forward then
+                if row > cur and (not best or row < best) then
+                    best = row
+                end
+            else
+                if row < cur and (not best or row > best) then
+                    best = row
+                end
             end
+        end
+        return best
+    end
+
+    local function jump_prompt(forward)
+        local row = adjacent_prompt_row(forward)
+        if row then
+            vim.api.nvim_win_set_cursor(0, { row + 1, 0 })
         end
     end
 
-    vim.api.nvim_create_autocmd("TextChanged", {
-        buffer = chat_buf,
-        callback = place_prompt_signs,
-    })
-
-    -- Jump between prompts
     BufHelpers.multi_keymap_set(
         Config.keymaps.chat and Config.keymaps.chat.prev_prompt or "[[",
         chat_buf,
         function()
-            local row = vim.api.nvim_win_get_cursor(0)[1]
-            local lines =
-                vim.api.nvim_buf_get_lines(chat_buf, 0, row - 1, false)
-            for i = #lines, 1, -1 do
-                if lines[i] == "##" then
-                    vim.api.nvim_win_set_cursor(0, { i, 0 })
-                    return
-                end
-            end
+            jump_prompt(false)
         end,
         { desc = "Agentic: Previous prompt" }
     )
@@ -655,14 +677,7 @@ function ChatWidget:_setup_prompt_signs()
         Config.keymaps.chat and Config.keymaps.chat.next_prompt or "]]",
         chat_buf,
         function()
-            local row = vim.api.nvim_win_get_cursor(0)[1]
-            local lines = vim.api.nvim_buf_get_lines(chat_buf, row, -1, false)
-            for i, line in ipairs(lines) do
-                if line == "##" then
-                    vim.api.nvim_win_set_cursor(0, { row + i, 0 })
-                    return
-                end
-            end
+            jump_prompt(true)
         end,
         { desc = "Agentic: Next prompt" }
     )
