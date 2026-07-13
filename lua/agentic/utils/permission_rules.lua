@@ -1767,9 +1767,16 @@ function walk(node, src, ctx)
         return not subtree_has_substitution(node)
     elseif t == "case_statement" then
         return walk_case(node, src, ctx)
-    elseif SEQUENCE_TYPES[t] or t == "do_group" or t == "compound_statement" then
-        -- `compound_statement` is a brace group `{ …; }` or a function body —
-        -- both run sequentially in the current shell, like a `list`.
+    elseif
+        SEQUENCE_TYPES[t]
+        or t == "do_group"
+        or t == "compound_statement"
+        or t == "subshell"
+    then
+        -- `compound_statement` is a brace group `{ …; }` or a function body,
+        -- `subshell` a `( … )` command group — all run their body sequentially
+        -- (the subshell in a child shell, which changes only variable scope and
+        -- cwd persistence, never leaf safety), like a `list`.
         return walk_sequence(node, src, ctx)
     elseif CONTAINER_TYPES[t] then
         -- `pipeline` / `variable_assignments` — the non-sequence containers (the
@@ -2320,7 +2327,12 @@ function tally_walk(node, src, ctx, ranges)
         record_substitutions(node, src, ctx, ranges)
     elseif t == "case_statement" then
         tally_case(node, src, ctx, ranges)
-    elseif SEQUENCE_TYPES[t] or t == "do_group" or t == "compound_statement" then
+    elseif
+        SEQUENCE_TYPES[t]
+        or t == "do_group"
+        or t == "compound_statement"
+        or t == "subshell"
+    then
         tally_sequence(node, src, ctx, ranges)
     elseif CONTAINER_TYPES[t] then
         tally_children(node, src, ctx, ranges)
@@ -2568,10 +2580,12 @@ end
 --- Check if a Bash command should be auto-approved. Parses the command with the
 --- zsh grammar and walks the tree: every leaf command must match an allow
 --- pattern, no leaf may match a deny or ask pattern, and any unmodelled
---- structure (argument-position substitution, file-writing redirect, dynamic
---- command name, subshell, brace group, negation) bails. Loops and if/case
---- control flow recurse into every branch. Fail-closed — an absent parser, a
---- parse error, or a truncated/malformed tree all return false.
+--- structure (argument-position substitution, dynamic command name, negation)
+--- bails. A file-writing redirect emits a `ctx.effects` entry cleared by the
+--- policy layer rather than bailing; brace groups (`{ …; }`), subshells
+--- (`( … )`), loops, and if/case control flow recurse into every branch.
+--- Fail-closed — an absent parser, a parse error, or a truncated/malformed tree
+--- all return false.
 ---
 --- `ok` means structurally approvable; the second return is the ordered list of
 --- concrete file-mutating effects (redirect writes) the command would produce.

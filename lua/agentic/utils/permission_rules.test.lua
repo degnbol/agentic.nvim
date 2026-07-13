@@ -382,7 +382,7 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
-        it("rejects subshell commands", function()
+        it("rejects a bare command substitution argument", function()
             local orig_read_json = PermissionRules.read_json
             PermissionRules.read_json = function(path)
                 if path:find("settings%.json$") then
@@ -1421,14 +1421,13 @@ describe("PermissionRules", function()
         describe("bails on control flow and compound structure", function()
             -- Loops and if/case control flow recurse (see the dedicated
             -- describe blocks below); a top-level `test_command` is a
-            -- side-effect-free predicate that walks; a brace group runs
-            -- sequentially in the current shell so it walks like a `list`
-            -- (covered separately below). The remaining cases (`!`, subshell)
-            -- stay rejected. Process substitution recurses (see the
+            -- side-effect-free predicate that walks; brace groups and
+            -- subshells run their body sequentially so they walk like a
+            -- `list` (covered separately below). The remaining case (`!`)
+            -- stays rejected. Process substitution recurses (see the
             -- command-substitution block).
             for _, cmd in ipairs({
                 "! rm x",
-                "( rm -rf x )",
             }) do
                 it("rejects " .. cmd, function()
                     assert.is_false(decide(cmd, ALLOW))
@@ -1445,6 +1444,34 @@ describe("PermissionRules", function()
             end)
             it("bails when any contained command is not allowed", function()
                 assert.is_false(decide("{ echo hi; danger x; }", ALLOW))
+            end)
+        end)
+
+        describe("subshell walks like a sequence", function()
+            -- A `( … )` command group runs its body in a child shell, which
+            -- changes only variable scope and cwd persistence — never leaf
+            -- safety — so its decision equals that of the contained body.
+            local perms = {
+                allow = {
+                    "Bash(echo *)",
+                    "Bash(ls *)",
+                    "Bash(printf *)",
+                },
+            }
+            it("approves a single contained command", function()
+                assert.is_true(decide("( echo hi )", perms))
+            end)
+            it("approves when every contained command is allowed", function()
+                assert.is_true(decide("( echo a && echo b )", perms))
+            end)
+            it("bails when any contained command is not allowed", function()
+                assert.is_false(decide("( echo a; rm x )", perms))
+            end)
+            it("approves the safe compound example", function()
+                assert.is_true(decide(
+                    "for p in a b; do ( ls \"$p\" >/dev/null 2>&1 && printf '%s\\n' \"$p\" ) || printf '%s\\n' \"$p\"; done",
+                    perms
+                ))
             end)
         end)
 
@@ -2910,6 +2937,7 @@ describe("PermissionRules", function()
                 "ls | find . -delete", -- deny leaf in a pipeline
                 "ls && find . -delete", -- deny leaf in an && chain
                 "echo $(find . -delete)", -- deny leaf in a substitution
+                "( find . -delete )", -- deny leaf inside a subshell
                 "timeout 5 rm -f x", -- deny survives a transparent wrapper
             }
             for _, cmd in ipairs(rejected) do
@@ -2988,6 +3016,23 @@ describe("PermissionRules", function()
                     assert.equal("rm bar", span_text(cmd, ranges[1]))
                 end
             )
+        end)
+
+        it("records nothing for a fully-approved subshell", function()
+            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                local ranges =
+                    PermissionRules.tally_unapproved("( echo a && echo b )")
+                assert.equal(0, #ranges)
+            end)
+        end)
+
+        it("washes only the gated leaf of a subshell", function()
+            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                local cmd = "( echo a; rm b )"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm b", span_text(cmd, ranges[1]))
+            end)
         end)
 
         it("returns only the unapproved inner of a single-quoted -c body", function()
