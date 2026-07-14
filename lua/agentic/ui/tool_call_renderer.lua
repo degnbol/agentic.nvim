@@ -1113,22 +1113,47 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         if tool_call_block.body then
             --- @type string[]
             local body = tool_call_block.body
+
+            -- Detect structured JSON results (meta/MCP tools) and pretty-print
+            -- them into a *local* display_body so the fold threshold has
+            -- something multi-line to key on and the JSON parser can inject.
+            -- Gated `kind ~= "execute"`: a successful execute reaches this
+            -- branch too, and reformatting its body would desync the ANSI/grep
+            -- passes below that assume a 1:1 mapping to tool_call_block.body.
+            -- Never mutate tool_call_block.body — MessageWriter merges each
+            -- streamed update against the raw body, so it must stay canonical.
+            local lang = "console"
+            --- @type string[]
+            local display_body = body
+            if kind ~= "execute" then
+                local ok, decoded =
+                    pcall(vim.json.decode, table.concat(body, "\n"))
+                if ok and type(decoded) == "table" then
+                    local pretty = vim.json.encode(
+                        decoded,
+                        { indent = "  ", sort_keys = true }
+                    )
+                    display_body = vim.split(pretty, "\n")
+                    lang = "json"
+                end
+            end
+
             local max_lines = kind == "execute"
                     and Config.tool_call_display.execute_max_lines
-                or 0
-            local count = #body
+                or Config.tool_call_display.other_max_lines
+            local count = #display_body
             local use_fold = max_lines > 0 and count > max_lines
 
-            local fence = safe_fence(body)
+            local fence = safe_fence(display_body)
             table.insert(
                 lines,
-                fence .. (use_fold and "console-fold" or "console")
+                fence .. lang .. (use_fold and "-fold" or "")
             )
             if use_fold then
                 -- First body line (fold spans code_fence_content), next.
                 fold_anchor = #lines
             end
-            vim.list_extend(lines, body)
+            vim.list_extend(lines, display_body)
             table.insert(lines, fence)
         end
     end
