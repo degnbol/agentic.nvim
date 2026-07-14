@@ -212,7 +212,6 @@ local function chat_win_opts(is_bottom)
         -- window it splits off, NOT the global default, so opening Agentic from
         -- a window with a low foldlevel would otherwise collapse every block.
         foldlevel = 99,
-        foldminlines = 0,
         foldcolumn = "0",
         conceallevel = 2,
         concealcursor = "n",

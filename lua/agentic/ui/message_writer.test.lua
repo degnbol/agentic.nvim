@@ -2288,7 +2288,6 @@ describe("agentic.ui.MessageWriter", function()
             vim.wo[winid].foldexpr = "v:lua.vim.treesitter.foldexpr()"
             vim.wo[winid].foldenable = true
             vim.wo[winid].foldlevel = 99
-            vim.wo[winid].foldminlines = 0
         end)
 
         --- Body long enough to exceed execute_max_lines (default 25).

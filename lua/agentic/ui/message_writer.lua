@@ -31,9 +31,16 @@ end
 --- injected fence — e.g. an execute command's ```zsh — leaving it with only
 --- the parent markup highlight until some unrelated later reparse. A
 --- callback-less `parse(range)` runs to completion with no time budget, so the
---- injection child trees are created deterministically; it short-circuits to a
---- no-op when the range is already valid, so calling it on a finalised block is
---- free when nothing was deferred.
+--- injection child trees are created deterministically.
+---
+--- Called after every content `set_lines` (not just on a finalised block) so
+--- that core's scheduled fold recompute for that edit sees injected trees
+--- matching the content it stamps. Injected-tree parses never notify core's
+--- fold module, so a stamp made against stale trees never self-heals — pairing
+--- the parse with each write is what keeps injected fold boundaries correct
+--- mid-stream. After a `set_lines` the range is dirty, so this is a real
+--- range-parse (one per block update); `parse` short-circuits only when the
+--- range is already valid.
 --- @param bufnr integer
 --- @param start_row integer 0-indexed first row of the block
 --- @param end_row integer 0-indexed last row of the block
@@ -1179,12 +1186,13 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         tool_call_block.decoration_extmark_ids =
             Renderer.render_decorations(bufnr, start_row, end_row)
 
-        -- Gated to final render, mirroring materialize_injections below. The
-        -- block is torn down and rebuilt on every streaming set_lines, so an
-        -- ungated fold op re-fires each render only to be redone — pure churn.
-        -- Deferring both open and close to completion applies fold state once,
-        -- when the block is stable, and removes the mid-stream :foldclose that
-        -- is the suspected seed for the foldexpr leak (see _open_fold).
+        -- Gated to final render (unlike materialize_injections below, which is
+        -- now unconditional). The block is torn down and rebuilt on every
+        -- streaming set_lines, so an ungated fold op re-fires each render only
+        -- to be redone — pure churn. Deferring both open and close to
+        -- completion applies fold state once, when the block is stable, and
+        -- removes the mid-stream :foldclose that is the suspected seed for the
+        -- foldexpr leak (see _open_fold).
         if fold_anchor and is_final_status(tool_call_block.status) then
             if fold_open then
                 self:_open_fold(start_row + fold_anchor)
@@ -1222,9 +1230,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         Renderer.apply_status_footer(bufnr, end_row, tool_call_block.status)
 
-        if is_final_status(tool_call_block.status) then
-            materialize_injections(bufnr, start_row, end_row)
-        end
+        materialize_injections(bufnr, start_row, end_row)
 
         self:_append_lines({ "" })
         self._last_wrote_tool_call = true
@@ -1496,9 +1502,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)
 
-        if is_final_status(tracker.status) then
-            materialize_injections(bufnr, start_row, new_end_row)
-        end
+        materialize_injections(bufnr, start_row, new_end_row)
     end)
 end
 
