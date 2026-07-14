@@ -248,6 +248,10 @@
     "read_only": [{ "options": ["l"] }],
     "ask":       [{ "options": ["o"] }]
   },
+  "luajit": {
+    "read_only": [{ "leading_options": ["h"] },
+                  { "leading_options": ["b"], "options": ["l"] }]
+  },
   "typst": {
     "read_only":  [{ "positionals": ["query"] }],
     "safe_write": [{}]
