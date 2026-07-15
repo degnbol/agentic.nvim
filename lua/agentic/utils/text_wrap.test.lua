@@ -390,6 +390,93 @@ describe("agentic.utils.TextWrap", function()
             assert.is_true(result[3]:match("| 1") ~= nil)
         end)
 
+        it("never wraps inside an inline math span", function()
+            local line =
+                "the identity $x + y = z + w$ holds for all reals here yes"
+            local result = TextWrap.wrap_prose({ line }, 30)
+            local has_span = false
+            for _, l in ipairs(result) do
+                if l:match("%$x %+ y = z %+ w%$") then
+                    has_span = true
+                end
+            end
+            assert.is_true(has_span, "math span was broken up")
+        end)
+
+        it("wraps before an oversized inline math span", function()
+            local line = "prefix $a + b + c + d + e + f + g$ suffix"
+            local result = TextWrap.wrap_prose({ line }, 20)
+            local joined = table.concat(result, " "):gsub("%s+", " ")
+            assert.equal(line, joined)
+            local has_span = false
+            for _, l in ipairs(result) do
+                if l:match("^%$a %+ b %+ c %+ d %+ e %+ f %+ g%$") then
+                    has_span = true
+                end
+            end
+            assert.is_true(has_span, "span should start a fresh line")
+        end)
+
+        it("treats an unclosed dollar as literal and wraps normally", function()
+            local line =
+                "the cost is $5 for the first widget and rises steeply after that"
+            local result = TextWrap.wrap_prose({ line }, 30)
+            for _, l in ipairs(result) do
+                assert.is_true(#l <= 30, "line too long: " .. l)
+            end
+            local joined = table.concat(result, " "):gsub("%s+", " ")
+            assert.equal(line, joined)
+        end)
+
+        it("keeps a single-line display-math span atomic", function()
+            local line = "before $$x = \\sum_i a_i b_i$$ after the equation ok"
+            local result = TextWrap.wrap_prose({ line }, 25)
+            local has_span = false
+            for _, l in ipairs(result) do
+                if l:match("%$%$x = \\sum_i a_i b_i%$%$") then
+                    has_span = true
+                end
+            end
+            assert.is_true(has_span, "display-math span was broken up")
+        end)
+
+        it("leaves a bare currency amount shorter than width untouched", function()
+            local lines = { "it costs $5 total" }
+            assert.same(lines, TextWrap.wrap_prose(lines, 80))
+        end)
+
+        it("passes multi-line display-math blocks through untouched", function()
+            local lines = {
+                "Consider the sum:",
+                "$$",
+                "\\sum_{i=1}^{n} a_i b_i = a_1 b_1 + a_2 b_2 + \\cdots + a_n b_n",
+                "$$",
+                "which converges.",
+            }
+            local result = TextWrap.wrap_prose(lines, 30)
+            assert.same(lines, result)
+        end)
+
+        it("does not let a $$ line inside a code fence enter math mode", function()
+            local lines = {
+                "```",
+                "$$",
+                "this is code not math and it is quite long so would wrap as prose",
+                "```",
+                "after the fence this prose line is long enough that it must wrap",
+            }
+            local result = TextWrap.wrap_prose(lines, 30)
+            assert.equal("```", result[1])
+            assert.equal("$$", result[2])
+            assert.equal(
+                "this is code not math and it is quite long so would wrap as prose",
+                result[3]
+            )
+            assert.equal("```", result[4])
+            -- Prose after the closed fence must still wrap.
+            assert.is_true(#result > 5)
+        end)
+
         it("never wraps headings", function()
             local heading =
                 "## the quick brown fox jumps over the lazy dog and keeps running"
@@ -440,6 +527,33 @@ describe("agentic.utils.TextWrap", function()
         it("returns original when width is 0", function()
             local result = TextWrap.wrap_single_line("hello world", 0)
             assert.same({ "hello world" }, result)
+        end)
+    end)
+
+    describe("wrap_single_line_with_offsets", function()
+        it("maps sub-line columns back through an inline math span", function()
+            local line = "start $a + b$ and then more trailing text to wrap here"
+            local sub_lines, offsets =
+                TextWrap.wrap_single_line_with_offsets(line, 20)
+            assert.is_true(#sub_lines > 1)
+            -- The math span stays whole on one sub-line.
+            local has_span = false
+            for _, l in ipairs(sub_lines) do
+                if l:match("%$a %+ b%$") then
+                    has_span = true
+                end
+            end
+            assert.is_true(has_span, "math span was broken across sub-lines")
+            -- Each offset must map its sub-line content (after the added
+            -- continuation indent) back to the matching bytes in the original.
+            for i, l in ipairs(sub_lines) do
+                local content = l:sub(offsets[i].indent_len + 1)
+                local orig = line:sub(
+                    offsets[i].orig_start + 1,
+                    offsets[i].orig_start + #content
+                )
+                assert.equal(content, orig)
+            end
         end)
     end)
 

@@ -33,8 +33,9 @@ local function wrap_line(line, width)
 
     -- Walk words with byte positions so we can map sub-lines back to the
     -- original. gmatch gives us words but not positions; find in a loop does.
-    -- Inline code spans (`...`) are kept as a single word even when they
-    -- contain spaces — a wrap must never fall inside backticks.
+    -- Inline code spans (`...`) and inline math (`$...$`) are kept as a single
+    -- word even when they contain spaces — a wrap must never fall inside
+    -- backticks or dollar-math.
     local words = {} ---@type { text: string, start: integer }[]
     local len = #line
     local pos = 1
@@ -44,13 +45,13 @@ local function wrap_line(line, width)
             break
         end
         -- Consume a maximal non-space run, but swallow whitespace that lives
-        -- inside a closed backtick span so the span stays atomic.
+        -- inside a closed backtick or dollar-math span so the span stays atomic.
         local i = s
         while i <= len do
             local ch = line:sub(i, i)
-            if ch == "`" then
+            if ch == "`" or ch == "$" then
                 local run_end = i
-                while run_end <= len and line:sub(run_end, run_end) == "`" do
+                while run_end <= len and line:sub(run_end, run_end) == ch do
                     run_end = run_end + 1
                 end
                 local delim = line:sub(i, run_end - 1)
@@ -58,7 +59,7 @@ local function wrap_line(line, width)
                 if close_e then
                     i = close_e + 1
                 else
-                    i = run_end -- unclosed: treat backticks as literal text
+                    i = run_end -- unclosed: treat delimiter run as literal text
                 end
             elseif ch:match("%s") then
                 break
@@ -112,6 +113,16 @@ end
 --- @return boolean
 local function is_table_line(line)
     return line:match("^%s*|") ~= nil
+end
+
+--- Check if a line is a display-math fence: a line whose only content is `$$`.
+--- This is the standard way multi-line display blocks are opened and closed;
+--- matching only the bare `$$` line (not `$$x$$` inline) keeps single-line
+--- display math on the per-line scanner path and avoids `$`-counting.
+--- @param line string
+--- @return boolean
+local function is_math_fence(line)
+    return line:match("^%s*%$%$%s*$") ~= nil
 end
 
 --- Check if a line is an ATX heading (1-6 `#` followed by a space or EOL).
@@ -376,32 +387,41 @@ function M.wrap_prose(lines, width)
 
     local out = {}
     local in_fence = false
+    local in_math = false
     local table_buf = {} ---@type string[]
 
-    for _, line in ipairs(lines) do
-        -- Toggle code fence state on ``` lines
-        if line:match("^%s*```") then
-            -- Flush any buffered table lines before entering/leaving a fence
-            if #table_buf > 0 then
-                for _, tl in ipairs(format_table(table_buf)) do
-                    out[#out + 1] = tl
-                end
-                table_buf = {}
+    --- Emit any buffered table lines (formatted) before a non-table line.
+    local function flush_table()
+        if #table_buf > 0 then
+            for _, tl in ipairs(format_table(table_buf)) do
+                out[#out + 1] = tl
             end
+            table_buf = {}
+        end
+    end
+
+    for _, line in ipairs(lines) do
+        -- A ``` fence only toggles when we're not inside display math, and a
+        -- `$$` fence only toggles when we're not inside a code fence — so the
+        -- two block delimiters never corrupt each other's state. Everything
+        -- inside either block (including a stray ``` or `$$`) passes through
+        -- untouched; display math is authored pre-formatted and never re-wrapped.
+        local code_fence = line:match("^%s*```") and not in_math
+        local math_fence = is_math_fence(line) and not in_fence
+        if code_fence then
+            flush_table()
             in_fence = not in_fence
             out[#out + 1] = line
-        elseif in_fence then
+        elseif math_fence then
+            flush_table()
+            in_math = not in_math
+            out[#out + 1] = line
+        elseif in_fence or in_math then
             out[#out + 1] = line
         elseif is_table_line(line) then
             table_buf[#table_buf + 1] = line
         else
-            -- Flush any buffered table lines before prose
-            if #table_buf > 0 then
-                for _, tl in ipairs(format_table(table_buf)) do
-                    out[#out + 1] = tl
-                end
-                table_buf = {}
-            end
+            flush_table()
             if line:match("^%s*$") or is_heading(line) then
                 out[#out + 1] = line
             else
@@ -413,12 +433,7 @@ function M.wrap_prose(lines, width)
         end
     end
 
-    -- Flush trailing table lines
-    if #table_buf > 0 then
-        for _, tl in ipairs(format_table(table_buf)) do
-            out[#out + 1] = tl
-        end
-    end
+    flush_table()
 
     return out
 end
