@@ -713,13 +713,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             tool_call_block.cached_diff_blocks = diff_blocks
         end
 
-        -- `lang` (inferred from the path) only decides markdown prose-wrapping
-        -- now; it is NOT the fence injection language. Strip any path-induced
-        -- `-fold` suffix (a file named `foo.x-fold`) so `wrap_diff_prose` keys
-        -- on the real language.
+        -- `lang` (inferred from the path) is the fence label and the create-case
+        -- fallback for context-aware highlighting; it is NOT the injection
+        -- language (see the `-difffold` note below). Strip any path-induced
+        -- `-fold` suffix (a file named `foo.x-fold`) so the fence string can't
+        -- become a pathological `foo-fold-difffold`.
         local lang = Theme.get_language_from_path(argument, tool_call_block.diff.new)
             :gsub("%-fold$", "")
-        local wrap_diff_prose = lang == "markdown"
 
         local fence_content = {}
         for _, block in ipairs(diff_blocks) do
@@ -798,16 +798,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
         end
 
-        -- For markdown diffs, wrap prose lines so they don't overflow the
-        -- chat window. Code blocks (inside fences) stay untouched.
-        local diff_wrap = wrap_diff_prose and wrap_width or 0
-        local in_fence = false
-
-        --- Insert a diff line into `lines`, wrapping if markdown prose.
-        --- Tracks fence state so lines inside code blocks are not wrapped.
-        --- Creates a highlight_range entry for each resulting buffer line.
-        --- Wrapped sub-lines drop `col_hl` because the column positions
-        --- refer to the original unwrapped content.
+        --- Insert a diff line into `lines` and record its highlight range.
         --- @param content string
         --- @param hl_type string
         --- @param old_line string|nil
@@ -820,94 +811,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             new_line,
             col_hl
         )
-            if content:match("^%s*```") then
-                in_fence = not in_fence
-            end
-            local sub_lines, offsets
-            if diff_wrap > 0 and not in_fence then
-                sub_lines, offsets =
-                    TextWrap.wrap_single_line_with_offsets(content, diff_wrap)
-            else
-                sub_lines = { content }
-                offsets = { { orig_start = 0, indent_len = 0 } }
-            end
-            local single = #sub_lines == 1
-
-            -- For a wrapped modification line (both old_line and new_line),
-            -- compute the inline change range ONCE on the unwrapped strings,
-            -- then map it onto each sub-line's local byte coords. Without
-            -- this, find_inline_change runs against the full unwrapped
-            -- line per sub-line and paints the highlight at original-line
-            -- offsets on every wrapped row regardless of overlap.
-            local change
-            local wrapped_mod = not single
-                and old_line ~= nil
-                and new_line ~= nil
-                and (hl_type == "new_modification" or hl_type == "old")
-            if wrapped_mod then
-                change = DiffHighlighter.find_inline_change(old_line, new_line)
-            end
-
-            for i, sub in ipairs(sub_lines) do
-                local line_index = #lines
-                table.insert(lines, sub)
-                local sub_old, sub_new = old_line, new_line
-                if wrapped_mod and change then
-                    local off = offsets[i]
-                    local change_start = hl_type == "old" and change.old_start
-                        or change.new_start
-                    local change_end = hl_type == "old" and change.old_end
-                        or change.new_end
-                    local orig_start = off.orig_start
-                    local orig_end = orig_start + (#sub - off.indent_len)
-                    local isect_start = math.max(change_start, orig_start)
-                    local isect_end = math.min(change_end, orig_end)
-                    if isect_start >= isect_end then
-                        -- No change overlaps this sub-line. For "old" keep
-                        -- the full-line DIFF_DELETE bg (pure-delete path);
-                        -- for "new_modification" emit nothing by making
-                        -- old == new so the highlighter returns early.
-                        if hl_type == "old" then
-                            sub_old, sub_new = sub, nil
-                        else
-                            sub_old, sub_new = sub, sub
-                        end
-                    else
-                        -- Map intersection into sub-line-local byte cols,
-                        -- accounting for the continuation indent that the
-                        -- wrapper prepended (indent bytes have no origin in
-                        -- the source line).
-                        local local_start = isect_start
-                            - orig_start
-                            + off.indent_len
-                        local local_end = isect_end
-                            - orig_start
-                            + off.indent_len
-                        -- Build a synthetic counterpart with a sentinel byte
-                        -- at the change position. find_inline_change then
-                        -- returns exactly [local_start, local_end).
-                        local synth = sub:sub(1, local_start)
-                            .. "\1"
-                            .. sub:sub(local_end + 1)
-                        if hl_type == "old" then
-                            sub_old, sub_new = sub, synth
-                        else
-                            sub_old, sub_new = synth, sub
-                        end
-                    end
-                end
-                --- @type agentic.ui.MessageWriter.HighlightRange
-                local hl_range = {
-                    line_index = line_index,
-                    type = hl_type,
-                    old_line = sub_old,
-                    new_line = sub_new,
-                }
-                if single and col_hl then
-                    hl_range.block_col_hl = col_hl
-                end
-                table.insert(highlight_ranges, hl_range)
-            end
+            --- @type agentic.ui.MessageWriter.HighlightRange
+            local hl_range = {
+                line_index = #lines,
+                type = hl_type,
+                old_line = old_line,
+                new_line = new_line,
+                block_col_hl = col_hl,
+            }
+            table.insert(lines, content)
+            table.insert(highlight_ranges, hl_range)
         end
 
         -- No matching block and a non-empty old_text means the Edit's
@@ -960,19 +873,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
 
             if is_new_file then
-                -- Format tables so they render with aligned columns
-                local fmt_new = wrap_diff_prose
-                        and TextWrap.format_tables_in_lines(block.new_lines)
-                    or block.new_lines
-                for ni, new_line in ipairs(fmt_new) do
+                for ni, new_line in ipairs(block.new_lines) do
                     local col_hl = new_map and new_map[ni - 1] or nil
-                    -- col_hl is indexed against the unformatted source line.
-                    -- format_tables_in_lines pads cells, shifting columns onto
-                    -- the wrong characters; drop col_hl when the line was
-                    -- rewritten.
-                    if col_hl and new_line ~= block.new_lines[ni] then
-                        col_hl = nil
-                    end
                     insert_diff_line(new_line, "new", nil, new_line, col_hl)
                 end
             else
@@ -981,46 +883,14 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                     block.new_lines
                 )
 
-                -- Collect old/new lines, format tables within each
-                -- group independently so they don't merge across the
-                -- old→new boundary.
-                local old_raw = {} ---@type string[]
-                local new_raw = {} ---@type string[]
-                local old_pair_idx = {} ---@type integer[]
-                local new_pair_idx = {} ---@type integer[]
-                for _, pair in ipairs(filtered.pairs) do
-                    if pair.old_line then
-                        old_raw[#old_raw + 1] = pair.old_line
-                        old_pair_idx[#old_pair_idx + 1] = pair.old_idx
-                    end
-                    if pair.new_line then
-                        new_raw[#new_raw + 1] = pair.new_line
-                        new_pair_idx[#new_pair_idx + 1] = pair.new_idx
-                    end
-                end
-
-                local fmt_old = wrap_diff_prose
-                        and TextWrap.format_tables_in_lines(old_raw)
-                    or old_raw
-                local fmt_new = wrap_diff_prose
-                        and TextWrap.format_tables_in_lines(new_raw)
-                    or new_raw
-
                 -- Insert old lines (removed content)
-                local oi = 0
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.old_line then
-                        oi = oi + 1
-                        local source_idx = old_pair_idx[oi]
                         local col_hl = old_map
-                                and source_idx
-                                and old_map[source_idx - 1]
+                            and old_map[pair.old_idx - 1]
                             or nil
-                        if col_hl and fmt_old[oi] ~= old_raw[oi] then
-                            col_hl = nil
-                        end
                         insert_diff_line(
-                            fmt_old[oi],
+                            pair.old_line,
                             "old",
                             pair.old_line,
                             is_modification and pair.new_line or nil,
@@ -1030,10 +900,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 end
 
                 -- Insert new lines (added content)
-                local ni = 0
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.new_line then
-                        ni = ni + 1
                         -- Block-level is_modification doesn't imply per-pair
                         -- modification: filter_unchanged_lines can split a
                         -- same-line-count block into pure insertions and
@@ -1044,16 +912,11 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                             and pair.old_line ~= nil
                         local hl_type = is_paired_mod and "new_modification"
                             or "new"
-                        local source_idx = new_pair_idx[ni]
                         local col_hl = new_map
-                                and source_idx
-                                and new_map[source_idx - 1]
+                            and new_map[pair.new_idx - 1]
                             or nil
-                        if col_hl and fmt_new[ni] ~= new_raw[ni] then
-                            col_hl = nil
-                        end
                         insert_diff_line(
-                            fmt_new[ni],
+                            pair.new_line,
                             hl_type,
                             is_paired_mod and pair.old_line or nil,
                             pair.new_line,
