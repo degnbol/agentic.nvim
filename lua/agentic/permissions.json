@@ -273,14 +273,24 @@
 
   "cargo": {
     "read_only": [
-      { "positionals": ["doc"] },
+      { "positionals": ["locate-project"] },
       { "positionals": ["metadata"] },
-      { "positionals": ["tree"] }
+      { "positionals": ["pkgid"] },
+      { "positionals": ["report"] },
+      { "positionals": ["search"] },
+      { "positionals": ["tree"] },
+      { "positionals": ["verify-project"] }
     ],
     "safe_write": [
+      { "positionals": ["build"] },
       { "positionals": ["check"] },
       { "positionals": ["clippy"] },
-      { "positionals": ["fmt"] }
+      { "positionals": ["doc"] },
+      { "positionals": ["fetch"] },
+      { "positionals": ["fmt"] },
+      { "positionals": ["generate-lockfile"] },
+      { "positionals": ["test"] },
+      { "positionals": ["update"] }
     ]
   },
 
