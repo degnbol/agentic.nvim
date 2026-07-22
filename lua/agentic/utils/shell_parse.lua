@@ -540,7 +540,7 @@ local function parse_zsh(src)
     end
     local ok, root = pcall(function()
         local parser = vim.treesitter.get_string_parser(src, "zsh")
-        return parser:parse(true)[1]:root()
+        return parser:parse(false)[1]:root()
     end)
     if not ok or not root or root:has_error() then
         return nil
