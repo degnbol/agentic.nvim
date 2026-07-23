@@ -122,6 +122,10 @@ tracker (which maps `toolCallId → line position` in one buffer) — not viable
   `Task` still runs). Grandchildren keep the parent `Task` open, so nesting needs
   no special-casing.
 
+  **Status:** this indicator does not currently fire for the subagents buffer
+  (known gap, cause unconfirmed). Showing per-window working state — the
+  thinking-vs-generating signal — is deferred until it is debugged.
+
 ## Window lifecycle
 
 A vertical split of the main chat (default ~50/50, allocation configurable via
@@ -238,17 +242,68 @@ late. Move it onto the subagent-side lifecycle tracking (`_open_tasks` /
   usual one-subagent-per-turn. Grandchildren are `is_subagent`, so they skip
   `_mark_task_open/closed` entirely and correctly emit no divider.
 
-## Deferred to v2
+## v2: numbering parallel subagents
 
-- **Distinguishing agents within the subagents buffer.** A per-turn ordinal in
-  the sign column (blank main / `1`, `2`, … per subagent), assigned in spawn
-  order via a `toolCallId → {number, label}` registry cleared at the turn
-  boundary. The sign column already holds tool-call borders (`╭─ │ ╰─`, capped at
-  2 cells), so a number forces a `statuscolumn` function shared with
-  `feature-diff-line-numbers.md` — resolve that contention there. A
-  `line_hl_group` per-agent tint is a fallback that sidesteps the sign column but
-  loses the explicit number. None of this is needed while it is usually one
-  subagent per turn.
+The subagents buffer interleaves all subagents of a turn. When two or more run
+concurrently, stamp each one's tool-call blocks with a **per-turn ordinal**
+(`0`–`9`, ten single-digit values), assigned in spawn order. A lone subagent
+shows no number — the ordinal appears only once there is something to
+disambiguate.
+
+- **Registry.** A `parent_tool_use_id → ordinal` map — a single field beside
+  `_open_tasks`/`_tool_call_owner`, assigned once in `_on_tool_call` when
+  `is_subagent`, reset at the turn boundary with the rest of the per-turn state.
+  Keying on the spawning Task's id (not the child's `toolCallId`, which changes
+  per call) numbers *agents*, not calls. Grandchildren key on their immediate
+  parent, so each nesting level gets its own ordinal — folding a grandchild under
+  its top-level Task would need parent-chain tracking the design deliberately
+  avoids (§ Non-issues), and is not worth it.
+- **Render: a `sign_text` swap, nothing more.** Borders already render as per-row
+  `sign_text` extmarks (`extmark_block.lua`) in a 2-cell sign column
+  (`signcolumn = "yes:1"`). Replace the `│ ` on the block's **first and last body
+  row** with `N ` (the ordinal). The digit sits in the one column already shown,
+  so this is a per-row value in `render_block`; the ordinal threads on the
+  tool-call block through `render_decorations` → `render_block`. Stamping both
+  ends keeps a number in view whenever either end of the block is on screen.
+- **Gate on concurrency, with backfill.** Numbers appear only while two or more
+  subagents are active at once in the turn. A per-turn latch flips on the first
+  time the concurrent count reaches two (`_open_tasks` size is the natural
+  source) and stays on for the rest of the turn, so numbering does not flicker if
+  the count drops back to one. Blocks rendered while the latch is on stamp their
+  ordinal live. On the flip, **backfill** ordinal `0`'s earlier blocks (they
+  streamed before the second subagent existed): for each, rewrite the first and
+  last body-row sign extmark in place — re-call `nvim_buf_set_extmark` with the
+  extmark's existing `id` and `sign_text = "0 "`. The ids are already retained per
+  block (`decoration_extmark_ids`) and sign extmarks track position under
+  `set_lines`, so locate the two body rows from the live header/footer extmark
+  positions (header+1, footer−1), not by indexing the array from the end — a
+  trailing dim_id would offset that count. Reaching block `0`'s blocks needs the
+  ordinal reachable from each block (via the ownership map or carried on the
+  block).
+- **Accepted edges.** A folded block shows no number (its body rows are
+  concealed; only the `╭─` header shows). A bodyless tool-call block has no body
+  row to stamp. The concurrency latch keys on top-level Tasks (`_open_tasks`), so
+  a parent+grandchild overlap may not trip it — deep-nesting numbering is
+  imprecise, in line with nesting being an edge elsewhere. All left as-is.
+
+### Ruled out
+
+- **`statuscolumn`.** Unnecessary — a single-digit ordinal fits the existing
+  `sign_text` cell, so no statuscolumn function is needed and there is no shared
+  rewrite with `feature-diff-line-numbers.md`. That feature needs statuscolumn on
+  its own account (up-to-5-digit line numbers beside a border), independent of
+  this one.
+- **Per-agent colour.** A distinct bright colour per agent reads as rainbow and
+  pulls attention; a subtle tint is too weak to distinguish at a glance. The
+  number is the signal; borders stay one colour.
+- **Sticky-in-view number.** Pinning the ordinal to the top of a block's visible
+  portion as it scrolls has no native primitive (no viewport-sticky sign). It
+  would need a `WinScrolled` handler recomputing the first visible line per
+  straddling block — fold-aware topline math (neovim skill § rendering) — too
+  brittle for the payoff. First+last stamping covers the common case instead.
+
+## Deferred (post-v2)
+
 - **Per-agent labels** (`subagent_type` + `description`) as an inline header when
   a new agent's content first appears in the buffer.
 - **Focus-by-folding** within the subagents buffer: a keymap that folds every
