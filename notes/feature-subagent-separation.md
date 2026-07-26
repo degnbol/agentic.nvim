@@ -36,8 +36,7 @@ omit the field.
 - Live streaming goes through `streamEventToAcpNotifications` (`:3837`), which
   passes `parentToolUseId: message.parent_tool_use_id` **unconditionally** into
   `toAcpNotifications`. So subagent prose, thinking, and tool calls all stream
-  to the client, each tagged. (Thinking is currently dropped by the plugin —
-  see "Show subagent thinking in the subagents buffer" below.)
+  to the client, each tagged (subagent thinking included).
 - The consolidated `assistant`-message path (`:1564`) *drops* subagent
   text/thinking — but only to avoid double-emitting what already streamed live.
 - The routing key is a boolean: **`parentToolUseId` present ⟺ subagent content.**
@@ -103,9 +102,10 @@ tracker (which maps `toolCallId → line position` in one buffer) — not viable
 - **Accumulates the full session** like the main chat. `reset_turn_state` runs
   on **both** writers each turn (mandatory — `MessageWriter` cross-turn flags
   are a hazard if not reset), but resets flags only, never buffer content.
-- **`---` divider at turn end.** A trimmed `finalize_turn` on the subagent writer
-  emits a divider (no usage footer) — a cheap per-turn separator that, with the
-  usual one-subagent-per-turn, effectively separates one detour from the next.
+- **`---` divider between subagents.** `emit_divider` fires per-Task in
+  `_mark_task_closed` (on the Task's `completed`/`failed` update), separating one
+  detour from the next. It no-ops when the writer grew nothing since the last
+  divider, so a no-interim-content subagent gets no separator.
 - **Own `StatusIndicator`** (the static "generating" indicator, not a spinner —
   see `status_indicator.lua`), so main and subagents each show their own working
   state independently (both can show at once). Driven by a **set of open
@@ -122,9 +122,9 @@ tracker (which maps `toolCallId → line position` in one buffer) — not viable
   `Task` still runs). Grandchildren keep the parent `Task` open, so nesting needs
   no special-casing.
 
-  **Status:** this indicator does not currently fire for the subagents buffer
-  (known gap, cause unconfirmed). Showing per-window working state — the
-  thinking-vs-generating signal — is deferred until it is debugged.
+  **Known gap:** this indicator does not currently fire for the subagents
+  buffer (cause unconfirmed); per-window working state is deferred until it is
+  debugged.
 
 ## Window lifecycle
 
@@ -179,112 +179,75 @@ the main chat. The whole design keys on tag-presence, so non-Claude providers
 simply never populate the subagents buffer. Nothing to build for graceful
 degradation.
 
-## Follow-up fixes
-
-### Show subagent thinking in the subagents buffer
-
-Thinking prose renders in neither window. `MessageWriter:write_message_chunk`
-drops every `agent_thought_chunk` up front (`message_writer.lua:563-566`) and
-returns before rendering, so the thought render is a no-op on *both* writers even
-though `_on_session_update` already routes thought chunks to the right writer
-(subagent → `subagent_writer:write_message_chunk` (478), main →
-`message_writer:write_message_chunk` (481), at `session_manager.lua:475-491`).
-The bridge streams both agents' thinking live, subagent thinking tagged with
-`parentToolUseId` (`streamEventToAcpNotifications`), so the data arrives — the
-writer just discards it.
-
-Goal: **each window shows its own agent's thinking**, so parallel main/subagent
-work each indicate when their agent is thinking. Both arms already route to the
-right writer and fire a per-window thinking indicator (main `status_indicator`
-482; subagent indicator driven by `_open_tasks`). So the whole fix is:
-
-- Delete the unconditional drop in `write_message_chunk` (563-566). Thought
-  content is `{type:"text",text:…}`, so it flows through the existing prose path
-  on whichever writer it was already routed to. There is no thought-specific
-  formatting (dim/italic/"Thinking" header) to add or lose. Both arms of
-  `_on_session_update` are left as-is.
-
-Side note: today the early return means `_last_message_type` is never set to
-`agent_thought_chunk`, so the thought→message `"\n\n"` separation
-(`message_writer.lua:606-613`) has never fired. Deleting the drop activates it on
-both writers — the desired separation, previously-dead code.
-
-### Emit the `---` divider when the subagent finishes, not at turn end
-
-The divider currently rides `finalize_turn` (`session_manager.lua:1778`, gated on
-`_subagent_wrote_this_turn`), which only runs in the `session/prompt` response
-callback — *after* the main agent reacts to the subagent's summary, so it appears
-late. Move it onto the subagent-side lifecycle tracking (`_open_tasks` /
-`_mark_task_closed`, `session_manager.lua:434-446`), which fires on the Task's
-`completed`/`failed` update — during the turn, strictly before the turn callback
-(JSON-RPC ordering).
-
-- Drop the `divider = …` option from the `finalize_turn` call at 1778, but keep
-  the call itself — it still does the mandatory per-writer cross-turn flag reset
-  (see § The subagents buffer). Without the option it appends a bare `""`, not a
-  divider.
-- Emit the divider per-Task in `_mark_task_closed`, **after** the
-  `self._open_tasks[id] = nil` line and the idempotent-membership guard (so a
-  duplicated terminal update can't double-emit). Extract the append into a small
-  `MessageWriter:emit_divider` — do **not** reuse `finalize_turn`, which also
-  resets five cross-turn flags and flushes reflow (`message_writer.lua:455-473`),
-  none of which is safe mid-turn.
-- **Gate on "wrote something", per subagent writer.** `_mark_task_closed` fires
-  for every closing `SubAgent` Task, including one that streamed no interim
-  content — an unguarded emit would stamp a divider into an empty window. Carry
-  the current `_subagent_wrote_this_turn` intent over as a per-writer "grew since
-  last divider" check inside `emit_divider` (e.g. skip if the buffer's line count
-  is unchanged since the last divider), so a no-interim-content subagent gets no
-  separator.
-- **Parallel subagents:** they share one interleaved buffer (per-agent separation
-  is deferred to v2), so with N concurrent Tasks a close-time divider can land
-  mid-stream of a still-running sibling. Known-imprecise until v2; moot at the
-  usual one-subagent-per-turn. Grandchildren are `is_subagent`, so they skip
-  `_mark_task_open/closed` entirely and correctly emit no divider.
-
 ## v2: numbering parallel subagents
 
 The subagents buffer interleaves all subagents of a turn. When two or more run
-concurrently, stamp each one's tool-call blocks with a **per-turn ordinal**
-(`0`–`9`, ten single-digit values), assigned in spawn order. A lone subagent
-shows no number — the ordinal appears only once there is something to
-disambiguate.
+concurrently, each one's tool-call blocks are stamped with a **per-turn ordinal**
+(`0`–`9`, single-digit), assigned in spawn order. A lone subagent shows no number.
 
-- **Registry.** A `parent_tool_use_id → ordinal` map — a single field beside
-  `_open_tasks`/`_tool_call_owner`, assigned once in `_on_tool_call` when
-  `is_subagent`, reset at the turn boundary with the rest of the per-turn state.
-  Keying on the spawning Task's id (not the child's `toolCallId`, which changes
-  per call) numbers *agents*, not calls. Grandchildren key on their immediate
-  parent, so each nesting level gets its own ordinal — folding a grandchild under
-  its top-level Task would need parent-chain tracking the design deliberately
-  avoids (§ Non-issues), and is not worth it.
-- **Render: a `sign_text` swap, nothing more.** Borders already render as per-row
-  `sign_text` extmarks (`extmark_block.lua`) in a 2-cell sign column
-  (`signcolumn = "yes:1"`). Replace the `│ ` on the block's **first and last body
-  row** with `N ` (the ordinal). The digit sits in the one column already shown,
-  so this is a per-row value in `render_block`; the ordinal threads on the
-  tool-call block through `render_decorations` → `render_block`. Stamping both
-  ends keeps a number in view whenever either end of the block is on screen.
-- **Gate on concurrency, with backfill.** Numbers appear only while two or more
-  subagents are active at once in the turn. A per-turn latch flips on the first
-  time the concurrent count reaches two (`_open_tasks` size is the natural
-  source) and stays on for the rest of the turn, so numbering does not flicker if
-  the count drops back to one. Blocks rendered while the latch is on stamp their
-  ordinal live. On the flip, **backfill** ordinal `0`'s earlier blocks (they
-  streamed before the second subagent existed): for each, rewrite the first and
-  last body-row sign extmark in place — re-call `nvim_buf_set_extmark` with the
-  extmark's existing `id` and `sign_text = "0 "`. The ids are already retained per
-  block (`decoration_extmark_ids`) and sign extmarks track position under
-  `set_lines`, so locate the two body rows from the live header/footer extmark
-  positions (header+1, footer−1), not by indexing the array from the end — a
-  trailing dim_id would offset that count. Reaching block `0`'s blocks needs the
-  ordinal reachable from each block (via the ownership map or carried on the
-  block).
-- **Accepted edges.** A folded block shows no number (its body rows are
-  concealed; only the `╭─` header shows). A bodyless tool-call block has no body
-  row to stamp. The concurrency latch keys on top-level Tasks (`_open_tasks`), so
-  a parent+grandchild overlap may not trip it — deep-nesting numbering is
-  imprecise, in line with nesting being an edge elsewhere. All left as-is.
+**Assignment.** An ordinal registry + latch, split across `SessionManager`
+(`_task_ordinal`/`_next_ordinal` via `_ordinal_for`; `_numbering_latched` via
+`_maybe_latch_numbering`; ordinal assigned once per spawning `parent_tool_use_id`
+and stamped onto `tool_call.ordinal` in `_on_tool_call`; all reset at the turn
+boundary) and `MessageWriter` (`_numbering_active`, `enable_numbering`,
+`_ordinal_sign`). Numbering latches the first time `_open_tasks` reaches two and
+stays on for the turn; ordinal `0`'s earlier blocks are backfilled on the flip.
+Keying the registry on the spawning Task's id (not the child's per-call
+`toolCallId`) numbers *agents*, not calls; grandchildren key on their immediate
+parent.
+
+### Placement: stamp every body row
+
+The ordinal replaces **every** `│` body-border sign while numbering is active —
+the whole left rail of a numbered block becomes the digit (same highlight as the
+border), leaving the `╭─`/`╰─` corners intact. Concealed fence-delimiter rows
+receive the digit too but stay zero-height at `conceallevel = 2`, so it simply
+does not show there — harmless.
+
+This is structure-agnostic: it does not depend on which rows a kind emits or which
+are concealed, so it survives both tool variation and any `conceallevel`.
+
+- **Live render:** `ExtmarkBlock.render_block` stamps `opts.ordinal` in place of
+  `SIGNS.BODY` on every body row — `sign_text = opts.ordinal or SIGNS.BODY`, no
+  per-row selection. `render_decorations` passes only the sign (no `ordinal_rows`).
+- **Backfill (`_stamp_ordinal`):** restamp every body decoration id to the digit
+  via `restamp_border` (`ExtmarkBlock.set_sign`), reusing the ids. The ids run
+  `[header, body_1 .. body_n, footer, (dim?)]`; header (`ids[1]`) and footer keep
+  their corner signs, every body id in between takes the digit.
+
+Tests assert the digit replaces the body signs (`│ ` count → `0 ` count) rather
+than asserting a specific row, and cover a fence-less `read` block, a multi-fence
+`execute` block, live-then-update, and backfill.
+
+### Migrating the current diff
+
+The uncommitted numbering diff is mostly reusable — pivot surgically, do not
+rebuild.
+
+- **Keep** the assignment/latch machinery (`session_manager.lua` and its
+  `_ordinal_for`/latch tests) and the sign primitives (`enable_numbering`,
+  `_ordinal_sign`, `set_sign`, `restamp_border`, the `ordinal` field/param) —
+  already correct, carry over untouched.
+- **Delete** the first/last content-row plumbing: the `record_content()` helper
+  and `content_rows` field threaded through every branch of `prepare_block_lines`,
+  the `ordinal_rows` logic in `render_decorations`/`render_block`, and the
+  offset→id mapping in `_stamp_ordinal`.
+- **Edit** the three stamp sites named in Placement — only `_stamp_ordinal`'s
+  backfill loop is a real rewrite (offset list → the block's body-row id range).
+
+The existing tests bake in a two-signs-per-block model: the numbering assertions
+count two signs (`count(decoration_signs(), "0 ") == 2`); a full rail makes the
+count the block's body-row count, and the "first and last content row" case needs
+retitling. Helpers and scaffolding survive.
+
+### Accepted edges
+
+- A block whose every visible body row is concealed (a fully-folded single-region
+  body) shows the digit only where a row is visible; a bodyless tool-call block
+  (header + footer only) has no body row and shows no number. The concurrency latch
+  keys on top-level Tasks (`_open_tasks`), so a parent+grandchild overlap may not
+  trip it — deep-nesting numbering is imprecise, in line with nesting being an edge
+  elsewhere. All left as-is.
 
 ### Ruled out
 
@@ -300,7 +263,8 @@ disambiguate.
   portion as it scrolls has no native primitive (no viewport-sticky sign). It
   would need a `WinScrolled` handler recomputing the first visible line per
   straddling block — fold-aware topline math (neovim skill § rendering) — too
-  brittle for the payoff. First+last stamping covers the common case instead.
+  brittle for the payoff. The full-rail stamp keeps a number in view for any
+  partly-visible block for free instead.
 
 ## Deferred (post-v2)
 
