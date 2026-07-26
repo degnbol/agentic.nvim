@@ -117,6 +117,214 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("subagent ordinal numbering", function()
+        local function decoration_signs()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local signs = {}
+            for _, m in ipairs(marks) do
+                table.insert(signs, m[4].sign_text)
+            end
+            return signs
+        end
+
+        local function count(signs, value)
+            local n = 0
+            for _, s in ipairs(signs) do
+                if s == value then
+                    n = n + 1
+                end
+            end
+            return n
+        end
+
+        -- The buffer text of every row carrying `value` as its decoration sign.
+        -- Full-rail numbering stamps every body row (concealed fence delimiters
+        -- included), so this includes fence rows; used to prove the digit
+        -- reaches the actual content rows — a content row is never concealed, so
+        -- the number is always visible somewhere on the block.
+        local function signed_row_texts(value)
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local texts = {}
+            for _, m in ipairs(marks) do
+                if m[4].sign_text == value then
+                    local row = m[2]
+                    table.insert(
+                        texts,
+                        vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+                    )
+                end
+            end
+            return texts
+        end
+
+        it("renders no number while numbering is inactive", function()
+            local block = make_tool_call_block("sub-1", "completed")
+            block.ordinal = 0
+            writer:write_tool_call_block(block)
+
+            assert.equal(0, count(decoration_signs(), "0 "))
+            assert.is_true(count(decoration_signs(), "│ ") > 0)
+        end)
+
+        -- Full-rail invariant for a buffer holding only numbered blocks: the
+        -- digit replaces every body-row border, so no plain │ remains, and each
+        -- block keeps its ╭─/╰─ corners.
+        local function assert_full_rail(n_blocks)
+            assert.equal(0, count(decoration_signs(), "│ "))
+            assert.equal(n_blocks, count(decoration_signs(), "╭─"))
+            assert.equal(n_blocks, count(decoration_signs(), "╰─"))
+        end
+
+        it("replaces the whole body rail with the ordinal when active", function()
+            writer:enable_numbering()
+
+            local block = make_tool_call_block("sub-2", "completed")
+            block.ordinal = 0
+            writer:write_tool_call_block(block)
+
+            -- every body row becomes the digit; the corners stay
+            assert_full_rail(1)
+
+            -- the digit reaches the actual content rows (command + output),
+            -- never only the concealed fence delimiters
+            assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "ls"))
+            assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "output"))
+        end)
+
+        it("stamps a fence-less read block's single body row", function()
+            writer:enable_numbering()
+
+            local block = {
+                tool_call_id = "read-1",
+                status = "completed",
+                kind = "read",
+                argument = "foo.lua",
+                body = { "a", "b", "c" },
+            }
+            block.ordinal = 0
+            writer:write_tool_call_block(block)
+
+            -- read's body is a bare "Read N lines" row (no fences), so the whole
+            -- rail is that single row
+            assert.same({ "Read 3 lines" }, signed_row_texts("0 "))
+            assert.equal(0, count(decoration_signs(), "│ "))
+        end)
+
+        it("backfills the ordinal onto an already-rendered block", function()
+            local block = make_tool_call_block("sub-3", "completed")
+            block.ordinal = 1
+            writer:write_tool_call_block(block)
+            assert.equal(0, count(decoration_signs(), "1 "))
+            assert.is_true(count(decoration_signs(), "│ ") > 0)
+
+            writer:enable_numbering()
+            assert_full_rail(1)
+            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "output"))
+        end)
+
+        it("keeps the number when a live-stamped block gets an update", function()
+            writer:enable_numbering()
+
+            local block = make_tool_call_block("sub-4", "pending", { "start" })
+            block.ordinal = 1
+            writer:write_tool_call_block(block)
+            assert_full_rail(1)
+
+            -- completion update with a changed body → content-changed rebuild path
+            writer:update_tool_call_block({
+                tool_call_id = "sub-4",
+                status = "completed",
+                body = { "more", "output", "lines" },
+            })
+            assert_full_rail(1)
+            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "more"))
+        end)
+
+        it("backfills two blocks rendered before the latch flips", function()
+            local a = make_tool_call_block("agent-a", "completed")
+            a.ordinal = 0
+            writer:write_tool_call_block(a)
+            local b = make_tool_call_block("agent-b", "completed")
+            b.ordinal = 1
+            writer:write_tool_call_block(b)
+
+            writer:enable_numbering()
+            assert_full_rail(2)
+            assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "output"))
+            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "output"))
+        end)
+
+        it("backfills one block then live-stamps the next", function()
+            local a = make_tool_call_block("agent-a2", "completed")
+            a.ordinal = 0
+            writer:write_tool_call_block(a)
+
+            writer:enable_numbering()
+
+            local b = make_tool_call_block("agent-b2", "completed")
+            b.ordinal = 1
+            writer:write_tool_call_block(b)
+
+            assert_full_rail(2)
+            assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "output"))
+            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "output"))
+        end)
+
+        it("shows no number for a bodyless block, then numbers it once a body arrives", function()
+            -- header + footer only: no body row to stamp at backfill time
+            local block = {
+                tool_call_id = "sub-6",
+                status = "pending",
+                kind = "other",
+                argument = "",
+            }
+            block.ordinal = 1
+            writer:write_tool_call_block(block)
+
+            writer:enable_numbering() -- nothing to stamp: bodyless
+            assert.equal(0, count(decoration_signs(), "1 "))
+
+            writer:update_tool_call_block({
+                tool_call_id = "sub-6",
+                status = "completed",
+                body = { "output", "lines" },
+            })
+            assert.is_true(count(decoration_signs(), "1 ") > 0)
+            assert.equal(0, count(decoration_signs(), "│ "))
+        end)
+
+        it("numbers a block first rendered pending, then updated after backfill", function()
+            -- realistic subagent flow: pending initial (little output yet)
+            -- renders before the second agent exists, so numbering is still
+            -- inactive and the block is stamped by backfill + the later update
+            local block = make_tool_call_block("sub-5", "pending", { "start" })
+            block.ordinal = 1
+            writer:write_tool_call_block(block)
+
+            writer:enable_numbering()
+
+            writer:update_tool_call_block({
+                tool_call_id = "sub-5",
+                status = "completed",
+                body = { "more", "output", "lines" },
+            })
+            assert_full_rail(1)
+            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "more"))
+        end)
+    end)
+
     describe("write_user_prompt", function()
         --- 0-indexed rows carrying a prompt marker, traversal order.
         local function marker_rows()

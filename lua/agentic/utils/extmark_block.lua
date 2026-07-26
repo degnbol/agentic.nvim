@@ -19,6 +19,7 @@ ExtmarkBlock.SIGNS = SIGNS
 --- @field body_end? integer 0-indexed end line for body (optional)
 --- @field footer_line? integer 0-indexed line number for footer (optional)
 --- @field hl_group string Highlight group name
+--- @field ordinal? string 2-cell sign stamped in place of the │ border on every body row (subagent ordinal); nil leaves the plain border. The ╭─/╰─ corner rows keep their signs regardless. Concealed fence-delimiter rows receive it too but stay zero-height at conceallevel=2, so it does not show there
 
 --- Renders a complete block with sign column decorations
 --- @param bufnr integer
@@ -41,7 +42,7 @@ function ExtmarkBlock.render_block(bufnr, ns_id, opts)
             table.insert(
                 decoration_ids,
                 vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_num, 0, {
-                    sign_text = SIGNS.BODY,
+                    sign_text = opts.ordinal or SIGNS.BODY,
                     sign_hl_group = opts.hl_group,
                 })
             )
@@ -58,6 +59,23 @@ function ExtmarkBlock.render_block(bufnr, ns_id, opts)
         )
     end
     return decoration_ids
+end
+
+--- Rewrite one row's border sign in place, reusing the extmark id so no
+--- duplicate sign is created. Used to backfill a subagent ordinal onto a block
+--- rendered before concurrent-subagent numbering activated.
+--- @param bufnr integer
+--- @param ns_id integer
+--- @param extmark_id integer Existing decoration extmark to overwrite
+--- @param row integer 0-indexed buffer row
+--- @param sign_text string 2-cell sign
+--- @param hl_group string
+function ExtmarkBlock.set_sign(bufnr, ns_id, extmark_id, row, sign_text, hl_group)
+    vim.api.nvim_buf_set_extmark(bufnr, ns_id, row, 0, {
+        id = extmark_id,
+        sign_text = sign_text,
+        sign_hl_group = hl_group,
+    })
 end
 
 return ExtmarkBlock

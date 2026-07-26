@@ -1642,6 +1642,8 @@ describe("agentic.SessionManager", function()
         local close_win_spy
         --- @type TestSpy
         local divider_spy
+        --- @type TestSpy
+        local enable_numbering_spy
         local orig_auto_close
 
         --- @return agentic.SessionManager
@@ -1650,15 +1652,24 @@ describe("agentic.SessionManager", function()
             stop_spy = spy.new(function() end)
             close_win_spy = spy.new(function() end)
             divider_spy = spy.new(function() end)
+            enable_numbering_spy = spy.new(function() end)
             return {
                 _open_tasks = {},
+                _task_ordinal = {},
+                _next_ordinal = 0,
+                _numbering_latched = false,
                 subagent_status_indicator = {
                     start = start_spy,
                     stop = stop_spy,
                 },
-                subagent_writer = { emit_divider = divider_spy },
+                subagent_writer = {
+                    emit_divider = divider_spy,
+                    enable_numbering = enable_numbering_spy,
+                },
                 widget = { close_subagent_window = close_win_spy },
                 _ensure_subagent_window = function() end,
+                _ordinal_for = SessionManager._ordinal_for,
+                _maybe_latch_numbering = SessionManager._maybe_latch_numbering,
                 _mark_task_open = SessionManager._mark_task_open,
                 _mark_task_closed = SessionManager._mark_task_closed,
             } --[[@as agentic.SessionManager]]
@@ -1745,6 +1756,160 @@ describe("agentic.SessionManager", function()
             session:_mark_task_closed("task-1")
 
             assert.spy(close_win_spy).was.called(0)
+        end)
+
+        it("assigns ordinals in first-seen order, idempotent per agent", function()
+            local session = make_session()
+            assert.equal(0, session:_ordinal_for("task-a"))
+            assert.equal(1, session:_ordinal_for("task-b"))
+            -- same agent again keeps its number
+            assert.equal(0, session:_ordinal_for("task-a"))
+            assert.equal(2, session:_ordinal_for("task-c"))
+        end)
+
+        it("latches numbering once two tasks run concurrently", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            assert.spy(enable_numbering_spy).was.called(0)
+
+            session:_mark_task_open("task-2")
+            assert.is_true(session._numbering_latched)
+            assert.spy(enable_numbering_spy).was.called(1)
+        end)
+
+        it("stays latched when the count drops back to one", function()
+            local session = make_session()
+            session:_mark_task_open("task-1")
+            session:_mark_task_open("task-2")
+            session:_mark_task_closed("task-1")
+
+            -- a later single task must not re-trigger the backfill
+            session:_maybe_latch_numbering()
+            assert.spy(enable_numbering_spy).was.called(1)
+            assert.is_true(session._numbering_latched)
+        end)
+    end)
+
+    describe("subagent numbering integration", function()
+        local MessageWriter = require("agentic.ui.message_writer")
+        local Renderer = require("agentic.ui.tool_call_renderer")
+        --- @type integer
+        local sub_bufnr
+        --- @type integer
+        local sub_winid
+
+        local function decoration_signs()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                sub_bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local signs = {}
+            for _, m in ipairs(marks) do
+                table.insert(signs, m[4].sign_text)
+            end
+            return signs
+        end
+
+        local function count(signs, value)
+            local n = 0
+            for _, s in ipairs(signs) do
+                if s == value then
+                    n = n + 1
+                end
+            end
+            return n
+        end
+
+        --- @param id string
+        --- @param parent string
+        --- @return agentic.ui.MessageWriter.ToolCallBlock
+        local function child_call(id, parent)
+            return {
+                tool_call_id = id,
+                status = "completed",
+                kind = "execute",
+                argument = "ls",
+                body = { "output" },
+                parent_tool_use_id = parent,
+            }
+        end
+
+        local function make_session()
+            sub_bufnr = vim.api.nvim_create_buf(false, true)
+            sub_winid = vim.api.nvim_open_win(sub_bufnr, false, {
+                relative = "editor",
+                width = 60,
+                height = 20,
+                row = 0,
+                col = 0,
+            })
+            local noop = function() end
+            local indicator = { start = noop, stop = noop, reposition = noop }
+            return {
+                message_writer = { write_tool_call_block = noop, reposition = noop },
+                subagent_writer = MessageWriter:new(sub_bufnr),
+                status_indicator = indicator,
+                subagent_status_indicator = indicator,
+                widget = {
+                    open_subagent_window = noop,
+                    close_subagent_window = noop,
+                },
+                chat_history = { add_message = noop },
+                _tool_call_owner = {},
+                _open_tasks = {},
+                _task_ordinal = {},
+                _next_ordinal = 0,
+                _numbering_latched = false,
+                _ensure_subagent_window = noop,
+                _try_record_edit_range = noop,
+                _track_plan_exit = noop,
+                _writer_for = SessionManager._writer_for,
+                _indicator_for = SessionManager._indicator_for,
+                _ordinal_for = SessionManager._ordinal_for,
+                _maybe_latch_numbering = SessionManager._maybe_latch_numbering,
+                _mark_task_open = SessionManager._mark_task_open,
+                _on_tool_call = SessionManager._on_tool_call,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        after_each(function()
+            if sub_winid and vim.api.nvim_win_is_valid(sub_winid) then
+                vim.api.nvim_win_close(sub_winid, true)
+            end
+            if sub_bufnr and vim.api.nvim_buf_is_valid(sub_bufnr) then
+                vim.api.nvim_buf_delete(sub_bufnr, { force = true })
+            end
+        end)
+
+        it("numbers both when children render before the second task opens", function()
+            local session = make_session()
+            -- both agents' children stream before either kind-resolving update
+            session:_mark_task_open("task-a")
+            session:_on_tool_call(child_call("c-a", "task-a"), false)
+            session:_on_tool_call(child_call("c-b", "task-b"), false)
+            -- second task's kind resolves → latch flips, backfills both
+            session:_mark_task_open("task-b")
+
+            -- full rail: both blocks' borders replaced by their own digit
+            assert.equal(0, count(decoration_signs(), "│ "))
+            assert.is_true(count(decoration_signs(), "0 ") > 0)
+            assert.is_true(count(decoration_signs(), "1 ") > 0)
+        end)
+
+        it("numbers both when the second child renders after the latch", function()
+            local session = make_session()
+            session:_mark_task_open("task-a")
+            session:_on_tool_call(child_call("c-a", "task-a"), false)
+            session:_mark_task_open("task-b") -- flip, backfill c-a
+            session:_on_tool_call(child_call("c-b", "task-b"), false) -- live
+
+            -- full rail: both blocks' borders replaced by their own digit
+            assert.equal(0, count(decoration_signs(), "│ "))
+            assert.is_true(count(decoration_signs(), "0 ") > 0)
+            assert.is_true(count(decoration_signs(), "1 ") > 0)
         end)
     end)
 

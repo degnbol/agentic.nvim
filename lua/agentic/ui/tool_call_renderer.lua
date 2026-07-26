@@ -1477,15 +1477,35 @@ end
 --- @param bufnr integer
 --- @param start_row integer
 --- @param end_row integer
+--- @param ordinal? string 2-cell sign stamped on every body row in place of the │ border (subagent ordinal); nil leaves the plain border. The ╭─/╰─ corner rows keep their signs
 --- @return integer[] decoration_extmark_ids
-function M.render_decorations(bufnr, start_row, end_row)
+function M.render_decorations(bufnr, start_row, end_row, ordinal)
     return ExtmarkBlock.render_block(bufnr, NS_DECORATIONS, {
         header_line = start_row,
         body_start = start_row + 1,
         body_end = end_row - 1,
         footer_line = end_row,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
+        ordinal = ordinal,
     })
+end
+
+--- Overwrite the border sign at `row` of an already-rendered block, reusing the
+--- decoration extmark id. Backfills a subagent ordinal onto a block that
+--- rendered before concurrent-subagent numbering activated.
+--- @param bufnr integer
+--- @param extmark_id integer
+--- @param row integer 0-indexed buffer row
+--- @param sign_text string 2-cell sign
+function M.restamp_border(bufnr, extmark_id, row, sign_text)
+    ExtmarkBlock.set_sign(
+        bufnr,
+        NS_DECORATIONS,
+        extmark_id,
+        row,
+        sign_text,
+        Theme.HL_GROUPS.CODE_BLOCK_FENCE
+    )
 end
 
 --- Register a dim extmark spanning a body range. Lines are highlighted with

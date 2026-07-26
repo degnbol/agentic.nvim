@@ -98,6 +98,7 @@ end
 --- @field diff_tab? integer Tabpage ID of the diff preview tab (set by SessionManager)
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
+--- @field ordinal? integer Per-turn subagent ordinal (0-9, in spawn order); rendered as a sign only while numbering is active (see MessageWriter._numbering_active)
 
 --- Known prefix of the rejection boilerplate injected by the provider after
 --- a permission denial. Streamed as agent_message_chunk but meant for the
@@ -118,6 +119,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
+--- @field _numbering_active? boolean When true (set by `enable_numbering` once ≥2 subagents run concurrently in the turn), blocks carrying an `ordinal` render it as the sign on every body row (the whole left rail), replacing the │ border. Reset per turn.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -153,6 +155,7 @@ function MessageWriter:new(bufnr, status_indicator)
         _auto_scroll_paused = false,
         _pending_fold_ops = {},
         _last_divider_line = nil,
+        _numbering_active = false,
     }, self)
 
     -- Listen for user scrolls. Our own programmatic scrolls and buffer
@@ -249,6 +252,7 @@ function MessageWriter:reset_turn_state()
     self._last_wrote_tool_call = false
     self._last_message_type = nil
     self._chunk_start_line = nil
+    self._numbering_active = false
     self:_release_prose_pin()
 end
 
@@ -564,6 +568,7 @@ function MessageWriter:finalize_turn()
     self._rejection_buffer = ""
     self._last_wrote_tool_call = false
     self._last_message_type = nil
+    self._numbering_active = false
     self:_release_prose_pin()
 
     self:_with_modifiable_suppressed(function(bufnr)
@@ -590,6 +595,69 @@ function MessageWriter:emit_divider()
         self:_append_lines({ "", "---", "" })
     end)
     self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
+end
+
+--- The 2-cell sign to stamp on a block's body rows in place of the │ border, or
+--- nil to leave the plain border. A number shows only while numbering is active on
+--- this writer (`enable_numbering`, once ≥2 subagents run concurrently) and the
+--- block carries an ordinal in the single-digit range the sign column holds.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @return string|nil
+function MessageWriter:_ordinal_sign(block)
+    local n = block.ordinal
+    if not self._numbering_active or not n or n > 9 then
+        return nil
+    end
+    return tostring(n) .. " "
+end
+
+--- Activate subagent ordinal numbering and backfill the number onto every
+--- already-rendered block that carries an ordinal. Called when a second
+--- subagent begins running concurrently in the turn (see SessionManager's
+--- latch); before that a lone subagent's blocks show no number. Idempotent.
+function MessageWriter:enable_numbering()
+    if self._numbering_active then
+        return
+    end
+    self._numbering_active = true
+    for _, block in pairs(self.tool_call_blocks) do
+        self:_stamp_ordinal(block)
+    end
+end
+
+--- @private
+--- Restamp a block's whole body rail to its ordinal, in place (reusing the
+--- decoration extmark ids). No-op for a block with no ordinal or a dropped range
+--- extmark. The range extmark spans header (start_row) to footer (end_row); body
+--- rows are the rows between. The decoration ids run
+--- `[header, body_1 .. body_n, footer, (dim?)]`, front-indexed by buffer offset,
+--- so the id for buffer row `r` is `ids[r - start_row + 1]`; header (start_row)
+--- and footer (end_row) keep their corner signs, every body row in between takes
+--- the digit. Concealed fence-delimiter rows get it too but stay zero-height at
+--- conceallevel=2, so it does not show there.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+function MessageWriter:_stamp_ordinal(block)
+    local sign = self:_ordinal_sign(block)
+    local ids = block.decoration_extmark_ids
+    if not sign or not block.extmark_id or not ids then
+        return
+    end
+    local pos = vim.api.nvim_buf_get_extmark_by_id(
+        self.bufnr,
+        Renderer.NS_TOOL_BLOCKS,
+        block.extmark_id,
+        { details = true }
+    )
+    local start_row, details = pos[1], pos[3]
+    if not start_row or not details or not details.end_row then
+        return
+    end
+    for row = start_row + 1, details.end_row - 1 do
+        local id = ids[row - start_row + 1]
+        if id then
+            Renderer.restamp_border(self.bufnr, id, row, sign)
+        end
+    end
 end
 
 --- Stamp the per-turn token-usage footer on the trailing blank line that
@@ -1183,8 +1251,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             tool_call_block.search_ansi
         )
 
-        tool_call_block.decoration_extmark_ids =
-            Renderer.render_decorations(bufnr, start_row, end_row)
+        tool_call_block.decoration_extmark_ids = Renderer.render_decorations(
+            bufnr,
+            start_row,
+            end_row,
+            self:_ordinal_sign(tool_call_block)
+        )
 
         -- Gated to final render (unlike materialize_injections below, which is
         -- now unconditional). The block is torn down and rebuilt on every
@@ -1480,8 +1552,12 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             }
         )
 
-        tracker.decoration_extmark_ids =
-            Renderer.render_decorations(bufnr, start_row, new_end_row)
+        tracker.decoration_extmark_ids = Renderer.render_decorations(
+            bufnr,
+            start_row,
+            new_end_row,
+            self:_ordinal_sign(tracker)
+        )
 
         -- Gated to final render — see the matching block in write_tool_call_block.
         if fold_anchor and is_final_status(tracker.status) then

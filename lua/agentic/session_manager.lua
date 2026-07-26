@@ -74,6 +74,9 @@ end
 --- @field _tool_call_owner table<string, boolean> toolCallId -> true when the block lives in the subagents buffer (set on the initial tool_call, read by _writer_for)
 --- @field _open_tasks table<string, true> toolCallId -> true for each open top-level Task this turn; subagent indicator shows while non-empty
 --- @field _subagent_win_opened_this_turn boolean Guards a single auto-open per turn so a manual close is not undone by later subagent activity
+--- @field _task_ordinal table<string, integer> parentToolUseId -> per-turn subagent ordinal (0-9, first-seen order); numbers agents, not calls
+--- @field _next_ordinal integer Next ordinal to hand out this turn
+--- @field _numbering_latched boolean Set the first time ≥2 top-level Tasks run concurrently this turn; keeps numbering on for the rest of the turn
 --- @field file_list agentic.ui.FileList
 --- @field code_selection agentic.ui.CodeSelection
 --- @field diagnostics_list agentic.ui.DiagnosticsList
@@ -201,6 +204,9 @@ function SessionManager:new(tab_page_id)
         _tool_call_owner = {},
         _open_tasks = {},
         _subagent_win_opened_this_turn = false,
+        _task_ordinal = {},
+        _next_ordinal = 0,
+        _numbering_latched = false,
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
         _announced_model_id = nil,
@@ -406,6 +412,38 @@ function SessionManager:_ensure_subagent_window()
     self.widget:open_subagent_window()
 end
 
+--- Per-turn ordinal for a subagent, keyed on its spawning Task id so every tool
+--- call of one agent shares a number. Assigned in first-seen order (0-based);
+--- idempotent per parent id. Grandchildren key on their immediate parent, so
+--- each nesting level gets its own ordinal.
+--- @param parent_tool_use_id string
+--- @return integer
+function SessionManager:_ordinal_for(parent_tool_use_id)
+    local existing = self._task_ordinal[parent_tool_use_id]
+    if existing then
+        return existing
+    end
+    local ordinal = self._next_ordinal
+    self._task_ordinal[parent_tool_use_id] = ordinal
+    self._next_ordinal = ordinal + 1
+    return ordinal
+end
+
+--- Flip on subagent numbering the first time two top-level Tasks run
+--- concurrently this turn, backfilling numbers onto already-rendered blocks.
+--- Latched for the rest of the turn so numbers don't flicker if the concurrent
+--- count drops back to one.
+function SessionManager:_maybe_latch_numbering()
+    if self._numbering_latched then
+        return
+    end
+    if vim.tbl_count(self._open_tasks) < 2 then
+        return
+    end
+    self._numbering_latched = true
+    self.subagent_writer:enable_numbering()
+end
+
 --- Mark a top-level Task as open (idempotent): reveal the subagents split and
 --- show its working indicator. Called on the Task's initial `tool_call` AND on
 --- refining `tool_call_update`s — a streamed top-level Task's kind only resolves
@@ -420,6 +458,7 @@ function SessionManager:_mark_task_open(tool_call_id)
     self._open_tasks[tool_call_id] = true
     self.subagent_status_indicator:start("generating")
     self:_ensure_subagent_window()
+    self:_maybe_latch_numbering()
 end
 
 --- Mark a top-level Task as closed (idempotent): when the last open Task closes,
@@ -933,6 +972,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
     local is_subagent = tool_call.parent_tool_use_id ~= nil
     if is_subagent then
         self._tool_call_owner[tool_call.tool_call_id] = true
+        tool_call.ordinal = self:_ordinal_for(tool_call.parent_tool_use_id)
         self:_ensure_subagent_window()
     end
 
@@ -1790,6 +1830,9 @@ function SessionManager:_handle_input_submit_inner(input_text)
     self._tool_call_owner = {}
     self._open_tasks = {}
     self._subagent_win_opened_this_turn = false
+    self._task_ordinal = {}
+    self._next_ordinal = 0
+    self._numbering_latched = false
 
     self.agent:send_prompt(self.session_id, prompt, function(response, err)
         -- This callback already runs inside vim.schedule (from _handle_message).
