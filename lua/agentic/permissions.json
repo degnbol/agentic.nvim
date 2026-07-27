@@ -64,6 +64,7 @@
   "ag":        { "read_only": [{}] },
   "ack":       { "read_only": [{}] },
   "pdfgrep":   { "read_only": [{}] },
+  "pdfinfo":   { "read_only": [{}] },
 
   "ast-grep": {
     "read_only": [{}],
