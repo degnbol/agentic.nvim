@@ -518,7 +518,7 @@ function Agentic.setup(opts)
             end
             -- v:event.abort is mutable, but `vim.v.event` returns a Lua copy —
             -- assigning to it from Lua is a no-op, so set it via Vimscript.
-            vim.cmd("let v:event.abort = v:true")
+            vim.cmd.let("v:event.abort = v:true")
             Logger.notify(
                 "Reloading is disabled in Agentic buffers (it would wipe the render)",
                 vim.log.levels.WARN
