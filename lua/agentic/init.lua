@@ -492,6 +492,41 @@ function Agentic.setup(opts)
         desc = "Cleanup Agentic processes on tab close",
     })
 
+    -- Block in-place reloads (`:e` / `:edit` / `:e!`) of Agentic widget
+    -- buffers. Reloading empties a `nofile` buffer *before* any autocmd can
+    -- refill it, and the render's extmarks (tool-call signs, fold anchors,
+    -- prompt markers) survive the wipe but collapse onto row 0 — desyncing the
+    -- whole chat. The unload itself can't be cancelled (BufUnload is a
+    -- notification, not a veto), so we cancel the command before it runs, via
+    -- CmdlineLeave's mutable `abort`. Only a bare reload (no file argument) is
+    -- blocked; `:e {file}` still switches away as normal. Global rather than
+    -- buffer-local because cmdline autocmds are not buffer-scoped; it gates on
+    -- the current buffer's filetype instead.
+    vim.api.nvim_create_autocmd("CmdlineLeave", {
+        group = cleanup_group,
+        callback = function()
+            if vim.v.event.cmdtype ~= ":" then
+                return
+            end
+            if not tostring(vim.bo.filetype):match("^Agentic") then
+                return
+            end
+            local args = vim.split(vim.trim(vim.fn.getcmdline()), "%s+")
+            local command = (args[1] or ""):gsub("!$", "")
+            if #args ~= 1 or vim.fn.fullcommand(command) ~= "edit" then
+                return
+            end
+            -- v:event.abort is mutable, but `vim.v.event` returns a Lua copy —
+            -- assigning to it from Lua is a no-op, so set it via Vimscript.
+            vim.cmd("let v:event.abort = v:true")
+            Logger.notify(
+                "Reloading is disabled in Agentic buffers (it would wipe the render)",
+                vim.log.levels.WARN
+            )
+        end,
+        desc = "Block :edit reload of Agentic buffers",
+    })
+
     if Config.image_paste.enabled then
         local function get_current_session()
             local tab_page_id = vim.api.nvim_get_current_tabpage()
