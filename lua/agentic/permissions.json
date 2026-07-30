@@ -43,6 +43,24 @@
   "lz4cat":    { "read_only": [{}] },
   "zstdcat":   { "read_only": [{}] },
 
+  "tar": {
+    "read_only": [
+      { "options":     ["t", "list", "d", "diff", "compare"] },
+      { "positionals": ["t*"] }
+    ],
+    "ask": [
+      { "options": ["c", "create",
+                    "x", "extract", "get",
+                    "r", "append",
+                    "u", "update",
+                    "A", "catenate", "concatenate",
+                    "delete",
+                    "I", "use-compress-program",
+                    "to-command", "checkpoint-action",
+                    "rmt-command", "rsh-command"] }
+    ]
+  },
+
   "cd":        { "read_only": [{}] },
   "pwd":       { "read_only": [{}] },
   "echo":      { "read_only": [{}] },
