@@ -259,7 +259,6 @@ describe("agentic.acp.ACPClient", function()
             }
             --- @type agentic.acp.ClientHandlers
             local handlers = {
-                on_error = function() end,
                 on_session_update = function(update)
                     table.insert(recorded.session_updates, update)
                 end,

@@ -1310,6 +1310,117 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("send_prompt error dispatch", function()
+        local Recovery = require("agentic.session_recovery")
+        --- @type TestStub
+        local reauth_stub
+        --- @type TestStub
+        local respawn_stub
+        --- @type TestStub
+        local auto_continue_stub
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            reauth_stub = spy.stub(Recovery, "offer_reauth")
+            respawn_stub = spy.stub(Recovery, "respawn_after_usage_limit")
+            auto_continue_stub = spy.stub(Recovery, "offer_auto_continue")
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            reauth_stub:revert()
+            respawn_stub:revert()
+            auto_continue_stub:revert()
+            schedule_stub:revert()
+        end)
+
+        --- Minimal session whose send_prompt errors and whose
+        --- write_error_message reports the given class.
+        --- @param error_type string|nil
+        --- @return agentic.SessionManager
+        local function make_session(error_type)
+            local noop = function() end
+            local empty = function()
+                return true
+            end
+            return {
+                session_id = "s-1",
+                tab_page_id = 1,
+                is_generating = false,
+                _is_first_message = false,
+                _destroyed = false,
+                _retry_attempt = 0,
+                agent = {
+                    state = "ready",
+                    provider_config = { name = "Test" },
+                    send_prompt = function(_self, _sid, _prompt, cb)
+                        cb(nil, { message = "boom" })
+                    end,
+                },
+                message_writer = {
+                    write_message = noop,
+                    write_user_prompt = noop,
+                    write_error_message = function()
+                        return error_type, nil
+                    end,
+                    finalize_turn = noop,
+                    set_turn_usage = noop,
+                    scroll_to_bottom = noop,
+                    is_near_bottom = empty,
+                    tool_call_blocks = {},
+                },
+                subagent_writer = { finalize_turn = noop },
+                status_indicator = { start = noop, stop = noop },
+                subagent_status_indicator = { stop = noop },
+                chat_history = {
+                    add_message = noop,
+                    save = noop,
+                    messages = {},
+                    title = "",
+                },
+                widget = {
+                    buf_nrs = { chat = 0 },
+                    win_nrs = { chat = nil },
+                    get_chat_width = function()
+                        return 80
+                    end,
+                    clear_unread_badge = noop,
+                    set_unread_badge = noop,
+                    set_chat_title = noop,
+                },
+                permission_manager = { current_request = nil, queue = {} },
+                todo_list = { close_if_all_completed = noop },
+                file_list = { is_empty = empty },
+                code_selection = { is_empty = empty },
+                diagnostics_list = { is_empty = empty },
+                _ring_bell = noop,
+                _handle_input_submit = SessionManager._handle_input_submit,
+                _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _notify_attention = SessionManager._notify_attention,
+                _sync_history_context = SessionManager._sync_history_context,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("billing_error offers no reauth, respawn or auto-continue", function()
+            local session = make_session("billing_error")
+            session:_handle_input_submit("hello")
+            assert.spy(reauth_stub).was.called(0)
+            assert.spy(respawn_stub).was.called(0)
+            assert.spy(auto_continue_stub).was.called(0)
+        end)
+
+        it("authentication_error offers reauth", function()
+            local session = make_session("authentication_error")
+            session:_handle_input_submit("hello")
+            assert.spy(reauth_stub).was.called(1)
+            assert.spy(respawn_stub).was.called(0)
+        end)
+    end)
+
     describe("_ring_bell", function()
         local original_notifications
 

@@ -2135,6 +2135,125 @@ describe("agentic.ui.MessageWriter", function()
 
             assert.is_nil(error_type)
         end)
+
+        it("classifies billing_error from errorKind with a hint", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "billing_error" },
+                message = "Internal error: You've hit your org's monthly spend "
+                    .. "limit · run /usage-credits to ask your admin for a "
+                    .. "higher limit",
+            }
+
+            local lines, error_type, reset_epoch =
+                MessageWriter._format_error_lines(err)
+
+            assert.equal("billing_error", error_type)
+            assert.is_nil(reset_epoch)
+            -- Wrapper prefix stripped from the first body line
+            assert.equal(
+                "You've hit your org's monthly spend limit · run /usage-credits"
+                    .. " to ask your admin for a higher limit",
+                lines[1]
+            )
+            -- Hint present after a blank separator
+            assert.equal("", lines[2])
+            assert.truthy(lines[3]:find("no automatic retry", 1, true))
+        end)
+
+        it("maps authentication_failed errorKind to auth class", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "authentication_failed" },
+                message = "Internal error: Please run /login",
+            }
+
+            local _, error_type = MessageWriter._format_error_lines(err)
+
+            assert.equal("authentication_error", error_type)
+        end)
+
+        it("errorKind is authoritative over embedded JSON class", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "authentication_failed" },
+                message = "Internal error: API Error: 500\n"
+                    .. '{"type":"error","error":{"type":"server_error",'
+                    .. '"message":"Boom"}}',
+            }
+
+            local lines, error_type = MessageWriter._format_error_lines(err)
+
+            -- Class comes from errorKind; display still uses the JSON extraction
+            assert.equal("authentication_error", error_type)
+            assert.equal("500 Boom", lines[1])
+        end)
+
+        it("mapped kind keeps its hint when embedded JSON is present", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "billing_error" },
+                message = "Internal error: API Error: 400\n"
+                    .. '{"type":"error","error":{"type":"invalid_request_error",'
+                    .. '"message":"Spend cap"}}',
+            }
+
+            local lines, error_type = MessageWriter._format_error_lines(err)
+
+            assert.equal("billing_error", error_type)
+            assert.equal("400 Spend cap", lines[1])
+            -- Hint follows the resolved (billing) class, not the JSON type
+            assert.truthy(lines[3] and lines[3]:find("no automatic retry", 1, true))
+        end)
+
+        it("strips the API Error prefix from a mapped-kind body", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "authentication_failed" },
+                message = "Internal error: API Error: 401 Session expired",
+            }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("Session expired", lines[1])
+        end)
+
+        it("returns reset_epoch nil for a mapped kind over a reset clause", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "billing_error" },
+                message = "Internal error: Spend cap · resets 5pm (Europe/London)",
+            }
+
+            local _, error_type, reset_epoch =
+                MessageWriter._format_error_lines(err)
+
+            -- errorKind wins: billing has no reset, so no auto-continue epoch
+            assert.equal("billing_error", error_type)
+            assert.is_nil(reset_epoch)
+        end)
+
+        it("unmapped errorKind falls through to text classification", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                data = { errorKind = "server_error" },
+                message = "Internal error: API Error: 529\n"
+                    .. '{"type":"error","error":{"type":"overloaded_error",'
+                    .. '"message":"Overloaded."}}',
+            }
+
+            local lines, error_type = MessageWriter._format_error_lines(err)
+
+            assert.equal("overloaded_error", error_type)
+            assert.equal("529 Overloaded.", lines[1])
+        end)
     end)
 
     describe("_parse_reset_time", function()

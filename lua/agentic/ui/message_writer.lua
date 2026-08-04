@@ -383,13 +383,38 @@ function MessageWriter:write_user_prompt(text, extra_lines)
     end)
 end
 
---- Hints for known API error types.
---- authentication_error is handled by the caller (provider-specific re-auth flow).
+--- Hints for known error classes. Keyed by both the Anthropic `error.type`
+--- strings the embedded-JSON path produces and the internal classes the
+--- errorKind map resolves to. authentication_error has no hint — re-auth is
+--- handled by the caller (provider-specific re-auth flow).
 --- @type table<string, string>
 local error_hints = {
     overloaded_error = "The API is overloaded. Try again in a moment.",
     rate_limit_error = "Rate limited. Wait a moment before retrying.",
+    billing_error = "Organisation spend limit reached — no automatic retry. "
+        .. "Ask an admin to raise the cap, or run /usage-credits to request "
+        .. "an increase.",
 }
+
+--- ACP bridge structured error kind → internal error class. The bridge attaches
+--- `errorKind` to the JSON-RPC error `data` so clients classify without parsing
+--- human-readable message text. Only kinds with confident recovery semantics are
+--- mapped; unmapped kinds fall through to the text heuristics below.
+--- @type table<string, string>
+local error_kind_class = {
+    authentication_failed = "authentication_error",
+    oauth_org_not_allowed = "authentication_error",
+    billing_error = "billing_error",
+}
+
+--- Strip the bridge's `Internal error: ` / `API Error: NNN` wrapper prefix.
+--- @param msg string
+--- @return string stripped
+local function strip_error_prefix(msg)
+    msg = msg:gsub("^Internal error:%s*", "")
+    msg = msg:gsub("^API Error:%s*%d+%s*", "")
+    return msg
+end
 
 --- Parse a reset time like "5pm (Europe/London)" or "17:30 (Europe/London)"
 --- into epoch seconds. Returns nil if parsing fails.
@@ -413,8 +438,9 @@ local function parse_reset_time(time_str, tz)
 end
 
 --- Format an ACP error into human-readable lines.
---- Parses embedded JSON in the message to extract the meaningful error type
---- and description, rather than dumping the raw Lua table.
+--- Classification prefers the bridge's structured `err.data.errorKind`; text
+--- heuristics (embedded JSON, then usage-limit regex) supply the display lines
+--- and the fallback class for errors/bridges that lack errorKind.
 ---
 --- Example input message:
 ---   "Internal error: Failed to authenticate. API Error: 401\n
@@ -423,11 +449,21 @@ end
 --- Output: {"401 Invalid authentication credentials", "", "Try running /login ..."}
 --- @param err agentic.acp.ACPError
 --- @return string[] lines
---- @return string|nil error_type Parsed API error type (e.g. "authentication_error")
+--- @return string|nil error_type Error class (from errorKind if present, else text)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 local function format_error_lines(err)
     local lines = {}
     local msg = err.message or "Unknown error"
+
+    -- The bridge attaches a structured errorKind to err.data; it is
+    -- authoritative for classification because message wording is a display
+    -- artefact that can change upstream and silently break text matching. The
+    -- text paths below still build the display lines (richer when structured
+    -- JSON or a reset clause is present) and supply the fallback class.
+    local kind_class
+    if type(err.data) == "table" then
+        kind_class = error_kind_class[err.data.errorKind]
+    end
 
     -- Try to extract embedded JSON from messages like:
     -- 'Internal error: API Error: 529\n{"type":"error","error":{"type":"overloaded_error","message":"Overloaded."}}'
@@ -455,15 +491,34 @@ local function format_error_lines(err)
                 table.insert(lines, readable)
             end
 
-            local hint = error_hints[error_type]
+            -- Hint follows the resolved class (errorKind first) so a mapped
+            -- kind that also carries embedded JSON keeps its class hint.
+            local hint = error_hints[kind_class or error_type]
             if hint then
                 table.insert(lines, "")
                 table.insert(lines, hint)
             end
 
             local resolved_type = error_type ~= "" and error_type or nil
-            return lines, resolved_type
+            return lines, kind_class or resolved_type
         end
+    end
+
+    -- errorKind classified with no richer structured JSON body (e.g. the
+    -- billing spend cap): show the message with the wrapper prefix stripped,
+    -- plus the class hint. Runs before the usage-limit scrape so a mapped kind
+    -- is never reclassified as usage_limit or given a spurious reset epoch.
+    if kind_class then
+        vim.list_extend(
+            lines,
+            vim.split(strip_error_prefix(msg), "\n", { plain = true })
+        )
+        local hint = error_hints[kind_class]
+        if hint then
+            table.insert(lines, "")
+            table.insert(lines, hint)
+        end
+        return lines, kind_class, nil
     end
 
     -- Detect usage limit errors: "You're out of extra usage · resets 5pm (Europe/London)"
@@ -490,7 +545,7 @@ local HEADING_PREFIX_LEN = #"### "
 --- Uses `### Error` heading (same pattern as tool call headers) so markdown
 --- treesitter renders the `###` as heading punctuation.
 --- @param err agentic.acp.ACPError
---- @return string|nil error_type Parsed API error type for caller to act on
+--- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 function MessageWriter:write_error_message(err)
     local body_lines, error_type, reset_epoch = format_error_lines(err)

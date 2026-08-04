@@ -480,6 +480,13 @@ success path and would otherwise be silently dropped. `end_turn`
 litellm now manifest as an empty chat after the thinking indicator
 clears; the user resolves them by checking provider credentials.
 
+### Error classification keys on `err.data.errorKind`
+
+`MessageWriter.format_error_lines` classifies JSON-RPC errors from the
+bridge's structured `err.data.errorKind` (claude-agent-acp), authoritative
+over the message-text heuristics (embedded JSON, usage-limit regex) which
+remain as the display source and the fallback class for bridges lacking it.
+
 ### opencode Edit diff not at content[1]
 
 Opencode follows the standard ACP diff layout (`content[]` array with

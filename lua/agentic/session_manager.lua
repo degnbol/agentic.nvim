@@ -931,17 +931,6 @@ function SessionManager:_build_handlers(opts)
 
     --- @type agentic.acp.ClientHandlers
     return {
-        on_error = function(err)
-            Logger.debug("Agent error: ", err)
-            local error_type, reset_epoch =
-                self.message_writer:write_error_message(err)
-            if error_type == "authentication_error" then
-                Recovery.offer_reauth(self)
-            elseif error_type == "usage_limit" and reset_epoch then
-                Recovery.offer_auto_continue(self, reset_epoch)
-            end
-        end,
-
         on_session_update = function(update)
             self:_on_session_update(update)
         end,

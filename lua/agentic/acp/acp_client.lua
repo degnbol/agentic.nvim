@@ -1378,7 +1378,6 @@ return ACPClient
 
 --- @alias agentic.acp.ClientHandlers.on_session_update fun(update: agentic.acp.SessionUpdateMessage): nil
 --- @alias agentic.acp.ClientHandlers.on_request_permission fun(request: agentic.acp.RequestPermission, callback: fun(option_id: string | nil)): nil
---- @alias agentic.acp.ClientHandlers.on_error fun(err: agentic.acp.ACPError): nil
 
 --- @class agentic.Selection
 --- @field lines string[] The selected code lines
@@ -1391,7 +1390,6 @@ return ACPClient
 --- @class agentic.acp.ClientHandlers
 --- @field on_session_update agentic.acp.ClientHandlers.on_session_update
 --- @field on_request_permission agentic.acp.ClientHandlers.on_request_permission
---- @field on_error agentic.acp.ClientHandlers.on_error
 --- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock): nil
 --- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase): nil
 --- @field on_stdout_text? fun(text: string): nil Non-JSON stdout lines (e.g. local command output)
