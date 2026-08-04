@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local spy = require("tests.helpers.spy")
 
 describe("BufHelpers", function()
     --- @type agentic.utils.BufHelpers
@@ -119,6 +120,37 @@ describe("BufHelpers", function()
 
             assert.is_false(BufHelpers.is_buffer_empty(bufnr))
             vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+    end)
+
+    describe("redraw_if_cmdline", function()
+        local mode_stub, cmd_stub
+
+        before_each(function()
+            mode_stub = spy.stub(vim.fn, "mode")
+            cmd_stub = spy.stub(vim, "cmd")
+        end)
+
+        after_each(function()
+            mode_stub:revert()
+            cmd_stub:revert()
+        end)
+
+        it("redraws while in cmdline mode", function()
+            mode_stub:returns("c")
+
+            BufHelpers.redraw_if_cmdline()
+
+            assert.are.equal(1, cmd_stub.call_count)
+            assert.is_true(cmd_stub:called_with("redraw"))
+        end)
+
+        it("does nothing outside cmdline mode", function()
+            mode_stub:returns("n")
+
+            BufHelpers.redraw_if_cmdline()
+
+            assert.are.equal(0, cmd_stub.call_count)
         end)
     end)
 end)

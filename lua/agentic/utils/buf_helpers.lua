@@ -137,6 +137,22 @@ function BufHelpers.feed_ESC_key()
     )
 end
 
+--- Repaint pending screen updates if the command-line is open.
+--- Neovim skips the pre-input-block redraw while in cmdline mode
+--- (src/nvim/state.c state_enter, `(State & MODE_CMDLINE) == 0` guard),
+--- so async buffer writes are not painted until CmdlineLeave. Forcing a
+--- redraw here paints them live. No-op in every other mode, where the
+--- redraw runs automatically before each input block.
+---
+--- Only matches `c` (cmdline). The sibling more-prompt/hit-enter state
+--- (`mode()` `r`/`rm`) defers by the same mechanism but is not a path
+--- this plugin drives; widen only if that changes.
+function BufHelpers.redraw_if_cmdline()
+    if vim.fn.mode():sub(1, 1) == "c" then
+        vim.cmd("redraw")
+    end
+end
+
 --- Move the viewport forward to follow the buffer's last line as
 --- content streams in. Never scrolls upward.
 ---

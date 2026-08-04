@@ -1,3 +1,4 @@
+local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 
@@ -181,6 +182,10 @@ function PermissionFloat:_render(bufnr, lines)
     vim.bo[bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     vim.bo[bufnr].modifiable = false
+    -- A permission request arriving while `:`/`/` is held would otherwise
+    -- show an unpainted float until CmdlineLeave; the float is not routed
+    -- through MessageWriter's choke, so force the repaint here too.
+    BufHelpers.redraw_if_cmdline()
 end
 
 --- Register a WinClosed autocmd on the chat window so the float closes if

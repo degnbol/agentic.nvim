@@ -265,12 +265,19 @@ end
 --- the autocmd would otherwise interpret as user intent and release the
 --- prose pin. Suppress for the whole synchronous write — vim is
 --- single-threaded so user input cannot interleave.
+---
+--- Every chat-buffer visual mutation routes through here, so this single
+--- choke also forces the repaint neovim otherwise defers while a command-line
+--- is open (see `BufHelpers.redraw_if_cmdline`), keeping streamed updates live
+--- behind `:`. In every other mode that repaint is a no-op — the write lands
+--- on screen at neovim's automatic pre-input redraw.
 --- @param fn fun(bufnr: integer): boolean|nil
 function MessageWriter:_with_modifiable_suppressed(fn)
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
     local result = BufHelpers.with_modifiable(self.bufnr, fn)
     self._suppress_pin_release = prev_suppress
+    BufHelpers.redraw_if_cmdline()
     return result
 end
 
