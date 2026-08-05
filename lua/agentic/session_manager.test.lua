@@ -271,6 +271,50 @@ describe("agentic.SessionManager", function()
                 s:revert()
             end
         end)
+
+        it("resets is_generating and stops indicators on reset mid-turn", function()
+            local Recovery = require("agentic.session_recovery")
+            local SlashCommands = require("agentic.acp.slash_commands")
+            local stubs = {
+                spy.stub(Recovery, "remove_reauth_keymap"),
+                spy.stub(Recovery, "cancel_health_check_timer"),
+                spy.stub(Recovery, "cancel_retry_timer"),
+                spy.stub(SlashCommands, "setCommands"),
+            }
+
+            local noop = function() end
+            local status_stop = spy.new(noop)
+            local subagent_stop = spy.new(noop)
+            local session = {
+                session_id = "live-session", -- exercise the teardown block
+                is_generating = true, -- as if a turn were streaming
+                agent = { cancel_session = noop },
+                permission_manager = { clear = noop },
+                todo_list = { clear = noop },
+                file_list = { clear = noop },
+                code_selection = { clear = noop },
+                diagnostics_list = { clear = noop },
+                config_options = { clear = noop },
+                status_indicator = { stop = status_stop },
+                subagent_status_indicator = { stop = subagent_stop },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    clear = noop,
+                    set_chat_title = noop,
+                },
+                _cancel_session = SessionManager._cancel_session,
+            } --[[@as agentic.SessionManager]]
+
+            session:_cancel_session()
+
+            assert.is_false(session.is_generating)
+            assert.spy(status_stop).was.called(1)
+            assert.spy(subagent_stop).was.called(1)
+
+            for _, s in ipairs(stubs) do
+                s:revert()
+            end
+        end)
     end)
 
     describe("_on_session_update: usage_update budget", function()

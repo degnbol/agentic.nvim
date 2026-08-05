@@ -2237,6 +2237,15 @@ function SessionManager:_cancel_session()
         self.code_selection:clear()
         self.diagnostics_list:clear()
         self.config_options:clear()
+
+        -- Tearing down a live session ends any in-flight turn. Reset the
+        -- generating flag and stop both indicators so /clear (or
+        -- delete/restart) mid-turn doesn't leave is_generating stale-true or
+        -- a spinner running. Only reachable with a session — is_generating is
+        -- set true only after the session is ready.
+        self.is_generating = false
+        self.status_indicator:stop()
+        self.subagent_status_indicator:stop()
     end
 
     self.session_id = nil
