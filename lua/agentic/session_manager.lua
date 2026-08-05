@@ -9,6 +9,7 @@ local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local DiffPreview = require("agentic.ui.diff_preview")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
+local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local Recovery = require("agentic.session_recovery")
@@ -2453,7 +2454,10 @@ function SessionManager:_get_system_info()
     local os_name = vim.uv.os_uname().sysname
     local os_version = vim.uv.os_uname().release
     local os_machine = vim.uv.os_uname().machine
-    local shell = os.getenv("SHELL")
+    -- The exec shell the provider actually runs commands in (bare name, not a
+    -- path), resolved as claude-agent-acp's SDK does; "bash" on an unprovable
+    -- resolve. See ExecShell.resolve / the `claude` skill's execute-tool.md.
+    local shell = ExecShell.resolve() or "bash"
     local neovim_version = tostring(vim.version())
     local today = os.date("%Y-%m-%d")
 

@@ -2,6 +2,7 @@ local ToolCallDiff = require("agentic.ui.tool_call_diff")
 local Ansi = require("agentic.utils.ansi")
 local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
+local ExecShell = require("agentic.utils.exec_shell")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FileSystem = require("agentic.utils.file_system")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -154,13 +155,14 @@ local function safe_fence(body_lines)
     return fence
 end
 
---- Language label for the execute command fence, taken from the user's shell
---- (basename of $SHELL, e.g. "zsh"). Cosmetic only. The zsh parser is aliased
---- to "bash", so highlighting is identical regardless of the label, which is
---- only visible at conceallevel=0.
+--- Language label for the execute command fence — the exec shell the provider
+--- runs commands in (`ExecShell.resolve`), matching `environment_info`.
+--- Cosmetic only. The zsh parser is aliased to "bash", so highlighting is
+--- identical regardless of the label, which is only visible at conceallevel=0;
+--- "bash" on an unprovable (`nil`) resolve keeps the label from going blank.
 --- @return string
 local function shell_lang()
-    return vim.fs.basename(os.getenv("SHELL") or vim.o.shell)
+    return ExecShell.resolve() or "bash"
 end
 
 --- Fence info-string for a shell command. Normally the shell label, but the

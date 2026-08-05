@@ -140,10 +140,12 @@ diff.
 Execute tool calls render their command inside a markdown fenced code block
 instead of inline in the header. This lets the markdown treesitter parser inject
 shell syntax highlighting automatically via its built-in injection queries. The
-fence label comes from `shell_lang()` — the basename of `$SHELL` (e.g. `zsh`),
-matching the shell the provider runs commands in (the same value sent in
-`environment_info`), with `bash` as the fallback when `$SHELL` is unset. The
-label is cosmetic: the zsh treesitter parser is aliased to `bash` via
+fence label comes from `shell_lang()` = `ExecShell.resolve()`, the exec shell the
+provider runs commands in (SDK precedence: `$CLAUDE_CODE_SHELL` then `$SHELL`,
+basename bash/zsh and executable — `claude` skill's `references/execute-tool.md`
+§ Shell; `nil` path-search branch renders as `bash`). `resolve()` is the single
+source of truth, shared with `environment_info` and the permissions arithmetic
+gate. The label is cosmetic: the zsh treesitter parser is aliased to `bash` via
 `vim.treesitter.language.register("zsh", "bash")`, so highlighting is identical
 regardless and the literal word is only visible at conceallevel=0.
 

@@ -99,6 +99,18 @@ Wildcarded only against deny/ask, **never allow**: a dynamic subcommand fails th
 allowlist (→ prompt) and a trailing dynamic arg (`git log $ref`) is harmless, so
 a dynamic token never widens an approval.
 
+**Arithmetic (zsh-gated)** — an `arithmetic_expansion` (`$((l))`, `"$((l))p"`,
+`-$((n))`) is *static* at argument position when `ctx.arith_static` holds: a
+capable provider AND a provably-zsh exec shell (`arith_static_gate` =
+provider set + `exec_shell.gate_is_zsh`). Sound because its output is always an
+integer, never a flag/subcommand/path. Dynamic (fail-closed) otherwise: under
+bash/sh/dash or a non-capable provider; at a redirect target (default `false`);
+and inside a non-zsh `-c` body or script, where the transparent-prefix recursion
+clears the gate (`NON_ZSH_SHELL_INVOKERS`) since bash/sh/dash re-evaluate a
+variable's value as arithmetic (RCE laundering) where zsh does not. The `string`
+classifier is a whitelist — arithmetic mixed with a `$var`/`$(…)` child stays
+dynamic.
+
 **Invalidation** (`update_known` → `collect_bindings`) drops only the names a
 sibling could rebind, defaulting to clear-all when those names can't be
 enumerated. A pure-literal `variable_assignment` records its binding; every

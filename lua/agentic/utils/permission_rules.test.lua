@@ -3817,4 +3817,144 @@ describe("PermissionRules", function()
             assert.is_true(ok)
         end)
     end)
+
+    describe("arithmetic argument gate", function()
+        local Config = require("agentic.config")
+        local orig_shell
+        local orig_code_shell
+        local orig_provider
+
+        --- Pin the exec-shell gate for the duration of a test.
+        --- @param shell string
+        --- @param provider string
+        local function gate(shell, provider)
+            vim.env.SHELL = shell
+            Config.provider = provider
+        end
+
+        before_each(function()
+            orig_shell = vim.env.SHELL
+            orig_code_shell = vim.env.CLAUDE_CODE_SHELL
+            orig_provider = Config.provider
+            vim.env.CLAUDE_CODE_SHELL = nil
+            PermissionRules.invalidate_cache()
+        end)
+
+        after_each(function()
+            vim.env.SHELL = orig_shell
+            vim.env.CLAUDE_CODE_SHELL = orig_code_shell
+            Config.provider = orig_provider
+            PermissionRules.invalidate_cache()
+        end)
+
+        local SED = 'sed -n "$((l - 18)),$((l))p" f'
+
+        it("approves an arithmetic sed range under the zsh gate", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_true(PermissionRules.should_auto_approve(SED))
+        end)
+
+        it("prompts under a bash exec shell (gate off)", function()
+            gate("/bin/bash", "claude-agent-acp")
+            assert.is_false(PermissionRules.should_auto_approve(SED))
+        end)
+
+        it("prompts under a non-capable provider (gate off)", function()
+            gate("/bin/zsh", "opencode-acp")
+            assert.is_false(PermissionRules.should_auto_approve(SED))
+        end)
+
+        it("keeps a redirect target dynamic even under the gate", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = { allow = { "Bash(echo *)" } } }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+            -- `> $((n))` resolves to no literal path — the redirect write bails.
+            assert.is_false(PermissionRules.should_auto_approve("echo hi > $((n))"))
+            PermissionRules.read_json = orig_read_json
+        end)
+
+        it("does not spuriously deny-reject a benign arithmetic arg", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return { permissions = { deny = { "Bash(rm *)" } } }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+            assert.is_false(PermissionRules.should_auto_reject(SED))
+            PermissionRules.read_json = orig_read_json
+        end)
+
+        it("does not auto-approve a functions -M registration", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_false(
+                PermissionRules.should_auto_approve("functions -M foo 1 1")
+            )
+        end)
+
+        it("still prompts a $var-bearing string under the gate", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_false(
+                PermissionRules.should_auto_approve('sed -n "$v p" f')
+            )
+        end)
+
+        -- The gate is the OUTER exec shell. A `bash -c`/`sh -c` wrapper switches
+        -- the inner evaluating shell to a non-zsh one, where arithmetic
+        -- re-evaluates a variable's value (RCE laundering) — the gate MUST clear
+        -- for that inner body or a single-quoted assignment launders past sed.
+        it("clears the gate inside a bash -c body", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    [[bash -c 'sed -n "$((l))p" f']]
+                )
+            )
+        end)
+
+        it("clears the gate inside an sh -c body", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    [[sh -c 'sed -n "$((l))p" f']]
+                )
+            )
+        end)
+
+        it("preserves the gate inside a zsh -c body", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    [[zsh -c 'sed -n "$((l))p" f']]
+                )
+            )
+        end)
+
+        it("preserves the gate through a benign exec-wrapper", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    'env FOO=1 sed -n "$((l))p" f'
+                )
+            )
+        end)
+
+        -- A command substitution *inside* arithmetic is opaque; the whitelist
+        -- must never treat it as static (belt to the subtree_has_substitution
+        -- bail that catches it first).
+        it("does not approve command-sub inside arithmetic", function()
+            gate("/bin/zsh", "claude-agent-acp")
+            assert.is_false(
+                PermissionRules.should_auto_approve('sed -n "$(( $(id) ))p" f')
+            )
+        end)
+    end)
 end)

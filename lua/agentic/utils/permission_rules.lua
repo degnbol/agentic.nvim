@@ -1,8 +1,27 @@
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
+local ExecShell = require("agentic.utils.exec_shell")
 
 --- @class agentic.utils.PermissionRules
 local M = {}
+
+--- Providers whose execute tool runs commands through claude-agent-acp's SDK
+--- shell resolution — the only ones for which the exec-shell gate below is
+--- meaningful. Encoded as a static table (not a live adapter field) because the
+--- permission decision path holds no reference to the active adapter; add a key
+--- here when a future provider adopts the same SDK exec path.
+local ARITH_STATIC_PROVIDERS = { ["claude-agent-acp"] = true }
+
+--- Whether arithmetic expansion may be classified as a static numeric token:
+--- the provider runs commands through the SDK shell resolver AND that shell is
+--- provably zsh. Fail-closed — a non-capable provider or an unprovable shell
+--- keeps arithmetic dynamic (over-prompt). See `token_is_dynamic`'s `arith_static`
+--- and the permissions skill § "Why this is sound only in zsh".
+--- @return boolean
+local function arith_static_gate()
+    return ARITH_STATIC_PROVIDERS[Config.provider] == true
+        and ExecShell.gate_is_zsh()
+end
 
 -- Structural shell-parse primitives live once in shell_parse.lua. The `walk` and
 -- `tally_walk` traversals below decide auto-approval on top of these; the same
@@ -23,6 +42,7 @@ local heredoc_pure_body = ShellParse.heredoc_pure_body
 local is_bare_cat = ShellParse.is_bare_cat
 local inner_source = ShellParse.inner_source
 local script_file_source = ShellParse.script_file_source
+local NON_ZSH_SHELL_INVOKERS = ShellParse.NON_ZSH_SHELL_INVOKERS
 local resolve_against_cwd = ShellParse.resolve_against_cwd
 local CONTAINER_TYPES = ShellParse.CONTAINER_TYPES
 local SUBSTITUTION_TYPES = ShellParse.SUBSTITUTION_TYPES
@@ -32,6 +52,19 @@ local CODE_TAKING_BUILTINS = ShellParse.CODE_TAKING_BUILTINS
 local NESTED_MAX_DEPTH = ShellParse.NESTED_MAX_DEPTH
 
 M.strip_command_path = ShellParse.strip_command_path
+
+--- The arith-static gate value for a transparent-prefix recursion. Preserved for
+--- the current/zsh shell and exec-wrappers; cleared when the wrapper invokes a
+--- non-zsh shell (`bash`/`sh`/`dash -c`, `bash file`), whose arithmetic
+--- re-evaluation would launder a payload the zsh-only soundness premise excludes
+--- (see `token_is_dynamic`'s `arith_static` and `NON_ZSH_SHELL_INVOKERS`). Once
+--- cleared it stays cleared down the recursion (`false and _` is monotonic).
+--- @param ctx { arith_static?: boolean }
+--- @param cmd_name string path-stripped wrapper command name
+--- @return boolean
+local function inner_arith_static(ctx, cmd_name)
+    return ctx.arith_static == true and not NON_ZSH_SHELL_INVOKERS[cmd_name]
+end
 
 --- @alias agentic.utils.PermissionRules.Origin agentic.utils.ShellParse.Origin
 
@@ -564,7 +597,7 @@ end
 --- @field kind "write"|"delete" Mutation kind (redirect write, or an `rm` operand)
 --- @field path string Concrete target path
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean, for_budget: integer }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean, for_budget: integer, arith_static: boolean }
 
 --- Maximum number of body walks a literal for-loop may unroll into. Nested
 --- literal loops multiply, so the budget is divided down each level; a loop whose
@@ -1106,7 +1139,13 @@ local function extract_args(node, src, ctx, known, inner_check)
                     end
                     table.insert(args, tok)
                     table.insert(arg_nodes, child)
-                    table.insert(args_dynamic, token_is_dynamic(child))
+                    -- Arithmetic at argument position is a static numeric token
+                    -- under the zsh exec-shell gate (`ctx.arith_static`); `== true`
+                    -- keeps a missed ctx rebuild fail-closed to dynamic.
+                    table.insert(
+                        args_dynamic,
+                        token_is_dynamic(child, ctx.arith_static == true)
+                    )
                 end
             end
         end
@@ -1265,7 +1304,10 @@ local function walk_command(node, src, ctx, known, funcs)
         return walk(
             root,
             inner,
-            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
+            vim.tbl_extend("force", ctx, {
+                depth = ctx.depth + 1,
+                arith_static = inner_arith_static(ctx, cmd_name),
+            })
         )
     end
 
@@ -1305,7 +1347,10 @@ local function walk_command(node, src, ctx, known, funcs)
         return walk(
             root,
             body,
-            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
+            vim.tbl_extend("force", ctx, {
+                depth = ctx.depth + 1,
+                arith_static = inner_arith_static(ctx, cmd_name),
+            })
         )
     end
 
@@ -1831,7 +1876,7 @@ end
 -- known-safe iff it matches a read_only/safe_write rule AND no deny/ask rule, so
 -- a `safe_write` like `git add` never lights up even in read-only mode.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer }
+--- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer, arith_static: boolean }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -2034,7 +2079,11 @@ local function command_known_safe(node, src, ctx, known, funcs)
             -- Fresh `leaves`: the inner is vetted only to decide this leaf's
             -- safety, so its leaves must not leak into the outer rememberable
             -- set (an unsafe inner makes the whole leaf non-rememberable).
-            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1, leaves = {} }),
+            vim.tbl_extend("force", ctx, {
+                depth = ctx.depth + 1,
+                leaves = {},
+                arith_static = inner_arith_static(ctx, cmd_name),
+            }),
             body_ranges
         )
         if #body_ranges == 0 then
@@ -2066,7 +2115,11 @@ local function command_known_safe(node, src, ctx, known, funcs)
         tally_walk(
             root,
             body,
-            vim.tbl_extend("force", ctx, { depth = ctx.depth + 1, leaves = {} }),
+            vim.tbl_extend("force", ctx, {
+                depth = ctx.depth + 1,
+                leaves = {},
+                arith_static = inner_arith_static(ctx, cmd_name),
+            }),
             body_ranges
         )
         return #body_ranges == 0
@@ -2421,6 +2474,7 @@ function M.tally_unapproved(command)
         depth = 0,
         leaves = {},
         for_budget = FOR_UNROLL_CAP,
+        arith_static = arith_static_gate(),
     }
     --- @type agentic.utils.PermissionRules.Range[]
     local ranges = {}
@@ -2446,7 +2500,7 @@ end
 -- withholds approval, and prompts. Net: concrete deny rejects,
 -- laundered/uncertain deny prompts.
 
---- @alias agentic.utils.PermissionRules.RejectCtx { deny: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer }
+--- @alias agentic.utils.PermissionRules.RejectCtx { deny: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, arith_static: boolean }
 
 --- Forward declaration — `reject_walk` and `command_is_denied` are mutually
 --- recursive (a transparent-prefix wrapper re-walks its inner command).
@@ -2487,7 +2541,10 @@ local function command_is_denied(node, src, ctx)
             and reject_walk(
                 root,
                 inner,
-                vim.tbl_extend("force", ctx, { depth = ctx.depth + 1 })
+                vim.tbl_extend("force", ctx, {
+                    depth = ctx.depth + 1,
+                    arith_static = inner_arith_static(ctx, cmd_name),
+                })
             )
         then
             return true
@@ -2574,6 +2631,7 @@ function M.should_auto_reject(command)
         deny = deny,
         structured_entries = structured_entries,
         depth = 0,
+        arith_static = arith_static_gate(),
     })
 end
 
@@ -2642,6 +2700,7 @@ function M.evaluate(command, extra_allow)
         written = {},
         tmp_cleanup = Config.permissions.tmp_cleanup,
         for_budget = FOR_UNROLL_CAP,
+        arith_static = arith_static_gate(),
     })
     return ok, effects
 end

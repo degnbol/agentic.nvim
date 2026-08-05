@@ -22,6 +22,7 @@ describe("agentic.ui.MessageWriter", function()
     local original_auto_scroll
     local original_tool_call_display
     local original_shell
+    local original_code_shell
 
     before_each(function()
         -- Re-acquire in case a prior test replaced the module in package.loaded
@@ -31,8 +32,11 @@ describe("agentic.ui.MessageWriter", function()
         -- Disable external formatter for deterministic fallback tests
         Config.tool_call_display.execute_formatter = false
         -- Pin the shell so the execute fence label is deterministic — the
-        -- renderer derives it from $SHELL (basename).
+        -- renderer resolves it via ExecShell (CLAUDE_CODE_SHELL then $SHELL,
+        -- executable & bash/zsh). Use real, executable paths.
         original_shell = vim.env.SHELL
+        original_code_shell = vim.env.CLAUDE_CODE_SHELL
+        vim.env.CLAUDE_CODE_SHELL = nil
         vim.env.SHELL = "/bin/bash"
         MessageWriter = require("agentic.ui.message_writer")
 
@@ -54,6 +58,7 @@ describe("agentic.ui.MessageWriter", function()
         Config.auto_scroll = original_auto_scroll --- @diagnostic disable-line: assign-type-mismatch
         Config.tool_call_display = original_tool_call_display
         vim.env.SHELL = original_shell
+        vim.env.CLAUDE_CODE_SHELL = original_code_shell
         if winid and vim.api.nvim_win_is_valid(winid) then
             vim.api.nvim_win_close(winid, true)
         end
@@ -1155,7 +1160,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it("labels the execute fence with the shell from $SHELL", function()
-            vim.env.SHELL = "/usr/bin/zsh"
+            vim.env.SHELL = "/bin/zsh"
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "exec-zsh",

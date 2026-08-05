@@ -335,23 +335,48 @@ end
 --- word-split surface as a bare `$d` must wildcard the deny/ask gates.
 --- Command-substitution-bearing nodes (rejected at the command level) never
 --- reach here.
+---
+--- `arith_static` (default false, fail-closed) treats an arithmetic expansion
+--- (`$((l))`) as a static numeric token instead of dynamic. Arithmetic output
+--- is always an integer — it can never expand to a flag, subcommand, or path —
+--- so dropping its deny/ask wildcard only removes a prompt. Sound *only* under a
+--- zsh exec shell (bash re-evaluates a referenced variable's value as
+--- arithmetic and runs command substitution in an array subscript); the caller
+--- gates it — see `exec_shell.gate_is_zsh` and the permissions skill. Only the
+--- argument site passes a true value; redirect targets and the dead-utility site
+--- keep the default false.
 --- @param node TSNode
+--- @param arith_static boolean|nil
 --- @return boolean
-local function token_is_dynamic(node)
+local function token_is_dynamic(node, arith_static)
     local t = node:type()
+    if t == "arithmetic_expansion" then
+        return not arith_static
+    end
     if
         t == "glob_pattern"
         or t == "variable_ref"
         or t == "simple_expansion"
         or t == "expansion"
-        or t == "arithmetic_expansion"
     then
         return true
     end
     if t == "string" then
+        -- Fail-closed whitelist: dynamic unless EVERY named child is provably
+        -- static. tree-sitter-zsh double-quote-string children are:
+        -- string_content, simple_expansion ($x), expansion (${x}),
+        -- command_substitution ($(…)), arithmetic_expansion ($((…))). Only
+        -- string_content — and arithmetic under the gate — is static; any other
+        -- child (incl. an unforeseen future node type) stays dynamic, so a
+        -- grammar bump that adds a child type fails safe (over-prompt).
         for c in node:iter_children() do
-            if c:named() and c:type() ~= "string_content" then
-                return true
+            if c:named() then
+                local ct = c:type()
+                local child_static = ct == "string_content"
+                    or (ct == "arithmetic_expansion" and arith_static)
+                if not child_static then
+                    return true
+                end
             end
         end
     end
@@ -363,7 +388,7 @@ local function token_is_dynamic(node)
         -- inside a `string` child, so a flat check reports static and the raw
         -- token approves past a deny gate — unsound (regression-tested).
         for c in node:iter_children() do
-            if c:named() and token_is_dynamic(c) then
+            if c:named() and token_is_dynamic(c, arith_static) then
                 return true
             end
         end
@@ -619,6 +644,15 @@ end
 --- file read, no TOCTOU window), so it is re-parsed and walked recursively
 --- instead of firing the unconditional `c`-flag ask.
 local SHELL_C_COMMANDS = { zsh = true, bash = true, sh = true, dash = true }
+
+--- Subset of `SHELL_C_COMMANDS` whose `-c` body / script file is evaluated by a
+--- NON-zsh shell. Recursing into one switches the evaluating shell, so a
+--- consumer whose analysis is sound only under zsh (the arithmetic-static
+--- permission gate) must clear it for the inner body — bash/sh/dash re-evaluate
+--- a referenced variable's value as arithmetic (RCE laundering) where zsh does
+--- not. `zsh`, `source`/`.` (run in the current shell), and the exec-wrappers
+--- keep the current shell and are absent.
+local NON_ZSH_SHELL_INVOKERS = { bash = true, sh = true, dash = true }
 
 --- Recursion-depth cap for nested transparent prefixes — inline `-c` bodies
 --- (`zsh -c 'zsh -c "…"'`) and exec-wrappers (`stdbuf -oL timeout 5 grep foo`). It is
@@ -1116,6 +1150,7 @@ M.heredoc_pure_body = heredoc_pure_body
 M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source
+M.NON_ZSH_SHELL_INVOKERS = NON_ZSH_SHELL_INVOKERS
 M.resolve_against_cwd = resolve_against_cwd
 M.CONTAINER_TYPES = CONTAINER_TYPES
 M.SUBSTITUTION_TYPES = SUBSTITUTION_TYPES

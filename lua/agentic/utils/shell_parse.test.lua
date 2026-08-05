@@ -166,4 +166,65 @@ describe("ShellParse.extract_commands", function()
             assert.equal(nil, ShellParse.parse_zsh_untrusted("c=${x//[^)]}"))
         end)
     end)
+
+    describe("token_is_dynamic arithmetic gate", function()
+        --- First named node of `node_type` (DFS) in the parse of `cmd`.
+        --- @param cmd string
+        --- @param node_type string
+        --- @return TSNode
+        local function find_node(cmd, node_type)
+            local root = ShellParse.parse_zsh(cmd)
+            local found
+            local function walk(n)
+                if found then
+                    return
+                end
+                if n:type() == node_type then
+                    found = n
+                    return
+                end
+                for c in n:iter_children() do
+                    walk(c)
+                end
+            end
+            walk(root)
+            assert.is_not_nil(found)
+            return found
+        end
+
+        -- Under the gate (arith_static=true) an arithmetic-only token is static;
+        -- with the gate off it is dynamic (today's always-dynamic baseline).
+        it("classifies a bare arithmetic expansion by the gate", function()
+            local node = find_node("sed $((l - 18))", "arithmetic_expansion")
+            assert.is_false(ShellParse.token_is_dynamic(node, true))
+            assert.is_true(ShellParse.token_is_dynamic(node, false))
+        end)
+
+        it("classifies an arithmetic-only string by the gate", function()
+            local node = find_node('sed "$((l))p"', "string")
+            assert.is_false(ShellParse.token_is_dynamic(node, true))
+            assert.is_true(ShellParse.token_is_dynamic(node, false))
+        end)
+
+        it("classifies an arithmetic concatenation by the gate", function()
+            local node = find_node("sed -$((n))", "concatenation")
+            assert.is_false(ShellParse.token_is_dynamic(node, true))
+            assert.is_true(ShellParse.token_is_dynamic(node, false))
+        end)
+
+        -- Whitelist fail-closed: a var- or command-sub-bearing string stays
+        -- dynamic under both gate states — the arithmetic-only carve-out must
+        -- not widen to a string with any other expansion child.
+        it("keeps a var+arithmetic string dynamic under both", function()
+            local node = find_node('sed "$f$((n))"', "string")
+            assert.is_true(ShellParse.token_is_dynamic(node, true))
+            assert.is_true(ShellParse.token_is_dynamic(node, false))
+        end)
+
+        it("keeps a command-sub string dynamic under both", function()
+            local node = find_node('sed "x$(ls)"', "string")
+            assert.is_true(ShellParse.token_is_dynamic(node, true))
+            assert.is_true(ShellParse.token_is_dynamic(node, false))
+        end)
+    end)
 end)
