@@ -204,22 +204,32 @@ function ChatWidget:hide()
     end
 end
 
---- Cleans up all buffers content without destroying them
+--- Clears every panel buffer's content without destroying them, except
+--- `input` — it holds the user's unsent draft, which is not conversation
+--- state and must survive session resets/swaps.
 function ChatWidget:clear()
     for name, bufnr in pairs(self.buf_nrs) do
-        BufHelpers.with_modifiable(bufnr, function()
-            local ok =
-                pcall(vim.api.nvim_buf_set_lines, bufnr, 0, -1, false, { "" })
-            if not ok then
-                Logger.debug(
-                    string.format(
-                        "Failed to clear buffer '%s' with id: %d",
-                        name,
-                        bufnr
-                    )
+        if name ~= "input" then
+            BufHelpers.with_modifiable(bufnr, function()
+                local ok = pcall(
+                    vim.api.nvim_buf_set_lines,
+                    bufnr,
+                    0,
+                    -1,
+                    false,
+                    { "" }
                 )
-            end
-        end)
+                if not ok then
+                    Logger.debug(
+                        string.format(
+                            "Failed to clear buffer '%s' with id: %d",
+                            name,
+                            bufnr
+                        )
+                    )
+                end
+            end)
+        end
     end
 
     -- set_lines collapses prompt markers onto (0,0) without deleting them, so

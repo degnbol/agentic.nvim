@@ -717,6 +717,23 @@ describe("agentic.ui.ChatWidget", function()
 
             assert.same({}, marker_rows())
         end)
+
+        it("clear() preserves the input buffer draft", function()
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                { "unsent draft" }
+            )
+
+            widget:clear()
+
+            assert.same(
+                { "unsent draft" },
+                vim.api.nvim_buf_get_lines(widget.buf_nrs.input, 0, -1, false)
+            )
+        end)
     end)
 
     describe("partial_send", function()
