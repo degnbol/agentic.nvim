@@ -3,8 +3,13 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
 local MessageWriter = require("agentic.ui.message_writer")
+local Theme = require("agentic.theme")
 local WindowDecoration = require("agentic.ui.window_decoration")
 local WidgetLayout = require("agentic.ui.widget_layout")
+
+--- Highlight namespace for queued input regions. Extmarks are buffer-scoped,
+--- so a module-level (global) namespace is fine (see multi-tabpage rules).
+local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
 --- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"subagent"
 
@@ -38,7 +43,9 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field on_submit_input fun(prompt: string) external callback to be called when user submits the input
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
 --- @field on_hide? fun() external callback called after the widget is hidden
+--- @field on_query_generating? fun(): boolean external callback: is the agent generating a turn right now?
 --- @field _hiding boolean re-entrancy guard for hide()
+--- @field _draining? boolean guard so drain's own buffer edits don't self-untag
 --- @field _unread_badge? string Badge appended to chat buffer name (e.g. "[done]", "[?]")
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
@@ -57,6 +64,16 @@ function ChatWidget._send_operator_dispatch(type)
     local widget = _send_widgets[vim.api.nvim_get_current_buf()]
     if widget then
         widget:_send_operator(type)
+    end
+end
+
+--- Dispatch target for the queue operator (`operatorfunc` after `<S-CR>{motion}`).
+--- Same widget resolution as `_send_operator_dispatch`.
+--- @param type "char"|"line"|"block"
+function ChatWidget._queue_operator_dispatch(type)
+    local widget = _send_widgets[vim.api.nvim_get_current_buf()]
+    if widget then
+        widget:_queue_operator(type)
     end
 end
 
@@ -509,6 +526,176 @@ function ChatWidget:_send_visual()
     self:submit({ text = text, delete_range = delete_range })
 end
 
+--- Whether the agent is mid-turn. The queue keymaps only defer while it is;
+--- idle they degrade to the matching send-now action (no turn to defer to).
+--- @return boolean
+function ChatWidget:_is_generating()
+    return self.on_query_generating ~= nil
+        and self.on_query_generating() == true
+end
+
+--- Delete every queued-region extmark whose line span intersects [sr, er]
+--- (0-indexed, inclusive).
+--- @param sr integer
+--- @param er integer
+function ChatWidget:_clear_queued_in_range(sr, er)
+    local buf = self.buf_nrs.input
+    local marks = vim.api.nvim_buf_get_extmarks(
+        buf,
+        NS_QUEUED,
+        0,
+        -1,
+        { details = true }
+    )
+    for _, mark in ipairs(marks) do
+        if mark[2] <= er and sr <= mark[4].end_row then
+            vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, mark[1])
+        end
+    end
+end
+
+--- Tag lines [sr, er] (0-indexed, inclusive) as a queued region: a full-width
+--- (hl_eol) background extmark that leaves the text in place. The extmark IS
+--- the region — its range stays accurate for drain because any edit inside it
+--- drops the tag (see _setup_queue), so a still-tagged mark has never been
+--- edited since tagging. Re-queueing over existing tags replaces them, so
+--- regions never overlap or double-highlight.
+--- @param sr integer
+--- @param er integer
+function ChatWidget:_queue_line_range(sr, er)
+    self:_clear_queued_in_range(sr, er)
+    local buf = self.buf_nrs.input
+    local last = vim.api.nvim_buf_get_lines(buf, er, er + 1, false)[1] or ""
+    vim.api.nvim_buf_set_extmark(buf, NS_QUEUED, sr, 0, {
+        end_row = er,
+        end_col = #last,
+        hl_group = Theme.HL_GROUPS.QUEUED_REGION,
+        hl_eol = true,
+    })
+end
+
+--- Whether lines [sr, er] (0-indexed, inclusive) contain any printable content.
+--- @param buf integer
+--- @param sr integer
+--- @param er integer
+--- @return boolean
+local function span_has_content(buf, sr, er)
+    local lines = vim.api.nvim_buf_get_lines(buf, sr, er + 1, false)
+    return #lines > 0 and table.concat(lines, "\n"):match("%S") ~= nil
+end
+
+--- Queue N lines (vim.v.count1) from the cursor, or send them now when idle.
+function ChatWidget:_queue_line()
+    if not self:_is_generating() then
+        self:_send_line()
+        return
+    end
+    local buf = self.buf_nrs.input
+    local sr = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local er = math.min(sr + vim.v.count1 - 1, vim.api.nvim_buf_line_count(buf) - 1)
+    if span_has_content(buf, sr, er) then
+        self:_queue_line_range(sr, er)
+    end
+end
+
+--- Operatorfunc callback for queueing (after `<S-CR>{motion}`). Queues the
+--- full line(s) the motion covers, or sends now when idle.
+--- @param type "char"|"line"|"block"
+function ChatWidget:_queue_operator(type)
+    if not self:_is_generating() then
+        self:_send_operator(type)
+        return
+    end
+    if type == "block" then
+        Logger.debug("queue: blockwise motion ignored")
+        return
+    end
+    local buf = self.buf_nrs.input
+    local sr = vim.api.nvim_buf_get_mark(buf, "[")[1] - 1
+    local er = vim.api.nvim_buf_get_mark(buf, "]")[1] - 1
+    if sr < 0 or er < 0 then
+        return
+    end
+    if span_has_content(buf, sr, er) then
+        self:_queue_line_range(sr, er)
+    end
+end
+
+--- Queue the selected line(s), or send them now when idle.
+function ChatWidget:_queue_visual()
+    if not self:_is_generating() then
+        self:_send_visual()
+        return
+    end
+    local mode = vim.api.nvim_get_mode().mode
+    if mode == "\22" then
+        Logger.debug("queue: blockwise visual ignored")
+        return
+    end
+    if mode ~= "v" and mode ~= "V" then
+        return
+    end
+    local buf = self.buf_nrs.input
+    local anchor = vim.fn.getpos("v")[2] - 1
+    local cursor = vim.fn.getpos(".")[2] - 1
+    local sr = math.min(anchor, cursor)
+    local er = math.max(anchor, cursor)
+    if not span_has_content(buf, sr, er) then
+        return
+    end
+    vim.cmd("normal! \27")
+    self:_queue_line_range(sr, er)
+end
+
+--- Collect queued regions in buffer order (top-to-bottom = priority), delete
+--- their text from the input buffer, clear the tags, and return the regions'
+--- text joined by blank lines. Returns nil when nothing is queued. Deletion
+--- mirrors partial-send (a dispatched region leaves the input buffer);
+--- bottom-to-top keeps row indices valid across deletes.
+--- @return string|nil
+function ChatWidget:drain_queued_regions()
+    local buf = self.buf_nrs.input
+    local marks = vim.api.nvim_buf_get_extmarks(
+        buf,
+        NS_QUEUED,
+        0,
+        -1,
+        { details = true }
+    )
+    if #marks == 0 then
+        return nil
+    end
+
+    -- get_extmarks returns marks in ascending position order.
+    local texts = {}
+    for _, mark in ipairs(marks) do
+        local lines =
+            vim.api.nvim_buf_get_lines(buf, mark[2], mark[4].end_row + 1, false)
+        table.insert(texts, table.concat(lines, "\n"))
+    end
+
+    self._draining = true
+    for i = #marks, 1, -1 do
+        local mark = marks[i]
+        vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, mark[1])
+        vim.api.nvim_buf_set_lines(
+            buf,
+            mark[2],
+            mark[4].end_row + 1,
+            false,
+            {}
+        )
+    end
+    self._draining = false
+
+    return table.concat(texts, "\n\n")
+end
+
+--- Drop every queued region, leaving the text as ordinary draft in place.
+function ChatWidget:cancel_queue()
+    vim.api.nvim_buf_clear_namespace(self.buf_nrs.input, NS_QUEUED, 0, -1)
+end
+
 --- @param winid integer|nil
 --- @param callback fun()|nil
 function ChatWidget:move_cursor_to(winid, callback)
@@ -533,6 +720,7 @@ function ChatWidget:_initialize()
     self:_bind_keymaps()
     self:_setup_write_submit()
     self:_setup_prompt_navigation()
+    self:_setup_queue()
 
     -- I only want to trigger a full close of the chat widget when closing the chat or the input buffers, the others are auxiliary
     for _, bufnr in ipairs({
@@ -736,6 +924,7 @@ function ChatWidget:_bind_keymaps()
     end
 
     self:_bind_send_keymaps()
+    self:_bind_queue_keymaps()
 
     BufHelpers.multi_keymap_set(
         Config.keymaps.prompt.paste_image,
@@ -929,14 +1118,6 @@ function ChatWidget:_bind_send_keymaps()
     end
 
     if not BufHelpers.is_keymap_disabled(keymaps.send_operator) then
-        _send_widgets[self.buf_nrs.input] = self
-        vim.api.nvim_create_autocmd("BufWipeout", {
-            buffer = self.buf_nrs.input,
-            once = true,
-            callback = function(ev)
-                _send_widgets[ev.buf] = nil
-            end,
-        })
         BufHelpers.multi_keymap_set(
             keymaps.send_operator,
             self.buf_nrs.input,
@@ -964,6 +1145,100 @@ function ChatWidget:_bind_send_keymaps()
             "x"
         )
     end
+end
+
+function ChatWidget:_bind_queue_keymaps()
+    local keymaps = Config.keymaps.prompt
+
+    if not BufHelpers.is_keymap_disabled(keymaps.queue_line) then
+        BufHelpers.multi_keymap_set(
+            keymaps.queue_line,
+            self.buf_nrs.input,
+            function()
+                self:_queue_line()
+            end,
+            { desc = "Agentic: Queue line" }
+        )
+    end
+
+    if not BufHelpers.is_keymap_disabled(keymaps.queue_operator) then
+        BufHelpers.multi_keymap_set(
+            keymaps.queue_operator,
+            self.buf_nrs.input,
+            function()
+                vim.o.operatorfunc =
+                    "v:lua.require'agentic.ui.chat_widget'._queue_operator_dispatch"
+                return "g@"
+            end,
+            {
+                desc = "Agentic: Queue motion",
+                expr = true,
+                silent = true,
+            }
+        )
+    end
+
+    if not BufHelpers.is_keymap_disabled(keymaps.queue_visual) then
+        BufHelpers.multi_keymap_set(
+            keymaps.queue_visual,
+            self.buf_nrs.input,
+            function()
+                self:_queue_visual()
+            end,
+            { desc = "Agentic: Queue visual" },
+            "x"
+        )
+    end
+
+    if not BufHelpers.is_keymap_disabled(keymaps.cancel_queue) then
+        BufHelpers.multi_keymap_set(
+            keymaps.cancel_queue,
+            self.buf_nrs.input,
+            function()
+                self:cancel_queue()
+            end,
+            { desc = "Agentic: Cancel queue" }
+        )
+    end
+end
+
+--- Register the input buffer for operatorfunc dispatch (shared by send and
+--- queue operators) and wire auto-unqueue: any edit intersecting a queued
+--- region drops its tag, so a region can never be dispatched mid-edit and a
+--- surviving tag's range is always pristine. Two triggers:
+---   • on_bytes — catch-all for buffer changes in any mode.
+---   • InsertEnter with cursor in a region — entering insert changes no bytes
+---     yet, but the user is poised to edit, so the region is no longer committed.
+function ChatWidget:_setup_queue()
+    local buf = self.buf_nrs.input
+
+    _send_widgets[buf] = self
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = buf,
+        once = true,
+        callback = function(ev)
+            _send_widgets[ev.buf] = nil
+        end,
+    })
+
+    vim.api.nvim_buf_attach(buf, false, {
+        on_bytes = function(_, _, _, start_row, _, _, old_end_row)
+            if self._draining then
+                return
+            end
+            -- textlock permits extmark get/del inside on_bytes (metadata, not
+            -- buffer content); do not mutate buffer text here.
+            self:_clear_queued_in_range(start_row, start_row + old_end_row)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("InsertEnter", {
+        buffer = buf,
+        callback = function()
+            local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+            self:_clear_queued_in_range(row, row)
+        end,
+    })
 end
 
 --- Apply the chat-buffer rendering setup (agentic treesitter parser + snacks

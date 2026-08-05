@@ -451,6 +451,9 @@ function M.offer_auto_continue(sm, reset_epoch)
             else
                 sm:_handle_input_submit("continue")
             end
+            -- The turn started above reaches its own Stop with the retry gate
+            -- cleared, where _drain_queue dispatches any tagged regions. Do NOT
+            -- drain here too — that would fire a second concurrent send_prompt.
         end)
     )
 end

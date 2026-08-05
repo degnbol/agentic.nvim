@@ -903,4 +903,174 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
     end)
+
+    describe("queue", function()
+        local ns = vim.api.nvim_create_namespace("agentic_queued_region")
+        local widget
+        local submit_spy
+
+        before_each(function()
+            vim.cmd("tabnew")
+            submit_spy = spy.new(function() end)
+            widget = ChatWidget:new(
+                vim.api.nvim_get_current_tabpage(),
+                submit_spy --[[@as function]]
+            )
+            widget:show()
+            vim.api.nvim_set_current_win(widget.win_nrs.input)
+            -- Default to generating so queue keymaps defer rather than send.
+            widget.on_query_generating = function()
+                return true
+            end
+        end)
+
+        after_each(function()
+            pcall(function()
+                widget:destroy()
+            end)
+            pcall(function()
+                vim.cmd("tabclose")
+            end)
+        end)
+
+        local function set_input(lines)
+            vim.api.nvim_buf_set_lines(widget.buf_nrs.input, 0, -1, false, lines)
+        end
+
+        local function input_lines()
+            return vim.api.nvim_buf_get_lines(widget.buf_nrs.input, 0, -1, false)
+        end
+
+        --- Tagged regions as `{ start_row, end_row }` pairs in buffer order.
+        local function tags()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                widget.buf_nrs.input,
+                ns,
+                0,
+                -1,
+                { details = true }
+            )
+            return vim.tbl_map(function(m)
+                return { m[2], m[4].end_row }
+            end, marks)
+        end
+
+        it("tags the cursor line while generating, does not send", function()
+            set_input({ "one", "two", "three" })
+            vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+            widget:_queue_line()
+
+            assert.same({ { 0, 0 } }, tags())
+            assert.spy(submit_spy).was.called(0)
+            assert.same({ "one", "two", "three" }, input_lines())
+        end)
+
+        it("sends immediately when idle (no turn to defer to)", function()
+            widget.on_query_generating = function()
+                return false
+            end
+            set_input({ "one", "two" })
+            vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+            widget:_queue_line()
+
+            assert.spy(submit_spy).was.called(1)
+            assert.equal("one", submit_spy.calls[1][1])
+            assert.equal(0, #tags())
+            assert.same({ "two" }, input_lines())
+        end)
+
+        it("re-queueing an overlapping range replaces, never stacks", function()
+            set_input({ "one", "two", "three", "four" })
+            widget:_queue_line_range(1, 1)
+            widget:_queue_line_range(0, 2)
+
+            assert.same({ { 0, 2 } }, tags())
+        end)
+
+        it("editing inside a region drops its tag", function()
+            set_input({ "one", "two", "three" })
+            widget:_queue_line_range(0, 1)
+            assert.equal(1, #tags())
+
+            vim.api.nvim_buf_set_text(widget.buf_nrs.input, 0, 3, 0, 3, { "X" })
+
+            assert.equal(0, #tags())
+        end)
+
+        it("editing outside a region leaves its tag", function()
+            set_input({ "one", "two", "three" })
+            widget:_queue_line_range(0, 0)
+
+            vim.api.nvim_buf_set_text(widget.buf_nrs.input, 2, 0, 2, 0, { "X" })
+
+            assert.equal(1, #tags())
+        end)
+
+        it("entering insert inside a region drops its tag", function()
+            set_input({ "one", "two", "three" })
+            widget:_queue_line_range(1, 1)
+            vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 2, 0 })
+
+            vim.api.nvim_exec_autocmds(
+                "InsertEnter",
+                { buffer = widget.buf_nrs.input }
+            )
+
+            assert.equal(0, #tags())
+        end)
+
+        it("cancel_queue clears every tag, leaving text in place", function()
+            set_input({ "one", "two", "three" })
+            widget:_queue_line_range(0, 0)
+            widget:_queue_line_range(2, 2)
+            assert.equal(2, #tags())
+
+            widget:cancel_queue()
+
+            assert.equal(0, #tags())
+            assert.same({ "one", "two", "three" }, input_lines())
+        end)
+
+        it("drain returns regions in buffer order and deletes them", function()
+            set_input({ "one", "two", "three" })
+            -- Queue bottom then top: buffer order must still be top-to-bottom.
+            widget:_queue_line_range(2, 2)
+            widget:_queue_line_range(0, 0)
+
+            local text = widget:drain_queued_regions()
+
+            assert.equal("one\n\nthree", text)
+            assert.equal(0, #tags())
+            assert.same({ "two" }, input_lines())
+        end)
+
+        it("drain returns nil when nothing is queued", function()
+            set_input({ "one" })
+            assert.is_nil(widget:drain_queued_regions())
+        end)
+
+        it("clamps a count past buffer end (no crash)", function()
+            set_input({ "one", "two" })
+            vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+            -- Drive via a real mapping so vim.v.count1 reflects the typed count.
+            vim.keymap.set("n", "<Plug>(agentic-test-queue)", function()
+                widget:_queue_line()
+            end, { buffer = widget.buf_nrs.input })
+            vim.api.nvim_feedkeys(
+                "9" .. vim.api.nvim_replace_termcodes(
+                    "<Plug>(agentic-test-queue)",
+                    true,
+                    true,
+                    true
+                ),
+                "x",
+                false
+            )
+
+            -- Clamped to the last line (row 1), not row 8.
+            assert.same({ { 0, 1 } }, tags())
+        end)
+    end)
 end)

@@ -437,6 +437,10 @@ does not disable it. >lua
     `<CR><CR>`         n       Stash-send: send N lines (count1), delete them
     `<CR>{motion}`     n       Stash-send: send motion range, delete
     `<CR>`             x       Stash-send: send visual selection, delete
+    `<S-CR><S-CR>`     n       Queue N lines (count1) for dispatch at turn end
+    `<S-CR>{motion}`   n       Queue the motion's line(s) for dispatch
+    `<S-CR>`           x       Queue the selected line(s) for dispatch
+    `<S-C-c>`          n       Drop every queued region (text stays as draft)
     `:w`               c       Submit whole buffer
     `:wq` / `:x`       c       Submit and emit a warning; `:wq!` / `:x!` submit and close
     `<localLeader>p`   n       Paste image
@@ -447,6 +451,20 @@ Partial-send deletes the sent text from the input buffer. Set
 `<CR>` as whole-buffer submit instead. Set `settings.send_register` to a
 register name (e.g. `"a"`) to copy the sent text into that register before
 deleting.
+
+While the agent is generating, the queue bindings tag the covered line(s) as
+a queued region, highlighted in place (`AgenticQueuedRegion`) and left
+editable, instead of sending now. Queued regions dispatch as one prompt at the
+next turn end, in buffer order (top to bottom). Editing a region — any change
+to it, or entering insert mode with the cursor inside it — drops it back to
+ordinary draft. When idle the queue bindings send immediately, exactly like
+the matching partial-send binding. Queueing is line-granular: a charwise
+motion queues its whole line(s). `:w` / `:wq` / `:x` always submit the whole
+buffer as one prompt now, dropping any queued tags.
+
+`<S-CR>` and `<S-C-c>` are only distinguishable from `<CR>` and `<C-c>` under
+the kitty keyboard protocol (kitty terminal with nvim 0.12); on other
+terminals these bindings do not fire.
 
 `settings.write_submit = false` disables `:w` / `:wq` / `:x` handling; the
 input buffer stays a plain `nofile` buffer.
@@ -610,6 +628,7 @@ All groups use `default = true` so user definitions take priority.
     `AgenticDimmedBlock`           (set in ftplugin)             Dimmed fence lines
     `AgenticUnapprovedCommand`     |DiagnosticVirtualTextWarn|   Non-known-safe parts of an execute permission prompt
     `AgenticTurnUsage`             |Comment|                      Per-turn token-usage footer
+    `AgenticQueuedRegion`          |DiffChange|                   Input region queued for dispatch
 
 `AgenticUnapprovedCommand` washes the leaves and structural parts of an
 `execute` permission prompt that are not known-safe (anything not matching a

@@ -256,6 +256,30 @@ local ConfigDefault = {
             --- Visual-mode binding. Sends the selection, then deletes it.
             send_visual = "<CR>",
 
+            --- Queue keymaps mirror the send keymaps but defer while the agent
+            --- is generating: instead of sending now, they tag the covered
+            --- line(s) as a queued region (highlighted in place, still
+            --- editable) that dispatches automatically at the next turn Stop.
+            --- When idle they behave exactly as the matching send keymap.
+            --- Queueing is line-granular — a charwise motion queues its full
+            --- line(s). `<S-CR>` / `<S-C-c>` are only distinguishable from
+            --- `<CR>` / `<C-c>` under the kitty keyboard protocol (kitty +
+            --- nvim 0.12); on other terminals these bindings won't fire.
+
+            --- Queue N lines (vim.v.count1) from the cursor.
+            queue_line = "<S-CR><S-CR>",
+
+            --- Operator (g@). `<S-CR>{motion}` queues the line(s) the motion
+            --- covers.
+            queue_operator = "<S-CR>",
+
+            --- Visual-mode binding. Queues the selected line(s).
+            queue_visual = "<S-CR>",
+
+            --- Drop every queued region in the input buffer, leaving the text
+            --- as ordinary draft in place.
+            cancel_queue = "<S-C-c>",
+
             paste_image = {
                 {
                     "<localLeader>p",

@@ -253,6 +253,10 @@ function SessionManager:new(tab_page_id)
         self:_refresh()
     end
 
+    self.widget.on_query_generating = function()
+        return self.is_generating
+    end
+
     self.widget.on_hide = function()
         if #self.chat_history.messages == 0 then
             -- Trivial session (no prompts sent) — destroy without a trace.
@@ -1578,11 +1582,28 @@ end
 --- Send any prompt that was queued before the ACP session was ready.
 function SessionManager:_flush_pending_input()
     local text = self._pending_input
-    if not text then
+    if text then
+        -- The flushed turn reaches its own Stop where _drain_queue dispatches
+        -- any tagged regions; draining here too would double-submit.
+        self._pending_input = nil
+        self:_handle_input_submit_inner(text)
+    else
+        self:_drain_queue()
+    end
+end
+
+--- Dispatch the input buffer's queued regions (see ChatWidget.drain_queued_regions)
+--- as a single new turn. Composes with the two string queues: while a usage-limit
+--- retry timer is armed the regions stay tagged and drain when that gate clears,
+--- not now. Called at each gate-clear site and at turn Stop.
+function SessionManager:_drain_queue()
+    if self._retry_timer then
         return
     end
-    self._pending_input = nil
-    self:_handle_input_submit_inner(text)
+    local text = self.widget:drain_queued_regions()
+    if text and text:match("%S") then
+        self:_handle_input_submit(text)
+    end
 end
 
 --- @param input_text string
@@ -1893,6 +1914,10 @@ function SessionManager:_handle_input_submit_inner(input_text)
                 end
             end)
         end
+
+        -- Dispatch any mid-turn queued regions now the turn is complete
+        -- (no-op while a usage-limit retry timer is armed — see _drain_queue).
+        self:_drain_queue()
     end)
 end
 

@@ -55,16 +55,17 @@ instead of sending and deleting the range now, it **tags the range with
 an extmark** and leaves the text in place. `<S-CR>` queues only; it is
 not a toggle.
 
-The tag is recorded as the actual range (for drain text and edit-overlap
-detection), but the **highlight is full window width** — a diff-style
-highlight, not a char-range highlight ending at the last character. Use
-a single extmark with `hl_group` + `end_row`/`end_col = -1` + `hl_eol =
-true` (`api.txt:3249`: continues the highlight past EOL for the rest of
-the screen line, "just like for diff and cursorline highlight"). One
-extmark covers the whole multi-line range full width — no per-line marks.
-Not `line_hl_group`, which only highlights the mark's start line and
-would need one mark per line. A sub-line char-wise send still highlights
-its full line(s).
+Queueing is **line-granular**: the region snaps to whole lines, so the
+extmark range *is* the drain range (no separate sub-line range to keep in
+sync with a full-line highlight). A single extmark with `hl_group` +
+`end_row` = last line + `end_col` = that line's length + `hl_eol = true`
+(`api.txt:3249`: continues the highlight past EOL for the rest of the
+screen line, "just like for diff and cursorline highlight"). One extmark
+covers the whole multi-line range full width — no per-line marks. Not
+`line_hl_group`, which only highlights the mark's start line and would
+need one mark per line. (`end_col = -1` is rejected — "out of range";
+use the last line's byte length.) A charwise motion queues its full
+line(s).
 
 Terminal caveat: `<S-CR>` (and any shifted control key) is only
 distinguishable from `<CR>` under the kitty keyboard protocol. Works on
@@ -80,8 +81,10 @@ Queued regions are extmark-tagged ranges in the input buffer. On Stop,
 
 1. Collects tagged regions **in buffer order** (top-to-bottom = priority),
 2. Concatenates their current text with `\n\n`,
-3. Funnels through `_handle_input_submit`,
-4. Clears the tags/highlights.
+3. Deletes the sent regions' text + tags from the input buffer
+   (bottom-to-top, mirroring partial-send — a dispatched region leaves the
+   buffer, otherwise the next `:w` would re-send it),
+4. Funnels through `_handle_input_submit`.
 
 Buffer order carries priority — no separate priority mechanism, no special
 `:w` mode.

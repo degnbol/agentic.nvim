@@ -32,6 +32,7 @@ Theme.HL_GROUPS = {
     PICKER_DELIM = "AgenticPickerDelim",
     UNAPPROVED_COMMAND = "AgenticUnapprovedCommand",
     TURN_USAGE = "AgenticTurnUsage",
+    QUEUED_REGION = "AgenticQueuedRegion",
 }
 
 local status_hl = {
@@ -95,6 +96,10 @@ function Theme.setup()
 
         -- Per-turn token-usage footer
         { Theme.HL_GROUPS.TURN_USAGE, { link = "Comment" } },
+
+        -- Input-buffer regions queued for dispatch at the next turn Stop.
+        -- Full-width (hl_eol) diff-style background, so DiffChange fits.
+        { Theme.HL_GROUPS.QUEUED_REGION, { link = "DiffChange" } },
     }
     -- stylua: ignore end
 

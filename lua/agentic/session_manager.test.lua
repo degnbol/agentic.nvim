@@ -1325,6 +1325,9 @@ describe("agentic.SessionManager", function()
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
                     set_chat_title = noop,
+                    drain_queued_regions = function()
+                        return nil
+                    end,
                 },
                 permission_manager = {
                     current_request = nil,
@@ -1338,6 +1341,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
+                _drain_queue = SessionManager._drain_queue,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -1435,6 +1439,9 @@ describe("agentic.SessionManager", function()
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
                     set_chat_title = noop,
+                    drain_queued_regions = function()
+                        return nil
+                    end,
                 },
                 permission_manager = { current_request = nil, queue = {} },
                 todo_list = { close_if_all_completed = noop },
@@ -1446,6 +1453,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
+                _drain_queue = SessionManager._drain_queue,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -2135,6 +2143,107 @@ describe("agentic.SessionManager", function()
             Config.auto_approve_trust_scope = false
             session:_apply_default_trust()
             assert.equal(0, pm.set_trust_scope.call_count)
+        end)
+    end)
+
+    describe("_drain_queue", function()
+        it("dispatches queued regions when no gate is active", function()
+            local submit_spy = spy.new(function() end)
+            local drained = false
+            local sm = {
+                _retry_timer = nil,
+                widget = {
+                    drain_queued_regions = function()
+                        drained = true
+                        return "queued text"
+                    end,
+                },
+                _handle_input_submit = submit_spy,
+            }
+            SessionManager._drain_queue(sm)
+            assert.is_true(drained)
+            assert.spy(submit_spy).was.called(1)
+            assert.equal("queued text", submit_spy.calls[1][2])
+        end)
+
+        it("leaves regions tagged while a retry timer is armed", function()
+            local drained = false
+            local submit_spy = spy.new(function() end)
+            local sm = {
+                _retry_timer = 123,
+                widget = {
+                    drain_queued_regions = function()
+                        drained = true
+                        return "x"
+                    end,
+                },
+                _handle_input_submit = submit_spy,
+            }
+            SessionManager._drain_queue(sm)
+            assert.is_false(drained)
+            assert.spy(submit_spy).was.called(0)
+        end)
+
+        it("does nothing when the queue is empty", function()
+            local submit_spy = spy.new(function() end)
+            local sm = {
+                _retry_timer = nil,
+                widget = {
+                    drain_queued_regions = function()
+                        return nil
+                    end,
+                },
+                _handle_input_submit = submit_spy,
+            }
+            SessionManager._drain_queue(sm)
+            assert.spy(submit_spy).was.called(0)
+        end)
+    end)
+
+    describe("_flush_pending_input", function()
+        -- Regression: flushing pending text must not ALSO drain the region
+        -- queue in the same tick — that fires a second concurrent send_prompt
+        -- (the flushed turn's own Stop drains the regions instead).
+        it("submits pending text without also draining", function()
+            local inner_spy = spy.new(function() end)
+            local drained = false
+            local sm = {
+                _pending_input = "hi",
+                _handle_input_submit_inner = inner_spy,
+                _drain_queue = SessionManager._drain_queue,
+                _retry_timer = nil,
+                widget = {
+                    drain_queued_regions = function()
+                        drained = true
+                        return "regions"
+                    end,
+                },
+                _handle_input_submit = function() end,
+            }
+            SessionManager._flush_pending_input(sm)
+            assert.spy(inner_spy).was.called(1)
+            assert.is_false(drained)
+        end)
+
+        it("drains queued regions when there is no pending text", function()
+            local drained = false
+            local sm = {
+                _pending_input = nil,
+                _handle_input_submit_inner = function()
+                    error("should not submit with no pending input")
+                end,
+                _drain_queue = SessionManager._drain_queue,
+                _retry_timer = nil,
+                widget = {
+                    drain_queued_regions = function()
+                        drained = true
+                        return nil
+                    end,
+                },
+                _handle_input_submit = function() end,
+            }
+            SessionManager._flush_pending_input(sm)
+            assert.is_true(drained)
         end)
     end)
 end)
