@@ -73,7 +73,8 @@ underlying read tool.
 ### 2. Shell command parsing (always on)
 
 Each `Bash`/`execute` command is parsed with the **zsh treesitter grammar**
-and every leaf classified independently, so pipelines, loops, conditionals,
+(commands execute in zsh — see the `claude` skill's `references/execute-tool.md`
+§ Shell) and every leaf classified independently, so pipelines, loops, conditionals,
 redirects, and env-prefixes are all checked structurally — catching evasions a
 whole-string glob cannot see. This runs unconditionally with no master switch:
 the parser only ever turns the provider's SDK `ask` escalations into approvals
