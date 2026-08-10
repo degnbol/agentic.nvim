@@ -552,8 +552,14 @@
 
   "kitty": {
     "read_only": [
-      { "positionals": ["@", "ls"] },
-      { "positionals": ["@", "get-text"] }
+      { "positionals": ["@", "get-colors"] },
+      { "positionals": ["@", "get-text"] },
+      { "positionals": ["@", "ls"] }
+    ],
+    "ask": [
+      { "positionals": ["@", "close-tab"] },
+      { "positionals": ["@", "close-window"] },
+      { "positionals": ["@", "launch"] }
     ]
   },
 
