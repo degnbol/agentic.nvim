@@ -74,6 +74,16 @@ Without it, register mappings yourself via `vim.treesitter.language.register`.
 
 If [`snacks.nvim`](https://github.com/folke/snacks.nvim)'s `image` module is installed and enabled, chat buffers attach to it automatically and LaTeX math (`$…$`, `$$…$$`) renders inline as images. Absent or disabled, it is a no-op. See snacks' `image` docs for its own requirements (graphics-capable terminal, ImageMagick, a LaTeX toolchain).
 
+### Subagent window prose (optional, claude-agent-acp)
+
+`claude-agent-acp` drops a subagent (Task) assistant message's text and thinking before sending it over ACP, so the subagents window shows only the subagent's tool calls. The bundled `scripts/patch-claude-agent-acp.sh` edits one line of the installed bridge's `dist/acp-agent.js` so that prose is forwarded and rendered in the window:
+
+```sh
+scripts/patch-claude-agent-acp.sh
+```
+
+It resolves the install from `claude-agent-acp` on `PATH`, is idempotent, and reports whether it patched or was already patched. Re-run it after each `claude-agent-acp` upgrade — an upgrade overwrites `dist/`. If upstream moves the target code it exits non-zero rather than silently leaving the install unpatched.
+
 ### OpenCode permission caveat
 
 OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve unless you opt in via its config. To route permission prompts through this plugin, set in `~/.config/opencode/opencode.json` (or `config.json`):
