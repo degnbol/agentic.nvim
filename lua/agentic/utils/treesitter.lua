@@ -1,7 +1,7 @@
 --- Treesitter helpers for reconstructing syntactic context.
 ---
---- `build_highlight_map` parses a snippet "as if" it were spliced into a
---- real file, so captures that depend on structural context (strings,
+--- `highlight_map_in_context` parses a snippet "as if" it were spliced into
+--- a real file, so captures that depend on structural context (strings,
 --- comments, docstrings, injections) come out right. The chat buffer's
 --- markdown treesitter injection only sees the isolated diff lines and
 --- can't know they live inside e.g. a Python triple-quoted string.
@@ -11,7 +11,7 @@ local M = {}
 
 local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 
---- Parse `new_lines` spliced into the buffer's full content, then extract
+--- Parse `new_lines` spliced into the surrounding file content, then extract
 --- highlight captures for just the new_lines rows. The result maps
 --- 0-indexed row-within-new_lines to a byte-col → capture-name map.
 ---
@@ -21,24 +21,24 @@ local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 --- structure (string opener/closer, injection root) and yield bare-code
 --- captures for content that's actually inside a docstring.
 ---
---- @param bufnr integer Source buffer containing the file
+--- @param file_lines string[] Content of the file the snippet lives in
 --- @param lang string Parser language
 --- @param splice_start integer 0-indexed row where new_lines replaces content (inclusive)
---- @param splice_end integer 0-indexed row (exclusive) — end of replaced range in bufnr
+--- @param splice_end integer 0-indexed row (exclusive) — end of replaced range
 --- @param new_lines string[] Lines to splice in and highlight
 --- @return table<integer, table<integer, string>>|nil highlight_map
-function M.build_highlight_map(bufnr, lang, splice_start, splice_end, new_lines)
-    local ok_parser = pcall(vim.treesitter.get_parser, bufnr, lang)
-    if not ok_parser then
-        return nil
-    end
+function M.highlight_map_in_context(
+    file_lines,
+    lang,
+    splice_start,
+    splice_end,
+    new_lines
+)
+    local s = math.max(0, math.min(splice_start, #file_lines))
+    local e = math.max(s, math.min(splice_end, #file_lines))
 
-    local line_count = vim.api.nvim_buf_line_count(bufnr)
-    local s = math.max(0, math.min(splice_start, line_count))
-    local e = math.max(s, math.min(splice_end, line_count))
-
-    local prefix = vim.api.nvim_buf_get_lines(bufnr, 0, s, false)
-    local suffix = vim.api.nvim_buf_get_lines(bufnr, e, -1, false)
+    local prefix = vim.list_slice(file_lines, 1, s)
+    local suffix = vim.list_slice(file_lines, e + 1)
 
     local reconstructed = {}
     vim.list_extend(reconstructed, prefix)

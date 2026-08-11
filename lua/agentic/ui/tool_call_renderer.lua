@@ -4,7 +4,6 @@ local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
 local ExecShell = require("agentic.utils.exec_shell")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
-local FileSystem = require("agentic.utils.file_system")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local Treesitter = require("agentic.utils.treesitter")
@@ -700,7 +699,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             table.insert(lines, fence)
         end
     elseif tool_call_block.diff then
-        local diff_blocks = ToolCallDiff.extract_diff_blocks({
+        local diff_blocks, source_lines = ToolCallDiff.extract_diff_blocks({
             path = argument,
             old_text = tool_call_block.diff.old,
             new_text = tool_call_block.diff.new,
@@ -715,13 +714,18 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             tool_call_block.cached_diff_blocks = diff_blocks
         end
 
-        -- `lang` (inferred from the path) is the fence label and the create-case
-        -- fallback for context-aware highlighting; it is NOT the injection
-        -- language (see the `-difffold` note below). Strip any path-induced
-        -- `-fold` suffix (a file named `foo.x-fold`) so the fence string can't
-        -- become a pathological `foo-fold-difffold`.
-        local lang = Theme.get_language_from_path(argument, tool_call_block.diff.new)
-            :gsub("%-fold$", "")
+        -- `lang` (inferred from the path) is the fence label and the language
+        -- for context-aware highlighting; it is NOT the injection language
+        -- (see the `-difffold` note below). Strip any path-induced `-fold`
+        -- suffix (a file named `foo.x-fold`) so the fence string can't become
+        -- a pathological `foo-fold-difffold`.
+        -- Contents inform the type only when the filename can't (extensionless
+        -- files like zsh `#compdef` completions); the file's own head beats
+        -- the diff's.
+        local lang = Theme.get_language_from_path(
+            argument,
+            #source_lines > 0 and source_lines or tool_call_block.diff.new
+        ):gsub("%-fold$", "")
 
         local fence_content = {}
         for _, block in ipairs(diff_blocks) do
@@ -754,51 +758,22 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             and #tool_call_block.diff.new > create_max
         fold_open = tool_call_block.status ~= "failed" and not collapse
 
-        -- Load the target file buffer to enable context-aware syntax
-        -- highlighting. The chat buffer's fence injection only sees the diff
-        -- lines in isolation, so structurally-dependent captures (strings,
-        -- comments, docstrings, language injections — including code fences
-        -- embedded in markdown) come out wrong. Reparsing the snippet inside
-        -- its surrounding ancestor in the real file reconstructs the correct
-        -- captures. Falls back silently when the file can't be loaded or no
-        -- parser is available.
-        local target_bufnr, target_lang
-        local abs_path = FileSystem.to_absolute_path(argument)
-        local max_lines = Config.tool_call_display
+        -- Context-aware syntax highlighting: the chat buffer's fence injection
+        -- only sees the diff lines in isolation, so structurally-dependent
+        -- captures (strings, comments, docstrings, language injections —
+        -- including code fences embedded in markdown) come out wrong.
+        -- Reparsing the snippet spliced back into the surrounding file
+        -- reconstructs the correct captures. Falls back silently when no
+        -- parser matches the path.
+        --
+        -- Reparse cost grows with the reconstructed file, so gate on its size.
+        local context_max = Config.tool_call_display
                 and Config.tool_call_display.diff_context_max_lines
             or 0
-        if max_lines > 0 and abs_path and abs_path ~= "" then
-            -- bufadd returns the existing buffer if one already has this
-            -- name, otherwise creates a new (unloaded) buffer.
-            local ok_add, b = pcall(vim.fn.bufadd, abs_path)
-            if ok_add and b and b ~= 0 and vim.api.nvim_buf_is_valid(b) then
-                if not vim.api.nvim_buf_is_loaded(b) then
-                    pcall(vim.fn.bufload, b)
-                end
-                if vim.api.nvim_buf_is_loaded(b) then
-                    -- Reparse cost grows with file length; skip the feature
-                    -- entirely above the configured threshold rather than
-                    -- block the render thread on huge files. A create's buffer
-                    -- is empty (not on disk yet) so its line count is 1 — gate
-                    -- on the diff line count instead.
-                    local lc = is_create and #tool_call_block.diff.new
-                        or vim.api.nvim_buf_line_count(b)
-                    if lc <= max_lines then
-                        local ok_p, parser = pcall(vim.treesitter.get_parser, b)
-                        if ok_p and parser then
-                            target_bufnr = b
-                            -- On-disk file: content detection already ran.
-                            target_lang = parser:lang()
-                        elseif lang ~= "" then
-                            target_bufnr = b
-                            -- Create: empty buffer has no filetype, so use the
-                            -- content-detected language.
-                            target_lang = lang
-                        end
-                    end
-                end
-            end
-        end
+        local context_lines = math.max(#source_lines, #tool_call_block.diff.new)
+        local use_context_highlights = context_max > 0
+            and context_lines <= context_max
+            and lang ~= ""
 
         --- Insert a diff line into `lines` and record its highlight range.
         --- @param content string
@@ -834,12 +809,17 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             and tool_call_block.diff.old
             and #tool_call_block.diff.old > 0
         then
-            table.insert(diff_blocks, {
+            --- @type agentic.ui.ToolCallDiff.DiffBlock
+            local unmatched_block = {
                 start_line = 1,
                 end_line = #tool_call_block.diff.old,
                 old_lines = tool_call_block.diff.old,
                 new_lines = tool_call_block.diff.new or {},
-            })
+                -- The old text was not found, so these coordinates index
+                -- nothing — splicing at them would fabricate context.
+                unmatched = true,
+            }
+            table.insert(diff_blocks, unmatched_block)
         end
 
         for _, block in ipairs(diff_blocks) do
@@ -853,21 +833,21 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             -- back at the matched location reconstructs the pre-edit file
             -- state; splicing new_lines gives the post-edit state.
             local old_map, new_map
-            if target_bufnr and target_lang then
+            if use_context_highlights and not block.unmatched then
                 local splice_start = math.max(0, block.start_line - 1)
                 local splice_end = block.end_line
                 if not is_new_file then
-                    old_map = Treesitter.build_highlight_map(
-                        target_bufnr,
-                        target_lang,
+                    old_map = Treesitter.highlight_map_in_context(
+                        source_lines,
+                        lang,
                         splice_start,
                         splice_end,
                         block.old_lines
                     )
                 end
-                new_map = Treesitter.build_highlight_map(
-                    target_bufnr,
-                    target_lang,
+                new_map = Treesitter.highlight_map_in_context(
+                    source_lines,
+                    lang,
                     splice_start,
                     splice_end,
                     block.new_lines

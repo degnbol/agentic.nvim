@@ -38,16 +38,11 @@ describe("ToolCallRenderer", function()
                     return
                 end
 
-                -- Real on-disk file required so bufadd+bufload can resolve
-                -- it and treesitter can parse the surrounding context.
-                local path = vim.fn.tempname() .. ".py"
                 local file_lines = {
                     'doc = """',
                     "placeholder",
                     '"""',
                 }
-                vim.fn.writefile(file_lines, path)
-
                 read_stub:invokes(function()
                     return file_lines, nil
                 end)
@@ -57,7 +52,7 @@ describe("ToolCallRenderer", function()
                     tool_call_id = "edit-string",
                     status = "pending",
                     kind = "edit",
-                    argument = path,
+                    argument = "/context.py",
                     diff = {
                         old = { "placeholder" },
                         new = { "for_helper = 1" },
@@ -84,12 +79,6 @@ describe("ToolCallRenderer", function()
                     end
                 end
                 assert.is_not_nil(found)
-
-                vim.fn.delete(path)
-                local b = vim.fn.bufnr(path)
-                if b ~= -1 then
-                    pcall(vim.api.nvim_buf_delete, b, { force = true })
-                end
             end
         )
 
@@ -98,13 +87,11 @@ describe("ToolCallRenderer", function()
                 return
             end
 
-            local path = vim.fn.tempname() .. ".py"
             local file_lines = {
                 'doc = """',
                 "placeholder",
                 '"""',
             }
-            vim.fn.writefile(file_lines, path)
             read_stub:invokes(function()
                 return file_lines, nil
             end)
@@ -114,7 +101,7 @@ describe("ToolCallRenderer", function()
                 tool_call_id = "edit-extmark",
                 status = "pending",
                 kind = "edit",
-                argument = path,
+                argument = "/context.py",
                 diff = {
                     old = { "placeholder" },
                     new = { "for_helper = 1" },
@@ -186,19 +173,11 @@ describe("ToolCallRenderer", function()
             assert.is_true(matched)
 
             pcall(vim.api.nvim_buf_delete, chat_buf, { force = true })
-            vim.fn.delete(path)
-            local b = vim.fn.bufnr(path)
-            if b ~= -1 then
-                pcall(vim.api.nvim_buf_delete, b, { force = true })
-            end
         end)
 
         it("falls back silently when no parser is available", function()
-            -- Use an extension neovim has no parser/filetype for so
-            -- get_parser returns nothing and target_lang stays nil.
-            local path = vim.fn.tempname() .. ".agentic_no_parser_xyz"
-            vim.fn.writefile({ "placeholder" }, path)
-
+            -- An extension neovim resolves no filetype for yields lang == "",
+            -- which leaves target_lang nil.
             read_stub:invokes(function()
                 return { "placeholder" }, nil
             end)
@@ -208,7 +187,7 @@ describe("ToolCallRenderer", function()
                 tool_call_id = "edit-no-parser",
                 status = "pending",
                 kind = "edit",
-                argument = path,
+                argument = "/plain.agentic_no_parser_xyz",
                 diff = {
                     old = { "placeholder" },
                     new = { "replacement" },
@@ -220,12 +199,97 @@ describe("ToolCallRenderer", function()
             for _, hr in ipairs(highlight_ranges) do
                 assert.is_nil(hr.block_col_hl)
             end
+        end)
 
-            vim.fn.delete(path)
-            local b = vim.fn.bufnr(path)
-            if b ~= -1 then
-                pcall(vim.api.nvim_buf_delete, b, { force = true })
+        it("skips context highlighting for a large Write", function()
+            if not has_parser("python") then
+                return
             end
+
+            -- Write sends no old_string, so diff.old is empty while the file
+            -- on disk is long: the reconstruction cost is the file's size.
+            local Config = require("agentic.config")
+            local file_lines = {}
+            for i = 1, Config.tool_call_display.diff_context_max_lines + 1 do
+                table.insert(file_lines, "x = " .. i)
+            end
+            read_stub:invokes(function()
+                return file_lines, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "write-large",
+                status = "pending",
+                kind = "write",
+                argument = "/large.py",
+                diff = { old = {}, new = { "y = 1" } },
+            }
+
+            local _, highlight_ranges = Renderer.prepare_block_lines(block, 0)
+
+            for _, hr in ipairs(highlight_ranges) do
+                assert.is_nil(hr.block_col_hl)
+            end
+        end)
+    end)
+
+    describe("buffer side effects", function()
+        --- @param block agentic.ui.MessageWriter.ToolCallBlock
+        --- @return integer count Buffers created by the render
+        local function buffers_created_by(block)
+            local before = #vim.api.nvim_list_bufs()
+            Renderer.prepare_block_lines(block, 80)
+            return #vim.api.nvim_list_bufs() - before
+        end
+
+        it("creates no buffer for an edit with a real path", function()
+            read_stub:invokes(function()
+                return { "placeholder" }, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "edit-real-path",
+                status = "in_progress",
+                kind = "edit",
+                argument = "/some_file.py",
+                diff = { old = { "placeholder" }, new = { "replacement" } },
+            }
+
+            assert.equal(0, buffers_created_by(block))
+        end)
+
+        it("creates no cwd buffer for an edit with an empty path", function()
+            -- Partial streaming Edit: the diff arrives before file_path, so
+            -- argument is "". A cwd-named buffer here hands a directory to
+            -- whatever plugin owns directory buffers.
+            read_stub:invokes(function()
+                return nil, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "edit-empty-path",
+                status = "in_progress",
+                kind = "edit",
+                argument = "",
+                diff = { old = { "before" }, new = { "after" } },
+            }
+
+            local lines = Renderer.prepare_block_lines(block, 80)
+            assert.equal(0, buffers_created_by(block))
+
+            local cwd = vim.fn.getcwd()
+            for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+                local name = vim.api.nvim_buf_get_name(bufnr)
+                assert.are_not.equal(cwd, name)
+                assert.are_not.equal(cwd .. "/", name)
+            end
+
+            -- The diff still renders, from the old/new arrays alone.
+            assert.is_true(vim.tbl_contains(lines, "before"))
+            assert.is_true(vim.tbl_contains(lines, "after"))
         end)
     end)
 

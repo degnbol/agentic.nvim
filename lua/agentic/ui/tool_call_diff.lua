@@ -3,6 +3,7 @@
 --- @field end_line integer
 --- @field old_lines string[]
 --- @field new_lines string[]
+--- @field unmatched? boolean Set when start_line/end_line index no real source
 
 --- @class agentic.ui.ToolCallDiff.ChangedPair
 --- @field old_idx integer|nil Original index in old_lines (nil if pure insertion)
@@ -42,23 +43,24 @@ end
 
 --- @param opts agentic.ui.ToolCallDiff.ExtractOpts
 --- @return agentic.ui.ToolCallDiff.DiffBlock[] diff_blocks
+--- @return string[] source_lines Content the blocks' line numbers index into
 function M.extract_diff_blocks(opts)
     --- @type agentic.ui.ToolCallDiff.DiffBlock[]
     local diff_blocks = {}
 
     if not opts.path or opts.path == "" or not opts.new_text then
-        return diff_blocks
+        return diff_blocks, {}
     end
 
     local old_lines = M.normalize_to_lines(opts.old_text)
     local new_lines = M.normalize_to_lines(opts.new_text)
 
     local abs_path = FileSystem.to_absolute_path(opts.path)
-    local file_lines = FileSystem.read_from_buffer_or_disk(abs_path) or {}
+    local source_lines = FileSystem.read_from_buffer_or_disk(abs_path) or {}
 
     -- When old_text is nil/empty but file exists, treat as full file replacement
-    if M.is_empty_lines(old_lines) and #file_lines > 0 then
-        old_lines = file_lines
+    if M.is_empty_lines(old_lines) and #source_lines > 0 then
+        old_lines = source_lines
     end
 
     if M.is_empty_lines(old_lines) then
@@ -68,7 +70,7 @@ function M.extract_diff_blocks(opts)
         end
     else
         local blocks =
-            M.match_or_substring_fallback(file_lines, old_lines, new_lines)
+            M.match_or_substring_fallback(source_lines, old_lines, new_lines)
 
         -- Buffer may lag disk (autoread). Retry once against fresh disk content.
         if not blocks then
@@ -79,6 +81,10 @@ function M.extract_diff_blocks(opts)
                     old_lines,
                     new_lines
                 )
+                -- The returned coordinates now index disk, not the buffer.
+                if blocks then
+                    source_lines = disk_lines
+                end
             end
         end
 
@@ -95,7 +101,7 @@ function M.extract_diff_blocks(opts)
         end
     end
 
-    return M.minimize_diff_blocks(diff_blocks)
+    return M.minimize_diff_blocks(diff_blocks), source_lines
 end
 
 --- Convert a hunk to a minimized diff block

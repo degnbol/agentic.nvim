@@ -1,21 +1,6 @@
 local Treesitter = require("agentic.utils.treesitter")
 local assert = require("tests.helpers.assert")
 
---- Create a scratch buffer with the given lines and filetype.
---- @param lines string[]
---- @param filetype string
---- @return integer bufnr
-local function make_buf(lines, filetype)
-    local bufnr = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-    vim.bo[bufnr].filetype = filetype
-    local ok, parser = pcall(vim.treesitter.get_parser, bufnr, filetype)
-    if ok and parser then
-        parser:parse(true)
-    end
-    return bufnr
-end
-
 --- Check whether a parser for `lang` is installed. Skips tests otherwise.
 --- @param lang string
 --- @return boolean
@@ -24,19 +9,16 @@ local function has_parser(lang)
 end
 
 describe("Treesitter", function()
-    describe("build_highlight_map", function()
+    describe("highlight_map_in_context", function()
         it("returns nil when no parser is installed", function()
-            local bufnr = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "hello" })
-            local map = Treesitter.build_highlight_map(
-                bufnr,
+            local map = Treesitter.highlight_map_in_context(
+                { "hello" },
                 "nonexistent_lang",
                 0,
                 1,
                 { "x" }
             )
             assert.is_nil(map)
-            vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
         it(
@@ -46,22 +28,20 @@ describe("Treesitter", function()
                     return
                 end
 
-                local src = {
+                local file_lines = {
                     "local M = {}",
                     "M.doc = [[",
                     "placeholder",
                     "]]",
                     "return M",
                 }
-                local bufnr = make_buf(src, "lua")
 
-                local new_lines = { "for_helper = 1" }
-                local map = Treesitter.build_highlight_map(
-                    bufnr,
+                local map = Treesitter.highlight_map_in_context(
+                    file_lines,
                     "lua",
                     2,
                     3,
-                    new_lines
+                    { "for_helper = 1" }
                 )
                 assert.is_not_nil(map)
                 --- @cast map -nil
@@ -74,8 +54,6 @@ describe("Treesitter", function()
                     cap:match("string") ~= nil,
                     "expected string capture, got " .. tostring(cap)
                 )
-
-                vim.api.nvim_buf_delete(bufnr, { force = true })
             end
         )
 
@@ -84,15 +62,13 @@ describe("Treesitter", function()
                 return
             end
 
-            local src = {
-                "local M = {}",
-                "return M",
-            }
-            local bufnr = make_buf(src, "lua")
-
-            local new_lines = { "local x = 1" }
-            local map =
-                Treesitter.build_highlight_map(bufnr, "lua", 1, 1, new_lines)
+            local map = Treesitter.highlight_map_in_context(
+                { "local M = {}", "return M" },
+                "lua",
+                1,
+                1,
+                { "local x = 1" }
+            )
             assert.is_not_nil(map)
             --- @cast map -nil
 
@@ -104,8 +80,6 @@ describe("Treesitter", function()
                 cap:match("keyword") ~= nil,
                 "expected keyword capture, got " .. tostring(cap)
             )
-
-            vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
         it(
@@ -115,24 +89,20 @@ describe("Treesitter", function()
                     return
                 end
 
-                local src = {
+                local file_lines = {
                     "def explain():",
                     '    """',
                     "    placeholder",
                     '    """',
                     "    return None",
                 }
-                local bufnr = make_buf(src, "python")
 
-                local new_lines = {
-                    "    for item in items: return item",
-                }
-                local map = Treesitter.build_highlight_map(
-                    bufnr,
+                local map = Treesitter.highlight_map_in_context(
+                    file_lines,
                     "python",
                     2,
                     3,
-                    new_lines
+                    { "    for item in items: return item" }
                 )
                 assert.is_not_nil(map)
                 --- @cast map -nil
@@ -149,8 +119,6 @@ describe("Treesitter", function()
                     cap:match("string") ~= nil or cap:match("spell") ~= nil,
                     "expected string/spell capture, got " .. tostring(cap)
                 )
-
-                vim.api.nvim_buf_delete(bufnr, { force = true })
             end
         )
     end)

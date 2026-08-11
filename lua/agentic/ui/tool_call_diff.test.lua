@@ -223,6 +223,57 @@ describe("tool_call_diff", function()
                 disk_stub:revert()
             end
         )
+
+        it("returns the buffer content the blocks index into", function()
+            local file_lines = { "alpha", "beta", "gamma" }
+            read_stub:returns(file_lines)
+
+            local blocks, source_lines = ToolCallDiff.extract_diff_blocks({
+                path = "/test.lua",
+                old_text = { "beta" },
+                new_text = { "delta" },
+            })
+
+            assert.equal(1, #blocks)
+            assert.same(file_lines, source_lines)
+            assert.same(
+                blocks[1].old_lines,
+                { source_lines[blocks[1].start_line] }
+            )
+        end)
+
+        it("returns the disk content when the disk retry matched", function()
+            -- Buffer lags disk: only the fresh disk content holds old_text.
+            read_stub:returns({ "stale" })
+            local disk_lines = { "alpha", "beta", "gamma" }
+            local disk_stub = spy.stub(FileSystem, "read_from_disk")
+            disk_stub:returns(disk_lines)
+
+            local blocks, source_lines = ToolCallDiff.extract_diff_blocks({
+                path = "/test.lua",
+                old_text = { "beta" },
+                new_text = { "delta" },
+            })
+
+            assert.equal(1, #blocks)
+            assert.same(disk_lines, source_lines)
+            assert.equal(2, blocks[1].start_line)
+            assert.equal("beta", source_lines[blocks[1].start_line])
+
+            disk_stub:revert()
+        end)
+
+        it("returns empty source lines for a created file", function()
+            read_stub:returns(nil)
+
+            local _, source_lines = ToolCallDiff.extract_diff_blocks({
+                path = "/new_file.lua",
+                old_text = nil,
+                new_text = { "line1" },
+            })
+
+            assert.same({}, source_lines)
+        end)
     end)
 
     describe("filter_unchanged_lines", function()
