@@ -177,7 +177,7 @@ describe("ToolCallRenderer", function()
 
         it("falls back silently when no parser is available", function()
             -- An extension neovim resolves no filetype for yields lang == "",
-            -- which leaves target_lang nil.
+            -- so use_context_highlights stays false.
             read_stub:invokes(function()
                 return { "placeholder" }, nil
             end)
@@ -235,12 +235,17 @@ describe("ToolCallRenderer", function()
     end)
 
     describe("buffer side effects", function()
+        --- Render `block`, reporting how many buffers the render added and the
+        --- lines it produced. Measures a single render: `bufadd` is idempotent
+        --- by name, so a second render of the same path reports a delta of 0
+        --- even when the first one created a buffer.
         --- @param block agentic.ui.MessageWriter.ToolCallBlock
-        --- @return integer count Buffers created by the render
-        local function buffers_created_by(block)
+        --- @return integer n_created
+        --- @return string[] lines
+        local function render_counting_buffers(block)
             local before = #vim.api.nvim_list_bufs()
-            Renderer.prepare_block_lines(block, 80)
-            return #vim.api.nvim_list_bufs() - before
+            local lines = Renderer.prepare_block_lines(block, 80)
+            return #vim.api.nvim_list_bufs() - before, lines
         end
 
         it("creates no buffer for an edit with a real path", function()
@@ -257,13 +262,18 @@ describe("ToolCallRenderer", function()
                 diff = { old = { "placeholder" }, new = { "replacement" } },
             }
 
-            assert.equal(0, buffers_created_by(block))
+            assert.equal(0, (render_counting_buffers(block)))
         end)
 
         it("creates no cwd buffer for an edit with an empty path", function()
             -- Partial streaming Edit: the diff arrives before file_path, so
             -- argument is "". A cwd-named buffer here hands a directory to
             -- whatever plugin owns directory buffers.
+            --
+            -- to_absolute_path must run unstubbed: fnamemodify("", ":p")
+            -- returning the cwd is the mechanism under test, and the identity
+            -- stub from before_each would hide it.
+            path_stub:revert()
             read_stub:invokes(function()
                 return nil, nil
             end)
@@ -277,8 +287,8 @@ describe("ToolCallRenderer", function()
                 diff = { old = { "before" }, new = { "after" } },
             }
 
-            local lines = Renderer.prepare_block_lines(block, 80)
-            assert.equal(0, buffers_created_by(block))
+            local n_created, lines = render_counting_buffers(block)
+            assert.equal(0, n_created)
 
             local cwd = vim.fn.getcwd()
             for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do

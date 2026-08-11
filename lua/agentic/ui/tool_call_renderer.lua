@@ -748,8 +748,12 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         fold_anchor = #lines
         -- A created file's diff is the whole file, so collapse large ones
         -- closed; an edit shows only fragments and is never auto-collapsed.
-        local is_create = not tool_call_block.diff.old
-            or #tool_call_block.diff.old == 0
+        -- Both clauses are load-bearing: Write sends no old_string even when
+        -- overwriting an existing file (empty diff.old alone would collapse
+        -- a fragment diff), and an unresolved path yields no source content
+        -- even though old_string does anchor a fragment.
+        local is_create = #source_lines == 0
+            and (not tool_call_block.diff.old or #tool_call_block.diff.old == 0)
         local create_max = Config.tool_call_display
                 and Config.tool_call_display.create_max_lines
             or 0
@@ -767,12 +771,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- parser matches the path.
         --
         -- Reparse cost grows with the reconstructed file, so gate on its size.
+        -- This bounds one parse, not the render: the map is rebuilt per block
+        -- per side, so a multi-block diff still costs 2 × #diff_blocks
+        -- reconstructions of a file up to the threshold.
         local context_max = Config.tool_call_display
                 and Config.tool_call_display.diff_context_max_lines
             or 0
-        local context_lines = math.max(#source_lines, #tool_call_block.diff.new)
+        local n_context_lines =
+            math.max(#source_lines, #tool_call_block.diff.new)
         local use_context_highlights = context_max > 0
-            and context_lines <= context_max
+            and n_context_lines <= context_max
             and lang ~= ""
 
         --- Insert a diff line into `lines` and record its highlight range.

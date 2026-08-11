@@ -59,7 +59,7 @@ close. The info-string after the fence is set per kind:
 | Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | claude-agent-acp pre-wraps in its own console fence; `prepare_block_lines` unwraps an already-fenced execute body before re-wrapping |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent body | `markdown-fold` (multi-line) or `markdown` | Always folded + dimmed (sidecar) when multi-line; dim via `set_dim_range` (`AgenticDimmedBlock`) |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** at render (`fold_open` return): open normally, closed when the edit failed (e.g. rejected permission). The explicit open is required — a fold created after a closed one inherits the closed state under `foldmethod=expr`, so relying on the foldlevel default would leave applied edits collapsed after any earlier close (see `MessageWriter:_open_fold`). No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is only the fence label and the create-case highlighting fallback |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** at render (`fold_open` return): open normally, closed when the edit failed (e.g. rejected permission). The explicit open is required — a fold created after a closed one inherits the closed state under `foldmethod=expr`, so relying on the foldlevel default would leave applied edits collapsed after any earlier close (see `MessageWriter:_open_fold`). No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
@@ -71,7 +71,8 @@ highlights) but **excludes `difffold$` from injection entirely** — injecting t
 diff's base language ships its `folds.scm`, whose per-structure folds would
 shatter the diff into one fold per function/block. With no injection the diff
 folds as one block; its syntax colour comes from `block_col_hl` extmarks
-(`build_highlight_map`), which already override the injection at priority 200.
+(`highlight_map_in_context`), which already override the injection at
+priority 200.
 
 **Downstream fence consumers must handle variable width.** Match `^\`+$`
 (any backtick-only line) instead of literal triple-backticks, and
