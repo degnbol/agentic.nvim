@@ -121,6 +121,11 @@ function ACPClient:new(config, on_ready)
                 writeTextFile = false,
             },
             terminal = false,
+            -- Opt into claude-agent-acp forwarding subagent (Task) assistant
+            -- text/thinking as parentToolUseId-tagged notifications (bridge
+            -- filters them out for clients that don't advertise this). Routed
+            -- to the subagents window in SessionManager:_on_session_update.
+            _meta = { ["subagent-transcript"] = true },
         },
         callbacks = {},
         transport = nil,
@@ -1096,6 +1101,7 @@ return ACPClient
 --- @class agentic.acp.ClientCapabilities
 --- @field fs agentic.acp.FileSystemCapability
 --- @field terminal boolean
+--- @field _meta? { ["subagent-transcript"]?: boolean }
 
 --- @class agentic.acp.InitializeParams
 --- @field protocolVersion number
