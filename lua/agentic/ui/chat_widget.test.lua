@@ -559,7 +559,7 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
-    describe(":wq and :x safeguard", function()
+    describe(":wq / :x and :q behaviour", function()
         local widget
         local submit_spy
         local hide_spy
@@ -587,7 +587,23 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
 
-        it(":Wq submits but does not hide", function()
+        --- Type an ex-command through the interactive cmdline so the
+        --- CmdlineLeave quit-guard fires (`vim.cmd` bypasses it).
+        --- @param cmd string
+        local function feed_cmdline(cmd)
+            vim.api.nvim_feedkeys(
+                vim.api.nvim_replace_termcodes(
+                    ":" .. cmd .. "<CR>",
+                    true,
+                    false,
+                    true
+                ),
+                "x",
+                false
+            )
+        end
+
+        it(":Wq submits and closes only the input window", function()
             vim.api.nvim_buf_set_lines(
                 widget.buf_nrs.input,
                 0,
@@ -595,14 +611,19 @@ describe("agentic.ui.ChatWidget", function()
                 false,
                 { "hello" }
             )
-            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+            local chat_win = widget.win_nrs.chat
+            local input_win = widget.win_nrs.input
+            vim.api.nvim_set_current_win(input_win)
             vim.cmd("Wq")
 
             assert.spy(submit_spy).was.called(1)
             assert.spy(hide_spy).was.called(0)
+            assert.is_false(vim.api.nvim_win_is_valid(input_win))
+            assert.is_nil(widget.win_nrs.input)
+            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
         end)
 
-        it(":Wq! submits and hides", function()
+        it(":Wq! submits and hides the whole widget", function()
             vim.api.nvim_buf_set_lines(
                 widget.buf_nrs.input,
                 0,
@@ -610,28 +631,110 @@ describe("agentic.ui.ChatWidget", function()
                 false,
                 { "hello" }
             )
-            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+            vim.api.nvim_set_current_win(widget.win_nrs.input)
             vim.cmd("Wq!")
 
             assert.spy(submit_spy).was.called(1)
             assert.is_true(hide_spy.call_count >= 1)
         end)
 
-        it(":X submits but does not hide", function()
-            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+        it(":X submits and closes only the input window", function()
+            local chat_win = widget.win_nrs.chat
+            local input_win = widget.win_nrs.input
+            vim.api.nvim_set_current_win(input_win)
             vim.cmd("X")
 
             assert.spy(submit_spy).was.called(1)
             assert.spy(hide_spy).was.called(0)
+            assert.is_false(vim.api.nvim_win_is_valid(input_win))
+            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
         end)
 
-        it(":X! submits and hides", function()
-            vim.api.nvim_set_current_buf(widget.buf_nrs.input)
+        it(":X! submits and hides the whole widget", function()
+            vim.api.nvim_set_current_win(widget.win_nrs.input)
             vim.cmd("X!")
 
             assert.spy(submit_spy).was.called(1)
             assert.is_true(hide_spy.call_count >= 1)
         end)
+
+        it(":q on an empty input closes only the input window", function()
+            local chat_win = widget.win_nrs.chat
+            local input_win = widget.win_nrs.input
+            vim.api.nvim_set_current_win(input_win)
+
+            feed_cmdline("q")
+            vim.wait(200, function()
+                return not vim.api.nvim_win_is_valid(input_win)
+            end)
+
+            assert.is_false(vim.api.nvim_win_is_valid(input_win))
+            assert.is_nil(widget.win_nrs.input)
+            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
+        end)
+
+        it(":q abandoned with <C-c> closes nothing", function()
+            local input_win = widget.win_nrs.input
+            vim.api.nvim_set_current_win(input_win)
+
+            -- <C-c> abandons the cmdline: CmdlineLeave fires with
+            -- v:event.abort = true and no quit runs, so the guard must leave
+            -- the (empty) input window open.
+            vim.api.nvim_feedkeys(
+                vim.api.nvim_replace_termcodes(":q<C-c>", true, false, true),
+                "nx",
+                false
+            )
+            vim.wait(50)
+
+            assert.is_true(vim.api.nvim_win_is_valid(input_win))
+            assert.is_not_nil(widget.win_nrs.input)
+        end)
+
+        it(":q on a non-empty input warns and closes nothing", function()
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                { "draft" }
+            )
+            local chat_win = widget.win_nrs.chat
+            local input_win = widget.win_nrs.input
+            vim.api.nvim_set_current_win(input_win)
+
+            feed_cmdline("q")
+
+            assert.is_true(vim.api.nvim_win_is_valid(input_win))
+            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
+        end)
+
+        it(":q in the chat warns and closes nothing", function()
+            local chat_win = widget.win_nrs.chat
+            local input_win = widget.win_nrs.input
+            vim.api.nvim_set_current_win(chat_win)
+
+            feed_cmdline("q")
+
+            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
+            assert.is_true(vim.api.nvim_win_is_valid(input_win))
+            assert.spy(hide_spy).was.called(0)
+        end)
+
+        it(
+            "an insert key in the chat reopens a closed input window",
+            function()
+                widget:close_input_window()
+                assert.is_nil(widget.win_nrs.input)
+
+                vim.api.nvim_set_current_win(widget.win_nrs.chat)
+                widget:focus_input_for_insert()
+
+                assert.is_true(
+                    vim.api.nvim_win_is_valid(widget.win_nrs.input)
+                )
+            end
+        )
     end)
 
     describe("prompt navigation", function()

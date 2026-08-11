@@ -77,6 +77,94 @@ function ChatWidget._queue_operator_dispatch(type)
     end
 end
 
+--- Whether the global `:q` guard has been installed. The guard is registered
+--- once for the whole plugin, not per-widget.
+local _quit_guard_installed = false
+
+--- Install a global `:q` (no-bang) guard for Agentic chat/input buffers so a
+--- reflex `:q` never tears down a live widget the way a stray window-close
+--- would:
+---   • chat buffer  → refuse; the widget closes via its close keymap or `:q!`.
+---   • input buffer → close only the input window when empty, else refuse with
+---     an unwritten-buffer-style warning (the draft is unsent).
+---
+--- `CmdlineLeave` + `v:event.abort` is the documented veto point for an
+--- ex-command; a buffer-local user command / abbreviation can't intercept the
+--- built-in `:q`. CmdlineLeave is not a buffer event and the handler is pure
+--- filetype/emptiness logic with no per-tabpage state, so a single global
+--- autocmd is correct here (see multi-tabpage rules).
+function ChatWidget._install_quit_guard()
+    if _quit_guard_installed then
+        return
+    end
+    _quit_guard_installed = true
+
+    vim.api.nvim_create_autocmd("CmdlineLeave", {
+        callback = function()
+            -- CmdlineLeave also fires when the cmdline is abandoned
+            -- (`<Esc>`/`<C-c>`); `v:event.abort` is true then and no command
+            -- runs, so the guard must do nothing (else `:q<Esc>` would still
+            -- close the window). `abort` only flips false→true, so the veto
+            -- below is unaffected.
+            if vim.v.event.cmdtype ~= ":" or vim.v.event.abort then
+                return
+            end
+
+            -- Resolve the buffer first and bail unless it is one this guard
+            -- acts on, so the per-command `nvim_parse_cmd` runs only for `:`
+            -- commands typed in the chat or input — not every `:` command in
+            -- the editor. The other Agentic buffers (subagent split, the
+            -- todos/code/files/diagnostics panels) get native `:q`, which
+            -- closes just that window (they have no teardown autocmd).
+            local buf = vim.api.nvim_get_current_buf()
+            local ft = vim.bo[buf].filetype
+            local is_chat = ft == "AgenticChat"
+                and vim.b[buf].agentic_window == "chat"
+            local is_input = ft == "AgenticInput"
+            if not is_chat and not is_input then
+                return
+            end
+
+            local ok, parsed =
+                pcall(vim.api.nvim_parse_cmd, vim.fn.getcmdline(), {})
+            -- Only plain `:q` / `:quit`; `:q!` (bang) and `:qa`/`:qall`
+            -- (cmd "qall") are intentional and pass through unguarded.
+            if not ok or parsed.cmd ~= "quit" or parsed.bang then
+                return
+            end
+
+            if is_chat then
+                vim.cmd.let("v:event.abort = v:true")
+                Logger.notify(
+                    "Use :q! or the close keymap to close Agentic",
+                    vim.log.levels.WARN
+                )
+            else
+                local widget = _send_widgets[buf]
+                if not widget then
+                    -- No widget to act on; let native `:q` close the window
+                    -- (its BufWinLeave just drops the stale handle).
+                    return
+                end
+                vim.cmd.let("v:event.abort = v:true")
+                if BufHelpers.is_buffer_empty(buf) then
+                    vim.schedule(function()
+                        widget:close_input_window()
+                    end)
+                else
+                    local discard = Config.settings.write_submit
+                            and ":w to send, :q! to discard"
+                        or ":q! to discard"
+                    Logger.notify(
+                        "No write since last change (" .. discard .. ")",
+                        vim.log.levels.WARN
+                    )
+                end
+            end
+        end,
+    })
+end
+
 --- @param tab_page_id integer
 --- @param on_submit_input fun(prompt: string)
 function ChatWidget:new(tab_page_id, on_submit_input)
@@ -714,6 +802,34 @@ function ChatWidget:move_cursor_to(winid, callback)
     end)
 end
 
+--- Close the input window without tearing down the widget, moving focus to the
+--- chat window so the cursor stays inside Agentic. The input buffer's
+--- BufWinLeave nulls `win_nrs.input`.
+function ChatWidget:close_input_window()
+    local input_win = self.win_nrs.input
+    if not input_win or not vim.api.nvim_win_is_valid(input_win) then
+        return
+    end
+    local chat_win = self.win_nrs.chat
+    if chat_win and vim.api.nvim_win_is_valid(chat_win) then
+        vim.api.nvim_set_current_win(chat_win)
+    end
+    pcall(vim.api.nvim_win_close, input_win, true)
+end
+
+--- Focus the input window for insert, reopening it first if it was closed.
+--- Bound to the insert keys (i, a, o, …) in the chat and panel buffers.
+function ChatWidget:focus_input_for_insert()
+    local input_win = self.win_nrs.input
+    if not input_win or not vim.api.nvim_win_is_valid(input_win) then
+        self:show({ focus_prompt = false })
+    end
+    self:move_cursor_to(
+        self.win_nrs.input,
+        BufHelpers.start_insert_on_last_char
+    )
+end
+
 function ChatWidget:_initialize()
     self.buf_nrs = self:_create_buf_nrs()
 
@@ -722,18 +838,27 @@ function ChatWidget:_initialize()
     self:_setup_prompt_navigation()
     self:_setup_queue()
 
-    -- I only want to trigger a full close of the chat widget when closing the chat or the input buffers, the others are auxiliary
-    for _, bufnr in ipairs({
-        self.buf_nrs.chat,
-        self.buf_nrs.input,
-    }) do
-        vim.api.nvim_create_autocmd("BufWinLeave", {
-            buffer = bufnr,
-            callback = function()
-                self:hide()
-            end,
-        })
-    end
+    ChatWidget._install_quit_guard()
+
+    -- Closing the chat window tears down the whole widget (the auxiliary
+    -- panels have no meaning without it).
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+        buffer = self.buf_nrs.chat,
+        callback = function()
+            self:hide()
+        end,
+    })
+
+    -- The input window is a satellite that can be closed and reopened
+    -- independently (`:q`, `:wq`, or an insert key from the chat reopens it),
+    -- so closing it only drops the stale window handle — it never hides the
+    -- widget.
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+        buffer = self.buf_nrs.input,
+        callback = function()
+            self.win_nrs.input = nil
+        end,
+    })
 
     -- Clear unread badge when the user reaches the bottom of the chat.
     -- If the chat window is focused, "at bottom" means cursor on the
@@ -792,11 +917,10 @@ function ChatWidget:_setup_write_submit()
         end,
     })
 
-    -- Safeguard against muscle-memory `:wq` / `:x` — these would otherwise
-    -- submit the prompt (via our BufWriteCmd) and then close the widget
-    -- window, which is rarely the intent during an active session. Here we
-    -- submit as usual but refuse to close. The `!` form (`:wq!` / `:x!`)
-    -- is an explicit opt-in to close.
+    -- `:wq` / `:x` submit the prompt (via our BufWriteCmd) and then close only
+    -- the input window, leaving the chat and the session intact — the input is
+    -- a satellite window (reopened by an insert key from the chat). The `!`
+    -- form (`:wq!` / `:x!`) is an explicit opt-in to close the whole widget.
     -- User commands require uppercase, so lowercase forms are mapped via
     -- buffer-local `cnoreabbrev`.
     for _, pair in ipairs({ { "Wq", "wq" }, { "X", "x" } }) do
@@ -805,10 +929,7 @@ function ChatWidget:_setup_write_submit()
             if opts.bang then
                 self:hide()
             else
-                Logger.notify(
-                    "Use :" .. pair[2] .. "! to close the session",
-                    vim.log.levels.WARN
-                )
+                self:close_input_window()
             end
         end, { bang = true })
         vim.api.nvim_buf_call(input_buf, function()
@@ -1080,10 +1201,7 @@ function ChatWidget:_bind_keymaps()
                 "X",
             }) do
                 BufHelpers.keymap_set(bufnr, "n", key, function()
-                    self:move_cursor_to(
-                        self.win_nrs.input,
-                        BufHelpers.start_insert_on_last_char
-                    )
+                    self:focus_input_for_insert()
                 end)
             end
 

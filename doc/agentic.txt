@@ -442,7 +442,8 @@ does not disable it. >lua
     `<S-CR>`           x       Queue the selected line(s) for dispatch
     `<S-C-c>`          n       Drop every queued region (text stays as draft)
     `:w`               c       Submit whole buffer
-    `:wq` / `:x`       c       Submit and emit a warning; `:wq!` / `:x!` submit and close
+    `:wq` / `:x`       c       Submit, then close the input window; `:wq!` / `:x!` close the widget
+    `:q`               c       Close the input window if empty, else warn (unsent draft)
     `<localLeader>p`   n       Paste image
     `<C-v>`            i       Paste image
 
@@ -475,6 +476,11 @@ input buffer stays a plain `nofile` buffer.
     Key    Mode    Description ~
     `[[`     n       Previous user prompt
     `]]`     n       Next user prompt
+    `:q`     c       Warns and closes nothing (`:q!` closes the chat window)
+
+An insert key (`i`, `a`, `o`, `c`, `x`, …) in the chat or a panel moves the
+cursor to the input window and starts insert there, reopening the input window
+first if it was closed.
 
 ------------------------------------------------------------------------------
 6.4 DIFF KEYMAPS                                   *agentic-keymaps-diff*
