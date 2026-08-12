@@ -223,7 +223,7 @@ local ConfigDefault = {
             restore_session = "<localLeader>R",
             refresh = "",
             toggle_auto_scroll = "<localLeader>a",
-            goto_chat_bottom = "<localLeader>G",
+            goto_bottom = "<localLeader>G",
             switch_provider = "<localLeader>s",
             switch_model = "<localLeader>M",
         },

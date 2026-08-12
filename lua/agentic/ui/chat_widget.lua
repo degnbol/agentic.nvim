@@ -1032,6 +1032,21 @@ function ChatWidget:_setup_prompt_navigation()
     end
 end
 
+--- Jump the chat and subagents windows to their last line without moving focus.
+--- The resulting WinScrolled lets each buffer's MessageWriter resume
+--- auto-scroll.
+--- @private
+function ChatWidget:_goto_transcripts_bottom()
+    for _, panel in ipairs({ "chat", "subagent" }) do
+        local winid = self.win_nrs[panel]
+        if winid and vim.api.nvim_win_is_valid(winid) then
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("normal! G")
+            end)
+        end
+    end
+end
+
 function ChatWidget:_bind_keymaps()
     if not BufHelpers.is_keymap_disabled(Config.keymaps.prompt.submit) then
         BufHelpers.multi_keymap_set(
@@ -1171,17 +1186,12 @@ function ChatWidget:_bind_keymaps()
         )
 
         BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.goto_chat_bottom,
+            Config.keymaps.widget.goto_bottom,
             bufnr,
             function()
-                local chat_win = self.win_nrs.chat
-                if chat_win and vim.api.nvim_win_is_valid(chat_win) then
-                    vim.api.nvim_win_call(chat_win, function()
-                        vim.cmd("normal! G")
-                    end)
-                end
+                self:_goto_transcripts_bottom()
             end,
-            { desc = "Agentic: Scroll chat to bottom" }
+            { desc = "Agentic: Scroll transcripts to bottom" }
         )
     end
 

@@ -419,7 +419,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>q`   n       Close widget
     `<localLeader>!`   n       Restart session
     `<localLeader>a`   n       Toggle auto-scroll
-    `<localLeader>G`   n       Scroll chat to bottom (keeps current window focused)
+    `<localLeader>G`   n       Scroll chat and subagents to bottom (keeps focus)
 
 `<localLeader>c` is a canned-prompt binding: it sends the fixed text
 "Continue" to the session. These live in `keymaps.prompts`, a key-to-text
