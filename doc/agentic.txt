@@ -268,7 +268,7 @@ override what you need.
     Show the claude.ai subscription rate-limit budget in the chat header:
     the binding window ("5h" five-hour or "wk" weekly), the time until it
     resets, and the utilisation percentage when available. A warning
-    triangle marks a pace that would hit the limit before the reset; a
+    triangle marks a pace that would hit the limit before the reset. A
     cross marks rejected requests. Only shown under claude.ai
     subscription auth.
 
@@ -443,7 +443,7 @@ does not disable it. >lua
     `<S-CR>`           x       Queue the selected line(s) for dispatch
     `<S-C-c>`          n       Drop every queued region (text stays as draft)
     `:w`               c       Submit whole buffer
-    `:wq` / `:x`       c       Submit, then close the input window; `:wq!` / `:x!` close the widget
+    `:wq` / `:x`       c       Submit, then close the input window (`:wq!` / `:x!` close the widget)
     `:q`               c       Close the input window if empty, else warn (unsent draft)
     `<localLeader>p`   n       Paste image
     `<C-v>`            i       Paste image
@@ -465,11 +465,11 @@ motion queues its whole line(s). `:w` / `:wq` / `:x` always submit the whole
 buffer as one prompt now, dropping any queued tags.
 
 `<S-CR>` and `<S-C-c>` are only distinguishable from `<CR>` and `<C-c>` under
-the kitty keyboard protocol (kitty terminal with nvim 0.12); on other
+the kitty keyboard protocol (kitty terminal with nvim 0.12). On other
 terminals these bindings do not fire.
 
-`settings.write_submit = false` disables `:w` / `:wq` / `:x` handling; the
-input buffer stays a plain `nofile` buffer.
+`settings.write_submit = false` disables `:w` / `:wq` / `:x` handling, leaving
+the input buffer as a plain `nofile` buffer.
 
 ------------------------------------------------------------------------------
 6.3 CHAT KEYMAPS                                   *agentic-keymaps-chat*
@@ -553,7 +553,7 @@ permission request arrives:
    binary-dir prefix, then check it against two complementary layers:
    - a glob layer reading Claude's `Bash(...)` patterns from
      `~/.claude/settings.json`, `.claude/settings.json`, and the
-     `Config.permissions.{read_only,safe_write,deny,ask}` lists;
+     `Config.permissions.{read_only,safe_write,deny,ask}` lists.
    - a structured layer reading the plugin's bundled `permissions.json`
      plus `Config.permissions.structured`. It matches on tokenised flag
      identifiers, so option clustering (`sort -uo out`), GNU abbreviation
@@ -564,9 +564,9 @@ permission request arrives:
    structured_deny OR glob_ask OR structured_ask)`.
 
 Deny/ask always take precedence over allow (same as upstream), and differ in
-outcome: a `deny` match rejects the command immediately (no prompt; it never
-runs), while `ask` only withholds approval so the command prompts. Which allow
-rules count depends on `Config.permissions.auto_approve`: "allow" admits
+outcome: a `deny` match rejects the command immediately (no prompt, no
+execution), while `ask` only withholds approval so the command prompts. Which
+allow rules count depends on `Config.permissions.auto_approve`: "allow" admits
 read-only + safe-write rules, "read-only" admits read-only only, nil admits
 none. Compiled patterns and the bundled file are cached with mtime-based
 invalidation.
@@ -642,7 +642,7 @@ All groups use `default = true` so user definitions take priority.
 `read_only`/`safe_write` rule, or matching a `deny`/`ask` rule, plus
 substitutions and unsafe redirects) while the prompt is shown. It is gated by
 `permissions.highlight_unapproved` (default true). |DiagnosticVirtualTextWarn|
-is fg+bg in some colorschemes and fg-only in others; on a bare theme set an
+is fg+bg in some colorschemes and fg-only in others. On a bare theme set an
 explicit `bg` for the wash to be visible.
 
 ==============================================================================
@@ -715,7 +715,7 @@ Permissions ~
   reliably persist them. The plugin caches per-session.
 - Permission keys `1`-`5` with escalating severity. `4` rejects all
   currently-queued prompts for the turn without creating a persistent
-  rule; `5` installs a reject-always rule. See
+  rule. `5` installs a reject-always rule. See
   |agentic-keymaps-permission|.
 
 Session & workflow ~
@@ -745,8 +745,8 @@ gap-fills, not additions over the TUI:
   is a no-op, so the plugin starts a fresh ACP session instead (aliased
   to `/new`).
 - `/new` — start a fresh session.
-- `/rename <name>` — rename the session. The TUI has this natively; the
-  ACP bridge does not expose it. The plugin stores the name in session
+- `/rename <name>` — rename the session. The TUI has this natively, but
+  the ACP bridge does not expose it. The plugin stores the name in session
   history and in the header state.
 - `/context` — compact token-usage readout built from
   `session/update` `usage_update` notifications. A strict subset of
@@ -758,7 +758,7 @@ gap-fills, not additions over the TUI:
 
 Claude TUI commands advertised by claude-agent-acp via
 `available_commands_update` and not intercepted by the plugin. Type them
-in the input buffer; they appear in slash-command completion.
+in the input buffer. They appear in slash-command completion.
 
 - `/init` — generate a project `CLAUDE.md`.
 - `/review` — pull-request review.
