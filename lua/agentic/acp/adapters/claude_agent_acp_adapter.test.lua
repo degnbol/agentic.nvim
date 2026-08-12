@@ -109,20 +109,23 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         )
     end)
 
-    describe("subagent edit diff on the initial tool_call", function()
-        -- Subagent (Task) tool calls carry kind + rawInput on the INITIAL
-        -- tool_call (nothing streams an empty one first), so the diff must be
-        -- built there — not only on tool_call_update as for top-level edits.
-        it("builds the diff from rawInput on the tool_call path", function()
+    describe("edit diff", function()
+        -- Subagent (Task) tool calls carry kind + rawInput + content on the
+        -- INITIAL tool_call (nothing streams an empty one first), so the diff
+        -- must be built there — not only on tool_call_update as for top-level
+        -- edits.
+        it("builds the diff from content on the tool_call path", function()
             local msg = make_adapter():__build_tool_call_message({
                 toolCallId = "tc-edit",
                 kind = "edit",
                 status = "pending",
                 title = "Edit /tmp/f.lua",
+                -- Deliberately disagrees with `content` so the assertions
+                -- below can only pass if the diff came from `content`.
                 rawInput = {
                     file_path = "/tmp/f.lua",
-                    old_string = "old line",
-                    new_string = "new line",
+                    old_string = "stale old",
+                    new_string = "stale new",
                 },
                 content = {
                     {
@@ -135,6 +138,100 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             })
 
             assert.same({ "new line" }, msg.diff.new)
+            assert.same({ "old line" }, msg.diff.old)
+        end)
+
+        it("carries replace_all from rawInput onto the diff", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-edit",
+                kind = "edit",
+                rawInput = {
+                    file_path = "/tmp/f.lua",
+                    old_string = "old line",
+                    new_string = "new line",
+                    replace_all = true,
+                },
+                content = {
+                    {
+                        type = "diff",
+                        path = "/tmp/f.lua",
+                        oldText = "old line",
+                        newText = "new line",
+                    },
+                },
+            })
+
+            assert.is_true(msg.diff.all)
+        end)
+
+        -- The bridge streams tool input field-by-field and omits `content`
+        -- until the input is complete. A diff built from a half-arrived
+        -- rawInput renders as a whole-file deletion and MessageWriter freezes
+        -- it, so these updates must produce no diff at all.
+        it("builds no diff while the input is still streaming", function()
+            local adapter = make_adapter()
+
+            local path_only = adapter:__build_tool_call_update({
+                toolCallId = "tc-edit",
+                kind = "edit",
+                rawInput = { file_path = "/tmp/f.lua" },
+            })
+            assert.is_nil(path_only.diff)
+            assert.equal("/tmp/f.lua", path_only.argument)
+
+            local missing_new = adapter:__build_tool_call_update({
+                toolCallId = "tc-edit",
+                kind = "edit",
+                rawInput = {
+                    file_path = "/tmp/f.lua",
+                    old_string = "old line",
+                },
+            })
+            assert.is_nil(missing_new.diff)
+        end)
+
+        -- A Write over an existing file sends oldText = null; the renderer
+        -- resolves the old side from the file itself.
+        it("keeps an absent oldText as an empty old side", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-write",
+                kind = "edit",
+                rawInput = { file_path = "/tmp/f.lua", content = "stale" },
+                content = {
+                    {
+                        type = "diff",
+                        path = "/tmp/f.lua",
+                        oldText = vim.NIL,
+                        newText = "whole file",
+                    },
+                },
+            })
+
+            assert.same({ "whole file" }, msg.diff.new)
+            assert.same({}, msg.diff.old)
+        end)
+
+        -- A status-text entry can precede the diff (opencode on write/edit
+        -- completion), so the scan must not stop at content[1].
+        it("finds a diff that is not at content[1]", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-edit",
+                kind = "edit",
+                rawInput = { file_path = "/tmp/f.lua" },
+                content = {
+                    {
+                        type = "content",
+                        content = { type = "text", text = "Wrote file" },
+                    },
+                    {
+                        type = "diff",
+                        path = "/tmp/f.lua",
+                        oldText = "old line",
+                        newText = "new line",
+                    },
+                },
+            })
+
             assert.same({ "old line" }, msg.diff.old)
         end)
     end)

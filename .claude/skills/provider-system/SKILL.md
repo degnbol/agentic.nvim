@@ -116,7 +116,8 @@ tracked after terminal status.
 Subagent (Task) calls carry `rawInput` on the initial `tool_call`; top-level
 calls carry it on the refining `tool_call_update`. The claude adapter enriches
 both build paths (`__apply_raw_input`) — else subagent edits render without a
-diff.
+path or body. The edit diff is the one field not taken from `rawInput`; see
+"Edit diffs come from `content[]`".
 
 ## Key design rules for adapters
 
@@ -494,24 +495,27 @@ bridge's structured `err.data.errorKind` (claude-agent-acp), authoritative
 over the message-text heuristics (embedded JSON, usage-limit regex) which
 remain as the display source and the fallback class for bridges lacking it.
 
-### opencode Edit diff not at content[1]
+### Edit diffs come from `content[]`, not `rawInput`
 
-Opencode follows the standard ACP diff layout (`content[]` array with
-`{type="diff", path, oldText, newText}`), but on write/edit completion the
-array contains the status-text entry **first** and the diff **second**:
+Edit diffs travel in the standard ACP `content[]` array as
+`{type="diff", path, oldText, newText}` (`oldText` is null for a Write).
+`ACPClient:find_content_diff` scans for that entry — opencode puts a
+status-text entry first on write/edit completion, so `content[1]` is not
+reliable and `extract_content_body`, which only inspects `content[1]`, is
+not a substitute.
 
-```lua
-content = {
-    { type = "content", content = { type = "text", text = "Wrote file successfully." } },
-    { type = "diff",    path = "...", oldText = "", newText = "..." },
-}
-```
+**For claude-agent-acp, never rebuild the diff from `rawInput`.** That
+bridge streams tool input field-by-field and omits `content` from the
+partial updates on purpose — a diff built from half-arrived input renders
+as a whole-file deletion, and diffs are frozen after first render (see
+"Key design rules for adapters"), so the partial one is what sticks.
+`replace_all` is the only diff field still read from `rawInput`; the
+content entry holds one old/new pair however many sites it applies to.
 
-The base class's `extract_content_body` only inspects `content[1]`, so
-adapters that reuse the default need to scan the array themselves for the
-diff entry. The opencode adapter does this in `__handle_tool_call_update`
-and suppresses the status-text body when a diff is rendered, matching
-claude-agent-acp's Edit block shape.
-
-Codex/gemini/mistral adapters happen to work with `content[1]` because
-those providers place the diff there. Don't assume any particular index.
+The claude and opencode adapters use the helper. Codex/gemini/mistral
+still index `content[1]` directly; codex and gemini also skip the
+`entry.type` check, so a status-text entry at that index would give them
+an empty diff, which renders as a whole-file deletion. Unverified —
+neither bridge is known to put anything else first. Auggie builds the
+diff from `rawInput`, which is safe there because that bridge sends
+complete input.

@@ -560,6 +560,21 @@ function ACPClient:extract_content_body(update)
     return nil
 end
 
+--- Find the diff entry in a tool call's standard ACP `content` array.
+--- Scans rather than reading `content[1]`: opencode precedes the diff with a
+--- status-text entry on write/edit completion.
+--- @param update agentic.acp.ToolCallMessage|agentic.acp.ToolCallUpdate
+--- @return agentic.acp.ToolCallDiffContent|nil content
+function ACPClient:find_content_diff(update)
+    for _, entry in ipairs(update.content or {}) do
+        if entry.type == "diff" then
+            return entry --[[@as agentic.acp.ToolCallDiffContent]]
+        end
+    end
+
+    return nil
+end
+
 --- Extract plain text from a tool_call_update's rawOutput field.
 --- claude-agent-acp sets `rawOutput = chunk.content`, which per the Anthropic
 --- API is a string or an array of content blocks (`{type="text", text=...}`).
@@ -1230,7 +1245,7 @@ return ACPClient
 --- @class agentic.acp.ToolCallDiffContent
 --- @field type "diff"
 --- @field path string
---- @field oldText string
+--- @field oldText string|vim.NIL Null for a Write, which sends no old side
 --- @field newText string
 
 --- @alias agentic.acp.ACPToolCallContent

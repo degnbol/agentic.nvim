@@ -31,9 +31,11 @@ local function split(s)
 end
 
 --- Reconstruct the edit diff `decide`'s trust path needs from the hook's raw
---- tool_input (the SDK sends no ACP diff to a hook). Mirrors the claude
---- adapter's `edit`-kind branch: `Edit` carries old_string/new_string, `Write`
---- carries content with no old_string (pure-addition path).
+--- tool_input (the SDK sends no ACP diff to a hook). `Edit` carries
+--- old_string/new_string, `Write` carries content with no old_string
+--- (pure-addition path). Input is complete here — unlike the streamed
+--- rawInput the chat renderer must not build a diff from, see
+--- `ClaudeAgentACPAdapter:__apply_edit_diff`.
 --- @param tool_input table
 --- @return { old: string[], new: string[], all: boolean }
 local function build_edit_diff(tool_input)

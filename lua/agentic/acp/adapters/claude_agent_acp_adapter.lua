@@ -93,6 +93,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update)
     local had_raw_input = update.rawInput
         and not vim.tbl_isempty(update.rawInput)
     self:__apply_raw_input(message, update)
+    self:__apply_edit_diff(message, update)
     -- Top-level execute tool_calls arrive with empty rawInput (input streams
     -- separately), so __apply_raw_input's execute branch is skipped — lift the
     -- description echo out of the body here. Subagent execute carries rawInput
@@ -120,15 +121,17 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
     end
 
     self:__apply_raw_input(message, update)
+    self:__apply_edit_diff(message, update)
 
     return message
 end
 
 --- Enrich a tool-call message from claude-agent-acp's rawInput fields (file
---- path, edit diff, read range, fetch/subagent/skill/slash-command remaps,
---- search pattern, execute description). Shared by the initial `tool_call` and
+--- path, read range, fetch/subagent/skill/slash-command remaps, search
+--- pattern, execute description). Shared by the initial `tool_call` and
 --- follow-up `tool_call_update` paths — see `__build_tool_call_message` for
---- why the tool_call path needs it too.
+--- why the tool_call path needs it too. The edit diff is deliberately not
+--- built here; see `__apply_edit_diff`.
 --- @protected
 --- @param message agentic.ui.MessageWriter.ToolCallBase
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
@@ -164,17 +167,6 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
                     }
                 end
             end
-        end
-
-        if kind == "edit" then
-            local new_string = rawInput.content or rawInput.new_string
-            local old_string = rawInput.old_string
-
-            message.diff = {
-                new = self:safe_split(new_string),
-                old = self:safe_split(old_string),
-                all = rawInput.replace_all or false,
-            }
         end
     elseif kind == "fetch" then
         self:__resolve_fetch_fields(message, rawInput)
@@ -230,6 +222,37 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
             lift_execute_description(message, rawInput)
         end
     end
+end
+
+--- Build the edit diff from the standard ACP `content` diff entry.
+---
+--- Not from `rawInput`, even though every other field here comes from there.
+--- claude-agent-acp streams tool input field-by-field and withholds `content`
+--- from those partial updates on purpose: a diff built from partial input is
+--- misleading (an Edit whose `new_string` has not arrived yet renders as a
+--- pure deletion) or invalid (a Write without `content` has no `newText`).
+--- The consolidated message carries the complete input and the diff together
+--- moments later. Deriving the diff from `rawInput` bypasses that guard, and
+--- MessageWriter freezes the first diff it renders, so the partial one is what
+--- sticks — see acp-agent.js `streamedInputRefinement`.
+---
+--- `replace_all` still comes from `rawInput`: the content entry holds a single
+--- old/new pair regardless of how many sites it applies to, and the renderer
+--- needs the flag to match them all.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+function ClaudeAgentACPAdapter:__apply_edit_diff(message, update)
+    local diff_content = self:find_content_diff(update)
+    if not diff_content then
+        return
+    end
+
+    message.diff = {
+        new = self:safe_split(diff_content.newText),
+        old = self:safe_split(diff_content.oldText),
+        all = (update.rawInput and update.rawInput.replace_all) or false,
+    }
 end
 
 --- Claude-agent-acp sends tool call updates without status, so we need to overload to handle it
