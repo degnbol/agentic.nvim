@@ -74,6 +74,7 @@
   "break":     { "read_only": [{}] },
   "continue":  { "read_only": [{}] },
   "return":    { "read_only": [{}] },
+  "exit":      { "read_only": [{}] },
   "shift":     { "read_only": [{}] },
   "read":      { "read_only": [{}] },
 
