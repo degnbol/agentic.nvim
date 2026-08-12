@@ -101,6 +101,48 @@ describe("agentic.ui.MessageWriter", function()
         }
     end
 
+    describe("_get_wrap_width", function()
+        local original_windows
+
+        before_each(function()
+            original_windows = vim.deepcopy(Config.windows)
+            Config.windows.min_wrap_width = 40
+            Config.windows.max_wrap_width = 80
+            vim.wo[winid].wrap = false
+        end)
+
+        after_each(function()
+            Config.windows = original_windows
+        end)
+
+        it("returns the window text width when between the bounds", function()
+            vim.api.nvim_win_set_width(winid, 62)
+            assert.equal(writer:_get_wrap_width(), 60)
+        end)
+
+        it("clamps down to max_wrap_width", function()
+            Config.windows.max_wrap_width = 50
+            vim.api.nvim_win_set_width(winid, 62)
+            assert.equal(writer:_get_wrap_width(), 50)
+        end)
+
+        it("clamps up to min_wrap_width", function()
+            vim.api.nvim_win_set_width(winid, 20)
+            assert.equal(writer:_get_wrap_width(), 40)
+        end)
+
+        it("does not widen past a max_wrap_width below the floor", function()
+            Config.windows.max_wrap_width = 30
+            vim.api.nvim_win_set_width(winid, 20)
+            assert.equal(writer:_get_wrap_width(), 30)
+        end)
+
+        it("returns 0 when the window soft-wraps", function()
+            vim.wo[winid].wrap = true
+            assert.equal(writer:_get_wrap_width(), 0)
+        end)
+    end)
+
     describe("emit_divider", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)

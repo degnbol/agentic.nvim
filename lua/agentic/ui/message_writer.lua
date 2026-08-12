@@ -283,7 +283,11 @@ end
 
 --- Returns the text area width of the chat window (excluding sign column), or 80.
 --- The chat window always has signcolumn=yes:1 (2 columns).
---- Capped by `Config.windows.max_wrap_width` when set.
+--- Clamped to `Config.windows.{min,max}_wrap_width` (either 0 disables that
+--- bound). The floor wins against a narrow *window* — prose keeps wrapping at
+--- `min_wrap_width` and is clipped at the window edge (the chat window is
+--- `nowrap`) rather than being shredded into two-word lines — but never against
+--- a configured `max_wrap_width`, which stays an absolute ceiling.
 --- Returns 0 when the chat window has soft wrap enabled (no hard wrapping needed).
 --- @return integer
 function MessageWriter:_get_wrap_width()
@@ -291,17 +295,22 @@ function MessageWriter:_get_wrap_width()
     if winid ~= -1 and vim.wo[winid].wrap then
         return 0
     end
-    local win_width
+    local width
     if winid ~= -1 then
-        win_width = vim.api.nvim_win_get_width(winid) - 2
+        width = vim.api.nvim_win_get_width(winid) - 2
     else
-        win_width = 80
+        width = 80
     end
     local max = Config.windows.max_wrap_width
-    if max and max > 0 then
-        return math.min(win_width, max)
+    local min = Config.windows.min_wrap_width
+    if max > 0 then
+        width = math.min(width, max)
+        min = math.min(min, max)
     end
-    return win_width
+    if min > 0 then
+        width = math.max(width, min)
+    end
+    return width
 end
 
 --- Writes a full message to the chat buffer and append two blank lines after.

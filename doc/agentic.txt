@@ -144,6 +144,13 @@ override what you need.
     `height`            string or number (default: `"20%"`)
     `stack_width_ratio` number (default: 0.4)
     `max_wrap_width`    integer (default: 80)
+    `min_wrap_width`    integer (default: 40)
+
+    Chat prose is hard-wrapped to the chat window width, clamped between
+    `min_wrap_width` and `max_wrap_width`; set either to 0 to drop that
+    bound. `max_wrap_width` is an absolute ceiling: it also caps the
+    floor. In a window narrower than the floor, wrapped lines run past
+    the window edge.
 
     Sub-tables for individual panels:
       `chat`          `{ win_opts = {} }`

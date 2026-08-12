@@ -117,9 +117,10 @@ end
 --- heading. An empty `name` yields a glyph-only heading (`### <glyph>`) — used
 --- before the argument has streamed in, and for execute calls with no model
 --- description (the command already shows in the fence below). When `truncate`
---- is set, `name` is clamped to a single screen line: `wrap_width` (or 80 when
---- soft-wrapping) minus the `` ### <glyph> `` prefix and one cell for the
---- ellipsis.
+--- is set, `name` is clamped to `wrap_width` (or 80 when soft-wrapping) minus
+--- the `` ### <glyph> `` prefix and one cell for the ellipsis. That is a single
+--- screen line only while `wrap_width` fits the window — `min_wrap_width` can
+--- hold it above the width of a narrow chat window.
 --- @param kind string
 --- @param name string
 --- @param wrap_width integer
