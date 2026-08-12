@@ -68,6 +68,8 @@ local KNOWN_ACP_KINDS = {
 --- @field client_info agentic.acp.ClientInfo
 --- @field capabilities agentic.acp.ClientCapabilities
 --- @field agent_capabilities? agentic.acp.AgentCapabilities
+--- @field agent_info? agentic.acp.AgentInfo
+--- @field auth_methods? agentic.acp.AuthMethod[]
 --- @field callbacks table<number, fun(result: table|nil, err: agentic.acp.ACPError|nil)>
 --- @field transport? agentic.acp.ACPTransportInstance
 --- @field subscribers table<string, agentic.acp.ClientHandlers>
@@ -881,9 +883,8 @@ function ACPClient:_connect()
             return
         end
 
-        self.protocol_version = result.protocolVersion
-        self.agent_capabilities = result.agentCapabilities
-        self.auth_methods = result.authMethods or {}
+        --- @cast result agentic.acp.InitializeResponse
+        self:_apply_initialize_result(result)
 
         -- Check if we need to authenticate
         local auth_method = self.provider_config.auth_method
@@ -899,6 +900,21 @@ function ACPClient:_connect()
             self._on_ready(self)
         end
     end)
+end
+
+--- Record what the agent reported about itself in the initialize response.
+---
+--- `agent_info.version` is the provider binary's own version (for
+--- claude-agent-acp, its package version). It is persisted with the session
+--- so a rendering or protocol regression can be dated to a provider version.
+---
+--- @protected
+--- @param result agentic.acp.InitializeResponse
+function ACPClient:_apply_initialize_result(result)
+    self.protocol_version = result.protocolVersion
+    self.agent_capabilities = result.agentCapabilities
+    self.agent_info = result.agentInfo
+    self.auth_methods = result.authMethods or {}
 end
 
 --- TODO: Authentication is NOT implemented properly yet by the ACP providers, revisit this later
@@ -1107,6 +1123,17 @@ return ACPClient
 --- @field protocolVersion number
 --- @field clientInfo agentic.acp.ClientInfo
 --- @field clientCapabilities agentic.acp.ClientCapabilities
+
+--- @class agentic.acp.AgentInfo
+--- @field name string
+--- @field title? string
+--- @field version string
+
+--- @class agentic.acp.InitializeResponse
+--- @field protocolVersion number
+--- @field agentCapabilities? agentic.acp.AgentCapabilities
+--- @field agentInfo? agentic.acp.AgentInfo
+--- @field authMethods? agentic.acp.AuthMethod[]
 
 --- @class agentic.acp.FileSystemCapability
 --- @field readTextFile boolean

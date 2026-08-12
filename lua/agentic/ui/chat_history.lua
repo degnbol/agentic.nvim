@@ -36,6 +36,7 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field prompt_count? integer Number of user prompts in the session
 --- @field provider? agentic.UserConfig.ProviderName config key, absent on pre-2026-04-23 sessions
 --- @field model? string model id used at last save
+--- @field provider_version? string provider binary version as reported in its ACP initialize response
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
@@ -47,6 +48,7 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field title string
 --- @field provider? agentic.UserConfig.ProviderName config key
 --- @field model? string model id
+--- @field provider_version? string provider binary version
 local ChatHistory = {}
 ChatHistory.__index = ChatHistory
 
@@ -60,6 +62,7 @@ function ChatHistory:new()
         title = "",
         provider = nil,
         model = nil,
+        provider_version = nil,
     }
 
     setmetatable(instance, self)
@@ -193,6 +196,7 @@ function ChatHistory:save(callback)
         last_activity = os.time(),
         cwd = vim.uv.cwd(),
         provider = self.provider,
+        provider_version = self.provider_version,
         model = self.model,
         messages = self.messages,
     }
@@ -246,6 +250,7 @@ function ChatHistory.load(session_id, callback, file_path)
         instance.messages = parsed.messages
         instance.title = parsed.title
         instance.provider = parsed.provider
+        instance.provider_version = parsed.provider_version
         instance.model = parsed.model
 
         vim.schedule(function()

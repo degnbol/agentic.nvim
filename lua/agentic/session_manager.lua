@@ -159,13 +159,20 @@ function SessionManager._generate_welcome_header(_, session_id)
     return string.format("# %s · %s", ts, short_id)
 end
 
---- Refresh chat_history.provider / model from current state so the next save
---- records which provider and model produced the conversation.
+--- Refresh chat_history.provider / provider_version / model from current state
+--- so the next save records which provider, provider version and model produced
+--- the conversation.
 function SessionManager:_sync_history_context()
     if not self.chat_history then
         return
     end
     self.chat_history.provider = Config.provider
+    -- Guarded: a provider that reports no agentInfo, or whose initialize is
+    -- still in flight, must not erase the version a restored session recorded.
+    local agent_info = self.agent and self.agent.agent_info
+    if agent_info then
+        self.chat_history.provider_version = agent_info.version
+    end
     local opts = self.config_options
     if opts then
         self.chat_history.model = (opts.model and opts.model.currentValue)

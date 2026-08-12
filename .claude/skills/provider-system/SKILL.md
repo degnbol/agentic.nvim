@@ -24,7 +24,12 @@ The full list of supported providers and their CLI requirements lives in
 `Config.acp_providers` (`lua/agentic/config_default.lua`) — `Config.provider`
 selects one of those keys. Per-provider quirks (message shape, missing fields,
 non-standard `kind` values, etc.) are absorbed by an adapter in
-`lua/agentic/acp/adapters/`. End-user install instructions are in the README.
+`lua/agentic/acp/adapters/`. Install instructions live in `doc/agentic.txt`
+§ Requirements, whose pinned `claude-agent-acp` version is the single record of
+which bridge the plugin is developed against — bump it on `dev` when updating
+the bridge, and let the merge to `main` mark that the pin survived real use.
+Sessions record the version the bridge actually reported (`provider_version`),
+so a regression can be dated.
 
 ## Event pipeline (top to bottom)
 

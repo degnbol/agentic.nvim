@@ -50,14 +50,10 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 ## Requirements
 
-- Neovim v0.12.0+
-- ACP provider(s)
-  - Claude: [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp). install via e.g.
-    - `npm install -g @agentclientprotocol/claude-agent-acp` or
-    - `pnpm add -g @agentclientprotocol/claude-agent-acp` or
-    - [download](https://github.com/agentclientprotocol/claude-agent-acp/releases)
-  - opencode
-  - ...
+- A recent Neovim and an ACP provider binary on PATH — [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
+  (Claude, default), opencode, gemini, codex and others. For the Neovim version,
+  the supported providers and the pinned install command, see
+  `:help agentic-requirements`.
 
 ### Treesitter parsers
 

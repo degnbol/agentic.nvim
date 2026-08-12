@@ -2246,4 +2246,33 @@ describe("agentic.SessionManager", function()
             assert.is_true(drained)
         end)
     end)
+
+    describe("_sync_history_context", function()
+        --- @param agent_info? agentic.acp.AgentInfo
+        --- @param recorded_version? string
+        --- @return agentic.SessionManager
+        local function make_session(agent_info, recorded_version)
+            return {
+                chat_history = { provider_version = recorded_version },
+                agent = { agent_info = agent_info },
+                _sync_history_context = SessionManager._sync_history_context,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("records the version the agent reported", function()
+            local session = make_session({ name = "acp", version = "0.66.0" })
+
+            session:_sync_history_context()
+
+            assert.equal("0.66.0", session.chat_history.provider_version)
+        end)
+
+        it("keeps a restored version when the agent reports none", function()
+            local session = make_session(nil, "0.65.0")
+
+            session:_sync_history_context()
+
+            assert.equal("0.65.0", session.chat_history.provider_version)
+        end)
+    end)
 end)

@@ -252,6 +252,8 @@ describe("ChatHistory", function()
         it("persists and restores ChatHistory instance", function()
             local original = ChatHistory:new()
             original.session_id = "roundtrip-test"
+            original.provider = "claude-agent-acp"
+            original.provider_version = "0.66.0"
             original:add_message({
                 type = "user",
                 text = "Test message",
@@ -282,6 +284,8 @@ describe("ChatHistory", function()
             assert.equal(original.session_id, parsed.session_id)
             assert.equal("Test message", parsed.title)
             assert.is_not_nil(parsed.timestamp)
+            assert.equal("claude-agent-acp", parsed.provider)
+            assert.equal("0.66.0", parsed.provider_version)
 
             local loaded = nil
             local load_err = nil
@@ -301,6 +305,7 @@ describe("ChatHistory", function()
             --- @cast loaded agentic.ui.ChatHistory
             assert.equal(original.session_id, loaded.session_id)
             assert.equal(original.timestamp, loaded.timestamp)
+            assert.equal(original.provider_version, loaded.provider_version)
             assert.equal(1, #loaded.messages)
             assert.equal("Test message", loaded.messages[1].text)
         end)

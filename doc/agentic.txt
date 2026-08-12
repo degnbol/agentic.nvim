@@ -55,7 +55,7 @@ gap-fills, behaviour differences, and TUI features not available here.
 ==============================================================================
 2. REQUIREMENTS                                         *agentic-requirements*
 
-- Neovim >= 0.11.0
+- Neovim >= 0.12.0
 - An ACP provider binary on PATH. Supported providers:
 
   `claude-agent-acp`    Claude (default)
@@ -68,9 +68,10 @@ gap-fills, behaviour differences, and TUI features not available here.
 
 Install claude-agent-acp:
 >
-    pnpm add -g @agentclientprotocol/claude-agent-acp
+    pnpm add -g @agentclientprotocol/claude-agent-acp@0.66.0
 <
-Or download a binary from the releases page.
+Or download a binary from the releases page. That version is the one the
+plugin is developed against, not a hard floor.
 
 TREESITTER PARSERS                              *agentic-requirements-parsers*
 
@@ -212,7 +213,7 @@ override what you need.
         Additional safe-write glob patterns.
     `deny`                  string list (default: {})
         Deny `Bash(...)` glob patterns. Take precedence over all other
-        fields and reject the command immediately (no prompt; it never runs).
+        fields and reject the command immediately (no prompt, it never runs).
     `ask`                   string list (default: {})
         Ask patterns. Withhold approval and prompt (override allow, lower
         precedence than deny).

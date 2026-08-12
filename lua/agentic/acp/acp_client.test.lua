@@ -497,6 +497,36 @@ describe("agentic.acp.ACPClient", function()
         )
     end)
 
+    describe("_apply_initialize_result", function()
+        local client
+        before_each(function()
+            client = setmetatable({}, { __index = ACPClient })
+        end)
+
+        it("captures the agent-reported version", function()
+            client:_apply_initialize_result({
+                protocolVersion = 1,
+                agentInfo = {
+                    name = "@agentclientprotocol/claude-agent-acp",
+                    title = "Claude Agent",
+                    version = "0.66.0",
+                },
+            })
+
+            assert.equal("0.66.0", client.agent_info.version)
+        end)
+
+        it("leaves agent_info nil when the agent reports none", function()
+            client:_apply_initialize_result({
+                protocolVersion = 1,
+                agentCapabilities = { loadSession = true },
+            })
+
+            assert.is_nil(client.agent_info)
+            assert.same({}, client.auth_methods)
+        end)
+    end)
+
     describe("extract_failure_reason", function()
         local client
         before_each(function()
