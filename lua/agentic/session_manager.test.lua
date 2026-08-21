@@ -1288,6 +1288,7 @@ describe("agentic.SessionManager", function()
                 is_generating = false,
                 _is_first_message = false,
                 _destroyed = false,
+                _transient_attempt = 0,
                 agent = {
                     state = "ready",
                     provider_config = { name = "Test" },
@@ -1339,6 +1340,7 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _dispatch_turn = SessionManager._dispatch_turn,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _drain_queue = SessionManager._drain_queue,
@@ -1387,14 +1389,26 @@ describe("agentic.SessionManager", function()
         end)
 
         --- Minimal session whose send_prompt errors and whose
-        --- write_error_message reports the given class.
+        --- write_error_message reports the given class. `send_err` overrides the
+        --- error object the provider callback reports; `sink` collects the
+        --- writes and prompts the turn tail produces.
         --- @param error_type string|nil
+        --- @param send_err table|nil
+        --- @param sink table|nil
         --- @return agentic.SessionManager
-        local function make_session(error_type)
+        local function make_session(error_type, send_err, sink)
             local noop = function() end
             local empty = function()
                 return true
             end
+            sink = sink or {}
+            sink.drains = sink.drains or 0
+            sink.errors = sink.errors or {}
+            sink.actions = sink.actions or {}
+            sink.prompts = sink.prompts or {}
+            sink.synthetic = sink.synthetic or {}
+            sink.headings = sink.headings or {}
+            sink.history = sink.history or {}
             return {
                 session_id = "s-1",
                 tab_page_id = 1,
@@ -1402,18 +1416,26 @@ describe("agentic.SessionManager", function()
                 _is_first_message = false,
                 _destroyed = false,
                 _retry_attempt = 0,
+                _transient_attempt = 0,
                 agent = {
                     state = "ready",
                     provider_config = { name = "Test" },
-                    send_prompt = function(_self, _sid, _prompt, cb)
-                        cb(nil, { message = "boom" })
+                    send_prompt = function(_self, _sid, prompt, cb)
+                        table.insert(sink.prompts, prompt)
+                        cb(nil, send_err or { message = "boom" })
                     end,
                 },
                 message_writer = {
                     write_message = noop,
-                    write_user_prompt = noop,
-                    write_error_message = function()
+                    write_user_prompt = function(_self, text)
+                        table.insert(sink.headings, text)
+                    end,
+                    write_error_message = function(_self, err)
+                        table.insert(sink.errors, err)
                         return error_type, nil
+                    end,
+                    write_error_action = function(_self, text)
+                        table.insert(sink.actions, text)
                     end,
                     finalize_turn = noop,
                     set_turn_usage = noop,
@@ -1425,7 +1447,9 @@ describe("agentic.SessionManager", function()
                 status_indicator = { start = noop, stop = noop },
                 subagent_status_indicator = { stop = noop },
                 chat_history = {
-                    add_message = noop,
+                    add_message = function(_self, msg)
+                        table.insert(sink.history, msg)
+                    end,
                     save = noop,
                     messages = {},
                     title = "",
@@ -1440,6 +1464,7 @@ describe("agentic.SessionManager", function()
                     set_unread_badge = noop,
                     set_chat_title = noop,
                     drain_queued_regions = function()
+                        sink.drains = (sink.drains or 0) + 1
                         return nil
                     end,
                 },
@@ -1451,6 +1476,11 @@ describe("agentic.SessionManager", function()
                 _ring_bell = noop,
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _dispatch_turn = SessionManager._dispatch_turn,
+                _send_synthetic_prompt = function(this, text)
+                    table.insert(sink.synthetic, text)
+                    SessionManager._send_synthetic_prompt(this, text)
+                end,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _drain_queue = SessionManager._drain_queue,
@@ -1470,6 +1500,156 @@ describe("agentic.SessionManager", function()
             session:_handle_input_submit("hello")
             assert.spy(reauth_stub).was.called(1)
             assert.spy(respawn_stub).was.called(0)
+        end)
+
+        describe("transient auto-retry", function()
+            local TRANSIENT =
+                { message = "boom", data = { errorKind = "server_error" } }
+            --- @type TestStub
+            local bell_stub
+            local original_enabled
+            local original_hooks
+            local completions
+
+            before_each(function()
+                original_enabled = Config.auto_retry_on_transient_error
+                original_hooks = Config.hooks
+                Config.auto_retry_on_transient_error = true
+                completions = {}
+                Config.hooks = {
+                    on_response_complete = function(data)
+                        table.insert(completions, data)
+                    end,
+                }
+                bell_stub = spy.stub(SessionManager, "_ring_bell")
+            end)
+
+            after_each(function()
+                Config.auto_retry_on_transient_error = original_enabled
+                Config.hooks = original_hooks
+                bell_stub:revert()
+            end)
+
+            --- Session that fails `n_failures` turns with a transient error
+            --- and succeeds after that.
+            --- @param n_failures number
+            --- @return agentic.SessionManager session
+            --- @return table sink
+            local function make_transient_session(n_failures)
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                local sent = 0
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    sent = sent + 1
+                    table.insert(sink.prompts, prompt)
+                    cb(
+                        { stopReason = "end_turn" },
+                        sent <= n_failures and TRANSIENT or nil
+                    )
+                end
+                return session, sink
+            end
+
+            it("retries silently and leaves no trace on recovery", function()
+                local session, sink = make_transient_session(2)
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, #sink.errors)
+                assert.equal(0, #sink.actions)
+                assert.same({ "continue", "continue" }, sink.synthetic)
+                -- Only the user's own prompt is attributed to them: one
+                -- heading, one history entry, one bell, one drain, one hook.
+                assert.same({ "hello" }, sink.headings)
+                assert.equal(1, #sink.history)
+                assert.spy(bell_stub).was.called(1)
+                assert.equal(1, sink.drains)
+                assert.equal(1, #completions)
+                assert.is_true(completions[1].success)
+            end)
+
+            it("gives up after 3 attempts and reports the count", function()
+                local session, sink = make_transient_session(math.huge)
+                session:_handle_input_submit("hello")
+
+                assert.equal(4, #sink.prompts)
+                assert.equal(3, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+                assert.same({ "Auto-retry gave up (3 attempts)." }, sink.actions)
+                assert.equal(0, session._transient_attempt)
+                assert.same({ "hello" }, sink.headings)
+                assert.spy(bell_stub).was.called(1)
+                assert.equal(1, sink.drains)
+                assert.equal(1, #completions)
+                assert.is_false(completions[1].success)
+            end)
+
+            it("does not retry into a session replaced mid-flight", function()
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    table.insert(sink.prompts, prompt)
+                    -- /new, a restore or a provider switch between send and
+                    -- callback: the pending callback outlives cancel_session.
+                    session.session_id = "s-2"
+                    cb(nil, TRANSIENT)
+                end
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+                assert.equal(1, sink.drains)
+            end)
+
+            it("does not retry when the agent is not ready", function()
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    table.insert(sink.prompts, prompt)
+                    session.agent.state = "connecting"
+                    cb(nil, TRANSIENT)
+                end
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+            end)
+
+            it("does not retry an error without server_error kind", function()
+                local sink = {}
+                local session = make_session(nil, { message = "boom" }, sink)
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+                assert.equal(0, #sink.actions)
+            end)
+
+            it("does not retry when disabled", function()
+                Config.auto_retry_on_transient_error = false
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+            end)
+
+            it("reports retries when the chain ends in another class", function()
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                local sent = 0
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    sent = sent + 1
+                    table.insert(sink.prompts, prompt)
+                    cb(nil, sent <= 2 and TRANSIENT or { message = "different" })
+                end
+                session:_handle_input_submit("hello")
+
+                assert.equal(2, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+                assert.same({ "Auto-retry gave up (2 attempts)." }, sink.actions)
+                assert.equal(0, session._transient_attempt)
+            end)
         end)
     end)
 

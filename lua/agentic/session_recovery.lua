@@ -3,6 +3,7 @@
 --   - Server-health backoff before offering reauth.
 --   - Provider subprocess restart after re-authentication.
 --   - Auto-continue retry after usage_limit errors.
+--   - Silent auto-retry after transient server errors.
 --   - Surfacing of "successful but empty" prompt responses.
 -- All functions take the SessionManager (`sm`) as the first argument and
 -- read/write its fields (`_reauth_keymap`, `_health_check_timer`,
@@ -456,6 +457,72 @@ function M.offer_auto_continue(sm, reset_epoch)
             -- drain here too — that would fire a second concurrent send_prompt.
         end)
     )
+end
+
+--- How many consecutive transient failures are retried before the error
+--- surfaces. Each attempt is a full turn, so the budget also bounds how much
+--- work an unrecoverable failure (offline machine, sustained 529) repeats.
+local MAX_TRANSIENT_RETRIES = 3
+
+--- Whether a failed turn will be resent as a fresh prompt.
+---
+--- Answers the caller's real question — "does a retry go out?" — because the
+--- caller suppresses the error block, bell, completion hook and queue drain on
+--- the strength of this one answer. Every reason a retry could not be
+--- dispatched therefore has to be decided here, or a declined retry would
+--- leave the failure with nothing reporting it.
+---
+--- Classification is keyed on the bridge's structured `errorKind` rather than
+--- message text, and deliberately kept off MessageWriter's display axis:
+--- mapping `server_error` into `error_kind_class` would outrank an embedded 529
+--- `overloaded_error` and cost it its hint. Retryability and display class are
+--- independent axes.
+---
+--- `server_error` covers mid-stream truncation, 529 overload and
+--- connection-refused/ENOTFOUND alike, and nothing structural separates them
+--- (a CLI-generated 529 is prose, but JSON-bearing 529s also exist). The
+--- unrecoverable subsets burn the budget in fast failures and then surface as
+--- a normal error block. Bridges that attach no `data` never retry.
+--- @param sm agentic.SessionManager
+--- @param err agentic.acp.ACPError
+--- @param turn_session_id string|nil Session the failed turn was sent to
+--- @return boolean should_retry
+function M.should_retry_transient(sm, err, turn_session_id)
+    if not Config.auto_retry_on_transient_error then
+        return false
+    end
+    if type(err.data) ~= "table" or err.data.errorKind ~= "server_error" then
+        return false
+    end
+    if sm._destroyed or sm._transient_attempt >= MAX_TRANSIENT_RETRIES then
+        return false
+    end
+    -- A pending session/prompt callback outlives cancel_session, which drops
+    -- the subscriber but not ACPClient.callbacks. So this failure can arrive
+    -- after /new, a restore or a provider switch installed a different
+    -- session — resending would inject an unprompted turn into it.
+    if sm.session_id == nil or sm.session_id ~= turn_session_id then
+        return false
+    end
+    -- send_prompt has no ready-state guard of its own (unlike
+    -- _handle_input_submit, which stashes to _pending_input). Writing to an
+    -- up-but-not-ready subprocess would leave is_generating stuck true.
+    return sm.agent ~= nil and sm.agent.state == "ready"
+end
+
+--- Resume a turn that died on a transient server error.
+--- ACP has no turn-level resume — `session/resume` re-attaches to a *session*,
+--- and only `session/prompt` makes an agent generate — so a fresh prompt on the
+--- still-live session is the whole recovery. `failActive` rejects the turn
+--- without tearing down the provider's consumer, so no respawn is needed. No
+--- delay: the retry goes out immediately.
+--- Only call when `should_retry_transient` returned true; it owns the guards.
+--- @param sm agentic.SessionManager
+function M.retry_after_transient_error(sm)
+    -- Increment before dispatch, not after: send_prompt's callback can run
+    -- synchronously, so a post-dispatch increment never terminates.
+    sm._transient_attempt = sm._transient_attempt + 1
+    sm:_send_synthetic_prompt("continue")
 end
 
 return M

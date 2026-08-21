@@ -81,6 +81,12 @@ local ConfigDefault = {
     --- a timer to send "continue" once the reset time arrives.
     auto_continue_on_usage_limit = true,
 
+    --- Auto-retry after transient server errors.
+    --- When a turn dies mid-stream (connection closed, API unreachable,
+    --- overloaded), resend "continue" immediately, up to 3 times. Nothing is
+    --- shown in the chat until the budget runs out.
+    auto_retry_on_transient_error = true,
+
     --- @type table<agentic.UserConfig.ProviderName, agentic.acp.ACPProviderConfig|nil>
     acp_providers = {
         ["claude-agent-acp"] = {

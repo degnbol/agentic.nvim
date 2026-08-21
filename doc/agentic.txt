@@ -251,7 +251,10 @@ override what you need.
 `hooks` table
     Callback functions for lifecycle events:
       `on_prompt_submit`       Fires after submitting a prompt.
-      `on_response_complete`   Fires when response finishes.
+      `on_response_complete`   Fires when response finishes. Once per
+                               submitted prompt, so turns resent by
+                               |agentic-config-auto_retry_on_transient_error|
+                               report only the final outcome.
       `on_permission_request`  Fires on tool permission prompt.
 
     Each receives a data table with `session_id`, `tab_page_id`, and
@@ -264,6 +267,18 @@ override what you need.
 `auto_continue_on_usage_limit` boolean (default: true)
     When the provider reports a usage limit with a reset time, schedule
     a timer to send "continue" automatically.
+
+                           *agentic-config-auto_retry_on_transient_error*
+`auto_retry_on_transient_error` boolean (default: true)
+    When a turn ends in a transient server error (connection closed
+    mid-response, API unreachable, overloaded), send "continue"
+    immediately as a new turn, up to 3 times. The retried turns write
+    nothing to the chat: no prompt heading, no error block, no bell or
+    unread badge. Once the budget runs out the error is written as
+    usual, followed by the number of attempts made.
+
+    Tools already run in a retried turn may run again, as they would if
+    you sent "continue" by hand.
 
                                                      *agentic-config-winbar*
 `winbar` boolean (default: true)

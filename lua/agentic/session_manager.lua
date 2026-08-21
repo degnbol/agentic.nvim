@@ -102,6 +102,7 @@ end
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
+--- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
 --- @field _queued_prompts? string[] User messages queued while waiting for auto-continue timer
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
 local SessionManager = {}
@@ -208,6 +209,7 @@ function SessionManager:new(tab_page_id)
         --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
         _plan_exit_pending = false,
         _retry_attempt = 0,
+        _transient_attempt = 0,
         _checktime_scheduled = false,
         _tool_call_owner = {},
         _open_tasks = {},
@@ -1828,13 +1830,33 @@ function SessionManager:_handle_input_submit_inner(input_text)
     }
     self.chat_history:add_message(user_msg)
 
-    self.status_indicator:start("thinking")
-
     P.invoke_hook("on_prompt_submit", {
         prompt = input_text,
         session_id = self.session_id,
         tab_page_id = self.tab_page_id,
     })
+
+    self:_dispatch_turn(prompt)
+end
+
+--- Send a prompt that the user did not author, recording nothing that would
+--- attribute it to them: no `## ` heading, `❯` sign or `---` separator
+--- (`write_user_prompt`), no `chat_history` entry — so a Path B restore reads
+--- the response as one continuous turn — and no context blocks, because
+--- pending @files, selections and diagnostics belong to the user's *next*
+--- prompt and stay pending. No `on_prompt_submit` hook either.
+--- @param text string
+function SessionManager:_send_synthetic_prompt(text)
+    self:_dispatch_turn({ { type = "text", text = text } })
+end
+
+--- Send an assembled prompt as a turn and own the turn tail: thinking
+--- indicator, per-turn state reset, error dispatch, finalization, attention
+--- notification, hooks and queue drain. Shared by user submits and synthetic
+--- prompts — everything that records user intent happens before this is called.
+--- @param prompt agentic.acp.Content[]
+function SessionManager:_dispatch_turn(prompt)
+    self.status_indicator:start("thinking")
 
     local session_id = self.session_id
     local tab_page_id = self.tab_page_id
@@ -1862,9 +1884,36 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         --- @type table|nil
         local turn_usage
-        if err then
+        --- Set when this failure is being resent as a fresh turn. Everything
+        --- that would tell the user the turn ended is suppressed, so a
+        --- recovered failure leaves no trace: no error block, no bell or unread
+        --- badge, no on_response_complete, and no queue drain.
+        local retrying = err ~= nil
+            and Recovery.should_retry_transient(self, err, session_id)
+
+        if not err then
+            self._retry_attempt = 0
+            self._transient_attempt = 0
+            Recovery.surface_unexpected_response(self, response)
+            if type(response) == "table" then
+                turn_usage = response.usage
+            end
+        elseif not retrying then
             local error_type, reset_epoch =
                 self.message_writer:write_error_message(err)
+            -- Account for the retries the user never saw — otherwise this error
+            -- follows a multi-turn stall with nothing to explain it. Covers a
+            -- chain ending in a different error class too, so no branch below
+            -- can leave a stale budget behind.
+            if self._transient_attempt > 0 then
+                self.message_writer:write_error_action(
+                    string.format(
+                        "Auto-retry gave up (%d attempts).",
+                        self._transient_attempt
+                    )
+                )
+                self._transient_attempt = 0
+            end
             if error_type == "authentication_error" then
                 Recovery.offer_reauth(self)
             elseif error_type == "usage_limit" then
@@ -1882,12 +1931,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
             else
                 self._retry_attempt = 0
             end
-        else
-            self._retry_attempt = 0
-            Recovery.surface_unexpected_response(self, response)
-            if type(response) == "table" then
-                turn_usage = response.usage
-            end
         end
 
         self.message_writer:finalize_turn()
@@ -1903,14 +1946,18 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         self.status_indicator:stop()
 
-        self:_notify_attention("[done]")
+        if not retrying then
+            self:_notify_attention("[done]")
 
-        P.invoke_hook("on_response_complete", {
-            session_id = session_id,
-            tab_page_id = tab_page_id,
-            success = err == nil,
-            error = err,
-        })
+            -- Fires once per user turn, not once per provider turn: the
+            -- retried attempts are not outcomes the user asked about.
+            P.invoke_hook("on_response_complete", {
+                session_id = session_id,
+                tab_page_id = tab_page_id,
+                success = err == nil,
+                error = err,
+            })
+        end
 
         -- Save chat history after successful turn completion
         if not err then
@@ -1922,9 +1969,18 @@ function SessionManager:_handle_input_submit_inner(input_text)
             end)
         end
 
-        -- Dispatch any mid-turn queued regions now the turn is complete
-        -- (no-op while a usage-limit retry timer is armed — see _drain_queue).
-        self:_drain_queue()
+        if retrying then
+            -- The retry turn reaches its own Stop where _drain_queue runs.
+            -- Draining here too would fire a second concurrent send_prompt,
+            -- so mid-turn queued regions defer up to MAX_TRANSIENT_RETRIES
+            -- turns (same reasoning as offer_auto_continue's timer callback).
+            Recovery.retry_after_transient_error(self)
+        else
+            -- Dispatch any mid-turn queued regions now the turn is complete
+            -- (no-op while a usage-limit retry timer is armed — see
+            -- _drain_queue).
+            self:_drain_queue()
+        end
     end)
 end
 
@@ -2146,6 +2202,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     Recovery.remove_reauth_keymap(self)
     Recovery.cancel_health_check_timer(self)
     Recovery.cancel_retry_timer(self)
+    self._transient_attempt = 0
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
@@ -2285,6 +2342,7 @@ function SessionManager:_cancel_session()
     Recovery.remove_reauth_keymap(self)
     Recovery.cancel_health_check_timer(self)
     Recovery.cancel_retry_timer(self)
+    self._transient_attempt = 0
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
@@ -2321,6 +2379,7 @@ function SessionManager:switch_provider()
     -- Cancel pending auto-continue timer — switching provider renders the
     -- current provider's usage limit irrelevant.
     Recovery.cancel_retry_timer(self)
+    self._transient_attempt = 0
 
     -- Save references before get_instance (on_ready may fire synchronously)
     local saved_history = self.chat_history
