@@ -164,6 +164,121 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("fence balancing", function()
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- 1-indexed positions of backtick-only lines.
+        local function fence_rows()
+            local rows = {}
+            for i, line in ipairs(buffer_lines()) do
+                if line:match("^`+$") then
+                    table.insert(rows, i)
+                end
+            end
+            return rows
+        end
+
+        it("closes an unclosed streamed fence at the turn boundary", function()
+            writer:write_message_chunk(
+                make_message_update("here:\n\n```lua\nx = 1\n")
+            )
+            writer:finalize_turn()
+
+            assert.same(
+                { "here:", "", "```lua", "x = 1", "", "```", "" },
+                buffer_lines()
+            )
+        end)
+
+        it("appends nothing when the streamed fence is balanced", function()
+            writer:write_message_chunk(
+                make_message_update("```lua\nx = 1\n```\n")
+            )
+            writer:finalize_turn()
+
+            assert.same({ 3 }, fence_rows())
+        end)
+
+        it("matches the width of a wide opener", function()
+            writer:write_message_chunk(make_message_update("````md\n```lua\n"))
+            writer:finalize_turn()
+
+            assert.is_true(vim.tbl_contains(buffer_lines(), "````"))
+        end)
+
+        it(
+            "closes the fence before a tool call block written after prose",
+            function()
+                writer:write_message_chunk(
+                    make_message_update("running:\n\n```bash\nls\n")
+                )
+                writer:write_tool_call_block(
+                    make_tool_call_block("t1", "completed")
+                )
+
+                local lines = buffer_lines()
+                local heading
+                for i, line in ipairs(lines) do
+                    if line:find(G_EXEC, 1, true) then
+                        heading = i
+                    end
+                end
+                assert.is_true(heading ~= nil)
+                local closer = fence_rows()[1]
+                assert.equal("```", lines[closer])
+                assert.is_true(closer < heading)
+            end
+        )
+
+        it("closes a fence that spans a blank line", function()
+            -- A blank line inside the fence must not advance the reflow marker
+            -- into the fence, or the flush would see a balanced region.
+            writer:write_message_chunk(
+                make_message_update("```lua\n\nx = 1\n\n")
+            )
+            writer:finalize_turn()
+
+            assert.same(
+                { "```lua", "", "x = 1", "", "", "```", "" },
+                buffer_lines()
+            )
+        end)
+
+        it("closes the fence before an error block", function()
+            writer:write_message_chunk(
+                make_message_update("here:\n\n```lua\nx = 1\n")
+            )
+            writer:write_error_message({ code = -32603, message = "boom" })
+
+            local lines = buffer_lines()
+            local closer = fence_rows()[1]
+            local heading = vim.fn.index(lines, "### Error") + 1
+            assert.is_true(heading > 0)
+            assert.is_true(closer < heading)
+        end)
+
+        it("closes an unclosed fence in a full message", function()
+            writer:write_message(make_message_update("intro\n\n```lua\nx = 1"))
+
+            assert.same(
+                { "intro", "", "```lua", "x = 1", "```", "" },
+                buffer_lines()
+            )
+        end)
+
+        it("closes a prompt fence before the separator", function()
+            writer:write_user_prompt("look at\n```lua\nx = 1")
+
+            local lines = buffer_lines()
+            local fence = fence_rows()[1]
+            local separator = vim.fn.index(lines, "---") + 1
+            assert.equal("```", lines[fence])
+            assert.is_true(fence < separator)
+        end)
+    end)
+
     describe("subagent ordinal numbering", function()
         local function decoration_signs()
             local marks = vim.api.nvim_buf_get_extmarks(

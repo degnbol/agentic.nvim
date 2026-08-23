@@ -347,6 +347,43 @@ function M.wrap_single_line_with_offsets(line, width)
     return wrap_line(line, width)
 end
 
+--- Find a fenced code block that is opened but never closed, and return the
+--- delimiter that would close it.
+---
+--- Follows the markdown rule rather than `wrap_prose`'s fence toggle, which is
+--- deliberately lenient (see the comment in its loop) and flips on any ` ``` `
+--- line. tree-sitter-markdown does not: a closer must use the opener's own
+--- delimiter character, carry no info string, and be at least as long as the
+--- opener — so a typed ` ```zsh ` line never closes an open fence. A backtick
+--- opener's info string may not contain a backtick (a tilde opener's may).
+--- Callers balancing buffer text against the parser need the parser's rule; the
+--- lenient one disagrees in exactly the cases that matter.
+--- @param lines string[]
+--- @return string|nil open_fence Delimiter run of the unterminated opener, nil when balanced
+--- @return integer|nil open_index 1-based index of that opener in `lines`
+function M.unclosed_fence(lines)
+    --- @type string|nil, integer|nil
+    local open_fence, open_index
+    for i, line in ipairs(lines) do
+        -- Up to 3 leading spaces; 4+ (or a tab) is an indented code block.
+        local indent, delim, rest = line:match("^( *)([`~]+)(.*)$")
+        if delim and #indent <= 3 and #delim >= 3 then
+            if open_fence then
+                if
+                    delim:sub(1, 1) == open_fence:sub(1, 1)
+                    and #delim >= #open_fence
+                    and rest:match("^%s*$")
+                then
+                    open_fence, open_index = nil, nil
+                end
+            elseif delim:sub(1, 1) == "~" or not rest:find("`", 1, true) then
+                open_fence, open_index = delim, i
+            end
+        end
+    end
+    return open_fence, open_index
+end
+
 --- Hard-wrap prose in a block of lines, skipping fenced code blocks and
 --- formatting markdown tables with aligned columns.
 --- @param lines string[]

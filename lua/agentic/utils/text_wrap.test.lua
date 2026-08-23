@@ -566,4 +566,75 @@ describe("agentic.utils.TextWrap", function()
             end
         end)
     end)
+
+    describe("unclosed_fence", function()
+        it("returns nil for a balanced pair", function()
+            assert.is_nil(
+                TextWrap.unclosed_fence({ "text", "```lua", "x = 1", "```" })
+            )
+        end)
+
+        it("returns the closing delimiter when never closed", function()
+            assert.equal("```", TextWrap.unclosed_fence({ "```lua", "x = 1" }))
+        end)
+
+        it("reports the opener index", function()
+            local _, index = TextWrap.unclosed_fence({ "a", "b", "```", "c" })
+            assert.equal(3, index)
+        end)
+
+        it("does not close a wide opener with a shorter fence", function()
+            assert.equal(
+                "````",
+                TextWrap.unclosed_fence({ "````", "```", "body" })
+            )
+        end)
+
+        it("handles tilde fences", function()
+            assert.equal("~~~", TextWrap.unclosed_fence({ "~~~lua", "x = 1" }))
+            assert.is_nil(TextWrap.unclosed_fence({ "~~~lua", "x = 1", "~~~" }))
+        end)
+
+        it("does not close a fence with the other delimiter", function()
+            assert.equal(
+                "~~~",
+                TextWrap.unclosed_fence({ "~~~lua", "```", "x = 1" })
+            )
+        end)
+
+        it("closes a wide opener with an equally wide fence", function()
+            assert.is_nil(
+                TextWrap.unclosed_fence({ "````", "```", "````", "after" })
+            )
+        end)
+
+        it("does not close on a fence carrying an info string", function()
+            assert.equal(
+                "```",
+                TextWrap.unclosed_fence({ "```bash", "x", "```zsh", "y" })
+            )
+        end)
+
+        it("treats a fence inside a fence as one open fence", function()
+            assert.equal(
+                "````",
+                TextWrap.unclosed_fence({ "````md", "```lua", "x", "```" })
+            )
+        end)
+
+        it("ignores backticks embedded in prose", function()
+            assert.is_nil(
+                TextWrap.unclosed_fence({ "see ``` and ``` in one line" })
+            )
+        end)
+
+        it("ignores an info string containing a backtick", function()
+            assert.is_nil(TextWrap.unclosed_fence({ "```foo`bar", "x" }))
+        end)
+
+        it("ignores a fence indented past an indented code block", function()
+            assert.equal("```", TextWrap.unclosed_fence({ "   ```lua", "x" }))
+            assert.is_nil(TextWrap.unclosed_fence({ "    ```lua", "x" }))
+        end)
+    end)
 end)

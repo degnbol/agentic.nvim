@@ -98,6 +98,25 @@ end
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
 --- @field ordinal? integer Per-turn subagent ordinal (0-9, in spawn order); rendered as a sign only while numbering is active (see MessageWriter._numbering_active)
 
+--- Append the closing fence for `lines` when they leave one open.
+---
+--- Prose and user prompts reach the chat buffer verbatim; only tool call blocks
+--- get `safe_fence` protection. An unclosed ``` leaves `fenced_code_block`
+--- unterminated, so it swallows the following prose and tool call blocks up to
+--- the next bare ``` line, or to the end of the buffer — taking their
+--- highlighting, and any `*-fold` fence opened inside it, with them. Closing it
+--- bounds that to the block the model opened.
+---
+--- Only ever called at the end of a prose run: mid-stream the fence is
+--- legitimately open and closing it early would corrupt the render.
+--- @param lines string[]
+local function close_fence(lines)
+    local fence = TextWrap.unclosed_fence(lines)
+    if fence then
+        lines[#lines + 1] = fence
+    end
+end
+
 --- Known prefix of the rejection boilerplate injected by the provider after
 --- a permission denial. Streamed as agent_message_chunk but meant for the
 --- model, not the user.
@@ -324,6 +343,7 @@ function MessageWriter:write_message(update)
     end
 
     local lines = vim.split(text, "\n", { plain = true })
+    close_fence(lines)
     lines = TextWrap.wrap_prose(lines, self:_get_wrap_width())
 
     self:_auto_scroll(self.bufnr)
@@ -358,9 +378,11 @@ end
 function MessageWriter:write_user_prompt(text, extra_lines)
     local lines = prompt_heading_lines(text)
     vim.list_extend(lines, extra_lines or {})
-    table.insert(lines, "\n---\n")
 
     local flat = vim.split(table.concat(lines, "\n"), "\n", { plain = true })
+    -- Before the separator: a fence closed after it would swallow the `---`.
+    close_fence(flat)
+    vim.list_extend(flat, { "", "---", "" })
     flat = TextWrap.wrap_prose(flat, self:_get_wrap_width())
 
     self:_auto_scroll(self.bufnr)
@@ -570,6 +592,11 @@ function MessageWriter:write_error_message(err)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
+        -- An error ends the prose run. Without the flush the error block lands
+        -- inside a fence the interrupted prose left open, and finalize_turn's
+        -- reflow would later span it and move its NS_ERROR extmarks.
+        self:_reflow_chunks(bufnr, true)
+
         local was_empty = BufHelpers.is_buffer_empty(bufnr)
         self:_append_lines(all_lines)
 
@@ -761,6 +788,13 @@ end
 --- When `flush_all` is false (during streaming), only reflows complete
 --- paragraphs — up to the last blank line, leaving the in-progress
 --- paragraph untouched. When true (response finished), reflows everything.
+---
+--- `flush_all` is also the end of the prose run (the callers are the turn
+--- boundary, a tool call, a prompt, an error and a divider), so it closes an
+--- unclosed fence — see `close_fence`. The streaming path keeps `_chunk_start_line`
+--- outside any open fence so that check sees the opener; a marker parked inside
+--- a fence would also make `wrap_prose` hard-wrap code as prose, since it starts
+--- each region assuming it is not in one.
 --- @param bufnr integer
 --- @param flush_all? boolean
 function MessageWriter:_reflow_chunks(bufnr, flush_all)
@@ -797,6 +831,18 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
             return -- no complete paragraph yet
         end
         reflow_end = last_blank + 1 -- exclusive, include the blank line
+
+        -- Stop short of an open fence: blank lines inside a code block would
+        -- otherwise advance the marker into it.
+        local _, opener = TextWrap.unclosed_fence(
+            vim.list_slice(lines, 1, reflow_end - start)
+        )
+        if opener then
+            reflow_end = start + opener - 1
+            if reflow_end <= start then
+                return
+            end
+        end
     end
 
     local raw = vim.api.nvim_buf_get_lines(bufnr, start, reflow_end, false)
@@ -807,6 +853,13 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
     end
 
     if flush_all then
+        -- Same job as `close_fence`, but appended to the buffer: reflow_end is
+        -- the end of the buffer here, and extending `wrapped` would also extend
+        -- `raw`, which wrap_prose returns unchanged when the window soft-wraps.
+        local fence = TextWrap.unclosed_fence(wrapped)
+        if fence then
+            self:_append_lines({ fence })
+        end
         self._chunk_start_line = nil
     else
         -- Advance past the reflowed region
