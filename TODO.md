@@ -24,15 +24,25 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
 
-- **Auto-continue queued messages not shown in chat**: when
-  `_handle_input_submit_inner` queues a message during the auto-continue
-  wait period (the `self._retry_timer` branch that appends to
-  `self._queued_prompts`), only a generic "Message queued — will send
-  when usage resets." line is written via `write_error_action`. The actual
-  user message should be rendered in the normal `## <text>` format so the
-  user can see what they typed, even if it hasn't been dispatched yet.
-  Should append "(queued)" or similar indicator to distinguish queued
-  messages from sent ones.
+- **Auto-continue discards queued messages entirely** (was filed as "not
+  shown in chat"; it is worse than that — the message is never sent). The
+  retry callback clears `_queued_prompts` before reading it, so `"continue"`
+  is always what goes out. Live data loss, untested:
+  [`notes/bug-auto-continue-discards-queued-prompts.md`](notes/bug-auto-continue-discards-queued-prompts.md).
+
+- **`/new` and `/trust` intercept on prefix, not on the command word**:
+  `/newsflash: build broken` destroys the session and discards the text;
+  `/trustworthy people` applies `"worthy people"` as an edit-trust scope.
+  The other four local commands are end-anchored and safe.
+  [`notes/bug-command-interception-prefix-match.md`](notes/bug-command-interception-prefix-match.md).
+
+- **`<C-c>` dispatches the mid-turn queue**: `Agentic.stop_generation`
+  sends `session/cancel`, the in-flight prompt resolves with
+  `stopReason = "cancelled"`, and the prompt callback falls through to an
+  unconditional `_drain_queue()`. So stopping a turn that went sideways
+  immediately sends the queued message — the risk the "Queue message"
+  entry below flagged. Fixed by narrowing the drain trigger to a normal
+  Stop (same plan note).
 
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
   After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
@@ -81,9 +91,11 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   might be extmark/virtual text tricks, or an autocommand updating visuals on
   scroll (probably overkill).
 
-- **Fold marker not closed**: rare issue where a fold marker (`{{{`) is
-  inserted but the closing marker (`}}}`) is missing, causing everything from
-  that point to the end of the chat buffer to be folded into a single fold.
+- **Streamed code lines get hard-wrapped**: a code line inside a prose ` ``` `
+  fence that outgrows the wrap width mid-stream is split into two buffer lines
+  and stays split, so copying it out of the chat yields broken code. Mechanism
+  and fix sketch in
+  [`notes/bug-streamed-code-lines-get-hard-wrapped.md`](notes/bug-streamed-code-lines-get-hard-wrapped.md).
 
 - **Syntax highlighting overflow**: rare issue where treesitter syntax
   highlighting from a previous block bleeds into the permission prompt,
@@ -112,12 +124,16 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   options are for other reject behaviours.
 
 - **Message queuing during resume**: queuing a message doesn't work while
-  waiting for a slow resume.
+  waiting for a slow resume — `_pending_input` is a bare assignment, so a
+  second submit clobbers the first. Fixed by
+  [`notes/refactor-unify-message-queues.md`](notes/refactor-unify-message-queues.md).
 
 - **Command queuing**: `/compact\nContinue` should fire `/compact` correctly
   (it doesn't), and then fire `Continue` when compaction is complete.
   Essentially work as if the user prompts `/compact` and then a moment later
-  the rest.
+  the rest. Applies to every command, not just `/compact`, and includes two
+  silent data-loss cases (`/new\nStart on X` discards `Start on X`) —
+  planned in [`notes/feature-block-dispatch.md`](notes/feature-block-dispatch.md).
 
 - **Resume after compacting**: resume right after compacting doesn't show
   history from before compacting, just the compacting summary. Both would be
@@ -173,6 +189,23 @@ read-only commands that we can populate from my claude settings.json.
   "todowrite"` to `kind = "todowrite"` and stripping the body in
   `MessageWriter`. But the plan/todo list is shown in its dedicated panel,
   so the chat entry is redundant. Suppress it (claude doesn't emit one).
+
+### Queue
+
+When the usage limits are reached momentarily there are two issues.
+1. It shows the following in chat:
+
+```markdown
+You've hit your org's monthly spend limit · run /usage-credits to ask your
+admin for a higher limit
+### Error
+
+Internal error: You've hit your org's monthly spend limit · run /usage-credits to ask your admin for a higher limit
+```
+
+It is a wrong message. It is not the monthly limit, I don't understand why it says that.
+
+2. Sending a message shouldn't work. There's no agent to send to. `<CR>` should probably queue, and `<S-CR>` should definitely queue, yet doesn't.
 
 ## Feature ideas
 
@@ -527,13 +560,26 @@ If that would make the config explode, then a better option might be to consider
 A useful Claude CLI feature is /rewind where a menu allows for selecting a previous prompt and rewinds the agent to that point in the conversation.
 If this feature is available through the ACP. If so, we can make a UI version, where we have a keymap that rewinds to where the cursor is placed in chat.
 
-### Extending Bash auto-approval
+### Queue message
 
-Designed in [`notes/perm-extend-auto-approve.md`](notes/perm-extend-auto-approve.md):
-generalise `$(...)` recursion, flow-sensitive literal propagation, walking
-`zsh -c '…'` bodies, and `rm` of Claude's own scratch (`scratch_rm`, off by
-default). Walking into script *files* (the original item here) + function
-walking is parked there — sound but blocked on a function-definition walker.
+In regular interaction (not when waiting for cool-down) it could be useful to queue a message.
+This could be done by waiting for the stop hook, and submitting the queued message then.
+The danger is this would be intended for being able to queue a next task 
+without interrupting the agent, but could lead to a question or follow up from 
+the agent in the stop hook summary message being overlooked.
+The agent may repeat unanswered questions, it may not.
+We could think of ways to mitigate this risk, and if we can think of any then this queue feature might be justified.
+
+### Grey out agentic inner thinking
+
+and sentences that look like noise.
+
+### Permission system arity
+
+Consider making the permission system one step more advanced.
+E.g. to be able to indicate arity, if term is first, last, if there's exactly n terms.
+Brainstorm ideas for the simplest increase in code complexity and usage in 
+permissions.json complexity that generalises to the most useful use cases.
 
 ## Auto-allow non-zsh
 

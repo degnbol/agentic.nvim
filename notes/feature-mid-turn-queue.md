@@ -1,5 +1,10 @@
 # Plan: mid-turn message queue
 
+Implemented in `f170629`. Three decisions here are superseded by
+[`refactor-unify-message-queues.md`](refactor-unify-message-queues.md): storage is
+unified across all three queues, the idle send-now degrade is dropped, and the
+drain trigger narrows to a normal Stop.
+
 ## Problem
 
 While the agent is generating (`is_generating == true`), the user often
@@ -72,7 +77,8 @@ distinguishable from `<CR>` under the kitty keyboard protocol. Works on
 kitty + nvim 0.12; document as terminal-dependent.
 
 Idle (not generating) + queue keymap → behave as send-now; there is no
-turn to defer to.
+turn to defer to. (Superseded: `<S-CR>` always queues, so the binding's
+meaning does not depend on `is_generating`.)
 
 ### Storage: buffer-region queue, shared drain
 
@@ -183,6 +189,9 @@ override.
 - **Full storage unification.** The two string queues (`_pending_input`,
   `_queued_prompts`) could also become buffer-region-based, but they carry
   committed-text semantics and work today. Not worth folding in now.
+  (Superseded — planned in
+  [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md); their
+  committed-text semantics are the cause of two open TODO bugs.)
 - **`:w` as a priority flush** (queued-then-draft across presses) —
   rejected; breaks the one-submit-one-turn invariant. Priority comes from
   buffer order instead.
