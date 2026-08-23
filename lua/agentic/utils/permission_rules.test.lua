@@ -2395,6 +2395,47 @@ describe("PermissionRules", function()
             )
         end)
 
+        it("auto-approves gh api with no method flag (GET default)", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve("gh api /rate_limit")
+            )
+        end)
+
+        -- `-X` asks on option identity, not value, so an explicit `-X GET`
+        -- prompts like any other method. Exempting the GET value is not
+        -- expressible: ask outranks allow, and gh's `-X` is last-wins
+        -- (`-X GET … -X DELETE` sends DELETE), so an allow gate keyed on the
+        -- GET token would approve the DELETE that follows it.
+        it("asks gh api -X GET (value-blind method gate)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("gh api -X GET /rate_limit")
+            )
+        end)
+
+        it("asks gh api -XDELETE (glued short cluster)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "gh api -XDELETE /repos/o/r"
+                )
+            )
+        end)
+
+        it("asks gh api -F x=@file (reads a local file)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "gh api /x -F leak=@/etc/passwd"
+                )
+            )
+        end)
+
+        it("asks gh api --hostname (retargets the request host)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "gh api --hostname ghe.example.com /rate_limit"
+                )
+            )
+        end)
+
         it("asks yq --inplace (long-form write)", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(

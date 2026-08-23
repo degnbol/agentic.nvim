@@ -536,7 +536,7 @@
     ],
     "ask": [
       { "positionals": ["api"],
-        "options":     ["X", "method", "f", "F", "input"] },
+        "options":     ["X", "method", "f", "F", "input", "hostname"] },
       { "positionals": ["issue", "create"] }
     ]
   },
