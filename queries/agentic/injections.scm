@@ -8,11 +8,10 @@
 ; without the suffix, so plain ```python / ```bash blocks inject as before.
 ;
 ; Edit diffs carry a "difffold" marker (```lua-difffold) and are deliberately
-; EXCLUDED here: injecting the base language ships its folds.scm, whose
-; per-structure folds shatter the diff into one fold per function/if/table.
-; With no injection the diff folds as one block; highlighting comes from
-; block_col_hl extmarks (tool_call_renderer build_highlight_map), which already
-; override the injection at priority 200 on any loadable diff.
+; EXCLUDED here: their colour comes from block_col_hl extmarks
+; (tool_call_renderer build_highlight_map), which override any injection at
+; priority 200 on every loadable diff, so injecting the base language would only
+; buy a second parse of the same text.
 ;
 ; This rule fires ONLY on `-fold`-suffixed fences (#lua-match? below). Plain
 ; ```python / ```bash fences are already injected by the inherited markdown rule

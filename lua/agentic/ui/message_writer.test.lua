@@ -2659,9 +2659,11 @@ describe("agentic.ui.MessageWriter", function()
             pcall(vim.treesitter.start, bufnr, "agentic")
 
             vim.wo[winid].foldmethod = "expr"
-            vim.wo[winid].foldexpr = "v:lua.vim.treesitter.foldexpr()"
+            vim.wo[winid].foldexpr =
+                'v:lua.require("agentic.ui.folds").foldexpr()'
             vim.wo[winid].foldenable = true
             vim.wo[winid].foldlevel = 99
+            vim.wo[winid].foldminlines = 1
         end)
 
         --- Body long enough to exceed execute_max_lines (default 25).

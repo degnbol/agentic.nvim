@@ -33,14 +33,12 @@ end
 --- callback-less `parse(range)` runs to completion with no time budget, so the
 --- injection child trees are created deterministically.
 ---
---- Called after every content `set_lines` (not just on a finalised block) so
---- that core's scheduled fold recompute for that edit sees injected trees
---- matching the content it stamps. Injected-tree parses never notify core's
---- fold module, so a stamp made against stale trees never self-heals — pairing
---- the parse with each write is what keeps injected fold boundaries correct
---- mid-stream. After a `set_lines` the range is dirty, so this is a real
+--- Called after every content `set_lines`, not just on a finalised block, so a
+--- block that is rewritten mid-stream is re-highlighted with each version of
+--- its content. After a `set_lines` the range is dirty, so this is a real
 --- range-parse (one per block update); `parse` short-circuits only when the
---- range is already valid.
+--- range is already valid. Folds do not depend on this — `agentic.ui.folds`
+--- reads the root tree only.
 --- @param bufnr integer
 --- @param start_row integer 0-indexed first row of the block
 --- @param end_row integer 0-indexed last row of the block
@@ -1160,16 +1158,13 @@ end
 --- level-1 row that belongs only to our fold (the fold spans
 --- `code_fence_content`, so the concealed fence delimiters are level 0,
 --- outside it). The one-level :foldopen/:foldclose hits exactly our block,
---- leaving injected folds and other blocks untouched. Anchoring on a body line
---- (not the delimiter) also keeps a closed fold's first screen row visible, so
---- the `··· N lines ···` foldtext shows.
+--- leaving other blocks untouched. Anchoring on a body line (not the
+--- delimiter) also keeps a closed fold's first screen row visible, so the
+--- `··· N lines ···` foldtext shows.
 ---
---- An anchor extmark tracks the row across later edits, and the op is deferred:
---- treesitter recomputes fold levels on its own vim.schedule callback after the
---- buffer edit, so an immediate :foldopen/:foldclose races it (E490 —
---- verified). Scheduling after that callback (FIFO) lets the recompute land
---- first. The deferred flush also covers the case where no chat window is
---- visible yet — the anchor stays pending until BufWinEnter.
+--- An anchor extmark tracks the row across later edits, and the op is deferred
+--- so it can wait for a chat window: with none visible the anchor stays pending
+--- until BufWinEnter.
 --- @param anchor_row integer 0-indexed buffer row of the block's first body line
 --- @param open boolean Desired state — true opens the fold, false closes it
 function MessageWriter:_queue_fold(anchor_row, open)
@@ -1233,8 +1228,12 @@ function MessageWriter:flush_pending_fold_ops()
             {}
         )
         if pos[1] then
-            -- A missing fold (E490, fence not yet foldable) is non-fatal —
-            -- the body just stays visible — so it is swallowed deliberately.
+            -- A missing fold (E490) is non-fatal — the body just stays
+            -- visible — so it is swallowed deliberately. The live cause is
+            -- insert mode: vim suppresses foldUpdate there, so a block
+            -- finishing while the user types in the prompt buffer finds no
+            -- fold to close. Core retries such ops on InsertLeave
+            -- (`_fold.lua`); this flush does not, so the body stays expanded.
             pcall(vim.api.nvim_win_call, win, function()
                 vim.cmd(
                     string.format(

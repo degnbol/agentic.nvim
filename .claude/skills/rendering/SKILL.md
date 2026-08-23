@@ -17,8 +17,10 @@ treesitter language — a clone of the markdown parser registered in
 `init.lua` (see the `language.add` block there for the registration rationale).
 Two consequences worth carrying in your head:
 
-- Folding uses `vim.treesitter.foldexpr()` driven by `queries/agentic/folds.scm`,
-  isolated from real markdown buffers.
+- Folding uses `agentic.ui.folds`'s own foldexpr over `queries/agentic/folds.scm`,
+  isolated from real markdown buffers. Not `vim.treesitter.foldexpr()` — that
+  one folds every injected tree too; the module docstring says why that is
+  unusable here.
 - All programmatic highlighting goes through extmarks, never vim syntax rules —
   treesitter clears `vim.bo.syntax` and the chat buffer has to render correctly
   with or without a user re-enable. Highlight group names are in
@@ -67,12 +69,10 @@ close. The info-string after the fence is set per kind:
 exceeds its per-kind threshold) and `<lang>-difffold` (every edit diff).
 `folds.scm` matches `fold$` on the language. `injections.scm` strips a trailing
 `-fold` before resolving the injected parser (so sidecar markdown still
-highlights) but **excludes `difffold$` from injection entirely** — injecting the
-diff's base language ships its `folds.scm`, whose per-structure folds would
-shatter the diff into one fold per function/block. With no injection the diff
-folds as one block; its syntax colour comes from `block_col_hl` extmarks
-(`highlight_map_in_context`), which already override the injection at
-priority 200.
+highlights) but **excludes `difffold$` from injection entirely** — a diff's
+syntax colour comes from `block_col_hl` extmarks (`highlight_map_in_context`),
+which override any injection at priority 200, so injecting the base language
+would only buy a second parse of the same text.
 
 **Downstream fence consumers must handle variable width.** Match `^\`+$`
 (any backtick-only line) instead of literal triple-backticks, and
@@ -83,17 +83,21 @@ existing pattern.
 
 A `fold$`-suffixed info-string on `code_fence_content`'s parent fence is the
 only fold trigger (`<lang>-fold` for sidecar bodies, `<lang>-difffold` for edit
-diffs). Mechanism is split across three files; read them in this order
-when changing fold behaviour:
+diffs) — and, because levels come from the root tree alone, the chat buffer's
+only fold source at all. Mechanism is split across four files; read them in
+this order when changing fold behaviour:
 
 1. `queries/agentic/folds.scm` — folds `code_fence_content`, not the whole
    `fenced_code_block` (the file's top comment explains why).
-2. `lua/agentic/ui/tool_call_renderer.lua` — `prepare_block_lines` decides
+2. `lua/agentic/ui/folds.lua` — the foldexpr: root-tree-only levels, cached
+   per `b:changedtick`. Its module docstring is the record of why core's
+   `vim.treesitter.foldexpr()` cannot be used here.
+3. `lua/agentic/ui/tool_call_renderer.lua` — `prepare_block_lines` decides
    per-kind whether to append `-fold`, and returns `fold_anchor` (0-indexed
    offset of the first body line).
-3. `lua/agentic/ui/message_writer.lua` — `MessageWriter:_close_fold` (and
-   its docstring) explain why the fold close is deferred via `vim.schedule`
-   and how anchor extmarks survive edits and chat-window hides.
+4. `lua/agentic/ui/message_writer.lua` — `MessageWriter:_queue_fold`'s
+   docstring explains why the fold close is deferred via `vim.schedule` and
+   how anchor extmarks survive edits and chat-window hides.
 
 Threshold config keys (in `config_default.lua`):
 
@@ -101,7 +105,7 @@ Threshold config keys (in `config_default.lua`):
 - `execute_max_lines` — shell stdout (and execute failure_reason)
 - Fetch / WebSearch / SubAgent — always folded when multi-line, no config
 
-`lua/agentic/ui/foldtext.lua` provides the `··· N lines ···` foldtext.
+`lua/agentic/ui/folds.lua` also provides the `··· N lines ···` foldtext.
 
 Adding a new foldable kind:
 
@@ -110,9 +114,9 @@ Adding a new foldable kind:
 2. Return the correct `fold_anchor` (offset within the returned `lines` to
    the first body line — the line *inside* the fold, not the fence
    delimiter).
-3. No changes needed to `folds.scm` or `injections.scm` — they match the
-   `fold$` suffix generically (use `<lang>-fold` to fold *and* inject the base
-   language; the `difffold` marker is the special case that suppresses
+3. No changes needed to `folds.scm`, `injections.scm` or `folds.lua` — they
+   match the `fold$` suffix generically (use `<lang>-fold` to fold *and* inject
+   the base language; the `difffold` marker is the special case that suppresses
    injection).
 
 ## Search match highlighting

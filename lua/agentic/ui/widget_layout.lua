@@ -203,19 +203,23 @@ local function chat_win_opts(is_bottom)
         winfixwidth = not is_bottom,
         signcolumn = "yes:1",
         foldmethod = "expr",
-        foldexpr = "v:lua.vim.treesitter.foldexpr()",
+        foldexpr = 'v:lua.require("agentic.ui.folds").foldexpr()',
         foldenable = true,
-        -- Set foldlevel high so nothing auto-closes: injected-language folds
-        -- and our own `*-fold` blocks both default open, and the writer closes
-        -- only its own blocks imperatively via :foldclose. This must be set
-        -- explicitly — a new window inherits window-local foldlevel from the
-        -- window it splits off, NOT the global default, so opening Agentic from
-        -- a window with a low foldlevel would otherwise collapse every block.
+        -- Set foldlevel high so nothing auto-closes: `*-fold` blocks default
+        -- open and the writer closes them imperatively via :foldclose. This
+        -- must be set explicitly — a new window inherits window-local foldlevel
+        -- from the window it splits off, NOT the global default, so opening
+        -- Agentic from a window with a low foldlevel would otherwise collapse
+        -- every block.
         foldlevel = 99,
+        -- Same inheritance hazard as foldlevel: `agentic.ui.folds` drops
+        -- one-line bodies on the assumption vim could not close them anyway,
+        -- which only holds at 1.
+        foldminlines = 1,
         foldcolumn = "0",
         conceallevel = 2,
         concealcursor = "n",
-        foldtext = 'v:lua.require("agentic.ui.foldtext").foldtext()',
+        foldtext = 'v:lua.require("agentic.ui.folds").foldtext()',
         winhighlight = CHAT_WINHIGHLIGHT,
     }
 end

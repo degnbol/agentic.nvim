@@ -736,9 +736,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local fence = safe_fence(fence_content)
         -- The `-difffold` marker makes the whole diff body foldable as ONE
         -- block (folds.scm matches `fold$`) while suppressing language
-        -- injection (injections.scm excludes `difffold$`) — without it the
-        -- injected language's folds.scm shatters the diff into per-structure
-        -- sub-folds. Highlighting comes from block_col_hl extmarks instead.
+        -- injection (injections.scm excludes `difffold$`): block_col_hl
+        -- extmarks already colour the diff at priority 200, so injecting the
+        -- base language would only buy a second parse of the same text.
         -- The diff is foldable; it renders open normally and closed only when
         -- the edit failed (e.g. a rejected permission). The fold state is set
         -- explicitly (fold_open) rather than left to the foldlevel default,

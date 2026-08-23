@@ -426,7 +426,7 @@ function Agentic.setup(opts)
     -- The chat buffer parses as a private `agentic` language (a clone of the
     -- bundled markdown parser) so its folds query — queries/agentic/folds.scm,
     -- which folds the writer's `*-fold` fences — is isolated from real markdown
-    -- buffers. `vim.treesitter.foldexpr()` resolves the parser via
+    -- buffers. `agentic.ui.folds` resolves the parser via
     -- get_parser(bufnr, nil), which infers the language from the filetype, so
     -- the AgenticChat→agentic registration is what makes folding work. Without
     -- it the chat would fall back to no parser and never fold.
