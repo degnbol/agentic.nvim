@@ -471,29 +471,32 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
-        it("blocks a write hidden after a newline-joined safe command", function()
-            -- Without newline splitting, `rm -rf bar` would be swallowed by
-            -- echo's trailing `*` wildcard and silently auto-approved.
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(echo *)" },
-                        },
-                    }
+        it(
+            "blocks a write hidden after a newline-joined safe command",
+            function()
+                -- Without newline splitting, `rm -rf bar` would be swallowed by
+                -- echo's trailing `*` wildcard and silently auto-approved.
+                local orig_read_json = PermissionRules.read_json
+                PermissionRules.read_json = function(path)
+                    if path:find("settings%.json$") then
+                        return {
+                            permissions = {
+                                allow = { "Bash(echo *)" },
+                            },
+                        }
+                    end
+                    return nil
                 end
-                return nil
+                PermissionRules.invalidate_cache()
+
+                local result =
+                    PermissionRules.should_auto_approve("echo hi\nrm -rf bar")
+                assert.is_false(result)
+
+                PermissionRules.read_json = orig_read_json
+                PermissionRules.invalidate_cache()
             end
-            PermissionRules.invalidate_cache()
-
-            local result =
-                PermissionRules.should_auto_approve("echo hi\nrm -rf bar")
-            assert.is_false(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-        end)
+        )
 
         it("approves newline-joined read-only statements", function()
             local orig_read_json = PermissionRules.read_json
@@ -566,7 +569,9 @@ describe("PermissionRules", function()
 
             it("resolves a call to a clean function body", function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve("foo() { echo hi }; foo")
+                    PermissionRules.should_auto_approve(
+                        "foo() { echo hi }; foo"
+                    )
                 )
             end)
 
@@ -584,7 +589,9 @@ describe("PermissionRules", function()
                 -- `rm -rf /` is not allowed, so the body never walks clean and
                 -- the name is not recorded — the call bails.
                 assert.is_false(
-                    PermissionRules.should_auto_approve("foo() { rm -rf / }; foo")
+                    PermissionRules.should_auto_approve(
+                        "foo() { rm -rf / }; foo"
+                    )
                 )
             end)
 
@@ -609,7 +616,9 @@ describe("PermissionRules", function()
             it("bails on a call before its definition", function()
                 -- Left-to-right: `foo` is not yet recorded at the call site.
                 assert.is_false(
-                    PermissionRules.should_auto_approve("foo; foo() { echo hi }")
+                    PermissionRules.should_auto_approve(
+                        "foo; foo() { echo hi }"
+                    )
                 )
             end)
 
@@ -623,16 +632,19 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("does not leak a function name into a nested sequence", function()
-                -- funcs is per-sequence (same scoping as the per-sequence `known`): the
-                -- `if` body is a fresh sequence, so a parent definition does not
-                -- resolve there. Accepted residual — over-prompts, never under.
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "foo() { echo hi }; if true; then foo; fi"
+            it(
+                "does not leak a function name into a nested sequence",
+                function()
+                    -- funcs is per-sequence (same scoping as the per-sequence `known`): the
+                    -- `if` body is a fresh sequence, so a parent definition does not
+                    -- resolve there. Accepted residual — over-prompts, never under.
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "foo() { echo hi }; if true; then foo; fi"
+                        )
                     )
-                )
-            end)
+                end
+            )
         end)
 
         it("blocks an anonymous function (runs immediately)", function()
@@ -726,65 +738,58 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
         end)
 
-        it(
-            "approves an escaped quote with a pipe inside the string",
-            function()
-                -- The walker sees `"a\"b|c"` is one double-quoted argument, so
-                -- the `|` is string data, not an operator. One safe `grep`
-                -- command — approve. (The old regex splitter saw an apparent
-                -- quote imbalance and bailed.) The `\` here is a literal
-                -- backslash char, not a lua escape.
-                local orig_read_json = PermissionRules.read_json
-                PermissionRules.read_json = function(path)
-                    if path:find("settings%.json$") then
-                        return {
-                            permissions = {
-                                allow = { "Bash(grep *)" },
-                            },
-                        }
-                    end
-                    return nil
+        it("approves an escaped quote with a pipe inside the string", function()
+            -- The walker sees `"a\"b|c"` is one double-quoted argument, so
+            -- the `|` is string data, not an operator. One safe `grep`
+            -- command — approve. (The old regex splitter saw an apparent
+            -- quote imbalance and bailed.) The `\` here is a literal
+            -- backslash char, not a lua escape.
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(grep *)" },
+                        },
+                    }
                 end
-                PermissionRules.invalidate_cache()
-
-                local result =
-                    PermissionRules.should_auto_approve([[grep "a\"b|c" file]])
-                assert.is_true(result)
-
-                PermissionRules.read_json = orig_read_json
-                PermissionRules.invalidate_cache()
+                return nil
             end
-        )
+            PermissionRules.invalidate_cache()
 
-        it(
-            "approves a quote-reopening idiom with a quoted pipe",
-            function()
-                -- zsh `'can'\''t|here'` concatenates to the literal can't|here,
-                -- so the `|` is inside the argument. The walker parses it as one
-                -- safe `echo` command — approve. (The old splitter saw the `|`
-                -- as unquoted and fragmented the command, bailing.)
-                local orig_read_json = PermissionRules.read_json
-                PermissionRules.read_json = function(path)
-                    if path:find("settings%.json$") then
-                        return {
-                            permissions = {
-                                allow = { "Bash(echo *)" },
-                            },
-                        }
-                    end
-                    return nil
+            local result =
+                PermissionRules.should_auto_approve([[grep "a\"b|c" file]])
+            assert.is_true(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
+
+        it("approves a quote-reopening idiom with a quoted pipe", function()
+            -- zsh `'can'\''t|here'` concatenates to the literal can't|here,
+            -- so the `|` is inside the argument. The walker parses it as one
+            -- safe `echo` command — approve. (The old splitter saw the `|`
+            -- as unquoted and fragmented the command, bailing.)
+            local orig_read_json = PermissionRules.read_json
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(echo *)" },
+                        },
+                    }
                 end
-                PermissionRules.invalidate_cache()
-
-                local result = PermissionRules.should_auto_approve(
-                    [[echo 'can'\''t|here']]
-                )
-                assert.is_true(result)
-
-                PermissionRules.read_json = orig_read_json
-                PermissionRules.invalidate_cache()
+                return nil
             end
-        )
+            PermissionRules.invalidate_cache()
+
+            local result =
+                PermissionRules.should_auto_approve([[echo 'can'\''t|here']])
+            assert.is_true(result)
+
+            PermissionRules.read_json = orig_read_json
+            PermissionRules.invalidate_cache()
+        end)
 
         it("approves pipeline with quoted pipe in grep pattern", function()
             local orig_read_json = PermissionRules.read_json
@@ -888,9 +893,7 @@ describe("PermissionRules", function()
         end)
 
         it("approves allowed command with stderr fd dup", function()
-            assert.is_true(
-                PermissionRules.should_auto_approve("echo hi >&2")
-            )
+            assert.is_true(PermissionRules.should_auto_approve("echo hi >&2"))
         end)
 
         it("approves allowed command with /dev/null redirect", function()
@@ -971,18 +974,25 @@ describe("PermissionRules", function()
 
         -- A redirect target is resolved to a literal the same way an `rm`
         -- operand is, so a write and a later delete on the same path correlate.
-        it("evaluate: a quoted-literal redirect target is quote-stripped", function()
-            local ok, effects = PermissionRules.evaluate([[echo x > "/tmp/x"]])
-            assert.is_true(ok)
-            assert.equal("/tmp/x", effects[1].path)
-        end)
+        it(
+            "evaluate: a quoted-literal redirect target is quote-stripped",
+            function()
+                local ok, effects =
+                    PermissionRules.evaluate([[echo x > "/tmp/x"]])
+                assert.is_true(ok)
+                assert.equal("/tmp/x", effects[1].path)
+            end
+        )
 
-        it("evaluate: a redirect target resolves through a known literal", function()
-            local ok, effects =
-                PermissionRules.evaluate("f=/tmp/x; echo y > $f")
-            assert.is_true(ok)
-            assert.equal("/tmp/x", effects[1].path)
-        end)
+        it(
+            "evaluate: a redirect target resolves through a known literal",
+            function()
+                local ok, effects =
+                    PermissionRules.evaluate("f=/tmp/x; echo y > $f")
+                assert.is_true(ok)
+                assert.equal("/tmp/x", effects[1].path)
+            end
+        )
 
         it("evaluate: a quoted known-var redirect target resolves", function()
             local ok, effects =
@@ -991,30 +1001,40 @@ describe("PermissionRules", function()
             assert.equal("/tmp/x", effects[1].path)
         end)
 
-        it("evaluate: an unbound-var redirect target bails (no effect)", function()
-            -- Previously emitted the raw `$f` as the path (never matched a tmp
-            -- root, never correlated). Now bails like any dynamic target.
-            local ok, effects = PermissionRules.evaluate("echo y > $f")
-            assert.is_false(ok)
-            assert.equal(0, #effects)
-        end)
+        it(
+            "evaluate: an unbound-var redirect target bails (no effect)",
+            function()
+                -- Previously emitted the raw `$f` as the path (never matched a tmp
+                -- root, never correlated). Now bails like any dynamic target.
+                local ok, effects = PermissionRules.evaluate("echo y > $f")
+                assert.is_false(ok)
+                assert.equal(0, #effects)
+            end
+        )
 
-        it("evaluate: known-var write then rm correlate on the resolved path", function()
-            Config.permissions.tmp_cleanup = true
-            local ok, effects =
-                PermissionRules.evaluate([[f=/tmp/x; echo y > "$f"; rm "$f"]])
-            assert.is_true(ok)
-            assert.equal(2, #effects)
-            assert.equal("write", effects[1].kind)
-            assert.equal("/tmp/x", effects[1].path)
-            assert.equal("delete", effects[2].kind)
-            assert.equal("/tmp/x", effects[2].path)
-        end)
+        it(
+            "evaluate: known-var write then rm correlate on the resolved path",
+            function()
+                Config.permissions.tmp_cleanup = true
+                local ok, effects = PermissionRules.evaluate(
+                    [[f=/tmp/x; echo y > "$f"; rm "$f"]]
+                )
+                assert.is_true(ok)
+                assert.equal(2, #effects)
+                assert.equal("write", effects[1].kind)
+                assert.equal("/tmp/x", effects[1].path)
+                assert.equal("delete", effects[2].kind)
+                assert.equal("/tmp/x", effects[2].path)
+            end
+        )
 
-        it("evaluate: an unapproved command with a redirect is not ok", function()
-            local ok = PermissionRules.evaluate("danger > /tmp/x")
-            assert.is_false(ok)
-        end)
+        it(
+            "evaluate: an unapproved command with a redirect is not ok",
+            function()
+                local ok = PermissionRules.evaluate("danger > /tmp/x")
+                assert.is_false(ok)
+            end
+        )
 
         -- Under tmp_cleanup, rm emits ordered delete effects instead
         -- of bailing to the structured `ask`; the policy layer correlates them
@@ -1034,24 +1054,30 @@ describe("PermissionRules", function()
             assert.equal(0, #effects)
         end)
 
-        it("evaluate: redirect-write then rm emits write then delete", function()
-            Config.permissions.tmp_cleanup = true
-            local ok, effects =
-                PermissionRules.evaluate("echo x > /tmp/f; rm /tmp/f")
-            assert.is_true(ok)
-            assert.equal(2, #effects)
-            assert.equal("write", effects[1].kind)
-            assert.equal("delete", effects[2].kind)
-            assert.equal("/tmp/f", effects[2].path)
-        end)
+        it(
+            "evaluate: redirect-write then rm emits write then delete",
+            function()
+                Config.permissions.tmp_cleanup = true
+                local ok, effects =
+                    PermissionRules.evaluate("echo x > /tmp/f; rm /tmp/f")
+                assert.is_true(ok)
+                assert.equal(2, #effects)
+                assert.equal("write", effects[1].kind)
+                assert.equal("delete", effects[2].kind)
+                assert.equal("/tmp/f", effects[2].path)
+            end
+        )
 
-        it("evaluate: rm flags are options, only operands emit effects", function()
-            Config.permissions.tmp_cleanup = true
-            local ok, effects = PermissionRules.evaluate("rm -rf /tmp/d")
-            assert.is_true(ok)
-            assert.equal(1, #effects)
-            assert.equal("/tmp/d", effects[1].path)
-        end)
+        it(
+            "evaluate: rm flags are options, only operands emit effects",
+            function()
+                Config.permissions.tmp_cleanup = true
+                local ok, effects = PermissionRules.evaluate("rm -rf /tmp/d")
+                assert.is_true(ok)
+                assert.equal(1, #effects)
+                assert.equal("/tmp/d", effects[1].path)
+            end
+        )
 
         it("evaluate: a dynamic rm operand bails (no effect)", function()
             Config.permissions.tmp_cleanup = true
@@ -1060,12 +1086,15 @@ describe("PermissionRules", function()
             assert.equal(0, #effects)
         end)
 
-        it("evaluate: rm -- treats a trailing dash-word as an operand", function()
-            Config.permissions.tmp_cleanup = true
-            local ok, effects = PermissionRules.evaluate("rm -- -weird")
-            assert.is_true(ok)
-            assert.equal("-weird", effects[1].path)
-        end)
+        it(
+            "evaluate: rm -- treats a trailing dash-word as an operand",
+            function()
+                Config.permissions.tmp_cleanup = true
+                local ok, effects = PermissionRules.evaluate("rm -- -weird")
+                assert.is_true(ok)
+                assert.equal("-weird", effects[1].path)
+            end
+        )
 
         it("should_auto_reject: rm -f always rejects", function()
             assert.is_true(PermissionRules.should_auto_reject("rm -f /tmp/x"))
@@ -1129,13 +1158,23 @@ describe("PermissionRules", function()
         end
 
         describe("uv run wrapper (safe_write tier)", function()
-            it("approves a bare `uv run <checker>` at the allow tier", function()
-                assert.is_true(approves_at("allow", "uv run basedpyright probe.py"))
-            end)
+            it(
+                "approves a bare `uv run <checker>` at the allow tier",
+                function()
+                    assert.is_true(
+                        approves_at("allow", "uv run basedpyright probe.py")
+                    )
+                end
+            )
 
-            it("prompts the same command at the read-only tier (env sync writes)", function()
-                assert.is_false(approves_at("read-only", "uv run basedpyright probe.py"))
-            end)
+            it(
+                "prompts the same command at the read-only tier (env sync writes)",
+                function()
+                    assert.is_false(
+                        approves_at("read-only", "uv run basedpyright probe.py")
+                    )
+                end
+            )
 
             it("prompts when the inner command is not approved", function()
                 assert.is_false(approves_at("allow", "uv run rm -rf /"))
@@ -1143,7 +1182,10 @@ describe("PermissionRules", function()
 
             it("prompts when a code-injecting option is present", function()
                 assert.is_false(
-                    approves_at("allow", "uv run --with=evil basedpyright probe.py")
+                    approves_at(
+                        "allow",
+                        "uv run --with=evil basedpyright probe.py"
+                    )
                 )
             end)
 
@@ -1162,59 +1204,93 @@ describe("PermissionRules", function()
             it("prompts on a checker's write/exec option", function()
                 -- basedpyright --writebaseline / --createstub / --gitlabcodequality
                 -- write files; mypy --install-types runs pip (arbitrary code).
-                assert.is_false(approves_at("allow", "basedpyright --writebaseline"))
                 assert.is_false(
-                    approves_at("allow", "basedpyright --gitlabcodequality out.json")
+                    approves_at("allow", "basedpyright --writebaseline")
+                )
+                assert.is_false(
+                    approves_at(
+                        "allow",
+                        "basedpyright --gitlabcodequality out.json"
+                    )
                 )
                 assert.is_false(approves_at("allow", "mypy --install-types"))
             end)
 
-            it("treats a cache/file writer as safe_write, not read-only", function()
-                -- mypy writes .mypy_cache by default; formatters rewrite files.
-                for _, cmd in ipairs({ "mypy src.py", "stylua init.lua", "ruff format src.py" }) do
-                    assert.is_true(approves_at("allow", cmd))
-                    assert.is_false(approves_at("read-only", cmd))
+            it(
+                "treats a cache/file writer as safe_write, not read-only",
+                function()
+                    -- mypy writes .mypy_cache by default; formatters rewrite files.
+                    for _, cmd in ipairs({
+                        "mypy src.py",
+                        "stylua init.lua",
+                        "ruff format src.py",
+                    }) do
+                        assert.is_true(approves_at("allow", cmd))
+                        assert.is_false(approves_at("read-only", cmd))
+                    end
                 end
-            end)
+            )
         end)
 
         describe("process substitution", function()
-            it("approves a read-only command with read-only procsub inners", function()
-                -- `<(…)` expands to a /dev/fd path; the inner `sort`s
-                -- recurse-approve, so the whole command auto-approves.
-                assert.is_true(
-                    approves_at("read-only", "diff <(sort a.tsv) <(sort b.tsv)")
-                )
-            end)
+            it(
+                "approves a read-only command with read-only procsub inners",
+                function()
+                    -- `<(…)` expands to a /dev/fd path; the inner `sort`s
+                    -- recurse-approve, so the whole command auto-approves.
+                    assert.is_true(
+                        approves_at(
+                            "read-only",
+                            "diff <(sort a.tsv) <(sort b.tsv)"
+                        )
+                    )
+                end
+            )
 
-            it("prompts when a procsub inner is not in any allow list", function()
-                assert.is_false(
-                    approves_at("allow", "diff <(sort a.tsv) <(rm -rf /)")
-                )
-            end)
+            it(
+                "prompts when a procsub inner is not in any allow list",
+                function()
+                    assert.is_false(
+                        approves_at("allow", "diff <(sort a.tsv) <(rm -rf /)")
+                    )
+                end
+            )
 
             it("rejects when a procsub inner hits a deny gate", function()
                 assert.is_false(
-                    approves_at("allow", "diff <(find . -exec rm {} +) <(sort b)")
+                    approves_at(
+                        "allow",
+                        "diff <(find . -exec rm {} +) <(sort b)"
+                    )
                 )
             end)
         end)
 
-        it("approves command from plugin defaults when auto_approve=allow", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
-            PermissionRules.invalidate_cache()
-            assert.is_true(PermissionRules.should_auto_approve("ls -la /tmp"))
-        end)
+        it(
+            "approves command from plugin defaults when auto_approve=allow",
+            function()
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.use_claude_settings = false
+                Config.permissions.auto_approve = "allow"
+                PermissionRules.invalidate_cache()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("ls -la /tmp")
+                )
+            end
+        )
 
-        it("approves command from plugin defaults when auto_approve=read-only", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "read-only"
-            PermissionRules.invalidate_cache()
-            assert.is_true(PermissionRules.should_auto_approve("ls -la /tmp"))
-        end)
+        it(
+            "approves command from plugin defaults when auto_approve=read-only",
+            function()
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.use_claude_settings = false
+                Config.permissions.auto_approve = "read-only"
+                PermissionRules.invalidate_cache()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("ls -la /tmp")
+                )
+            end
+        )
 
         it("rejects when auto_approve is nil", function()
             Config.permissions.use_plugin_defaults = true
@@ -1314,18 +1390,21 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("recompiles when Config.permissions.read_only is replaced", function()
-            Config.permissions.use_plugin_defaults = false
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "read-only"
-            Config.permissions.read_only = { "Bash(custom *)" }
-            PermissionRules.invalidate_cache()
-            -- Default `ls` no longer in list
-            assert.is_false(PermissionRules.should_auto_approve("ls -la"))
-            assert.is_true(
-                PermissionRules.should_auto_approve("custom thing")
-            )
-        end)
+        it(
+            "recompiles when Config.permissions.read_only is replaced",
+            function()
+                Config.permissions.use_plugin_defaults = false
+                Config.permissions.use_claude_settings = false
+                Config.permissions.auto_approve = "read-only"
+                Config.permissions.read_only = { "Bash(custom *)" }
+                PermissionRules.invalidate_cache()
+                -- Default `ls` no longer in list
+                assert.is_false(PermissionRules.should_auto_approve("ls -la"))
+                assert.is_true(
+                    PermissionRules.should_auto_approve("custom thing")
+                )
+            end
+        )
 
         it("merges Config patterns with settings.json patterns", function()
             Config.permissions.use_plugin_defaults = false
@@ -1347,9 +1426,7 @@ describe("PermissionRules", function()
             PermissionRules.invalidate_cache()
 
             assert.is_true(PermissionRules.should_auto_approve("ls -la"))
-            assert.is_true(
-                PermissionRules.should_auto_approve("make test foo")
-            )
+            assert.is_true(PermissionRules.should_auto_approve("make test foo"))
             assert.is_true(
                 PermissionRules.should_auto_approve("ls /tmp && make test x")
             )
@@ -1468,10 +1545,12 @@ describe("PermissionRules", function()
                 assert.is_false(decide("( echo a; rm x )", perms))
             end)
             it("approves the safe compound example", function()
-                assert.is_true(decide(
-                    "for p in a b; do ( ls \"$p\" >/dev/null 2>&1 && printf '%s\\n' \"$p\" ) || printf '%s\\n' \"$p\"; done",
-                    perms
-                ))
+                assert.is_true(
+                    decide(
+                        'for p in a b; do ( ls "$p" >/dev/null 2>&1 && printf \'%s\\n\' "$p" ) || printf \'%s\\n\' "$p"; done',
+                        perms
+                    )
+                )
             end)
         end)
 
@@ -1596,7 +1675,7 @@ describe("PermissionRules", function()
             local ALLOW_GREP = { allow = { "Bash(grep *)" } }
 
             it(
-                "denies a literal concatenation in option position (-ex\"e\"c)",
+                'denies a literal concatenation in option position (-ex"e"c)',
                 function()
                     assert.is_false(
                         decide_with_entries(
@@ -1657,15 +1736,18 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("approves a literal concatenation in command-name position", function()
-                assert.is_true(
-                    decide_with_entries(
-                        'gr"e"p foo file',
-                        ALLOW_GREP,
-                        { grep = { read_only = { {} } } }
+            it(
+                "approves a literal concatenation in command-name position",
+                function()
+                    assert.is_true(
+                        decide_with_entries(
+                            'gr"e"p foo file',
+                            ALLOW_GREP,
+                            { grep = { read_only = { {} } } }
+                        )
                     )
-                )
-            end)
+                end
+            )
 
             it(
                 "matches the same option whether the rule lists -exec or exec (post-normalisation)",
@@ -1715,87 +1797,125 @@ describe("PermissionRules", function()
         -- "argument-position command substitution" block below.) These
         -- tests focus on the assignment positives and on the negatives that
         -- remain unsafe.
-        describe("Phase 2 (assignment-position substitution and loops)", function()
-            local ALLOW_ECHO_CAT = {
-                allow = { "Bash(echo *)", "Bash(echo)", "Bash(cat *)" },
-            }
-            local ALLOW_ECHO = {
-                allow = { "Bash(echo *)", "Bash(echo)" },
-            }
-            local ALLOW_READ_ECHO = {
-                allow = { "Bash(read *)", "Bash(echo *)", "Bash(echo)" },
-            }
-            local ALLOW_GREP_SLEEP = {
-                allow = { "Bash(grep *)", "Bash(sleep *)" },
-            }
+        describe(
+            "Phase 2 (assignment-position substitution and loops)",
+            function()
+                local ALLOW_ECHO_CAT = {
+                    allow = { "Bash(echo *)", "Bash(echo)", "Bash(cat *)" },
+                }
+                local ALLOW_ECHO = {
+                    allow = { "Bash(echo *)", "Bash(echo)" },
+                }
+                local ALLOW_READ_ECHO = {
+                    allow = { "Bash(read *)", "Bash(echo *)", "Bash(echo)" },
+                }
+                local ALLOW_GREP_SLEEP = {
+                    allow = { "Bash(grep *)", "Bash(sleep *)" },
+                }
 
-            it("approves f=$(echo hi) when echo is allowed", function()
-                assert.is_true(decide("f=$(echo hi)", ALLOW_ECHO))
-            end)
+                it("approves f=$(echo hi) when echo is allowed", function()
+                    assert.is_true(decide("f=$(echo hi)", ALLOW_ECHO))
+                end)
 
-            it("approves f=$(echo a; echo b) — multi-statement inner list", function()
-                assert.is_true(decide("f=$(echo a; echo b)", ALLOW_ECHO))
-            end)
+                it(
+                    "approves f=$(echo a; echo b) — multi-statement inner list",
+                    function()
+                        assert.is_true(
+                            decide("f=$(echo a; echo b)", ALLOW_ECHO)
+                        )
+                    end
+                )
 
-            it("approves f=$(echo a | head) — inner pipeline", function()
-                assert.is_true(
-                    decide("f=$(echo a | head)", {
+                it("approves f=$(echo a | head) — inner pipeline", function()
+                    assert.is_true(decide("f=$(echo a | head)", {
                         allow = { "Bash(echo *)", "Bash(head)" },
-                    })
+                    }))
+                end)
+
+                it(
+                    "approves arr=(a $(echo b) c) — safe substitution in array element",
+                    function()
+                        assert.is_true(
+                            decide("arr=(a $(echo b) c)", ALLOW_ECHO)
+                        )
+                    end
                 )
-            end)
 
-            it("approves arr=(a $(echo b) c) — safe substitution in array element", function()
-                assert.is_true(decide("arr=(a $(echo b) c)", ALLOW_ECHO))
-            end)
-
-            it("approves a for-loop over a glob with allowed body", function()
-                assert.is_true(
-                    decide("for f in *.txt; do cat \"$f\"; done", ALLOW_ECHO_CAT)
+                it(
+                    "approves a for-loop over a glob with allowed body",
+                    function()
+                        assert.is_true(
+                            decide(
+                                'for f in *.txt; do cat "$f"; done',
+                                ALLOW_ECHO_CAT
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("approves a for-loop over literal items", function()
-                assert.is_true(
-                    decide("for f in a b c; do cat \"$f\"; done", ALLOW_ECHO_CAT)
-                )
-            end)
-
-            it("approves a while-loop with allowed condition and body", function()
-                assert.is_true(
-                    decide("while read l; do echo \"$l\"; done", ALLOW_READ_ECHO)
-                )
-            end)
-
-            it("approves an until-loop with allowed condition and body", function()
-                assert.is_true(
-                    decide(
-                        "until grep done log; do sleep 1; done",
-                        ALLOW_GREP_SLEEP
+                it("approves a for-loop over literal items", function()
+                    assert.is_true(
+                        decide(
+                            'for f in a b c; do cat "$f"; done',
+                            ALLOW_ECHO_CAT
+                        )
                     )
+                end)
+
+                it(
+                    "approves a while-loop with allowed condition and body",
+                    function()
+                        assert.is_true(
+                            decide(
+                                'while read l; do echo "$l"; done',
+                                ALLOW_READ_ECHO
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("rejects f=$(rm x) — inner command not allowed", function()
-                assert.is_false(decide("f=$(rm x)", ALLOW_ECHO))
-            end)
-
-            it("rejects f=$(foo > bar) — inner file_redirect fires", function()
-                assert.is_false(
-                    decide("f=$(foo > bar)", {
-                        allow = { "Bash(foo *)", "Bash(foo)" },
-                    })
+                it(
+                    "approves an until-loop with allowed condition and body",
+                    function()
+                        assert.is_true(
+                            decide(
+                                "until grep done log; do sleep 1; done",
+                                ALLOW_GREP_SLEEP
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("rejects arr=($(rm x)) — array element with disallowed inner", function()
-                assert.is_false(decide("arr=($(rm x))", ALLOW_ECHO))
-            end)
+                it("rejects f=$(rm x) — inner command not allowed", function()
+                    assert.is_false(decide("f=$(rm x)", ALLOW_ECHO))
+                end)
 
-            it("rejects foo=$(rm x) ls — command-prefix assignment with substitution", function()
-                assert.is_false(decide("foo=$(rm x) ls", ALLOW_ECHO_CAT))
-            end)
-        end)
+                it(
+                    "rejects f=$(foo > bar) — inner file_redirect fires",
+                    function()
+                        assert.is_false(decide("f=$(foo > bar)", {
+                            allow = { "Bash(foo *)", "Bash(foo)" },
+                        }))
+                    end
+                )
+
+                it(
+                    "rejects arr=($(rm x)) — array element with disallowed inner",
+                    function()
+                        assert.is_false(decide("arr=($(rm x))", ALLOW_ECHO))
+                    end
+                )
+
+                it(
+                    "rejects foo=$(rm x) ls — command-prefix assignment with substitution",
+                    function()
+                        assert.is_false(
+                            decide("foo=$(rm x) ls", ALLOW_ECHO_CAT)
+                        )
+                    end
+                )
+            end
+        )
 
         -- a bare `$(...)` in argument or for-list position is recursed —
         -- the inner command must approve on its own, and its output splices
@@ -1817,9 +1937,12 @@ describe("PermissionRules", function()
                 assert.is_true(decide("cat $(ls)", ALLOW_CAT_LS))
             end)
 
-            it("approves cat foo $(ls) bar — substitution among literals", function()
-                assert.is_true(decide("cat foo $(ls) bar", ALLOW_CAT_LS))
-            end)
+            it(
+                "approves cat foo $(ls) bar — substitution among literals",
+                function()
+                    assert.is_true(decide("cat foo $(ls) bar", ALLOW_CAT_LS))
+                end
+            )
 
             it("approves a backtick substitution", function()
                 assert.is_true(decide("cat `ls`", ALLOW_CAT_LS))
@@ -1829,9 +1952,12 @@ describe("PermissionRules", function()
                 assert.is_false(decide("cat $(nope)", ALLOW_CAT_LS))
             end)
 
-            it("rejects cat $(ls > out) — inner write redirect fires", function()
-                assert.is_false(decide("cat $(ls > out)", ALLOW_CAT_LS))
-            end)
+            it(
+                "rejects cat $(ls > out) — inner write redirect fires",
+                function()
+                    assert.is_false(decide("cat $(ls > out)", ALLOW_CAT_LS))
+                end
+            )
 
             it("rejects cat $() — empty substitution", function()
                 assert.is_false(decide("cat $()", ALLOW_CAT_LS))
@@ -1845,35 +1971,56 @@ describe("PermissionRules", function()
                 assert.is_true(decide("cat $(echo $(ls))", ALLOW_CAT_LS))
             end)
 
-            it("rejects nested substitution with a disallowed innermost command", function()
-                assert.is_false(decide("cat $(echo $(rm x))", ALLOW_CAT_LS))
-            end)
+            it(
+                "rejects nested substitution with a disallowed innermost command",
+                function()
+                    assert.is_false(decide("cat $(echo $(rm x))", ALLOW_CAT_LS))
+                end
+            )
 
-            it("approves process substitution — inner recurses, arg is a /dev/fd path", function()
-                assert.is_true(decide("cat <(ls)", ALLOW_CAT_LS))
-            end)
+            it(
+                "approves process substitution — inner recurses, arg is a /dev/fd path",
+                function()
+                    assert.is_true(decide("cat <(ls)", ALLOW_CAT_LS))
+                end
+            )
 
-            it("rejects process substitution with a disallowed inner", function()
-                assert.is_false(decide("cat <(rm x)", ALLOW_CAT_LS))
-            end)
+            it(
+                "rejects process substitution with a disallowed inner",
+                function()
+                    assert.is_false(decide("cat <(rm x)", ALLOW_CAT_LS))
+                end
+            )
 
             it("approves a for-loop over a substitution list", function()
                 assert.is_true(
-                    decide("for f in $(ls); do cat \"$f\"; done", ALLOW_CAT_LS)
+                    decide('for f in $(ls); do cat "$f"; done', ALLOW_CAT_LS)
                 )
             end)
 
-            it("approves a for-loop with substitution among literals", function()
-                assert.is_true(
-                    decide("for f in a $(ls) b; do cat \"$f\"; done", ALLOW_CAT_LS)
-                )
-            end)
+            it(
+                "approves a for-loop with substitution among literals",
+                function()
+                    assert.is_true(
+                        decide(
+                            'for f in a $(ls) b; do cat "$f"; done',
+                            ALLOW_CAT_LS
+                        )
+                    )
+                end
+            )
 
-            it("rejects a for-loop over a substitution with disallowed inner", function()
-                assert.is_false(
-                    decide("for f in $(nope); do cat \"$f\"; done", ALLOW_CAT_LS)
-                )
-            end)
+            it(
+                "rejects a for-loop over a substitution with disallowed inner",
+                function()
+                    assert.is_false(
+                        decide(
+                            'for f in $(nope); do cat "$f"; done',
+                            ALLOW_CAT_LS
+                        )
+                    )
+                end
+            )
         end)
 
         -- a quoted `"$(cmd)"` argument is unwrapped to its inner
@@ -1894,31 +2041,45 @@ describe("PermissionRules", function()
                 },
             }
 
-            it("approves cat \"$(ls)\" — the gate-free flip", function()
+            it('approves cat "$(ls)" — the gate-free flip', function()
                 assert.is_true(decide('cat "$(ls)"', ALLOW_CAT_LS))
             end)
 
-            it("rejects cat \"$(nope)\" — inner command not allowed", function()
+            it('rejects cat "$(nope)" — inner command not allowed', function()
                 assert.is_false(decide('cat "$(nope)"', ALLOW_CAT_LS))
             end)
 
-            it("rejects cat \"$(ls > out)\" — inner write redirect fires", function()
-                assert.is_false(decide('cat "$(ls > out)"', ALLOW_CAT_LS))
-            end)
+            it(
+                'rejects cat "$(ls > out)" — inner write redirect fires',
+                function()
+                    assert.is_false(decide('cat "$(ls > out)"', ALLOW_CAT_LS))
+                end
+            )
 
-            it("approves cat \"pre$(ls)\" — literal prefix, see generalised block", function()
-                assert.is_true(decide('cat "pre$(ls)"', ALLOW_CAT_LS))
-            end)
+            it(
+                'approves cat "pre$(ls)" — literal prefix, see generalised block',
+                function()
+                    assert.is_true(decide('cat "pre$(ls)"', ALLOW_CAT_LS))
+                end
+            )
 
-            it("approves cat \"$(echo $(ls))\" — nested inner recurses", function()
-                assert.is_true(decide('cat "$(echo $(ls))"', ALLOW_CAT_LS))
-            end)
+            it(
+                'approves cat "$(echo $(ls))" — nested inner recurses',
+                function()
+                    assert.is_true(decide('cat "$(echo $(ls))"', ALLOW_CAT_LS))
+                end
+            )
 
-            it("prompts on find \"$(echo -exec rm)\" — dynamic token wildcards find's -exec deny", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve('find "$(echo -exec rm)"')
-                )
-            end)
+            it(
+                'prompts on find "$(echo -exec rm)" — dynamic token wildcards find\'s -exec deny',
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            'find "$(echo -exec rm)"'
+                        )
+                    )
+                end
+            )
         end)
 
         -- a quoted string mixing literal text with one or more
@@ -1937,31 +2098,47 @@ describe("PermissionRules", function()
                 },
             }
 
-            it("approves echo \"count: $(ls)\" — literal prefix", function()
+            it('approves echo "count: $(ls)" — literal prefix', function()
                 assert.is_true(decide('echo "count: $(ls)"', ALLOW_SUBST))
             end)
 
-            it("approves echo \"$(ls) done\" — literal suffix", function()
+            it('approves echo "$(ls) done" — literal suffix', function()
                 assert.is_true(decide('echo "$(ls) done"', ALLOW_SUBST))
             end)
 
-            it("approves echo \"a $(ls) b $(wc -l) c\" — multiple substitutions", function()
-                assert.is_true(decide('echo "a $(ls) b $(wc -l) c"', ALLOW_SUBST))
-            end)
+            it(
+                'approves echo "a $(ls) b $(wc -l) c" — multiple substitutions',
+                function()
+                    assert.is_true(
+                        decide('echo "a $(ls) b $(wc -l) c"', ALLOW_SUBST)
+                    )
+                end
+            )
 
-            it("rejects echo \"x $(rm y)\" — inner command not allowed", function()
-                assert.is_false(decide('echo "x $(rm y)"', ALLOW_SUBST))
-            end)
+            it(
+                'rejects echo "x $(rm y)" — inner command not allowed',
+                function()
+                    assert.is_false(decide('echo "x $(rm y)"', ALLOW_SUBST))
+                end
+            )
 
-            it("prompts on find . \"x$(echo -exec rm)\" — dynamic token wildcards find's -exec deny", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve('find . "x$(echo -exec rm)"')
-                )
-            end)
+            it(
+                'prompts on find . "x$(echo -exec rm)" — dynamic token wildcards find\'s -exec deny',
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            'find . "x$(echo -exec rm)"'
+                        )
+                    )
+                end
+            )
 
-            it("bails on echo \"x $y $(ls)\" — $var child is out of scope", function()
-                assert.is_false(decide('echo "x $y $(ls)"', ALLOW_SUBST))
-            end)
+            it(
+                'bails on echo "x $y $(ls)" — $var child is out of scope',
+                function()
+                    assert.is_false(decide('echo "x $y $(ls)"', ALLOW_SUBST))
+                end
+            )
         end)
 
         describe("control flow (if / case)", function()
@@ -1987,12 +2164,14 @@ describe("PermissionRules", function()
             end)
 
             it("approves if/elif/else with allowed bodies", function()
-                assert.is_true(decide(
-                    "if [ -f x ]; then cat x; "
-                        .. "elif grep y z; then echo a; "
-                        .. "else echo b; fi",
-                    ALLOW_CF
-                ))
+                assert.is_true(
+                    decide(
+                        "if [ -f x ]; then cat x; "
+                            .. "elif grep y z; then echo a; "
+                            .. "else echo b; fi",
+                        ALLOW_CF
+                    )
+                )
             end)
 
             it("rejects a disallowed command in an if body", function()
@@ -2002,36 +2181,36 @@ describe("PermissionRules", function()
             end)
 
             it("rejects a disallowed command in an elif body", function()
-                assert.is_false(decide(
-                    "if [ -f x ]; then cat x; elif grep y z; then rm a; fi",
-                    ALLOW_CF
-                ))
+                assert.is_false(
+                    decide(
+                        "if [ -f x ]; then cat x; elif grep y z; then rm a; fi",
+                        ALLOW_CF
+                    )
+                )
             end)
 
             it("rejects a disallowed command condition", function()
-                assert.is_false(
-                    decide("if rm x; then cat x; fi", ALLOW_CF)
-                )
+                assert.is_false(decide("if rm x; then cat x; fi", ALLOW_CF))
             end)
 
-            it("rejects substitution inside a test-command condition", function()
-                -- `[[ -f $(rm y) ]]` runs `rm y` during the predicate.
-                assert.is_false(
-                    decide("if [[ -f $(rm y) ]]; then cat x; fi", ALLOW_CF)
-                )
-            end)
+            it(
+                "rejects substitution inside a test-command condition",
+                function()
+                    -- `[[ -f $(rm y) ]]` runs `rm y` during the predicate.
+                    assert.is_false(
+                        decide("if [[ -f $(rm y) ]]; then cat x; fi", ALLOW_CF)
+                    )
+                end
+            )
 
             it("approves case with allowed item bodies", function()
-                assert.is_true(decide(
-                    "case $x in a) cat x;; b|c) echo y;; esac",
-                    ALLOW_CF
-                ))
+                assert.is_true(
+                    decide("case $x in a) cat x;; b|c) echo y;; esac", ALLOW_CF)
+                )
             end)
 
             it("rejects a disallowed command in a case item body", function()
-                assert.is_false(
-                    decide("case $x in a) rm x;; esac", ALLOW_CF)
-                )
+                assert.is_false(decide("case $x in a) rm x;; esac", ALLOW_CF))
             end)
 
             it("rejects substitution in the case value", function()
@@ -2092,9 +2271,7 @@ describe("PermissionRules", function()
         end)
 
         it("denies sort --out=x (GNU abbreviation)", function()
-            assert.is_false(
-                PermissionRules.should_auto_approve("sort --out=x")
-            )
+            assert.is_false(PermissionRules.should_auto_approve("sort --out=x"))
         end)
 
         it("denies sort -oFILE (glued arg)", function()
@@ -2185,16 +2362,13 @@ describe("PermissionRules", function()
             end
         )
 
-        it(
-            "auto-approves a safe_write command at allow (stylua)",
-            function()
-                Config.permissions.auto_approve = "allow"
-                PermissionRules.invalidate_cache()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("stylua foo.lua")
-                )
-            end
-        )
+        it("auto-approves a safe_write command at allow (stylua)", function()
+            Config.permissions.auto_approve = "allow"
+            PermissionRules.invalidate_cache()
+            assert.is_true(
+                PermissionRules.should_auto_approve("stylua foo.lua")
+            )
+        end)
 
         -- Write carve-outs: a read-only base command prompts only on the
         -- options/verbs that actually write (local file, upload, or remote
@@ -2223,7 +2397,9 @@ describe("PermissionRules", function()
 
         it("asks yq --inplace (long-form write)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("yq --inplace '.a=1' f.yaml")
+                PermissionRules.should_auto_approve(
+                    "yq --inplace '.a=1' f.yaml"
+                )
             )
         end)
 
@@ -2276,16 +2452,22 @@ describe("PermissionRules", function()
         -- Cluster-bypass closure rules: a destructive short letter sharing a
         -- cluster with an allow-listed letter must still prompt.
         it("asks pacman -QR foo (R shares the -Q cluster)", function()
-            assert.is_false(PermissionRules.should_auto_approve("pacman -QR foo"))
+            assert.is_false(
+                PermissionRules.should_auto_approve("pacman -QR foo")
+            )
         end)
 
         it("auto-approves pacman -Q kitty", function()
-            assert.is_true(PermissionRules.should_auto_approve("pacman -Q kitty"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("pacman -Q kitty")
+            )
         end)
 
         it("asks luac -lo evil.luac (o writes bytecode)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("luac -lo evil.luac foo.lua")
+                PermissionRules.should_auto_approve(
+                    "luac -lo evil.luac foo.lua"
+                )
             )
         end)
 
@@ -2317,7 +2499,7 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("auto-approves bash -c \"echo hi\"", function()
+            it('auto-approves bash -c "echo hi"', function()
                 assert.is_true(
                     PermissionRules.should_auto_approve('bash -c "echo hi"')
                 )
@@ -2380,7 +2562,7 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("prompts on find \"$f\" (quoting does not help)", function()
+            it('prompts on find "$f" (quoting does not help)', function()
                 assert.is_false(
                     PermissionRules.should_auto_approve('find "$f"')
                 )
@@ -2396,99 +2578,134 @@ describe("PermissionRules", function()
                 assert.is_false(PermissionRules.should_auto_approve("git $sub"))
             end)
 
-            it("prompts on git branch $x (ask gate options wildcard)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("git branch $x")
-                )
-            end)
+            it(
+                "prompts on git branch $x (ask gate options wildcard)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("git branch $x")
+                    )
+                end
+            )
 
-            it("auto-approves git log $ref (token after pinned positional)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("git log $ref")
-                )
-            end)
+            it(
+                "auto-approves git log $ref (token after pinned positional)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("git log $ref")
+                    )
+                end
+            )
 
             it("auto-approves ls $f (no gate to evade)", function()
                 assert.is_true(PermissionRules.should_auto_approve("ls $f"))
             end)
 
-            it("auto-approves find . -name '*.lua' (quoted glob is literal)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "find . -name '*.lua'"
+            it(
+                "auto-approves find . -name '*.lua' (quoted glob is literal)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "find . -name '*.lua'"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on find . -name *.lua (unquoted glob is dynamic)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("find . -name *.lua")
-                )
-            end)
+            it(
+                "prompts on find . -name *.lua (unquoted glob is dynamic)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "find . -name *.lua"
+                        )
+                    )
+                end
+            )
         end)
 
         -- The two phase-2 carve-outs (assignment substitution, loops) defer or
         -- multiply a use site; the gate fix guards that use site, so a payload
         -- routed through them is still caught.
-        describe("use-site fix closes the carve-out laundering chains", function()
-            it("prompts on f=$(printf …); find . $f (assignment-deferred)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "f=$(printf -- '-exec rm {} ;'); find . $f"
-                    )
+        describe(
+            "use-site fix closes the carve-out laundering chains",
+            function()
+                it(
+                    "prompts on f=$(printf …); find . $f (assignment-deferred)",
+                    function()
+                        assert.is_false(
+                            PermissionRules.should_auto_approve(
+                                "f=$(printf -- '-exec rm {} ;'); find . $f"
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("prompts on for f in *.txt; do find . $f; done (loop-multiplied)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "for f in *.txt; do find . $f; done"
-                    )
+                it(
+                    "prompts on for f in *.txt; do find . $f; done (loop-multiplied)",
+                    function()
+                        assert.is_false(
+                            PermissionRules.should_auto_approve(
+                                "for f in *.txt; do find . $f; done"
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("prompts on find . $(echo -exec rm {} ;) (arg-substitution spliced)", function()
-                -- The inner echo approves, but its output splices in as a
-                -- dynamic token that wildcards find's -exec deny gate.
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "find . $(echo -exec rm {} \\;)"
-                    )
+                it(
+                    "prompts on find . $(echo -exec rm {} ;) (arg-substitution spliced)",
+                    function()
+                        -- The inner echo approves, but its output splices in as a
+                        -- dynamic token that wildcards find's -exec deny gate.
+                        assert.is_false(
+                            PermissionRules.should_auto_approve(
+                                "find . $(echo -exec rm {} \\;)"
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("prompts on g=-exec; find . \"$g\" echo X {} \\; (flag in a var)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        'g=-exec; find . "$g" echo X {} \\;'
-                    )
+                it(
+                    'prompts on g=-exec; find . "$g" echo X {} \\; (flag in a var)',
+                    function()
+                        assert.is_false(
+                            PermissionRules.should_auto_approve(
+                                'g=-exec; find . "$g" echo X {} \\;'
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("still auto-approves for r in a b; do git show $r; done", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "for r in a b; do git show $r; done"
-                    )
+                it(
+                    "still auto-approves for r in a b; do git show $r; done",
+                    function()
+                        assert.is_true(
+                            PermissionRules.should_auto_approve(
+                                "for r in a b; do git show $r; done"
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("still auto-approves the git-rev-parse capture idiom", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "branch=$(git rev-parse --abbrev-ref HEAD)"
-                    )
+                it(
+                    "still auto-approves the git-rev-parse capture idiom",
+                    function()
+                        assert.is_true(
+                            PermissionRules.should_auto_approve(
+                                "branch=$(git rev-parse --abbrev-ref HEAD)"
+                            )
+                        )
+                    end
                 )
-            end)
 
-            it("still auto-approves capture-then-cd", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        'root=$(git rev-parse --git-dir); cd "$root"'
+                it("still auto-approves capture-then-cd", function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            'root=$(git rev-parse --git-dir); cd "$root"'
+                        )
                     )
-                )
-            end)
-        end)
+                end)
+            end
+        )
 
         -- A dynamic token consumed as an option value (only the value-taking
         -- flags of git/gh/aws/flytectl) is removed from the positional stream,
@@ -2496,17 +2713,23 @@ describe("PermissionRules", function()
         -- ahead of the visible ones — so it must wildcard positional-keyed
         -- gates too.
         describe("option-value injection wildcards positional gates", function()
-            it("prompts on git -C $repo log (dynamic value word-splits)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("git -C $repo log")
-                )
-            end)
+            it(
+                "prompts on git -C $repo log (dynamic value word-splits)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("git -C $repo log")
+                    )
+                end
+            )
 
-            it("auto-approves git -C /repo log (static value, no injection)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("git -C /repo log")
-                )
-            end)
+            it(
+                "auto-approves git -C /repo log (static value, no injection)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("git -C /repo log")
+                    )
+                end
+            )
 
             it("prompts on git -c $x log (dynamic config value)", function()
                 assert.is_false(
@@ -2522,35 +2745,49 @@ describe("PermissionRules", function()
         -- a leading flag) stays AUTO, and a post-subcommand `-c` (the harmless
         -- combined-diff flag) is not flagged.
         describe("git -c leading-option gate", function()
-            it("prompts on git -c core.pager=x log (static code channel)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "git -c core.pager=x log"
+            it(
+                "prompts on git -c core.pager=x log (static code channel)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "git -c core.pager=x log"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("auto-approves git log $ref (trailing token can't inject -c)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("git log $ref")
-                )
-            end)
+            it(
+                "auto-approves git log $ref (trailing token can't inject -c)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("git log $ref")
+                    )
+                end
+            )
 
-            it("auto-approves git log -c (post-subcommand -c is harmless)", function()
-                assert.is_true(PermissionRules.should_auto_approve("git log -c"))
-            end)
+            it(
+                "auto-approves git log -c (post-subcommand -c is harmless)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("git log -c")
+                    )
+                end
+            )
 
             -- `--config-env=<name>=<envvar>` is git's other leading config
             -- channel ("Like -c <name>=<value>"), so it is the same code
             -- channel as `-c` and must be in `leading_options`. (`--config`
             -- is not a real git option.)
-            it("prompts on git --config-env=core.pager=X log (env code channel)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "git --config-env=core.pager=X log"
+            it(
+                "prompts on git --config-env=core.pager=X log (env code channel)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "git --config-env=core.pager=X log"
+                        )
                     )
-                )
-            end)
+                end
+            )
         end)
 
         -- Correction step: deny/ask branch each leading flag's 0/1 absorption
@@ -2558,17 +2795,23 @@ describe("PermissionRules", function()
         -- via value_options. git's gates are subcommand-keyed, so a leading
         -- flag that shifts the subcommand in the took-0 parse exposes it.
         describe("absorption matching", function()
-            it("auto-approves git -C /repo log (value-taker absorbs /repo)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("git -C /repo log")
-                )
-            end)
+            it(
+                "auto-approves git -C /repo log (value-taker absorbs /repo)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("git -C /repo log")
+                    )
+                end
+            )
 
-            it("prompts on git -p push (zero-arity global can't hide push)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("git -p push")
-                )
-            end)
+            it(
+                "prompts on git -p push (zero-arity global can't hide push)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("git -p push")
+                    )
+                end
+            )
 
             it("prompts on git --no-pager push", function()
                 assert.is_false(
@@ -2576,33 +2819,45 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("prompts on git --new-global val push (unknown value-taker)", function()
-                -- The old silent OPTION_VALUE_TAKERS hole: an unlisted
-                -- value-taker mis-split the args and hid the real subcommand.
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "git --new-global val push"
+            it(
+                "prompts on git --new-global val push (unknown value-taker)",
+                function()
+                    -- The old silent OPTION_VALUE_TAKERS hole: an unlisted
+                    -- value-taker mis-split the args and hid the real subcommand.
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "git --new-global val push"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on git --foo ci log (single-parse allow: unknown subcommand)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("git --foo ci log")
-                )
-            end)
+            it(
+                "prompts on git --foo ci log (single-parse allow: unknown subcommand)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("git --foo ci log")
+                    )
+                end
+            )
 
-            it("prompts on git -C push log (accepted false-positive)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("git -C push log")
-                )
-            end)
+            it(
+                "prompts on git -C push log (accepted false-positive)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("git -C push log")
+                    )
+                end
+            )
 
-            it("auto-approves xargs -0 ls (unlisted leading flag absorbs 0)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("xargs -0 ls")
-                )
-            end)
+            it(
+                "auto-approves xargs -0 ls (unlisted leading flag absorbs 0)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("xargs -0 ls")
+                    )
+                end
+            )
         end)
 
         -- a `$var` bound to a splitting-proof literal earlier in the same
@@ -2610,11 +2865,16 @@ describe("PermissionRules", function()
         -- value no longer wildcard-fires a gate — while the literal feeds the
         -- SAME gates, and any non-inert sibling clears the binding (over-prompt).
         describe("constant-literal propagation", function()
-            it("approves f=/safe/dir; find $f (benign value recovered)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("f=/safe/dir; find $f")
-                )
-            end)
+            it(
+                "approves f=/safe/dir; find $f (benign value recovered)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe/dir; find $f"
+                        )
+                    )
+                end
+            )
 
             it("approves f=/safe; find ${f} (braced reference)", function()
                 assert.is_true(
@@ -2622,214 +2882,333 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("approves base=/safe/dir; find \"$base\" (quoted reference recovered)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve('base=/safe/dir; find "$base"')
-                )
-            end)
+            it(
+                'approves base=/safe/dir; find "$base" (quoted reference recovered)',
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            'base=/safe/dir; find "$base"'
+                        )
+                    )
+                end
+            )
 
-            it("approves base=/safe; find \"${base}\" (braced quoted reference)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve('base=/safe; find "${base}"')
-                )
-            end)
+            it(
+                'approves base=/safe; find "${base}" (braced quoted reference)',
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            'base=/safe; find "${base}"'
+                        )
+                    )
+                end
+            )
 
-            it("prompts on base=--exec; find \"$base\" (deny resolves through quoting)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve('base=--exec; find "$base"')
-                )
-            end)
+            it(
+                'prompts on base=--exec; find "$base" (deny resolves through quoting)',
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            'base=--exec; find "$base"'
+                        )
+                    )
+                end
+            )
 
-            it("prompts on find \"$base\" (unbound quoted var)", function()
+            it('prompts on find "$base" (unbound quoted var)', function()
                 assert.is_false(
                     PermissionRules.should_auto_approve('find "$base"')
                 )
             end)
 
-            it("prompts on base=/safe; find \"$base/x\" (concatenation not resolved)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve('base=/safe; find "$base/x"')
-                )
-            end)
+            it(
+                'prompts on base=/safe; find "$base/x" (concatenation not resolved)',
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            'base=/safe; find "$base/x"'
+                        )
+                    )
+                end
+            )
 
-            it("prompts on base=/safe; find \"${base:-x}\" (richer expansion not resolved)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve('base=/safe; find "${base:-x}"')
-                )
-            end)
+            it(
+                'prompts on base=/safe; find "${base:-x}" (richer expansion not resolved)',
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            'base=/safe; find "${base:-x}"'
+                        )
+                    )
+                end
+            )
 
             -- With quoted-substitution handling the quoted `"$(echo x)"` is walked
             -- and spliced as a dynamic token; it prompts because that token
             -- wildcard-fires find's `-exec` deny (the gate wildcard), not because
             -- the substitution bails. The bare `find $(echo x)` already prompts
             -- the same way, so quoted-substitution handling never flipped this boolean.
-            it("prompts on base=/safe; find \"$(echo x)\" (dynamic token wildcards find's -exec deny)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve('base=/safe; find "$(echo x)"')
-                )
-            end)
-
-            it("approves d=/repo; git -C $d log (resolved option value)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("d=/repo; git -C $d log")
-                )
-            end)
-
-            it("approves f=data.txt; sort $f (benign positional recovered)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("f=data.txt; sort $f")
-                )
-            end)
-
-            it("approves f=/safe; ls; find $f (inert command preserves binding)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("f=/safe; ls; find $f")
-                )
-            end)
-
-            it("prompts on f=--exec; find $f (literal feeds the same deny gate)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("f=--exec; find $f")
-                )
-            end)
-
-            it("prompts on f='-exec rm'; find $f (multi-word literal not propagated)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("f='-exec rm'; find $f")
-                )
-            end)
-
-            it("prompts on f=*.txt; find $f (glob value not propagated)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("f=*.txt; find $f")
-                )
-            end)
-
-            it("prompts on f=/safe; f=$x; find $f (reassignment to dynamic drops it)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("f=/safe; f=$x; find $f")
-                )
-            end)
-
-            it("prompts on f=/safe; printf -v f -- -exec; find $f (printf -v rebinds)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; printf -v f -- -exec; find $f"
+            it(
+                'prompts on base=/safe; find "$(echo x)" (dynamic token wildcards find\'s -exec deny)',
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            'base=/safe; find "$(echo x)"'
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("approves f=/safe; printf 'msg'; find $f (plain printf is inert)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; printf 'msg'; find $f"
+            it(
+                "approves d=/repo; git -C $d log (resolved option value)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "d=/repo; git -C $d log"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("approves f=/safe; printf -v g x; find $f (printf -v drops only its target)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; printf -v g x; find $f"
+            it(
+                "approves f=data.txt; sort $f (benign positional recovered)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=data.txt; sort $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
+
+            it(
+                "approves f=/safe; ls; find $f (inert command preserves binding)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; ls; find $f"
+                        )
+                    )
+                end
+            )
+
+            it(
+                "prompts on f=--exec; find $f (literal feeds the same deny gate)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("f=--exec; find $f")
+                    )
+                end
+            )
+
+            it(
+                "prompts on f='-exec rm'; find $f (multi-word literal not propagated)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "f='-exec rm'; find $f"
+                        )
+                    )
+                end
+            )
+
+            it(
+                "prompts on f=*.txt; find $f (glob value not propagated)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("f=*.txt; find $f")
+                    )
+                end
+            )
+
+            it(
+                "prompts on f=/safe; f=$x; find $f (reassignment to dynamic drops it)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; f=$x; find $f"
+                        )
+                    )
+                end
+            )
+
+            it(
+                "prompts on f=/safe; printf -v f -- -exec; find $f (printf -v rebinds)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; printf -v f -- -exec; find $f"
+                        )
+                    )
+                end
+            )
+
+            it(
+                "approves f=/safe; printf 'msg'; find $f (plain printf is inert)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; printf 'msg'; find $f"
+                        )
+                    )
+                end
+            )
+
+            it(
+                "approves f=/safe; printf -v g x; find $f (printf -v drops only its target)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; printf -v g x; find $f"
+                        )
+                    )
+                end
+            )
 
             -- capable grade: a control-flow sibling drops only the names it
             -- could rebind, not all of `known`.
-            it("approves f=/safe; if true; then echo hi; fi; find $f (binding-free if preserves)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; if true; then echo hi; fi; find $f"
+            it(
+                "approves f=/safe; if true; then echo hi; fi; find $f (binding-free if preserves)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; if true; then echo hi; fi; find $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("approves f=/safe; [[ -n x ]] && echo ok; find $f (test guard preserves)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; [[ -n x ]] && echo ok; find $f"
+            it(
+                "approves f=/safe; [[ -n x ]] && echo ok; find $f (test guard preserves)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; [[ -n x ]] && echo ok; find $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("approves f=/safe; for x in a b; do echo $x; done; find $f (loop over other var preserves)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; for x in a b; do echo $x; done; find $f"
+            it(
+                "approves f=/safe; for x in a b; do echo $x; done; find $f (loop over other var preserves)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; for x in a b; do echo $x; done; find $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on f=/safe; if true; then f=/danger; fi; find $f (if-body rebinds the var)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; if true; then f=/danger; fi; find $f"
+            it(
+                "prompts on f=/safe; if true; then f=/danger; fi; find $f (if-body rebinds the var)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; if true; then f=/danger; fi; find $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on f=/safe; for f in a b; do echo $f; done; find $f (loop rebinds the var)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; for f in a b; do echo $f; done; find $f"
+            it(
+                "prompts on f=/safe; for f in a b; do echo $f; done; find $f (loop rebinds the var)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; for f in a b; do echo $f; done; find $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on f=/safe; if c; then printf -v f -- -exec; fi; find $f (printf -v in if-body rebinds)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; if true; then printf -v f -- -exec; fi; find $f"
+            it(
+                "prompts on f=/safe; if c; then printf -v f -- -exec; fi; find $f (printf -v in if-body rebinds)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; if true; then printf -v f -- -exec; fi; find $f"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("approves f=/safe; find $f; printf x (resolved before the clearing sibling)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "f=/safe; find $f; printf x"
+            it(
+                "approves f=/safe; find $f; printf x (resolved before the clearing sibling)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "f=/safe; find $f; printf x"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("does not leak across statements — bare find $f still prompts", function()
-                assert.is_false(PermissionRules.should_auto_approve("find $f"))
-            end)
+            it(
+                "does not leak across statements — bare find $f still prompts",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("find $f")
+                    )
+                end
+            )
         end)
 
         describe("concatenation token shape", function()
-            it("approves head -40 $d/SKILL.md (dynamic token, empty read_only gate)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("head -40 $d/SKILL.md")
-                )
-            end)
+            it(
+                "approves head -40 $d/SKILL.md (dynamic token, empty read_only gate)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "head -40 $d/SKILL.md"
+                        )
+                    )
+                end
+            )
 
-            it("approves ls -la $d (bare dynamic unchanged — regression guard)", function()
-                assert.is_true(PermissionRules.should_auto_approve("ls -la $d"))
-            end)
+            it(
+                "approves ls -la $d (bare dynamic unchanged — regression guard)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("ls -la $d")
+                    )
+                end
+            )
 
-            it("prompts on find . $d/x (dynamic wildcard fires find's -exec deny)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("find . $d/x")
-                )
-            end)
+            it(
+                "prompts on find . $d/x (dynamic wildcard fires find's -exec deny)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("find . $d/x")
+                    )
+                end
+            )
 
-            it("approves base=/safe; head $base/x (static resolution)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("base=/safe; head $base/x")
-                )
-            end)
+            it(
+                "approves base=/safe; head $base/x (static resolution)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "base=/safe; head $base/x"
+                        )
+                    )
+                end
+            )
 
             -- A dangerous literal still hits the gate after static resolution.
             -- `-o` glues its value (`-o/x`), so short-flag clustering extracts the
             -- `o` candidate and sort's write gate fires. This is the sound
             -- symmetry with `f=--exec; find $f`.
-            it("prompts on base=-o; sort $base/x (resolved literal hits sort's write gate)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("base=-o; sort $base/x")
-                )
-            end)
+            it(
+                "prompts on base=-o; sort $base/x (resolved literal hits sort's write gate)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "base=-o; sort $base/x"
+                        )
+                    )
+                end
+            )
 
             -- A concatenation suffix (`/x`) can never reconstruct a bare gate flag:
             -- the resolved `--exec/x` is a single long token that does not
@@ -2837,29 +3216,52 @@ describe("PermissionRules", function()
             -- value), and `find --exec/x` is an unknown predicate at runtime, not
             -- the `-exec` action. So it approves — safe, unlike the bare
             -- `f=--exec; find $f` where `$f` resolves to exactly `-exec`.
-            it("approves base=--exec; find $base/x (suffix neutralises — cannot be a bare flag)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("base=--exec; find $base/x")
-                )
-            end)
+            it(
+                "approves base=--exec; find $base/x (suffix neutralises — cannot be a bare flag)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "base=--exec; find $base/x"
+                        )
+                    )
+                end
+            )
 
-            it("approves head $d/*.js (glob part keeps it dynamic, empty gate)", function()
-                assert.is_true(PermissionRules.should_auto_approve("head $d/*.js"))
-            end)
+            it(
+                "approves head $d/*.js (glob part keeps it dynamic, empty gate)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve("head $d/*.js")
+                    )
+                end
+            )
 
-            it("prompts on rm $d/*.js (glob part → dynamic wildcards rm's gate)", function()
-                assert.is_false(PermissionRules.should_auto_approve("rm $d/*.js"))
-            end)
+            it(
+                "prompts on rm $d/*.js (glob part → dynamic wildcards rm's gate)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("rm $d/*.js")
+                    )
+                end
+            )
 
-            it("prompts on cat a$(b)c (command-sub concatenation stays bailed)", function()
-                assert.is_false(PermissionRules.should_auto_approve("cat a$(b)c"))
-            end)
+            it(
+                "prompts on cat a$(b)c (command-sub concatenation stays bailed)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("cat a$(b)c")
+                    )
+                end
+            )
 
-            it("prompts on echo x > $d/f (dynamic redirect target still bails)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve("echo x > $d/f")
-                )
-            end)
+            it(
+                "prompts on echo x > $d/f (dynamic redirect target still bails)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve("echo x > $d/f")
+                    )
+                end
+            )
         end)
 
         -- a for-loop over an all-literal list unrolls the body once per value
@@ -2869,58 +3271,76 @@ describe("PermissionRules", function()
         -- over-budget value count falls back to the single dynamic walk (the
         -- dynamic-token floor).
         describe("for-loop literal unroll", function()
-            it("approves for d in acp permissions provider-system; do find . $d/SKILL.md; done (all values are positional paths)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "for d in acp permissions provider-system; do find . $d/SKILL.md; done"
+            it(
+                "approves for d in acp permissions provider-system; do find . $d/SKILL.md; done (all values are positional paths)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "for d in acp permissions provider-system; do find . $d/SKILL.md; done"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on for d in acp -delete; do find . $d; done (one value trips find's deny)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "for d in acp -delete; do find . $d; done"
+            it(
+                "prompts on for d in acp -delete; do find . $d; done (one value trips find's deny)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "for d in acp -delete; do find . $d; done"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("approves for d in acp permissions; do head $d/SKILL.md; done (also passes via concatenation resolution alone)", function()
-                assert.is_true(
-                    PermissionRules.should_auto_approve(
-                        "for d in acp permissions; do head $d/SKILL.md; done"
+            it(
+                "approves for d in acp permissions; do head $d/SKILL.md; done (also passes via concatenation resolution alone)",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "for d in acp permissions; do head $d/SKILL.md; done"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
-            it("prompts on for f in $(ls); do find . $f; done (non-literal list → dynamic fallback)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "for f in $(ls); do find . $f; done"
+            it(
+                "prompts on for f in $(ls); do find . $f; done (non-literal list → dynamic fallback)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "for f in $(ls); do find . $f; done"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
             -- Nested literal loops multiply: outer 9 values (≤64) divides the
             -- budget to floor(64/9)=7, so the inner 9-value loop exceeds it and
             -- falls back to the dynamic walk, where the gated body prompts.
-            it("prompts on nested literal loops beyond the product cap with a gated body", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do find . $b; done; done"
+            it(
+                "prompts on nested literal loops beyond the product cap with a gated body",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do find . $b; done; done"
+                        )
                     )
-                )
-            end)
+                end
+            )
 
             -- A body that rebinds the loop var drops the seed (update_known runs
             -- per body statement), so the subsequent use is dynamic again.
-            it("prompts on for d in acp; do d=$x; find . $d; done (body rebinds the loop var to dynamic)", function()
-                assert.is_false(
-                    PermissionRules.should_auto_approve(
-                        "for d in acp; do d=$x; find . $d; done"
+            it(
+                "prompts on for d in acp; do d=$x; find . $d; done (body rebinds the loop var to dynamic)",
+                function()
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "for d in acp; do d=$x; find . $d; done"
+                        )
                     )
-                )
-            end)
+                end
+            )
         end)
 
         -- Reject pass: a concrete deny gate rejects outright (no prompt). ask
@@ -2931,7 +3351,7 @@ describe("PermissionRules", function()
                 "find . -delete",
                 "fd -x rm",
                 "date -s '2020-01-01'",
-                'awk \'BEGIN{system("rm -rf /")}\'',
+                "awk 'BEGIN{system(\"rm -rf /\")}'",
                 "rm -f x",
                 "rm -rf x", -- clustered force flag
                 "ls | find . -delete", -- deny leaf in a pipeline
@@ -3035,18 +3455,21 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("returns only the unapproved inner of a single-quoted -c body", function()
-            with_perms(
-                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "zsh -c 'rm -rf /'"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
-        end)
+        it(
+            "returns only the unapproved inner of a single-quoted -c body",
+            function()
+                with_perms(
+                    { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = "zsh -c 'rm -rf /'"
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                    end
+                )
+            end
+        )
 
         it("highlights the whole leaf for a double-quoted -c body", function()
             with_perms(
@@ -3061,23 +3484,26 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("pinpoints the inner row of a multi-line single-quoted -c body", function()
-            with_perms(
-                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "zsh -c 'grep foo\nrm bar'"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    local r = ranges[1]
-                    assert.equal(1, r[1]) -- row 1 (rm bar), not row 0 (grep foo)
-                    assert.equal(
-                        "rm bar",
-                        vim.split(cmd, "\n")[r[1] + 1]:sub(r[2] + 1, r[4])
-                    )
-                end
-            )
-        end)
+        it(
+            "pinpoints the inner row of a multi-line single-quoted -c body",
+            function()
+                with_perms(
+                    { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = "zsh -c 'grep foo\nrm bar'"
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        local r = ranges[1]
+                        assert.equal(1, r[1]) -- row 1 (rm bar), not row 0 (grep foo)
+                        assert.equal(
+                            "rm bar",
+                            vim.split(cmd, "\n")[r[1] + 1]:sub(r[2] + 1, r[4])
+                        )
+                    end
+                )
+            end
+        )
 
         it("does not return a safe_write leaf (intrinsically safe)", function()
             with_perms(
@@ -3099,60 +3525,76 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("returns only the unapproved inner of an arg substitution", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "echo $(rm -rf /)"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
-        end)
-
-        it("highlights the whole leaf when the command name is denied", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "rm $(rm -rf /)"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal(cmd, span_text(cmd, ranges[1]))
-                end
-            )
-        end)
-
-        it("returns nothing when an arg substitution's inner is approved", function()
-            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                local ranges = PermissionRules.tally_unapproved("echo $(echo hi)")
-                assert.equal(0, #ranges)
-            end)
-        end)
-
-        it("returns nothing for a for-loop over an approved substitution", function()
-            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                local ranges = PermissionRules.tally_unapproved(
-                    "for f in $(echo x); do echo \"$f\"; done"
+        it(
+            "returns only the unapproved inner of an arg substitution",
+            function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = "echo $(rm -rf /)"
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                    end
                 )
-                assert.equal(0, #ranges)
-            end)
-        end)
+            end
+        )
 
-        it("returns only the unapproved inner of a quoted substitution", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = 'echo "$(rm -rf /)"'
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
-        end)
+        it(
+            "highlights the whole leaf when the command name is denied",
+            function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = "rm $(rm -rf /)"
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        assert.equal(cmd, span_text(cmd, ranges[1]))
+                    end
+                )
+            end
+        )
+
+        it(
+            "returns nothing when an arg substitution's inner is approved",
+            function()
+                with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                    local ranges =
+                        PermissionRules.tally_unapproved("echo $(echo hi)")
+                    assert.equal(0, #ranges)
+                end)
+            end
+        )
+
+        it(
+            "returns nothing for a for-loop over an approved substitution",
+            function()
+                with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                    local ranges = PermissionRules.tally_unapproved(
+                        'for f in $(echo x); do echo "$f"; done'
+                    )
+                    assert.equal(0, #ranges)
+                end)
+            end
+        )
+
+        it(
+            "returns only the unapproved inner of a quoted substitution",
+            function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = 'echo "$(rm -rf /)"'
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                    end
+                )
+            end
+        )
 
         it("pinpoints the inner of a string-embedded substitution", function()
             with_perms(
@@ -3167,42 +3609,52 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("returns only the unapproved inner of an assignment substitution", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "f=$(rm -rf /)"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
-        end)
+        it(
+            "returns only the unapproved inner of an assignment substitution",
+            function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = "f=$(rm -rf /)"
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                    end
+                )
+            end
+        )
 
-        it("returns only the unapproved inner of a for-list substitution", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "for f in $(rm -rf /); do echo hi; done"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
-        end)
+        it(
+            "returns only the unapproved inner of a for-list substitution",
+            function()
+                with_perms(
+                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
+                    nil,
+                    function()
+                        local cmd = "for f in $(rm -rf /); do echo hi; done"
+                        local ranges = PermissionRules.tally_unapproved(cmd)
+                        assert.equal(1, #ranges)
+                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                    end
+                )
+            end
+        )
 
         it("pinpoints a substitution inside a transparent prefix", function()
-            with_perms({
-                allow = { "Bash(echo *)", "Bash(timeout *)" },
-                deny = { "Bash(rm *)" },
-            }, nil, function()
-                local cmd = "timeout 5 echo $(rm -rf /)"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-            end)
+            with_perms(
+                {
+                    allow = { "Bash(echo *)", "Bash(timeout *)" },
+                    deny = { "Bash(rm *)" },
+                },
+                nil,
+                function()
+                    local cmd = "timeout 5 echo $(rm -rf /)"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
+                end
+            )
         end)
 
         it("returns an unsafe redirect", function()
@@ -3214,39 +3666,43 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it("does not highlight a constant-resolved benign $var (bundled defaults)", function()
-            -- `find $f` resolves to /safe (known-safe via the bundled find rule),
-            -- so only the unknown command highlights. Without the constant-
-            -- propagation mirror, $f would wildcard-fire find's -exec deny and
-            -- light up too. Needs the structured (bundled) gate — a glob deny
-            -- cannot get the dynamic-token wildcard treatment.
-            local orig_read_json = PermissionRules.read_json
-            local orig_plugin = Config.permissions.use_plugin_defaults
-            Config.permissions.use_plugin_defaults = true
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return nil
+        it(
+            "does not highlight a constant-resolved benign $var (bundled defaults)",
+            function()
+                -- `find $f` resolves to /safe (known-safe via the bundled find rule),
+                -- so only the unknown command highlights. Without the constant-
+                -- propagation mirror, $f would wildcard-fire find's -exec deny and
+                -- light up too. Needs the structured (bundled) gate — a glob deny
+                -- cannot get the dynamic-token wildcard treatment.
+                local orig_read_json = PermissionRules.read_json
+                local orig_plugin = Config.permissions.use_plugin_defaults
+                Config.permissions.use_plugin_defaults = true
+                PermissionRules.read_json = function(path)
+                    if path:find("settings%.json$") then
+                        return nil
+                    end
+                    return orig_read_json(path)
                 end
-                return orig_read_json(path)
+                PermissionRules.invalidate_cache()
+                local ok, err = pcall(function()
+                    local cmd = "f=/safe; find $f; frobnicate x"
+                    local ranges = PermissionRules.tally_unapproved(cmd)
+                    assert.equal(1, #ranges)
+                    assert.equal("frobnicate x", span_text(cmd, ranges[1]))
+                end)
+                PermissionRules.read_json = orig_read_json
+                Config.permissions.use_plugin_defaults = orig_plugin
+                PermissionRules.invalidate_cache()
+                if not ok then
+                    error(err)
+                end
             end
-            PermissionRules.invalidate_cache()
-            local ok, err = pcall(function()
-                local cmd = "f=/safe; find $f; frobnicate x"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.equal("frobnicate x", span_text(cmd, ranges[1]))
-            end)
-            PermissionRules.read_json = orig_read_json
-            Config.permissions.use_plugin_defaults = orig_plugin
-            PermissionRules.invalidate_cache()
-            if not ok then
-                error(err)
-            end
-        end)
+        )
 
         it("returns every unapproved leaf (record-and-continue)", function()
             with_perms({ allow = {} }, nil, function()
-                local ranges = PermissionRules.tally_unapproved("frob a | nope b")
+                local ranges =
+                    PermissionRules.tally_unapproved("frob a | nope b")
                 assert.equal(2, #ranges)
             end)
         end)
@@ -3265,7 +3721,8 @@ describe("PermissionRules", function()
 
         it("returns nothing for a wrapper with a known-safe inner", function()
             with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                local ranges = PermissionRules.tally_unapproved("timeout 5 grep foo")
+                local ranges =
+                    PermissionRules.tally_unapproved("timeout 5 grep foo")
                 assert.equal(0, #ranges)
             end)
         end)
@@ -3344,26 +3801,33 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("collects the clean leaf but is incomplete alongside a redirect", function()
-                with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                    local _, leaves, complete =
-                        PermissionRules.tally_unapproved("frob a > out.txt")
-                    assert.same({ "frob a" }, leaves)
-                    assert.is_false(complete)
-                end)
-            end)
+            it(
+                "collects the clean leaf but is incomplete alongside a redirect",
+                function()
+                    with_perms({ allow = { "Bash(grep *)" } }, nil, function()
+                        local _, leaves, complete =
+                            PermissionRules.tally_unapproved("frob a > out.txt")
+                        assert.same({ "frob a" }, leaves)
+                        assert.is_false(complete)
+                    end)
+                end
+            )
 
-            it("returns empty leaves and incomplete on parse failure", function()
-                with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                    local ranges, leaves, complete =
-                        PermissionRules.tally_unapproved("echo 'unterminated")
-                    assert.is_nil(ranges)
-                    assert.same({}, leaves)
-                    assert.is_false(complete)
-                end)
-            end)
+            it(
+                "returns empty leaves and incomplete on parse failure",
+                function()
+                    with_perms({ allow = { "Bash(echo *)" } }, nil, function()
+                        local ranges, leaves, complete =
+                            PermissionRules.tally_unapproved(
+                                "echo 'unterminated"
+                            )
+                        assert.is_nil(ranges)
+                        assert.same({}, leaves)
+                        assert.is_false(complete)
+                    end)
+                end
+            )
         end)
-
     end)
 
     describe("literal_pattern / remembered-leaf injection", function()
@@ -3383,11 +3847,8 @@ describe("PermissionRules", function()
                 return nil
             end
             PermissionRules.invalidate_cache()
-            local ok, result = pcall(
-                PermissionRules.should_auto_approve,
-                cmd,
-                extra_allow
-            )
+            local ok, result =
+                pcall(PermissionRules.should_auto_approve, cmd, extra_allow)
             PermissionRules.read_json = orig_read_json
             Config.permissions.use_plugin_defaults = orig_plugin
             PermissionRules.invalidate_cache()
@@ -3399,9 +3860,7 @@ describe("PermissionRules", function()
 
         it("matches its own occurrence (path-stripped)", function()
             local pat = PermissionRules.literal_pattern("/usr/bin/foo --x")
-            assert.is_true(
-                approves({}, nil, "/usr/bin/foo --x", { pat })
-            )
+            assert.is_true(approves({}, nil, "/usr/bin/foo --x", { pat }))
         end)
 
         it("does not widen to a different invocation", function()
@@ -3411,7 +3870,12 @@ describe("PermissionRules", function()
 
         it("approves only when every leaf is remembered or ruled", function()
             assert.is_false(
-                approves({}, nil, "a; b", { PermissionRules.literal_pattern("b") })
+                approves(
+                    {},
+                    nil,
+                    "a; b",
+                    { PermissionRules.literal_pattern("b") }
+                )
             )
             assert.is_true(approves({}, nil, "a; b", {
                 PermissionRules.literal_pattern("a"),
@@ -3420,12 +3884,14 @@ describe("PermissionRules", function()
         end)
 
         it("never overrides a deny gate", function()
-            assert.is_false(approves(
-                {},
-                { "Bash(rm *)" },
-                "rm x",
-                { PermissionRules.literal_pattern("rm x") }
-            ))
+            assert.is_false(
+                approves(
+                    {},
+                    { "Bash(rm *)" },
+                    "rm x",
+                    { PermissionRules.literal_pattern("rm x") }
+                )
+            )
         end)
 
         -- Merge-before-guard: an empty remembered set leaves #allow == 0, so the
@@ -3615,51 +4081,69 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
         end)
 
-        it("surfaces a body's write effect; no scope → not approved", function()
-            local path = script("ls /tmp > /tmp/scratch_step_a\n")
-            local ok, effects = PermissionRules.evaluate("zsh " .. path)
-            assert.is_true(ok)
-            assert.equal("write", effects[1].kind)
-            assert.equal("/tmp/scratch_step_a", effects[1].path)
-            assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
-        end)
+        it(
+            "surfaces a body's write effect; no scope → not approved",
+            function()
+                local path = script("ls /tmp > /tmp/scratch_step_a\n")
+                local ok, effects = PermissionRules.evaluate("zsh " .. path)
+                assert.is_true(ok)
+                assert.equal("write", effects[1].kind)
+                assert.equal("/tmp/scratch_step_a", effects[1].path)
+                assert.is_false(
+                    PermissionRules.should_auto_approve("zsh " .. path)
+                )
+            end
+        )
 
-        it("taint: bails reading a path written earlier in the command", function()
-            -- Disk holds safe bytes, but the in-block redirect overwrites the
-            -- file before it runs — walking disk would judge stale content.
-            local path = script("ls /tmp\n")
-            local ok = PermissionRules.evaluate(
-                "ls /tmp > " .. path .. "; zsh " .. path
-            )
-            assert.is_false(ok)
-        end)
+        it(
+            "taint: bails reading a path written earlier in the command",
+            function()
+                -- Disk holds safe bytes, but the in-block redirect overwrites the
+                -- file before it runs — walking disk would judge stale content.
+                local path = script("ls /tmp\n")
+                local ok = PermissionRules.evaluate(
+                    "ls /tmp > " .. path .. "; zsh " .. path
+                )
+                assert.is_false(ok)
+            end
+        )
 
-        it("taint: a write AFTER the execute does not bail (reads disk)", function()
-            local path = script("ls /tmp\n")
-            local ok, effects = PermissionRules.evaluate(
-                "zsh " .. path .. "; ls /tmp > " .. path
-            )
-            assert.is_true(ok)
-            assert.equal("write", effects[1].kind)
-        end)
+        it(
+            "taint: a write AFTER the execute does not bail (reads disk)",
+            function()
+                local path = script("ls /tmp\n")
+                local ok, effects = PermissionRules.evaluate(
+                    "zsh " .. path .. "; ls /tmp > " .. path
+                )
+                assert.is_true(ok)
+                assert.equal("write", effects[1].kind)
+            end
+        )
 
-        it("taint: bails when write target and script path differ only by a parent symlink", function()
-            -- Producer writes via the symlinked dir, executor reads via the
-            -- real dir — same inode, two name strings. A lexical-only resolver
-            -- would miss the correlation and approve stale disk bytes.
-            local real_dir = vim.fn.tempname()
-            vim.uv.fs_mkdir(real_dir, 493) -- 0755
-            local link_dir = vim.fn.tempname()
-            vim.uv.fs_symlink(real_dir, link_dir)
-            write_file(real_dir .. "/f.sh", "ls /tmp\n")
-            table.insert(written, real_dir .. "/f.sh")
-            table.insert(written, link_dir)
-            table.insert(written, real_dir)
-            local ok = PermissionRules.evaluate(
-                "ls /tmp > " .. link_dir .. "/f.sh; zsh " .. real_dir .. "/f.sh"
-            )
-            assert.is_false(ok)
-        end)
+        it(
+            "taint: bails when write target and script path differ only by a parent symlink",
+            function()
+                -- Producer writes via the symlinked dir, executor reads via the
+                -- real dir — same inode, two name strings. A lexical-only resolver
+                -- would miss the correlation and approve stale disk bytes.
+                local real_dir = vim.fn.tempname()
+                vim.uv.fs_mkdir(real_dir, 493) -- 0755
+                local link_dir = vim.fn.tempname()
+                vim.uv.fs_symlink(real_dir, link_dir)
+                write_file(real_dir .. "/f.sh", "ls /tmp\n")
+                table.insert(written, real_dir .. "/f.sh")
+                table.insert(written, link_dir)
+                table.insert(written, real_dir)
+                local ok = PermissionRules.evaluate(
+                    "ls /tmp > "
+                        .. link_dir
+                        .. "/f.sh; zsh "
+                        .. real_dir
+                        .. "/f.sh"
+                )
+                assert.is_false(ok)
+            end
+        )
 
         it("tally: a clean body yields no ranges", function()
             local path = script("ls /tmp\n")
@@ -3667,14 +4151,17 @@ describe("PermissionRules", function()
             assert.equal(0, #ranges)
         end)
 
-        it("tally: an unsafe body washes the whole leaf, not rememberable", function()
-            local path = script("make build\n")
-            local ranges, leaves, complete =
-                PermissionRules.tally_unapproved("zsh " .. path)
-            assert.equal(1, #ranges)
-            assert.equal(0, #leaves)
-            assert.is_false(complete)
-        end)
+        it(
+            "tally: an unsafe body washes the whole leaf, not rememberable",
+            function()
+                local path = script("make build\n")
+                local ranges, leaves, complete =
+                    PermissionRules.tally_unapproved("zsh " .. path)
+                assert.equal(1, #ranges)
+                assert.equal(0, #leaves)
+                assert.is_false(complete)
+            end
+        )
     end)
 
     describe("script file walk (Step B — heredoc reconstruction)", function()
@@ -3726,7 +4213,11 @@ describe("PermissionRules", function()
                         permissions = {
                             -- `Bash(cat)` (bare, no args) so a heredoc passthrough
                             -- body approves; the reconstructed body uses `ls`.
-                            allow = { "Bash(ls *)", "Bash(grep *)", "Bash(cat)" },
+                            allow = {
+                                "Bash(ls *)",
+                                "Bash(grep *)",
+                                "Bash(cat)",
+                            },
                         },
                     }
                 end
@@ -3743,19 +4234,27 @@ describe("PermissionRules", function()
             written = {}
         end)
 
-        it("approves a create-then-run whose heredoc body is all-allowed", function()
-            -- The script never touches disk; only the reconstructed heredoc body
-            -- can clear the `zsh` leaf.
-            local path = ghost()
-            local ok = PermissionRules.evaluate(create_run(path, "ls /tmp\n"))
-            assert.is_true(ok)
-        end)
+        it(
+            "approves a create-then-run whose heredoc body is all-allowed",
+            function()
+                -- The script never touches disk; only the reconstructed heredoc body
+                -- can clear the `zsh` leaf.
+                local path = ghost()
+                local ok =
+                    PermissionRules.evaluate(create_run(path, "ls /tmp\n"))
+                assert.is_true(ok)
+            end
+        )
 
-        it("bails a create-then-run whose heredoc body is not allowed", function()
-            local path = ghost()
-            local ok = PermissionRules.evaluate(create_run(path, "make build\n"))
-            assert.is_false(ok)
-        end)
+        it(
+            "bails a create-then-run whose heredoc body is not allowed",
+            function()
+                local path = ghost()
+                local ok =
+                    PermissionRules.evaluate(create_run(path, "make build\n"))
+                assert.is_false(ok)
+            end
+        )
 
         it("walks reconstructed bytes, not stale disk content", function()
             -- Disk holds a disallowed body; the heredoc rewrites it to an allowed
@@ -3771,13 +4270,19 @@ describe("PermissionRules", function()
             assert.is_false(ok2)
         end)
 
-        it("taint: a non-`cat` producer (grep) is not reconstructable", function()
-            local path = ghost()
-            local ok = PermissionRules.evaluate(
-                ("grep x > %s <<'EOF'\nls /tmp\nEOF\nzsh %s"):format(path, path)
-            )
-            assert.is_false(ok)
-        end)
+        it(
+            "taint: a non-`cat` producer (grep) is not reconstructable",
+            function()
+                local path = ghost()
+                local ok = PermissionRules.evaluate(
+                    ("grep x > %s <<'EOF'\nls /tmp\nEOF\nzsh %s"):format(
+                        path,
+                        path
+                    )
+                )
+                assert.is_false(ok)
+            end
+        )
 
         it("taint: a `>>` append is not reconstructable", function()
             local path = ghost()
@@ -3786,34 +4291,44 @@ describe("PermissionRules", function()
             assert.is_false(ok)
         end)
 
-        it("bails an expanding heredoc (substitution runs at write time)", function()
-            -- An unquoted `<<EOF` with `$(…)` runs the substitution when the file
-            -- is written, so the redirect itself must bail.
-            local path = ghost()
-            local ok = PermissionRules.evaluate(
-                ("cat > %s <<EOF\n$(make build)\nEOF\nzsh %s"):format(path, path)
-            )
-            assert.is_false(ok)
-        end)
-
-        it("taint: a second write to the same path drops the reconstruction", function()
-            -- The heredoc records reconstructable bytes; a later redirect to the
-            -- same path (before the `zsh`) overwrites them → the path taints and
-            -- the `zsh` leaf bails rather than walking the now-stale bytes.
-            local path = ghost()
-            local ok = PermissionRules.evaluate(
-                ("cat > %s <<'EOF'\nls /tmp\nEOF\nls /tmp > %s\nzsh %s"):format(
-                    path,
-                    path,
-                    path
+        it(
+            "bails an expanding heredoc (substitution runs at write time)",
+            function()
+                -- An unquoted `<<EOF` with `$(…)` runs the substitution when the file
+                -- is written, so the redirect itself must bail.
+                local path = ghost()
+                local ok = PermissionRules.evaluate(
+                    ("cat > %s <<EOF\n$(make build)\nEOF\nzsh %s"):format(
+                        path,
+                        path
+                    )
                 )
-            )
-            assert.is_false(ok)
-        end)
+                assert.is_false(ok)
+            end
+        )
+
+        it(
+            "taint: a second write to the same path drops the reconstruction",
+            function()
+                -- The heredoc records reconstructable bytes; a later redirect to the
+                -- same path (before the `zsh`) overwrites them → the path taints and
+                -- the `zsh` leaf bails rather than walking the now-stale bytes.
+                local path = ghost()
+                local ok = PermissionRules.evaluate(
+                    ("cat > %s <<'EOF'\nls /tmp\nEOF\nls /tmp > %s\nzsh %s"):format(
+                        path,
+                        path,
+                        path
+                    )
+                )
+                assert.is_false(ok)
+            end
+        )
 
         it("approves a pure-text heredoc as stdin with no write", function()
             -- No redirect to a file, so no write effect — fully auto-approvable.
-            local ok = PermissionRules.should_auto_approve("cat <<'EOF'\nls /tmp\nEOF")
+            local ok =
+                PermissionRules.should_auto_approve("cat <<'EOF'\nls /tmp\nEOF")
             assert.is_true(ok)
         end)
     end)
@@ -3875,7 +4390,9 @@ describe("PermissionRules", function()
             end
             PermissionRules.invalidate_cache()
             -- `> $((n))` resolves to no literal path — the redirect write bails.
-            assert.is_false(PermissionRules.should_auto_approve("echo hi > $((n))"))
+            assert.is_false(
+                PermissionRules.should_auto_approve("echo hi > $((n))")
+            )
             PermissionRules.read_json = orig_read_json
         end)
 

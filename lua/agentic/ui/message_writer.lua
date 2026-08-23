@@ -748,7 +748,8 @@ function MessageWriter:set_turn_usage(usage)
         return
     end
 
-    local text = string.format("%.1fk in · %.1fk out", input / 1000, output / 1000)
+    local text =
+        string.format("%.1fk in · %.1fk out", input / 1000, output / 1000)
     local last_row = vim.api.nvim_buf_line_count(self.bufnr) - 1
     vim.api.nvim_buf_set_extmark(self.bufnr, NS_TURN_USAGE, last_row, 0, {
         virt_text = { { text, Theme.HL_GROUPS.TURN_USAGE } },
@@ -947,9 +948,7 @@ function MessageWriter:write_message_chunk(update)
         -- a few lines from chunk_start_line to skip the leading blank.
         -- Skip when the user has paused auto-scroll: pinning would require
         -- scrolling the view, which is exactly what the user opted out of.
-        if
-            self._prose_anchor_line == nil and not self._auto_scroll_paused
-        then
+        if self._prose_anchor_line == nil and not self._auto_scroll_paused then
             local total = vim.api.nvim_buf_line_count(bufnr)
             local scan_end = math.min(self._chunk_start_line + 4, total - 1)
             for line = self._chunk_start_line, scan_end do
@@ -1396,7 +1395,10 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     -- Strip internal instructions from switch_mode updates
     -- TodoWrite body is the raw JSON request — hide it since the todo window
     -- shows the rendered todos.
-    if kind_key(tracker.kind) == "switch_mode" or kind_key(tracker.kind) == "todowrite" then
+    if
+        kind_key(tracker.kind) == "switch_mode"
+        or kind_key(tracker.kind) == "todowrite"
+    then
         tool_call_block.body = nil
     end
 

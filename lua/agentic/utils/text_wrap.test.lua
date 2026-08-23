@@ -120,19 +120,22 @@ describe("agentic.utils.TextWrap", function()
             assert.is_true(has_span, "code span was broken up")
         end)
 
-        it("keeps an oversized code span whole rather than splitting it", function()
-            local line = "prefix `one two three four five six seven` suffix"
-            local result = TextWrap.wrap_prose({ line }, 20)
-            local joined = table.concat(result, " "):gsub("%s+", " ")
-            assert.equal(line, joined)
-            local has_span = false
-            for _, l in ipairs(result) do
-                if l:match("`one two three four five six seven`") then
-                    has_span = true
+        it(
+            "keeps an oversized code span whole rather than splitting it",
+            function()
+                local line = "prefix `one two three four five six seven` suffix"
+                local result = TextWrap.wrap_prose({ line }, 20)
+                local joined = table.concat(result, " "):gsub("%s+", " ")
+                assert.equal(line, joined)
+                local has_span = false
+                for _, l in ipairs(result) do
+                    if l:match("`one two three four five six seven`") then
+                        has_span = true
+                    end
                 end
+                assert.is_true(has_span, "oversized span was broken up")
             end
-            assert.is_true(has_span, "oversized span was broken up")
-        end)
+        )
 
         it("formats markdown tables with aligned columns", function()
             local lines = {
@@ -440,10 +443,13 @@ describe("agentic.utils.TextWrap", function()
             assert.is_true(has_span, "display-math span was broken up")
         end)
 
-        it("leaves a bare currency amount shorter than width untouched", function()
-            local lines = { "it costs $5 total" }
-            assert.same(lines, TextWrap.wrap_prose(lines, 80))
-        end)
+        it(
+            "leaves a bare currency amount shorter than width untouched",
+            function()
+                local lines = { "it costs $5 total" }
+                assert.same(lines, TextWrap.wrap_prose(lines, 80))
+            end
+        )
 
         it("passes multi-line display-math blocks through untouched", function()
             local lines = {
@@ -457,25 +463,28 @@ describe("agentic.utils.TextWrap", function()
             assert.same(lines, result)
         end)
 
-        it("does not let a $$ line inside a code fence enter math mode", function()
-            local lines = {
-                "```",
-                "$$",
-                "this is code not math and it is quite long so would wrap as prose",
-                "```",
-                "after the fence this prose line is long enough that it must wrap",
-            }
-            local result = TextWrap.wrap_prose(lines, 30)
-            assert.equal("```", result[1])
-            assert.equal("$$", result[2])
-            assert.equal(
-                "this is code not math and it is quite long so would wrap as prose",
-                result[3]
-            )
-            assert.equal("```", result[4])
-            -- Prose after the closed fence must still wrap.
-            assert.is_true(#result > 5)
-        end)
+        it(
+            "does not let a $$ line inside a code fence enter math mode",
+            function()
+                local lines = {
+                    "```",
+                    "$$",
+                    "this is code not math and it is quite long so would wrap as prose",
+                    "```",
+                    "after the fence this prose line is long enough that it must wrap",
+                }
+                local result = TextWrap.wrap_prose(lines, 30)
+                assert.equal("```", result[1])
+                assert.equal("$$", result[2])
+                assert.equal(
+                    "this is code not math and it is quite long so would wrap as prose",
+                    result[3]
+                )
+                assert.equal("```", result[4])
+                -- Prose after the closed fence must still wrap.
+                assert.is_true(#result > 5)
+            end
+        )
 
         it("never wraps headings", function()
             local heading =
@@ -532,7 +541,8 @@ describe("agentic.utils.TextWrap", function()
 
     describe("wrap_single_line_with_offsets", function()
         it("maps sub-line columns back through an inline math span", function()
-            local line = "start $a + b$ and then more trailing text to wrap here"
+            local line =
+                "start $a + b$ and then more trailing text to wrap here"
             local sub_lines, offsets =
                 TextWrap.wrap_single_line_with_offsets(line, 20)
             assert.is_true(#sub_lines > 1)

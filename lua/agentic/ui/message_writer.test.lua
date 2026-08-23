@@ -234,21 +234,26 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(n_blocks, count(decoration_signs(), "╰─"))
         end
 
-        it("replaces the whole body rail with the ordinal when active", function()
-            writer:enable_numbering()
+        it(
+            "replaces the whole body rail with the ordinal when active",
+            function()
+                writer:enable_numbering()
 
-            local block = make_tool_call_block("sub-2", "completed")
-            block.ordinal = 0
-            writer:write_tool_call_block(block)
+                local block = make_tool_call_block("sub-2", "completed")
+                block.ordinal = 0
+                writer:write_tool_call_block(block)
 
-            -- every body row becomes the digit; the corners stay
-            assert_full_rail(1)
+                -- every body row becomes the digit; the corners stay
+                assert_full_rail(1)
 
-            -- the digit reaches the actual content rows (command + output),
-            -- never only the concealed fence delimiters
-            assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "ls"))
-            assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "output"))
-        end)
+                -- the digit reaches the actual content rows (command + output),
+                -- never only the concealed fence delimiters
+                assert.is_true(vim.tbl_contains(signed_row_texts("0 "), "ls"))
+                assert.is_true(
+                    vim.tbl_contains(signed_row_texts("0 "), "output")
+                )
+            end
+        )
 
         it("stamps a fence-less read block's single body row", function()
             writer:enable_numbering()
@@ -281,23 +286,27 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "output"))
         end)
 
-        it("keeps the number when a live-stamped block gets an update", function()
-            writer:enable_numbering()
+        it(
+            "keeps the number when a live-stamped block gets an update",
+            function()
+                writer:enable_numbering()
 
-            local block = make_tool_call_block("sub-4", "pending", { "start" })
-            block.ordinal = 1
-            writer:write_tool_call_block(block)
-            assert_full_rail(1)
+                local block =
+                    make_tool_call_block("sub-4", "pending", { "start" })
+                block.ordinal = 1
+                writer:write_tool_call_block(block)
+                assert_full_rail(1)
 
-            -- completion update with a changed body → content-changed rebuild path
-            writer:update_tool_call_block({
-                tool_call_id = "sub-4",
-                status = "completed",
-                body = { "more", "output", "lines" },
-            })
-            assert_full_rail(1)
-            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "more"))
-        end)
+                -- completion update with a changed body → content-changed rebuild path
+                writer:update_tool_call_block({
+                    tool_call_id = "sub-4",
+                    status = "completed",
+                    body = { "more", "output", "lines" },
+                })
+                assert_full_rail(1)
+                assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "more"))
+            end
+        )
 
         it("backfills two blocks rendered before the latch flips", function()
             local a = make_tool_call_block("agent-a", "completed")
@@ -329,47 +338,54 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "output"))
         end)
 
-        it("shows no number for a bodyless block, then numbers it once a body arrives", function()
-            -- header + footer only: no body row to stamp at backfill time
-            local block = {
-                tool_call_id = "sub-6",
-                status = "pending",
-                kind = "other",
-                argument = "",
-            }
-            block.ordinal = 1
-            writer:write_tool_call_block(block)
+        it(
+            "shows no number for a bodyless block, then numbers it once a body arrives",
+            function()
+                -- header + footer only: no body row to stamp at backfill time
+                local block = {
+                    tool_call_id = "sub-6",
+                    status = "pending",
+                    kind = "other",
+                    argument = "",
+                }
+                block.ordinal = 1
+                writer:write_tool_call_block(block)
 
-            writer:enable_numbering() -- nothing to stamp: bodyless
-            assert.equal(0, count(decoration_signs(), "1 "))
+                writer:enable_numbering() -- nothing to stamp: bodyless
+                assert.equal(0, count(decoration_signs(), "1 "))
 
-            writer:update_tool_call_block({
-                tool_call_id = "sub-6",
-                status = "completed",
-                body = { "output", "lines" },
-            })
-            assert.is_true(count(decoration_signs(), "1 ") > 0)
-            assert.equal(0, count(decoration_signs(), "│ "))
-        end)
+                writer:update_tool_call_block({
+                    tool_call_id = "sub-6",
+                    status = "completed",
+                    body = { "output", "lines" },
+                })
+                assert.is_true(count(decoration_signs(), "1 ") > 0)
+                assert.equal(0, count(decoration_signs(), "│ "))
+            end
+        )
 
-        it("numbers a block first rendered pending, then updated after backfill", function()
-            -- realistic subagent flow: pending initial (little output yet)
-            -- renders before the second agent exists, so numbering is still
-            -- inactive and the block is stamped by backfill + the later update
-            local block = make_tool_call_block("sub-5", "pending", { "start" })
-            block.ordinal = 1
-            writer:write_tool_call_block(block)
+        it(
+            "numbers a block first rendered pending, then updated after backfill",
+            function()
+                -- realistic subagent flow: pending initial (little output yet)
+                -- renders before the second agent exists, so numbering is still
+                -- inactive and the block is stamped by backfill + the later update
+                local block =
+                    make_tool_call_block("sub-5", "pending", { "start" })
+                block.ordinal = 1
+                writer:write_tool_call_block(block)
 
-            writer:enable_numbering()
+                writer:enable_numbering()
 
-            writer:update_tool_call_block({
-                tool_call_id = "sub-5",
-                status = "completed",
-                body = { "more", "output", "lines" },
-            })
-            assert_full_rail(1)
-            assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "more"))
-        end)
+                writer:update_tool_call_block({
+                    tool_call_id = "sub-5",
+                    status = "completed",
+                    body = { "more", "output", "lines" },
+                })
+                assert_full_rail(1)
+                assert.is_true(vim.tbl_contains(signed_row_texts("1 "), "more"))
+            end
+        )
     end)
 
     describe("write_user_prompt", function()
@@ -393,15 +409,18 @@ describe("agentic.ui.MessageWriter", function()
             return vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
         end
 
-        it("marks the heading row when writing into a non-empty buffer", function()
-            writer:write_message(make_message_update("prior agent prose"))
-            local before = vim.api.nvim_buf_line_count(bufnr)
+        it(
+            "marks the heading row when writing into a non-empty buffer",
+            function()
+                writer:write_message(make_message_update("prior agent prose"))
+                local before = vim.api.nvim_buf_line_count(bufnr)
 
-            writer:write_user_prompt("Hello there")
+                writer:write_user_prompt("Hello there")
 
-            assert.same({ before }, marker_rows())
-            assert.equal("## Hello there", line_at(before))
-        end)
+                assert.same({ before }, marker_rows())
+                assert.equal("## Hello there", line_at(before))
+            end
+        )
 
         it("marks row 0 when the buffer is empty", function()
             writer:write_user_prompt("First prompt")
@@ -660,22 +679,30 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
-        it("flush scrolls once the folds are closed, then clears the verdict", function()
-            setup_buffer(50, 1)
-            writer._should_auto_scroll = true
+        it(
+            "flush scrolls once the folds are closed, then clears the verdict",
+            function()
+                setup_buffer(50, 1)
+                writer._should_auto_scroll = true
 
-            local scroll_spy = spy.on(writer, "_scroll_now")
-            -- A real fold anchor isn't needed — flush scrolls after draining
-            -- whatever ops are present, missing folds are swallowed.
-            local id =
-                vim.api.nvim_buf_set_extmark(bufnr, vim.api.nvim_create_namespace("agentic_fold_anchors"), 0, 0, {})
-            writer._pending_fold_ops = { { id = id, open = false } }
-            writer:flush_pending_fold_ops()
+                local scroll_spy = spy.on(writer, "_scroll_now")
+                -- A real fold anchor isn't needed — flush scrolls after draining
+                -- whatever ops are present, missing folds are swallowed.
+                local id = vim.api.nvim_buf_set_extmark(
+                    bufnr,
+                    vim.api.nvim_create_namespace("agentic_fold_anchors"),
+                    0,
+                    0,
+                    {}
+                )
+                writer._pending_fold_ops = { { id = id, open = false } }
+                writer:flush_pending_fold_ops()
 
-            assert.equal(1, scroll_spy.call_count)
-            assert.is_nil(writer._should_auto_scroll)
-            scroll_spy:revert()
-        end)
+                assert.equal(1, scroll_spy.call_count)
+                assert.is_nil(writer._should_auto_scroll)
+                scroll_spy:revert()
+            end
+        )
 
         it("flush does not scroll a scrolled-away user", function()
             setup_buffer(50, 1)
@@ -683,8 +710,13 @@ describe("agentic.ui.MessageWriter", function()
             writer._auto_scroll_paused = true
 
             local scroll_spy = spy.on(writer, "_scroll_now")
-            local id =
-                vim.api.nvim_buf_set_extmark(bufnr, vim.api.nvim_create_namespace("agentic_fold_anchors"), 0, 0, {})
+            local id = vim.api.nvim_buf_set_extmark(
+                bufnr,
+                vim.api.nvim_create_namespace("agentic_fold_anchors"),
+                0,
+                0,
+                {}
+            )
             writer._pending_fold_ops = { { id = id, open = false } }
             writer:flush_pending_fold_ops()
 
@@ -866,46 +898,38 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(writer._prose_anchor_line)
         end)
 
-        it(
-            "user scrolls away from bottom: pauses and releases pin",
-            function()
-                writer:write_message_chunk(
-                    make_message_update("some prose")
-                )
-                assert.is_not_nil(writer._prose_anchor_line)
-                -- Grow the buffer and park cursor far from the end so the
-                -- threshold check sees a "scrolled away" state.
-                local lines = {}
-                for i = 1, 50 do
-                    lines[i] = "filler " .. i
-                end
-                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
-                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-
-                writer:on_user_scroll()
-
-                assert.is_nil(writer._prose_anchor_line)
-                assert.is_true(writer._auto_scroll_paused)
+        it("user scrolls away from bottom: pauses and releases pin", function()
+            writer:write_message_chunk(make_message_update("some prose"))
+            assert.is_not_nil(writer._prose_anchor_line)
+            -- Grow the buffer and park cursor far from the end so the
+            -- threshold check sees a "scrolled away" state.
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "filler " .. i
             end
-        )
+            vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 1, 0 })
 
-        it(
-            "user scrolls to bottom: resumes auto-scroll",
-            function()
-                -- User had previously paused; now G or scroll-to-bottom.
-                writer._auto_scroll_paused = true
-                local lines = {}
-                for i = 1, 50 do
-                    lines[i] = "line " .. i
-                end
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-                vim.api.nvim_win_set_cursor(winid, { 50, 0 })
+            writer:on_user_scroll()
 
-                writer:on_user_scroll()
+            assert.is_nil(writer._prose_anchor_line)
+            assert.is_true(writer._auto_scroll_paused)
+        end)
 
-                assert.is_false(writer._auto_scroll_paused)
+        it("user scrolls to bottom: resumes auto-scroll", function()
+            -- User had previously paused; now G or scroll-to-bottom.
+            writer._auto_scroll_paused = true
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
             end
-        )
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 50, 0 })
+
+            writer:on_user_scroll()
+
+            assert.is_false(writer._auto_scroll_paused)
+        end)
 
         it(
             "ignores on_user_scroll while _suppress_pin_release is set",
@@ -990,9 +1014,7 @@ describe("agentic.ui.MessageWriter", function()
                 local info = vim.fn.getwininfo(winid)[1]
                 assert.equal(1, info.topline)
                 -- Cursor parked inside the pinned viewport, not at last.
-                assert.is_true(
-                    vim.api.nvim_win_get_cursor(winid)[1] <= 20
-                )
+                assert.is_true(vim.api.nvim_win_get_cursor(winid)[1] <= 20)
             end
         )
     end)
@@ -1069,36 +1091,33 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(info.topline > 10)
         end)
 
-        it(
-            "no-ops without error when topline sits on the last line",
-            function()
-                -- The last line alone is taller than the window (wraps to
-                -- ~34 rows > winheight=20) and the viewport already starts
-                -- on it, so no forward scroll is possible. The tail-does-
-                -- not-fit height check cannot short-circuit here, so this
-                -- pins the `old_topline >= last_line` guard: without it the
-                -- search would start below the last line and compute an
-                -- out-of-range target.
-                local lines = {}
-                for i = 1, 5 do
-                    lines[i] = "line " .. i
-                end
-                lines[6] = string.rep("x", 2000)
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-
-                vim.wo[winid].wrap = true
-                vim.api.nvim_win_set_cursor(winid, { 6, 0 })
-                vim.api.nvim_win_call(winid, function()
-                    vim.fn.winrestview({ topline = 6 })
-                end)
-                vim.cmd("redraw")
-
-                BufHelpers.scroll_down(winid, nil)
-
-                local info = vim.fn.getwininfo(winid)[1]
-                assert.equal(6, info.topline)
+        it("no-ops without error when topline sits on the last line", function()
+            -- The last line alone is taller than the window (wraps to
+            -- ~34 rows > winheight=20) and the viewport already starts
+            -- on it, so no forward scroll is possible. The tail-does-
+            -- not-fit height check cannot short-circuit here, so this
+            -- pins the `old_topline >= last_line` guard: without it the
+            -- search would start below the last line and compute an
+            -- out-of-range target.
+            local lines = {}
+            for i = 1, 5 do
+                lines[i] = "line " .. i
             end
-        )
+            lines[6] = string.rep("x", 2000)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+
+            vim.wo[winid].wrap = true
+            vim.api.nvim_win_set_cursor(winid, { 6, 0 })
+            vim.api.nvim_win_call(winid, function()
+                vim.fn.winrestview({ topline = 6 })
+            end)
+            vim.cmd("redraw")
+
+            BufHelpers.scroll_down(winid, nil)
+
+            local info = vim.fn.getwininfo(winid)[1]
+            assert.equal(6, info.topline)
+        end)
 
         it(
             "stays put when closed folds collapse buffer to fit window",
@@ -1232,7 +1251,10 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-                assert.equal("### " .. G_EXEC .. " `List the temp directory`", lines[1])
+                assert.equal(
+                    "### " .. G_EXEC .. " `List the temp directory`",
+                    lines[1]
+                )
                 assert.equal("```bash", lines[2])
                 assert.equal("ls -la /tmp", lines[3])
                 assert.equal("```", lines[4])
@@ -1793,63 +1815,55 @@ describe("agentic.ui.MessageWriter", function()
             schedule_stub:revert()
         end)
 
-        it(
-            "finalize_turn reflow does not corrupt tool call block",
-            function()
-                -- Simulate: agent streams message, then tool call, then separator
-                writer:write_message_chunk(
-                    make_message_update("Do a sample for loop\n\n---")
-                )
+        it("finalize_turn reflow does not corrupt tool call block", function()
+            -- Simulate: agent streams message, then tool call, then separator
+            writer:write_message_chunk(
+                make_message_update("Do a sample for loop\n\n---")
+            )
 
-                --- @type agentic.ui.MessageWriter.ToolCallBlock
-                local block = {
-                    tool_call_id = "reflow-exec",
-                    status = "pending",
-                    kind = "execute",
-                    argument = "for colour in 31 32 33 34 35 36; do\n  printf 'hello'\ndone",
-                }
-                writer:write_tool_call_block(block)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "reflow-exec",
+                status = "pending",
+                kind = "execute",
+                argument = "for colour in 31 32 33 34 35 36; do\n  printf 'hello'\ndone",
+            }
+            writer:write_tool_call_block(block)
 
-                -- This is what happens when the response ends
-                writer:finalize_turn()
+            -- This is what happens when the response ends
+            writer:finalize_turn()
 
-                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-                -- Find the collapsed execute header
-                local found_header = false
-                local found_fence = false
-                local found_command = false
-                for _, line in ipairs(lines) do
-                    if line == "### " .. G_EXEC then
-                        found_header = true
-                    end
-                    if line == "```bash" then
-                        found_fence = true
-                    end
-                    if line:find("for colour") then
-                        found_command = true
-                    end
+            -- Find the collapsed execute header
+            local found_header = false
+            local found_fence = false
+            local found_command = false
+            for _, line in ipairs(lines) do
+                if line == "### " .. G_EXEC then
+                    found_header = true
                 end
-                assert.is_true(found_header, "Execute header missing")
-                assert.is_true(found_fence, "```bash fence missing")
-                assert.is_true(found_command, "Command missing")
-
-                -- Block should still be tracked
-                assert.is_not_nil(writer.tool_call_blocks["reflow-exec"])
-
-                -- Decorations should exist
-                local NS_DECORATIONS =
-                    vim.api.nvim_create_namespace("agentic_tool_decorations")
-                local decs = vim.api.nvim_buf_get_extmarks(
-                    bufnr,
-                    NS_DECORATIONS,
-                    0,
-                    -1,
-                    {}
-                )
-                assert.is_true(#decs > 0, "Decoration extmarks missing")
+                if line == "```bash" then
+                    found_fence = true
+                end
+                if line:find("for colour") then
+                    found_command = true
+                end
             end
-        )
+            assert.is_true(found_header, "Execute header missing")
+            assert.is_true(found_fence, "```bash fence missing")
+            assert.is_true(found_command, "Command missing")
+
+            -- Block should still be tracked
+            assert.is_not_nil(writer.tool_call_blocks["reflow-exec"])
+
+            -- Decorations should exist
+            local NS_DECORATIONS =
+                vim.api.nvim_create_namespace("agentic_tool_decorations")
+            local decs =
+                vim.api.nvim_buf_get_extmarks(bufnr, NS_DECORATIONS, 0, -1, {})
+            assert.is_true(#decs > 0, "Decoration extmarks missing")
+        end)
 
         it(
             "narrow window reflow preserves tool call block after streamed chunks",
@@ -2239,23 +2253,28 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("500 Boom", lines[1])
         end)
 
-        it("mapped kind keeps its hint when embedded JSON is present", function()
-            --- @type agentic.acp.ACPError
-            local err = {
-                code = -32603,
-                data = { errorKind = "billing_error" },
-                message = "Internal error: API Error: 400\n"
-                    .. '{"type":"error","error":{"type":"invalid_request_error",'
-                    .. '"message":"Spend cap"}}',
-            }
+        it(
+            "mapped kind keeps its hint when embedded JSON is present",
+            function()
+                --- @type agentic.acp.ACPError
+                local err = {
+                    code = -32603,
+                    data = { errorKind = "billing_error" },
+                    message = "Internal error: API Error: 400\n"
+                        .. '{"type":"error","error":{"type":"invalid_request_error",'
+                        .. '"message":"Spend cap"}}',
+                }
 
-            local lines, error_type = MessageWriter._format_error_lines(err)
+                local lines, error_type = MessageWriter._format_error_lines(err)
 
-            assert.equal("billing_error", error_type)
-            assert.equal("400 Spend cap", lines[1])
-            -- Hint follows the resolved (billing) class, not the JSON type
-            assert.truthy(lines[3] and lines[3]:find("no automatic retry", 1, true))
-        end)
+                assert.equal("billing_error", error_type)
+                assert.equal("400 Spend cap", lines[1])
+                -- Hint follows the resolved (billing) class, not the JSON type
+                assert.truthy(
+                    lines[3] and lines[3]:find("no automatic retry", 1, true)
+                )
+            end
+        )
 
         it("strips the API Error prefix from a mapped-kind body", function()
             --- @type agentic.acp.ACPError
@@ -2270,21 +2289,24 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("Session expired", lines[1])
         end)
 
-        it("returns reset_epoch nil for a mapped kind over a reset clause", function()
-            --- @type agentic.acp.ACPError
-            local err = {
-                code = -32603,
-                data = { errorKind = "billing_error" },
-                message = "Internal error: Spend cap · resets 5pm (Europe/London)",
-            }
+        it(
+            "returns reset_epoch nil for a mapped kind over a reset clause",
+            function()
+                --- @type agentic.acp.ACPError
+                local err = {
+                    code = -32603,
+                    data = { errorKind = "billing_error" },
+                    message = "Internal error: Spend cap · resets 5pm (Europe/London)",
+                }
 
-            local _, error_type, reset_epoch =
-                MessageWriter._format_error_lines(err)
+                local _, error_type, reset_epoch =
+                    MessageWriter._format_error_lines(err)
 
-            -- errorKind wins: billing has no reset, so no auto-continue epoch
-            assert.equal("billing_error", error_type)
-            assert.is_nil(reset_epoch)
-        end)
+                -- errorKind wins: billing has no reset, so no auto-continue epoch
+                assert.equal("billing_error", error_type)
+                assert.is_nil(reset_epoch)
+            end
+        )
 
         it("unmapped errorKind falls through to text classification", function()
             --- @type agentic.acp.ACPError
@@ -2852,40 +2874,43 @@ describe("agentic.ui.MessageWriter", function()
             end)
         end
 
-        it("folds an edit diff as ONE block with no injected sub-folds", function()
-            writer:write_tool_call_block({
-                tool_call_id = "diff-onefold",
-                status = "completed",
-                kind = "create",
-                argument = "/tmp/agentic_difffold_probe.lua",
-                diff = { old = {}, new = diff_new },
-            })
+        it(
+            "folds an edit diff as ONE block with no injected sub-folds",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "diff-onefold",
+                    status = "completed",
+                    kind = "create",
+                    argument = "/tmp/agentic_difffold_probe.lua",
+                    diff = { old = {}, new = diff_new },
+                })
 
-            local fence = difffold_fence_line()
-            local body_start = fence + 1
-            local body_end = closing_fence_after(fence) - 1
-            wait_folded(body_start)
+                local fence = difffold_fence_line()
+                local body_start = fence + 1
+                local body_end = closing_fence_after(fence) - 1
+                wait_folded(body_start)
 
-            -- No injected sub-fold: nothing inside the body exceeds level 1
-            -- (vim.fn.foldlevel forces foldexpr computation). A surviving lua
-            -- fold over `foo`/`bar` would report level 2.
-            for line = body_start, body_end do
-                assert.is_true(
-                    vim.fn.foldlevel(line) <= 1,
-                    "sub-fold at line " .. line
-                )
+                -- No injected sub-fold: nothing inside the body exceeds level 1
+                -- (vim.fn.foldlevel forces foldexpr computation). A surviving lua
+                -- fold over `foo`/`bar` would report level 2.
+                for line = body_start, body_end do
+                    assert.is_true(
+                        vim.fn.foldlevel(line) <= 1,
+                        "sub-fold at line " .. line
+                    )
+                end
+
+                -- The whole body is a single fold: closing inside a function body
+                -- collapses the entire diff, not just that function.
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd((body_start + 1) .. "foldclose")
+                end)
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
+                assert.equal(body_start, vim.fn.foldclosed(body_end))
+                -- The concealed delimiter stays outside the fold.
+                assert.equal(-1, vim.fn.foldclosed(fence))
             end
-
-            -- The whole body is a single fold: closing inside a function body
-            -- collapses the entire diff, not just that function.
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd((body_start + 1) .. "foldclose")
-            end)
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
-            assert.equal(body_start, vim.fn.foldclosed(body_end))
-            -- The concealed delimiter stays outside the fold.
-            assert.equal(-1, vim.fn.foldclosed(fence))
-        end)
+        )
 
         it("leaves an applied edit diff foldable but open", function()
             writer:write_tool_call_block({
@@ -2904,64 +2929,74 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(-1, vim.fn.foldclosed(body_start))
         end)
 
-        it("closes the diff and shows the reason when the edit fails", function()
-            writer:write_tool_call_block({
-                tool_call_id = "diff-fail",
-                status = "failed",
-                kind = "edit",
-                argument = "/tmp/agentic_difffold_fail.lua",
-                diff = { old = { "stub" }, new = diff_new },
-                failure_reason = { "User refused permission to run tool" },
-            })
+        it(
+            "closes the diff and shows the reason when the edit fails",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "diff-fail",
+                    status = "failed",
+                    kind = "edit",
+                    argument = "/tmp/agentic_difffold_fail.lua",
+                    diff = { old = { "stub" }, new = diff_new },
+                    failure_reason = { "User refused permission to run tool" },
+                })
 
-            local fence = difffold_fence_line()
-            assert.is_not_nil(fence)
-            local body_start = fence + 1
-            wait_closed(body_start)
-            -- A failed (e.g. rejected) edit folds closed.
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
+                local fence = difffold_fence_line()
+                assert.is_not_nil(fence)
+                local body_start = fence + 1
+                wait_closed(body_start)
+                -- A failed (e.g. rejected) edit folds closed.
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
 
-            -- The reason renders below the diff, not in place of it.
-            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            local reason_line
-            for i, line in ipairs(lines) do
-                if line == "User refused permission to run tool" then
-                    reason_line = i
+                -- The reason renders below the diff, not in place of it.
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local reason_line
+                for i, line in ipairs(lines) do
+                    if line == "User refused permission to run tool" then
+                        reason_line = i
+                    end
                 end
+                assert.is_not_nil(reason_line)
             end
-            assert.is_not_nil(reason_line)
-        end)
+        )
 
-        it("closes the diff and appends the reason on the in_progress→failed transition", function()
-            writer:write_tool_call_block({
-                tool_call_id = "diff-trans",
-                status = "in_progress",
-                kind = "edit",
-                argument = "/tmp/agentic_difffold_trans.lua",
-                diff = { old = { "stub" }, new = diff_new },
-            })
-            -- Open while in progress.
-            assert.equal(-1, vim.fn.foldclosed(difffold_fence_line() + 1))
+        it(
+            "closes the diff and appends the reason on the in_progress→failed transition",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "diff-trans",
+                    status = "in_progress",
+                    kind = "edit",
+                    argument = "/tmp/agentic_difffold_trans.lua",
+                    diff = { old = { "stub" }, new = diff_new },
+                })
+                -- Open while in progress.
+                assert.equal(-1, vim.fn.foldclosed(difffold_fence_line() + 1))
 
-            writer:update_tool_call_block({
-                tool_call_id = "diff-trans",
-                status = "failed",
-                failure_reason = { "Load /coding skill first." },
-            })
+                writer:update_tool_call_block({
+                    tool_call_id = "diff-trans",
+                    status = "failed",
+                    failure_reason = { "Load /coding skill first." },
+                })
 
-            local fence = difffold_fence_line()
-            assert.is_not_nil(fence)
-            wait_closed(fence + 1)
-            -- Folds closed after the failed transition.
-            assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
+                local fence = difffold_fence_line()
+                assert.is_not_nil(fence)
+                wait_closed(fence + 1)
+                -- Folds closed after the failed transition.
+                assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
 
-            -- The diff was not discarded: its content survives the transition,
-            -- and the reason is appended beneath it.
-            local text =
-                table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-            assert.is_not_nil(text:find("local function foo()", 1, true))
-            assert.is_not_nil(text:find("Load /coding skill first.", 1, true))
-        end)
+                -- The diff was not discarded: its content survives the transition,
+                -- and the reason is appended beneath it.
+                local text = table.concat(
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                    "\n"
+                )
+                assert.is_not_nil(text:find("local function foo()", 1, true))
+                assert.is_not_nil(
+                    text:find("Load /coding skill first.", 1, true)
+                )
+            end
+        )
 
         it("opens an applied edit diff appended after a closed fold", function()
             -- A closed fold poisons foldexpr: a fold created afterwards
@@ -2997,55 +3032,58 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(exec_fence + 1, vim.fn.foldclosed(exec_fence + 1))
         end)
 
-        it("does not orphan diff highlights past the block on the failed transition", function()
-            -- Block is the LAST thing in the buffer (the live mid-turn case).
-            -- The failed re-render replaces block lines via set_lines; DIFF_ADD
-            -- line_hl_group extmarks migrate to EOF, past the pre-edit range, so
-            -- a clear after set_lines misses them and a diff-bg highlight bleeds
-            -- onto the trailing blank line. Clearing before set_lines fixes it.
-            writer:write_message(make_message_update("intro prose line"))
-            writer:write_tool_call_block({
-                tool_call_id = "diff-orphan",
-                status = "in_progress",
-                kind = "create",
-                argument = "/tmp/agentic_difffold_orphan.lua",
-                diff = { old = {}, new = diff_new },
-            })
-            writer:update_tool_call_block({
-                tool_call_id = "diff-orphan",
-                status = "failed",
-                failure_reason = { "short" },
-            })
-            -- No wait: the orphaned marks are the OLD highlights that survive
-            -- the synchronous clear+set_lines. The re-applied (correct) marks
-            -- land later via vim.schedule, but the bug is detectable now.
+        it(
+            "does not orphan diff highlights past the block on the failed transition",
+            function()
+                -- Block is the LAST thing in the buffer (the live mid-turn case).
+                -- The failed re-render replaces block lines via set_lines; DIFF_ADD
+                -- line_hl_group extmarks migrate to EOF, past the pre-edit range, so
+                -- a clear after set_lines misses them and a diff-bg highlight bleeds
+                -- onto the trailing blank line. Clearing before set_lines fixes it.
+                writer:write_message(make_message_update("intro prose line"))
+                writer:write_tool_call_block({
+                    tool_call_id = "diff-orphan",
+                    status = "in_progress",
+                    kind = "create",
+                    argument = "/tmp/agentic_difffold_orphan.lua",
+                    diff = { old = {}, new = diff_new },
+                })
+                writer:update_tool_call_block({
+                    tool_call_id = "diff-orphan",
+                    status = "failed",
+                    failure_reason = { "short" },
+                })
+                -- No wait: the orphaned marks are the OLD highlights that survive
+                -- the synchronous clear+set_lines. The re-applied (correct) marks
+                -- land later via vim.schedule, but the bug is detectable now.
 
-            -- The diff body ends at the last added line; nothing below it
-            -- (reason fence, footer, trailing blank) may carry a diff highlight.
-            local last_diff_row
-            for i, l in
-                ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
-            do
-                if l == "end" then
-                    last_diff_row = i - 1 -- 0-indexed; last added diff line
+                -- The diff body ends at the last added line; nothing below it
+                -- (reason fence, footer, trailing blank) may carry a diff highlight.
+                local last_diff_row
+                for i, l in
+                    ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+                do
+                    if l == "end" then
+                        last_diff_row = i - 1 -- 0-indexed; last added diff line
+                    end
+                end
+                assert.is_not_nil(last_diff_row)
+
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    Renderer.NS_DIFF_HIGHLIGHTS,
+                    0,
+                    -1,
+                    {}
+                )
+                for _, m in ipairs(marks) do
+                    assert.is_true(
+                        m[2] <= last_diff_row,
+                        "diff highlight orphaned at row " .. m[2]
+                    )
                 end
             end
-            assert.is_not_nil(last_diff_row)
-
-            local marks = vim.api.nvim_buf_get_extmarks(
-                bufnr,
-                Renderer.NS_DIFF_HIGHLIGHTS,
-                0,
-                -1,
-                {}
-            )
-            for _, m in ipairs(marks) do
-                assert.is_true(
-                    m[2] <= last_diff_row,
-                    "diff highlight orphaned at row " .. m[2]
-                )
-            end
-        end)
+        )
     end)
 
     describe("execute description heading", function()
