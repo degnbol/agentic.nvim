@@ -471,10 +471,8 @@ does not disable it. >lua
     `<C-v>`            i       Paste image
 
 Partial-send deletes the sent text from the input buffer. Set
-`keymaps.prompt.submit = { "<CR>" }` and the send bindings to `{}` to bind
-`<CR>` as whole-buffer submit instead. Set `settings.send_register` to a
-register name (e.g. `"a"`) to copy the sent text into that register before
-deleting.
+`settings.send_register` to a register name (e.g. `"a"`) to copy the sent text
+into that register before deleting.
 
 While the agent is generating, the queue bindings tag the covered line(s) as
 a queued region, highlighted in place (`AgenticQueuedRegion`) and left
