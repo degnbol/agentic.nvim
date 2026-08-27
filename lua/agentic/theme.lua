@@ -17,6 +17,8 @@ Theme.HL_GROUPS = {
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
 
     HEADING = "AgenticHeading",
+    GLYPH = "AgenticGlyph",
+    GLYPH_OFF = "AgenticGlyphOff",
     DIMMED_BLOCK = "AgenticDimmedBlock",
     SEARCH_MATCH = "AgenticSearchMatch",
     GREP_PATH = "AgenticGrepPath",
@@ -42,6 +44,19 @@ local status_hl = {
     failed = Theme.HL_GROUPS.STATUS_FAILED,
 }
 
+--- Definition for the struck-through glyph group: `Normal`'s foreground struck
+--- through, or a plain link to the un-struck glyph group when `Normal` has no
+--- foreground to strike.
+--- @return vim.api.keyset.highlight
+local function glyph_off_hl()
+    local normal_fg =
+        vim.api.nvim_get_hl(0, { name = "Normal", link = false }).fg
+    if not normal_fg then
+        return { link = Theme.HL_GROUPS.GLYPH }
+    end
+    return { fg = normal_fg, strikethrough = true }
+end
+
 function Theme.setup()
     -- stylua: ignore start
     local highlights = {
@@ -65,6 +80,21 @@ function Theme.setup()
         -- being a heading (a treesitter-context anchor) is decoupled from
         -- looking important. Retarget this group to restyle the markers.
         { Theme.HL_GROUPS.HEADING, { link = "@punctuation.special" } },
+
+        -- Identity glyphs in the sign column. An omitted `sign_hl_group` falls
+        -- through to SignColumn, which is dimmer than the text the glyph
+        -- announces — hence an explicit group rather than no group at all.
+        { Theme.HL_GROUPS.GLYPH, { link = "Normal" } },
+
+        -- The same glyph for a command that undid its own effect (`/trust`
+        -- with no argument). Not a link: nvim_set_hl ignores every other field
+        -- when `link` is set, so the strikethrough needs a resolved colour, an
+        -- attribute-only group having no foreground of its own to strike (it
+        -- falls through to SignColumn, dimmer than the glyph it pairs with).
+        -- A colorscheme that leaves `Normal` to the terminal resolves to no
+        -- foreground at all, and nothing can be inherited then, so that case
+        -- trades the strikethrough away rather than the colour.
+        { Theme.HL_GROUPS.GLYPH_OFF, glyph_off_hl() },
 
         -- Sidecar body dim (fetch/WebSearch/SubAgent output)
         { Theme.HL_GROUPS.DIMMED_BLOCK, { link = "Comment" } },
@@ -107,6 +137,16 @@ function Theme.setup()
         hl[2].default = true
         vim.api.nvim_set_hl(0, hl[1], hl[2])
     end
+
+    -- `:colorscheme` runs `:highlight clear`, which drops every group defined
+    -- here — links included — leaving the extmarks that name them unhighlighted
+    -- until the next restart. Redefining also re-resolves the colours read off
+    -- other groups above. `clear = true` keeps this to one autocmd across
+    -- repeat calls.
+    vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("agentic_theme", { clear = true }),
+        callback = Theme.setup,
+    })
 end
 
 --- Treesitter injection name for a path's markdown code fence, via neovim's

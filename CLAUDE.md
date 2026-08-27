@@ -44,7 +44,7 @@ Log paths: `.local/agentic_{luals,selene,helptags,test}_output.log`
 ## Key files
 
 - `lua/agentic/config_default.lua` — all user-configurable options
-- `lua/agentic/theme.lua` — highlight groups (update README.md when adding new ones)
+- `lua/agentic/theme.lua` — highlight groups, `glyphs.lua` — glyph vocabulary (list new ones in `doc/agentic.txt`)
 - `lua/agentic/acp/adapters/` — provider-specific adapters
 
 ## Session cache location

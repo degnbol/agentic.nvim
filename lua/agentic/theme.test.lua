@@ -53,4 +53,54 @@ describe("agentic.Theme", function()
             )
         end)
     end)
+
+    describe("setup", function()
+        --- Definitions are `default = true`, so a group that already exists
+        --- wins over a fresh setup — the same reason a colorscheme's
+        --- `:highlight clear` is what lets the redefinition through.
+        --- @param name string
+        local function clear(name)
+            vim.cmd.highlight({ args = { "clear", name } })
+        end
+
+        it("redefines its groups after a colorscheme wipes them", function()
+            Theme.setup()
+            vim.cmd.colorscheme("default")
+
+            assert.equal(
+                "Normal",
+                vim.api.nvim_get_hl(0, { name = Theme.HL_GROUPS.GLYPH }).link
+            )
+        end)
+
+        it("strikes the off-glyph in Normal's own foreground", function()
+            vim.api.nvim_set_hl(0, "Normal", { fg = "#abcdef" })
+            clear(Theme.HL_GROUPS.GLYPH_OFF)
+
+            Theme.setup()
+
+            local off =
+                vim.api.nvim_get_hl(0, { name = Theme.HL_GROUPS.GLYPH_OFF })
+            assert.equal(tonumber("abcdef", 16), off.fg)
+            assert.is_true(off.strikethrough)
+        end)
+
+        it(
+            "trades the strikethrough for a colour Normal cannot give",
+            function()
+                -- A colorscheme leaving Normal to the terminal resolves to no
+                -- foreground, and an attribute-only group would fall through to
+                -- SignColumn — dimmer than the glyph this one pairs with.
+                vim.api.nvim_set_hl(0, "Normal", {})
+                clear(Theme.HL_GROUPS.GLYPH_OFF)
+
+                Theme.setup()
+
+                assert.equal(
+                    Theme.HL_GROUPS.GLYPH,
+                    vim.api.nvim_get_hl(0, { name = Theme.HL_GROUPS.GLYPH_OFF }).link
+                )
+            end
+        )
+    end)
 end)

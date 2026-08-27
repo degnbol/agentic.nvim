@@ -74,6 +74,11 @@ end
 --- @field old string[]
 --- @field all? boolean
 
+--- An inclusive 1-based line range in a file's post-edit content.
+--- @class agentic.ui.MessageWriter.HunkRange
+--- @field start_line integer
+--- @field end_line integer
+
 --- @class agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id string
 --- @field status agentic.acp.ToolCallStatus
@@ -85,6 +90,8 @@ end
 --- @field read_range? { offset: integer, limit?: integer } Line range for partial reads
 --- @field failure_reason? string[] Error message shown in place of kind-specific body when status == "failed" (e.g. hook-denial reason, tool error). Extracted from rawOutput, so no ``` fences.
 --- @field description? string Model-provided one-line summary of the call (e.g. a Bash command's `description`), rendered as a title line under the header. Distinct from body (the output) and argument (the command).
+--- @field file_created? boolean Whether the call created the file rather than changing existing content. Reported after the tool runs, so absent until then — a mutation with no value here has not been told either way, which is not the same as false.
+--- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives a session restore, which re-deriving from disk cannot (the file is post-edit by then).
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -136,17 +143,19 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
+--- @field _pending_section_break? boolean Set by `_mark_section_break` when a block interrupts a prose run mid-turn (tool call, notice); makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
 --- @field _numbering_active? boolean When true (set by `enable_numbering` once ≥2 subagents run concurrently in the turn), blocks carrying an `ordinal` render it as the sign on every body row (the whole left rail), replacing the │ border. Reset per turn.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
---- Namespace for prompt-heading marker extmarks: placed at write time on each
---- user prompt's `## ` heading line. Drives both the `❯` sign and `[[`/`]]`
+--- Namespace for user-action marker extmarks: placed at write time on the
+--- heading line of each user prompt (`write_user_prompt`) and each command
+--- notice (`write_notice`). Drives both the row's identity sign and `[[`/`]]`
 --- navigation, replacing the old text-scan on `line == "##"` (dead since the
 --- heading became `## <first line>`). Global namespace + buffer-scoped marks is
 --- sanctioned by .claude/rules/multi-tabpage.md (mirrors Renderer.NS_TOOL_BLOCKS).
-MessageWriter.NS_PROMPT_MARKERS =
-    vim.api.nvim_create_namespace("agentic_prompt_signs")
+MessageWriter.NS_USER_ACTIONS =
+    vim.api.nvim_create_namespace("agentic_user_actions")
 
 --- @param bufnr integer
 --- @param status_indicator? agentic.ui.StatusIndicator
@@ -163,7 +172,7 @@ function MessageWriter:new(bufnr, status_indicator)
         _should_auto_scroll = nil,
         _scroll_callback_queued = false,
         _chunk_start_line = nil,
-        _last_wrote_tool_call = false,
+        _pending_section_break = false,
         _suppressing_rejection = false,
         _rejection_buffer = "",
         _status_indicator = status_indicator,
@@ -261,12 +270,20 @@ function MessageWriter:_release_prose_pin()
     self._prose_anchor_line = nil
 end
 
+--- Make the next prose chunk of this turn open its own section, by emitting the
+--- empty `###` boundary ahead of it (see `write_message_chunk`). Called by every
+--- writer that interrupts a prose run mid-turn, so the flag has one setter.
+--- @private
+function MessageWriter:_mark_section_break()
+    self._pending_section_break = true
+end
+
 --- Reset all per-turn mutable state. Called by refresh to unstick a
 --- desynchronised display without restarting the session.
 function MessageWriter:reset_turn_state()
     self._suppressing_rejection = false
     self._rejection_buffer = ""
-    self._last_wrote_tool_call = false
+    self._pending_section_break = false
     self._last_message_type = nil
     self._chunk_start_line = nil
     self._numbering_active = false
@@ -407,7 +424,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
         -- The sign rides on the marker itself, so there is no separate scan.
         vim.api.nvim_buf_set_extmark(
             bufnr,
-            MessageWriter.NS_PROMPT_MARKERS,
+            MessageWriter.NS_USER_ACTIONS,
             heading_row,
             0,
             {
@@ -417,6 +434,87 @@ function MessageWriter:write_user_prompt(text, extra_lines)
             }
         )
     end)
+end
+
+--- @class agentic.ui.MessageWriter.Notice
+--- @field glyph string Identity glyph for the command, stamped as the heading row's sign (see agentic.glyphs)
+--- @field title string Heading text. Raw, not backtick-wrapped: an underscore or stray backtick in it can corrupt the heading through markdown inline parsing, the same exposure a user prompt's heading already carries.
+--- @field body? string[] Already-formatted markdown lines placed under the heading
+--- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH
+--- @field mid_turn? boolean True when a turn is running. Decides both the heading level and whether the notice closes the turn — see write_notice.
+
+--- Write the result of a locally-handled command as a glyph-signed heading.
+---
+--- A notice records something the *user* did, so its row carries an identity
+--- sign in the same channel as a prompt's `❯` and is navigable with `[[`/`]]`.
+---
+--- The heading level follows the notice's position in the section tree, which
+--- `mid_turn` decides. Every command here takes effect the moment it is issued
+--- (`/trust` widens permissions for the turn already running), so the honest
+--- place to render it is where it happened:
+---
+--- - Between turns it is a sibling of the prompts: `##`, and it closes the turn.
+--- - Mid-turn it must nest inside the running turn instead (`##` would close the
+---   `## prompt` section and steal every following tool call as its child), so
+---   it takes `###` and requests a section break for the prose that follows. It
+---   must NOT finalize: that would reset the very cross-turn state the break
+---   needs, and the break is what stops a later fenced code block from becoming
+---   the notice's child — a `###` section holding a fence matches
+---   `queries/agentic/context.scm` and would pin the breadcrumb for the rest of
+---   the turn.
+---
+--- @param notice agentic.ui.MessageWriter.Notice
+function MessageWriter:write_notice(notice)
+    local level = notice.mid_turn and "###" or "##"
+    local wrap_width = self:_get_wrap_width()
+    -- Headings are never prose-wrapped (TextWrap.is_heading), so a long title
+    -- would run off the window instead — truncate it as a tool-call head does.
+    local heading = TextWrap.truncate_to_width(
+        level .. " " .. notice.title,
+        wrap_width > 0 and wrap_width or 80
+    )
+
+    local lines = { heading }
+    vim.list_extend(lines, notice.body or {})
+    table.insert(lines, "")
+
+    -- A notice ends the prose run it interrupts: without this the viewport
+    -- stays anchored to the pre-notice prose, since the re-pin check only
+    -- fires once the anchor is nil.
+    self:_release_prose_pin()
+    self:_auto_scroll(self.bufnr)
+
+    self:_with_modifiable_suppressed(function(bufnr)
+        -- Flush pending prose reflow first, for the reason write_user_prompt
+        -- documents: the heading would otherwise land inside an unclosed prose
+        -- fence, and a later reflow's set_lines would span the heading row and
+        -- drag the marker with it.
+        self:_reflow_chunks(bufnr, true)
+
+        self:_append_lines(lines)
+
+        -- Computed AFTER the append: on an empty buffer _append_lines replaces
+        -- row 0 rather than appending, so a pre-capture would be off by one.
+        local heading_row = vim.api.nvim_buf_line_count(bufnr) - #lines
+
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            MessageWriter.NS_USER_ACTIONS,
+            heading_row,
+            0,
+            {
+                right_gravity = false,
+                sign_text = notice.glyph .. " ",
+                sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH,
+            }
+        )
+    end)
+
+    if notice.mid_turn then
+        self:_mark_section_break()
+    else
+        self:finalize_turn()
+    end
 end
 
 --- Hints for known error classes. Keyed by both the Anthropic `error.type`
@@ -662,7 +760,7 @@ function MessageWriter:finalize_turn()
     -- subsequent turns (the "stuck 1 message behind" family of bugs).
     self._suppressing_rejection = false
     self._rejection_buffer = ""
-    self._last_wrote_tool_call = false
+    self._pending_section_break = false
     self._last_message_type = nil
     self._numbering_active = false
     self:_release_prose_pin()
@@ -921,15 +1019,15 @@ function MessageWriter:write_message_chunk(update)
         text = "\n\n" .. text
     end
 
-    -- Prose that resumes after a tool call must close the tool section so
-    -- treesitter-context stops pinning the tool's filename while the user
-    -- reads the summary. Emit an empty `###` heading (no inline child, so
-    -- context.scm never captures it) ahead of the prose, plus the blank line
-    -- for visual breathing room. Once per prose run — the flag resets after
-    -- the first chunk.
-    if self._last_wrote_tool_call then
+    -- Prose that resumes after an interrupting block must close that block's
+    -- section so treesitter-context stops pinning its heading (a tool call's
+    -- filename, a notice's title) while the user reads the summary. Emit an
+    -- empty `###` heading (no inline child, so context.scm never captures it)
+    -- ahead of the prose, plus the blank line for visual breathing room. Once
+    -- per prose run — the flag resets after the first chunk.
+    if self._pending_section_break then
         text = "\n###\n\n" .. text
-        self._last_wrote_tool_call = false
+        self._pending_section_break = false
     end
 
     self._last_message_type = update.sessionUpdate
@@ -1427,7 +1525,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         materialize_injections(bufnr, start_row, end_row)
 
         self:_append_lines({ "" })
-        self._last_wrote_tool_call = true
+        self:_mark_section_break()
     end)
 end
 

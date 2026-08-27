@@ -234,6 +234,27 @@ describe("ToolCallRenderer", function()
         end)
     end)
 
+    describe("collapsed heading width", function()
+        it("fits the wrap width including the frame it adds", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-long-desc",
+                status = "completed",
+                kind = "execute",
+                argument = "ls",
+                description = string.rep("long description ", 10),
+            }
+
+            local lines = Renderer.prepare_block_lines(block, 40)
+
+            -- The heading is `### <glyph> `<name>``: the truncation budget has
+            -- to pay for the backticks it wraps the name in, not just the
+            -- prefix.
+            assert.is_true(vim.fn.strdisplaywidth(lines[1]) <= 40)
+            assert.equal("…`", lines[1]:sub(-4))
+        end)
+    end)
+
     describe("buffer side effects", function()
         --- Render `block`, reporting how many buffers the render added and the
         --- lines it produced. Measures a single render: `bufadd` is idempotent

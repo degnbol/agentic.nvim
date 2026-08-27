@@ -1,4 +1,5 @@
 local FileSystem = require("agentic.utils.file_system")
+local TextWrap = require("agentic.utils.text_wrap")
 
 --- @class agentic.ui.DiagnosticsContext
 local DiagnosticsContext = {}
@@ -15,36 +16,6 @@ local function normalize_file_path(file_path)
     end
 
     return file_path
-end
-
---- @param text string
---- @param max_width integer
---- @return string truncated_text
-function DiagnosticsContext.truncate_for_display(text, max_width)
-    local display_width = vim.fn.strdisplaywidth(text)
-    if max_width < 4 or display_width <= max_width then
-        return text
-    end
-
-    local target = max_width - 3
-    local current_width = 0
-    local byte_offset = 1
-    local len = #text
-
-    while byte_offset <= len do
-        local char_end = vim.str_utf_end(text, byte_offset) + byte_offset
-        local char = text:sub(byte_offset, char_end)
-        local char_width = vim.fn.strdisplaywidth(char)
-
-        if current_width + char_width > target then
-            break
-        end
-
-        current_width = current_width + char_width
-        byte_offset = char_end + 1
-    end
-
-    return text:sub(1, byte_offset - 1) .. "..."
 end
 
 --- @param text string
@@ -138,7 +109,7 @@ function DiagnosticsContext.format_diagnostics(diagnostics, chat_width)
 
         table.insert(
             summary_lines,
-            DiagnosticsContext.truncate_for_display(summary, chat_width)
+            TextWrap.truncate_to_width(summary, chat_width)
         )
     end
 

@@ -104,7 +104,7 @@ Known hazards (and their reset points):
 |------|----------|----------|
 | `_suppressing_rejection` | Permission rejected | `append_separator`, `write_tool_call_block` |
 | `_rejection_buffer` | With above | With above |
-| `_last_wrote_tool_call` | Tool call block written | Next `write_message_chunk` |
+| `_pending_section_break` | Tool call block or mid-turn notice written | Next `write_message_chunk`, `finalize_turn`, `reset_turn_state` |
 | `_chunk_start_line` | First streamed chunk | `_reflow_chunks(flush_all=true)` via `append_separator` |
 
 When adding new per-turn state to MessageWriter, always ensure it resets at the

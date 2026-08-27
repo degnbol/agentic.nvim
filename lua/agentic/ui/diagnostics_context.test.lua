@@ -64,7 +64,7 @@ describe("agentic.ui.DiagnosticsContext", function()
                 true
             )
         )
-        assert.equal("...", result.summary_lines[1]:sub(-3))
+        assert.equal("…", result.summary_lines[1]:sub(-3))
     end)
 
     it("handles nil file_path as unnamed buffer", function()

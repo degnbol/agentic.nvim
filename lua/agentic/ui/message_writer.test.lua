@@ -2,11 +2,13 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 local Renderer = require("agentic.ui.tool_call_renderer")
+local Theme = require("agentic.theme")
 
--- Collapsed tool-call heading glyphs (mirror KIND_GLYPHS in the renderer).
-local G_READ = "󰈈"
-local G_EXEC = "󰆍"
+-- Collapsed tool-call heading glyphs.
+local G_READ = Glyphs.KIND.read
+local G_EXEC = Glyphs.KIND.execute
 
 describe("agentic.ui.MessageWriter", function()
     --- @type agentic.ui.MessageWriter
@@ -508,7 +510,7 @@ describe("agentic.ui.MessageWriter", function()
         local function marker_rows()
             local marks = vim.api.nvim_buf_get_extmarks(
                 bufnr,
-                MessageWriter.NS_PROMPT_MARKERS,
+                MessageWriter.NS_USER_ACTIONS,
                 0,
                 -1,
                 {}
@@ -553,6 +555,125 @@ describe("agentic.ui.MessageWriter", function()
             local rows = marker_rows()
             assert.equal(1, #rows)
             assert.equal("## The prompt", line_at(rows[1]))
+        end)
+    end)
+
+    describe("write_notice", function()
+        local GLYPH = Glyphs.NOTICE.TRUST
+        local original_windows
+
+        before_each(function()
+            -- Hard-wrap at the window width, so the truncation case can set it.
+            original_windows = vim.deepcopy(Config.windows)
+            Config.windows.min_wrap_width = 0
+            Config.windows.max_wrap_width = 0
+            vim.wo[winid].wrap = false
+        end)
+
+        after_each(function()
+            Config.windows = original_windows
+            vim.wo[winid].wrap = true
+        end)
+
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- Marks in the user-action namespace as { row, sign_text, sign_hl }.
+        local function action_marks()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                MessageWriter.NS_USER_ACTIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local out = {}
+            for _, mark in ipairs(marks) do
+                table.insert(out, {
+                    mark[2],
+                    mark[4].sign_text,
+                    mark[4].sign_hl_group,
+                })
+            end
+            return out
+        end
+
+        it(
+            "writes the title as a heading with the glyph in the gutter",
+            function()
+                writer:write_notice({ glyph = GLYPH, title = "repo" })
+
+                assert.same({ "## repo", "", "" }, buffer_lines())
+                assert.same(
+                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH } },
+                    action_marks()
+                )
+            end
+        )
+
+        it("appends body lines verbatim and a trailing blank", function()
+            writer:write_notice({
+                glyph = Glyphs.NOTICE.CONTEXT,
+                title = "72.4k / 200k · 36%",
+                body = { "- Cost: $0.0412 USD" },
+            })
+
+            assert.same({
+                "## 72.4k / 200k · 36%",
+                "- Cost: $0.0412 USD",
+                "",
+                "",
+            }, buffer_lines())
+        end)
+
+        it("honours an explicit glyph highlight", function()
+            writer:write_notice({
+                glyph = GLYPH,
+                glyph_hl = Theme.HL_GROUPS.GLYPH_OFF,
+                title = "trust cleared",
+            })
+
+            assert.equal(Theme.HL_GROUPS.GLYPH_OFF, action_marks()[1][3])
+        end)
+
+        it("truncates a title too wide for the window", function()
+            vim.api.nvim_win_set_width(winid, 30)
+
+            writer:write_notice({
+                glyph = GLYPH,
+                title = string.rep("wide ", 20),
+            })
+
+            local heading = buffer_lines()[1]
+            assert.equal(28, vim.fn.strdisplaywidth(heading))
+            assert.equal("…", heading:sub(-3))
+        end)
+
+        it("takes ### and no turn boundary mid-turn", function()
+            writer:write_message_chunk(make_message_update("streaming prose"))
+
+            writer:write_notice({
+                glyph = GLYPH,
+                title = "repo",
+                mid_turn = true,
+            })
+
+            assert.equal("### repo", buffer_lines()[2])
+            -- The next prose chunk resumes in its own section, so the notice
+            -- stops pinning the breadcrumb.
+            writer:write_message_chunk(make_message_update("resumed prose"))
+            assert.is_true(vim.tbl_contains(buffer_lines(), "###"))
+        end)
+
+        it("closes the turn when written between turns", function()
+            writer:write_message_chunk(make_message_update("prior prose"))
+            writer._pending_section_break = true
+
+            writer:write_notice({ glyph = GLYPH, title = "repo" })
+
+            assert.equal("## repo", buffer_lines()[2])
+            assert.is_false(writer._pending_section_break)
         end)
     end)
 

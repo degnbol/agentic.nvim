@@ -4,6 +4,7 @@ local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
 local ExecShell = require("agentic.utils.exec_shell")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
+local Glyphs = require("agentic.glyphs")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local Treesitter = require("agentic.utils.treesitter")
@@ -69,44 +70,12 @@ function M.parse_read_range(argument)
     return path, { offset = na, limit = nb - na + 1 }
 end
 
---- Per-kind glyph shown on the collapsed tool-call heading in place of the
---- kind word. Keyed on the lowercased kind; unlisted kinds fall back to
---- DEFAULT_GLYPH. edit and write intentionally share identity (both arrive as
---- kind == "edit", distinguished only by diff content).
---- @type table<string, string>
-local KIND_GLYPHS = {
-    read = "󰈈",
-    edit = "󰏫",
-    execute = "󰆍",
-    search = "󰍉",
-    fetch = "󰖟",
-    websearch = "󰖟",
-    subagent = "󰚩",
-}
-local DEFAULT_GLYPH = "󰒓"
-
+--- The glyph carrying an ACP kind's identity on the collapsed tool-call
+--- heading, in place of the kind word.
 --- @param kind string
 --- @return string
 local function kind_glyph(kind)
-    return KIND_GLYPHS[vim.trim(kind):lower()] or DEFAULT_GLYPH
-end
-
---- Truncate `s` to at most `width` display columns, appending "…" (which
---- occupies the final column) when the string is cut. Returns `s` unchanged
---- when it already fits or `width` is not positive.
---- @param s string
---- @param width integer
---- @return string
-local function truncate_display(s, width)
-    if width <= 0 or vim.fn.strdisplaywidth(s) <= width then
-        return s
-    end
-    local budget = width - 1
-    local out = vim.fn.strcharpart(s, 0, budget)
-    while #out > 0 and vim.fn.strdisplaywidth(out) > budget do
-        out = vim.fn.strcharpart(out, 0, vim.fn.strchars(out) - 1)
-    end
-    return out .. "…"
+    return Glyphs.KIND[vim.trim(kind):lower()] or Glyphs.KIND_DEFAULT
 end
 
 --- Build the collapsed tool-call heading: `` ### <glyph> `name` ``. The glyph
@@ -118,9 +87,10 @@ end
 --- before the argument has streamed in, and for execute calls with no model
 --- description (the command already shows in the fence below). When `truncate`
 --- is set, `name` is clamped to `wrap_width` (or 80 when soft-wrapping) minus
---- the `` ### <glyph> `` prefix and one cell for the ellipsis. That is a single
---- screen line only while `wrap_width` fits the window — `min_wrap_width` can
---- hold it above the width of a narrow chat window.
+--- everything the rendered line spends on the frame, and one cell for the
+--- ellipsis. That is a single screen line only while `wrap_width` fits the
+--- window — `min_wrap_width` can hold it above the width of a narrow chat
+--- window.
 --- @param kind string
 --- @param name string
 --- @param wrap_width integer
@@ -133,8 +103,9 @@ local function collapsed_header(kind, name, wrap_width, truncate)
     end
     if truncate then
         local budget = (wrap_width > 0 and wrap_width or 80)
-            - vim.fn.strdisplaywidth(prefix .. " ")
-        name = truncate_display(name, budget)
+            - vim.fn.strdisplaywidth(prefix)
+            - #" ``"
+        name = TextWrap.truncate_to_width(name, budget)
     end
     return string.format("%s `%s`", prefix, name)
 end

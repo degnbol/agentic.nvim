@@ -3,6 +3,7 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
 local MessageWriter = require("agentic.ui.message_writer")
+local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local WindowDecoration = require("agentic.ui.window_decoration")
 local WidgetLayout = require("agentic.ui.widget_layout")
@@ -337,12 +338,12 @@ function ChatWidget:clear()
         end
     end
 
-    -- set_lines collapses prompt markers onto (0,0) without deleting them, so
-    -- stale marks would make [[/]] jump to a phantom prompt at the top. Clear
+    -- set_lines collapses user-action markers onto (0,0) without deleting them,
+    -- so stale marks would make [[/]] jump to a phantom prompt at the top. Clear
     -- them explicitly (they are rebuilt when prompts are re-written on restore).
     vim.api.nvim_buf_clear_namespace(
         self.buf_nrs.chat,
-        MessageWriter.NS_PROMPT_MARKERS,
+        MessageWriter.NS_USER_ACTIONS,
         0,
         -1
     )
@@ -940,22 +941,23 @@ function ChatWidget:_setup_write_submit()
     end
 end
 
---- Wire up [[ / ]] navigation between user prompts in the chat buffer.
---- Prompt heading rows are marked with extmarks in NS_PROMPT_MARKERS at write
---- time (see MessageWriter:write_user_prompt); the `❯` sign rides on the same
---- marks. Navigation reads the marks, so agent-authored `## ` headings are
---- never treated as prompts.
+--- Wire up [[ / ]] navigation between the rows recording a user action in the
+--- chat buffer: prompts, and the notices confirming a local command. Those rows
+--- are marked with extmarks in NS_USER_ACTIONS at write time (see
+--- MessageWriter:write_user_prompt and :write_notice); each row's identity sign
+--- rides on the same mark. Navigation reads the marks, so agent-authored `## `
+--- headings are never treated as prompts.
 function ChatWidget:_setup_prompt_navigation()
     local chat_buf = self.buf_nrs.chat
 
-    --- Row of the nearest prompt marker relative to the cursor.
+    --- Row of the nearest user-action marker relative to the cursor.
     --- @param forward boolean true = smallest row > cursor, false = greatest < cursor
     --- @return integer|nil row 0-indexed
     local function adjacent_prompt_row(forward)
         local cur = vim.api.nvim_win_get_cursor(0)[1] - 1
         local marks = vim.api.nvim_buf_get_extmarks(
             chat_buf,
-            MessageWriter.NS_PROMPT_MARKERS,
+            MessageWriter.NS_USER_ACTIONS,
             0,
             -1,
             {}
@@ -1538,10 +1540,10 @@ function ChatWidget:set_chat_title(title)
     end
 
     if title and title ~= "" then
-        -- Truncate long titles to keep buffer name short
-        local max_len = 30
-        local display = #title > max_len and title:sub(1, max_len) .. "…"
-            or title
+        -- Keep the buffer name short. Cut by display width, not bytes: a
+        -- byte-slice can halve a codepoint and put invalid UTF-8 into the
+        -- buffer name and winbar.
+        local display = TextWrap.truncate_to_width(title, 31)
         headers.chat.title = "󰻞 " .. display
         headers.chat.session_name = display
     else

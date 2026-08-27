@@ -1,6 +1,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 
 describe("agentic.ui.ChatWidget", function()
@@ -762,11 +763,11 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
 
-        --- 0-indexed rows carrying a prompt marker.
+        --- 0-indexed rows carrying a user-action marker.
         local function marker_rows()
             local marks = vim.api.nvim_buf_get_extmarks(
                 widget.buf_nrs.chat,
-                MessageWriter.NS_PROMPT_MARKERS,
+                MessageWriter.NS_USER_ACTIONS,
                 0,
                 -1,
                 {}
@@ -812,7 +813,22 @@ describe("agentic.ui.ChatWidget", function()
             assert.equal(second, cursor_row())
         end)
 
-        it("clear() removes prompt markers", function()
+        it("]] stops on a command notice between prompts", function()
+            writer:write_user_prompt("First prompt")
+            writer:write_notice({
+                glyph = Glyphs.NOTICE.RENAME,
+                title = "New Name",
+            })
+
+            local rows = marker_rows()
+            assert.equal(2, #rows)
+
+            vim.api.nvim_win_set_cursor(0, { rows[1] + 1, 0 })
+            press("]]")
+            assert.equal(rows[2], cursor_row())
+        end)
+
+        it("clear() removes user-action markers", function()
             writer:write_user_prompt("A prompt")
             assert.equal(1, #marker_rows())
 

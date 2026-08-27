@@ -4,8 +4,10 @@ local spy = require("tests.helpers.spy")
 
 local AgentModes = require("agentic.acp.agent_modes")
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionManager = require("agentic.session_manager")
+local Theme = require("agentic.theme")
 
 --- @param mode_id string
 --- @return agentic.acp.CurrentModeUpdate
@@ -579,6 +581,7 @@ describe("agentic.SessionManager", function()
                 },
                 message_writer = {
                     write_message = noop,
+                    write_notice = noop,
                     tool_call_blocks = {},
                 },
                 status_indicator = { start = noop, stop = noop },
@@ -754,10 +757,11 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("announce_model_loaded", function()
+    describe("model announce", function()
         --- @param models table<string, agentic.acp.ConfigOption.Option>
         local function make_session(models)
             local write_spy = spy.new(function() end)
+            local notice_spy = spy.new(function() end)
             local session = {
                 _announced_model_id = nil,
                 config_options = {
@@ -768,10 +772,15 @@ describe("agentic.SessionManager", function()
                         get_model = function() end,
                     },
                 },
-                message_writer = { write_message = write_spy },
+                message_writer = {
+                    write_message = write_spy,
+                    write_notice = notice_spy,
+                },
+                _resolve_model_display = SessionManager._resolve_model_display,
                 announce_model_loaded = SessionManager.announce_model_loaded,
+                _notice_model_switched = SessionManager._notice_model_switched,
             } --[[@as agentic.SessionManager]]
-            return session, write_spy
+            return session, write_spy, notice_spy
         end
 
         --- @param spy_obj TestSpy
@@ -842,6 +851,101 @@ describe("agentic.SessionManager", function()
             session:announce_model_loaded(nil)
 
             assert.spy(write_spy).was.called(0)
+        end)
+
+        it("renders an explicit switch as a notice", function()
+            local session, write_spy, notice_spy = make_session({
+                ["m"] = { value = "m", name = "M", description = "desc" },
+            })
+
+            session:_notice_model_switched("m")
+
+            assert.spy(write_spy).was.called(0)
+            assert.spy(notice_spy).was.called(1)
+            local notice = notice_spy.calls[1][2]
+            assert.equal("M · m", notice.title)
+            assert.same({ "desc" }, notice.body)
+        end)
+
+        it("notices a switch back to an already-announced model", function()
+            -- A provider-side change (rate-limit fallback) moves the current
+            -- model without announcing, so the flag can still hold the id the
+            -- user switches back to. The switch is real; the notice must show.
+            local session, _, notice_spy = make_session({
+                ["m"] = { value = "m", name = "M" },
+            })
+
+            session:announce_model_loaded("m")
+            session:_notice_model_switched("m")
+
+            assert.spy(notice_spy).was.called(1)
+        end)
+
+        it("takes the notice level from the generating state", function()
+            local session, _, notice_spy = make_session({
+                ["m"] = { value = "m", name = "M" },
+            })
+            session.is_generating = true
+
+            session:_notice_model_switched("m")
+
+            assert.is_true(notice_spy.calls[1][2].mid_turn)
+        end)
+    end)
+
+    describe("_display_context_usage", function()
+        --- @param usage table|nil
+        --- @return agentic.ui.MessageWriter.Notice
+        local function notice_for(usage)
+            local captured
+            local session = {
+                _usage = usage,
+                message_writer = {
+                    write_notice = function(_, notice)
+                        captured = notice
+                    end,
+                },
+                _display_context_usage = SessionManager._display_context_usage,
+            } --[[@as agentic.SessionManager]]
+
+            session:_display_context_usage()
+            return captured
+        end
+
+        it("titles with the totals and bodies the cost", function()
+            local notice = notice_for({
+                used = 72400,
+                size = 200000,
+                cost = { amount = 0.0412, currency = "USD" },
+            })
+
+            assert.equal("72.4k / 200k · 36%", notice.title)
+            assert.same({ "- Cost: $0.0412 USD" }, notice.body)
+        end)
+
+        it("falls back to a bare title with no totals to show", function()
+            local notice = notice_for(nil)
+
+            assert.equal("context", notice.title)
+            assert.same({ "No usage data available yet." }, notice.body)
+        end)
+
+        it("omits the cost when the provider reported none", function()
+            local notice = notice_for({ used = 1000, size = 200000 })
+
+            assert.same({}, notice.body)
+        end)
+
+        it("keeps a cost figure away from the no-data line", function()
+            -- size 0 means no totals; a spend figure under "no usage data"
+            -- would contradict the line above it.
+            local notice = notice_for({
+                used = 0,
+                size = 0,
+                cost = { amount = 1, currency = "USD" },
+            })
+
+            assert.same({ "No usage data available yet." }, notice.body)
         end)
     end)
 
@@ -994,6 +1098,7 @@ describe("agentic.SessionManager", function()
                     },
                     permission_manager = { clear = function() end },
                     todo_list = { clear = function() end },
+                    message_writer = { write_notice = spy.new(function() end) },
                     chat_history = saved_history,
                     _is_first_message = false,
                     _history_to_send = nil,
@@ -1089,6 +1194,7 @@ describe("agentic.SessionManager", function()
                 },
                 permission_manager = { clear = function() end },
                 todo_list = { clear = function() end },
+                message_writer = { write_notice = spy.new(function() end) },
                 chat_history = { messages = {}, session_id = "old" },
                 _is_first_message = false,
                 _history_to_send = nil,
@@ -1117,6 +1223,44 @@ describe("agentic.SessionManager", function()
 
             -- Verify _queued_prompts was cleared by cancel_retry_timer
             assert.is_nil(session._queued_prompts)
+        end)
+
+        it("names the new provider in a notice from on_created", function()
+            local AgentInstance = require("agentic.acp.agent_instance")
+            local mock_new_agent = {
+                provider_config = { name = "New Provider" },
+                create_session = spy.new(function() end),
+            }
+            get_instance_stub = spy.stub(AgentInstance, "get_instance")
+            get_instance_stub:invokes(function(_provider, on_ready)
+                on_ready(mock_new_agent)
+                return mock_new_agent
+            end)
+
+            local captured_on_created
+            local notice_spy = spy.new(function() end)
+            local session = {
+                is_generating = false,
+                session_id = "old-session",
+                agent = {
+                    cancel_session = spy.new(function() end),
+                    provider_config = { name = "Old" },
+                },
+                permission_manager = { clear = function() end },
+                todo_list = { clear = function() end },
+                message_writer = { write_notice = notice_spy },
+                chat_history = { messages = {}, session_id = "old" },
+                new_session = spy.new(function(_self, opts)
+                    captured_on_created = opts.on_created
+                end),
+                switch_provider = SessionManager.switch_provider,
+            } --[[@as agentic.SessionManager]]
+
+            session:switch_provider()
+            captured_on_created()
+
+            assert.spy(notice_spy).was.called(1)
+            assert.equal("New Provider", notice_spy.calls[1][2].title)
         end)
     end)
 
@@ -1846,8 +1990,8 @@ describe("agentic.SessionManager", function()
         local test_bufnr
         --- @type table
         local pm
-        --- @type any[][]
-        local writes
+        --- @type agentic.ui.MessageWriter.Notice[]
+        local notices
         --- @type any[]
         local errors
 
@@ -1864,7 +2008,7 @@ describe("agentic.SessionManager", function()
 
             test_bufnr = vim.api.nvim_create_buf(false, true)
 
-            writes = {}
+            notices = {}
             errors = {}
 
             pm = {
@@ -1880,10 +2024,9 @@ describe("agentic.SessionManager", function()
                     tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 message_writer = {
-                    write_message = spy.new(function(_, msg)
-                        table.insert(writes, msg)
+                    write_notice = spy.new(function(_, notice)
+                        table.insert(notices, notice)
                     end),
-                    finalize_turn = spy.new(function() end),
                     write_error_action = spy.new(function(_, msg)
                         table.insert(errors, msg)
                     end),
@@ -1911,6 +2054,9 @@ describe("agentic.SessionManager", function()
             assert.equal(1, pm.set_trust_scope.call_count)
             local scope = pm.set_trust_scope.calls[1][2]
             assert.equal("repo", scope.kind)
+            assert.equal(scope.display, notices[1].title)
+            assert.equal(Glyphs.NOTICE.TRUST, notices[1].glyph)
+            assert.is_nil(notices[1].glyph_hl)
         end)
 
         it("here subcommand sets a here scope on the manager", function()
@@ -1920,9 +2066,20 @@ describe("agentic.SessionManager", function()
             assert.equal("here", scope.kind)
         end)
 
+        it("nests the notice in the turn it widens", function()
+            -- A scope set mid-turn governs the tool calls after it, so it
+            -- renders inside the running turn rather than at the boundary.
+            session.is_generating = true
+            session:_handle_trust_command("repo")
+            assert.is_true(notices[1].mid_turn)
+        end)
+
         it("off subcommand clears the scope", function()
             session:_handle_trust_command("off")
             assert.equal(1, pm.clear_trust_scope.call_count)
+            -- The cleared notice reuses the set glyph, struck through.
+            assert.equal(Glyphs.NOTICE.TRUST, notices[1].glyph)
+            assert.equal(Theme.HL_GROUPS.GLYPH_OFF, notices[1].glyph_hl)
         end)
 
         it("path subcommand compiles a path scope", function()

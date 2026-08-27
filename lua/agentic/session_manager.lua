@@ -11,10 +11,12 @@ local DiffPreview = require("agentic.ui.diff_preview")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local Recovery = require("agentic.session_recovery")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
+local Theme = require("agentic.theme")
 local TrustSafety = require("agentic.utils.trust_safety")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -319,8 +321,8 @@ function SessionManager:new(tab_page_id)
         function(mode_id, is_legacy)
             self:_handle_mode_change(mode_id, is_legacy)
         end,
-        function(model_id, is_legacy)
-            self:_handle_model_change(model_id, is_legacy)
+        function(model_id, is_legacy, opts)
+            self:_handle_model_change(model_id, is_legacy, opts)
         end,
         function()
             return self.agent ~= nil and self.agent.state == "ready"
@@ -654,36 +656,42 @@ end
 
 --- Display context usage info locally (intercepted /context command)
 function SessionManager:_display_context_usage()
-    local lines = { "**Context usage:**", "" }
+    local usage = self._usage
+    local body = {}
+    -- The totals are the notice's title; the glyph says what they measure, so
+    -- there is no label line. With no totals to show there is nothing to title
+    -- the notice with either, hence the bare fallback.
+    local title = "context"
 
-    if self._usage and self._usage.size > 0 then
-        local pct = math.floor(self._usage.used / self._usage.size * 100)
-        local used_k = string.format("%.1fk", self._usage.used / 1000)
-        local size_k = string.format("%.1fk", self._usage.size / 1000)
-
-        table.insert(
-            lines,
-            string.format("- Tokens: %s / %s (%d%%)", used_k, size_k, pct)
+    if usage and usage.size > 0 then
+        title = string.format(
+            "%.1fk / %.0fk · %d%%",
+            usage.used / 1000,
+            usage.size / 1000,
+            math.floor(usage.used / usage.size * 100)
         )
-
-        if self._usage.cost then
+        if usage.cost then
             table.insert(
-                lines,
+                body,
                 string.format(
                     "- Cost: $%.4f %s",
-                    self._usage.cost.amount,
-                    self._usage.cost.currency
+                    usage.cost.amount,
+                    usage.cost.currency
                 )
             )
         end
     else
-        table.insert(lines, "No usage data available yet.")
+        -- Cost stays with the totals: a spend figure under "no usage data"
+        -- would contradict the line above it.
+        table.insert(body, "No usage data available yet.")
     end
 
-    self.message_writer:write_message(
-        ACPPayloads.generate_agent_message(table.concat(lines, "\n"))
-    )
-    self.message_writer:finalize_turn()
+    self.message_writer:write_notice({
+        glyph = Glyphs.NOTICE.CONTEXT,
+        title = title,
+        body = body,
+        mid_turn = self.is_generating,
+    })
 end
 
 --- Rename the current session and update buffer name.
@@ -698,12 +706,11 @@ function SessionManager:_rename_session(new_title)
     self._title_user_set = true
     self.widget:set_chat_title(trimmed)
 
-    self.message_writer:write_message(
-        ACPPayloads.generate_agent_message(
-            string.format("Session renamed to: **%s**", trimmed)
-        )
-    )
-    self.message_writer:finalize_turn()
+    self.message_writer:write_notice({
+        glyph = Glyphs.NOTICE.RENAME,
+        title = trimmed,
+        mid_turn = self.is_generating,
+    })
 
     -- Persist the updated title
     self:_sync_history_context()
@@ -730,12 +737,11 @@ function SessionManager:_apply_trust_scope(scope)
     self.permission_manager:set_trust_scope(scope)
     self:_push_trust_to_headers(scope.display)
 
-    self.message_writer:write_message(
-        ACPPayloads.generate_agent_message(
-            string.format("Trust scope set: **%s**", scope.display)
-        )
-    )
-    self.message_writer:finalize_turn()
+    self.message_writer:write_notice({
+        glyph = Glyphs.NOTICE.TRUST,
+        title = scope.display,
+        mid_turn = self.is_generating,
+    })
 
     local wide, reason = TrustSafety.is_wide_scope(scope)
     if wide then
@@ -775,10 +781,14 @@ function SessionManager:_clear_trust_scope()
     self.permission_manager:clear_trust_scope()
     self:_push_trust_to_headers(nil)
 
-    self.message_writer:write_message(
-        ACPPayloads.generate_agent_message("Trust scope cleared.")
-    )
-    self.message_writer:finalize_turn()
+    -- Same glyph as the set notice, struck through — Nerd Fonts has no
+    -- struck-through handshake to switch to.
+    self.message_writer:write_notice({
+        glyph = Glyphs.NOTICE.TRUST,
+        glyph_hl = Theme.HL_GROUPS.GLYPH_OFF,
+        title = "trust cleared",
+        mid_turn = self.is_generating,
+    })
 end
 
 --- @param prompt string
@@ -1394,7 +1404,12 @@ end
 --- Send the newly selected model to the agent
 --- @param model_id string
 --- @param is_legacy boolean|nil
-function SessionManager:_handle_model_change(model_id, is_legacy)
+--- @param opts { as_notice?: boolean }|nil `as_notice` renders the announce as
+---   a command notice instead of prose. Set by the model picker; the render
+---   style cannot be inferred from the call site, since the queued-initial-model
+---   flush (restore, `/new`, `/clear`) arrives through this same callback and is
+---   not a user switch.
+function SessionManager:_handle_model_change(model_id, is_legacy, opts)
     if not self.session_id then
         return
     end
@@ -1415,7 +1430,11 @@ function SessionManager:_handle_model_change(model_id, is_legacy)
                 self:_handle_new_config_options(result.configOptions)
             end
 
-            self:announce_model_loaded(model_id)
+            if opts and opts.as_notice then
+                self:_notice_model_switched(model_id)
+            else
+                self:announce_model_loaded(model_id)
+            end
         end
     end
 
@@ -1539,19 +1558,12 @@ function SessionManager:_update_chat_header()
     self.widget:render_header("chat")
 end
 
---- Write a two-line "Loaded <model>" marker into the chat buffer announcing
---- which model is now active, with its full id and description. Doubles as a
---- temporal marker — its scrollback position shows when the model was
---- loaded/switched. Display-only: not persisted, not sent to the model, not
---- replayed on restore. Consecutive duplicate ids are suppressed
---- (dedups the session-start announce against the pending-initial-model flush).
---- @param model_id string|nil
-function SessionManager:announce_model_loaded(model_id)
-    if not model_id or model_id == self._announced_model_id then
-        return
-    end
-    self._announced_model_id = model_id
-
+--- How a model id reads to a human: its display name and description. Falls
+--- back to the id itself for a model the provider never described.
+--- @param model_id string
+--- @return string name
+--- @return string|nil description
+function SessionManager:_resolve_model_display(model_id)
     local model = self.config_options:get_model(model_id)
         or self.config_options.legacy_agent_models:get_model(model_id)
     local name = model and model.name or model_id
@@ -1563,12 +1575,68 @@ function SessionManager:announce_model_loaded(model_id)
         name = description:match("^(%S+)") or name
     end
 
+    return name, description
+end
+
+--- Write a two-line "Loaded <model>" marker into the chat buffer announcing
+--- which model is now active, with its full id and description. Doubles as a
+--- temporal marker — its scrollback position shows when the model was
+--- loaded/switched. Display-only: not persisted, not sent to the model, not
+--- replayed on restore.
+---
+--- Prose rather than a notice because this is the session-start announce, which
+--- lands directly under the `#` welcome header and reads as that header's
+--- detail. An explicit switch renders as a notice instead
+--- (`_notice_model_switched`).
+---
+--- Consecutive duplicate ids are suppressed: the session-start announce and the
+--- pending-initial-model flush both fire for the same id.
+--- @param model_id string|nil
+function SessionManager:announce_model_loaded(model_id)
+    if not model_id or model_id == self._announced_model_id then
+        return
+    end
+    self._announced_model_id = model_id
+
+    local name, description = self:_resolve_model_display(model_id)
+
     local lines = { string.format("**Loaded %s** · %s", name, model_id) }
     if description and description ~= "" then
         table.insert(lines, description)
     end
 
     self.message_writer:write_message(ACPPayloads.generate_agent_message(lines))
+end
+
+--- Announce a model the user just switched to, as a command notice.
+---
+--- Unlike the session-start announce this never dedups on
+--- `_announced_model_id`: the picker refuses a selection equal to the current
+--- model, so any id arriving here is a real change, and a provider-side switch
+--- (`_handle_new_config_options`, e.g. a rate-limit fallback) moves
+--- `currentValue` without announcing — leaving the flag equal to the id the
+--- user may switch back to, where suppressing would drop the notice entirely.
+--- @param model_id string|nil
+function SessionManager:_notice_model_switched(model_id)
+    if not model_id then
+        return
+    end
+    self._announced_model_id = model_id
+
+    local name, description = self:_resolve_model_display(model_id)
+
+    --- @type string[]|nil
+    local body
+    if description and description ~= "" then
+        body = { description }
+    end
+
+    self.message_writer:write_notice({
+        glyph = Glyphs.NOTICE.MODEL,
+        title = string.format("%s · %s", name, model_id),
+        body = body,
+        mid_turn = self.is_generating,
+    })
 end
 
 --- @param input_text string
@@ -2283,15 +2351,17 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                         and opts.legacy_agent_models
                         and opts.legacy_agent_models.current_model_id
                     )
-                local welcome = string.format(
-                    "\n## Resumed session `%s`\nProvider: **%s** · Model: **%s**\n",
-                    session_id:sub(1, 8),
-                    provider_label,
-                    model_label or "unknown"
-                )
-                self.message_writer:write_message(
-                    ACPPayloads.generate_user_message(welcome)
-                )
+                self.message_writer:write_notice({
+                    glyph = Glyphs.NOTICE.RESUME,
+                    title = session_id:sub(1, 8),
+                    body = {
+                        string.format(
+                            "Provider: **%s** · Model: **%s**",
+                            provider_label,
+                            model_label or "unknown"
+                        ),
+                    },
+                })
             end)
         end
     )
@@ -2396,6 +2466,14 @@ function SessionManager:switch_provider()
                 self:new_session({
                     restore_mode = true,
                     on_created = function()
+                        -- Nothing else names the new provider: the welcome
+                        -- header takes it and discards it, and restore_mode
+                        -- skips the model announce.
+                        self.message_writer:write_notice({
+                            glyph = Glyphs.NOTICE.PROVIDER,
+                            title = self.agent.provider_config.name,
+                        })
+
                         -- Capture new session metadata before overwriting
                         local new_session_id = self.chat_history.session_id
                         local new_timestamp = self.chat_history.timestamp

@@ -347,6 +347,28 @@ function M.wrap_single_line_with_offsets(line, width)
     return wrap_line(line, width)
 end
 
+--- Truncate a string to a display-column budget, marking the cut with `…`.
+--- The ellipsis occupies the last column of `width`, so the result never
+--- exceeds it. Returns the string unchanged when it already fits, or when
+--- `width` is too small to say anything (under 4 columns an ellipsis is most of
+--- the output).
+--- @param s string
+--- @param width integer Display columns available, ellipsis included
+--- @return string
+function M.truncate_to_width(s, width)
+    if width < 4 or vim.fn.strdisplaywidth(s) <= width then
+        return s
+    end
+    -- Character count is an upper bound on display width, so cut by characters
+    -- first and shrink while the result is still too wide (double-width chars).
+    local budget = width - 1
+    local out = vim.fn.strcharpart(s, 0, budget)
+    while #out > 0 and vim.fn.strdisplaywidth(out) > budget do
+        out = vim.fn.strcharpart(out, 0, vim.fn.strchars(out) - 1)
+    end
+    return out .. "…"
+end
+
 --- Find a fenced code block that is opened but never closed, and return the
 --- delimiter that would close it.
 ---

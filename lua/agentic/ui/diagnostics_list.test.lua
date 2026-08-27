@@ -339,7 +339,7 @@ describe("agentic.ui.DiagnosticsList", function()
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
-            assert.equal("...", lines[1]:sub(-3))
+            assert.equal("…", lines[1]:sub(-3))
             assert.truthy(vim.fn.strdisplaywidth(lines[1]) <= 40)
         end)
 
@@ -352,7 +352,7 @@ describe("agentic.ui.DiagnosticsList", function()
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
             assert.truthy(lines[1]:find("Short msg", 1, true))
-            assert.is_nil(lines[1]:find("...", 1, true))
+            assert.is_nil(lines[1]:find("…", 1, true))
         end)
 
         it("updates buffer after removal", function()

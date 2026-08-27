@@ -1,8 +1,8 @@
 local Config = require("agentic.config")
-local DiagnosticsContext = require("agentic.ui.diagnostics_context")
 local WidgetLayout = require("agentic.ui.widget_layout")
 local FileSystem = require("agentic.utils.file_system")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local TextWrap = require("agentic.utils.text_wrap")
 
 --- Get diagnostic severity icons from config
 --- @return table<number, string> Mapping of severity to icon
@@ -237,10 +237,7 @@ function DiagnosticsList:_render()
 
         -- Format: ICON path:line:col - message
         local line = string.format("%s %s - %s", icon, location, message)
-        table.insert(
-            lines,
-            DiagnosticsContext.truncate_for_display(line, buf_width)
-        )
+        table.insert(lines, TextWrap.truncate_to_width(line, buf_width))
     end
 
     local did_render = BufHelpers.with_modifiable(self._bufnr, function(bufnr)

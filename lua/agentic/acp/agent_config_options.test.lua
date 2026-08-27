@@ -506,7 +506,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     handler --[[@as fun(model: string, is_legacy: boolean): any]]
                 )
 
-                assert.spy(handler).was.called_with("claude-opus", false)
+                assert
+                    .spy(handler).was
+                    .called_with("claude-opus", false, { as_notice = true })
             end
         )
 
@@ -546,7 +548,9 @@ describe("agentic.acp.AgentConfigOptions", function()
 
                 assert.is_true(shown)
                 assert.stub(select_stub).was.called(1)
-                assert.spy(handler).was.called_with("opus", true)
+                assert
+                    .spy(handler).was
+                    .called_with("opus", true, { as_notice = true })
             end
         )
 
