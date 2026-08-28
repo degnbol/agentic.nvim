@@ -89,6 +89,16 @@ write commands need an explicit `force` flag. `keymaps.prompt.submit` defaults t
 `{}` and `config_default.lua:246-249` already documents that the write commands
 submit regardless of it.
 
+**Against `in_flight`, `force` needs a cancel and not just a bypass.** The other
+three defer reasons have no running turn to collide with. `_dispatch_turn`
+(`session_manager.lua:2045`) unconditionally resets `_tool_call_owner`,
+`_open_tasks`, `_subagent_win_opened_this_turn`, `_task_ordinal`, `_next_ordinal`
+and `_numbering_latched` (`:2057-2062`), so a second dispatch strands the first
+turn's in-flight tool calls, and whichever callback returns first clears
+`is_generating` under the other (`:2070`) — the desync the comment at `:2065-2069`
+warns about, reached from the other side. So a forced mid-turn submit either
+cancels the running turn first or is the one case `force` does not bypass.
+
 Charwise `<CR>` sends (`_send_operator`, `_send_visual`) widen to whole lines when
 tagged, since `_queue_line_range` is line-granular. Consistent with the shipped
 `<S-CR>`, which already widens charwise motions.
@@ -286,11 +296,40 @@ New:
 - Restore completes with regions tagged → drains once, exactly once; load *failure*
   with regions tagged → also drains exactly once, not twice.
 - `/new` with regions tagged → tags retained, regions dispatch into the new session.
+- Preview: tag mid-turn → virt_lines below the last row; two more chunks arrive →
+  still below the last row, same extmark id. Untag by editing → preview drops that
+  region. Drain → no preview extmark and the `##` heading is real buffer text.
 
 ## Intended consequences
 
 **`<S-CR>` always queues**, including when idle. The binding's meaning no longer
 depends on hidden state.
+
+**A mid-turn prompt never lands inside the stream.** Two cases, and the display
+difference between them is the whole point of the gate. A forced submit really was
+sent, so it renders at the buffer end where it happened, splitting the streaming
+prose run the way a mid-turn notice already does
+(`MessageWriter:write_notice`) — the run ends cleanly there because
+`write_user_prompt` flushes it.
+
+A tagged region is not sent, and must be **visible below the stream and travel
+with it**, not hidden and then revealed at Stop: the reader is looking at the chat
+buffer, and a prompt that vanishes from view between `<CR>` and turn end reads as
+lost. So the drain also needs a preview:
+
+- Rendered as a virt_lines extmark below the last buffer row, repositioned on each
+  chunk rather than deleted and recreated — `StatusIndicator` (`status_indicator.lua`)
+  is the working precedent for exactly this placement and update discipline, and
+  the two must agree on who sits closest to the text.
+- Regenerated from the tagged regions, never stored. It is a *view* of AgenticInput,
+  so an edit that drops a region's tag drops it from the preview too, and there is no
+  second copy of the text to keep in step.
+- Materialised in place at drain: the preview goes away in the same tick
+  `write_user_prompt` writes the real `##` heading at the row the preview occupied,
+  so the prompt does not appear to move.
+
+This retires `bug-mid-turn-prompt-splits-prose.md` § Open, which floated the
+preview as one of two options; it is the chosen one.
 
 **An abnormal Stop parks the queue indefinitely.** Queue while idle with no turn
 running, or after a `refusal`, and nothing drains until the user starts a turn that

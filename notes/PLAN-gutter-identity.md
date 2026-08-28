@@ -1,8 +1,8 @@
 # Plan: gutter identity glyphs
 
-Master note for six units of work, of which 1 to 3 have shipped. Each remaining
-unit note is self-contained; this one holds the rule they converge on, the
-limitation they accept, and the order.
+Master note for six units of work: 1 to 3 have shipped, 4 has been handed off,
+and 5 and 6 remain. Each remaining unit note is self-contained; this one holds
+the rule they converge on, the limitation they accept, and the order.
 
 ## The rule
 
@@ -32,10 +32,11 @@ fields); getting it in there means patching upstream. Accepted because a pinned
 block's kind is implied by what is on screen, and the blocks whose kind is not
 self-evident are short enough to keep their heading in view.
 
-## Delivered
+## Closed
 
 Units 1 to 3 have shipped; their notes are gone and the code is the reference.
-The rule above is in force, not proposed.
+The rule above is in force, not proposed. Unit 4 turned out to hold no rendering
+work and left for the note that owns the submit paths.
 
 1. Command notices — `/trust`, `/rename`, `/context`, model/provider switch and
    session resume render as glyph-signed headings instead of fabricated
@@ -58,19 +59,21 @@ The rule above is in force, not proposed.
    accept, and the fix is the same shape: replay would have to bracket at each
    user→agent boundary.
 
+4. Mid-turn prompt splitting the prose run — folded into
+   [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md) §§ "One
+   submit rule" and "Intended consequences". Nothing was left for the renderer:
+   `write_user_prompt` already ends the run it interrupts (its
+   `_reflow_chunks(bufnr, true)` drops `_prose_run_start_line`), so unit 3's
+   bracket never spans the wedge, and the residual paragraph split is the cost
+   `write_notice` documents and accepts. What remained hangs off the gate, so it
+   went with it: whether a forced mid-turn submit sends at all, the concurrent
+   `_dispatch_turn` state clobbering that follows if it does, and the bottom-pinned
+   preview a *deferred* prompt gets while it waits.
+
 ## Units and order
 
-4 is independent. 6 needs 5; its own first phase needs nothing.
+6 needs 5; its own first phase needs nothing.
 
-4. [`bug-mid-turn-prompt-splits-prose.md`](bug-mid-turn-prompt-splits-prose.md) —
-   a submit mid-turn wedges its `##` heading into the streaming prose run.
-   Deferring its *display* to the turn boundary is correct here precisely because
-   the agent does not act on it until then — the opposite of a command notice,
-   which takes effect immediately and so renders where it happened. Mostly
-   pre-empted by
-   [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md), which
-   makes `<CR>` tag instead of dispatch when the gate is closed; what remains is
-   the forced `:w`/`:X` path. Decide whether it folds into that note.
 5. [`feature-thinking-summary-line.md`](feature-thinking-summary-line.md) —
    thinking currently renders as ordinary prose, indistinguishable from the
    answer. Collapse a thought run to a single closed-fold row carrying the glyph
@@ -82,7 +85,7 @@ The rule above is in force, not proposed.
    one closed fold row. Takes 5's shape wholesale — `markdown-fold` body,
    `sign_text` glyph, no heading (a titled section over a fenced body would pin
    the breadcrumb, per `queries/agentic/context.scm`) — and extends the same
-   per-kind foldtext dispatch, so it **needs 5** and is independent of 3 and 4. Its
+   per-kind foldtext dispatch, so it **needs 5** and nothing else. Its
    own phase 1 (the transcript reader) is pure file IO with no rendering, so it can
    run **at any point**. Separately it converts a site unit 1 left as prose:
    blocking-hook feedback arrives as a genuine `agent_message_chunk`, identifiable
