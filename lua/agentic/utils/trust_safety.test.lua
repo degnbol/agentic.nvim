@@ -584,6 +584,24 @@ describe("agentic.utils.trust_safety", function()
         end)
     end)
 
+    describe("build_reserved_scope", function()
+        it("abbreviates a path under $HOME in the display string", function()
+            local home = vim.uv.os_homedir()
+            local root = home .. "/src/project"
+            local scope = TrustSafety.build_reserved_scope("repo", root, root)
+
+            assert.equal("Recoverable edits under ~/src/project", scope.display)
+            assert.equal(root, scope.cwd)
+        end)
+
+        it("leaves a path outside $HOME unabbreviated", function()
+            local scope =
+                TrustSafety.build_reserved_scope("here", "/srv/repo/sub")
+
+            assert.equal("Recoverable edits under /srv/repo/sub", scope.display)
+        end)
+    end)
+
     describe("is_wide_scope", function()
         it("never warns for reserved literals", function()
             assert.is_false(TrustSafety.is_wide_scope({

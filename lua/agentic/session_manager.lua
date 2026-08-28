@@ -809,7 +809,10 @@ function SessionManager:_show_trust_picker()
         { kind = "repo", label = "Git-tracked files in repo" },
         {
             kind = "here",
-            label = string.format("Git-tracked files under %s", cwd),
+            label = string.format(
+                "Git-tracked files under %s",
+                vim.fn.fnamemodify(cwd, ":~")
+            ),
         },
         { kind = "tmp", label = "Scratch files under tmp" },
         { kind = "path", label = "Path or glob…" },

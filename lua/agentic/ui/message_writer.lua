@@ -466,15 +466,12 @@ end
 --- @param notice agentic.ui.MessageWriter.Notice
 function MessageWriter:write_notice(notice)
     local level = notice.mid_turn and "###" or "##"
-    local wrap_width = self:_get_wrap_width()
-    -- Headings are never prose-wrapped (TextWrap.is_heading), so a long title
-    -- would run off the window instead — truncate it as a tool-call head does.
-    local heading = TextWrap.truncate_to_width(
-        level .. " " .. notice.title,
-        wrap_width > 0 and wrap_width or 80
-    )
-
-    local lines = { heading }
+    -- Never wrapped or truncated: an ATX heading has to stay on one row, and
+    -- the title is the notice's whole record of the command — for `/trust` the
+    -- part that would be cut is the scope path it exists to report. A title
+    -- wider than the (nowrap) chat window runs past its edge and is reached by
+    -- scrolling horizontally.
+    local lines = { level .. " " .. notice.title }
     vim.list_extend(lines, notice.body or {})
     table.insert(lines, "")
 

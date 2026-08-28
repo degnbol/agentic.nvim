@@ -44,6 +44,16 @@ local function normalize(path)
     return vim.fs.normalize(path, { expand_env = false })
 end
 
+--- Home-relative form of a path, for display strings only (`~/src/x`). Scope
+--- matching always runs on the unabbreviated path; the shortening exists
+--- because the display string lands in width-bounded places (the chat notice
+--- heading, the headers state external UI plugins render).
+--- @param path string
+--- @return string
+local function tilde(path)
+    return vim.fn.fnamemodify(path, ":~")
+end
+
 --- True iff `pat` contains glob metacharacters.
 --- @param pat string
 --- @return boolean
@@ -103,7 +113,7 @@ function M.build_reserved_scope(kind, cwd, git_root)
     --- @type agentic.utils.TrustSafety.Scope
     local scope = {
         kind = kind,
-        display = string.format("recoverable edits under %s", where),
+        display = string.format("Recoverable edits under %s", tilde(where)),
         cwd = cwd,
     }
     return scope

@@ -563,7 +563,7 @@ describe("agentic.ui.MessageWriter", function()
         local original_windows
 
         before_each(function()
-            -- Hard-wrap at the window width, so the truncation case can set it.
+            -- Hard-wrap at the window width, so the over-wide case can set it.
             original_windows = vim.deepcopy(Config.windows)
             Config.windows.min_wrap_width = 0
             Config.windows.max_wrap_width = 0
@@ -637,18 +637,21 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(Theme.HL_GROUPS.GLYPH_OFF, action_marks()[1][3])
         end)
 
-        it("truncates a title too wide for the window", function()
-            vim.api.nvim_win_set_width(winid, 30)
+        it(
+            "keeps a title too wide for the window on one heading row",
+            function()
+                vim.api.nvim_win_set_width(winid, 30)
+                local title = string.rep("wide ", 6) .. "tail"
 
-            writer:write_notice({
-                glyph = GLYPH,
-                title = string.rep("wide ", 20),
-            })
+                writer:write_notice({ glyph = GLYPH, title = title })
 
-            local heading = buffer_lines()[1]
-            assert.equal(28, vim.fn.strdisplaywidth(heading))
-            assert.equal("…", heading:sub(-3))
-        end)
+                assert.same({ "## " .. title, "", "" }, buffer_lines())
+                assert.same(
+                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH } },
+                    action_marks()
+                )
+            end
+        )
 
         it("takes ### and no turn boundary mid-turn", function()
             writer:write_message_chunk(make_message_update("streaming prose"))
