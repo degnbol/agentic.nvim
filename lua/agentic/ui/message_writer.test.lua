@@ -852,7 +852,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("one", buffer_lines()[1])
         end)
 
-        it("opens on the first prose row after a tool call", function()
+        it("opens on the section boundary after a tool call", function()
             writer:write_tool_call_block(
                 make_tool_call_block("t1", "completed")
             )
@@ -861,11 +861,13 @@ describe("agentic.ui.MessageWriter", function()
             )
             writer:finalize_turn()
 
-            -- The run opens on a blank and the empty `###` that closes the tool
-            -- call's section; the bracket starts at the text.
+            -- The empty `###` that closes the tool call's section opens the
+            -- summary's own, so the bracket takes it in rather than the blank
+            -- above it or the first row of text below.
             local row = opener_row()
             assert.is_true(row ~= nil)
-            assert.equal("summary one", buffer_lines()[row + 1])
+            assert.equal("###", buffer_lines()[row + 1])
+            assert.equal("summary one", buffer_lines()[row + 3])
             assert_one_sign_per_row()
         end)
 
@@ -946,7 +948,8 @@ describe("agentic.ui.MessageWriter", function()
             writer:finalize_turn()
 
             local row = opener_row()
-            assert.equal("summary one", buffer_lines()[row + 1])
+            assert.equal("###", buffer_lines()[row + 1])
+            assert.equal("summary one", buffer_lines()[row + 3])
             assert.equal("summary two", buffer_lines()[closer_row() + 1])
             assert_one_sign_per_row()
         end)

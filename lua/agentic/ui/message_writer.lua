@@ -485,8 +485,26 @@ local function render_region_rail(bufnr, identity_row, last_row)
     })
 end
 
+--- The empty `###` boundary heading within `from_row .. to_row`, or nil when
+--- the range holds none. It opens the prose run's own section (see
+--- `write_message_chunk`), so it is where the run's bracket belongs.
+--- @param bufnr integer
+--- @param from_row integer 0-indexed row to start scanning at
+--- @param to_row integer 0-indexed last row to scan, inclusive
+--- @return integer|nil
+local function section_break_row(bufnr, from_row, to_row)
+    for row = from_row, to_row do
+        local content =
+            vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        if content and content:match("^#+%s*$") then
+            return row
+        end
+    end
+    return nil
+end
+
 --- Bracket the prose run reaching from `run_start` to the end of the buffer:
---- `╭─` on its first row of text, `│` beneath, `╰─` on its last drawn row.
+--- `╭─` on the row opening its section, `│` beneath, `╰─` on its last drawn row.
 ---
 --- Prose is the one region with nothing to announce, so it opens on the plain
 --- corner instead of an identity glyph — and therefore gets no signs at all when
@@ -495,7 +513,9 @@ end
 ---
 --- `run_start` is where the chunk writer began appending, which sits a row or
 --- two above the first word: the run can open on a blank or on the `###`
---- boundary that closes an interrupting block's section.
+--- boundary that closes an interrupting block's section. That heading is the
+--- summary's own section, so the bracket takes it in; a run without one opens on
+--- its first row of text.
 --- @param bufnr integer
 --- @param run_start integer 0-indexed row where the prose run began
 local function render_prose_region(bufnr, run_start)
@@ -505,15 +525,17 @@ local function render_prose_region(bufnr, run_start)
         return
     end
 
-    local end_row = last_drawn_row(bufnr, first_row, buf_end)
-    if end_row <= first_row then
+    local header_row = section_break_row(bufnr, run_start, first_row - 1)
+        or first_row
+    local end_row = last_drawn_row(bufnr, header_row, buf_end)
+    if end_row <= header_row then
         return
     end
 
     ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
-        header_line = first_row,
+        header_line = header_row,
         header_sign = ExtmarkBlock.SIGNS.HEADER,
-        body_start = first_row + 1,
+        body_start = header_row + 1,
         body_end = end_row - 1,
         footer_line = end_row,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
