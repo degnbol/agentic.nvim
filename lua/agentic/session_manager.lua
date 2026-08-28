@@ -1398,9 +1398,9 @@ end
 function SessionManager:_finalize_turn(usage)
     self.message_writer:finalize_turn()
     self.message_writer:set_turn_usage(usage)
-    -- Last of the three: a region appended before `finalize_turn` would end the
-    -- prose run it brackets, and one appended before the footer would move the
-    -- row the footer is stamped on.
+    -- Last of the three: a region appended before the footer would move the row
+    -- the footer is stamped on. Where it falls relative to the prose run does
+    -- not matter — `_write_collapsed_region` brackets the run it ends.
     self:_drain_hook_records()
 end
 

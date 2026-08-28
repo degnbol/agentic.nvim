@@ -1,7 +1,9 @@
 -- A region's signs render via sign_text extmarks in the sign column rather than
--- inline virtual text. Signs survive nvim_buf_set_lines line-replacement
--- without delete/recreate cycles, so updates to a tool call block do not
--- displace its decorations.
+-- inline virtual text. They stay put only where a region is updated in place —
+-- nvim_buf_set_text, which is all a tool call block's status footer refresh
+-- runs. A line replacement (nvim_buf_set_lines) displaces every sign it spans,
+-- collapsing them onto the replacement's first row, so a caller that replaces
+-- lines re-stamps the region rather than expecting its signs to survive.
 --
 -- The opening row carries the region's identity (a per-kind glyph, a prompt's
 -- `❯`), continuation rows `│`, the last row `╰─`. The caller supplies the
@@ -85,8 +87,7 @@ function ExtmarkBlock.render_block(bufnr, ns_id, opts)
 end
 
 --- Rewrite one row's border sign in place, reusing the extmark id so no
---- duplicate sign is created. Used to backfill a subagent ordinal onto a block
---- rendered before concurrent-subagent numbering activated.
+--- duplicate sign is created.
 --- @param bufnr integer
 --- @param ns_id integer
 --- @param extmark_id integer Existing decoration extmark to overwrite

@@ -142,7 +142,8 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_indicator? agentic.ui.StatusIndicator Reference for auto-scroll virt_lines awareness
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
---- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `finalize_turn` to bracket the turn's closing summary; cleared by every flushing reflow, which is to say wherever a prose run ends.
+--- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
+--- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
@@ -196,6 +197,7 @@ function MessageWriter:new(bufnr, status_indicator)
         _scroll_callback_queued = false,
         _chunk_start_line = nil,
         _prose_run_start_line = nil,
+        _prose_region_ids = nil,
         _pending_section_break = false,
         _suppressing_rejection = false,
         _rejection_buffer = "",
@@ -311,6 +313,11 @@ function MessageWriter:reset_turn_state()
     self._pending_section_break = false
     self._chunk_start_line = nil
     self._prose_run_start_line = nil
+    -- The signs go with the run, not just the tracking: this abandons the run
+    -- mid-stream, and the next one starts on the row they end on, where a
+    -- surviving `╰─` would contend with its `╭─` for the one sign cell.
+    Renderer.clear_decoration_extmarks(self.bufnr, self._prose_region_ids)
+    self._prose_region_ids = nil
     self._thought_run = nil
     self._numbering_active = false
     self:_release_prose_pin()
@@ -456,14 +463,37 @@ end
 --- @param to_row integer 0-indexed last row to scan, inclusive
 --- @return integer|nil
 local function first_prose_row(bufnr, from_row, to_row)
-    for row = from_row, to_row do
-        local content =
-            vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
-        if content and content:match("%S") and not content:match("^#+%s*$") then
-            return row
+    local rows = vim.api.nvim_buf_get_lines(bufnr, from_row, to_row + 1, false)
+    for i, content in ipairs(rows) do
+        if content:match("%S") and not content:match("^#+%s*$") then
+            return from_row + i - 1
         end
     end
     return nil
+end
+
+--- True when a blank row falls strictly between `from_row` and `to_row` — that
+--- is, when the rows hold more than one paragraph.
+---
+--- Only the interior counts. A run's leading and trailing breaks are stripped by
+--- `first_prose_row` and `last_drawn_row` before this sees the range, and say
+--- nothing about how much the run holds.
+--- @param bufnr integer
+--- @param from_row integer 0-indexed first row of the range
+--- @param to_row integer 0-indexed last row of the range, inclusive
+--- @return boolean
+local function has_paragraph_break(bufnr, from_row, to_row)
+    -- Fewer than three rows cannot hold an interior blank.
+    if to_row - from_row < 2 then
+        return false
+    end
+    local rows = vim.api.nvim_buf_get_lines(bufnr, from_row + 1, to_row, false)
+    for _, content in ipairs(rows) do
+        if content:match("^%s*$") then
+            return true
+        end
+    end
+    return false
 end
 
 --- Stamp the `│`/`╰─` rail under a region whose identity sign is already in
@@ -492,57 +522,47 @@ local function render_region_rail(bufnr, identity_row, last_row)
     })
 end
 
---- The empty `###` boundary heading within `from_row .. to_row`, or nil when
---- the range holds none. It opens the prose run's own section (see
---- `write_message_chunk`), so it is where the run's bracket belongs.
---- @param bufnr integer
---- @param from_row integer 0-indexed row to start scanning at
---- @param to_row integer 0-indexed last row to scan, inclusive
---- @return integer|nil
-local function section_break_row(bufnr, from_row, to_row)
-    for row = from_row, to_row do
-        local content =
-            vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
-        if content and content:match("^#+%s*$") then
-            return row
-        end
-    end
-    return nil
-end
-
 --- Bracket the prose run reaching from `run_start` to the end of the buffer:
---- `╭─` on the row opening its section, `│` beneath, `╰─` on its last drawn row.
+--- `╭─` on its first row of text, `│` beneath, `╰─` on its last drawn row.
 ---
 --- Prose is the one region with nothing to announce, so it opens on the plain
---- corner instead of an identity glyph — and therefore gets no signs at all when
---- a single row is all that draws, where a lone `╭─` would read as a region that
---- never closes.
+--- corner instead of an identity glyph.
+---
+--- Only a run holding more than one paragraph is bracketed: a rail over a
+--- one-line aside between tool calls groups nothing, and those asides are a
+--- third of every run written. The measure is a blank row inside the run rather
+--- than a row count, which is a property of the window instead of the text —
+--- `_get_wrap_width` returns 0 under `wrap`, where a paragraph of any length is
+--- one row, so a row count would have the same reply bracket in one split width
+--- and not in another.
 ---
 --- `run_start` is where the chunk writer began appending, which sits a row or
 --- two above the first word: the run can open on a blank or on the `###`
---- boundary that closes an interrupting block's section. That heading is the
---- summary's own section, so the bracket takes it in; a run without one opens on
---- its first row of text.
+--- boundary that closes an interrupting block's section. Neither belongs to the
+--- region. The heading is an artifact of ATX headings closing a section by
+--- opening the next, carries no content, and exists for the block above it (see
+--- `write_message_chunk`) — and the viewport pin sits on the first row of text
+--- (`_prose_anchor_line`), so a corner above that row is scrolled out of sight
+--- for the whole of the run's streaming.
 --- @param bufnr integer
 --- @param run_start integer 0-indexed row where the prose run began
+--- @return integer[]|nil decoration_extmark_ids nil when the run takes no region
 local function render_prose_region(bufnr, run_start)
     local buf_end = vim.api.nvim_buf_line_count(bufnr) - 1
     local first_row = first_prose_row(bufnr, run_start, buf_end)
     if not first_row then
-        return
+        return nil
     end
 
-    local header_row = section_break_row(bufnr, run_start, first_row - 1)
-        or first_row
-    local end_row = last_drawn_row(bufnr, header_row, buf_end)
-    if end_row <= header_row then
-        return
+    local end_row = last_drawn_row(bufnr, first_row, buf_end)
+    if not has_paragraph_break(bufnr, first_row, end_row) then
+        return nil
     end
 
-    ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
-        header_line = header_row,
+    return ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
+        header_line = first_row,
         header_sign = ExtmarkBlock.SIGNS.HEADER,
-        body_start = header_row + 1,
+        body_start = first_row + 1,
         body_end = end_row - 1,
         footer_line = end_row,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
@@ -567,6 +587,99 @@ local function render_collapsed_region(bufnr, first_row, last_row, sign)
         footer_line = end_row > first_row and end_row or nil,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
     })
+end
+
+--- Stamp the live prose run's region from scratch, replacing the signs it
+--- already carries.
+---
+--- Signs do not survive the `set_lines` a reflow runs over the run's rows — they
+--- collapse onto the replacement's first row — so a rewritten run is rebuilt
+--- rather than repaired, the same way a resized tool call block is. A run that
+--- holds a single paragraph tracks nil and stamps nothing.
+--- @param bufnr integer
+function MessageWriter:_rebuild_prose_region(bufnr)
+    if not self._prose_run_start_line then
+        return
+    end
+    Renderer.clear_decoration_extmarks(bufnr, self._prose_region_ids)
+    self._prose_region_ids =
+        render_prose_region(bufnr, self._prose_run_start_line)
+end
+
+--- Move the live run's `╰─` down to the last row the run has grown, rewriting
+--- the row it used to close on to `│`.
+---
+--- The rail has to follow every row gained, not every paragraph: a reflow fires
+--- only once a paragraph completes, so a corner left where the last one ended
+--- sits mid-region with bare rows beneath it. Rewriting the old corner in place
+--- rather than re-stamping the whole run is what makes that cadence cheap.
+---
+--- Rebuilds instead for a run carrying no region yet — the rows just written may
+--- be what carries it past a single paragraph.
+--- @param bufnr integer
+function MessageWriter:_extend_prose_region(bufnr)
+    local ids = self._prose_region_ids
+    local closer_id = ids and ids[#ids]
+    local closer_row = closer_id
+        and vim.api.nvim_buf_get_extmark_by_id(
+            bufnr,
+            Renderer.NS_DECORATIONS,
+            closer_id,
+            {}
+        )[1]
+    if not ids or not closer_id or not closer_row then
+        -- No region yet, or its marks went with a namespace-wide clear
+        -- (`clear_regions`) — a dead id deletes as a no-op either way.
+        self:_rebuild_prose_region(bufnr)
+        return
+    end
+
+    local end_row = last_drawn_row(
+        bufnr,
+        closer_row,
+        vim.api.nvim_buf_line_count(bufnr) - 1
+    )
+    if end_row <= closer_row then
+        return
+    end
+
+    Renderer.restamp_border(
+        bufnr,
+        closer_id,
+        closer_row,
+        ExtmarkBlock.SIGNS.BODY
+    )
+    -- Appended in buffer order, which is the indexing `render_block` documents
+    -- and which locating the corner above depends on.
+    vim.list_extend(
+        ids,
+        ExtmarkBlock.render_rail(bufnr, Renderer.NS_DECORATIONS, {
+            body_start = closer_row + 1,
+            body_end = end_row - 1,
+            footer_line = end_row,
+            hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
+        })
+    )
+end
+
+--- End the prose run at the end of the buffer: reflow what is left of it,
+--- bracket it, and release the run.
+---
+--- The one way a run ends. Every writer that interrupts prose calls this rather
+--- than the flushing reflow directly, so a run cannot be released without being
+--- bracketed, nor bracketed twice.
+--- @param bufnr integer
+function MessageWriter:_end_prose_run(bufnr)
+    local run_start = self._prose_run_start_line
+    -- The reflow can rewrite the run's rows and append a closing fence, moving
+    -- both ends of the region, so the final bracket is stamped fresh. Its ids go
+    -- untracked: the region is finished, and holding them would have the next
+    -- run's first re-stamp delete it.
+    Renderer.clear_decoration_extmarks(bufnr, self._prose_region_ids)
+    self:_reflow_chunks(bufnr, true)
+    if run_start then
+        render_prose_region(bufnr, run_start)
+    end
 end
 
 --- Append a body as one collapsed region: the lines inside a `markdown-fold`
@@ -617,11 +730,11 @@ function MessageWriter:_write_collapsed_region(body, sign, source)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
-        -- Flush pending prose reflow first, for the reason write_user_prompt
-        -- documents: the fence would otherwise land inside one the streamed
-        -- prose left open, and a later reflow's set_lines would span these rows
-        -- and drag their signs.
-        self:_reflow_chunks(bufnr, true)
+        -- End the prose run first, for the reason write_user_prompt documents:
+        -- the fence would otherwise land inside one the streamed prose left
+        -- open, and a later reflow's set_lines would span these rows and drag
+        -- their signs.
+        self:_end_prose_run(bufnr)
 
         self:_append_lines(lines)
 
@@ -715,12 +828,12 @@ function MessageWriter:write_user_prompt(text, extra_lines)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
-        -- Flush pending prose reflow first. right_gravity=false survives
-        -- appends but NOT a set_lines over the mark row, and prompt writes do
-        -- not reset _chunk_start_line, so during replay (thought → prompt →
-        -- thought) a later reflow range could span the heading and drag the
-        -- marker. Mirrors the guard in write_tool_call_block.
-        self:_reflow_chunks(bufnr, true)
+        -- End the prose run first. right_gravity=false survives appends but NOT
+        -- a set_lines over the mark row, and prompt writes do not reset
+        -- _chunk_start_line, so during replay (thought → prompt → thought) a
+        -- later reflow range could span the heading and drag the marker.
+        -- Mirrors the guard in write_tool_call_block.
+        self:_end_prose_run(bufnr)
 
         self:_append_lines(flat)
         self:_append_lines({ "" })
@@ -794,11 +907,11 @@ function MessageWriter:write_notice(notice)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
-        -- Flush pending prose reflow first, for the reason write_user_prompt
-        -- documents: the heading would otherwise land inside an unclosed prose
-        -- fence, and a later reflow's set_lines would span the heading row and
-        -- drag the marker with it.
-        self:_reflow_chunks(bufnr, true)
+        -- End the prose run first, for the reason write_user_prompt documents:
+        -- the heading would otherwise land inside an unclosed prose fence, and a
+        -- later reflow's set_lines would span the heading row and drag the
+        -- marker with it.
+        self:_end_prose_run(bufnr)
 
         self:_append_lines(lines)
 
@@ -1009,10 +1122,10 @@ function MessageWriter:write_error_message(err)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
-        -- An error ends the prose run. Without the flush the error block lands
-        -- inside a fence the interrupted prose left open, and finalize_turn's
-        -- reflow would later span it and move its NS_ERROR extmarks.
-        self:_reflow_chunks(bufnr, true)
+        -- An error ends the prose run. Without this the error block lands inside
+        -- a fence the interrupted prose left open, and finalize_turn's reflow
+        -- would later span it and move its NS_ERROR extmarks.
+        self:_end_prose_run(bufnr)
 
         local was_empty = BufHelpers.is_buffer_empty(bufnr)
         self:_append_lines(all_lines)
@@ -1071,21 +1184,13 @@ function MessageWriter:write_error_action(text)
     end)
 end
 
---- Close out a turn: reset all per-turn state, reflow any streamed prose,
---- bracket the prose that closes the turn, and append a trailing blank line.
----
---- The closing summary is the only prose run that gets a region, because it is
---- the only one whose end is known: every other run ends at the next tool call,
---- an unknown future point. Railing all prose would occupy the sign column
---- nearly everywhere anyway, at which point the rail marks nothing out.
+--- Close out a turn: reset all per-turn state, end the prose run that closes
+--- the turn, and append a trailing blank line.
 function MessageWriter:finalize_turn()
     -- A turn ending mid-thought (a cancel, most often) still owes the reader
     -- the thinking it did. The flush ends the prose run before it, so a turn
     -- of prose → thinking closes with nothing left to bracket.
     self:flush_thought_run()
-
-    -- Read before the flush below, which drops the run start.
-    local run_start = self._prose_run_start_line
 
     -- Reset ALL per-turn state at the turn boundary. Any flag that was set
     -- during the turn must be cleared here, otherwise it silently corrupts
@@ -1097,12 +1202,9 @@ function MessageWriter:finalize_turn()
     self:_release_prose_pin()
 
     self:_with_modifiable_suppressed(function(bufnr)
-        self:_reflow_chunks(bufnr, true)
-        if run_start then
-            -- Before the trailing blank: that row carries the turn-usage footer
-            -- and belongs to no region.
-            render_prose_region(bufnr, run_start)
-        end
+        -- Before the trailing blank: that row carries the turn-usage footer and
+        -- belongs to no region.
+        self:_end_prose_run(bufnr)
         self:_append_lines({ "" })
     end)
     self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
@@ -1125,7 +1227,7 @@ function MessageWriter:emit_divider()
         return
     end
     self:_with_modifiable_suppressed(function(bufnr)
-        self:_reflow_chunks(bufnr, true)
+        self:_end_prose_run(bufnr)
         self:_append_lines({ "", "---", "" })
     end)
     self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
@@ -1230,11 +1332,9 @@ end
 --- paragraphs — up to the last blank line, leaving the in-progress
 --- paragraph untouched. When true (response finished), reflows everything.
 ---
---- `flush_all` is also the end of the prose run (the callers are the turn
---- boundary, a tool call, a prompt, a notice, an error and a divider), so it
---- closes an unclosed fence — see `close_fence` — and drops the run start a
---- closing summary would have been bracketed from. A caller that wants that row
---- has to read it before it flushes.
+--- `flush_all` is the end of the prose run, so it closes an unclosed fence — see
+--- `close_fence` — and releases the run. Reached through `_end_prose_run`, its
+--- only caller, which brackets the run the release drops.
 --- The streaming path keeps `_chunk_start_line`
 --- outside any open fence so that check sees the opener; a marker parked inside
 --- a fence would also make `wrap_prose` hard-wrap code as prose, since it starts
@@ -1244,6 +1344,7 @@ end
 function MessageWriter:_reflow_chunks(bufnr, flush_all)
     if flush_all then
         self._prose_run_start_line = nil
+        self._prose_region_ids = nil
     end
 
     local start = self._chunk_start_line
@@ -1298,6 +1399,12 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
 
     if not vim.deep_equal(raw, wrapped) then
         vim.api.nvim_buf_set_lines(bufnr, start, reflow_end, false, wrapped)
+        -- The replacement displaces the signs it spans, so the live region is
+        -- rebuilt over the rewrapped rows. Not on the flush path, where
+        -- `_end_prose_run` stamps the final bracket straight after.
+        if not flush_all then
+            self:_rebuild_prose_region(bufnr)
+        end
     end
 
     if flush_all then
@@ -1484,6 +1591,13 @@ function MessageWriter:write_message_chunk(update)
         if text:find("\n") then
             self:_reflow_chunks(bufnr)
         end
+
+        -- Follow the rail down to the run's last drawn row, which any chunk can
+        -- move: one carrying no newline still fills the blank row a paragraph
+        -- break left behind, so a line-count check would miss it. A reflow that
+        -- rewrote rows above has already rebuilt the region, leaving this a
+        -- no-op.
+        self:_extend_prose_region(bufnr)
     end)
 end
 
@@ -1821,11 +1935,11 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
-        -- Flush any pending prose reflow before writing the tool call block.
-        -- Without this, finalize_turn's _reflow_chunks would later process
-        -- a range that includes these tool call lines, destroying extmarks
-        -- (decorations, status, range tracking) via nvim_buf_set_lines.
-        self:_reflow_chunks(bufnr, true)
+        -- End the prose run before writing the tool call block. Without this,
+        -- finalize_turn's reflow would later process a range that includes these
+        -- tool call lines, destroying extmarks (decorations, status, range
+        -- tracking) via nvim_buf_set_lines.
+        self:_end_prose_run(bufnr)
 
         local kind = tool_call_block.kind
 
@@ -2125,8 +2239,9 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         -- Follow the rows that track the live prose run across the line count
         -- change (e.g. diff data arriving late), so that _reflow_chunks does not
-        -- process tool call block lines and the closing summary is still
-        -- bracketed from its own first row.
+        -- process tool call block lines and the run is still bracketed from its
+        -- own first row. The region's own signs need no help: extmarks move with
+        -- the lines below a replacement.
         local line_delta = new_end_row - old_end_row
         if line_delta ~= 0 then
             self._chunk_start_line = shift_across_block(

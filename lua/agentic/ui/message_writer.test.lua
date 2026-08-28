@@ -1039,20 +1039,28 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("closing summary region", function()
+    describe("prose run regions", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
         end
 
-        --- The row the `╭─` opener sits on, or nil when the turn got no region.
-        --- @return integer|nil
-        local function opener_row()
+        --- Every row a `╭─` opener sits on, one per bracketed prose run. Only
+        --- prose opens on the plain corner, so a tool call block adds none.
+        --- @return integer[]
+        local function opener_rows()
+            local rows = {}
             for _, mark in ipairs(rail()) do
                 if mark[2] == "╭─" then
-                    return mark[1]
+                    table.insert(rows, mark[1])
                 end
             end
-            return nil
+            return rows
+        end
+
+        --- The row the first region opens on, or nil when nothing bracketed.
+        --- @return integer|nil
+        local function opener_row()
+            return opener_rows()[1]
         end
 
         --- The row closing the last region in the buffer. Tool call blocks
@@ -1099,27 +1107,38 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("one", buffer_lines()[1])
         end)
 
-        it("opens on the section boundary after a tool call", function()
+        it("opens on the first prose row after a tool call", function()
             writer:write_tool_call_block(
                 make_tool_call_block("t1", "completed")
             )
             writer:write_message_chunk(
-                make_message_update("summary one\nsummary two")
+                make_message_update("summary one\n\nsummary two")
             )
             writer:finalize_turn()
 
-            -- The empty `###` that closes the tool call's section opens the
-            -- summary's own, so the bracket takes it in rather than the blank
-            -- above it or the first row of text below.
+            -- The empty `###` that closes the tool call's section is written
+            -- for the block above it and holds no content, so the region opens
+            -- below it, on the first row of text.
             local row = opener_row()
             assert.is_true(row ~= nil)
-            assert.equal("###", buffer_lines()[row + 1])
-            assert.equal("summary one", buffer_lines()[row + 3])
+            assert.equal("summary one", buffer_lines()[row + 1])
+            assert.equal("###", buffer_lines()[row - 1])
             assert_one_sign_per_row()
         end)
 
-        it("leaves a one-row summary unbracketed", function()
+        it("leaves a one-line run unbracketed", function()
             writer:write_message_chunk(make_message_update("done"))
+            writer:finalize_turn()
+
+            assert.same({}, rail())
+        end)
+
+        it("leaves a multi-row single paragraph unbracketed", function()
+            -- Two rows of one paragraph. A row count would bracket this; the
+            -- gate reads the text, which holds nothing to group.
+            writer:write_message_chunk(
+                make_message_update("summary one\nsummary two")
+            )
             writer:finalize_turn()
 
             assert.same({}, rail())
@@ -1136,14 +1155,52 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("x = 1", buffer_lines()[row + 1])
         end)
 
-        it("gives a turn that ends in a tool call no region", function()
+        it("brackets the run a tool call interrupted", function()
+            writer:write_message_chunk(
+                make_message_update("looking at it\n\nrunning it now")
+            )
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:finalize_turn()
+
+            local rows = opener_rows()
+            assert.equal(1, #rows)
+            assert.equal("looking at it", buffer_lines()[rows[1] + 1])
+            assert.equal("running it now", buffer_lines()[rows[1] + 3])
+            assert_one_sign_per_row()
+        end)
+
+        it("leaves a one-line aside before a tool call unbracketed", function()
             writer:write_message_chunk(make_message_update("running it now"))
             writer:write_tool_call_block(
                 make_tool_call_block("t1", "completed")
             )
             writer:finalize_turn()
 
-            assert.is_nil(opener_row())
+            assert.same({}, opener_rows())
+        end)
+
+        it("keeps a bracketed run when the next run brackets", function()
+            -- The second run's signs are tracked and re-stamped as it streams;
+            -- releasing that tracking at each run end is what stops the
+            -- re-stamp from clearing the first run's committed bracket.
+            writer:write_message_chunk(
+                make_message_update("first one\n\nfirst two")
+            )
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(
+                make_message_update("second one\n\nsecond two")
+            )
+            writer:finalize_turn()
+
+            local rows = opener_rows()
+            assert.equal(2, #rows)
+            assert.equal("first one", buffer_lines()[rows[1] + 1])
+            assert.equal("second one", buffer_lines()[rows[2] + 1])
+            assert_one_sign_per_row()
         end)
 
         it("gives a turn that ends on a thought no region", function()
@@ -1162,7 +1219,7 @@ describe("agentic.ui.MessageWriter", function()
                 make_thought_update("thinking hard\nabout the problem")
             )
             writer:write_message_chunk(
-                make_message_update("the answer\nis here")
+                make_message_update("the answer\n\nis here")
             )
             writer:finalize_turn()
 
@@ -1174,7 +1231,7 @@ describe("agentic.ui.MessageWriter", function()
         it("follows the run start across a tool block resize", function()
             writer:write_tool_call_block(make_tool_call_block("t1", "pending"))
             writer:write_message_chunk(
-                make_message_update("summary one\nsummary two")
+                make_message_update("summary one\n\nsummary two")
             )
             -- A block above the run grows when its body arrives late, pushing
             -- every prose row down with it.
@@ -1189,25 +1246,86 @@ describe("agentic.ui.MessageWriter", function()
             writer:finalize_turn()
 
             local row = opener_row()
-            assert.equal("###", buffer_lines()[row + 1])
-            assert.equal("summary one", buffer_lines()[row + 3])
+            assert.equal("summary one", buffer_lines()[row + 1])
             assert.equal("summary two", buffer_lines()[closer_row() + 1])
             assert_one_sign_per_row()
         end)
 
-        it("brackets only the prose written after a divider", function()
+        it("brackets each run a divider separates", function()
+            -- A divider is the subagent pane's run end: one fires per Task as
+            -- it closes, long before the turn does.
             writer:write_message_chunk(
-                make_message_update("before one\nbefore two")
+                make_message_update("before one\n\nbefore two")
             )
             writer:emit_divider()
             writer:write_message_chunk(
-                make_message_update("after one\nafter two")
+                make_message_update("after one\n\nafter two")
             )
             writer:finalize_turn()
 
-            local row = opener_row()
-            assert.equal("after one", buffer_lines()[row + 1])
+            local rows = opener_rows()
+            assert.equal(2, #rows)
+            assert.equal("before one", buffer_lines()[rows[1] + 1])
+            assert.equal("after one", buffer_lines()[rows[2] + 1])
             assert.equal("after two", buffer_lines()[closer_row() + 1])
+            assert_one_sign_per_row()
+        end)
+
+        it("rails a run as it streams, before the turn ends", function()
+            writer:write_message_chunk(make_message_update("one\n\ntwo\n"))
+
+            assert.same({ { 0, "╭─" }, { 1, "│ " }, { 2, "╰─" } }, rail())
+
+            -- The corner follows the row just gained rather than waiting for
+            -- the next paragraph to complete, which is the only thing that
+            -- fires a reflow.
+            writer:write_message_chunk(make_message_update("three\n"))
+
+            assert.same({
+                { 0, "╭─" },
+                { 1, "│ " },
+                { 2, "│ " },
+                { 3, "╰─" },
+            }, rail())
+            assert_one_sign_per_row()
+        end)
+
+        it("rails a run once a chunk lands on the blank row", function()
+            -- The row a paragraph break leaves behind is where the next
+            -- paragraph's first words land, so the run's last drawn row moves
+            -- without the line count changing.
+            writer:write_message_chunk(make_message_update("one\n\n"))
+            assert.same({}, rail())
+
+            writer:write_message_chunk(make_message_update("two "))
+
+            assert.same({ { 0, "╭─" }, { 1, "│ " }, { 2, "╰─" } }, rail())
+        end)
+
+        it("drops a live region's signs when the turn state resets", function()
+            -- A refresh abandons the run mid-stream. Its signs have to go with
+            -- it: the next run starts on the row they end on.
+            writer:write_message_chunk(make_message_update("alpha\n\nbeta"))
+            writer:reset_turn_state()
+            writer:write_message_chunk(
+                make_message_update(" more\n\ngamma\n")
+            )
+
+            assert_one_sign_per_row()
+        end)
+
+        it("re-stamps the rail over rewrapped rows", function()
+            -- Wide enough to wrap at the 60-column test window, so the reflow
+            -- replaces the rows the live region is stamped on.
+            local long = string.rep("word ", 30)
+            writer:write_message_chunk(
+                make_message_update("intro\n\n" .. long .. "\n\n")
+            )
+            writer:write_message_chunk(make_message_update("tail\n"))
+
+            assert.same({ 0 }, opener_rows())
+            assert.equal("tail", buffer_lines()[closer_row() + 1])
+            assert_one_sign_per_row()
         end)
     end)
 

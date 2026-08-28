@@ -304,9 +304,11 @@ Two real signals plus one that needs an adapter change:
    and skipping subagent calls.
 2. **Turn end.** Shipped as `SessionManager:_finalize_turn`, the chokepoint every
    `message_writer:finalize_turn()` call site now routes through. It drains
-   *after* the writer, not before: `finalize_turn` brackets the turn's closing
-   prose and a region written first would end that run through
-   `_reflow_chunks(bufnr, true)`, leaving the summary unbracketed.
+   *after* the writer, not before: the turn-usage footer is stamped on the
+   buffer's last row, which a region drained first would move out from under it.
+   (The other reason its docstring gives — a region written first ends the prose
+   run and leaves the summary unbracketed — no longer holds now that every run
+   ending brackets, including the one a hook region would end.)
 3. **The bridge's PostToolUse-callback `tool_call_update`**
    (`acp-agent.js:5966-5979`) — **currently dropped before the plugin sees it.**
    `ClaudeAgentACPAdapter:__handle_tool_call_update` returns early when `not update.status

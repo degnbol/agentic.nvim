@@ -74,11 +74,13 @@ rail only, for a region whose identity mark lives in another namespace — see
 `AgenticGlyph{User,Agent}` rather than the rail's `AgenticCodeBlockFence`,
 which would dim it.
 
-Prose is the exception with no identity to announce: the run that closes a turn
-opens on a plain `╭─` instead, and so takes no signs at all when only one row
-draws — see `render_prose_region`, called from `finalize_turn`. The opener sits
-on the empty `###` boundary the run emitted after an interrupting block, and on
-the first row of text when the run has no such heading.
+Prose is the exception with no identity to announce: a run of it opens on a
+plain `╭─` instead, on its first row of text — never on the empty `###`
+boundary above, which belongs to the block that boundary closes. Only a run
+holding more than one paragraph is bracketed. See `render_prose_region` and the
+three `MessageWriter:_{rebuild,extend}_prose_region` / `_end_prose_run` methods
+around it: every writer that interrupts prose ends the run through
+`_end_prose_run`, and the rail is re-stamped as the run streams.
 
 Because the chat window is `signcolumn=yes:1`, one row holds one sign — a
 second extmark on the identity row silently loses. Status text is real buffer

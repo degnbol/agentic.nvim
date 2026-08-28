@@ -1,8 +1,8 @@
 # Plan: gutter identity glyphs
 
-Master note for six units of work: 1 to 3 and 5 have shipped, 4 has been handed
-off, and 6 is partly done. Its note is self-contained; this one holds the rule
-they converge on, the limitation they accept, and the order.
+Master note for eight units of work: 1 to 3, 5 and 7 have shipped, 4 has been
+handed off, and 6 is partly done. Each note is self-contained; this one holds the
+rule they converge on, the limitation they accept, and the order.
 
 ## The rule
 
@@ -34,7 +34,7 @@ self-evident are short enough to keep their heading in view.
 
 ## Closed
 
-Units 1 to 3 and 5 have shipped; their notes are gone and the code is the
+Units 1 to 3, 5 and 7 have shipped; their notes are gone and the code is the
 reference. The rule above is in force, not proposed. Unit 4 turned out to hold
 no rendering work and left for the note that owns the submit paths.
 
@@ -46,11 +46,12 @@ no rendering work and left for the note that owns the submit paths.
    separator is retired. See `ExtmarkBlock.render_block`/`render_rail`,
    `Renderer.render_decorations`, and `render_region_rail` in `message_writer`.
 3. Closing summary bracket — the prose that closes a turn takes a `╭─` region,
-   tracked by `_prose_run_start_line` and drawn by `render_prose_region` in
-   `finalize_turn`. Its scope is superseded by unit 7, which brackets every prose
-   run: the reason given here for confining it to one run per turn does not hold.
+   tracked by `_prose_run_start_line` and drawn by `render_prose_region`.
+   Superseded entirely by unit 7: the bracket is no longer confined to one run
+   per turn, no longer anchored on the empty `###`, and no longer drawn from
+   `finalize_turn`.
 
-   Restored sessions carry no closing summary bracket: `replay_messages` writes
+   Restored sessions carry no prose bracket at all: `replay_messages` writes
    agent prose through `write_message`, which starts no run, and finalizes no
    turn. Prompt and tool-block regions do survive a restore, so this is the one
    bracket that a resumed buffer is missing — the same gap unit 1's notices
@@ -75,6 +76,14 @@ no rendering work and left for the note that owns the submit paths.
    swallow came with it (`_retry_folds_on_insert_leave`), which repairs sidecar
    bodies too.
 
+7. Prose run regions — every prose run holding more than one paragraph takes a
+   `╭─` region, opening on its first row of text and re-stamped as the run
+   streams. The seven writers that interrupt prose end a run through
+   `MessageWriter:_end_prose_run`, which is also what fixed the subagents pane
+   (its runs end at a Task divider, never at `finalize_turn`). See
+   `render_prose_region`, `has_paragraph_break`, and
+   `_{rebuild,extend}_prose_region`.
+
 ## Units and order
 
 6. [`PLAN-hooks_in_chat.md`](PLAN-hooks_in_chat.md) — hook activity (injected
@@ -87,16 +96,8 @@ no rendering work and left for the note that owns the submit paths.
    arrives as a genuine `agent_message_chunk`, identifiable by a bridge-generated
    severity prefix — that part renders through `write_notice`.
 
-7. [`feature-prose-run-regions.md`](feature-prose-run-regions.md) — bracket every
-   prose run rather than only the turn's last, gated on the run holding more than
-   one paragraph, and draw it live instead of at turn end. Revises unit 3's scope
-   and fixes the subagents pane, which has never drawn a summary bracket because
-   its runs end at a Task divider rather than at `finalize_turn`. No new glyph:
-   prose opens on the plain `╭─`.
-
 8. Foldable prose regions — a prose region should fold on `zc`, open by default.
-   After unit 7: the fold wants the region's range, so it needs the region to
-   exist and be stable first.
+   Unblocked by unit 7, which is where the region's range comes from.
 
    The fold *source* is the work. `folds.scm` is the buffer's only one and it
    matches `code_fence_content` under a `fold$` info string; prose has no fence,

@@ -1464,9 +1464,8 @@ function M.render_decorations(bufnr, start_row, end_row, kind, ordinal)
     })
 end
 
---- Overwrite the border sign at `row` of an already-rendered block, reusing the
---- decoration extmark id. Backfills a subagent ordinal onto a block that
---- rendered before concurrent-subagent numbering activated.
+--- Overwrite the border sign at `row` of an already-rendered region, reusing the
+--- decoration extmark id so the row does not end up carrying two signs.
 --- @param bufnr integer
 --- @param extmark_id integer
 --- @param row integer 0-indexed buffer row

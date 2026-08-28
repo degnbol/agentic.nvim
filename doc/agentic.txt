@@ -695,7 +695,7 @@ column carries a glyph naming the command, rather than as agent prose:
 
 Since the glyph says which command ran, the heading text is just the result.
 A notice with a body closes with `╰─` on its last row, the same bracket a
-multi-line prompt, a tool call block and the prose closing a turn get.
+multi-line prompt, a tool call block and a run of agent prose get.
 
 `[[` and `]]` stop on notices as well as prompts (|agentic-keymaps-chat|).
 Notices are display-only — not saved with the session, not replayed on restore.
