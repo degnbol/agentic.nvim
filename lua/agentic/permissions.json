@@ -79,6 +79,7 @@
   "read":      { "read_only": [{}] },
 
   "grep":      { "read_only": [{}] },
+  "zgrep":     { "read_only": [{}] },
   "rg":        { "read_only": [{}] },
   "ag":        { "read_only": [{}] },
   "ack":       { "read_only": [{}] },
