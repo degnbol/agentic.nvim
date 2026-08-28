@@ -707,7 +707,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 assert.same({ "## repo", "", "" }, buffer_lines())
                 assert.same(
-                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH } },
+                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH_USER } },
                     action_marks()
                 )
             end
@@ -759,7 +759,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 assert.same({ "## " .. title, "", "" }, buffer_lines())
                 assert.same(
-                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH } },
+                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH_USER } },
                     action_marks()
                 )
             end

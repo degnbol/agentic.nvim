@@ -17,7 +17,8 @@ Theme.HL_GROUPS = {
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
 
     HEADING = "AgenticHeading",
-    GLYPH = "AgenticGlyph",
+    GLYPH_USER = "AgenticGlyphUser",
+    GLYPH_AGENT = "AgenticGlyphAgent",
     GLYPH_OFF = "AgenticGlyphOff",
     DIMMED_BLOCK = "AgenticDimmedBlock",
     SEARCH_MATCH = "AgenticSearchMatch",
@@ -49,20 +50,32 @@ local status_hl = {
     failed = Theme.HL_GROUPS.STATUS_FAILED,
 }
 
---- Definition for the struck-through glyph group: `Normal`'s foreground struck
---- through, or a plain link to the un-struck glyph group when `Normal` has no
+--- Group the user-side identity glyphs follow: `Prompt` where the colorscheme
+--- defines it, `Normal` otherwise. `Prompt` is not one of neovim's own groups,
+--- and a link to an undefined group resolves to nothing — the sign would drop
+--- through to SignColumn, dimmer than the row it announces.
+--- @return string
+local function user_glyph_source()
+    local prompt = vim.api.nvim_get_hl(0, { name = "Prompt" })
+    return vim.tbl_isempty(prompt) and "Normal" or "Prompt"
+end
+
+--- Definition for the struck-through glyph group: the user glyph's foreground
+--- struck through, or a plain link to the un-struck group when `source` has no
 --- foreground to strike.
+--- @param source string Group the user glyphs take their colour from
 --- @return vim.api.keyset.highlight
-local function glyph_off_hl()
-    local normal_fg =
-        vim.api.nvim_get_hl(0, { name = "Normal", link = false }).fg
-    if not normal_fg then
-        return { link = Theme.HL_GROUPS.GLYPH }
+local function glyph_off_hl(source)
+    local fg = vim.api.nvim_get_hl(0, { name = source, link = false }).fg
+    if not fg then
+        return { link = Theme.HL_GROUPS.GLYPH_USER }
     end
-    return { fg = normal_fg, strikethrough = true }
+    return { fg = fg, strikethrough = true }
 end
 
 function Theme.setup()
+    local user_glyph = user_glyph_source()
+
     -- stylua: ignore start
     local highlights = {
         -- Diff highlights
@@ -86,20 +99,24 @@ function Theme.setup()
         -- looking important. Retarget this group to restyle the markers.
         { Theme.HL_GROUPS.HEADING, { link = "@punctuation.special" } },
 
-        -- Identity glyphs in the sign column. An omitted `sign_hl_group` falls
-        -- through to SignColumn, which is dimmer than the text the glyph
-        -- announces — hence an explicit group rather than no group at all.
-        { Theme.HL_GROUPS.GLYPH, { link = "Normal" } },
+        -- Identity glyphs in the sign column, split by whose row they open:
+        -- the user's `❯` prompt and command notices, the agent's tool calls.
+        -- An omitted `sign_hl_group` falls through to SignColumn, which is
+        -- dimmer than the text the glyph announces — hence an explicit group
+        -- rather than no group at all.
+        { Theme.HL_GROUPS.GLYPH_USER, { link = user_glyph } },
+        { Theme.HL_GROUPS.GLYPH_AGENT, { link = "Normal" } },
 
-        -- The same glyph for a command that undid its own effect (`/trust`
-        -- with no argument). Not a link: nvim_set_hl ignores every other field
-        -- when `link` is set, so the strikethrough needs a resolved colour, an
-        -- attribute-only group having no foreground of its own to strike (it
-        -- falls through to SignColumn, dimmer than the glyph it pairs with).
-        -- A colorscheme that leaves `Normal` to the terminal resolves to no
-        -- foreground at all, and nothing can be inherited then, so that case
-        -- trades the strikethrough away rather than the colour.
-        { Theme.HL_GROUPS.GLYPH_OFF, glyph_off_hl() },
+        -- The same user glyph for a command that undid its own effect
+        -- (`/trust` with no argument). Not a link: nvim_set_hl ignores every
+        -- other field when `link` is set, so the strikethrough needs a
+        -- resolved colour, an attribute-only group having no foreground of its
+        -- own to strike (it falls through to SignColumn, dimmer than the glyph
+        -- it pairs with). A colorscheme that leaves the source group to the
+        -- terminal resolves to no foreground at all, and nothing can be
+        -- inherited then, so that case trades the strikethrough away rather
+        -- than the colour.
+        { Theme.HL_GROUPS.GLYPH_OFF, glyph_off_hl(user_glyph) },
 
         -- Sidecar body dim (fetch/WebSearch/SubAgent output)
         { Theme.HL_GROUPS.DIMMED_BLOCK, { link = "Comment" } },

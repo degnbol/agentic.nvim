@@ -45,8 +45,9 @@ continuation rows `│`, the last row `╰─`. A single-row region carries the
 identity sign alone. Signs are `sign_text` extmarks via
 `utils/extmark_block.lua` (`render_block` = identity + rail, `render_rail` =
 rail only, for a region whose identity mark lives in another namespace — see
-`MessageWriter:write_user_prompt`). The identity sign takes `AgenticGlyph`
-rather than the rail's `AgenticCodeBlockFence`, which would dim it.
+`MessageWriter:write_user_prompt`). The identity sign takes
+`AgenticGlyph{User,Agent}` rather than the rail's `AgenticCodeBlockFence`,
+which would dim it.
 
 Because the chat window is `signcolumn=yes:1`, one row holds one sign — a
 second extmark on the identity row silently loses. Status text is real buffer

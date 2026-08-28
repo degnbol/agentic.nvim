@@ -63,19 +63,43 @@ describe("agentic.Theme", function()
             vim.cmd.highlight({ args = { "clear", name } })
         end
 
+        --- @param name string
+        --- @return string|nil
+        local function link_of(name)
+            return vim.api.nvim_get_hl(0, { name = name }).link
+        end
+
+        -- `Prompt` is not one of neovim's own groups, so every case has to say
+        -- whether the colorscheme under test defines it.
+        before_each(function()
+            clear("Prompt")
+            clear(Theme.HL_GROUPS.GLYPH_USER)
+            clear(Theme.HL_GROUPS.GLYPH_OFF)
+        end)
+
         it("redefines its groups after a colorscheme wipes them", function()
             Theme.setup()
             vim.cmd.colorscheme("default")
 
-            assert.equal(
-                "Normal",
-                vim.api.nvim_get_hl(0, { name = Theme.HL_GROUPS.GLYPH }).link
-            )
+            assert.equal("Normal", link_of(Theme.HL_GROUPS.GLYPH_AGENT))
         end)
 
-        it("strikes the off-glyph in Normal's own foreground", function()
-            vim.api.nvim_set_hl(0, "Normal", { fg = "#abcdef" })
-            clear(Theme.HL_GROUPS.GLYPH_OFF)
+        it("points the user glyph at Prompt where it is defined", function()
+            vim.api.nvim_set_hl(0, "Prompt", { fg = "#f05af2" })
+
+            Theme.setup()
+
+            assert.equal("Prompt", link_of(Theme.HL_GROUPS.GLYPH_USER))
+        end)
+
+        it("falls back to Normal where Prompt is undefined", function()
+            Theme.setup()
+
+            assert.equal("Normal", link_of(Theme.HL_GROUPS.GLYPH_USER))
+        end)
+
+        it("strikes the off-glyph in the user glyph's foreground", function()
+            vim.api.nvim_set_hl(0, "Prompt", { fg = "#abcdef" })
 
             Theme.setup()
 
@@ -86,19 +110,18 @@ describe("agentic.Theme", function()
         end)
 
         it(
-            "trades the strikethrough for a colour Normal cannot give",
+            "trades the strikethrough for a colour the source cannot give",
             function()
                 -- A colorscheme leaving Normal to the terminal resolves to no
                 -- foreground, and an attribute-only group would fall through to
                 -- SignColumn — dimmer than the glyph this one pairs with.
                 vim.api.nvim_set_hl(0, "Normal", {})
-                clear(Theme.HL_GROUPS.GLYPH_OFF)
 
                 Theme.setup()
 
                 assert.equal(
-                    Theme.HL_GROUPS.GLYPH,
-                    vim.api.nvim_get_hl(0, { name = Theme.HL_GROUPS.GLYPH_OFF }).link
+                    Theme.HL_GROUPS.GLYPH_USER,
+                    link_of(Theme.HL_GROUPS.GLYPH_OFF)
                 )
             end
         )

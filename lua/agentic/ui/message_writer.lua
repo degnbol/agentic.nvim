@@ -488,7 +488,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
             {
                 right_gravity = false,
                 sign_text = "❯ ",
-                sign_hl_group = "NonText",
+                sign_hl_group = Theme.HL_GROUPS.GLYPH_USER,
             }
         )
 
@@ -500,7 +500,7 @@ end
 --- @field glyph string Identity glyph for the command, stamped as the heading row's sign (see agentic.glyphs)
 --- @field title string Heading text. Raw, not backtick-wrapped: an underscore or stray backtick in it can corrupt the heading through markdown inline parsing, the same exposure a user prompt's heading already carries.
 --- @field body? string[] Already-formatted markdown lines placed under the heading
---- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH
+--- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
 --- @field mid_turn? boolean True when a turn is running. Decides both the heading level and whether the notice closes the turn — see write_notice.
 
 --- Write the result of a locally-handled command as a glyph-signed heading.
@@ -563,7 +563,7 @@ function MessageWriter:write_notice(notice)
             {
                 right_gravity = false,
                 sign_text = notice.glyph .. " ",
-                sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH,
+                sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH_USER,
             }
         )
 

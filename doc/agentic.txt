@@ -720,8 +720,9 @@ All groups use `default = true` so user definitions take priority.
     `AgenticStatusFailed`          |DiagnosticVirtualTextError|   Failed tool call
     `AgenticCodeBlockFence`        |NonText|                      Code fences and region rails
     `AgenticHeading`               @punctuation.special          Chat section heading markers (## / ###)
-    `AgenticGlyph`                 |Normal|                       Identity glyph in the sign column
-    `AgenticGlyphOff`              (Normal fg, struck)            Glyph of a command that cleared its own setting
+    `AgenticGlyphUser`             `Prompt`, else |Normal|          Identity glyph of a user row (prompt, notice)
+    `AgenticGlyphAgent`            |Normal|                       Identity glyph of an agent row (tool call)
+    `AgenticGlyphOff`              (user glyph fg, struck)        Glyph of a command that cleared its own setting
     `AgenticSearchMatch`           |Search|                       Search match
     `AgenticGrepPath`              @string.special.path          Grep file path
     `AgenticGrepLineNr`            |LineNr|                       Grep line number
@@ -750,9 +751,14 @@ substitutions and unsafe redirects) while the prompt is shown. It is gated by
 is fg+bg in some colorschemes and fg-only in others. On a bare theme set an
 explicit `bg` for the wash to be visible.
 
-`AgenticGlyphOff` needs a foreground of its own to strike through, so under a
-colorscheme that leaves |hl-Normal| to the terminal it falls back to
-`AgenticGlyph` unstruck. Define it explicitly to keep the strikethrough there.
+`AgenticGlyphUser` links to `Prompt` when the colorscheme defines that group and
+to |hl-Normal| otherwise; `Prompt` is not one of Neovim's own groups, and a link
+to an undefined group leaves the sign at |hl-SignColumn|.
+
+`AgenticGlyphOff` needs a foreground of its own to strike through, so when the
+group `AgenticGlyphUser` follows leaves its foreground to the terminal it falls
+back to `AgenticGlyphUser` unstruck. Define it explicitly to keep the
+strikethrough there.
 
 ==============================================================================
 12. AUTOCMDS                                             *agentic-autocmds*

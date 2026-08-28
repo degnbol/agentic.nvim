@@ -1450,7 +1450,7 @@ function M.render_decorations(bufnr, start_row, end_row, kind, ordinal)
     return ExtmarkBlock.render_block(bufnr, NS_DECORATIONS, {
         header_line = start_row,
         header_sign = kind_glyph(kind) .. " ",
-        header_hl_group = Theme.HL_GROUPS.GLYPH,
+        header_hl_group = Theme.HL_GROUPS.GLYPH_AGENT,
         body_start = start_row + 1,
         body_end = end_row - 1,
         footer_line = end_row,
