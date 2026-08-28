@@ -140,6 +140,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_indicator? agentic.ui.StatusIndicator Reference for auto-scroll virt_lines awareness
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
+--- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `finalize_turn` to bracket the turn's closing summary; cleared by every flushing reflow, which is to say wherever a prose run ends.
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
@@ -191,6 +192,7 @@ function MessageWriter:new(bufnr, status_indicator)
         _should_auto_scroll = nil,
         _scroll_callback_queued = false,
         _chunk_start_line = nil,
+        _prose_run_start_line = nil,
         _pending_section_break = false,
         _suppressing_rejection = false,
         _rejection_buffer = "",
@@ -306,6 +308,7 @@ function MessageWriter:reset_turn_state()
     self._pending_section_break = false
     self._last_message_type = nil
     self._chunk_start_line = nil
+    self._prose_run_start_line = nil
     self._numbering_active = false
     self:_release_prose_pin()
 end
@@ -405,6 +408,57 @@ local function prompt_heading_lines(text)
     return lines
 end
 
+--- The row a region's `╰─` belongs on: the last row of `first_row .. last_row`
+--- that draws the corner where it can be seen.
+---
+--- A trailing blank row has nothing to close over, and a fence delimiter is
+--- concealed to zero height (`TextWrap.is_fence_delimiter`), so a corner
+--- anchored on either is at best detached from the region's last content and at
+--- worst never drawn, leaving the region to read as unterminated. A prompt ends
+--- on a delimiter whenever it carries selected code, or whenever `close_fence`
+--- had to balance one the user left open. Interior rows of both kinds need no
+--- such care: a zero-height row leaves no gap in the rail.
+--- @param bufnr integer
+--- @param first_row integer 0-indexed opening row of the region
+--- @param last_row integer 0-indexed last row of the region, inclusive
+--- @return integer row `first_row` when nothing below it draws, and less than
+---         that for a range past the end of the buffer — both leave the caller's
+---         one-drawn-row check to reject the region
+local function last_drawn_row(bufnr, first_row, last_row)
+    local rows =
+        vim.api.nvim_buf_get_lines(bufnr, first_row, last_row + 1, false)
+    local last = #rows
+    while
+        last > 1
+        and (
+            rows[last]:match("^%s*$")
+            or TextWrap.is_fence_delimiter(rows[last])
+        )
+    do
+        last = last - 1
+    end
+    return first_row + last - 1
+end
+
+--- The first row of `from_row .. to_row` carrying prose, or nil when none does.
+--- Skips blanks and the empty `###` section boundary that opens a prose run
+--- resuming after an interrupting block (see `write_message_chunk`), neither of
+--- which is text the reader is looking at.
+--- @param bufnr integer
+--- @param from_row integer 0-indexed row to start scanning at
+--- @param to_row integer 0-indexed last row to scan, inclusive
+--- @return integer|nil
+local function first_prose_row(bufnr, from_row, to_row)
+    for row = from_row, to_row do
+        local content =
+            vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        if content and content:match("%S") and not content:match("^#+%s*$") then
+            return row
+        end
+    end
+    return nil
+end
+
 --- Stamp the `│`/`╰─` rail under a region whose identity sign is already in
 --- place, marking how far the region reaches.
 ---
@@ -412,33 +466,56 @@ end
 --- not: `[[`/`]]` stops on every mark in NS_USER_ACTIONS, so a body-row mark
 --- there would land the cursor inside a region instead of on its opening row.
 ---
---- `╰─` is pulled back off a trailing fence delimiter, which
---- `TextWrap.is_fence_delimiter` conceals to zero height — the closing corner
---- would simply not be drawn and the region would read as unterminated. A
---- prompt ends on a delimiter whenever it carries selected code, or whenever
---- `close_fence` had to balance one the user left open. Interior delimiters need
---- no such care: a zero-height row leaves no gap in the rail.
----
---- A region with one visible row gets nothing — it carries the identity sign
+--- A region with one drawn row gets nothing — it carries the identity sign
 --- alone. The chat window is `signcolumn=yes:1`, so a `╰─` on that row would
 --- contend with the identity for the one sign cell.
 --- @param bufnr integer
 --- @param identity_row integer 0-indexed row carrying the identity sign
 --- @param last_row integer 0-indexed last row of the region, inclusive
 local function render_region_rail(bufnr, identity_row, last_row)
-    local rows =
-        vim.api.nvim_buf_get_lines(bufnr, identity_row, last_row + 1, false)
-    local last = #rows
-    while last > 1 and TextWrap.is_fence_delimiter(rows[last]) do
-        last = last - 1
-    end
-    if last < 2 then
+    local end_row = last_drawn_row(bufnr, identity_row, last_row)
+    if end_row <= identity_row then
         return
     end
     ExtmarkBlock.render_rail(bufnr, Renderer.NS_DECORATIONS, {
         body_start = identity_row + 1,
-        body_end = identity_row + last - 2,
-        footer_line = identity_row + last - 1,
+        body_end = end_row - 1,
+        footer_line = end_row,
+        hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
+    })
+end
+
+--- Bracket the prose run reaching from `run_start` to the end of the buffer:
+--- `╭─` on its first row of text, `│` beneath, `╰─` on its last drawn row.
+---
+--- Prose is the one region with nothing to announce, so it opens on the plain
+--- corner instead of an identity glyph — and therefore gets no signs at all when
+--- a single row is all that draws, where a lone `╭─` would read as a region that
+--- never closes.
+---
+--- `run_start` is where the chunk writer began appending, which sits a row or
+--- two above the first word: the run can open on a blank or on the `###`
+--- boundary that closes an interrupting block's section.
+--- @param bufnr integer
+--- @param run_start integer 0-indexed row where the prose run began
+local function render_prose_region(bufnr, run_start)
+    local buf_end = vim.api.nvim_buf_line_count(bufnr) - 1
+    local first_row = first_prose_row(bufnr, run_start, buf_end)
+    if not first_row then
+        return
+    end
+
+    local end_row = last_drawn_row(bufnr, first_row, buf_end)
+    if end_row <= first_row then
+        return
+    end
+
+    ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
+        header_line = first_row,
+        header_sign = ExtmarkBlock.SIGNS.HEADER,
+        body_start = first_row + 1,
+        body_end = end_row - 1,
+        footer_line = end_row,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
     })
 end
@@ -565,9 +642,7 @@ function MessageWriter:write_notice(notice)
             }
         )
 
-        -- `lines` ends in the blank that separates the notice from what follows;
-        -- that row belongs to no region, so it is left off the rail.
-        render_region_rail(bufnr, heading_row, heading_row + #lines - 2)
+        render_region_rail(bufnr, heading_row, heading_row + #lines - 1)
     end)
 
     -- No section break to request: a `##` heading already closes whatever
@@ -814,9 +889,23 @@ function MessageWriter:write_error_action(text)
     end)
 end
 
---- Close out a turn: reset all per-turn state, reflow any streamed prose, and
---- append a trailing blank line.
+--- Close out a turn: reset all per-turn state, reflow any streamed prose,
+--- bracket the prose that closes the turn, and append a trailing blank line.
+---
+--- The closing summary is the only prose run that gets a region, because it is
+--- the only one whose end is known: every other run ends at the next tool call,
+--- an unknown future point. Railing all prose would occupy the sign column
+--- nearly everywhere anyway, at which point the rail marks nothing out.
 function MessageWriter:finalize_turn()
+    -- Both reads have to happen before the flush below, which drops the run
+    -- start, and before the resets, which drop the message type.
+    local run_start = self._prose_run_start_line
+    -- Thinking still streams through the prose path, so a turn that stops
+    -- mid-thought ends on a run that is not a summary of anything. A turn that
+    -- thinks and then answers is the other half of the same problem, handled
+    -- where the run start is re-anchored (see `write_message_chunk`).
+    local closed_with_prose = self._last_message_type == "agent_message_chunk"
+
     -- Reset ALL per-turn state at the turn boundary. Any flag that was set
     -- during the turn must be cleared here, otherwise it silently corrupts
     -- subsequent turns (the "stuck 1 message behind" family of bugs).
@@ -829,6 +918,11 @@ function MessageWriter:finalize_turn()
 
     self:_with_modifiable_suppressed(function(bufnr)
         self:_reflow_chunks(bufnr, true)
+        if run_start and closed_with_prose then
+            -- Before the trailing blank: that row carries the turn-usage footer
+            -- and belongs to no region.
+            render_prose_region(bufnr, run_start)
+        end
         self:_append_lines({ "" })
     end)
     self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
@@ -950,14 +1044,21 @@ end
 --- paragraph untouched. When true (response finished), reflows everything.
 ---
 --- `flush_all` is also the end of the prose run (the callers are the turn
---- boundary, a tool call, a prompt, an error and a divider), so it closes an
---- unclosed fence — see `close_fence`. The streaming path keeps `_chunk_start_line`
+--- boundary, a tool call, a prompt, a notice, an error and a divider), so it
+--- closes an unclosed fence — see `close_fence` — and drops the run start a
+--- closing summary would have been bracketed from. A caller that wants that row
+--- has to read it before it flushes.
+--- The streaming path keeps `_chunk_start_line`
 --- outside any open fence so that check sees the opener; a marker parked inside
 --- a fence would also make `wrap_prose` hard-wrap code as prose, since it starts
 --- each region assuming it is not in one.
 --- @param bufnr integer
 --- @param flush_all? boolean
 function MessageWriter:_reflow_chunks(bufnr, flush_all)
+    if flush_all then
+        self._prose_run_start_line = nil
+    end
+
     local start = self._chunk_start_line
     if not start then
         return
@@ -1072,10 +1173,9 @@ function MessageWriter:write_message_chunk(update)
         self._rejection_buffer = ""
     end
 
-    if
-        self._last_message_type == "agent_thought_chunk"
+    local answers_a_thought = self._last_message_type == "agent_thought_chunk"
         and update.sessionUpdate == "agent_message_chunk"
-    then
+    if answers_a_thought then
         -- Different message type, add newline before appending, to create visual separation
         -- only for thought -> message
         text = "\n\n" .. text
@@ -1110,6 +1210,15 @@ function MessageWriter:write_message_chunk(update)
             -- If appending to a non-empty line, this line is the start
             -- If the line is empty, the new content starts here
             self._chunk_start_line = current == "" and last_line or last_line
+            self._prose_run_start_line = self._chunk_start_line
+        elseif answers_a_thought then
+            -- The answer restarts the run for bracketing purposes. Thinking
+            -- reaches the buffer through this same path and does not break the
+            -- reflow region, so without this the closing summary would open on
+            -- the first thought row and bracket the whole turn. `+ 1` clears the
+            -- row the last thought ends on; the blank after it is skipped when
+            -- the region is rendered.
+            self._prose_run_start_line = last_line + 1
         end
 
         local current_line = vim.api.nvim_buf_get_lines(
@@ -1156,28 +1265,18 @@ function MessageWriter:write_message_chunk(update)
         end
 
         -- Pin the start of the current prose run to the top of the viewport
-        -- once non-blank content lands. The line we wrote on can begin with a
-        -- "\n" prefix (added when prose follows a tool call), so scan forward
-        -- a few lines from chunk_start_line to skip the leading blank.
-        -- Skip when the user has paused auto-scroll: pinning would require
-        -- scrolling the view, which is exactly what the user opted out of.
+        -- once its first text lands. The scan stops a few lines in: the run's
+        -- opening rows are the only ones that can still be blank, and a pin set
+        -- far below the run start would jump the viewport past prose the reader
+        -- has not seen. Skip while the user has paused auto-scroll — pinning
+        -- means scrolling the view, which is what they opted out of.
         if self._prose_anchor_line == nil and not self._auto_scroll_paused then
             local total = vim.api.nvim_buf_line_count(bufnr)
-            local scan_end = math.min(self._chunk_start_line + 4, total - 1)
-            for line = self._chunk_start_line, scan_end do
-                local content =
-                    vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
-                -- Skip the leading blank and the empty `###` section boundary
-                -- inserted before a post-tool-call prose run; pin real prose.
-                if
-                    content
-                    and content:match("%S")
-                    and not content:match("^#+%s*$")
-                then
-                    self._prose_anchor_line = line
-                    break
-                end
-            end
+            self._prose_anchor_line = first_prose_row(
+                bufnr,
+                self._chunk_start_line,
+                math.min(self._chunk_start_line + 4, total - 1)
+            )
         end
 
         -- Wrap the last line immediately if it overflows, so the user sees
@@ -1592,6 +1691,26 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     end)
 end
 
+--- Follow a prose row across a tool call block's resize, so a row recorded
+--- before the edit still points at the content it was recorded for. A row that
+--- fell inside the old block range comes back just past the new one: nothing
+--- tracking prose may point into block lines, where a reflow's `set_lines` would
+--- destroy the block's extmarks.
+--- @param row integer|nil
+--- @param start_row integer 0-indexed first row of the block
+--- @param old_end_row integer 0-indexed last row of the block before the edit
+--- @param new_end_row integer 0-indexed last row of the block after the edit
+--- @return integer|nil
+local function shift_across_block(row, start_row, old_end_row, new_end_row)
+    if not row or row <= start_row then
+        return row
+    end
+    if row > old_end_row then
+        return row + (new_end_row - old_end_row)
+    end
+    return new_end_row + 1
+end
+
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBase
 function MessageWriter:update_tool_call_block(tool_call_block)
     local tracker = self.tool_call_blocks[tool_call_block.tool_call_id]
@@ -1782,24 +1901,33 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         local new_end_row = start_row + #new_lines - 1
 
-        -- Adjust _chunk_start_line for the line count change so that
-        -- _reflow_chunks does not accidentally process tool call block
-        -- lines after the block expands (e.g. diff data arriving late).
+        -- Follow the rows that track the live prose run across the line count
+        -- change (e.g. diff data arriving late), so that _reflow_chunks does not
+        -- process tool call block lines and the closing summary is still
+        -- bracketed from its own first row.
         local line_delta = new_end_row - old_end_row
-        if line_delta ~= 0 and self._chunk_start_line then
-            if self._chunk_start_line > old_end_row then
-                self._chunk_start_line = self._chunk_start_line + line_delta
-            elseif self._chunk_start_line > start_row then
-                -- Chunk start was inside the old block range — push it
-                -- past the new block so reflow never touches block lines.
-                self._chunk_start_line = new_end_row + 1
-            end
+        if line_delta ~= 0 then
+            self._chunk_start_line = shift_across_block(
+                self._chunk_start_line,
+                start_row,
+                old_end_row,
+                new_end_row
+            )
+            self._prose_run_start_line = shift_across_block(
+                self._prose_run_start_line,
+                start_row,
+                old_end_row,
+                new_end_row
+            )
         end
 
         -- Same shift for the prose run anchor: prose is written after the
         -- most recent tool call, but updates can resize *older* blocks above
         -- it. The anchor must move with the lines it points to so the pin
-        -- stays on the same content.
+        -- stays on the same content. Not `shift_across_block`: a row swallowed
+        -- by the block releases the pin rather than relocating, since a pin is
+        -- a viewport promise about specific content and there is no equivalent
+        -- of "just past the block" that keeps it.
         if line_delta ~= 0 and self._prose_anchor_line then
             if self._prose_anchor_line > old_end_row then
                 self._prose_anchor_line = self._prose_anchor_line + line_delta

@@ -1,6 +1,6 @@
 # Plan: gutter identity glyphs
 
-Master note for six units of work, of which 1 and 2 have shipped. Each remaining
+Master note for six units of work, of which 1 to 3 have shipped. Each remaining
 unit note is self-contained; this one holds the rule they converge on, the
 limitation they accept, and the order.
 
@@ -14,12 +14,13 @@ a region grows when it has more than one row, not a frame every region wears.
 The rule is forced by the chat window being `signcolumn=yes:1` — one sign per
 row, so a region bracket and an identity marker cannot share the opening row and
 one of the two meanings had to leave the gutter. Identity won it; the `╭─` corner
-survives only for a region with no identity to announce (unit 3).
+survives only for a region with no identity to announce, which is prose.
 
-`╰─` goes on the last row that actually renders. A fence delimiter is concealed
-to zero height (`TextWrap.is_fence_delimiter`), so a corner anchored there is
-never drawn — interior delimiters need no such care, a zero-height row leaving no
-gap in the rail.
+`╰─` goes on the last row that draws it where it can be seen (`last_drawn_row` in
+`message_writer`): not a trailing blank, which has nothing to close over, and not
+a fence delimiter, which `TextWrap.is_fence_delimiter` conceals to zero height so
+the corner is never drawn at all. Interior rows of both kinds need no such care —
+a zero-height row leaves no gap in the rail.
 
 ## The accepted limitation
 
@@ -33,7 +34,7 @@ self-evident are short enough to keep their heading in view.
 
 ## Delivered
 
-Units 1 and 2 have shipped; their notes are gone and the code is the reference.
+Units 1 to 3 have shipped; their notes are gone and the code is the reference.
 The rule above is in force, not proposed.
 
 1. Command notices — `/trust`, `/rename`, `/context`, model/provider switch and
@@ -43,13 +44,24 @@ The rule above is in force, not proposed.
    prompt and body-bearing notices grew a region bracket, and the prompt's `---`
    separator is retired. See `ExtmarkBlock.render_block`/`render_rail`,
    `Renderer.render_decorations`, and `render_region_rail` in `message_writer`.
+3. Closing summary bracket — the prose that closes a turn takes a `╭─` region,
+   tracked by `_prose_run_start_line` and drawn by `render_prose_region` in
+   `finalize_turn`. Shipped ahead of 5, so thinking is still prose and the
+   bracket has to dodge it twice: skipped when the turn ends on a thought chunk,
+   and re-anchored at the answer when a turn thinks and then answers. Unit 5
+   retires both.
+
+   Restored sessions carry no closing summary bracket: `replay_messages` writes
+   agent prose through `write_message`, which starts no run, and finalizes no
+   turn. Prompt and tool-block regions do survive a restore, so this is the one
+   bracket that a resumed buffer is missing — the same gap unit 1's notices
+   accept, and the fix is the same shape: replay would have to bracket at each
+   user→agent boundary.
 
 ## Units and order
 
-3 wants 5 first. 4 is independent. 6 needs 5; its own first phase needs nothing.
+4 is independent. 6 needs 5; its own first phase needs nothing.
 
-3. [`feature-closing-summary-group.md`](feature-closing-summary-group.md) —
-   bracket the turn's closing prose as one region.
 4. [`bug-mid-turn-prompt-splits-prose.md`](bug-mid-turn-prompt-splits-prose.md) —
    a submit mid-turn wedges its `##` heading into the streaming prose run.
    Deferring its *display* to the turn boundary is correct here precisely because

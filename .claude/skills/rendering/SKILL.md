@@ -74,6 +74,10 @@ rail only, for a region whose identity mark lives in another namespace — see
 `AgenticGlyph{User,Agent}` rather than the rail's `AgenticCodeBlockFence`,
 which would dim it.
 
+Prose is the exception with no identity to announce: the run that closes a turn
+opens on a plain `╭─` instead, and so takes no signs at all when only one row
+draws — see `render_prose_region`, called from `finalize_turn`.
+
 Because the chat window is `signcolumn=yes:1`, one row holds one sign — a
 second extmark on the identity row silently loses. Status text is real buffer
 text written with `nvim_buf_set_text` then highlighted with an extmark in

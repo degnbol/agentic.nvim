@@ -44,6 +44,20 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
   entry below flagged. Fixed by narrowing the drain trigger to a normal
   Stop (same plan note).
 
+- **Cancelled tool calls keep their pending footer forever**: `<C-c>` never
+  terminalises the blocks that were mid-flight, and the stale status is persisted
+  and replayed. Cause and fix design (including that it needs a status word):
+  [`notes/bug-cancelled-tool-calls-stay-pending.md`](notes/bug-cancelled-tool-calls-stay-pending.md).
+
+- **Sidecar folds stay open when the run ends in insert mode**:
+  `flush_pending_fold_ops` (`message_writer.lua:1289`) swallows `E490: No fold
+  found` and drops the op with no retry — and its own comment names insert mode
+  as the live cause. Verified: `:foldclose` in insert mode raises E490 and the
+  fold stays open. Cosmetic for tool bodies today; it becomes load-bearing for
+  [`feature-thinking-summary-line.md`](notes/feature-thinking-summary-line.md),
+  whose dominant case is the agent thinking while the user types the next prompt.
+  Fix: keep the anchor and re-arm the flush on `InsertLeave`.
+
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
   After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
   This is a long standing and difficult bug.
@@ -271,6 +285,12 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 
 - **`/diff`, `/rewind`, `/branch`, `/teleport`**: provider-level features
   or conversation-state primitives not exposed through ACP.
+
+### Gutter identity glyphs
+
+Five units of work under one rule — *the sign column says what a region is, the
+buffer text says what it contains*. Overview, dependency order and the accepted
+breadcrumb limitation: [`notes/PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md).
 
 ### Rendering
 
@@ -543,11 +563,6 @@ So, I think we should not be showing this output. If it originates from our code
 When being prompted for running a script it would be useful to see what that script actually contains.
 A hover peek window would be one solution. The regular hover keymap `K` isn't used here for anything else, so that could be the config default.
 
-### Treesitter-context
-
-I use the Treesitter-context plugin that provides a line at the top with breadcrumbs for what function/class, etc I am inside of if the start isn't visible.
-This isn't active at all currently in chat, but it should work for markdown. The question is if we could get it to show the filename for a long edit call.
-
 ### Hooks
 
 Claude hook system is complicated right now. I have made a lib/ and there's many files.
@@ -559,6 +574,10 @@ If that would make the config explode, then a better option might be to consider
 
 A useful Claude CLI feature is /rewind where a menu allows for selecting a previous prompt and rewinds the agent to that point in the conversation.
 If this feature is available through the ACP. If so, we can make a UI version, where we have a keymap that rewinds to where the cursor is placed in chat.
+
+The glyph 󰋚 (nf-md-history) is reserved for this — see
+[`feature-command-notices.md`](notes/feature-command-notices.md) § "Glyph options
+considered".
 
 ### Queue message
 
@@ -572,7 +591,11 @@ We could think of ways to mitigate this risk, and if we can think of any then th
 
 ### Grey out agentic inner thinking
 
-and sentences that look like noise.
+Superseded by
+[`feature-thinking-summary-line.md`](notes/feature-thinking-summary-line.md),
+which collapses a thought run to one marker line with a folded body rather than
+dimming it in place. The "sentences that look like noise" half is unaddressed —
+it needs a definition of noise before it is actionable.
 
 ### Permission system arity
 

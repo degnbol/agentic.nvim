@@ -792,6 +792,181 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("closing summary region", function()
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- The row the `╭─` opener sits on, or nil when the turn got no region.
+        --- @return integer|nil
+        local function opener_row()
+            for _, mark in ipairs(rail()) do
+                if mark[2] == "╭─" then
+                    return mark[1]
+                end
+            end
+            return nil
+        end
+
+        --- The row closing the last region in the buffer. Tool call blocks
+        --- carry `╰─` too, so the summary's is the final one, never the first.
+        --- @return integer|nil
+        local function closer_row()
+            local row
+            for _, mark in ipairs(rail()) do
+                if mark[2] == "╰─" then
+                    row = mark[1]
+                end
+            end
+            return row
+        end
+
+        it("brackets a streamed run down to its last prose row", function()
+            writer:write_message_chunk(
+                make_message_update("one\n\ntwo\n\nthree")
+            )
+            writer:finalize_turn()
+
+            -- The trailing blank carries the turn-usage footer, so it stays
+            -- outside the bracket.
+            assert.same({ "one", "", "two", "", "three", "" }, buffer_lines())
+            assert.same({
+                { 0, "╭─" },
+                { 1, "│ " },
+                { 2, "│ " },
+                { 3, "│ " },
+                { 4, "╰─" },
+            }, rail())
+            assert_one_sign_per_row()
+        end)
+
+        it("opens on the run's first row, not the last reflow's", function()
+            -- The first chunk ends on a complete paragraph, so the streaming
+            -- reflow advances its marker past it before the second arrives.
+            writer:write_message_chunk(make_message_update("one\n\ntwo\n\n"))
+            writer:write_message_chunk(make_message_update("three"))
+            writer:finalize_turn()
+
+            assert.is_true(writer._chunk_start_line == nil)
+            assert.equal(0, opener_row())
+            assert.equal("one", buffer_lines()[1])
+        end)
+
+        it("opens on the first prose row after a tool call", function()
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(
+                make_message_update("summary one\nsummary two")
+            )
+            writer:finalize_turn()
+
+            -- The run opens on a blank and the empty `###` that closes the tool
+            -- call's section; the bracket starts at the text.
+            local row = opener_row()
+            assert.is_true(row ~= nil)
+            assert.equal("summary one", buffer_lines()[row + 1])
+            assert_one_sign_per_row()
+        end)
+
+        it("leaves a one-row summary unbracketed", function()
+            writer:write_message_chunk(make_message_update("done"))
+            writer:finalize_turn()
+
+            assert.same({}, rail())
+        end)
+
+        it("ends the rail above a trailing fence", function()
+            writer:write_message_chunk(
+                make_message_update("here:\n\n```lua\nx = 1\n```")
+            )
+            writer:finalize_turn()
+
+            local row = closer_row()
+            assert.is_true(row ~= nil)
+            assert.equal("x = 1", buffer_lines()[row + 1])
+        end)
+
+        it("gives a turn that ends in a tool call no region", function()
+            writer:write_message_chunk(make_message_update("running it now"))
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:finalize_turn()
+
+            assert.is_nil(opener_row())
+        end)
+
+        it("gives a turn that ends on a thought no region", function()
+            writer:write_message_chunk({
+                sessionUpdate = "agent_thought_chunk",
+                content = { type = "text", text = "still thinking\nabout it" },
+            })
+            writer:finalize_turn()
+
+            assert.is_nil(opener_row())
+        end)
+
+        it("opens on the answer, not the thinking before it", function()
+            -- Thinking reaches the buffer through the prose path and does not
+            -- end the run, so the bracket has to be re-anchored at the answer
+            -- or it spans the whole turn.
+            writer:write_message_chunk({
+                sessionUpdate = "agent_thought_chunk",
+                content = {
+                    type = "text",
+                    text = "thinking hard\nabout the problem",
+                },
+            })
+            writer:write_message_chunk(
+                make_message_update("the answer\nis here")
+            )
+            writer:finalize_turn()
+
+            local row = opener_row()
+            assert.equal("the answer", buffer_lines()[row + 1])
+            assert.equal("is here", buffer_lines()[closer_row() + 1])
+        end)
+
+        it("follows the run start across a tool block resize", function()
+            writer:write_tool_call_block(make_tool_call_block("t1", "pending"))
+            writer:write_message_chunk(
+                make_message_update("summary one\nsummary two")
+            )
+            -- A block above the run grows when its body arrives late, pushing
+            -- every prose row down with it.
+            writer:update_tool_call_block(
+                make_tool_call_block("t1", "completed", {
+                    "out one",
+                    "out two",
+                    "out three",
+                    "out four",
+                })
+            )
+            writer:finalize_turn()
+
+            local row = opener_row()
+            assert.equal("summary one", buffer_lines()[row + 1])
+            assert.equal("summary two", buffer_lines()[closer_row() + 1])
+            assert_one_sign_per_row()
+        end)
+
+        it("brackets only the prose written after a divider", function()
+            writer:write_message_chunk(
+                make_message_update("before one\nbefore two")
+            )
+            writer:emit_divider()
+            writer:write_message_chunk(
+                make_message_update("after one\nafter two")
+            )
+            writer:finalize_turn()
+
+            local row = opener_row()
+            assert.equal("after one", buffer_lines()[row + 1])
+            assert.equal("after two", buffer_lines()[closer_row() + 1])
+        end)
+    end)
+
     describe("_check_auto_scroll", function()
         it("returns true when cursor is on the last line", function()
             setup_buffer(50, 50)
