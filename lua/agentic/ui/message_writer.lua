@@ -549,17 +549,18 @@ local function render_prose_region(bufnr, run_start)
     })
 end
 
---- Stamp a thought run's region signs: the thinking glyph on its first body
---- row, the `│`/`╰─` rail beneath. The glyph row is also the row a closed fold
---- shows, so the gutter says "thinking" whether the run is collapsed or open.
+--- Stamp a collapsed region's signs: its identity glyph on the first body row,
+--- the `│`/`╰─` rail beneath. That row is also the row a closed fold shows, so
+--- the gutter names the region whether it is collapsed or open.
 --- @param bufnr integer
---- @param first_row integer 0-indexed first body row of the run
---- @param last_row integer 0-indexed last body row of the run, inclusive
-local function render_thought_region(bufnr, first_row, last_row)
+--- @param first_row integer 0-indexed first body row of the region
+--- @param last_row integer 0-indexed last body row of the region, inclusive
+--- @param sign string `sign_text` identifying the region
+local function render_collapsed_region(bufnr, first_row, last_row, sign)
     local end_row = last_drawn_row(bufnr, first_row, last_row)
     ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
         header_line = first_row,
-        header_sign = Glyphs.THINKING_SIGN,
+        header_sign = sign,
         header_hl_group = Theme.HL_GROUPS.GLYPH_AGENT,
         body_start = first_row + 1,
         body_end = end_row - 1,
@@ -568,56 +569,49 @@ local function render_thought_region(bufnr, first_row, last_row)
     })
 end
 
---- Render the thinking streamed since the last flush as one collapsed region:
---- the run's text inside a `markdown-fold` fence closed at render, the thinking
---- glyph on its first body row, and the whole body dimmed. The fence delimiters
---- conceal to zero height, so the run occupies the single screen row its
---- foldtext summarises (`agentic.ui.folds`).
+--- Append a body as one collapsed region: the lines inside a `markdown-fold`
+--- fence closed at render, `sign` on the fence's first body row, and the whole
+--- body dimmed. The fence delimiters conceal to zero height, so the region
+--- occupies the single screen row its foldtext summarises (`agentic.ui.folds`).
 ---
---- A run too short to fold — vim cannot close a one-line fold — renders as that
---- line under the glyph, with no fence: a visible ``` around one line of
---- thinking is worse than the line itself.
----
---- Thinking is buffered rather than streamed because the fence has to reach the
---- buffer in a single write. Held open across chunks, `_reflow_chunks` would
---- rewrite the rows it spans, and a `set_lines` over a row drops the signs on
---- it. Nothing shows meanwhile except the status indicator, which already says
---- "thinking".
----
---- Public because `SessionRestore.replay_messages` ends on this too — a stored
---- history whose last entry is a thought would otherwise stay buffered until
---- the next turn's first write and render under the new prompt.
-function MessageWriter:flush_thought_run()
-    local text = self._thought_run
-    self._thought_run = nil
-    if not text or vim.trim(text) == "" then
+--- A body too short to fold — vim cannot close a one-line fold — renders as
+--- that line under the glyph, with no fence: a visible ``` around one line is
+--- worse than the line itself. `source` is then dropped with it, having no
+--- foldtext to name.
+--- @param body string[] Already prose-wrapped
+--- @param sign string `sign_text` identifying the region
+--- @param source string|nil Where the body came from, for the foldtext to name
+function MessageWriter:_write_collapsed_region(body, sign, source)
+    if #body == 0 then
         return
     end
 
-    local wrapped = TextWrap.wrap_prose(
-        vim.split(vim.trim(text), "\n", { plain = true }),
-        self:_get_wrap_width()
-    )
-    local use_fold = #wrapped > 1
+    local use_fold = #body > 1
     local lines = {}
-    -- Thinking after a tool call closes that call's section, for the reason
+    -- A region after a tool call closes that call's section, for the reason
     -- `write_message_chunk` documents: the fence below would otherwise keep the
-    -- breadcrumb on the tool call for as long as the run is on screen.
+    -- breadcrumb on the tool call for as long as the region is on screen.
     if self._pending_section_break then
         vim.list_extend(lines, { "###", "" })
         self._pending_section_break = false
     end
     if use_fold then
-        local fence = Renderer.safe_fence(wrapped)
-        lines[#lines + 1] = fence .. "markdown-fold"
-        vim.list_extend(lines, wrapped)
+        local fence = Renderer.safe_fence(body)
+        -- `source` as a second word after the language: `folds.scm` and
+        -- `injections.scm` both key on the `(info_string (language))` node,
+        -- which is the first word alone, so the name rides along without
+        -- disturbing either.
+        lines[#lines + 1] = fence
+            .. "markdown-fold"
+            .. (source and (" " .. source) or "")
+        vim.list_extend(lines, body)
         lines[#lines + 1] = fence
     else
-        vim.list_extend(lines, wrapped)
+        vim.list_extend(lines, body)
     end
     lines[#lines + 1] = ""
 
-    -- A thought run ends the prose run it follows, so the viewport stops
+    -- A collapsed region ends the prose run it follows, so the viewport stops
     -- being anchored to prose the reader has already passed.
     self:_release_prose_pin()
     self:_auto_scroll(self.bufnr)
@@ -638,14 +632,64 @@ function MessageWriter:flush_thought_run()
         if use_fold then
             body_end = body_end - 1 -- the closing fence delimiter
         end
-        local body_start = body_end - #wrapped + 1
+        local body_start = body_end - #body + 1
 
-        render_thought_region(bufnr, body_start, body_end)
+        render_collapsed_region(bufnr, body_start, body_end, sign)
         Renderer.set_dim_range(bufnr, body_start, body_end)
         if use_fold then
             self:_close_fold(body_start)
         end
     end)
+end
+
+--- Render the thinking streamed since the last flush as one collapsed region
+--- carrying the thinking glyph.
+---
+--- Thinking is buffered rather than streamed because the fence has to reach the
+--- buffer in a single write. Held open across chunks, `_reflow_chunks` would
+--- rewrite the rows it spans, and a `set_lines` over a row drops the signs on
+--- it. Nothing shows meanwhile except the status indicator, which already says
+--- "thinking".
+---
+--- Public because `SessionRestore.replay_messages` ends on this too — a stored
+--- history whose last entry is a thought would otherwise stay buffered until
+--- the next turn's first write and render under the new prompt.
+function MessageWriter:flush_thought_run()
+    local text = self._thought_run
+    self._thought_run = nil
+    if not text or vim.trim(text) == "" then
+        return
+    end
+
+    self:_write_collapsed_region(
+        TextWrap.wrap_prose(
+            vim.split(vim.trim(text), "\n", { plain = true }),
+            self:_get_wrap_width()
+        ),
+        Glyphs.THINKING_SIGN
+    )
+end
+
+--- Render one hook's activity as a collapsed region carrying the hook glyph and
+--- the name of the script it came from.
+---
+--- A region of its own rather than part of the tool call that triggered it: an
+--- injection is a separate input the model received. It carries no heading for
+--- the reason `queries/agentic/context.scm` documents — a titled heading over a
+--- fenced body pins the treesitter-context breadcrumb.
+---
+--- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
+--- session shows none of these. Missing work, not a rendering bug.
+--- @param body string[] The hook's output, unwrapped
+--- @param script string|nil Basename of the script it came from, if known
+function MessageWriter:write_hook_block(body, script)
+    self:flush_thought_run()
+
+    self:_write_collapsed_region(
+        TextWrap.wrap_prose(body, self:_get_wrap_width()),
+        Glyphs.HOOK .. " ",
+        script
+    )
 end
 
 --- Write a user prompt to the chat buffer as a bracketed region: the heading
@@ -780,6 +824,10 @@ function MessageWriter:write_notice(notice)
     -- No section break to request: a `##` heading already closes whatever
     -- section it interrupts, so prose resuming after the notice needs no
     -- boundary line of its own.
+    --
+    -- Ends the turn directly rather than through
+    -- `SessionManager:_finalize_turn`: a client-side notice dispatched nothing,
+    -- so there is no usage to stamp and no hook activity to drain.
     if not notice.mid_turn then
         self:finalize_turn()
     end

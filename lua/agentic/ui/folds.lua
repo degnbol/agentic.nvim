@@ -146,19 +146,44 @@ local function sign_at(bufnr, row)
     return nil
 end
 
+--- The name a fold's opening fence gives its content, or nil when it gives
+--- none.
+--- @param bufnr integer
+--- @param fold_start integer 1-indexed first row of the fold
+--- @return string|nil
+local function fence_source(bufnr, fold_start)
+    -- The fold spans `code_fence_content`, so the row above it is always the
+    -- opening fence; the writer puts the name in its info string, after the
+    -- language (`MessageWriter:_write_collapsed_region`).
+    local fence = vim.api.nvim_buf_get_lines(
+        bufnr,
+        fold_start - 2,
+        fold_start - 1,
+        false
+    )[1]
+    return fence and fence:match("^`+%S*fold%s+(%S+)%s*$")
+end
+
 --- 'foldtext' for the chat buffer: a line-count summary styled as Comment. The
 --- fold spans the `code_fence_content` node (body only, delimiters excluded),
 --- so foldend - foldstart + 1 is the body's line count.
 ---
---- A thought run adds the character count, because lines are a weak proxy for
---- how much thinking happened and no provider reports thinking tokens. Both
---- figures are read back out of the folded rows rather than recorded at write
---- time, so they describe what `zo` will actually show.
+--- A named body leads with its name — one hook block's summary is otherwise
+--- indistinguishable from the next. A thought run adds the character count,
+--- because lines are a weak proxy for how much thinking happened and no
+--- provider reports thinking tokens. Both figures are read back out of
+--- the folded rows rather than recorded at write time, so they describe what
+--- `zo` will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
     local first, last = vim.v.foldstart, vim.v.foldend
     local summary = string.format("%d lines", last - first + 1)
+
+    local source = fence_source(bufnr, first)
+    if source then
+        summary = source .. " · " .. summary
+    end
 
     if sign_at(bufnr, first - 1) == Glyphs.THINKING_SIGN then
         local body = vim.api.nvim_buf_get_lines(bufnr, first - 1, last, false)

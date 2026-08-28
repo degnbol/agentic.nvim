@@ -99,6 +99,101 @@ describe("FileSystem", function()
         end)
     end)
 
+    describe("read_appended", function()
+        --- @type string
+        local tmp
+
+        before_each(function()
+            tmp = os.tmpname()
+        end)
+
+        after_each(function()
+            os.remove(tmp)
+        end)
+
+        --- @param text string
+        --- @param mode string|nil
+        local function write(text, mode)
+            local f = io.open(tmp, mode or "ab")
+            assert.is_not_nil(f)
+            ---@cast f -nil
+            f:write(text)
+            f:close()
+        end
+
+        it("returns whole lines and the offset just past them", function()
+            write("one\ntwo\n")
+
+            local lines, offset, err = FileSystem.read_appended(tmp, 0)
+
+            assert.is_nil(err)
+            assert.same({ "one", "two" }, lines)
+            assert.equal(8, offset)
+        end)
+
+        it("leaves a trailing partial line for the next call", function()
+            write("one\npart")
+
+            local lines, offset = FileSystem.read_appended(tmp, 0)
+            assert.same({ "one" }, lines)
+            assert.equal(4, offset)
+
+            write("ial\n")
+            local more, next_offset = FileSystem.read_appended(tmp, offset)
+            assert.same({ "partial" }, more)
+            assert.equal(12, next_offset)
+        end)
+
+        it("returns nothing when no complete line has arrived", function()
+            write("partial")
+
+            local lines, offset = FileSystem.read_appended(tmp, 0)
+
+            assert.same({}, lines)
+            assert.equal(0, offset)
+        end)
+
+        it("returns nothing when the file has not grown", function()
+            write("one\n")
+            local _, offset = FileSystem.read_appended(tmp, 0)
+
+            local lines, next_offset = FileSystem.read_appended(tmp, offset)
+
+            assert.same({}, lines)
+            assert.equal(offset, next_offset)
+        end)
+
+        it("restarts from the beginning when the file shrank", function()
+            write("first\nsecond\n")
+            local _, offset = FileSystem.read_appended(tmp, 0)
+
+            write("fresh\n", "wb")
+
+            local lines, next_offset = FileSystem.read_appended(tmp, offset)
+
+            assert.same({ "fresh" }, lines)
+            assert.equal(6, next_offset)
+        end)
+
+        it("keeps the offset when the file cannot be opened", function()
+            local lines, offset, err =
+                FileSystem.read_appended("/tmp/agentic_absent_transcript", 42)
+
+            assert.is_nil(lines)
+            assert.equal(42, offset)
+            assert.is_not_nil(err)
+        end)
+
+        it("does not rewrite CRLF, which would shift the offset", function()
+            write("one\r\ntwo\r\n")
+
+            local lines, offset = FileSystem.read_appended(tmp, 0)
+
+            assert.same({ "one\r", "two\r" }, lines)
+            assert.equal(10, offset)
+        end)
+    end)
+
     describe("read_from_buffer_or_disk", function()
         it("reads from disk when no buffer exists", function()
             local tmp = os.tmpname()

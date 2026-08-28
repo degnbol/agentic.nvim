@@ -360,5 +360,32 @@ describe("agentic.ui.folds", function()
 
             assert.equal("    ··· 7 lines ···", foldtext_of(5, 11))
         end)
+
+        it("leads with the name the opening fence gives the body", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                "above",
+                "```markdown-fold shell-guard.sh",
+                "injected",
+                "context",
+                "```",
+            })
+
+            assert.equal(
+                "    ··· shell-guard.sh · 2 lines ···",
+                foldtext_of(3, 4)
+            )
+        end)
+
+        it("names nothing when the fence carries only a language", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                "above",
+                "```markdown-fold",
+                "injected",
+                "context",
+                "```",
+            })
+
+            assert.equal("    ··· 2 lines ···", foldtext_of(3, 4))
+        end)
     end)
 end)

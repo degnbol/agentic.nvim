@@ -35,6 +35,8 @@ FileSystem.AUDIO_MIMES = {
 
 --- Read the file content directly from disk, bypassing any loaded buffer.
 --- Use when the on-disk version is authoritative (e.g. provider edits).
+--- CRLF is normalised to LF, so the returned lines do not preserve the file's
+--- byte count.
 --- @param abs_path string
 --- @return string[]|nil lines
 --- @return string|nil error
@@ -53,6 +55,43 @@ function FileSystem.read_from_disk(abs_path)
     end
 
     return nil, (open_err or ("Failed to open file: " .. abs_path))
+end
+
+--- Read whole lines appended to a file since a byte offset.
+---
+--- For tailing a file another process appends to: the tail may end mid-line, so
+--- `new_offset` points just past the last complete line and the remainder is
+--- left for the next call — no remainder state to carry. A file shorter than
+--- `offset` — truncated, rotated or replaced — is read from the start.
+--- @param abs_path string
+--- @param offset integer bytes already consumed
+--- @return string[]|nil lines complete lines appended since `offset`
+--- @return integer new_offset unchanged from `offset` on error
+--- @return string|nil error
+function FileSystem.read_appended(abs_path, offset)
+    -- Not `read_from_disk`, whose CRLF normalisation desynchronises the offset
+    -- from the file's bytes.
+    local file, open_err = io.open(abs_path, "rb")
+    if not file then
+        return nil, offset, (open_err or ("Failed to open file: " .. abs_path))
+    end
+
+    local size = file:seek("end")
+    -- Restart rather than seek past EOF, which would yield nothing forever.
+    local start = size < offset and 0 or offset
+    file:seek("set", start)
+    local tail = file:read("*a") or ""
+    file:close()
+
+    -- Anchored at the end, so this is the last newline in the tail.
+    local last_newline = tail:find("\n[^\n]*$")
+    if not last_newline then
+        return {}, start, nil
+    end
+
+    return vim.split(tail:sub(1, last_newline - 1), "\n"),
+        start + last_newline,
+        nil
 end
 
 --- Read the file content from a buffer if loaded, to get unsaved changes,

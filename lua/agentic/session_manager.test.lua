@@ -1296,8 +1296,15 @@ describe("agentic.SessionManager", function()
 
         --- @param tool_call_blocks table<string, table>
         --- @return agentic.SessionManager
+        --- @return { n: integer } drains counted
         local function make_session(tool_call_blocks)
-            return {
+            local drains = { n = 0 }
+            --- @type agentic.SessionManager
+            local session = {
+                subagent_writer = {
+                    update_tool_call_block = function() end,
+                    tool_call_blocks = tool_call_blocks,
+                },
                 message_writer = {
                     update_tool_call_block = function() end,
                     tool_call_blocks = tool_call_blocks,
@@ -1319,7 +1326,11 @@ describe("agentic.SessionManager", function()
                 chat_history = { update_tool_call = function() end },
                 _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
+                _drain_hook_records = function()
+                    drains.n = drains.n + 1
+                end,
             } --[[@as agentic.SessionManager]]
+            return session, drains
         end
 
         before_each(function()
@@ -1395,6 +1406,113 @@ describe("agentic.SessionManager", function()
 
             assert.spy(checktime_stub).was.called(0)
             debug_stub:revert()
+        end)
+
+        it("drains hook records on a terminal update", function()
+            for _, status in ipairs({ "completed", "failed" }) do
+                local session, drains =
+                    make_session({ ["tc-1"] = { kind = "read" } })
+
+                SessionManager._on_tool_call_update(
+                    session,
+                    { tool_call_id = "tc-1", status = status }
+                )
+
+                assert.equal(1, drains.n)
+            end
+        end)
+
+        it("does not drain before the call is terminal", function()
+            local session, drains =
+                make_session({ ["tc-1"] = { kind = "read" } })
+
+            SessionManager._on_tool_call_update(
+                session,
+                { tool_call_id = "tc-1", status = "in_progress" }
+            )
+
+            assert.equal(0, drains.n)
+        end)
+
+        it("does not drain for a subagent's tool call", function()
+            -- Subagent hooks write to a transcript the reader does not follow.
+            local session, drains =
+                make_session({ ["tc-1"] = { kind = "read" } })
+            session._tool_call_owner["tc-1"] = true
+
+            SessionManager._on_tool_call_update(
+                session,
+                { tool_call_id = "tc-1", status = "completed" }
+            )
+
+            assert.equal(0, drains.n)
+        end)
+    end)
+
+    describe("_drain_hook_records", function()
+        --- @param records table[]
+        --- @return agentic.SessionManager
+        --- @return table[] written `{ body, script }` per write_hook_block call
+        local function make_session(records)
+            local written = {}
+            --- @type agentic.SessionManager
+            local session = {
+                _destroyed = false,
+                _drain_hook_records = SessionManager._drain_hook_records,
+                _hook_records = {
+                    drain = function()
+                        return records
+                    end,
+                },
+                message_writer = {
+                    write_hook_block = function(_self, body, script)
+                        table.insert(written, { body = body, script = script })
+                    end,
+                },
+            } --[[@as agentic.SessionManager]]
+            return session, written
+        end
+
+        it("renders injected context", function()
+            local session, written = make_session({
+                { group = "context", body = { "ctx" }, script = "guard.sh" },
+            })
+
+            session:_drain_hook_records()
+
+            assert.same({ { body = { "ctx" }, script = "guard.sh" } }, written)
+        end)
+
+        it("renders a record whose line did not parse", function()
+            -- The group exists so an unparseable record cannot vanish.
+            local session, written =
+                make_session({ { group = "verbatim", body = { "{ trunc" } } })
+
+            session:_drain_hook_records()
+
+            assert.equal(1, #written)
+            assert.same({ "{ trunc" }, written[1].body)
+        end)
+
+        it("holds back the groups whose rendering is not built", function()
+            local session, written = make_session({
+                { group = "failure", body = { "timed out" } },
+                { group = "unrecognised", body = { "???" } },
+            })
+
+            session:_drain_hook_records()
+
+            assert.same({}, written)
+        end)
+
+        it("writes nothing once the session is destroyed", function()
+            local session, written =
+                make_session({ { group = "context", body = { "ctx" } } })
+            session._destroyed = true
+
+            session:_drain_hook_records()
+
+            assert.same({}, written)
         end)
     end)
 
@@ -1645,6 +1763,13 @@ describe("agentic.SessionManager", function()
                     tool_call_blocks = {},
                 },
                 subagent_writer = { finalize_turn = noop },
+                _finalize_turn = SessionManager._finalize_turn,
+                _drain_hook_records = SessionManager._drain_hook_records,
+                _hook_records = {
+                    drain = function()
+                        return {}
+                    end,
+                },
                 status_indicator = { start = noop, stop = noop },
                 subagent_status_indicator = { stop = noop },
                 chat_history = {
@@ -1780,6 +1905,13 @@ describe("agentic.SessionManager", function()
                     tool_call_blocks = {},
                 },
                 subagent_writer = { finalize_turn = noop },
+                _finalize_turn = SessionManager._finalize_turn,
+                _drain_hook_records = SessionManager._drain_hook_records,
+                _hook_records = {
+                    drain = function()
+                        return {}
+                    end,
+                },
                 status_indicator = { start = noop, stop = noop },
                 subagent_status_indicator = { stop = noop },
                 chat_history = {

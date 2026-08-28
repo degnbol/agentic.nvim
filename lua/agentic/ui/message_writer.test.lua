@@ -988,6 +988,57 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("hook blocks", function()
+        local G_HOOK = Glyphs.HOOK .. " "
+
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("names the script in the fence for the foldtext to read", function()
+            writer:write_hook_block({ "injected", "context" }, "guard.sh")
+
+            assert.same({
+                "```markdown-fold guard.sh",
+                "injected",
+                "context",
+                "```",
+                "",
+            }, buffer_lines())
+            assert.same({ { 1, G_HOOK }, { 2, "╰─" } }, rail())
+            assert_one_sign_per_row()
+        end)
+
+        it("omits the name when no script is known", function()
+            writer:write_hook_block({ "injected", "context" }, nil)
+
+            assert.equal("```markdown-fold", buffer_lines()[1])
+        end)
+
+        it("leaves a one-line body unfenced under the glyph", function()
+            writer:write_hook_block({ "brief" }, "guard.sh")
+
+            assert.equal("brief", buffer_lines()[1])
+            assert.same({ { 0, G_HOOK } }, rail())
+        end)
+
+        it("writes nothing for an empty body", function()
+            writer:write_hook_block({}, "guard.sh")
+
+            assert.same({ "" }, buffer_lines())
+            assert.same({}, rail())
+        end)
+
+        it("flushes a buffered thought run ahead of itself", function()
+            writer:write_message_chunk(make_thought_update("one\ntwo"))
+            writer:write_hook_block({ "injected", "context" }, "guard.sh")
+
+            local lines = buffer_lines()
+            assert.equal("```markdown-fold", lines[1])
+            assert.equal("```markdown-fold guard.sh", lines[6])
+        end)
+    end)
+
     describe("closing summary region", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)

@@ -110,8 +110,11 @@ the fence is set per kind:
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
-`<lang>-fold` (sidecar bodies past their per-kind threshold, and thought runs
-— see `flush_thought_run`) and `<lang>-difffold` (every edit diff).
+`<lang>-fold` (sidecar bodies past their per-kind threshold, plus thought runs
+and hook blocks — see `_write_collapsed_region`) and `<lang>-difffold` (every
+edit diff). A second word may follow the language (`markdown-fold guard.sh`):
+`(info_string (language))` is the first word alone, so both queries ignore it
+and the foldtext reads it as the body's name.
 `folds.scm` matches `fold$` on the language. `injections.scm` strips a trailing
 `-fold` before resolving the injected parser (so sidecar markdown still
 highlights) but **excludes `difffold$` from injection entirely** — a diff's
@@ -149,8 +152,8 @@ Threshold config keys (in `config_default.lua`):
 - `execute_max_lines` — shell stdout (and execute failure_reason)
 - Fetch / WebSearch / SubAgent — always folded when multi-line, no config
 
-`folds.lua` provides the `··· N lines ···` foldtext, plus a character count
-on thought runs.
+`folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
+word when it has one, plus a character count on thought runs.
 
 Adding a new foldable kind:
 

@@ -1,8 +1,8 @@
 # Plan: gutter identity glyphs
 
 Master note for six units of work: 1 to 3 and 5 have shipped, 4 has been handed
-off, and 6 remains. Its note is self-contained; this one holds the rule they
-converge on, the limitation they accept, and the order.
+off, and 6 is partly done. Its note is self-contained; this one holds the rule
+they converge on, the limitation they accept, and the order.
 
 ## The rule
 
@@ -47,7 +47,8 @@ no rendering work and left for the note that owns the submit paths.
    `Renderer.render_decorations`, and `render_region_rail` in `message_writer`.
 3. Closing summary bracket — the prose that closes a turn takes a `╭─` region,
    tracked by `_prose_run_start_line` and drawn by `render_prose_region` in
-   `finalize_turn`.
+   `finalize_turn`. Its scope is superseded by unit 7, which brackets every prose
+   run: the reason given here for confining it to one run per turn does not hold.
 
    Restored sessions carry no closing summary bracket: `replay_messages` writes
    agent prose through `write_message`, which starts no run, and finalizes no
@@ -79,19 +80,47 @@ no rendering work and left for the note that owns the submit paths.
 6. [`PLAN-hooks_in_chat.md`](PLAN-hooks_in_chat.md) — hook activity (injected
    context, timeouts) is invisible because the ACP bridge drops the hook lifecycle
    events; recover it from the CLI's transcript jsonl and render each record as
-   one closed fold row. Takes 5's shape wholesale — `markdown-fold` body,
-   `sign_text` glyph, no heading (a titled section over a fenced body would pin
-   the breadcrumb, per `queries/agentic/context.scm`) — and extends the same
-   foldtext dispatch, which keys on the row's identity sign
-   (`sign_at` in `folds.lua`). Separately it converts a site unit 1 left as prose:
-   blocking-hook feedback arrives as a genuine `agent_message_chunk`, identifiable
-   by a bridge-generated severity prefix — that part renders through
-   `write_notice`.
+   one closed fold row. Injected context has shipped: it took 5's shape wholesale,
+   and the two now share `MessageWriter:_write_collapsed_region`. Still open there:
+   failures and unrecognised output, which need a second glyph, and persistence.
+   Separately it converts a site unit 1 left as prose: blocking-hook feedback
+   arrives as a genuine `agent_message_chunk`, identifiable by a bridge-generated
+   severity prefix — that part renders through `write_notice`.
+
+7. [`feature-prose-run-regions.md`](feature-prose-run-regions.md) — bracket every
+   prose run rather than only the turn's last, gated on the run holding more than
+   one paragraph, and draw it live instead of at turn end. Revises unit 3's scope
+   and fixes the subagents pane, which has never drawn a summary bracket because
+   its runs end at a Task divider rather than at `finalize_turn`. No new glyph:
+   prose opens on the plain `╭─`.
+
+8. Foldable prose regions — a prose region should fold on `zc`, open by default.
+   After unit 7: the fold wants the region's range, so it needs the region to
+   exist and be stable first.
+
+   The fold *source* is the work. `folds.scm` is the buffer's only one and it
+   matches `code_fence_content` under a `fold$` info string; prose has no fence,
+   and no node spans a run — a run is a sequence of sibling paragraphs. Markdown's
+   `(section)` is ruled out by that query's own top comment (sections nest, and
+   `folds.lua` flattens every match to level 1), and would anyway miss a run with
+   no `###` opener, which is the first prose of every turn. So the region becomes
+   the fold: overlay the run's rows onto `M.levels`'s per-line array, read from
+   the signs already placed.
+
+   Three things that need deciding rather than assuming: `M.levels` caches on
+   `b:changedtick` and placing an extmark does not bump it, so the render needs an
+   explicit invalidation rather than relying on text landing afterwards; the
+   non-nesting invariant holds by construction unless an agent writes a `fold$`
+   fence inside prose; and `fence_source`'s "the row above a fold is always its
+   fence" stops being true. Open-by-default is nearly free — `chat_win_opts` pins
+   `foldlevel = 99` — but a fold created after a closed one still inherits the
+   closed state, and prose lands directly beneath closed thought runs constantly,
+   so it needs the same explicit `_open_fold` a diff gets.
 
 ## Glyph vocabulary
 
 `glyphs.lua`. Nerd Font `nf-md-*`, never emoji, and every new glyph must avoid
 the tool kinds 󰈈 󰏫 󰆍 󰍉 󰖟 󰚩 󰒓. `sign_text` must be
 `glyph .. " "` — two cells, which is also what lets a wide-aspect glyph render
-across both. 󰋚 history is reserved for a future rewind. 󰛢 hook is taken by unit 6.
-󰧑 thinking is spent (unit 5).
+across both. 󰋚 history is reserved for a future rewind. 󰧑 thinking (unit 5) and
+󰛢 hook (unit 6) are spent; unit 6's failure rows still need one.

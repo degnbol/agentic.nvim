@@ -18,12 +18,16 @@ describe("agentic.permission_hook", function()
     before_each(function()
         last_call = nil
         verdict_to_return = "allow"
-        SessionRegistry.permission_manager_for_session = function(_)
+        SessionRegistry.session_for_acp_id = function(_)
             return {
-                decide = function(_, kind, tool_call, diff)
-                    last_call = { kind = kind, tool_call = tool_call, diff = diff }
-                    return verdict_to_return
-                end,
+                permission_manager = {
+                    decide = function(_, kind, tool_call, diff)
+                        last_call =
+                            { kind = kind, tool_call = tool_call, diff = diff }
+                        return verdict_to_return
+                    end,
+                },
+                note_hook_transcript = function() end,
             }
         end
     end)
@@ -42,7 +46,7 @@ describe("agentic.permission_hook", function()
         end)
 
         it("returns empty when no session matches", function()
-            SessionRegistry.permission_manager_for_session = function(_)
+            SessionRegistry.session_for_acp_id = function(_)
                 return nil
             end
             assert.equal(
@@ -57,6 +61,43 @@ describe("agentic.permission_hook", function()
 
         it("returns empty on undecodable input", function()
             assert.equal("", PermissionHook.evaluate("not base64 !!!"))
+        end)
+    end)
+
+    describe("transcript path", function()
+        it("hands the reported path to the session", function()
+            local noted
+            SessionRegistry.session_for_acp_id = function(_)
+                return {
+                    permission_manager = {
+                        decide = function() end,
+                    },
+                    note_hook_transcript = function(_self, path)
+                        noted = path
+                    end,
+                }
+            end
+
+            PermissionHook.evaluate(encode({
+                session_id = "s1",
+                transcript_path = "/projects/slug/s1.jsonl",
+                tool_name = "Bash",
+                tool_input = { command = "ls" },
+            }))
+
+            assert.equal("/projects/slug/s1.jsonl", noted)
+        end)
+
+        it("still decides for a tool the reader never hears about", function()
+            -- Verdicts must not depend on a transcript path being present.
+            assert.equal(
+                "allow",
+                PermissionHook.evaluate(encode({
+                    session_id = "s1",
+                    tool_name = "Bash",
+                    tool_input = { command = "ls" },
+                }))
+            )
         end)
     end)
 

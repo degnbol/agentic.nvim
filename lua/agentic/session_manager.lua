@@ -12,6 +12,7 @@ local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
+local HookRecordReader = require("agentic.hook_record_reader")
 local Logger = require("agentic.utils.logger")
 local Recovery = require("agentic.session_recovery")
 local SlashCommands = require("agentic.acp.slash_commands")
@@ -87,6 +88,7 @@ end
 --- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
+--- @field _hook_records agentic.HookRecordReader Tail of the CLI transcript for hook activity the ACP feed drops. Replaced alongside `chat_history` wherever the ACP session is torn down, so its path and offset cannot outlive the session they belong to
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
@@ -260,6 +262,7 @@ function SessionManager:new(tab_page_id)
     self.agent = agent
 
     self.chat_history = ChatHistory:new()
+    self._hook_records = HookRecordReader:new()
 
     self.widget = ChatWidget:new(tab_page_id, function(input_text)
         self:_handle_input_submit(input_text)
@@ -908,7 +911,7 @@ function SessionManager:_delete_session()
         self.message_writer:write_message(
             ACPPayloads.generate_agent_message("No active session to delete.")
         )
-        self.message_writer:finalize_turn()
+        self:_finalize_turn()
         return
     end
 
@@ -931,7 +934,7 @@ function SessionManager:_delete_session()
                     )
                 )
             )
-            self.message_writer:finalize_turn()
+            self:_finalize_turn()
         end
     end
 
@@ -1356,6 +1359,51 @@ function SessionManager:_on_request_permission(request, callback)
     end
 end
 
+--- Record where the Claude Code CLI is writing this session's transcript, as
+--- reported by a hook input — the only channel that carries the path. No-op
+--- before the ACP session id is known, which is what the path is checked
+--- against.
+--- @param path string `transcript_path` from a hook input
+function SessionManager:note_hook_transcript(path)
+    if self.session_id then
+        self._hook_records:set_transcript_path(path, self.session_id)
+    end
+end
+
+--- Hook record groups that reach the chat buffer. `failure` and `unrecognised`
+--- are dropped for now; `verbatim` renders because a record whose line did not
+--- parse is exactly the one that must not disappear.
+local RENDERED_HOOK_GROUPS = {
+    context = true,
+    verbatim = true,
+}
+
+--- Append the hook activity recorded since the last drain to the chat buffer.
+function SessionManager:_drain_hook_records()
+    if self._destroyed then
+        return
+    end
+    for _, record in ipairs(self._hook_records:drain()) do
+        if RENDERED_HOOK_GROUPS[record.group] then
+            self.message_writer:write_hook_block(record.body, record.script)
+        end
+    end
+end
+
+--- Close out a turn dispatched to the agent: end it in the chat buffer, stamp
+--- its usage footer, then append the hook activity it produced. The single
+--- chokepoint for those three — client-side notices end their own turn through
+--- `MessageWriter:write_notice`, having dispatched nothing.
+--- @param usage { inputTokens?: number, outputTokens?: number }|nil
+function SessionManager:_finalize_turn(usage)
+    self.message_writer:finalize_turn()
+    self.message_writer:set_turn_usage(usage)
+    -- Last of the three: a region appended before `finalize_turn` would end the
+    -- prose run it brackets, and one appended before the footer would move the
+    -- row the footer is stamped on.
+    self:_drain_hook_records()
+end
+
 --- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
@@ -1457,6 +1505,21 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         and #self.permission_manager.queue == 0
     then
         self.status_indicator:start("generating")
+    end
+
+    -- A PreToolUse hook's records are on disk before this call's terminal
+    -- update, so draining here puts them directly beneath the block that
+    -- triggered them; PostToolUse records land after it and wait for the
+    -- turn-end drain. Subagent calls are excluded — their hooks write to a
+    -- transcript the reader does not follow.
+    if
+        not is_subagent
+        and (
+            tool_call_update.status == "completed"
+            or tool_call_update.status == "failed"
+        )
+    then
+        self:_drain_hook_records()
     end
 end
 
@@ -1832,7 +1895,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         self.message_writer:write_message(
             ACPPayloads.generate_agent_message("Usage: `/rename <new name>`")
         )
-        self.message_writer:finalize_turn()
+        self:_finalize_turn()
         return
     end
 
@@ -2120,8 +2183,7 @@ function SessionManager:_dispatch_turn(prompt)
             end
         end
 
-        self.message_writer:finalize_turn()
-        self.message_writer:set_turn_usage(turn_usage)
+        self:_finalize_turn(turn_usage)
         self.message_writer:scroll_to_bottom()
 
         -- Reset the subagents buffer's per-turn flags too (mandatory — the
@@ -2399,6 +2461,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self._last_edited_md = nil
     self._plan_exit_pending = false
     self.chat_history = ChatHistory:new()
+    -- Fresh reader: a path and offset from the outgoing session would read the
+    -- wrong file at the wrong position.
+    self._hook_records = HookRecordReader:new()
     self.widget:set_chat_title(nil)
     self._history_to_send = nil
 
@@ -2555,6 +2620,9 @@ function SessionManager:_cancel_session()
     self._plan_exit_pending = false
 
     self.chat_history = ChatHistory:new()
+    -- Fresh reader: a path and offset from the outgoing session would read the
+    -- wrong file at the wrong position.
+    self._hook_records = HookRecordReader:new()
     self._title_user_set = false -- Fresh session: allow provider auto-summary again
     self.widget:set_chat_title(nil) -- Reset buffer name to default
     self._history_to_send = nil

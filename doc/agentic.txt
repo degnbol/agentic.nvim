@@ -808,6 +808,8 @@ Rendering ~
 - Treesitter folding for long tool output, toggleable with `zo` / `zc` / `za`.
 - Each run of agent thinking collapsed to one dimmed row, marked 󰧑 in the sign
   column and summarised as `··· N lines · N chars ···`. `zo` expands it.
+- Context a hook injected shown as its own dimmed row, marked 󰛢 in the sign
+  column and named after the script that produced it. Claude provider only.
 - Sign-column decorations on tool-call blocks.
 - Slash-command and `@`-mention syntax highlighting in input and chat.
 

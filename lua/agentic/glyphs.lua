@@ -39,6 +39,11 @@ Glyphs.THINKING = "󰧑"
 --- one side alone would silently drop the count.
 Glyphs.THINKING_SIGN = Glyphs.THINKING .. " "
 
+--- Identity of a hook's activity (`MessageWriter:write_hook_block`). The one
+--- region whose glyph names the mechanism rather than the content: a hook can
+--- deliver anything, so the reader's question is which script spoke.
+Glyphs.HOOK = "󰛢"
+
 --- Per-command glyph for a client-side command notice
 --- (`MessageWriter:write_notice`). Every value is distinct from `KIND`: a gutter
 --- glyph reads as an identity, so a command confirmation must not look like a

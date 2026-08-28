@@ -1,7 +1,12 @@
 # PLAN: surface hook activity in the chat buffer
 
-Status: **designed, reviewed twice, not implemented.** All design decisions are
-settled; the plan is implementable as written.
+Status: **phases 1 and 2 shipped; 3 to 5 remain.** The tail read, decoder,
+per-session reader and the injected-context fold row are in the code, which is
+the reference for them — see `read_appended`, `claude_hook_records.lua`,
+`hook_record_reader.lua`, `MessageWriter:write_hook_block`, and the drains in
+`SessionManager:{_finalize_turn, _on_tool_call_update}`. What remains is
+failures and unrecognised output (phase 3), the optional PostToolUse drain (4),
+and persistence (5). The record taxonomy and evidence below still govern those.
 
 Evidence is first-hand: bridge/SDK source and plugin source at the pinned
 versions, plus counts over this project's own transcript history. **Counts drift**
@@ -259,36 +264,18 @@ when the preceding tool call is what triggered it, so it is its own region rathe
 than part of the tool call's output. `SessionStart`, `UserPromptSubmit` and `Stop`
 records are not special-cased.
 
-**Follow unit 5's shape**, which shipped — `MessageWriter:flush_thought_run` is
-the reference: the body goes in a `markdown-fold` fence closed at render, the
-glyph is a `sign_text` extmark on the fence's visible row, and the summary lives
-in the foldtext (`folds.lua` dispatches on that glyph via `sign_at`). Not
-`write_notice` — that method builds a heading, and a heading is what this shape
-exists to avoid:
+Shipped as `MessageWriter:_write_collapsed_region`, which thought runs and hook
+blocks now share: a `markdown-fold` fence closed explicitly at render, a
+`sign_text` glyph on the fence's first body row, `set_dim_range` over the body,
+and `wrap_prose` so the foldtext's line count matches what `zo` shows. The
+heading-avoidance rationale (`queries/agentic/context.scm` pins the breadcrumb
+on a *titled* heading over a fenced body) is in `write_hook_block`'s docstring.
 
-`queries/agentic/context.scm` captures `(section (atx_heading (inline))
-(fenced_code_block))`, so a *titled* heading over a fenced body pins the
-treesitter-context breadcrumb for as long as the cursor stays in the section.
-Hook bodies are fenced, so headings would pin — and inconsistently, since an empty
-ATX heading has no `inline` child and is never captured, meaning the ~86 untitled
-records would behave differently from the titled ones. No heading, no divergence.
-This is the same reasoning that left thought runs headingless.
+Glyph constraints come from `PLAN-gutter-identity.md` § "Glyph vocabulary".
+`󰛢` U+F06E2 `nf-md-hook` satisfies all of them and is now spent.
 
-Glyph constraints come from `PLAN-gutter-identity.md` § "Glyph vocabulary", not
-from this plan: `nf-md-*`, never emoji, `sign_text` must be `glyph .. " "`, must
-avoid the seven tool kinds (󰈈 󰏫 󰆍 󰍉 󰖟 󰚩 󰒓), and `󰋚` history is reserved for a
-future rewind. `󰛢` U+F06E2 `nf-md-hook` satisfies all of them.
-
-Body: parse the record line as JSON, render `content` neatly when present, write
-the line verbatim when it does not parse. `content` is a list whose single element
-is **plain text** (358/358) — do not attempt a second JSON parse one level in.
-Bodies run 25–1844 chars (1–25 lines).
-
-The fold must be closed **explicitly** via `self:_close_fold(anchor)`, with
-`Renderer.set_dim_range` for the dim. `MessageWriter._pending_fold_ops`' field
-docstring documents the foldexpr leak whereby a fold created after a closed one
-inherits the closed state, so nothing may rely on the default. `wrap_prose` the
-body as sidecar bodies are, so the foldtext's line count matches what `zo` shows.
+`content` is a list whose single element is **plain text** (358/358) — do not
+attempt a second JSON parse one level in. Bodies run 25–1844 chars (1–25 lines).
 
 Appending a region rather than mutating a tool-call block avoids three constraints
 a fields-on-the-block design would have to change: the frozen-diff early return
@@ -313,12 +300,13 @@ below to drain promptly. Not blocking — it affects ~28 records.
 Two real signals plus one that needs an adapter change:
 
 1. **Terminal `tool_call_update`** — covers every PreToolUse record, and appends
-   in the right place.
-2. **Turn end.** `MessageWriter:finalize_turn` has **nine** call sites in
-   `session_manager.lua` — four command notices, three `/delete`+`/rename` failure
-   messages, the usage-limit respawn path, and one on `subagent_writer`. Hooking the drain at the call sites means nine edits and a
-   guaranteed miss — introduce a single chokepoint. This is the backstop for the
-   last call of a turn and for turn-boundary records.
+   in the right place. Shipped, at the end of `SessionManager:_on_tool_call_update`
+   and skipping subagent calls.
+2. **Turn end.** Shipped as `SessionManager:_finalize_turn`, the chokepoint every
+   `message_writer:finalize_turn()` call site now routes through. It drains
+   *after* the writer, not before: `finalize_turn` brackets the turn's closing
+   prose and a region written first would end that run through
+   `_reflow_chunks(bufnr, true)`, leaving the summary unbracketed.
 3. **The bridge's PostToolUse-callback `tool_call_update`**
    (`acp-agent.js:5966-5979`) — **currently dropped before the plugin sees it.**
    `ClaudeAgentACPAdapter:__handle_tool_call_update` returns early when `not update.status
@@ -354,6 +342,13 @@ carry a UTC `Z` ISO-8601 `timestamp`, so the comparison is a plain string compar
 This collapses the new-vs-resume special case into one rule and prevents a resumed
 session re-rendering its entire history (up to ~1.8 MB).
 
+One record has no timestamp to compare: a `verbatim` one, whose line did not
+parse and so has no envelope to read it from. Those are placed by the read they
+arrive on instead — the catch-up read is the only one that can return bytes
+older than the reader, so anything after it is new by construction
+(`HookRecordReader:_is_current`). Without that rule a resumed session dumps
+every historical unparseable line at once.
+
 - A separate process appends: `new_offset` points **just past the last complete
   line**. That *is* the carry-the-remainder mechanism — no separate remainder
   state.
@@ -370,28 +365,18 @@ transcript when a path *was* supplied surfaces once via `Logger.notify`;
 
 ## Structure
 
-| piece | location | contract |
-| --- | --- | --- |
-| byte-exact tail read | `read_appended(abs_path, offset)` in `lua/agentic/utils/file_system.lua` | → `lines, new_offset`; `new_offset` just past the last complete line |
-| record decoder | new `lua/agentic/acp/adapters/claude_hook_records.lua` | pure line → `{group, hook_name, command, content, …}`; no IO, no state |
-| drain + offset + marker | new `lua/agentic/hook_record_reader.lua`, one per session, instantiated in `SessionManager:new` alongside `ChatHistory`/`PermissionManager` | `drain()`; unit-testable without a SessionManager |
-| block rendering | a `markdown-fold` fence + `sign_text` glyph + per-glyph foldtext, as shipped for thought runs | no heading, no new writer method |
+Shipped as three pieces, each documented at its own definition:
+`FileSystem.read_appended`, `claude_hook_records.lua` (pure decode, no IO or
+state), and `hook_record_reader.lua` (one per session, built in
+`SessionManager:new` and replaced in `_cancel_session` alongside `ChatHistory`
+so a stale path and offset cannot outlive their session). Rendering goes through
+`MessageWriter:write_hook_block`, no heading.
 
-`claude_utils.lua` is "constants and helpers for the Claude ACP adapter" — jsonl
-record decoding is a different contract, so a sibling file rather than an addition.
-A per-session reader object (not two fields on the 2700-line `SessionManager`)
-satisfies `.claude/rules/multi-tabpage.md`: no module-level per-tabpage state.
-
-**Do not build the tail read on `FileSystem.read_from_disk`** — its
-`content:gsub("\r\n", "\n")` (`file_system.lua:51`) desynchronises byte offsets.
-Use `io.open` + `seek("set", offset)`.
-
-**Reset.** Path, offset and marker must be cleared wherever the ACP session is torn
-down. `SessionManager:_cancel_session` nils `session_id` and installs
-a fresh `ChatHistory`; `/clear`, `/new`, provider switch and restart all route
-through it. A stale path+offset carried into the next session reads the wrong file
-at the wrong position. Also state how the state interacts with `_restoring` /
-`_session_epoch` / `_destroyed` (the `SessionManager` class field docs).
+Why a sibling file rather than an addition to `claude_utils.lua`: that module is
+"constants and helpers for the Claude ACP adapter" and jsonl record decoding is
+a different contract. Why a reader object rather than two fields on the
+2700-line `SessionManager`: `.claude/rules/multi-tabpage.md`, no module-level
+per-tabpage state.
 
 ## Persistence
 
@@ -407,31 +392,23 @@ next reader does not file the absence as a bug.
 
 ## Phasing
 
-Phase 1 has **no dependency on the gutter-identity programme** — it is file IO and
-decoding with no rendering, so it can proceed in parallel with that programme's
-unit 1. Phase 2 onward consumes the fold-row shape and foldtext dispatch unit 5
-shipped, so it is unblocked; it is independent of units 1–4. The separate
-`informational` conversion below is the one part that needs unit 1.
-
-1. `read_appended` + the reader object (path, marker, offset, `drain()`) + the
-   decoder. No rendering. Testable in isolation.
-2. Injected context as fold rows on triggers 1 and 2 — the bulk of the value
-   (~358 records).
-3. Failures and unrecognised output.
+1. **Shipped.** `read_appended` + the reader object (path, marker, offset,
+   `drain()`) + the decoder.
+2. **Shipped.** Injected context as fold rows on triggers 1 and 2 — the bulk of
+   the value (~358 records).
+3. Failures and unrecognised output. `SessionManager:_drain_hook_records`
+   already receives both groups and discards them; the work is a second glyph
+   (`failure` needs one from `PLAN-gutter-identity.md` § "Glyph vocabulary") and
+   deciding what an empty-bodied `unrecognised` record renders as, which
+   `_write_collapsed_region` currently drops.
 4. Optional: trigger 3 (adapter change, drain-only) for prompt placement of the
    ~28 PostToolUse records.
 5. Persistence — new `ChatHistory.Message` variant.
 
-Tests are **co-located `<module>.test.lua`** per `.claude/rules/tests.md` —
-`lua/agentic/utils/file_system.test.lua` already uses `os.tmpname()` in five
-places, the pattern for the byte-offset tests. `tests/fixtures/` is not the right
-home. `make validate` is the gate.
+Tests are **co-located `<module>.test.lua`** per `.claude/rules/tests.md`.
+`make validate` is the gate.
 
 ## The fold row
-
-The glyph is settled: `󰛢` U+F06E2 `nf-md-hook` for injected context, satisfying
-every constraint in `PLAN-gutter-identity.md` § "Glyph vocabulary". Failures need a
-second glyph from the same vocabulary.
 
 **The script basename in the foldtext, and nothing else.** Where the row lands
 already says what the event was — beside a tool call for
@@ -446,8 +423,16 @@ which script ran:
 󰛢 ··· 12 lines ···                     ← no name available
 ```
 
-This extends `folds.lua`'s `M.foldtext`, which already branches on the row's
-identity sign (`sign_at`) for thought folds — one dispatch, two consumers.
+**How the name reaches the foldtext, revised from the sign dispatch this plan
+first proposed.** An extmark carries no payload beyond its two sign cells, so
+the sign can say *that* a row is a hook but never *which script*. The writer
+instead appends the basename to the fence's info string
+(```` ```markdown-fold shell-guard.sh ````) and `folds.lua`'s `fence_source`
+reads it back off the row above the fold. Both queries key on the
+`(info_string (language))` node — the first word alone, verified against the
+parser — so neither folding nor markdown injection notices the extra word, and
+`is_fence_delimiter` still conceals the row to zero height. The sign dispatch
+remains for the thought run's character count, which needs no payload.
 
 `hookName` is not a fallback. It is lossy enough to give adjacent rows identical
 summaries over different bodies: `PreToolUse:Bash` covers five scripts
