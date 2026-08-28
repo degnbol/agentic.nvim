@@ -703,7 +703,8 @@ Notices are display-only — not saved with the session, not replayed on restore
 ==============================================================================
 11. HIGHLIGHT GROUPS                                    *agentic-highlights*
 
-All groups use `default = true` so user definitions take priority.
+Any of these groups you define yourself is left alone; the plugin only
+overwrites definitions it made itself, and re-derives them on |ColorScheme|.
 
     Group                        Default link                   Purpose ~
     `AgenticDiffDelete`            |DiffDelete|                   Deleted lines

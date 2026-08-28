@@ -73,6 +73,40 @@ local function glyph_off_hl(source)
     return { fg = fg, strikethrough = true }
 end
 
+--- What this module last wrote to each group, as `nvim_get_hl` reads it back.
+--- A group still matching its entry is one nobody has touched since; anything
+--- else belongs to the colorscheme or the user.
+--- @type table<string, table>
+local applied = {}
+
+--- Define a highlight group, unless somebody else already owns it.
+---
+--- `default = true` cannot express that, for two reasons. It is a no-op on a
+--- group that already exists, and nothing guarantees one was cleared first:
+--- `:colorscheme` only sources `colors/{name}` (`:help :colorscheme`), and
+--- running `:highlight clear` is a convention of the scheme file that a
+--- generated or minimal scheme may skip. Where nothing clears, the first
+--- setup's definitions stand for the rest of the session — a group resolved
+--- before the colorscheme loaded keeps that first answer, pointing at `Normal`
+--- because `Prompt` did not exist yet, or striking through a foreground the
+--- scheme has since replaced. Recording each write instead lets a later setup
+--- re-derive its own groups while still yielding to everyone else's.
+---
+--- Writing no `default` flag is what keeps that record comparable: nvim reports
+--- the flag back as part of a group's definition and `:colorscheme` strips it
+--- from every group it leaves standing, so a recorded flag would go missing
+--- underneath us and read as somebody else's definition.
+--- @param name string
+--- @param definition vim.api.keyset.highlight
+local function set_hl(name, definition)
+    local current = vim.api.nvim_get_hl(0, { name = name })
+    if not vim.tbl_isempty(current) and not vim.deep_equal(current, applied[name]) then
+        return
+    end
+    vim.api.nvim_set_hl(0, name, definition)
+    applied[name] = vim.api.nvim_get_hl(0, { name = name })
+end
+
 function Theme.setup()
     local user_glyph = user_glyph_source()
 
@@ -167,15 +201,14 @@ function Theme.setup()
     -- stylua: ignore end
 
     for _, hl in ipairs(highlights) do
-        hl[2].default = true
-        vim.api.nvim_set_hl(0, hl[1], hl[2])
+        set_hl(hl[1], hl[2])
     end
 
-    -- `:colorscheme` runs `:highlight clear`, which drops every group defined
-    -- here — links included — leaving the extmarks that name them unhighlighted
-    -- until the next restart. Redefining also re-resolves the colours read off
-    -- other groups above. `clear = true` keeps this to one autocmd across
-    -- repeat calls.
+    -- A colorscheme that clears drops the groups defined here, leaving the
+    -- extmarks that name them unhighlighted until the next restart; one that
+    -- does not clear leaves them resolved against the colours of the scheme
+    -- before it. Redefining covers both — see `set_hl` for why `default = true`
+    -- cannot. `clear = true` keeps this to one autocmd across repeat calls.
     vim.api.nvim_create_autocmd("ColorScheme", {
         group = vim.api.nvim_create_augroup("agentic_theme", { clear = true }),
         callback = Theme.setup,

@@ -55,9 +55,6 @@ describe("agentic.Theme", function()
     end)
 
     describe("setup", function()
-        --- Definitions are `default = true`, so a group that already exists
-        --- wins over a fresh setup — the same reason a colorscheme's
-        --- `:highlight clear` is what lets the redefinition through.
         --- @param name string
         local function clear(name)
             vim.cmd.highlight({ args = { "clear", name } })
@@ -70,11 +67,16 @@ describe("agentic.Theme", function()
         end
 
         -- `Prompt` is not one of neovim's own groups, so every case has to say
-        -- whether the colorscheme under test defines it.
+        -- whether the colorscheme under test defines it. `Normal` is put back
+        -- because one case blanks it and the whole file shares one neovim.
+        local normal
         before_each(function()
             clear("Prompt")
-            clear(Theme.HL_GROUPS.GLYPH_USER)
-            clear(Theme.HL_GROUPS.GLYPH_OFF)
+            normal = vim.api.nvim_get_hl(0, { name = "Normal" })
+        end)
+
+        after_each(function()
+            vim.api.nvim_set_hl(0, "Normal", normal)
         end)
 
         it("redefines its groups after a colorscheme wipes them", function()
@@ -125,5 +127,56 @@ describe("agentic.Theme", function()
                 )
             end
         )
+
+        -- The colorscheme need not have cleared for the second setup to take
+        -- effect: `default = true` is a no-op on a group that still exists, so
+        -- a group resolved before the scheme loaded would otherwise keep that
+        -- first answer for the rest of the session.
+        it("re-resolves its own groups against a later colorscheme", function()
+            Theme.setup()
+            assert.equal("Normal", link_of(Theme.HL_GROUPS.GLYPH_USER))
+
+            vim.api.nvim_set_hl(0, "Prompt", { fg = "#f05af2" })
+            Theme.setup()
+
+            assert.equal("Prompt", link_of(Theme.HL_GROUPS.GLYPH_USER))
+        end)
+
+        -- Twice over: a setup that finds a group it does not own must not
+        -- record that group as its own, or the setup after it overwrites what
+        -- it just yielded to.
+        it("yields to a group defined outside this module", function()
+            Theme.setup()
+            vim.api.nvim_set_hl(0, Theme.HL_GROUPS.GLYPH_AGENT, {
+                link = "Title",
+            })
+
+            Theme.setup()
+            assert.equal("Title", link_of(Theme.HL_GROUPS.GLYPH_AGENT))
+
+            Theme.setup()
+            assert.equal("Title", link_of(Theme.HL_GROUPS.GLYPH_AGENT))
+        end)
+
+        -- Driven by the real event rather than a second `setup()` call, the
+        -- path where a re-derivation has to survive whatever `:colorscheme`
+        -- does to the groups already standing. Runs last — it leaves a
+        -- colorscheme and an 'runtimepath' entry behind.
+        it("re-resolves over a colorscheme that never clears", function()
+            local rtp_dir = vim.fn.tempname()
+            vim.fn.mkdir(rtp_dir .. "/colors", "p")
+            vim.fn.writefile({
+                'vim.g.colors_name = "agentic_noclear"',
+                'vim.api.nvim_set_hl(0, "Prompt", { fg = "#f05af2" })',
+            }, rtp_dir .. "/colors/agentic_noclear.lua")
+            vim.opt.rtp:prepend(rtp_dir)
+
+            Theme.setup()
+            assert.equal("Normal", link_of(Theme.HL_GROUPS.GLYPH_USER))
+
+            vim.cmd.colorscheme("agentic_noclear")
+
+            assert.equal("Prompt", link_of(Theme.HL_GROUPS.GLYPH_USER))
+        end)
     end)
 end)
