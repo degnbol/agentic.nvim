@@ -697,11 +697,6 @@ Since the glyph says which command ran, the heading text is just the result.
 A notice with a body closes with `╰─` on its last row, the same bracket a
 multi-line prompt and a tool call block get.
 
-Issued between turns, a notice is a `##` heading — a sibling of your prompts.
-Issued while the agent is working, it is a `###` nested in the running turn, at
-the point it happened: these commands all take effect immediately, so a
-`/trust` widening governs the tool calls after it and none before.
-
 `[[` and `]]` stop on notices as well as prompts (|agentic-keymaps-chat|).
 Notices are display-only — not saved with the session, not replayed on restore.
 

@@ -144,7 +144,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
---- @field _pending_section_break? boolean Set by `_mark_section_break` when a block interrupts a prose run mid-turn (tool call, notice); makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
+--- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
 --- @field _numbering_active? boolean When true (set by `enable_numbering` once ≥2 subagents run concurrently in the turn), blocks carrying an `ordinal` render it as the sign on every body row (the whole left rail), replacing the │ border. Reset per turn.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
@@ -290,8 +290,9 @@ function MessageWriter:_release_prose_pin()
 end
 
 --- Make the next prose chunk of this turn open its own section, by emitting the
---- empty `###` boundary ahead of it (see `write_message_chunk`). Called by every
---- writer that interrupts a prose run mid-turn, so the flag has one setter.
+--- empty `###` boundary ahead of it (see `write_message_chunk`). Called by the
+--- tool call writer — the only writer that interrupts a prose run with a
+--- section markdown cannot otherwise close (`##` writers close their own).
 --- @private
 function MessageWriter:_mark_section_break()
     self._pending_section_break = true
@@ -501,7 +502,7 @@ end
 --- @field title string Heading text. Raw, not backtick-wrapped: an underscore or stray backtick in it can corrupt the heading through markdown inline parsing, the same exposure a user prompt's heading already carries.
 --- @field body? string[] Already-formatted markdown lines placed under the heading
 --- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
---- @field mid_turn? boolean True when a turn is running. Decides both the heading level and whether the notice closes the turn — see write_notice.
+--- @field mid_turn? boolean True when a turn is running. Decides whether the notice closes the turn — see write_notice.
 
 --- Write the result of a locally-handled command as a glyph-signed heading.
 ---
@@ -509,30 +510,27 @@ end
 --- sign in the same channel as a prompt's `❯` and is navigable with `[[`/`]]`.
 --- A notice with a body grows a `│`/`╰─` rail over those rows.
 ---
---- The heading level follows the notice's position in the section tree, which
---- `mid_turn` decides. Every command here takes effect the moment it is issued
---- (`/trust` widens permissions for the turn already running), so the honest
---- place to render it is where it happened:
+--- Always `##`. The heading level says whose row it is, not when it was written
+--- (§ "Heading levels" in the `rendering` skill): a notice is a user action, a
+--- sibling of the prompts, and `###` would file it among the running turn's
+--- tool calls. Mid-turn that costs a breadcrumb — the notice closes the
+--- `## prompt` section, so `queries/agentic/context.scm` pins the notice title
+--- over the rest of the turn's prose (tool calls still pin their own `###`
+--- head; innermost wins). Accepted: the title is the scope or model that just
+--- changed, which is the more useful thing to see at that point anyway.
 ---
---- - Between turns it is a sibling of the prompts: `##`, and it closes the turn.
---- - Mid-turn it must nest inside the running turn instead (`##` would close the
----   `## prompt` section and steal every following tool call as its child), so
----   it takes `###` and requests a section break for the prose that follows. It
----   must NOT finalize: that would reset the very cross-turn state the break
----   needs, and the break is what stops a later fenced code block from becoming
----   the notice's child — a `###` section holding a fence matches
----   `queries/agentic/context.scm` and would pin the breadcrumb for the rest of
----   the turn.
+--- `mid_turn` decides only the turn boundary. Between turns the notice
+--- finalizes; mid-turn it must NOT, since finalizing resets cross-turn state
+--- the running turn still needs.
 ---
 --- @param notice agentic.ui.MessageWriter.Notice
 function MessageWriter:write_notice(notice)
-    local level = notice.mid_turn and "###" or "##"
     -- Never wrapped or truncated: an ATX heading has to stay on one row, and
     -- the title is the notice's whole record of the command — for `/trust` the
     -- part that would be cut is the scope path it exists to report. A title
     -- wider than the (nowrap) chat window runs past its edge and is reached by
     -- scrolling horizontally.
-    local lines = { level .. " " .. notice.title }
+    local lines = { "## " .. notice.title }
     vim.list_extend(lines, notice.body or {})
     table.insert(lines, "")
 
@@ -572,9 +570,10 @@ function MessageWriter:write_notice(notice)
         render_region_rail(bufnr, heading_row, heading_row + #lines - 2)
     end)
 
-    if notice.mid_turn then
-        self:_mark_section_break()
-    else
+    -- No section break to request: a `##` heading already closes whatever
+    -- section it interrupts, so prose resuming after the notice needs no
+    -- boundary line of its own.
+    if not notice.mid_turn then
         self:finalize_turn()
     end
 end
@@ -734,12 +733,13 @@ local function format_error_lines(err)
     return lines, nil
 end
 
-local HEADING = "### Error"
-local HEADING_PREFIX_LEN = #"### "
+local HEADING = "## Error"
+local HEADING_PREFIX_LEN = #"## "
 
 --- Write an error message to the chat buffer with red error highlighting.
---- Uses `### Error` heading (same pattern as tool call headers) so markdown
---- treesitter renders the `###` as heading punctuation.
+--- The `##` heading puts the error where it belongs in the section tree: a
+--- turn-level report from the provider, a sibling of the prompt it answers,
+--- not one of that turn's `###` tool calls.
 --- @param err agentic.acp.ACPError
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
@@ -768,7 +768,7 @@ function MessageWriter:write_error_message(err)
             start_row = 0
         end
 
-        -- Highlight "Error" portion of "### Error" (after "### ")
+        -- Highlight "Error" portion of "## Error" (after "## ")
         vim.api.nvim_buf_set_extmark(
             bufnr,
             NS_ERROR,
@@ -1081,12 +1081,12 @@ function MessageWriter:write_message_chunk(update)
         text = "\n\n" .. text
     end
 
-    -- Prose that resumes after an interrupting block must close that block's
-    -- section so treesitter-context stops pinning its heading (a tool call's
-    -- filename, a notice's title) while the user reads the summary. Emit an
-    -- empty `###` heading (no inline child, so context.scm never captures it)
-    -- ahead of the prose, plus the blank line for visual breathing room. Once
-    -- per prose run — the flag resets after the first chunk.
+    -- Prose that resumes after a tool call must close its section so
+    -- treesitter-context stops pinning the tool call's filename while the user
+    -- reads the summary. Emit an empty `###` heading (no inline child, so
+    -- context.scm never captures it) ahead of the prose, plus the blank line
+    -- for visual breathing room. Once per prose run — the flag resets after
+    -- the first chunk.
     if self._pending_section_break then
         text = "\n###\n\n" .. text
         self._pending_section_break = false

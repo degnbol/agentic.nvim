@@ -11,8 +11,9 @@ local Theme = require("agentic.theme")
 -- the text after the marker — and `@text.titleN` wins on the overlap. So dim
 -- the marker (→ AgenticHeading) while leaving the heading text neutral
 -- (→ Normal). The tool-call name is a markdown_inline code span (`@markup.raw`)
--- that wins over both and keeps its own colour. Levels 2 (## prompt) and 3
--- (### tool call) are the only heading levels the writer emits. Scoping this to
+-- that wins over both and keeps its own colour. Levels 2 and 3 are the writer's
+-- structural levels (see the `rendering` skill § "Heading levels"); the `#`
+-- session header is left at the colourscheme's heading-1 colour. Scoping this to
 -- the chat window (rather than nvim_set_hl globally) leaves real markdown
 -- buffers untouched.
 local CHAT_WINHIGHLIGHT = table.concat({

@@ -26,6 +26,31 @@ Two consequences worth carrying in your head:
   with or without a user re-enable. Highlight group names are in
   `lua/agentic/theme.lua` (`Theme.HL_GROUPS`).
 
+## Heading levels
+
+The chat buffer is one markdown document and its ATX level says *whose* row it
+is, never how deep in the turn the row was written:
+
+| Level | Rows | Written by |
+| --- | --- | --- |
+| `#` | Session header (`<timestamp> · <session-id>`) | `SessionManager._generate_welcome_header` |
+| `##` | User prompts, command notices, `## Error` | `write_user_prompt`, `write_notice`, `write_error_message` |
+| `###` | Tool call heads, and the empty `###` that closes one | `write_tool_call_block`, `write_message_chunk` |
+
+Level 2 is the turn's own participants — what the user asked, what the user did
+mid-turn (`/trust`, `/rename`, a model switch), what the provider reported back.
+Level 3 is one step inside such a turn: its tool calls. A row that is not a tool
+call never takes `###`, even when it lands in the middle of one turn's tool
+calls; the cost is a breadcrumb (see `write_notice`), not a level.
+
+Agent prose carries no heading of its own — it belongs to the `##` prompt
+section above it. Headings *inside* agent markdown are the agent's content at
+whatever level it chose, and are not part of this scheme; `[[`/`]]` navigation
+therefore reads `NS_USER_ACTIONS` extmarks rather than scanning for `## `.
+
+Only levels 2 and 3 are dimmed by the chat window's `winhighlight`
+(`widget_layout.lua`).
+
 ## Tool call block layout
 
 ```

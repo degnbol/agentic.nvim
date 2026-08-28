@@ -307,7 +307,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines = buffer_lines()
             local closer = fence_rows()[1]
-            local heading = vim.fn.index(lines, "### Error") + 1
+            local heading = vim.fn.index(lines, "## Error") + 1
             assert.is_true(heading > 0)
             assert.is_true(closer < heading)
         end)
@@ -765,7 +765,7 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
-        it("takes ### and no turn boundary mid-turn", function()
+        it("keeps ## and no turn boundary mid-turn", function()
             writer:write_message_chunk(make_message_update("streaming prose"))
 
             writer:write_notice({
@@ -774,11 +774,11 @@ describe("agentic.ui.MessageWriter", function()
                 mid_turn = true,
             })
 
-            assert.equal("### repo", buffer_lines()[2])
-            -- The next prose chunk resumes in its own section, so the notice
-            -- stops pinning the breadcrumb.
+            assert.equal("## repo", buffer_lines()[2])
+            -- The heading closed the section itself, so resumed prose gets no
+            -- `###` boundary line.
             writer:write_message_chunk(make_message_update("resumed prose"))
-            assert.is_true(vim.tbl_contains(buffer_lines(), "###"))
+            assert.is_false(vim.tbl_contains(buffer_lines(), "###"))
         end)
 
         it("closes the turn when written between turns", function()
@@ -2715,7 +2715,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-                assert.equal("### Error", lines[1])
+                assert.equal("## Error", lines[1])
                 assert.equal("", lines[2])
                 assert.equal("Authentication required", lines[3])
                 -- No embedded JSON, so error_type is nil
@@ -2760,7 +2760,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(#extmarks >= 1)
             local heading_ext = extmarks[1]
             assert.equal(0, heading_ext[2]) -- row 0
-            assert.equal(4, heading_ext[3]) -- col 4 (after "### ")
+            assert.equal(3, heading_ext[3]) -- col 3 (after "## ")
             assert.equal("AgenticErrorHeading", heading_ext[4].hl_group)
         end)
 
@@ -2818,7 +2818,7 @@ describe("agentic.ui.MessageWriter", function()
             local found_heading = false
             local found_body = false
             for _, line in ipairs(lines) do
-                if line == "### Error" then
+                if line == "## Error" then
                     found_heading = true
                 end
                 if line == "529 Overloaded." then
@@ -2851,7 +2851,7 @@ describe("agentic.ui.MessageWriter", function()
                 0,
                 -1,
                 false,
-                { "### Error", "", "401 Auth failed", "" }
+                { "## Error", "", "401 Auth failed", "" }
             )
 
             writer:write_error_action(
