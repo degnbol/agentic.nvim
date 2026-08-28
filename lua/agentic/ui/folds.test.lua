@@ -1,4 +1,6 @@
 local assert = require("tests.helpers.assert")
+local Glyphs = require("agentic.glyphs")
+local Renderer = require("agentic.ui.tool_call_renderer")
 
 describe("agentic.ui.folds", function()
     --- @type number
@@ -293,6 +295,70 @@ describe("agentic.ui.folds", function()
             -- direct call covers it.
             local chunks = require("agentic.ui.folds").foldtext()
             assert.equal("Comment", chunks[1][2])
+        end)
+
+        --- Fold rows `first` to `last` (1-indexed, inclusive) and return the
+        --- rendered foldtext.
+        --- @param first integer
+        --- @param last integer
+        --- @return string
+        local function foldtext_of(first, last)
+            vim.wo[winid].foldmethod = "manual"
+            vim.wo[winid].foldenable = true
+            vim.wo[winid].foldtext =
+                'v:lua.require("agentic.ui.folds").foldtext()'
+            return vim.api.nvim_win_call(winid, function()
+                vim.cmd(string.format("%d,%dfold", first, last))
+                return vim.fn.foldtextresult(first)
+            end)
+        end
+
+        it("adds a character count under a thinking glyph", function()
+            -- The glyph in the sign column is what says the fold is a thought
+            -- run; the count is read back out of the folded rows.
+            fill_lines(20)
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                4,
+                0,
+                { sign_text = Glyphs.THINKING_SIGN }
+            )
+
+            -- "line 5".."line 9" are 6 characters, "line 10".."line 11" are 7,
+            -- plus the 6 newlines rejoining them.
+            assert.equal(
+                "    ··· 7 lines · 50 chars ···",
+                foldtext_of(5, 11)
+            )
+        end)
+
+        it("counts characters, not bytes", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                "above",
+                "—·—·—",
+                "—·—·—",
+                "below",
+            })
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                1,
+                0,
+                { sign_text = Glyphs.THINKING_SIGN }
+            )
+
+            -- 10 dashes and middots plus the newline; by bytes it would be 31.
+            assert.equal(
+                "    ··· 2 lines · 11 chars ···",
+                foldtext_of(2, 3)
+            )
+        end)
+
+        it("leaves an unsigned fold's summary alone", function()
+            fill_lines(20)
+
+            assert.equal("    ··· 7 lines ···", foldtext_of(5, 11))
         end)
     end)
 end)

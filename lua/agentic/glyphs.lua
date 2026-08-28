@@ -28,6 +28,17 @@ Glyphs.KIND = {
 
 Glyphs.KIND_DEFAULT = "󰒓"
 
+--- Identity of a collapsed thought run (`MessageWriter:flush_thought_run`).
+--- The head family is otherwise spent on the model-switch notice (󱍐), so the
+--- brain keeps thinking distinguishable from switching which model does it.
+Glyphs.THINKING = "󰧑"
+
+--- `THINKING` as a sign. Named because it is written and read at opposite ends
+--- of a dispatch — the writer stamps it, `folds.lua` matches on it to decide
+--- whether a fold summary carries a character count — and a padding change on
+--- one side alone would silently drop the count.
+Glyphs.THINKING_SIGN = Glyphs.THINKING .. " "
+
 --- Per-command glyph for a client-side command notice
 --- (`MessageWriter:write_notice`). Every value is distinct from `KIND`: a gutter
 --- glyph reads as an identity, so a command confirmation must not look like a

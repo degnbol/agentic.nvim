@@ -1,4 +1,6 @@
---- Hard-wrap prose lines to a target width, preserving code blocks untouched.
+--- Fitting text to a display width: hard-wrapping prose (code blocks left
+--- untouched), truncating to a column budget, abbreviating a count, and the
+--- fence bookkeeping wrapping needs to know where prose stops.
 --- @class agentic.utils.TextWrap
 local M = {}
 
@@ -367,6 +369,21 @@ function M.truncate_to_width(s, width)
         out = vim.fn.strcharpart(out, 0, vim.fn.strchars(out) - 1)
     end
     return out .. "…"
+end
+
+--- Abbreviate a count for a display where the digits compete for width: a plain
+--- integer below a thousand, `k`-suffixed to one decimal above it.
+---
+--- The plain branch is not cosmetic — `%.1fk` renders every count under a
+--- thousand as some fraction of `0.9k`, which reads as "about none" for figures
+--- that are routinely in the hundreds.
+--- @param n number
+--- @return string
+function M.abbreviate_count(n)
+    if n < 1000 then
+        return string.format("%d", n)
+    end
+    return string.format("%.1fk", n / 1000)
 end
 
 --- Find a fenced code block that is opened but never closed, and return the

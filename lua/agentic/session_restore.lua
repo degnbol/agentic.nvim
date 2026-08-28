@@ -357,6 +357,10 @@ function SessionRestore.replay_messages(writer, messages)
             writer:write_tool_call_block(tool_block)
         end
     end
+    -- Neither caller finalizes the turn, so a history ending on a thought would
+    -- leave the run buffered until the next turn's first write and render the
+    -- restored session's thinking under the new prompt.
+    writer:flush_thought_run()
 end
 
 --- Resolve a session reference to a cached session. Tries session_id prefix

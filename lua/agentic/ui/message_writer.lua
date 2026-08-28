@@ -1,6 +1,7 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local Renderer = require("agentic.ui.tool_call_renderer")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -133,8 +134,9 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
---- @field _last_message_type? string
---- @field _should_auto_scroll? boolean The frozen scroll verdict captured before a write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so a verdict deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold.
+--- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history` on the main branch, but not for a subagent.
+--- @field _fold_retry_armed? boolean True while an InsertLeave autocmd is waiting to retry deferred fold ops (see `flush_pending_fold_ops`). Guards against arming a second one per pending batch.
+--- @field _should_auto_scroll? boolean The frozen scroll verdict captured before a write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so a verdict deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold. The insert-mode hold is the one deferral the callback does not wait on — see the skip condition, which reads `_fold_retry_armed`.
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
@@ -188,7 +190,8 @@ function MessageWriter:new(bufnr, status_indicator)
     local instance = setmetatable({
         bufnr = bufnr,
         tool_call_blocks = {},
-        _last_message_type = nil,
+        _thought_run = nil,
+        _fold_retry_armed = false,
         _should_auto_scroll = nil,
         _scroll_callback_queued = false,
         _chunk_start_line = nil,
@@ -306,9 +309,9 @@ function MessageWriter:reset_turn_state()
     self._suppressing_rejection = false
     self._rejection_buffer = ""
     self._pending_section_break = false
-    self._last_message_type = nil
     self._chunk_start_line = nil
     self._prose_run_start_line = nil
+    self._thought_run = nil
     self._numbering_active = false
     self:_release_prose_pin()
 end
@@ -381,6 +384,10 @@ function MessageWriter:write_message(update)
     if not text or text == "" then
         return
     end
+
+    -- Thinking that preceded this message has to land above it. Replay reaches
+    -- here for every stored agent message, and stores thoughts separately.
+    self:flush_thought_run()
 
     local lines = vim.split(text, "\n", { plain = true })
     close_fence(lines)
@@ -542,6 +549,105 @@ local function render_prose_region(bufnr, run_start)
     })
 end
 
+--- Stamp a thought run's region signs: the thinking glyph on its first body
+--- row, the `│`/`╰─` rail beneath. The glyph row is also the row a closed fold
+--- shows, so the gutter says "thinking" whether the run is collapsed or open.
+--- @param bufnr integer
+--- @param first_row integer 0-indexed first body row of the run
+--- @param last_row integer 0-indexed last body row of the run, inclusive
+local function render_thought_region(bufnr, first_row, last_row)
+    local end_row = last_drawn_row(bufnr, first_row, last_row)
+    ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
+        header_line = first_row,
+        header_sign = Glyphs.THINKING_SIGN,
+        header_hl_group = Theme.HL_GROUPS.GLYPH_AGENT,
+        body_start = first_row + 1,
+        body_end = end_row - 1,
+        footer_line = end_row > first_row and end_row or nil,
+        hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
+    })
+end
+
+--- Render the thinking streamed since the last flush as one collapsed region:
+--- the run's text inside a `markdown-fold` fence closed at render, the thinking
+--- glyph on its first body row, and the whole body dimmed. The fence delimiters
+--- conceal to zero height, so the run occupies the single screen row its
+--- foldtext summarises (`agentic.ui.folds`).
+---
+--- A run too short to fold — vim cannot close a one-line fold — renders as that
+--- line under the glyph, with no fence: a visible ``` around one line of
+--- thinking is worse than the line itself.
+---
+--- Thinking is buffered rather than streamed because the fence has to reach the
+--- buffer in a single write. Held open across chunks, `_reflow_chunks` would
+--- rewrite the rows it spans, and a `set_lines` over a row drops the signs on
+--- it. Nothing shows meanwhile except the status indicator, which already says
+--- "thinking".
+---
+--- Public because `SessionRestore.replay_messages` ends on this too — a stored
+--- history whose last entry is a thought would otherwise stay buffered until
+--- the next turn's first write and render under the new prompt.
+function MessageWriter:flush_thought_run()
+    local text = self._thought_run
+    self._thought_run = nil
+    if not text or vim.trim(text) == "" then
+        return
+    end
+
+    local wrapped = TextWrap.wrap_prose(
+        vim.split(vim.trim(text), "\n", { plain = true }),
+        self:_get_wrap_width()
+    )
+    local use_fold = #wrapped > 1
+    local lines = {}
+    -- Thinking after a tool call closes that call's section, for the reason
+    -- `write_message_chunk` documents: the fence below would otherwise keep the
+    -- breadcrumb on the tool call for as long as the run is on screen.
+    if self._pending_section_break then
+        vim.list_extend(lines, { "###", "" })
+        self._pending_section_break = false
+    end
+    if use_fold then
+        local fence = Renderer.safe_fence(wrapped)
+        lines[#lines + 1] = fence .. "markdown-fold"
+        vim.list_extend(lines, wrapped)
+        lines[#lines + 1] = fence
+    else
+        vim.list_extend(lines, wrapped)
+    end
+    lines[#lines + 1] = ""
+
+    -- A thought run ends the prose run it follows, so the viewport stops
+    -- being anchored to prose the reader has already passed.
+    self:_release_prose_pin()
+    self:_auto_scroll(self.bufnr)
+
+    self:_with_modifiable_suppressed(function(bufnr)
+        -- Flush pending prose reflow first, for the reason write_user_prompt
+        -- documents: the fence would otherwise land inside one the streamed
+        -- prose left open, and a later reflow's set_lines would span these rows
+        -- and drag their signs.
+        self:_reflow_chunks(bufnr, true)
+
+        self:_append_lines(lines)
+
+        -- Computed AFTER the append: on an empty buffer _append_lines replaces
+        -- row 0 rather than appending, so a pre-capture would be off by one.
+        -- The -1 accounts for the trailing blank, which belongs to no region.
+        local body_end = vim.api.nvim_buf_line_count(bufnr) - 2
+        if use_fold then
+            body_end = body_end - 1 -- the closing fence delimiter
+        end
+        local body_start = body_end - #wrapped + 1
+
+        render_thought_region(bufnr, body_start, body_end)
+        Renderer.set_dim_range(bufnr, body_start, body_end)
+        if use_fold then
+            self:_close_fold(body_start)
+        end
+    end)
+end
+
 --- Write a user prompt to the chat buffer as a bracketed region: the heading
 --- row takes a `❯` identity mark (which also drives `[[`/`]]` navigation), and a
 --- multi-line prompt grows a `│`/`╰─` rail beneath it. Standalone rather than
@@ -551,6 +657,8 @@ end
 --- @param extra_lines string[]|nil Display-only lines appended after the prompt
 ---        body (selected code / referenced files / diagnostics)
 function MessageWriter:write_user_prompt(text, extra_lines)
+    self:flush_thought_run()
+
     local lines = prompt_heading_lines(text)
     vim.list_extend(lines, extra_lines or {})
 
@@ -624,6 +732,8 @@ end
 ---
 --- @param notice agentic.ui.MessageWriter.Notice
 function MessageWriter:write_notice(notice)
+    self:flush_thought_run()
+
     -- Never wrapped or truncated: an ATX heading has to stay on one row, and
     -- the title is the notice's whole record of the command — for `/trust` the
     -- part that would be cut is the scope path it exists to report. A title
@@ -841,6 +951,8 @@ local HEADING_PREFIX_LEN = #"## "
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 function MessageWriter:write_error_message(err)
+    self:flush_thought_run()
+
     local body_lines, error_type, reset_epoch = format_error_lines(err)
     local all_lines = { HEADING, "" }
     vim.list_extend(all_lines, body_lines)
@@ -919,14 +1031,13 @@ end
 --- an unknown future point. Railing all prose would occupy the sign column
 --- nearly everywhere anyway, at which point the rail marks nothing out.
 function MessageWriter:finalize_turn()
-    -- Both reads have to happen before the flush below, which drops the run
-    -- start, and before the resets, which drop the message type.
+    -- A turn ending mid-thought (a cancel, most often) still owes the reader
+    -- the thinking it did. The flush ends the prose run before it, so a turn
+    -- of prose → thinking closes with nothing left to bracket.
+    self:flush_thought_run()
+
+    -- Read before the flush below, which drops the run start.
     local run_start = self._prose_run_start_line
-    -- Thinking still streams through the prose path, so a turn that stops
-    -- mid-thought ends on a run that is not a summary of anything. A turn that
-    -- thinks and then answers is the other half of the same problem, handled
-    -- where the run start is re-anchored (see `write_message_chunk`).
-    local closed_with_prose = self._last_message_type == "agent_message_chunk"
 
     -- Reset ALL per-turn state at the turn boundary. Any flag that was set
     -- during the turn must be cleared here, otherwise it silently corrupts
@@ -934,13 +1045,12 @@ function MessageWriter:finalize_turn()
     self._suppressing_rejection = false
     self._rejection_buffer = ""
     self._pending_section_break = false
-    self._last_message_type = nil
     self._numbering_active = false
     self:_release_prose_pin()
 
     self:_with_modifiable_suppressed(function(bufnr)
         self:_reflow_chunks(bufnr, true)
-        if run_start and closed_with_prose then
+        if run_start then
             -- Before the trailing blank: that row carries the turn-usage footer
             -- and belongs to no region.
             render_prose_region(bufnr, run_start)
@@ -959,6 +1069,10 @@ function MessageWriter:emit_divider()
     if not vim.api.nvim_buf_is_valid(self.bufnr) then
         return
     end
+    -- Before the no-op check, and before the separator: a run still buffered
+    -- when this subagent's Task closes would otherwise surface under the next
+    -- one. Subagent thinking is not persisted, so a dropped run is gone.
+    self:flush_thought_run()
     if vim.api.nvim_buf_line_count(self.bufnr) == self._last_divider_line then
         return
     end
@@ -1051,8 +1165,11 @@ function MessageWriter:set_turn_usage(usage)
         return
     end
 
-    local text =
-        string.format("%.1fk in · %.1fk out", input / 1000, output / 1000)
+    local text = string.format(
+        "%s in · %s out",
+        TextWrap.abbreviate_count(input),
+        TextWrap.abbreviate_count(output)
+    )
     local last_row = vim.api.nvim_buf_line_count(self.bufnr) - 1
     vim.api.nvim_buf_set_extmark(self.bufnr, NS_TURN_USAGE, last_row, 0, {
         virt_text = { { text, Theme.HL_GROUPS.TURN_USAGE } },
@@ -1154,9 +1271,9 @@ end
 --- Some ACP providers stream chunks instead of full messages
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message_chunk(update)
-    -- Thought chunks flow through as prose. _on_session_update routes them to
-    -- the writer for the agent that produced them (main → chat, subagent →
-    -- subagents window), so each window shows its own agent's thinking.
+    -- _on_session_update routes chunks to the writer for the agent that
+    -- produced them (main → chat, subagent → subagents window), so each window
+    -- shows its own agent's prose and thinking.
     local text = update.content
         and update.content.type == "text"
         and update.content.text --[[@as string]]
@@ -1164,6 +1281,14 @@ function MessageWriter:write_message_chunk(update)
     if not text or text == "" then
         return
     end
+
+    -- Thinking accumulates out of the buffer until the run ends; the answer
+    -- that follows is what ends it, and has to be written after it.
+    if update.sessionUpdate == "agent_thought_chunk" then
+        self._thought_run = (self._thought_run or "") .. text
+        return
+    end
+    self:flush_thought_run()
 
     -- After a permission rejection, the provider streams boilerplate
     -- instructions meant for the model ("The user doesn't want to proceed…").
@@ -1195,14 +1320,6 @@ function MessageWriter:write_message_chunk(update)
         self._rejection_buffer = ""
     end
 
-    local answers_a_thought = self._last_message_type == "agent_thought_chunk"
-        and update.sessionUpdate == "agent_message_chunk"
-    if answers_a_thought then
-        -- Different message type, add newline before appending, to create visual separation
-        -- only for thought -> message
-        text = "\n\n" .. text
-    end
-
     -- Prose that resumes after a tool call must close its section so
     -- treesitter-context stops pinning the tool call's filename while the user
     -- reads the summary. Emit an empty `###` heading (no inline child, so
@@ -1213,8 +1330,6 @@ function MessageWriter:write_message_chunk(update)
         text = "\n###\n\n" .. text
         self._pending_section_break = false
     end
-
-    self._last_message_type = update.sessionUpdate
 
     self:_auto_scroll(self.bufnr)
 
@@ -1233,14 +1348,6 @@ function MessageWriter:write_message_chunk(update)
             -- If the line is empty, the new content starts here
             self._chunk_start_line = current == "" and last_line or last_line
             self._prose_run_start_line = self._chunk_start_line
-        elseif answers_a_thought then
-            -- The answer restarts the run for bracketing purposes. Thinking
-            -- reaches the buffer through this same path and does not break the
-            -- reflow region, so without this the closing summary would open on
-            -- the first thought row and bracket the whole turn. `+ 1` clears the
-            -- row the last thought ends on; the blank after it is skipped when
-            -- the region is rendered.
-            self._prose_run_start_line = last_line + 1
         end
 
         local current_line = vim.api.nvim_buf_get_lines(
@@ -1442,7 +1549,8 @@ end
 --- fold-level recompute, so it measures the already-*closed* fold. Scrolling
 --- here would race the recompute and park the viewport at the unfolded bottom
 --- (the fold-vs-auto-scroll timing bug). The callback skips when fold ops are
---- pending, leaving the verdict for flush to consume.
+--- pending, leaving the verdict for flush to consume — unless they are held for
+--- insert mode, a wait no write can afford to sit out.
 --- @param bufnr integer Buffer number to scroll
 function MessageWriter:_auto_scroll(bufnr)
     if self._should_auto_scroll ~= true then
@@ -1458,7 +1566,10 @@ function MessageWriter:_auto_scroll(bufnr)
         self._scroll_callback_queued = false
 
         -- Fold-close owns the scroll on this tick — leave the verdict for it.
-        if #self._pending_fold_ops > 0 then
+        -- Except while the ops are held for insert mode: that hold lasts as
+        -- long as the user keeps typing, and deferring to a flush that will not
+        -- run until then freezes the viewport for every write in between.
+        if #self._pending_fold_ops > 0 and not self._fold_retry_armed then
             return
         end
 
@@ -1530,10 +1641,38 @@ function MessageWriter:_open_fold(anchor_row)
     self:_queue_fold(anchor_row, true)
 end
 
+--- Hold the pending fold ops until the user leaves insert mode, then retry.
+---
+--- Vim suppresses foldUpdate in insert mode, so a `:foldclose` issued while the
+--- user types in the prompt buffer finds no fold and raises E490 — and since
+--- the flush drops each op after trying it, the body would stay expanded for
+--- good. That is the dominant case for a thought run, which finishes precisely
+--- while the user is typing the next prompt. The autocmd is not buffer-scoped:
+--- the insert session it waits on is in another buffer.
+--- @private
+function MessageWriter:_retry_folds_on_insert_leave()
+    if self._fold_retry_armed then
+        return
+    end
+    self._fold_retry_armed = true
+    vim.api.nvim_create_autocmd("InsertLeave", {
+        once = true,
+        callback = function()
+            self._fold_retry_armed = false
+            -- Scheduled so the fold levels vim recomputes on leaving insert
+            -- are in place before :foldclose looks for one.
+            vim.schedule(function()
+                self:flush_pending_fold_ops()
+            end)
+        end,
+    })
+end
+
 --- Apply every pending fold op (see _queue_fold). Resolves each anchor
 --- extmark's current row so edits since the render are accounted for. No-op
---- when nothing is pending. When no chat window exists yet the anchors stay
---- pending so the BufWinEnter autocmd retries once the window reappears.
+--- when nothing is pending. When no chat window exists yet, or the user is in
+--- insert mode, the anchors stay pending and a retry is armed (BufWinEnter and
+--- InsertLeave respectively).
 --- Ops are wrapped in `_suppress_pin_release` so the viewport shift from
 --- collapsing/expanding a fold is not mistaken for a user scroll.
 --- Public so the BufWinEnter autocmd closure can reach it without tripping
@@ -1550,6 +1689,19 @@ function MessageWriter:flush_pending_fold_ops()
     if not win then
         return
     end
+    if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then
+        self:_retry_folds_on_insert_leave()
+        -- Discharge the deferred scroll before returning. `_auto_scroll`'s
+        -- callback skips for as long as ops are pending, on the assumption that
+        -- flush follows within the tick; holding for a whole insert session
+        -- would instead freeze the viewport for every write until the user
+        -- leaves insert. Scroll against the still-open fold and keep the
+        -- verdict, so the InsertLeave retry re-measures the collapsed height.
+        if self._should_auto_scroll and not self._auto_scroll_paused then
+            self:_scroll_now(self.bufnr)
+        end
+        return
+    end
 
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
@@ -1562,11 +1714,8 @@ function MessageWriter:flush_pending_fold_ops()
         )
         if pos[1] then
             -- A missing fold (E490) is non-fatal — the body just stays
-            -- visible — so it is swallowed deliberately. The live cause is
-            -- insert mode: vim suppresses foldUpdate there, so a block
-            -- finishing while the user types in the prompt buffer finds no
-            -- fold to close. Core retries such ops on InsertLeave
-            -- (`_fold.lua`); this flush does not, so the body stays expanded.
+            -- visible — so it is swallowed deliberately. Insert mode, the
+            -- cause that used to reach here, is now held above instead.
             pcall(vim.api.nvim_win_call, win, function()
                 vim.cmd(
                     string.format(
@@ -1597,6 +1746,9 @@ end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:write_tool_call_block(tool_call_block)
+    -- Thinking interrupted by a tool call belongs above it.
+    self:flush_thought_run()
+
     -- A new tool call means any rejection boilerplate is over
     if self._suppressing_rejection then
         self._suppressing_rejection = false

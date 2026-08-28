@@ -10,5 +10,6 @@ One shared ACP provider subprocess, one ACP session ID per tabpage, full UI isol
 - No module-level shared state for per-tabpage runtime data
 - Namespaces are global, extmarks are buffer-scoped — module-level `nvim_create_namespace` is fine
 - Highlight groups defined once globally in `lua/agentic/theme.lua`
-- Keymaps and autocommands must be buffer-local
+- Keymaps and autocommands must be buffer-local, except where the trigger fires
+  in another buffer (`MessageWriter:_retry_folds_on_insert_leave`)
 - See scoped storage: `vim.b`/`vim.bo`, `vim.w`/`vim.wo`, `vim.t`

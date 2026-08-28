@@ -113,9 +113,14 @@ end
 
 --- Return a backtick fence string long enough to avoid clashing with any
 --- literal backtick runs inside `body_lines`.
+---
+--- Exported because every fenced body in the chat buffer needs it, not just the
+--- ones this module builds: a body fence of exactly three backticks around
+--- model-written content closes on the model's own code block, and everything
+--- after it is swallowed by the runaway fence.
 --- @param body_lines string[]
 --- @return string fence e.g. "```" or "````"
-local function safe_fence(body_lines)
+function M.safe_fence(body_lines)
     local fence = "```"
     for _, line in ipairs(body_lines) do
         for ticks in line:gmatch("(`+)") do
@@ -476,7 +481,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     if kind == "execute" then
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
-        local fence = safe_fence(cmd_lines)
+        local fence = M.safe_fence(cmd_lines)
         -- Head shows the model's description; when absent it stays bare rather
         -- than repeating the command (which renders in the fence below).
         local description = tool_call_block.description
@@ -491,7 +496,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         table.insert(lines, fence)
     elseif kind == "search" then
         local cmd_lines = vim.split(argument, "\n", { plain = true })
-        local fence = safe_fence(cmd_lines)
+        local fence = M.safe_fence(cmd_lines)
         lines = {
             collapsed_header(cmd_lines[1], wrap_width, true),
             fence .. shell_fence_lang(argument, "bash"),
@@ -550,7 +555,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- read, search, fetch) use this reason-only path.
         and not tool_call_block.diff
     then
-        local fence = safe_fence(failure_reason)
+        local fence = M.safe_fence(failure_reason)
         -- 0 means "never fold" (matches the success path).
         local exec_max_lines = kind == "execute"
                 and Config.tool_call_display.execute_max_lines
@@ -614,7 +619,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             -- is applied by the generic path in _apply_block_highlights which
             -- already skips ``` lines.
             local use_fold = max_lines > 0 and count > max_lines
-            local fence = safe_fence(body)
+            local fence = M.safe_fence(body)
             table.insert(
                 lines,
                 fence .. (use_fold and "console-fold" or "console")
@@ -705,7 +710,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             vim.list_extend(fence_content, block.old_lines)
             vim.list_extend(fence_content, block.new_lines)
         end
-        local fence = safe_fence(fence_content)
+        local fence = M.safe_fence(fence_content)
         -- The `-difffold` marker makes the whole diff body foldable as ONE
         -- block (folds.scm matches `fold$`) while suppressing language
         -- injection (injections.scm excludes `difffold$`): block_col_hl
@@ -902,7 +907,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             and failure_reason
             and #failure_reason > 0
         then
-            local reason_fence = safe_fence(failure_reason)
+            local reason_fence = M.safe_fence(failure_reason)
             table.insert(lines, reason_fence .. "console")
             for _, reason_line in ipairs(failure_reason) do
                 table.insert(lines, reason_line)
@@ -919,7 +924,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             -- (visually de-emphasise as sidecar content).
             local wrapped =
                 TextWrap.wrap_prose(tool_call_block.body, wrap_width)
-            local fence = safe_fence(wrapped)
+            local fence = M.safe_fence(wrapped)
             local use_fold = #wrapped > 1
             table.insert(
                 lines,
@@ -970,7 +975,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local count = #display_body
             local use_fold = max_lines > 0 and count > max_lines
 
-            local fence = safe_fence(display_body)
+            local fence = M.safe_fence(display_body)
             table.insert(
                 lines,
                 fence .. lang .. (use_fold and "-fold" or "")

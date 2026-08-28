@@ -259,11 +259,12 @@ when the preceding tool call is what triggered it, so it is its own region rathe
 than part of the tool call's output. `SessionStart`, `UserPromptSubmit` and `Stop`
 records are not special-cased.
 
-**Follow unit 5's shape** (`feature-thinking-summary-line.md` § "That row **is**
-the closed fold"): the body goes in a `markdown-fold` fence closed at render, the
+**Follow unit 5's shape**, which shipped — `MessageWriter:flush_thought_run` is
+the reference: the body goes in a `markdown-fold` fence closed at render, the
 glyph is a `sign_text` extmark on the fence's visible row, and the summary lives
-in the foldtext. Not `write_notice` — that method builds a heading, and a heading
-is what this shape exists to avoid:
+in the foldtext (`folds.lua` dispatches on that glyph via `sign_at`). Not
+`write_notice` — that method builds a heading, and a heading is what this shape
+exists to avoid:
 
 `queries/agentic/context.scm` captures `(section (atx_heading (inline))
 (fenced_code_block))`, so a *titled* heading over a fenced body pins the
@@ -271,7 +272,7 @@ treesitter-context breadcrumb for as long as the cursor stays in the section.
 Hook bodies are fenced, so headings would pin — and inconsistently, since an empty
 ATX heading has no `inline` child and is never captured, meaning the ~86 untitled
 records would behave differently from the titled ones. No heading, no divergence.
-This is the same reasoning unit 5 gives for having none.
+This is the same reasoning that left thought runs headingless.
 
 Glyph constraints come from `PLAN-gutter-identity.md` § "Glyph vocabulary", not
 from this plan: `nf-md-*`, never emoji, `sign_text` must be `glyph .. " "`, must
@@ -374,7 +375,7 @@ transcript when a path *was* supplied surfaces once via `Logger.notify`;
 | byte-exact tail read | `read_appended(abs_path, offset)` in `lua/agentic/utils/file_system.lua` | → `lines, new_offset`; `new_offset` just past the last complete line |
 | record decoder | new `lua/agentic/acp/adapters/claude_hook_records.lua` | pure line → `{group, hook_name, command, content, …}`; no IO, no state |
 | drain + offset + marker | new `lua/agentic/hook_record_reader.lua`, one per session, instantiated in `SessionManager:new` alongside `ChatHistory`/`PermissionManager` | `drain()`; unit-testable without a SessionManager |
-| block rendering | a `markdown-fold` fence + `sign_text` glyph + per-kind foldtext, per unit 5 | no heading, no new writer method |
+| block rendering | a `markdown-fold` fence + `sign_text` glyph + per-glyph foldtext, as shipped for thought runs | no heading, no new writer method |
 
 `claude_utils.lua` is "constants and helpers for the Claude ACP adapter" — jsonl
 record decoding is a different contract, so a sibling file rather than an addition.
@@ -408,14 +409,14 @@ next reader does not file the absence as a bug.
 
 Phase 1 has **no dependency on the gutter-identity programme** — it is file IO and
 decoding with no rendering, so it can proceed in parallel with that programme's
-unit 1. Phase 2 onward consumes unit 5's fold-row shape and its per-kind foldtext
-dispatch, so it waits on **unit 5**; it is independent of units 1–4. The separate
+unit 1. Phase 2 onward consumes the fold-row shape and foldtext dispatch unit 5
+shipped, so it is unblocked; it is independent of units 1–4. The separate
 `informational` conversion below is the one part that needs unit 1.
 
 1. `read_appended` + the reader object (path, marker, offset, `drain()`) + the
    decoder. No rendering. Testable in isolation.
 2. Injected context as fold rows on triggers 1 and 2 — the bulk of the value
-   (~358 records). Needs unit 5.
+   (~358 records).
 3. Failures and unrecognised output.
 4. Optional: trigger 3 (adapter change, drain-only) for prompt placement of the
    ~28 PostToolUse records.
@@ -445,8 +446,8 @@ which script ran:
 󰛢 ··· 12 lines ···                     ← no name available
 ```
 
-This extends `folds.lua`'s `M.foldtext` (`··· %d lines ···`) per fold kind, which
-unit 5 is already doing for thought folds — one dispatch, two consumers.
+This extends `folds.lua`'s `M.foldtext`, which already branches on the row's
+identity sign (`sign_at`) for thought folds — one dispatch, two consumers.
 
 `hookName` is not a fallback. It is lossy enough to give adjacent rows identical
 summaries over different bodies: `PreToolUse:Bash` covers five scripts

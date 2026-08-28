@@ -1,3 +1,6 @@
+local Glyphs = require("agentic.glyphs")
+local TextWrap = require("agentic.utils.text_wrap")
+
 --- Fold levels and fold text for the chat buffer.
 ---
 --- The chat window folds with this module's `foldexpr`, not
@@ -115,14 +118,60 @@ function M.foldexpr()
     return cached.levels[vim.v.lnum] or "0"
 end
 
+--- The sign stamped on `row`, or nil when the row carries none.
+---
+--- Read across every namespace: a fold's summary is keyed on what the region
+--- *is*, which the chat buffer states in the sign column and nowhere else, and
+--- the writers that place those signs are not otherwise this module's business.
+--- `type = "sign"` is not just the cheaper query (10× over an unfiltered one on
+--- a row of ANSI highlights, and this runs per closed fold per redraw) — it is
+--- also what makes the row unambiguous, a dim range starting at the same
+--- `(row, 0)` being otherwise indistinguishable by anything but creation order.
+--- @param bufnr integer
+--- @param row integer 0-indexed buffer row
+--- @return string|nil sign_text
+local function sign_at(bufnr, row)
+    local marks = vim.api.nvim_buf_get_extmarks(
+        bufnr,
+        -1,
+        { row, 0 },
+        { row, -1 },
+        { details = true, type = "sign" }
+    )
+    for _, mark in ipairs(marks) do
+        if mark[4].sign_text then
+            return mark[4].sign_text
+        end
+    end
+    return nil
+end
+
 --- 'foldtext' for the chat buffer: a line-count summary styled as Comment. The
 --- fold spans the `code_fence_content` node (body only, delimiters excluded),
 --- so foldend - foldstart + 1 is the body's line count.
+---
+--- A thought run adds the character count, because lines are a weak proxy for
+--- how much thinking happened and no provider reports thinking tokens. Both
+--- figures are read back out of the folded rows rather than recorded at write
+--- time, so they describe what `zo` will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
-    local line_count = vim.v.foldend - vim.v.foldstart + 1
-    local text = string.format("    ··· %d lines ···", line_count)
-    return { { text, "Comment" } }
+    local bufnr = vim.api.nvim_get_current_buf()
+    local first, last = vim.v.foldstart, vim.v.foldend
+    local summary = string.format("%d lines", last - first + 1)
+
+    if sign_at(bufnr, first - 1) == Glyphs.THINKING_SIGN then
+        local body = vim.api.nvim_buf_get_lines(bufnr, first - 1, last, false)
+        -- strchars, not `#`: thought text is full of dashes, middots and
+        -- box-drawing, whose byte counts overstate it by a third.
+        local chars = vim.fn.strchars(table.concat(body, "\n"))
+        summary = summary
+            .. " · "
+            .. TextWrap.abbreviate_count(chars)
+            .. " chars"
+    end
+
+    return { { "    ··· " .. summary .. " ···", "Comment" } }
 end
 
 return M

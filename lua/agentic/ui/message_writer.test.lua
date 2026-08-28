@@ -89,6 +89,15 @@ describe("agentic.ui.MessageWriter", function()
         }
     end
 
+    --- @param text string
+    --- @return agentic.acp.SessionUpdateMessage
+    local function make_thought_update(text)
+        return {
+            sessionUpdate = "agent_thought_chunk",
+            content = { type = "text", text = text },
+        }
+    end
+
     --- @param id string
     --- @param status agentic.acp.ToolCallStatus
     --- @param body? string[]
@@ -113,9 +122,13 @@ describe("agentic.ui.MessageWriter", function()
             -1,
             { details = true }
         )
-        return vim.tbl_map(function(mark)
-            return { mark[2], mark[4].sign_text }
-        end, marks)
+        local out = {}
+        for _, mark in ipairs(marks) do
+            if mark[4].sign_text then
+                table.insert(out, { mark[2], mark[4].sign_text })
+            end
+        end
+        return out
     end
 
     --- 1-indexed row whose decoration sign is `glyph`, i.e. the opening row of
@@ -792,6 +805,189 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("thought runs", function()
+        local G_THINK = Glyphs.THINKING_SIGN
+
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- 0-indexed rows the dim extmarks cover, `{ start, end }` each.
+        local function dim_ranges()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local out = {}
+            for _, mark in ipairs(marks) do
+                if mark[4].hl_group == "AgenticDimmedBlock" then
+                    table.insert(out, { mark[2], mark[4].end_row })
+                end
+            end
+            return out
+        end
+
+        it("writes nothing until the run ends", function()
+            writer:write_message_chunk(make_thought_update("half a thought"))
+
+            assert.same({ "" }, buffer_lines())
+            assert.same({}, rail())
+        end)
+
+        it("renders the run as a folded, glyph-signed block", function()
+            writer:write_message_chunk(
+                make_thought_update("first thought\nsecond thought")
+            )
+            writer:write_message_chunk(make_message_update("the answer"))
+
+            assert.same({
+                "```markdown-fold",
+                "first thought",
+                "second thought",
+                "```",
+                "the answer",
+            }, buffer_lines())
+            -- The glyph opens on the first body row — the row a closed fold
+            -- shows — and the rail closes above the concealed fence.
+            assert.same({ { 1, G_THINK }, { 2, "╰─" } }, rail())
+            assert.same({ { 1, 3 } }, dim_ranges())
+            assert_one_sign_per_row()
+        end)
+
+        it("widens the fence past backticks in the thinking", function()
+            writer:write_message_chunk(
+                make_thought_update("try:\n```lua\nx = 1\n```\nno")
+            )
+            writer:finalize_turn()
+
+            assert.equal("````markdown-fold", buffer_lines()[1])
+        end)
+
+        it("leaves a one-line run unfenced under the glyph", function()
+            -- Vim cannot close a one-line fold, and a visible ``` around a
+            -- single line is worse than the line.
+            writer:write_message_chunk(make_thought_update("brief"))
+            writer:finalize_turn()
+
+            assert.equal("brief", buffer_lines()[1])
+            assert.same({ { 0, G_THINK } }, rail())
+        end)
+
+        it("keeps two runs separated by a tool call apart", function()
+            writer:write_message_chunk(make_thought_update("one\ntwo"))
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(make_thought_update("three\nfour"))
+            writer:finalize_turn()
+
+            local markers = {}
+            for _, mark in ipairs(rail()) do
+                if mark[2] == G_THINK then
+                    table.insert(markers, mark[1])
+                end
+            end
+            assert.equal(2, #markers)
+            assert.equal("one", buffer_lines()[markers[1] + 1])
+            assert.equal("three", buffer_lines()[markers[2] + 1])
+        end)
+
+        it("places the run above a whole stored message", function()
+            -- Replay writes stored agent prose through write_message, and
+            -- stores thoughts as separate entries.
+            writer:write_message_chunk(make_thought_update("stored\nthinking"))
+            writer:write_message(make_message_update("stored answer"))
+
+            local lines = buffer_lines()
+            assert.equal("stored", lines[2])
+            assert.equal("stored answer", lines[6])
+        end)
+
+        it("writes nothing for a whitespace-only run", function()
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            local before = #buffer_lines()
+
+            writer:write_message_chunk(make_thought_update("  \n\n "))
+
+            assert.equal(before, #buffer_lines())
+            -- The boundary belongs to whatever writes next; an empty run must
+            -- not consume it.
+            assert.is_true(writer._pending_section_break)
+        end)
+
+        it("places the run above the prompt that interrupts it", function()
+            writer:write_message_chunk(make_thought_update("mid\nthought"))
+            writer:write_user_prompt("actually, stop")
+
+            local lines = buffer_lines()
+            assert.equal("mid", lines[2])
+            assert.equal("## actually, stop", lines[6])
+        end)
+
+        it("places the run above an error that ends the turn", function()
+            writer:write_message_chunk(make_thought_update("mid\nthought"))
+            writer:write_error_message({ code = 1, message = "boom" })
+
+            local lines = buffer_lines()
+            assert.equal("mid", lines[2])
+            assert.equal("## Error", lines[6])
+        end)
+
+        it("flushes at a subagent divider", function()
+            writer:write_message_chunk(make_thought_update("task a\nthinking"))
+            writer:emit_divider()
+
+            local lines = buffer_lines()
+            assert.equal("task a", lines[2])
+            assert.is_true(vim.tbl_contains(lines, "---"))
+        end)
+
+        it("flushes before a mid-turn notice", function()
+            writer:write_message_chunk(make_thought_update("mid\nthought"))
+            writer:write_notice({
+                glyph = Glyphs.NOTICE.TRUST,
+                title = "repo",
+                mid_turn = true,
+            })
+
+            local lines = buffer_lines()
+            assert.equal("mid", lines[2])
+            assert.equal("## repo", lines[6])
+        end)
+
+        it("closes the interrupted tool call's section", function()
+            -- A fence inside the tool call's `###` section would keep the
+            -- breadcrumb on the tool call for as long as the run is on screen.
+            -- The description keeps the tool head off `###`, so a bare one is
+            -- unambiguously the boundary.
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+            writer:write_message_chunk(make_thought_update("now\nwhat"))
+            writer:write_message_chunk(make_message_update("and the answer"))
+            writer:finalize_turn()
+
+            local lines = buffer_lines()
+            local fence_row, boundaries = nil, 0
+            for i, line in ipairs(lines) do
+                if line == "```markdown-fold" then
+                    fence_row = i
+                elseif line == "###" then
+                    boundaries = boundaries + 1
+                end
+            end
+            assert.equal("###", lines[fence_row - 2])
+            -- Exactly one: the run consumed the pending break, so the prose
+            -- after it must not emit a second.
+            assert.equal(1, boundaries)
+        end)
+    end)
+
     describe("closing summary region", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -900,26 +1096,20 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it("gives a turn that ends on a thought no region", function()
-            writer:write_message_chunk({
-                sessionUpdate = "agent_thought_chunk",
-                content = { type = "text", text = "still thinking\nabout it" },
-            })
+            -- A thought run is its own region, so a turn closing on one has no
+            -- trailing prose left to bracket.
+            writer:write_message_chunk(
+                make_thought_update("still thinking\nabout it")
+            )
             writer:finalize_turn()
 
             assert.is_nil(opener_row())
         end)
 
         it("opens on the answer, not the thinking before it", function()
-            -- Thinking reaches the buffer through the prose path and does not
-            -- end the run, so the bracket has to be re-anchored at the answer
-            -- or it spans the whole turn.
-            writer:write_message_chunk({
-                sessionUpdate = "agent_thought_chunk",
-                content = {
-                    type = "text",
-                    text = "thinking hard\nabout the problem",
-                },
-            })
+            writer:write_message_chunk(
+                make_thought_update("thinking hard\nabout the problem")
+            )
             writer:write_message_chunk(
                 make_message_update("the answer\nis here")
             )
@@ -1208,6 +1398,46 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
+        it("callback scrolls anyway while the op is held for insert", function()
+            -- The skip above assumes the flush follows within the tick. An
+            -- insert-mode hold lasts as long as the user keeps typing, and the
+            -- flush does not run at all meanwhile — so deferring to it would
+            -- freeze the viewport for every write until they leave insert.
+            setup_buffer(50, 1)
+            writer._pending_fold_ops = { { id = 1, open = false } }
+            writer._fold_retry_armed = true
+            writer._should_auto_scroll = true
+
+            local scroll_spy = spy.on(writer, "_scroll_now")
+            writer:_auto_scroll(bufnr)
+
+            assert.equal(1, scroll_spy.call_count)
+            scroll_spy:revert()
+        end)
+
+        it("insert-mode hold discharges the verdict it inherited", function()
+            -- The first write's callback has already skipped by the time the
+            -- flush discovers insert mode, so the hold owes that one a scroll.
+            setup_buffer(50, 1)
+            writer._pending_fold_ops = { { id = 1, open = false } }
+            writer._should_auto_scroll = true
+            local mode = spy.stub(vim.api, "nvim_get_mode")
+            mode:returns({ mode = "i", blocking = false })
+
+            local scroll_spy = spy.on(writer, "_scroll_now")
+            writer:flush_pending_fold_ops()
+
+            assert.equal(1, scroll_spy.call_count)
+            -- Held, not dropped: InsertLeave still has to close the fold.
+            assert.equal(1, #writer._pending_fold_ops)
+            assert.is_true(writer._fold_retry_armed)
+            scroll_spy:revert()
+            mode:revert()
+            -- Consume the armed autocmd so it cannot fire in a sibling test.
+            writer._pending_fold_ops = {}
+            vim.api.nvim_exec_autocmds("InsertLeave", {})
+        end)
+
         it(
             "flush scrolls once the folds are closed, then clears the verdict",
             function()
@@ -1382,7 +1612,9 @@ describe("agentic.ui.MessageWriter", function()
             local vt = marks[1][4].virt_text
             local text = vt and vt[1] and vt[1][1]
             assert.equal(marks[1][4].virt_text_pos, "right_align")
-            assert.equal(text, "1.2k in · 0.4k out")
+            -- Below a thousand the k-suffix would render the output as "0.4k",
+            -- which reads as "about none".
+            assert.equal(text, "1.2k in · 420 out")
         end)
 
         it("renders nothing for an all-zero turn", function()
@@ -3267,6 +3499,42 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
             -- The opening delimiter is level 0, outside the fold.
             assert.equal(-1, vim.fn.foldclosed(fence))
+        end)
+
+        it("closes the fold over a thought run", function()
+            writer:write_message_chunk(
+                make_thought_update("first\nsecond\nthird")
+            )
+            writer:finalize_turn()
+
+            local fences = fold_fence_lines()
+            assert.equal(1, #fences)
+            local body_start = fences[1] + 1
+            wait_closed(body_start)
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+        end)
+
+        it("holds the fold through insert mode and closes on leave", function()
+            -- Vim suppresses foldUpdate in insert mode, which is where a
+            -- thought run usually lands: the agent thinks while the user types
+            -- the next prompt.
+            local mode = spy.stub(vim.api, "nvim_get_mode")
+            mode:returns({ mode = "i", blocking = false })
+
+            writer:write_message_chunk(
+                make_thought_update("first\nsecond\nthird")
+            )
+            writer:finalize_turn()
+            vim.wait(100)
+
+            local body_start = fold_fence_lines()[1] + 1
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+            assert.equal(1, #writer._pending_fold_ops)
+
+            mode:revert()
+            vim.api.nvim_exec_autocmds("InsertLeave", {})
+            wait_closed(body_start)
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
         it("does not fold a short execute body", function()

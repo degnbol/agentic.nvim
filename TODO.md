@@ -49,15 +49,6 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
   and replayed. Cause and fix design (including that it needs a status word):
   [`notes/bug-cancelled-tool-calls-stay-pending.md`](notes/bug-cancelled-tool-calls-stay-pending.md).
 
-- **Sidecar folds stay open when the run ends in insert mode**:
-  `flush_pending_fold_ops` (`message_writer.lua:1289`) swallows `E490: No fold
-  found` and drops the op with no retry — and its own comment names insert mode
-  as the live cause. Verified: `:foldclose` in insert mode raises E490 and the
-  fold stays open. Cosmetic for tool bodies today; it becomes load-bearing for
-  [`feature-thinking-summary-line.md`](notes/feature-thinking-summary-line.md),
-  whose dominant case is the agent thinking while the user types the next prompt.
-  Fix: keep the anchor and re-arm the flush on `InsertLeave`.
-
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
   After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
   This is a long standing and difficult bug.
@@ -591,11 +582,9 @@ We could think of ways to mitigate this risk, and if we can think of any then th
 
 ### Grey out agentic inner thinking
 
-Superseded by
-[`feature-thinking-summary-line.md`](notes/feature-thinking-summary-line.md),
-which collapses a thought run to one marker line with a folded body rather than
-dimming it in place. The "sentences that look like noise" half is unaddressed —
-it needs a definition of noise before it is actionable.
+A thought run now collapses to one dimmed, folded row instead of being dimmed
+in place. The "sentences that look like noise" half is unaddressed — it needs a
+definition of noise before it is actionable.
 
 ### Permission system arity
 

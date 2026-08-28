@@ -717,7 +717,7 @@ overwrites definitions it made itself, and re-derives them on |ColorScheme|.
     `AgenticCodeBlockFence`        |NonText|                      Code fences and region rails
     `AgenticHeading`               @punctuation.special          Chat section heading markers (## / ###)
     `AgenticGlyphUser`             `Prompt`, else |Normal|          Identity glyph of a user row (prompt, notice)
-    `AgenticGlyphAgent`            |Normal|                       Identity glyph of an agent row (tool call)
+    `AgenticGlyphAgent`            |Normal|                       Identity glyph of an agent row (tool call, thinking)
     `AgenticGlyphOff`              (user glyph fg, struck)        Glyph of a command that cleared its own setting
     `AgenticSearchMatch`           |Search|                       Search match
     `AgenticGrepPath`              @string.special.path          Grep file path
@@ -806,6 +806,8 @@ Rendering ~
   and match highlights.
 - Diff preview for Edit tool calls with hunk navigation (`]c` / `[c`).
 - Treesitter folding for long tool output, toggleable with `zo` / `zc` / `za`.
+- Each run of agent thinking collapsed to one dimmed row, marked 󰧑 in the sign
+  column and summarised as `··· N lines · N chars ···`. `zo` expands it.
 - Sign-column decorations on tool-call blocks.
 - Slash-command and `@`-mention syntax highlighting in input and chat.
 

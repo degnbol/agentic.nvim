@@ -1,8 +1,8 @@
 # Plan: gutter identity glyphs
 
-Master note for six units of work: 1 to 3 have shipped, 4 has been handed off,
-and 5 and 6 remain. Each remaining unit note is self-contained; this one holds
-the rule they converge on, the limitation they accept, and the order.
+Master note for six units of work: 1 to 3 and 5 have shipped, 4 has been handed
+off, and 6 remains. Its note is self-contained; this one holds the rule they
+converge on, the limitation they accept, and the order.
 
 ## The rule
 
@@ -34,9 +34,9 @@ self-evident are short enough to keep their heading in view.
 
 ## Closed
 
-Units 1 to 3 have shipped; their notes are gone and the code is the reference.
-The rule above is in force, not proposed. Unit 4 turned out to hold no rendering
-work and left for the note that owns the submit paths.
+Units 1 to 3 and 5 have shipped; their notes are gone and the code is the
+reference. The rule above is in force, not proposed. Unit 4 turned out to hold
+no rendering work and left for the note that owns the submit paths.
 
 1. Command notices — `/trust`, `/rename`, `/context`, model/provider switch and
    session resume render as glyph-signed headings instead of fabricated
@@ -47,10 +47,7 @@ work and left for the note that owns the submit paths.
    `Renderer.render_decorations`, and `render_region_rail` in `message_writer`.
 3. Closing summary bracket — the prose that closes a turn takes a `╭─` region,
    tracked by `_prose_run_start_line` and drawn by `render_prose_region` in
-   `finalize_turn`. Shipped ahead of 5, so thinking is still prose and the
-   bracket has to dodge it twice: skipped when the turn ends on a thought chunk,
-   and re-anchored at the answer when a turn thinks and then answers. Unit 5
-   retires both.
+   `finalize_turn`.
 
    Restored sessions carry no closing summary bracket: `replay_messages` writes
    agent prose through `write_message`, which starts no run, and finalizes no
@@ -70,24 +67,23 @@ work and left for the note that owns the submit paths.
    `_dispatch_turn` state clobbering that follows if it does, and the bottom-pinned
    preview a *deferred* prompt gets while it waits.
 
+5. Collapsed thought runs — thinking is buffered out of the prose path and
+   rendered as one dimmed `markdown-fold` block closed at write, carrying 󰧑 on
+   its first body row. See `MessageWriter:flush_thought_run` and `sign_at` /
+   `foldtext` in `folds.lua`. Fixing the fold close that insert mode used to
+   swallow came with it (`_retry_folds_on_insert_leave`), which repairs sidecar
+   bodies too.
+
 ## Units and order
 
-6 needs 5; its own first phase needs nothing.
-
-5. [`feature-thinking-summary-line.md`](feature-thinking-summary-line.md) —
-   thinking currently renders as ordinary prose, indistinguishable from the
-   answer. Collapse a thought run to a single closed-fold row carrying the glyph
-   and a character count, with no heading (a heading whose section holds a fence
-   would pin the breadcrumb for the rest of the turn).
 6. [`PLAN-hooks_in_chat.md`](PLAN-hooks_in_chat.md) — hook activity (injected
    context, timeouts) is invisible because the ACP bridge drops the hook lifecycle
    events; recover it from the CLI's transcript jsonl and render each record as
    one closed fold row. Takes 5's shape wholesale — `markdown-fold` body,
    `sign_text` glyph, no heading (a titled section over a fenced body would pin
    the breadcrumb, per `queries/agentic/context.scm`) — and extends the same
-   per-kind foldtext dispatch, so it **needs 5** and nothing else. Its
-   own phase 1 (the transcript reader) is pure file IO with no rendering, so it can
-   run **at any point**. Separately it converts a site unit 1 left as prose:
+   foldtext dispatch, which keys on the row's identity sign
+   (`sign_at` in `folds.lua`). Separately it converts a site unit 1 left as prose:
    blocking-hook feedback arrives as a genuine `agent_message_chunk`, identifiable
    by a bridge-generated severity prefix — that part renders through
    `write_notice`.
@@ -98,3 +94,4 @@ work and left for the note that owns the submit paths.
 the tool kinds 󰈈 󰏫 󰆍 󰍉 󰖟 󰚩 󰒓. `sign_text` must be
 `glyph .. " "` — two cells, which is also what lets a wide-aspect glyph render
 across both. 󰋚 history is reserved for a future rewind. 󰛢 hook is taken by unit 6.
+󰧑 thinking is spent (unit 5).

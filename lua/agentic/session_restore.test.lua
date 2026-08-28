@@ -640,12 +640,14 @@ describe("SessionRestore", function()
             local write_prompt_spy = spy.new(function() end)
             local write_chunk_spy = spy.new(function() end)
             local write_tool_spy = spy.new(function() end)
+            local flush_spy = spy.new(function() end)
 
             local writer = {
                 write_message = write_message_spy,
                 write_user_prompt = write_prompt_spy,
                 write_message_chunk = write_chunk_spy,
                 write_tool_call_block = write_tool_spy,
+                flush_thought_run = flush_spy,
             }
 
             SessionRestore.replay_messages(
@@ -664,11 +666,13 @@ describe("SessionRestore", function()
             local write_message_spy = spy.new(function() end)
             local write_chunk_spy = spy.new(function() end)
             local write_tool_spy = spy.new(function() end)
+            local flush_spy = spy.new(function() end)
 
             local writer = {
                 write_message = write_message_spy,
                 write_message_chunk = write_chunk_spy,
                 write_tool_call_block = write_tool_spy,
+                flush_thought_run = flush_spy,
             }
 
             SessionRestore.replay_messages(
@@ -679,17 +683,22 @@ describe("SessionRestore", function()
             )
 
             assert.equal(1, write_chunk_spy.call_count)
+            -- Nothing else finalizes the replayed turn, so the run would stay
+            -- buffered and surface under the next prompt.
+            assert.equal(1, flush_spy.call_count)
         end)
 
         it("replays tool calls", function()
             local write_message_spy = spy.new(function() end)
             local write_chunk_spy = spy.new(function() end)
             local write_tool_spy = spy.new(function() end)
+            local flush_spy = spy.new(function() end)
 
             local writer = {
                 write_message = write_message_spy,
                 write_message_chunk = write_chunk_spy,
                 write_tool_call_block = write_tool_spy,
+                flush_thought_run = flush_spy,
             }
 
             SessionRestore.replay_messages(
