@@ -247,4 +247,70 @@ describe("FileSystem", function()
             notify_stub:revert()
         end)
     end)
+
+    describe("canonical_path", function()
+        --- @type TestStub
+        local realpath_stub
+        --- Directories the fake filesystem resolves, mapped to their target.
+        --- @type table<string, string>
+        local links
+
+        before_each(function()
+            links = {}
+            realpath_stub = spy.stub(vim.uv, "fs_realpath")
+            realpath_stub:invokes(function(path)
+                return links[path]
+            end)
+        end)
+
+        after_each(function()
+            realpath_stub:revert()
+        end)
+
+        it("resolves a symlinked directory prefix", function()
+            links["/link/dir"] = "/real/dir"
+
+            assert.equal(
+                "/real/dir/file.lua",
+                FileSystem.canonical_path("/link/dir/file.lua")
+            )
+        end)
+
+        it("collapses both spellings of one file to one path", function()
+            links["/tmp"] = "/private/tmp"
+            links["/private/tmp"] = "/private/tmp"
+
+            assert.equal(
+                FileSystem.canonical_path("/private/tmp/a/b.lua"),
+                FileSystem.canonical_path("/tmp/a/b.lua")
+            )
+        end)
+
+        it("resolves a file that does not exist yet", function()
+            -- Every created file looks like this at the moment it is recorded:
+            -- realpath fails on the leaf, succeeds on its parent.
+            links["/real/dir"] = "/real/dir"
+
+            assert.equal(
+                "/real/dir/brand/new.lua",
+                FileSystem.canonical_path("/real/dir/brand/new.lua")
+            )
+        end)
+
+        it("falls back to the normalised path when nothing resolves", function()
+            assert.equal(
+                "/nowhere/at/all.lua",
+                FileSystem.canonical_path("/nowhere/at/all.lua")
+            )
+        end)
+
+        it("returns an absolute path for a relative input", function()
+            links[vim.uv.cwd()] = vim.uv.cwd()
+
+            assert.equal(
+                vim.fs.joinpath(vim.uv.cwd(), "sub/file.lua"),
+                FileSystem.canonical_path("sub/file.lua")
+            )
+        end)
+    end)
 end)

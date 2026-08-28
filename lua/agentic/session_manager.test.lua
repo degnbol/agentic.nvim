@@ -297,6 +297,7 @@ describe("agentic.SessionManager", function()
                 code_selection = { clear = noop },
                 diagnostics_list = { clear = noop },
                 config_options = { clear = noop },
+                file_activity = { clear = noop },
                 status_indicator = { stop = status_stop },
                 subagent_status_indicator = { stop = subagent_stop },
                 widget = {
@@ -1312,6 +1313,7 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 _try_record_edit_range = function() end,
+                _record_file_op = function() end,
                 status_indicator = { start = function() end },
                 _show_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
@@ -1393,6 +1395,196 @@ describe("agentic.SessionManager", function()
 
             assert.spy(checktime_stub).was.called(0)
             debug_stub:revert()
+        end)
+    end)
+
+    describe("_record_file_op", function()
+        --- @param tracker table|nil MessageWriter tracker for "tc-1"
+        --- @return agentic.SessionManager
+        --- @return table[] recorded
+        local function make_session(tracker)
+            --- @type table[]
+            local recorded = {}
+            --- @type agentic.SessionManager
+            local session = {
+                message_writer = {
+                    tool_call_blocks = tracker and { ["tc-1"] = tracker } or {},
+                },
+                _tool_call_owner = {},
+                file_activity = {
+                    record = function(_self, op)
+                        table.insert(recorded, op)
+                        return true
+                    end,
+                },
+                _writer_for = SessionManager._writer_for,
+                _record_file_op = SessionManager._record_file_op,
+            } --[[@as agentic.SessionManager]]
+            return session, recorded
+        end
+
+        it("records a completed edit against the tracker's path", function()
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "completed",
+                argument = "/repo/a.lua",
+                diff = { old = { "before" }, new = { "after" } },
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(1, #recorded)
+            assert.equal("/repo/a.lua", recorded[1].path)
+            assert.equal("edit", recorded[1].op)
+            assert.equal("tc-1", recorded[1].tool_call_id)
+        end)
+
+        it("prefers the provider's own created-or-not answer", function()
+            -- A whole-file write over an existing file: the diff has no old
+            -- side, so only file_created distinguishes it from a creation.
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "completed",
+                argument = "/repo/a.lua",
+                file_created = false,
+                diff = { old = {}, new = { "whole file" } },
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal("edit", recorded[1].op)
+        end)
+
+        it("falls back to an empty diff old side meaning creation", function()
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "completed",
+                argument = "/repo/new.lua",
+                diff = { old = {}, new = { "hello" } },
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal("create", recorded[1].op)
+        end)
+
+        it("records a delete kind as a deletion", function()
+            local session, recorded = make_session({
+                kind = "delete",
+                status = "completed",
+                argument = "/repo/a.lua",
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal("delete", recorded[1].op)
+        end)
+
+        it("carries the provider's hunk ranges through", function()
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "completed",
+                argument = "/repo/a.lua",
+                diff = { old = { "x" }, new = { "y" } },
+                hunk_ranges = { { start_line = 9, end_line = 11 } },
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.same(
+                { { start_line = 9, end_line = 11 } },
+                recorded[1].ranges
+            )
+        end)
+
+        it("lowercases the kind before dispatching", function()
+            -- opencode capitalises kinds; display_kind hides the difference.
+            local session, recorded = make_session({
+                kind = "Edit",
+                status = "completed",
+                argument = "/repo/a.lua",
+                diff = { old = { "x" }, new = { "y" } },
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(1, #recorded)
+        end)
+
+        it("ignores a call that has not finished", function()
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "in_progress",
+                argument = "/repo/a.lua",
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(0, #recorded)
+        end)
+
+        it("ignores a failed call, which includes a rejected prompt", function()
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "failed",
+                argument = "/repo/a.lua",
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(0, #recorded)
+        end)
+
+        it("ignores non-mutating kinds", function()
+            for _, kind in ipairs({ "read", "search", "execute", "fetch" }) do
+                local session, recorded = make_session({
+                    kind = kind,
+                    status = "completed",
+                    argument = "/repo/a.lua",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.equal(0, #recorded)
+            end
+        end)
+
+        it("ignores a mutation with no path", function()
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "completed",
+                argument = "",
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(0, #recorded)
+        end)
+
+        it("ignores an unknown tool call", function()
+            local session, recorded = make_session(nil)
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(0, #recorded)
+        end)
+
+        it("does nothing while tracking is disabled", function()
+            local original = Config.windows.activity
+            Config.windows.activity =
+                vim.tbl_extend("force", original, { display = false })
+
+            local session, recorded = make_session({
+                kind = "edit",
+                status = "completed",
+                argument = "/repo/a.lua",
+                diff = { old = { "x" }, new = { "y" } },
+            })
+
+            session:_record_file_op("tc-1")
+
+            assert.equal(0, #recorded)
+            Config.windows.activity = original
         end)
     end)
 
@@ -2365,6 +2557,7 @@ describe("agentic.SessionManager", function()
                 _numbering_latched = false,
                 _ensure_subagent_window = noop,
                 _try_record_edit_range = noop,
+                _record_file_op = noop,
                 _track_plan_exit = noop,
                 _writer_for = SessionManager._writer_for,
                 _indicator_for = SessionManager._indicator_for,

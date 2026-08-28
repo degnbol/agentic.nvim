@@ -149,6 +149,76 @@ function M.diff_hunks(git_root, path)
     return hunks
 end
 
+--- Absolute paths git reports as differing from HEAD in `git_root`, whether
+--- staged, unstaged or untracked. A path absent from the result has the same
+--- content as HEAD.
+---
+--- The only asynchronous entry point in this module: it runs against a working
+--- tree of arbitrary size rather than against the index, so a caller must be
+--- able to show something before the answer arrives. `callback` is invoked on
+--- the main loop.
+---
+--- Failure yields nil, not an empty set. An empty set is a real answer — a clean
+--- tree — and a caller reading "absent from the set" as "unchanged" would
+--- otherwise treat a held `index.lock`, a missing `git`, or an unreadable repo
+--- as every path being unchanged.
+---
+--- `-z` rather than the default quoting: paths with spaces or non-ASCII bytes
+--- come back double-quoted and C-escaped otherwise, and a rename entry is
+--- `XY <new>\0<old>` — two NUL-terminated fields for one entry.
+--- @param git_root string
+--- @param callback fun(paths: table<string, boolean>|nil)
+function M.dirty_paths(git_root, callback)
+    vim.system({
+        "git",
+        "-C",
+        git_root,
+        "status",
+        "--porcelain",
+        "-z",
+    }, { text = true }, function(result)
+        if result.code ~= 0 then
+            vim.schedule(function()
+                Logger.notify(
+                    string.format(
+                        "git status failed in %s: %s",
+                        git_root,
+                        vim.trim(result.stderr or "")
+                    ),
+                    vim.log.levels.WARN,
+                    { title = "Agentic" }
+                )
+                callback(nil)
+            end)
+            return
+        end
+
+        local paths = {}
+        local fields = vim.split(result.stdout or "", "\0", { plain = true })
+        local i = 1
+        while i <= #fields do
+            local entry = fields[i]
+            i = i + 1
+            -- "XY " prefix plus at least one path byte.
+            if #entry > 3 then
+                paths[vim.fs.joinpath(git_root, entry:sub(4))] = true
+                local status = entry:sub(1, 2)
+                if status:find("[RC]") then
+                    local source = fields[i]
+                    i = i + 1
+                    if source and source ~= "" then
+                        paths[vim.fs.joinpath(git_root, source)] = true
+                    end
+                end
+            end
+        end
+
+        vim.schedule(function()
+            callback(paths)
+        end)
+    end)
+end
+
 --- Drop all caches (test helper / `:checktime`-style invalidation).
 function M.invalidate()
     caches = {}

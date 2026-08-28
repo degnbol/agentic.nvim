@@ -40,6 +40,7 @@ local FileSystem = require("agentic.utils.file_system")
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
+--- @field file_activity? agentic.ui.FileActivity.Data
 
 --- @class agentic.ui.ChatHistory
 --- @field session_id? string
@@ -49,6 +50,7 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field provider? agentic.UserConfig.ProviderName config key
 --- @field model? string model id
 --- @field provider_version? string provider binary version
+--- @field file_activity? agentic.ui.FileActivity.Data Tally of files the agent changed. Cannot be rebuilt from `messages`: the restore path that replays them writes tool-call blocks straight to the chat buffer, bypassing the handlers that record ops.
 local ChatHistory = {}
 ChatHistory.__index = ChatHistory
 
@@ -63,6 +65,7 @@ function ChatHistory:new()
         provider = nil,
         model = nil,
         provider_version = nil,
+        file_activity = nil,
     }
 
     setmetatable(instance, self)
@@ -199,6 +202,7 @@ function ChatHistory:save(callback)
         provider_version = self.provider_version,
         model = self.model,
         messages = self.messages,
+        file_activity = self.file_activity,
     }
 
     local encode_ok, json = pcall(vim.json.encode, data)
@@ -252,6 +256,7 @@ function ChatHistory.load(session_id, callback, file_path)
         instance.provider = parsed.provider
         instance.provider_version = parsed.provider_version
         instance.model = parsed.model
+        instance.file_activity = parsed.file_activity
 
         vim.schedule(function()
             callback(instance, nil)

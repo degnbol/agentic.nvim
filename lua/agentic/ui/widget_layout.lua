@@ -9,8 +9,8 @@ local Theme = require("agentic.theme")
 -- highlighter captures `@markup.heading.N` over the whole heading line (the
 -- only capture covering the `##`/`###` marker) and `@text.titleN` over just
 -- the text after the marker — and `@text.titleN` wins on the overlap. So dim
--- the marker (→ AgenticHeading) while leaving the heading text and tool-call
--- glyph neutral (→ Normal). The tool-call name is a markdown_inline code span
+-- the marker (→ AgenticHeading) while leaving the heading text neutral
+-- (→ Normal). The tool-call name is a markdown_inline code span
 -- (`@markup.raw`) that wins over both and keeps its own colour. Levels 2
 -- (## prompt) and 3 (### tool call) are the only heading levels the writer
 -- emits. Scoping this to the chat window (rather than nvim_set_hl globally)
@@ -427,6 +427,64 @@ function WidgetLayout.open_subagent(win_nrs, buf_nrs)
         win_opts
     )
     WindowDecoration.render_header(buf_nrs.subagent, "subagent")
+end
+
+--- Open the file activity panel next to the prompt, sized to its content.
+---
+--- Deliberately not on the `open_or_resize_dynamic_window` path the other list
+--- panels use. That helper derives the window's existence from the buffer —
+--- empty closes it, non-empty opens it — and runs inside `show_layout`, i.e. on
+--- every `ChatWidget:show()`. A tally on that path would force itself open the
+--- moment the agent touches a file and shut again whenever the list is empty,
+--- which is the opposite of a toggle. `show_layout` never touches this window,
+--- so an imperative open survives re-layout.
+--- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+function WidgetLayout.open_activity(win_nrs, buf_nrs)
+    local existing = win_nrs.activity
+    if existing and vim.api.nvim_win_is_valid(existing) then
+        return
+    end
+
+    local anchor = win_nrs.input
+    if not anchor or not vim.api.nvim_win_is_valid(anchor) then
+        return
+    end
+
+    local is_bottom = Config.windows.position == "bottom"
+    local bufnr = buf_nrs.activity
+    local height = calculate_dynamic_height(
+        bufnr,
+        Config.windows.activity.max_height,
+        is_bottom and 2 or 1
+    )
+
+    -- The sign column carries the changed-since-last-viewed marks, and
+    -- `style = "minimal"` in `open_win` would otherwise force it off.
+    win_nrs.activity = open_win(bufnr, false, {
+        win = anchor,
+        split = is_bottom and "below" or "above",
+        height = height,
+    }, "activity", { signcolumn = "yes:1" })
+    WindowDecoration.render_header(buf_nrs.activity, "activity")
+end
+
+--- Resize the activity panel to its current content. No-op when closed.
+--- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+function WidgetLayout.resize_activity(win_nrs, buf_nrs)
+    local winid = win_nrs.activity
+    if not winid or not vim.api.nvim_win_is_valid(winid) then
+        return
+    end
+
+    vim.api.nvim_win_set_config(winid, {
+        height = calculate_dynamic_height(
+            buf_nrs.activity,
+            Config.windows.activity.max_height,
+            Config.windows.position == "bottom" and 2 or 1
+        ),
+    })
 end
 
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs

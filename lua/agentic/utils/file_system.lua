@@ -201,6 +201,40 @@ function FileSystem.to_smart_path(path)
     return vim.fn.fnamemodify(path, ":p:~:.")
 end
 
+--- Absolute path with symlinked directory components resolved, usable as a
+--- map key that identifies a file by identity rather than by spelling.
+---
+--- `vim.fs.normalize` does not resolve symlinks, so the same file reached
+--- through a symlinked prefix yields two different keys — on macOS `/tmp/x`
+--- and `/private/tmp/x`, or a symlinked config directory and the repository it
+--- points into. `vim.uv.fs_realpath` collapses those but returns nil for a
+--- path that does not exist yet, which is every file at the moment it is
+--- created — so resolve the deepest existing ancestor and re-join the
+--- remaining tail.
+--- @param path string
+--- @return string
+function FileSystem.canonical_path(path)
+    local absolute =
+        vim.fs.normalize(vim.fn.fnamemodify(path, ":p"), { expand_env = false })
+
+    --- @type string[]
+    local tail = {}
+    local prefix = absolute
+    while prefix ~= "" and prefix ~= "/" do
+        local resolved = vim.uv.fs_realpath(prefix)
+        if resolved then
+            if #tail == 0 then
+                return resolved
+            end
+            return vim.fs.joinpath(resolved, table.concat(tail, "/"))
+        end
+        table.insert(tail, 1, vim.fs.basename(prefix))
+        prefix = vim.fs.dirname(prefix)
+    end
+
+    return absolute
+end
+
 --- @param file_path string
 --- @return string
 function FileSystem.get_file_extension(file_path)

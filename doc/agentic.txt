@@ -29,16 +29,18 @@ CONTENTS                                                    *agentic-contents*
        6.6 Plug mappings ..................... |agentic-plug-mappings|
     7. Shell command auto-approval ........... |agentic-compound-commands|
     8. Auto-scroll ........................... |agentic-auto-scroll|
-    9. Highlight groups ...................... |agentic-highlights|
-   10. Autocmds .............................. |agentic-autocmds|
-   11. Health check .......................... |agentic-health|
-   12. Debug mode ............................ |agentic-debug|
-   13. Comparison with Claude TUI ............ |agentic-vs-tui|
-       13.1 Additions ........................ |agentic-vs-tui-additions|
-       13.2 ACP patches ...................... |agentic-vs-tui-patches|
-       13.3 Forwarded transparently .......... |agentic-vs-tui-forwarded|
-       13.4 Behaviour differences ............ |agentic-vs-tui-diffs|
-       13.5 Not available .................... |agentic-vs-tui-missing|
+    9. File activity ......................... |agentic-file-activity|
+   10. Command notices ....................... |agentic-notices|
+   11. Highlight groups ...................... |agentic-highlights|
+   12. Autocmds .............................. |agentic-autocmds|
+   13. Health check .......................... |agentic-health|
+   14. Debug mode ............................ |agentic-debug|
+   15. Comparison with Claude TUI ............ |agentic-vs-tui|
+       15.1 Additions ........................ |agentic-vs-tui-additions|
+       15.2 ACP patches ...................... |agentic-vs-tui-patches|
+       15.3 Forwarded transparently .......... |agentic-vs-tui-forwarded|
+       15.4 Behaviour differences ............ |agentic-vs-tui-diffs|
+       15.5 Not available .................... |agentic-vs-tui-missing|
 
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
@@ -158,7 +160,13 @@ override what you need.
       `code`          `{ max_height = 15, win_opts = {} }`
       `files`         `{ max_height = 10, win_opts = {} }`
       `diagnostics`   `{ max_height = 10, win_opts = {} }`
+      `activity`      `{ display = true, max_height = 10,`
+                      ` hide_reverted = true, win_opts = {} }`
       `todos`         `{ display = true, max_height = 10, win_opts = {} }`
+
+    `activity.display` turns off both the panel and its count in the chat
+    header. `activity.hide_reverted` drops rows whose change is no longer on
+    disk; set it false to keep them. See |agentic-file-activity|.
 
     `win_opts` is passed to |nvim_set_option_value()| for each window.
 
@@ -398,6 +406,11 @@ agentic.switch_provider({opts})
 agentic.stop_generation()
     Stop the current response generation.
 
+                                            *agentic.toggle_file_activity()*
+agentic.toggle_file_activity()
+    Show or hide the panel listing the files this session's agent has
+    changed. See |agentic-file-activity|.
+
                                                 *agentic.restart_session()*
 agentic.restart_session()
     Restart the current session (new process).
@@ -440,6 +453,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>M`   n       Switch model
     `<localLeader>q`   n       Close widget
     `<localLeader>!`   n       Restart session
+    `<localLeader>f`   n       Toggle changed-files panel
     `<localLeader>a`   n       Toggle auto-scroll
     `<localLeader>G`   n       Scroll chat and subagents to bottom (keeps focus)
 
@@ -495,8 +509,8 @@ the input buffer as a plain `nofile` buffer.
 6.3 CHAT KEYMAPS                                   *agentic-keymaps-chat*
 
     Key    Mode    Description ~
-    `[[`     n       Previous user prompt
-    `]]`     n       Next user prompt
+    `[[`     n       Previous prompt or command notice
+    `]]`     n       Next prompt or command notice
     `:q`     c       Warns and closes nothing (`:q!` closes the chat window)
 
 An insert key (`i`, `a`, `o`, `c`, `x`, …) in the chat or a panel moves the
@@ -628,7 +642,71 @@ Toggle via `<localLeader>a` (|agentic-config-keymaps|). Disable the pin
 with `pause_on_prose = false` (|agentic-config-auto_scroll|).
 
 ==============================================================================
-9. HIGHLIGHT GROUPS                                     *agentic-highlights*
+9. FILE ACTIVITY                                     *agentic-file-activity*
+
+A toggled panel listing the files the agent has changed over the session,
+one row per file however many times it was touched. Subagent (Task) edits
+appear alongside the main agent's, unmarked.
+
+Toggle with `<localLeader>f`. The chat header also carries the number of
+changed files, so the count is available with the panel closed.
+
+    Row      Meaning ~
+    `+ path`   File created
+    `~ path`   File changed
+    `- path`   File deleted
+
+A `●` in the panel's sign column marks a row changed since the panel was last
+open. The marks clear when the panel is closed, and survive a resume.
+
+Rows are ordered by change class (changes above plain reads), then by
+location (project files, elsewhere, then scratch), then alphabetically.
+Inside the panel:
+
+    Key   Description ~
+    `<CR>`  Open the file at its first recorded change
+    `Q`     Send every row to the |quickfix| list
+
+Opening the panel re-checks each change against disk and drops the rows that
+are no longer changes: a created file that no longer exists, and a tracked
+file git no longer reports as differing from HEAD. Committing the agent's
+work drops its rows too. Set `windows.activity.hide_reverted = false` to keep
+them. Outside a git repository, and for untracked files that still exist,
+there is nothing to compare against and every row stays.
+
+The list survives |agentic.restore_session()| and a provider switch. `/new`
+and `/clear` start a new conversation, and empty it.
+
+Only the file-editing tools are tracked. Files a shell command changes are
+not listed: no provider reports which files a command touched, and deriving
+them from the working tree attributes every concurrent change to the agent.
+
+==============================================================================
+10. COMMAND NOTICES                                        *agentic-notices*
+
+Commands the plugin answers itself — `/trust`, `/rename`, `/context`, a model
+or provider switch, a resumed session — report back as a heading whose sign
+column carries a glyph naming the command, rather than as agent prose:
+
+    󱈘  ## repo
+    󱈤  ## New Name
+    󰊚  ## 72.4k / 200k · 36%
+    ╰─ - Cost: $0.0412 USD
+
+Since the glyph says which command ran, the heading text is just the result.
+A notice with a body closes with `╰─` on its last row, the same bracket a
+multi-line prompt and a tool call block get.
+
+Issued between turns, a notice is a `##` heading — a sibling of your prompts.
+Issued while the agent is working, it is a `###` nested in the running turn, at
+the point it happened: these commands all take effect immediately, so a
+`/trust` widening governs the tool calls after it and none before.
+
+`[[` and `]]` stop on notices as well as prompts (|agentic-keymaps-chat|).
+Notices are display-only — not saved with the session, not replayed on restore.
+
+==============================================================================
+11. HIGHLIGHT GROUPS                                    *agentic-highlights*
 
 All groups use `default = true` so user definitions take priority.
 
@@ -640,8 +718,10 @@ All groups use `default = true` so user definitions take priority.
     `AgenticStatusPending`         |DiagnosticVirtualTextHint|    Pending tool call
     `AgenticStatusCompleted`       |DiagnosticVirtualTextOk|      Completed tool call
     `AgenticStatusFailed`          |DiagnosticVirtualTextError|   Failed tool call
-    `AgenticCodeBlockFence`        |NonText|                      Code fences
+    `AgenticCodeBlockFence`        |NonText|                      Code fences and region rails
     `AgenticHeading`               @punctuation.special          Chat section heading markers (## / ###)
+    `AgenticGlyph`                 |Normal|                       Identity glyph in the sign column
+    `AgenticGlyphOff`              (Normal fg, struck)            Glyph of a command that cleared its own setting
     `AgenticSearchMatch`           |Search|                       Search match
     `AgenticGrepPath`              @string.special.path          Grep file path
     `AgenticGrepLineNr`            |LineNr|                       Grep line number
@@ -656,6 +736,11 @@ All groups use `default = true` so user definitions take priority.
     `AgenticUnapprovedCommand`     |DiagnosticVirtualTextWarn|   Non-known-safe parts of an execute permission prompt
     `AgenticTurnUsage`             |Comment|                      Per-turn token-usage footer
     `AgenticQueuedRegion`          |DiffChange|                   Input region queued for dispatch
+    `AgenticActivityCreate`        |hl-Added|                     File activity: created marker
+    `AgenticActivityEdit`          |hl-Changed|                   File activity: changed marker
+    `AgenticActivityDelete`        |hl-Removed|                   File activity: deleted marker
+    `AgenticActivityRead`          |Comment|                      File activity: read marker
+    `AgenticActivityUnseen`        |DiagnosticHint|               File activity: changed-since-last-viewed dot
 
 `AgenticUnapprovedCommand` washes the leaves and structural parts of an
 `execute` permission prompt that are not known-safe (anything not matching a
@@ -665,8 +750,12 @@ substitutions and unsafe redirects) while the prompt is shown. It is gated by
 is fg+bg in some colorschemes and fg-only in others. On a bare theme set an
 explicit `bg` for the wash to be visible.
 
+`AgenticGlyphOff` needs a foreground of its own to strike through, so under a
+colorscheme that leaves |hl-Normal| to the terminal it falls back to
+`AgenticGlyph` unstruck. Define it explicitly to keep the strikethrough there.
+
 ==============================================================================
-10. AUTOCMDS                                             *agentic-autocmds*
+12. AUTOCMDS                                             *agentic-autocmds*
 
                                                *AgenticSessionChanged*
 User AgenticSessionChanged
@@ -683,13 +772,13 @@ User AgenticSessionChanged
 <
 
 ==============================================================================
-11. HEALTH CHECK                                          *agentic-health*
+13. HEALTH CHECK                                          *agentic-health*
 >vim
     :checkhealth agentic
 <
 
 ==============================================================================
-12. DEBUG MODE                                             *agentic-debug*
+14. DEBUG MODE                                             *agentic-debug*
 
 >lua
     require("agentic").setup({ debug = true })
@@ -698,14 +787,14 @@ User AgenticSessionChanged
 View logs with |:messages| or in `~/.cache/nvim/agentic_debug.log`.
 
 ==============================================================================
-13. COMPARISON WITH CLAUDE TUI                              *agentic-vs-tui*
+15. COMPARISON WITH CLAUDE TUI                              *agentic-vs-tui*
 
 This section documents how agentic.nvim differs from the native `claude`
 CLI (the Claude Code TUI). The comparison is against the TUI as of Claude
 Code v2.1.x.
 
 ------------------------------------------------------------------------------
-13.1 ADDITIONS                                    *agentic-vs-tui-additions*
+15.1 ADDITIONS                                    *agentic-vs-tui-additions*
 
 Features present here that the TUI does not have:
 
@@ -755,7 +844,7 @@ Session & workflow ~
   (e.g. incline.nvim, custom tablines).
 
 ------------------------------------------------------------------------------
-13.2 ACP PATCHES                                    *agentic-vs-tui-patches*
+15.2 ACP PATCHES                                    *agentic-vs-tui-patches*
 
 The following commands exist in the TUI but are not forwarded through
 ACP by claude-agent-acp. The plugin intercepts them locally. These are
@@ -774,7 +863,7 @@ gap-fills, not additions over the TUI:
   suggestions.
 
 ------------------------------------------------------------------------------
-13.3 FORWARDED TRANSPARENTLY                     *agentic-vs-tui-forwarded*
+15.3 FORWARDED TRANSPARENTLY                     *agentic-vs-tui-forwarded*
 
 Claude TUI commands advertised by claude-agent-acp via
 `available_commands_update` and not intercepted by the plugin. Type them
@@ -793,7 +882,7 @@ Provider-specific. Re-verify with the probe in
 `.claude/skills/acp/references/claude-agent.md` after bridge upgrades.
 
 ------------------------------------------------------------------------------
-13.4 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
+15.4 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
 
 Same feature, different behaviour:
 
@@ -805,7 +894,7 @@ Same feature, different behaviour:
   behaviour.
 
 ------------------------------------------------------------------------------
-13.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*
+15.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*
 
 TUI features this plugin does not currently provide:
 

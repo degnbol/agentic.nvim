@@ -16,6 +16,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 - Attention bell/badge when chat is unfocused or scrolled up
 - Auto-scroll toggle (default: `<localLeader>a`)
 - Todos / code / files / diagnostics panels alongside chat
+- Changed-files panel (default: `<localLeader>f`) — one row per file the agent created or edited this session (see `:help agentic-file-activity`)
 - External UI hook (`AgenticHeadersChanged` autocmd + `vim.t.agentic_headers`) for plugins like [incline.nvim](https://github.com/b0o/incline.nvim)
 - `:w[rite]` of your input prompt submits it (by default).
   - Opt-in register copy via `settings.send_register`.

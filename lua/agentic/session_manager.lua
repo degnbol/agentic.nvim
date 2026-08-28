@@ -81,6 +81,7 @@ end
 --- @field _next_ordinal integer Next ordinal to hand out this turn
 --- @field _numbering_latched boolean Set the first time ≥2 top-level Tasks run concurrently this turn; keeps numbering on for the rest of the turn
 --- @field file_list agentic.ui.FileList
+--- @field file_activity agentic.ui.FileActivity
 --- @field code_selection agentic.ui.CodeSelection
 --- @field diagnostics_list agentic.ui.DiagnosticsList
 --- @field config_options agentic.acp.AgentConfigOptions
@@ -162,12 +163,15 @@ function SessionManager._generate_welcome_header(_, session_id)
     return string.format("# %s · %s", ts, short_id)
 end
 
---- Refresh chat_history.provider / provider_version / model from current state
---- so the next save records which provider, provider version and model produced
---- the conversation.
+--- Refresh chat_history.provider / provider_version / model / file_activity
+--- from current state so the next save records which provider, provider version
+--- and model produced the conversation, and which files it changed.
 function SessionManager:_sync_history_context()
     if not self.chat_history then
         return
+    end
+    if self.file_activity then
+        self.chat_history.file_activity = self.file_activity:serialize()
     end
     self.chat_history.provider = Config.provider
     -- Guarded: a provider that reports no agentInfo, or whose initialize is
@@ -191,6 +195,7 @@ function SessionManager:new(tab_page_id)
     local AgentInstance = require("agentic.acp.agent_instance")
     local ChatWidget = require("agentic.ui.chat_widget")
     local CodeSelection = require("agentic.ui.code_selection")
+    local FileActivity = require("agentic.ui.file_activity")
     local FileList = require("agentic.ui.file_list")
     local MessageWriter = require("agentic.ui.message_writer")
     local PermissionManager = require("agentic.ui.permission_manager")
@@ -338,6 +343,17 @@ function SessionManager:new(tab_page_id)
             self.widget:show({ focus_prompt = false })
         end
     end)
+
+    -- Unlike the sibling list panels, an empty tally must not close the window
+    -- and a new row must not open it: the panel is a toggle. The callback only
+    -- refreshes the ambient count and re-fits an already-open window.
+    self.file_activity = FileActivity:new(
+        self.widget.buf_nrs.activity,
+        function()
+            self:_update_chat_header()
+            self.widget:resize_activity_window()
+        end
+    )
 
     self.code_selection = CodeSelection:new(
         self.widget.buf_nrs.code,
@@ -1022,6 +1038,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
     end
 
     self:_try_record_edit_range(tool_call.tool_call_id)
+    self:_record_file_op(tool_call.tool_call_id)
     self:_track_plan_exit(tool_call)
 end
 
@@ -1086,6 +1103,91 @@ function SessionManager:_try_record_edit_range(tool_call_id)
         start_line,
         new_lines
     )
+end
+
+--- Append a completed file mutation to the session's activity tally.
+---
+--- Called from both tool-call handlers, like `_try_record_edit_range`, and
+--- self-gating so neither site needs to know when a mutation is final. Reads
+--- the accumulated `MessageWriter` tracker rather than the update that
+--- triggered it: `argument` arrives on an early update and is absent from the
+--- `completed` one.
+---
+--- Only `completed` is recorded. `failed` covers a rejected permission prompt,
+--- where nothing reached disk.
+---
+--- `file_created` comes from the provider's post-tool response and is the exact
+--- answer, but it is a separate notification — when it has not arrived, fall
+--- back to the shape of the diff. An empty `old` side means the tool had no
+--- prior content to replace, which is true of every creation and of no edit.
+--- The one case that misreports is a whole-file write over an existing file.
+--- @param tool_call_id string
+function SessionManager:_record_file_op(tool_call_id)
+    if not tool_call_id or not Config.windows.activity.display then
+        return
+    end
+    local tracker =
+        self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
+    if not tracker or tracker.status ~= "completed" then
+        return
+    end
+    local kind = kind_key(tracker.kind)
+    if not FILE_MUTATING_KINDS[kind] then
+        return
+    end
+    if not tracker.argument or tracker.argument == "" then
+        return
+    end
+
+    local created = tracker.file_created
+    if created == nil then
+        created = #((tracker.diff and tracker.diff.old) or {}) == 0
+    end
+
+    --- @type agentic.ui.FileActivity.OpClass
+    local op = "edit"
+    if kind == "delete" then
+        op = "delete"
+    elseif created then
+        op = "create"
+    end
+
+    self.file_activity:record({
+        tool_call_id = tool_call_id,
+        path = tracker.argument,
+        op = op,
+        ranges = tracker.hunk_ranges,
+    })
+end
+
+--- Show or hide the changed-files panel. Opening reconciles the rows against
+--- disk first (rendering what is already known, then correcting when the git
+--- probe returns); closing marks every row seen, clearing the unseen dots.
+function SessionManager:toggle_file_activity()
+    if not Config.windows.activity.display then
+        Logger.notify(
+            "File activity tracking is disabled (windows.activity.display).",
+            vim.log.levels.WARN,
+            { title = "Agentic" }
+        )
+        return
+    end
+
+    self.widget:toggle_activity_window(function()
+        self.file_activity:reconcile(function()
+            self.widget:resize_activity_window()
+        end)
+    end, function()
+        self.file_activity:mark_viewed()
+        -- Persist immediately rather than waiting for the next turn to save.
+        -- The marker's whole point is surviving a quit-and-resume, and quitting
+        -- straight after looking at the panel is the ordinary case. Gated on a
+        -- session: `save` warns when there is nothing to save under.
+        if self.session_id then
+            self:_sync_history_context()
+            self.chat_history:save()
+        end
+    end)
 end
 
 --- Detect Plan→Normal mode switch so the turn-end callback can offer
@@ -1263,6 +1365,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
 
     writer:update_tool_call_block(tool_call_update)
     self:_try_record_edit_range(id)
+    self:_record_file_op(id)
 
     -- Persist only main-agent tool calls; subagent interim is not restored.
     if not is_subagent then
@@ -1503,6 +1606,19 @@ function SessionManager:_update_chat_header()
         local mode_name = self.config_options:get_mode_name(mode_id) or mode_id
         mode_name = mode_name:gsub(" Mode$", "")
         table.insert(parts, mode_name)
+    end
+
+    -- Changed-file count. It rides the chat header because the activity
+    -- panel's own header only exists while that panel has a window, and the
+    -- panel is closed most of the time — a count rendered there would be
+    -- invisible exactly when it is wanted. Guarded: the tally's first render
+    -- happens while its constructor is still running.
+    local file_activity = self.file_activity
+    if file_activity and Config.windows.activity.display then
+        local changed = file_activity:count()
+        if changed > 0 then
+            table.insert(parts, string.format(" %d", changed))
+        end
     end
 
     -- Used-token count, not %: performance degrades near a fixed ~200k
@@ -1773,7 +1889,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     end
 
     --- Display-only lines appended after the prompt body in the chat widget
-    --- (heading and separator are owned by MessageWriter:write_user_prompt)
+    --- (heading and region signs are owned by MessageWriter:write_user_prompt)
     local extra_lines = {}
 
     if not is_slash_command and not self.code_selection:is_empty() then
@@ -2268,6 +2384,10 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.code_selection:clear()
         self.diagnostics_list:clear()
         self.config_options:clear()
+        -- Loading a saved session replaces the conversation in this tab, so the
+        -- outgoing one's tally must not bleed into it. The incoming session's
+        -- own log is restored from its file below.
+        self.file_activity:clear()
     end
     self.session_id = nil
     Recovery.remove_reauth_keymap(self)
@@ -2322,13 +2442,22 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 self._restoring = false
                 self.status_indicator:stop()
 
-                -- Restore title from local history (ACP doesn't return it)
+                -- Restore title and file tally from local history — the ACP
+                -- replay carries neither. The replayed tool calls re-enter the
+                -- tool-call handlers, so ops may already have been recorded by
+                -- the time this lands; FileActivity:load merges rather than
+                -- replaces, and dedupes on tool_call_id.
                 ChatHistory.load(session_id, function(history)
-                    if history and history.title and history.title ~= "" then
+                    if not history then
+                        return
+                    end
+                    if history.title and history.title ~= "" then
                         self.chat_history.title = history.title
                         self._title_user_set = true
                         self.widget:set_chat_title(history.title)
                     end
+                    self.chat_history.file_activity = history.file_activity
+                    self.file_activity:load(history.file_activity)
                 end)
 
                 -- Apply configOptions the provider returned with session/load,
@@ -2400,6 +2529,10 @@ function SessionManager:_cancel_session()
         self.code_selection:clear()
         self.diagnostics_list:clear()
         self.config_options:clear()
+        -- The only reset that starts a new conversation. Ctrl-C, a provider
+        -- switch and both restore paths all continue the same one, so they
+        -- leave the tally alone.
+        self.file_activity:clear()
 
         -- Tearing down a live session ends any in-flight turn. Reset the
         -- generating flag and stop both indicators so /clear (or
@@ -2728,9 +2861,19 @@ function SessionManager:restore_from_history(history, opts)
     if opts.reuse_session then
         self.chat_history.messages = vim.deepcopy(history.messages)
         self.chat_history.title = history.title or ""
+        self.chat_history.file_activity = history.file_activity
     else
         self.chat_history = history
     end
+
+    -- Replaying the saved messages writes tool-call blocks straight to the
+    -- chat buffer, bypassing the handlers that record ops, so the tally has to
+    -- come off disk. Cleared first: `load` deliberately keeps ops recorded
+    -- before it ran (the session/load replay race), but this path can arrive
+    -- from `SessionRestore` with a live tally belonging to the conversation
+    -- being replaced, and that one must not follow the user into the new one.
+    self.file_activity:clear()
+    self.file_activity:load(self.chat_history.file_activity)
 
     -- Show restored session title in buffer name
     local restored_title = self.chat_history.title

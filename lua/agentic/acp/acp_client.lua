@@ -1316,10 +1316,24 @@ return ACPClient
 --- @field params? { sessionId: string, update: agentic.acp.SessionUpdateMessage }
 --- @field error? agentic.acp.ACPError
 
+--- One hunk of a `structuredPatch`. Line numbers and counts are of the
+--- post-edit file; `newLines` is 0 for a hunk that only deletes.
+--- @class agentic.acp.ClaudePatchHunk
+--- @field newStart integer
+--- @field newLines integer
+
+--- A tool's own return value, forwarded verbatim. Only the Edit/Write shape is
+--- modelled, since that is the one the client reads: `type` is Write-only and
+--- says whether the file was created or overwritten, Edit omits it entirely.
+--- @class agentic.acp.ClaudeToolResponse
+--- @field filePath? string
+--- @field type? "create"|"update"
+--- @field structuredPatch? agentic.acp.ClaudePatchHunk[]
+
 --- claude-agent-acp per-notification metadata. `parentToolUseId` is set on
 --- subagent (Task) notifications — present ⟺ subagent content.
 --- @class agentic.acp.ClaudeMeta
---- @field claudeCode? { parentToolUseId?: string, toolName?: string, toolResponse?: any }
+--- @field claudeCode? { parentToolUseId?: string, toolName?: string, toolResponse?: agentic.acp.ClaudeToolResponse }
 
 --- @class agentic.acp.ToolCallMessage
 --- @field sessionUpdate "tool_call"
@@ -1337,7 +1351,9 @@ return ACPClient
 --- @field toolCallId string
 --- @field status? agentic.acp.ToolCallStatus
 --- @field content? agentic.acp.ACPToolCallContent[]
+--- @field locations? agentic.acp.ToolCallLocation[]
 --- @field rawOutput? string|table Plain string or array of content blocks (`{type="text",text=...}`). claude-agent-acp forwards `ToolResultBlockParam.content` here. Non-standard across providers.
+--- @field public _meta? agentic.acp.ClaudeMeta
 
 --- @class agentic.acp.PlanUpdate
 --- @field sessionUpdate "plan"

@@ -35,6 +35,11 @@ Theme.HL_GROUPS = {
     UNAPPROVED_COMMAND = "AgenticUnapprovedCommand",
     TURN_USAGE = "AgenticTurnUsage",
     QUEUED_REGION = "AgenticQueuedRegion",
+    ACTIVITY_CREATE = "AgenticActivityCreate",
+    ACTIVITY_EDIT = "AgenticActivityEdit",
+    ACTIVITY_DELETE = "AgenticActivityDelete",
+    ACTIVITY_READ = "AgenticActivityRead",
+    ACTIVITY_UNSEEN = "AgenticActivityUnseen",
 }
 
 local status_hl = {
@@ -130,6 +135,17 @@ function Theme.setup()
         -- Input-buffer regions queued for dispatch at the next turn Stop.
         -- Full-width (hl_eol) diff-style background, so DiffChange fits.
         { Theme.HL_GROUPS.QUEUED_REGION, { link = "DiffChange" } },
+
+        -- File activity panel: the op-class marker on each row, and the dot
+        -- marking rows changed since the panel was last open. Linked to the
+        -- foreground-only Added/Changed/Removed rather than the Diff*
+        -- background groups — these highlight a one-character marker, not a
+        -- diff line.
+        { Theme.HL_GROUPS.ACTIVITY_CREATE, { link = "Added" } },
+        { Theme.HL_GROUPS.ACTIVITY_EDIT, { link = "Changed" } },
+        { Theme.HL_GROUPS.ACTIVITY_DELETE, { link = "Removed" } },
+        { Theme.HL_GROUPS.ACTIVITY_READ, { link = "Comment" } },
+        { Theme.HL_GROUPS.ACTIVITY_UNSEEN, { link = "DiagnosticHint" } },
     }
     -- stylua: ignore end
 

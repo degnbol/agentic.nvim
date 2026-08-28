@@ -164,6 +164,12 @@ local ConfigDefault = {
     --- @field max_height number
     --- @field win_opts? agentic.UserConfig.WinOpts
 
+    --- @class agentic.UserConfig.Windows.Activity
+    --- @field display boolean Track the files the agent changes and offer the toggle panel
+    --- @field max_height number
+    --- @field hide_reverted boolean Drop rows whose change is no longer on disk — undone, or committed
+    --- @field win_opts? agentic.UserConfig.WinOpts
+
     --- @class agentic.UserConfig.Windows.Todos
     --- @field display boolean
     --- @field max_height number
@@ -192,6 +198,7 @@ local ConfigDefault = {
     --- @field code agentic.UserConfig.Windows.Code
     --- @field files agentic.UserConfig.Windows.Files
     --- @field diagnostics agentic.UserConfig.Windows.Diagnostics
+    --- @field activity agentic.UserConfig.Windows.Activity
     --- @field todos agentic.UserConfig.Windows.Todos
     --- @field subagent agentic.UserConfig.Windows.Subagent
     windows = {
@@ -206,6 +213,12 @@ local ConfigDefault = {
         code = { max_height = 15, win_opts = {} },
         files = { max_height = 10, win_opts = {} },
         diagnostics = { max_height = 10, win_opts = {} },
+        activity = {
+            display = true,
+            max_height = 10,
+            hide_reverted = true,
+            win_opts = {},
+        },
         todos = { display = true, max_height = 10, win_opts = {} },
         subagent = { display = true, width = "40%", auto_close = false, win_opts = {} },
     },
@@ -227,6 +240,7 @@ local ConfigDefault = {
                     mode = { "n", "v" },
                 },
             },
+            toggle_activity = "<localLeader>f",
             restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
             refresh = "",

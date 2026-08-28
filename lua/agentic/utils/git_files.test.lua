@@ -1,5 +1,6 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local Logger = require("agentic.utils.logger")
 
 describe("agentic.utils.git_files", function()
     --- @type agentic.utils.GitFiles
@@ -229,6 +230,95 @@ describe("agentic.utils.git_files", function()
 
             local hunks = GitFiles.diff_hunks("/repo", "/repo/missing.lua")
             assert.equal(0, #hunks)
+        end)
+    end)
+
+    describe("dirty_paths", function()
+        local NUL = string.char(0)
+        --- @type TestStub
+        local schedule_stub
+
+        --- Run `dirty_paths` against a canned `git status -z` payload.
+        --- @param result { code: integer, stdout: string, stderr: string }
+        --- @return table<string, boolean>|nil
+        --- @return boolean called
+        local function collect(result)
+            system_stub:invokes(function(_argv, _opts, callback)
+                callback(result)
+                return fake_process(result)
+            end)
+
+            --- @type table<string, boolean>|nil
+            local captured
+            local called = false
+            GitFiles.dirty_paths("/repo", function(paths)
+                captured = paths
+                called = true
+            end)
+            return captured, called
+        end
+
+        --- `collect` for the success path, where the set is never nil.
+        --- @param stdout string
+        --- @return table<string, boolean>
+        local function collect_ok(stdout)
+            return collect({ code = 0, stdout = stdout, stderr = "" }) or {}
+        end
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("resolves each entry against the git root", function()
+            local paths =
+                collect_ok(" M lua/a.lua" .. NUL .. "?? notes/b.md" .. NUL)
+
+            assert.is_true(paths["/repo/lua/a.lua"])
+            assert.is_true(paths["/repo/notes/b.md"])
+        end)
+
+        it("keeps paths containing spaces intact", function()
+            local paths = collect_ok(" M dir with space/a b.lua" .. NUL)
+
+            assert.is_true(paths["/repo/dir with space/a b.lua"])
+        end)
+
+        it("reports both sides of a rename", function()
+            -- A rename entry spends two NUL-terminated fields: destination
+            -- first, then source.
+            local paths = collect_ok(
+                "R  new.lua" .. NUL .. "old.lua" .. NUL .. " M other.lua" .. NUL
+            )
+
+            assert.is_true(paths["/repo/new.lua"])
+            assert.is_true(paths["/repo/old.lua"])
+            -- The entry after the rename source must still be read as an entry.
+            assert.is_true(paths["/repo/other.lua"])
+        end)
+
+        it("yields nil when git fails, distinct from a clean tree", function()
+            local notify_stub = spy.stub(Logger, "notify")
+
+            local paths, called =
+                collect({ code = 128, stdout = "", stderr = "fatal: no repo" })
+
+            assert.is_true(called)
+            assert.is_nil(paths)
+            -- Silent failure would look identical to a clean tree to callers.
+            assert.stub(notify_stub).was.called(1)
+
+            notify_stub:revert()
+        end)
+
+        it("yields an empty set for a clean tree", function()
+            assert.equal(0, vim.tbl_count(collect_ok("")))
         end)
     end)
 end)

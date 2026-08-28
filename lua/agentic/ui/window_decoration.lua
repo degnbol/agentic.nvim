@@ -19,10 +19,13 @@ local WINDOW_HEADERS = {
         title = "󰪸 Selected Code Snippets",
     },
     files = {
-        title = " Referenced Files",
+        title = " File Injections",
     },
     diagnostics = {
         title = " Diagnostics",
+    },
+    activity = {
+        title = " Files",
     },
     todos = {
         title = " Tasks list",

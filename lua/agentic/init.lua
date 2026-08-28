@@ -308,6 +308,23 @@ function Agentic.stop_generation()
     end)
 end
 
+--- Show or hide the panel listing the files this session's agent has changed.
+--- Requires an open widget in the current tabpage: the panel is a split of the
+--- prompt window, and `get_session_for_tab_page` would spawn a whole provider
+--- for a session with nowhere to put it.
+function Agentic.toggle_file_activity()
+    local session = SessionRegistry.sessions[vim.api.nvim_get_current_tabpage()]
+    if not session or not session.widget:is_open() then
+        Logger.notify(
+            "No Agentic widget open in this tabpage.",
+            vim.log.levels.WARN,
+            { title = "Agentic" }
+        )
+        return
+    end
+    session:toggle_file_activity()
+end
+
 --- Restart the current session: cancel and restore from chat history.
 --- Use when a session becomes stuck or unresponsive.
 function Agentic.restart_session()

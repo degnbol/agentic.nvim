@@ -255,11 +255,75 @@ function ClaudeAgentACPAdapter:__apply_edit_diff(message, update)
     }
 end
 
+--- Reduce the Edit/Write PostToolUse-hook `tool_call_update` to the two facts
+--- only it carries, or nil when `update` is not that notification.
+---
+--- The bridge registers a PostToolUse hook for Edit and Write and emits an
+--- extra `tool_call_update` built from the tool response's `structuredPatch`
+--- (`tools.js` `toolUpdateFromDiffToolResponse`). It carries no `status` and no
+--- `rawInput`, so the shape-based guard in `__handle_tool_call_update` would
+--- otherwise drop it.
+---
+--- Its `content[]` is deliberately ignored. `update_tool_call_block` merges
+--- partials with `tbl_deep_extend("force", …)`, which merges list-valued
+--- `diff.old` / `diff.new` element-by-element: a hook diff carrying context
+--- lines would corrupt the tracker's diff data — and with it
+--- `cached_diff_blocks` and the trust ranges — while the rendered diff stays
+--- frozen at whatever was drawn first. Only the two scalar/flat fields below
+--- are surfaced.
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @return agentic.ui.MessageWriter.ToolCallBase|nil
+local function hook_patch_facts(update)
+    local claude_meta = update._meta and update._meta.claudeCode
+    local response = claude_meta and claude_meta.toolResponse
+    local patch = response and response.structuredPatch
+    -- Other notifications also carry `_meta.claudeCode.toolResponse` (mode
+    -- switches, permission denials, subagent progress); a structuredPatch with
+    -- no status is unique to the hook.
+    if update.status or type(patch) ~= "table" then
+        return nil
+    end
+
+    --- @type agentic.ui.MessageWriter.HunkRange[]
+    local hunk_ranges = {}
+    for _, hunk in ipairs(patch) do
+        local start_line = hunk.newStart
+        if type(start_line) == "number" then
+            table.insert(hunk_ranges, {
+                start_line = start_line,
+                end_line = math.max(
+                    start_line,
+                    start_line + (hunk.newLines or 1) - 1
+                ),
+            })
+        end
+    end
+
+    --- @type agentic.ui.MessageWriter.ToolCallBase
+    local message = {
+        tool_call_id = update.toolCallId,
+        status = update.status,
+        -- Exact, unlike inferring from an empty `diff.old`: Write reports
+        -- whether it created the file, Edit never creates one.
+        file_created = response.type == "create",
+        hunk_ranges = hunk_ranges,
+    }
+    return message
+end
+
 --- Claude-agent-acp sends tool call updates without status, so we need to overload to handle it
 --- @protected
 --- @param session_id string
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 function ClaudeAgentACPAdapter:__handle_tool_call_update(session_id, update)
+    local patch_facts = hook_patch_facts(update)
+    if patch_facts then
+        self:__with_subscriber(session_id, function(subscriber)
+            subscriber.on_tool_call_update(patch_facts)
+        end)
+        return
+    end
+
     if
         not update.status
         and (not update.rawInput or vim.tbl_isempty(update.rawInput))

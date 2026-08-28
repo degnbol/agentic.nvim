@@ -12,7 +12,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- so a module-level (global) namespace is fine (see multi-tabpage rules).
 local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
---- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"subagent"
+--- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
@@ -1139,6 +1139,15 @@ function ChatWidget:_bind_keymaps()
         end
 
         BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.toggle_activity,
+            bufnr,
+            function()
+                require("agentic").toggle_file_activity()
+            end,
+            { desc = "Agentic: Toggle changed-files panel" }
+        )
+
+        BufHelpers.multi_keymap_set(
             Config.keymaps.widget.restart_session,
             bufnr,
             function()
@@ -1420,6 +1429,10 @@ function ChatWidget:_create_buf_nrs()
         filetype = "AgenticDiagnostics",
     })
 
+    local activity = self:_create_new_buf({
+        filetype = "AgenticActivity",
+    })
+
     local input = self:_create_new_buf({
         filetype = "AgenticInput",
         modifiable = true,
@@ -1447,6 +1460,7 @@ function ChatWidget:_create_buf_nrs()
         code = code,
         files = files,
         diagnostics = diagnostics,
+        activity = activity,
         input = input,
     }
 
@@ -1571,6 +1585,38 @@ end
 --- Close the subagent split if open, keeping the buffer.
 function ChatWidget:close_subagent_window()
     self:close_optional_window("subagent")
+end
+
+--- @return boolean
+function ChatWidget:is_activity_window_open()
+    local winid = self.win_nrs.activity
+    return winid ~= nil and vim.api.nvim_win_is_valid(winid)
+end
+
+--- Show or hide the file activity panel. `on_open` runs before the window
+--- appears, so a caller can reconcile the rows first; `on_close` after it goes,
+--- to record that the rows have been seen.
+--- @param on_open fun()|nil
+--- @param on_close fun()|nil
+function ChatWidget:toggle_activity_window(on_open, on_close)
+    if self:is_activity_window_open() then
+        self:close_optional_window("activity")
+        if on_close then
+            on_close()
+        end
+        return
+    end
+
+    if on_open then
+        on_open()
+    end
+    WidgetLayout.open_activity(self.win_nrs, self.buf_nrs)
+end
+
+--- Keep the open activity panel's height matched to its row count. No-op while
+--- the panel is closed, which is its normal state during a turn.
+function ChatWidget:resize_activity_window()
+    WidgetLayout.resize_activity(self.win_nrs, self.buf_nrs)
 end
 
 --- Filetypes that should be excluded when finding fallback windows

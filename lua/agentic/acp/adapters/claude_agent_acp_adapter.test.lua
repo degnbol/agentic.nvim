@@ -235,4 +235,197 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.same({ "old line" }, msg.diff.old)
         end)
     end)
+
+    describe("PostToolUse hook diff update", function()
+        --- Adapter whose subscriber notifications are captured instead of sent.
+        --- @return agentic.acp.ACPClient adapter
+        --- @return agentic.ui.MessageWriter.ToolCallBase[] updates
+        local function make_capturing_adapter()
+            --- @type agentic.ui.MessageWriter.ToolCallBase[]
+            local updates = {}
+            local adapter = setmetatable({
+                __with_subscriber = function(_self, _session_id, fn)
+                    fn({
+                        on_tool_call_update = function(message)
+                            table.insert(updates, message)
+                        end,
+                    })
+                end,
+            }, { __index = ClaudeAgentACPAdapter })
+            return adapter, updates
+        end
+
+        --- The hook's notification shape: no status, no rawInput, the tool's
+        --- own response under _meta and a content[] rebuilt from its patch.
+        --- @param response table
+        --- @return agentic.acp.ClaudeAgentToolCallUpdate
+        local function hook_update(response)
+            return {
+                sessionUpdate = "tool_call_update",
+                toolCallId = "tc-1",
+                _meta = {
+                    claudeCode = { toolName = "Write", toolResponse = response },
+                },
+                content = {
+                    {
+                        type = "diff",
+                        path = response.filePath,
+                        oldText = "context",
+                        newText = "context",
+                    },
+                },
+                locations = { { path = response.filePath, line = 12 } },
+            }
+        end
+
+        it("reports a Write that created the file", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update(
+                "s-1",
+                hook_update({
+                    filePath = "/tmp/new.lua",
+                    type = "create",
+                    structuredPatch = {
+                        { newStart = 1, newLines = 3 },
+                    },
+                })
+            )
+
+            assert.equal(1, #updates)
+            assert.is_true(updates[1].file_created)
+            assert.same(
+                { { start_line = 1, end_line = 3 } },
+                updates[1].hunk_ranges
+            )
+        end)
+
+        it("reports a Write over an existing file as not created", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update(
+                "s-1",
+                hook_update({
+                    filePath = "/tmp/old.lua",
+                    type = "update",
+                    structuredPatch = { { newStart = 5, newLines = 2 } },
+                })
+            )
+
+            assert.is_false(updates[1].file_created)
+        end)
+
+        it(
+            "reports an Edit, whose response carries no type, as not created",
+            function()
+                local adapter, updates = make_capturing_adapter()
+
+                adapter:__handle_tool_call_update(
+                    "s-1",
+                    hook_update({
+                        filePath = "/tmp/old.lua",
+                        structuredPatch = { { newStart = 40, newLines = 6 } },
+                    })
+                )
+
+                assert.is_false(updates[1].file_created)
+                assert.same(
+                    { { start_line = 40, end_line = 45 } },
+                    updates[1].hunk_ranges
+                )
+            end
+        )
+
+        it("keeps one range per hunk", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update(
+                "s-1",
+                hook_update({
+                    filePath = "/tmp/old.lua",
+                    structuredPatch = {
+                        { newStart = 3, newLines = 2 },
+                        { newStart = 90, newLines = 1 },
+                    },
+                })
+            )
+
+            assert.same({
+                { start_line = 3, end_line = 4 },
+                { start_line = 90, end_line = 90 },
+            }, updates[1].hunk_ranges)
+        end)
+
+        it(
+            "never lets the hook's content[] reach the tracker as a diff",
+            function()
+                local adapter, updates = make_capturing_adapter()
+
+                adapter:__handle_tool_call_update(
+                    "s-1",
+                    hook_update({
+                        filePath = "/tmp/old.lua",
+                        structuredPatch = { { newStart = 1, newLines = 1 } },
+                    })
+                )
+
+                -- MessageWriter merges list fields element-by-element, so a
+                -- hook diff carrying context lines would corrupt the rendered
+                -- diff's tracker data.
+                assert.is_nil(updates[1].diff)
+                assert.is_nil(updates[1].body)
+                assert.is_nil(updates[1].status)
+            end
+        )
+
+        it("degenerates a delete-only hunk to a single line", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update(
+                "s-1",
+                hook_update({
+                    filePath = "/tmp/old.lua",
+                    structuredPatch = { { newStart = 7, newLines = 0 } },
+                })
+            )
+
+            assert.same(
+                { { start_line = 7, end_line = 7 } },
+                updates[1].hunk_ranges
+            )
+        end)
+
+        it("leaves a status-bearing update on the normal build path", function()
+            local adapter, updates = make_capturing_adapter()
+
+            -- Subagent progress notifications also carry
+            -- _meta.claudeCode.toolResponse; only the hook lacks a status.
+            adapter:__handle_tool_call_update("s-1", {
+                sessionUpdate = "tool_call_update",
+                toolCallId = "tc-1",
+                status = "in_progress",
+                _meta = {
+                    claudeCode = {
+                        toolName = "Task",
+                        toolResponse = { elapsedTimeSeconds = 4 },
+                    },
+                },
+            })
+
+            assert.equal(1, #updates)
+            assert.equal("in_progress", updates[1].status)
+            assert.is_nil(updates[1].file_created)
+        end)
+
+        it("still drops an update with neither status nor rawInput", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update("s-1", {
+                sessionUpdate = "tool_call_update",
+                toolCallId = "tc-1",
+            })
+
+            assert.equal(0, #updates)
+        end)
+    end)
 end)
