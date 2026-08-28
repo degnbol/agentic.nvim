@@ -70,44 +70,45 @@ function M.parse_read_range(argument)
     return path, { offset = na, limit = nb - na + 1 }
 end
 
---- The glyph carrying an ACP kind's identity on the collapsed tool-call
---- heading, in place of the kind word.
+--- The glyph carrying an ACP kind's identity, stamped as the sign on the
+--- block's opening row (see `render_decorations`).
 --- @param kind string
 --- @return string
 local function kind_glyph(kind)
     return Glyphs.KIND[vim.trim(kind):lower()] or Glyphs.KIND_DEFAULT
 end
 
---- Build the collapsed tool-call heading: `` ### <glyph> `name` ``. The glyph
---- carries the kind identity (the kind word is dropped); `name` is the
---- informative content (filename / description / command) that
---- treesitter-context pins as a breadcrumb. `name` is backtick-wrapped so
---- markdown inline parsing (emphasis on `_`, stray `` ` ``) cannot corrupt the
---- heading. An empty `name` yields a glyph-only heading (`### <glyph>`) — used
---- before the argument has streamed in, and for execute calls with no model
---- description (the command already shows in the fence below). When `truncate`
---- is set, `name` is clamped to `wrap_width` (or 80 when soft-wrapping) minus
---- everything the rendered line spends on the frame, and one cell for the
---- ellipsis. That is a single screen line only while `wrap_width` fits the
---- window — `min_wrap_width` can hold it above the width of a narrow chat
---- window.
---- @param kind string
+--- Build the collapsed tool-call heading: `` ### `name` ``. The kind identity
+--- lives in the sign column, so the heading text is only the informative
+--- content (filename / description / command) that treesitter-context pins as a
+--- breadcrumb. `name` is backtick-wrapped so markdown inline parsing (emphasis
+--- on `_`, stray `` ` ``) cannot corrupt the heading.
+---
+--- An empty `name` yields a bare `###` — used before the argument has streamed
+--- in, and for execute calls with no model description (the command already
+--- shows in the fence below). That is byte-identical to the section-close
+--- boundary `write_message_chunk` emits, and has to stay so: both are
+--- fence-less and uncaptured by `queries/agentic/context.scm`, so the enclosing
+--- `## prompt` keeps the breadcrumb either way.
+---
+--- When `truncate` is set, `name` is clamped to `wrap_width` (or 80 when
+--- soft-wrapping) minus everything the rendered line spends on the frame, and
+--- one cell for the ellipsis. That is a single screen line only while
+--- `wrap_width` fits the window — `min_wrap_width` can hold it above the width
+--- of a narrow chat window.
 --- @param name string
 --- @param wrap_width integer
 --- @param truncate boolean
 --- @return string
-local function collapsed_header(kind, name, wrap_width, truncate)
-    local prefix = string.format("### %s", kind_glyph(kind))
+local function collapsed_header(name, wrap_width, truncate)
     if name == "" then
-        return prefix
+        return "###"
     end
     if truncate then
-        local budget = (wrap_width > 0 and wrap_width or 80)
-            - vim.fn.strdisplaywidth(prefix)
-            - #" ``"
+        local budget = (wrap_width > 0 and wrap_width or 80) - #"### ``"
         name = TextWrap.truncate_to_width(name, budget)
     end
-    return string.format("%s `%s`", prefix, name)
+    return string.format("### `%s`", name)
 end
 
 --- Return a backtick fence string long enough to avoid clashing with any
@@ -476,14 +477,14 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local cmd_lines =
             vim.split(format_long_command(argument), "\n", { plain = true })
         local fence = safe_fence(cmd_lines)
-        -- Head shows the model's description; when absent it stays glyph-only
-        -- rather than repeating the command (which renders in the fence below).
+        -- Head shows the model's description; when absent it stays bare rather
+        -- than repeating the command (which renders in the fence below).
         local description = tool_call_block.description
         local head_name = (description and description ~= "")
                 and vim.split(description, "\n", { plain = true })[1]
             or ""
         lines = {
-            collapsed_header(kind, head_name, wrap_width, true),
+            collapsed_header(head_name, wrap_width, true),
             fence .. shell_fence_lang(argument, shell_lang()),
         }
         vim.list_extend(lines, cmd_lines)
@@ -492,7 +493,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local cmd_lines = vim.split(argument, "\n", { plain = true })
         local fence = safe_fence(cmd_lines)
         lines = {
-            collapsed_header(kind, cmd_lines[1], wrap_width, true),
+            collapsed_header(cmd_lines[1], wrap_width, true),
             fence .. shell_fence_lang(argument, "bash"),
         }
         vim.list_extend(lines, cmd_lines)
@@ -502,16 +503,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- is repeated in the body (model instructions to itself).
         local url = argument:match("^(%S+)")
         local name = url or (argument:gsub("\n", "\\n"))
-        lines = { collapsed_header(kind, name, wrap_width, false) }
+        lines = { collapsed_header(name, wrap_width, false) }
     elseif argument == "" then
         -- Argument hasn't streamed in yet (placeholder suppressed in adapter);
-        -- the glyph-only head holds the layout until the next update.
-        lines = { collapsed_header(kind, "", wrap_width, false) }
+        -- the bare head holds the layout until the next update.
+        lines = { collapsed_header("", wrap_width, false) }
     else
         -- Sanitize argument to prevent embedded newlines — nvim_buf_set_lines
         -- rejects array items containing "\n".
         argument = argument:gsub("\n", "\\n")
-        lines = { collapsed_header(kind, argument, wrap_width, false) }
+        lines = { collapsed_header(argument, wrap_width, false) }
     end
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]
@@ -1421,7 +1422,7 @@ function M.apply_status_footer(bufnr, footer_line, status)
 end
 
 -- ---------------------------------------------------------------------------
--- Decoration borders
+-- Region signs
 -- ---------------------------------------------------------------------------
 
 --- @param bufnr integer
@@ -1436,14 +1437,20 @@ function M.clear_decoration_extmarks(bufnr, ids)
     end
 end
 
+--- Stamp a tool call block's region signs: the kind glyph on its header row,
+--- the `│`/`╰─` rail below. The glyph gets its own highlight — the rail's
+--- CODE_BLOCK_FENCE (→ NonText) would dim the identity along with the frame.
 --- @param bufnr integer
 --- @param start_row integer
 --- @param end_row integer
---- @param ordinal? string 2-cell sign stamped on every body row in place of the │ border (subagent ordinal); nil leaves the plain border. The ╭─/╰─ corner rows keep their signs
+--- @param kind string ACP tool kind, supplying the header row's identity glyph
+--- @param ordinal? string 2-cell sign stamped on every body row in place of the │ border (subagent ordinal); nil leaves the plain border. The glyph and ╰─ rows keep their signs
 --- @return integer[] decoration_extmark_ids
-function M.render_decorations(bufnr, start_row, end_row, ordinal)
+function M.render_decorations(bufnr, start_row, end_row, kind, ordinal)
     return ExtmarkBlock.render_block(bufnr, NS_DECORATIONS, {
         header_line = start_row,
+        header_sign = kind_glyph(kind) .. " ",
+        header_hl_group = Theme.HL_GROUPS.GLYPH,
         body_start = start_row + 1,
         body_end = end_row - 1,
         footer_line = end_row,

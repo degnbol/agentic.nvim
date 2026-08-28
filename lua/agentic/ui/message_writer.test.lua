@@ -103,6 +103,60 @@ describe("agentic.ui.MessageWriter", function()
         }
     end
 
+    --- Every decoration sign in traversal order, `{ row, sign_text }` each.
+    --- @return table[]
+    local function rail()
+        local marks = vim.api.nvim_buf_get_extmarks(
+            bufnr,
+            Renderer.NS_DECORATIONS,
+            0,
+            -1,
+            { details = true }
+        )
+        return vim.tbl_map(function(mark)
+            return { mark[2], mark[4].sign_text }
+        end, marks)
+    end
+
+    --- 1-indexed row whose decoration sign is `glyph`, i.e. the opening row of
+    --- the region that glyph identifies.
+    --- @param glyph string
+    --- @return integer|nil
+    local function glyph_sign_row(glyph)
+        for _, mark in ipairs(rail()) do
+            if mark[2] == glyph .. " " then
+                return mark[1] + 1
+            end
+        end
+        return nil
+    end
+
+    --- One sign per row is the whole premise of the gutter: the chat window is
+    --- `signcolumn=yes:1`, so a second sign on a row is silently dropped and the
+    --- loser is decided by namespace id. Asserts no row carries two, across both
+    --- namespaces that place signs.
+    local function assert_one_sign_per_row()
+        local seen = {}
+        for _, ns in ipairs({
+            Renderer.NS_DECORATIONS,
+            MessageWriter.NS_USER_ACTIONS,
+        }) do
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                ns,
+                0,
+                -1,
+                { details = true }
+            )
+            for _, mark in ipairs(marks) do
+                if mark[4].sign_text then
+                    assert.is_nil(seen[mark[2]])
+                    seen[mark[2]] = mark[4].sign_text
+                end
+            end
+        end
+    end
+
     describe("_get_wrap_width", function()
         local original_windows
 
@@ -221,12 +275,9 @@ describe("agentic.ui.MessageWriter", function()
                 )
 
                 local lines = buffer_lines()
-                local heading
-                for i, line in ipairs(lines) do
-                    if line:find(G_EXEC, 1, true) then
-                        heading = i
-                    end
-                end
+                -- The kind identity is a sign on the head row, so the head is
+                -- located by its glyph in the gutter rather than in the text.
+                local heading = glyph_sign_row(G_EXEC)
                 assert.is_true(heading ~= nil)
                 local closer = fence_rows()[1]
                 assert.equal("```", lines[closer])
@@ -270,14 +321,17 @@ describe("agentic.ui.MessageWriter", function()
             )
         end)
 
-        it("closes a prompt fence before the separator", function()
+        it("closes a prompt fence inside the prompt region", function()
             writer:write_user_prompt("look at\n```lua\nx = 1")
 
             local lines = buffer_lines()
             local fence = fence_rows()[1]
-            local separator = vim.fn.index(lines, "---") + 1
             assert.equal("```", lines[fence])
-            assert.is_true(fence < separator)
+            -- ╰─ stops on the last *visible* row. The closer below it is
+            -- concealed to zero height, so a corner there would never be drawn.
+            local footer = rail()[#rail()]
+            assert.equal("╰─", footer[2])
+            assert.equal("x = 1", lines[footer[1] + 1])
         end)
     end)
 
@@ -342,12 +396,12 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(count(decoration_signs(), "│ ") > 0)
         end)
 
-        -- Full-rail invariant for a buffer holding only numbered blocks: the
-        -- digit replaces every body-row border, so no plain │ remains, and each
-        -- block keeps its ╭─/╰─ corners.
+        -- Full-rail invariant for a buffer holding only numbered execute blocks:
+        -- the digit replaces every body-row border, so no plain │ remains, and
+        -- each block keeps its identity glyph and its ╰─.
         local function assert_full_rail(n_blocks)
             assert.equal(0, count(decoration_signs(), "│ "))
-            assert.equal(n_blocks, count(decoration_signs(), "╭─"))
+            assert.equal(n_blocks, count(decoration_signs(), G_EXEC .. " "))
             assert.equal(n_blocks, count(decoration_signs(), "╰─"))
         end
 
@@ -362,6 +416,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 -- every body row becomes the digit; the corners stay
                 assert_full_rail(1)
+                assert_one_sign_per_row()
 
                 -- the digit reaches the actual content rows (command + output),
                 -- never only the concealed fence delimiters
@@ -389,6 +444,8 @@ describe("agentic.ui.MessageWriter", function()
             -- rail is that single row
             assert.same({ "Read 3 lines" }, signed_row_texts("0 "))
             assert.equal(0, count(decoration_signs(), "│ "))
+            -- The head sign is the kind's own glyph, not a shared corner.
+            assert.equal(1, count(decoration_signs(), G_READ .. " "))
         end)
 
         it("backfills the ordinal onto an already-rendered block", function()
@@ -556,6 +613,50 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(1, #rows)
             assert.equal("## The prompt", line_at(rows[1]))
         end)
+
+        it("writes no separator line", function()
+            writer:write_user_prompt("Hello there")
+
+            assert.is_false(
+                vim.tbl_contains(
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                    "---"
+                )
+            )
+        end)
+
+        it("leaves a single-line prompt with the marker alone", function()
+            writer:write_user_prompt("Hello there")
+
+            assert.same({}, rail())
+        end)
+
+        it("brackets a multi-line prompt down to its last row", function()
+            writer:write_user_prompt("Hello there\nsecond\nthird")
+
+            assert.same({ { 1, "│ " }, { 2, "╰─" } }, rail())
+            assert.equal("third", line_at(2))
+            -- The rail must stay out of NS_USER_ACTIONS or [[/]] would stop on
+            -- prompt body rows.
+            assert.same({ 0 }, marker_rows())
+            assert_one_sign_per_row()
+        end)
+
+        it("ends the rail above a trailing extra_lines fence", function()
+            -- The selected-code path: session_manager appends a fenced snippet,
+            -- so the region's last buffer row is a closing ```. That row is
+            -- concealed to zero height, so ╰─ has to sit on the last visible one.
+            writer:write_user_prompt("check this", {
+                "```lua",
+                "x = 1",
+                "```",
+            })
+
+            local footer = rail()[#rail()]
+            assert.equal("╰─", footer[2])
+            assert.equal("x = 1", line_at(footer[1]))
+            assert_one_sign_per_row()
+        end)
     end)
 
     describe("write_notice", function()
@@ -625,6 +726,17 @@ describe("agentic.ui.MessageWriter", function()
                 "",
                 "",
             }, buffer_lines())
+
+            -- The body row closes the notice's region; the trailing blank is a
+            -- separator and belongs to no region.
+            assert.same({ { 1, "╰─" } }, rail())
+            assert_one_sign_per_row()
+        end)
+
+        it("leaves a heading-only notice unbracketed", function()
+            writer:write_notice({ glyph = GLYPH, title = "repo" })
+
+            assert.same({}, rail())
         end)
 
         it("honours an explicit glyph highlight", function()
@@ -1450,7 +1562,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### " .. G_EXEC, lines[1])
+            assert.equal("###", lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
@@ -1490,10 +1602,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-                assert.equal(
-                    "### " .. G_EXEC .. " `List the temp directory`",
-                    lines[1]
-                )
+                assert.equal("### `List the temp directory`", lines[1])
                 assert.equal("```bash", lines[2])
                 assert.equal("ls -la /tmp", lines[3])
                 assert.equal("```", lines[4])
@@ -1528,7 +1637,7 @@ describe("agentic.ui.MessageWriter", function()
                     openers = openers + 1
                 end
                 assert.equal(1, openers)
-                assert.equal("### " .. G_EXEC, lines[1])
+                assert.equal("###", lines[1])
                 assert.equal("```bash", lines[2])
                 assert.equal("echo hi", lines[3])
                 assert.equal("```", lines[4])
@@ -1549,7 +1658,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### " .. G_EXEC, lines[1])
+            assert.equal("###", lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
@@ -1571,7 +1680,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-                assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+                assert.equal("### `/tmp/file.txt`", lines[1])
                 assert.equal("Read 1 lines", lines[2])
             end
         )
@@ -1588,7 +1697,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+            assert.equal("### `/tmp/file.txt`", lines[1])
         end)
 
         it("extracts range from argument into read_range", function()
@@ -1603,7 +1712,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+            assert.equal("### `/tmp/file.txt`", lines[1])
             assert.equal("Read 100 lines (1 - 100)", lines[2])
         end)
 
@@ -1620,7 +1729,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### " .. G_READ .. " `/tmp/file.txt`", lines[1])
+            assert.equal("### `/tmp/file.txt`", lines[1])
             assert.equal("Read 3 lines (10 - 12)", lines[2])
         end)
 
@@ -1669,7 +1778,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### " .. G_EXEC, lines[1])
+            assert.equal("###", lines[1])
             assert.equal("```bash", lines[2])
             assert.equal("cd /some/very/long/project/path &&", lines[3])
             assert.equal("npm install --save-dev typescript &&", lines[4])
@@ -1902,7 +2011,7 @@ describe("agentic.ui.MessageWriter", function()
                     vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 -- Header should be present
-                assert.equal("### " .. G_EXEC, lines_after_write[1])
+                assert.equal("###", lines_after_write[1])
                 -- Code fence and split command
                 assert.equal("```bash", lines_after_write[2])
                 assert.equal(
@@ -1938,7 +2047,7 @@ describe("agentic.ui.MessageWriter", function()
                     vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 -- Header still present
-                assert.equal("### " .. G_EXEC, lines_after_update[1])
+                assert.equal("###", lines_after_update[1])
                 assert.equal("```bash", lines_after_update[2])
 
                 -- Body output should be present
@@ -2079,7 +2188,7 @@ describe("agentic.ui.MessageWriter", function()
             local found_fence = false
             local found_command = false
             for _, line in ipairs(lines) do
-                if line == "### " .. G_EXEC then
+                if line == "###" then
                     found_header = true
                 end
                 if line == "```bash" then
@@ -2136,7 +2245,7 @@ describe("agentic.ui.MessageWriter", function()
                 local found_header = false
                 local found_fence = false
                 for _, line in ipairs(lines) do
-                    if line == "### " .. G_EXEC then
+                    if line == "###" then
                         found_header = true
                     end
                     if line == "```bash" then
@@ -3361,9 +3470,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- Description is the collapsed heading name, directly above
                 -- the command fence.
                 assert.is_not_nil(
-                    text:match(
-                        "### " .. G_EXEC .. " `Demo execute folding`\n```bash"
-                    )
+                    text:match("### `Demo execute folding`\n```bash")
                 )
                 -- No accumulation divider, no double-wrapped console fence.
                 assert.is_nil(text:match("\n%-%-%-\n"))

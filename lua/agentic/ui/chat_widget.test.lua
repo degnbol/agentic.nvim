@@ -3,6 +3,7 @@ local spy = require("tests.helpers.spy")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
+local Renderer = require("agentic.ui.tool_call_renderer")
 
 describe("agentic.ui.ChatWidget", function()
     --- @type agentic.ui.ChatWidget
@@ -835,6 +836,25 @@ describe("agentic.ui.ChatWidget", function()
             widget:clear()
 
             assert.same({}, marker_rows())
+        end)
+
+        it("clear() removes region rails", function()
+            local function decoration_marks()
+                return vim.api.nvim_buf_get_extmarks(
+                    widget.buf_nrs.chat,
+                    Renderer.NS_DECORATIONS,
+                    0,
+                    -1,
+                    {}
+                )
+            end
+
+            writer:write_user_prompt("A prompt\nwith a body")
+            assert.is_true(#decoration_marks() > 0)
+
+            widget:clear()
+
+            assert.same({}, decoration_marks())
         end)
 
         it("clear() preserves the input buffer draft", function()

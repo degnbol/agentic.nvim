@@ -1,5 +1,6 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
+local ExtmarkBlock = require("agentic.utils.extmark_block")
 local Logger = require("agentic.utils.logger")
 local Renderer = require("agentic.ui.tool_call_renderer")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -156,6 +157,24 @@ MessageWriter.__index = MessageWriter
 --- sanctioned by .claude/rules/multi-tabpage.md (mirrors Renderer.NS_TOOL_BLOCKS).
 MessageWriter.NS_USER_ACTIONS =
     vim.api.nvim_create_namespace("agentic_user_actions")
+
+--- Drop every region sign the writer placed in `bufnr`: the identity marks and
+--- the rails under them.
+---
+--- Emptying a buffer with `nvim_buf_set_lines` collapses extmarks onto (0,0)
+--- instead of deleting them, so without this a reset leaves `[[`/`]]` jumping to
+--- a phantom prompt and a heap of rail signs on row 0. Tool blocks free their
+--- own decorations by id; a prompt or notice rail has no tracker to free it,
+--- which is why the namespace is cleared wholesale.
+--- @param bufnr integer
+function MessageWriter.clear_regions(bufnr)
+    for _, ns in ipairs({
+        MessageWriter.NS_USER_ACTIONS,
+        Renderer.NS_DECORATIONS,
+    }) do
+        vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+    end
+end
 
 --- @param bufnr integer
 --- @param status_indicator? agentic.ui.StatusIndicator
@@ -385,10 +404,49 @@ local function prompt_heading_lines(text)
     return lines
 end
 
---- Write a user prompt to the chat buffer and mark its heading line with a
---- prompt-marker extmark (drives the `❯` sign and `[[`/`]]` navigation).
---- Standalone rather than delegating to write_message: it owns the `---`
---- separator and needs the heading row post-append to place the marker.
+--- Stamp the `│`/`╰─` rail under a region whose identity sign is already in
+--- place, marking how far the region reaches.
+---
+--- The rail goes in the decoration namespace even though the identity sign does
+--- not: `[[`/`]]` stops on every mark in NS_USER_ACTIONS, so a body-row mark
+--- there would land the cursor inside a region instead of on its opening row.
+---
+--- `╰─` is pulled back off a trailing fence delimiter, which
+--- `TextWrap.is_fence_delimiter` conceals to zero height — the closing corner
+--- would simply not be drawn and the region would read as unterminated. A
+--- prompt ends on a delimiter whenever it carries selected code, or whenever
+--- `close_fence` had to balance one the user left open. Interior delimiters need
+--- no such care: a zero-height row leaves no gap in the rail.
+---
+--- A region with one visible row gets nothing — it carries the identity sign
+--- alone. The chat window is `signcolumn=yes:1`, so a `╰─` on that row would
+--- contend with the identity for the one sign cell.
+--- @param bufnr integer
+--- @param identity_row integer 0-indexed row carrying the identity sign
+--- @param last_row integer 0-indexed last row of the region, inclusive
+local function render_region_rail(bufnr, identity_row, last_row)
+    local rows =
+        vim.api.nvim_buf_get_lines(bufnr, identity_row, last_row + 1, false)
+    local last = #rows
+    while last > 1 and TextWrap.is_fence_delimiter(rows[last]) do
+        last = last - 1
+    end
+    if last < 2 then
+        return
+    end
+    ExtmarkBlock.render_rail(bufnr, Renderer.NS_DECORATIONS, {
+        body_start = identity_row + 1,
+        body_end = identity_row + last - 2,
+        footer_line = identity_row + last - 1,
+        hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
+    })
+end
+
+--- Write a user prompt to the chat buffer as a bracketed region: the heading
+--- row takes a `❯` identity mark (which also drives `[[`/`]]` navigation), and a
+--- multi-line prompt grows a `│`/`╰─` rail beneath it. Standalone rather than
+--- delegating to write_message: it owns those signs and needs the heading row
+--- post-append to place them.
 --- @param text string Raw prompt text (first line becomes the `## ` heading)
 --- @param extra_lines string[]|nil Display-only lines appended after the prompt
 ---        body (selected code / referenced files / diagnostics)
@@ -397,9 +455,9 @@ function MessageWriter:write_user_prompt(text, extra_lines)
     vim.list_extend(lines, extra_lines or {})
 
     local flat = vim.split(table.concat(lines, "\n"), "\n", { plain = true })
-    -- Before the separator: a fence closed after it would swallow the `---`.
+    -- An unclosed fence would swallow everything written after the prompt into
+    -- the prompt's own code block.
     close_fence(flat)
-    vim.list_extend(flat, { "", "---", "" })
     flat = TextWrap.wrap_prose(flat, self:_get_wrap_width())
 
     self:_auto_scroll(self.bufnr)
@@ -433,6 +491,8 @@ function MessageWriter:write_user_prompt(text, extra_lines)
                 sign_hl_group = "NonText",
             }
         )
+
+        render_region_rail(bufnr, heading_row, heading_row + #flat - 1)
     end)
 end
 
@@ -447,6 +507,7 @@ end
 ---
 --- A notice records something the *user* did, so its row carries an identity
 --- sign in the same channel as a prompt's `❯` and is navigable with `[[`/`]]`.
+--- A notice with a body grows a `│`/`╰─` rail over those rows.
 ---
 --- The heading level follows the notice's position in the section tree, which
 --- `mid_turn` decides. Every command here takes effect the moment it is issued
@@ -505,6 +566,10 @@ function MessageWriter:write_notice(notice)
                 sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH,
             }
         )
+
+        -- `lines` ends in the blank that separates the notice from what follows;
+        -- that row belongs to no region, so it is left off the rail.
+        render_region_rail(bufnr, heading_row, heading_row + #lines - 2)
     end)
 
     if notice.mid_turn then
@@ -822,10 +887,10 @@ end
 --- extmark. The range extmark spans header (start_row) to footer (end_row); body
 --- rows are the rows between. The decoration ids run
 --- `[header, body_1 .. body_n, footer, (dim?)]`, front-indexed by buffer offset,
---- so the id for buffer row `r` is `ids[r - start_row + 1]`; header (start_row)
---- and footer (end_row) keep their corner signs, every body row in between takes
---- the digit. Concealed fence-delimiter rows get it too but stay zero-height at
---- conceallevel=2, so it does not show there.
+--- so the id for buffer row `r` is `ids[r - start_row + 1]`; the header
+--- (start_row) keeps its identity glyph and the footer (end_row) its `╰─`, every
+--- body row in between takes the digit. Concealed fence-delimiter rows get it
+--- too but stay zero-height at conceallevel=2, so it does not show there.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:_stamp_ordinal(block)
     local sign = self:_ordinal_sign(block)
@@ -1472,6 +1537,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             bufnr,
             start_row,
             end_row,
+            kind,
             self:_ordinal_sign(tool_call_block)
         )
 
@@ -1656,7 +1722,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 return false
             end
 
-            -- Decorations (╭│╰ borders) are stable — leave them in place.
+            -- Decorations (kind glyph, │, ╰─) are stable — leave them in place.
             -- Only refresh status footer which changes on completion.
             Renderer.apply_status_footer(bufnr, old_end_row, tracker.status)
 
@@ -1776,6 +1842,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             bufnr,
             start_row,
             new_end_row,
+            tracker.kind,
             self:_ordinal_sign(tracker)
         )
 

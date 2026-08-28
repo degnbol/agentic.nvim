@@ -406,6 +406,27 @@ function M.unclosed_fence(lines)
     return open_fence, open_index
 end
 
+--- Whether a line is a fence delimiter — the opening or closing ` ``` ` of a
+--- fenced code block.
+---
+--- Applies `unclosed_fence`'s parser rule to a single line: up to 3 leading
+--- spaces, a run of at least 3 backticks or tildes, and (for backticks) no
+--- backtick in the info string. A closer, having no info string, always
+--- qualifies.
+---
+--- The markdown highlights query sets `conceal_lines` on these, so at
+--- conceallevel=2 the row is zero-height and anything anchored to it — a sign,
+--- a fold marker — never renders.
+--- @param line string
+--- @return boolean
+function M.is_fence_delimiter(line)
+    local indent, delim, rest = line:match("^( *)([`~]+)(.*)$")
+    if not delim or #indent > 3 or #delim < 3 then
+        return false
+    end
+    return delim:sub(1, 1) == "~" or not rest:find("`", 1, true)
+end
+
 --- Hard-wrap prose in a block of lines, skipping fenced code blocks and
 --- formatting markdown tables with aligned columns.
 --- @param lines string[]

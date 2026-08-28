@@ -58,7 +58,7 @@ describe("diff_jump", function()
                 )
 
                 -- Layout for non-markdown diff (block_start_row = 0):
-                --   row 0: ### <glyph> `/file.lua`
+                --   row 0: ### `/file.lua`
                 --   row 1: ```lua
                 --   row 2: beta             ← old
                 --   row 3: gamma            ← old
@@ -85,7 +85,7 @@ describe("diff_jump", function()
             local block = make_edit_block({ "b", "c" }, {})
 
             -- Layout (non-markdown):
-            --   row 0: ### <glyph> `/file.lua`
+            --   row 0: ### `/file.lua`
             --   row 1: ```lua
             --   row 2: b   ← old (cursor here)
             --   row 3: c   ← old
@@ -105,7 +105,7 @@ describe("diff_jump", function()
                 local block = make_edit_block({ "old1", "old2" }, { "new1", "new2" })
 
                 -- Layout:
-                --   row 0: ### <glyph> `/file.lua`
+                --   row 0: ### `/file.lua`
                 --   row 1: ```lua
                 --   row 2: old1   ← old (cursor here, col 2)
                 --   row 3: old2   ← old
@@ -167,7 +167,7 @@ describe("diff_jump", function()
 
             -- New-file diff: start_line = 1.
             -- Layout:
-            --   row 0: ### <glyph> `/file.lua`
+            --   row 0: ### `/file.lua`
             --   row 1: ```lua
             --   row 2: L1   (cursor here, col 1)
             --   row 3: L2
@@ -188,7 +188,7 @@ describe("diff_jump", function()
             block.argument = "/notes.md"
 
             -- Layout (markdown, fenced like other languages):
-            --   row 0: ### <glyph> `/notes.md`
+            --   row 0: ### `/notes.md`
             --   row 1: ```md
             --   row 2: old md line   ← old
             --   row 3: new md line   ← new (cursor here)

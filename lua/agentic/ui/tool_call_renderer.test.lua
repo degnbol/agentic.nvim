@@ -247,9 +247,8 @@ describe("ToolCallRenderer", function()
 
             local lines = Renderer.prepare_block_lines(block, 40)
 
-            -- The heading is `### <glyph> `<name>``: the truncation budget has
-            -- to pay for the backticks it wraps the name in, not just the
-            -- prefix.
+            -- The heading is ``### `<name>` ``: the truncation budget has to pay
+            -- for the backticks it wraps the name in, not just the prefix.
             assert.is_true(vim.fn.strdisplaywidth(lines[1]) <= 40)
             assert.equal("…`", lines[1]:sub(-4))
         end)

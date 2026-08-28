@@ -338,15 +338,13 @@ function ChatWidget:clear()
         end
     end
 
-    -- set_lines collapses user-action markers onto (0,0) without deleting them,
-    -- so stale marks would make [[/]] jump to a phantom prompt at the top. Clear
-    -- them explicitly (they are rebuilt when prompts are re-written on restore).
-    vim.api.nvim_buf_clear_namespace(
-        self.buf_nrs.chat,
-        MessageWriter.NS_USER_ACTIONS,
-        0,
-        -1
-    )
+    -- Both buffers a MessageWriter writes to: the subagent split carries tool
+    -- call blocks of its own (SessionManager routes Task content there).
+    -- Everything cleared here is rebuilt when the conversation is re-written on
+    -- restore.
+    for _, panel in ipairs({ "chat", "subagent" }) do
+        MessageWriter.clear_regions(self.buf_nrs[panel])
+    end
 end
 
 --- Deletes all buffers and removes them from memory

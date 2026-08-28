@@ -29,8 +29,7 @@ Two consequences worth carrying in your head:
 ## Tool call block layout
 
 ```
-╭─ ### <Kind>             ← header (sign extmark = ╭─, NS_DECORATIONS)
-│  `<argument>`           ← argument or kind-specific
+󰆍  ### `<argument>`       ← header (sign extmark = kind glyph, NS_DECORATIONS)
 │  ```<lang>              ← optional command fence (execute/search)
 │  <command lines>
 │  ```
@@ -40,12 +39,26 @@ Two consequences worth carrying in your head:
 ╰─  ✔ completed           ← footer (sign + status text — NS_STATUS)
 ```
 
-Borders (╭ │ ╰) are `sign_text` extmarks via `utils/extmark_block.lua`; status
-text is real buffer text written with `nvim_buf_set_text` then highlighted with
-an extmark in `NS_STATUS`. The header `### Kind` and argument backticks get
-extmark highlights from `apply_block_highlights`. All extmarks share priority
-200 so they win over markdown injections (priority 100) — see the comment on
-`get_clean_hl_group` for why a higher priority alone is not enough.
+The sign column says what a region *is*, the buffer text what it *contains*:
+the opening row carries an identity sign (the kind glyph, from `glyphs.lua`),
+continuation rows `│`, the last row `╰─`. A single-row region carries the
+identity sign alone. Signs are `sign_text` extmarks via
+`utils/extmark_block.lua` (`render_block` = identity + rail, `render_rail` =
+rail only, for a region whose identity mark lives in another namespace — see
+`MessageWriter:write_user_prompt`). The identity sign takes `AgenticGlyph`
+rather than the rail's `AgenticCodeBlockFence`, which would dim it.
+
+Because the chat window is `signcolumn=yes:1`, one row holds one sign — a
+second extmark on the identity row silently loses. Status text is real buffer
+text written with `nvim_buf_set_text` then highlighted with an extmark in
+`NS_STATUS`. The heading marker and argument backticks get extmark highlights
+from `apply_block_highlights`. All extmarks share priority 200 so they win over
+markdown injections (priority 100) — see the comment on `get_clean_hl_group`
+for why a higher priority alone is not enough.
+
+A tool head with no name renders as a bare `###`, byte-identical to the
+section-close boundary `write_message_chunk` emits; both must stay uncaptured
+by `queries/agentic/context.scm`.
 
 ## Fence info-strings — cross-kind reference
 

@@ -1,8 +1,13 @@
--- Borders (╭─ │ ╰─) render via sign_text extmarks in the sign column rather
--- than inline virtual text. Signs survive nvim_buf_set_lines line-replacement
+-- A region's signs render via sign_text extmarks in the sign column rather than
+-- inline virtual text. Signs survive nvim_buf_set_lines line-replacement
 -- without delete/recreate cycles, so updates to a tool call block do not
 -- displace its decorations.
+--
+-- The opening row carries the region's identity (a per-kind glyph, a prompt's
+-- `❯`), continuation rows `│`, the last row `╰─`. The caller supplies the
+-- identity sign; only the rail below it belongs to this module's vocabulary.
 local SIGNS = {
+    -- Opener for a region with no identity to announce (prose).
     HEADER = "╭─",
     BODY = "│ ",
     FOOTER = "╰─",
@@ -13,29 +18,26 @@ local ExtmarkBlock = {}
 
 ExtmarkBlock.SIGNS = SIGNS
 
---- @class agentic.utils.ExtmarkBlock.RenderBlockOpts
---- @field header_line integer 0-indexed line number for header
---- @field body_start? integer 0-indexed start line for body (optional)
---- @field body_end? integer 0-indexed end line for body (optional)
+--- @class agentic.utils.ExtmarkBlock.RenderRailOpts
+--- @field body_start? integer 0-indexed first continuation line (optional)
+--- @field body_end? integer 0-indexed last continuation line, inclusive (optional)
 --- @field footer_line? integer 0-indexed line number for footer (optional)
 --- @field hl_group string Highlight group name
---- @field ordinal? string 2-cell sign stamped in place of the │ border on every body row (subagent ordinal); nil leaves the plain border. The ╭─/╰─ corner rows keep their signs regardless. Concealed fence-delimiter rows receive it too but stay zero-height at conceallevel=2, so it does not show there
+--- @field ordinal? string 2-cell sign stamped in place of the │ border on every continuation row (subagent ordinal); nil leaves the plain border. The identity and ╰─ rows keep their signs regardless. Concealed fence-delimiter rows receive it too but stay zero-height at conceallevel=2, so it does not show there
 
---- Renders a complete block with sign column decorations
+--- @class agentic.utils.ExtmarkBlock.RenderBlockOpts : agentic.utils.ExtmarkBlock.RenderRailOpts
+--- @field header_line integer 0-indexed line number for the identity row
+--- @field header_sign string 2-cell identity sign for the opening row
+--- @field header_hl_group? string Highlight group for the identity sign; defaults to `hl_group`
+
+--- Renders the continuation rail below a region's identity row: `│` on every
+--- body row and `╰─` on the last.
 --- @param bufnr integer
 --- @param ns_id integer
---- @param opts agentic.utils.ExtmarkBlock.RenderBlockOpts
+--- @param opts agentic.utils.ExtmarkBlock.RenderRailOpts
 --- @return integer[]
-function ExtmarkBlock.render_block(bufnr, ns_id, opts)
+function ExtmarkBlock.render_rail(bufnr, ns_id, opts)
     local decoration_ids = {}
-
-    table.insert(
-        decoration_ids,
-        vim.api.nvim_buf_set_extmark(bufnr, ns_id, opts.header_line, 0, {
-            sign_text = SIGNS.HEADER,
-            sign_hl_group = opts.hl_group,
-        })
-    )
 
     if opts.body_start and opts.body_end then
         for line_num = opts.body_start, opts.body_end do
@@ -59,6 +61,27 @@ function ExtmarkBlock.render_block(bufnr, ns_id, opts)
         )
     end
     return decoration_ids
+end
+
+--- Renders a complete region: identity sign on the header row, then the rail.
+--- Ids come back front-indexed by buffer offset (header first), which
+--- `MessageWriter:_stamp_ordinal` relies on to address a single row.
+--- @param bufnr integer
+--- @param ns_id integer
+--- @param opts agentic.utils.ExtmarkBlock.RenderBlockOpts
+--- @return integer[]
+function ExtmarkBlock.render_block(bufnr, ns_id, opts)
+    local decoration_ids = {
+        vim.api.nvim_buf_set_extmark(bufnr, ns_id, opts.header_line, 0, {
+            sign_text = opts.header_sign,
+            sign_hl_group = opts.header_hl_group or opts.hl_group,
+        }),
+    }
+
+    return vim.list_extend(
+        decoration_ids,
+        ExtmarkBlock.render_rail(bufnr, ns_id, opts)
+    )
 end
 
 --- Rewrite one row's border sign in place, reusing the extmark id so no
