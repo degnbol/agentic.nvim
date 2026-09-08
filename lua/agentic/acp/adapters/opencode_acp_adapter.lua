@@ -117,7 +117,9 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
     -- streaming tool args — before execute() runs and before the permission
     -- ask. The tool is not actually executing. Relabel to "pending" so the
     -- chat footer reflects the true state.
-    local status = (update.status == "in_progress" and "pending" or update.status) --[[@as agentic.acp.ToolCallStatus]]
+    local status = (
+        update.status == "in_progress" and "pending" or update.status
+    ) --[[@as agentic.acp.ToolCallStatus]]
 
     --- @type agentic.ui.MessageWriter.ToolCallBase
     local message = {

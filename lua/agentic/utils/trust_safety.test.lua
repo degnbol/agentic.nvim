@@ -692,19 +692,22 @@ describe("agentic.utils.trust_safety", function()
             assert.is_true(#scope.tmp_roots >= 1)
         end)
 
-        it("safe_for_kind: tmp write/create are unconditionally safe", function()
-            -- tmp short-circuits before any git field, even on an existing,
-            -- untracked, dirty file (the worst case for the git-backed branch).
-            local args = {
-                tmp = true,
-                exists = true,
-                tracked = false,
-                has_unstaged_hunks = true,
-                hunks = {},
-                claude_owned_ranges = {},
-            }
-            assert.is_true(TrustSafety.safe_for_kind("write", args))
-            assert.is_true(TrustSafety.safe_for_kind("create", args))
-        end)
+        it(
+            "safe_for_kind: tmp write/create are unconditionally safe",
+            function()
+                -- tmp short-circuits before any git field, even on an existing,
+                -- untracked, dirty file (the worst case for the git-backed branch).
+                local args = {
+                    tmp = true,
+                    exists = true,
+                    tracked = false,
+                    has_unstaged_hunks = true,
+                    hunks = {},
+                    claude_owned_ranges = {},
+                }
+                assert.is_true(TrustSafety.safe_for_kind("write", args))
+                assert.is_true(TrustSafety.safe_for_kind("create", args))
+            end
+        )
     end)
 end)

@@ -94,7 +94,14 @@ end
 --- @param row integer 0-indexed buffer row
 --- @param sign_text string 2-cell sign
 --- @param hl_group string
-function ExtmarkBlock.set_sign(bufnr, ns_id, extmark_id, row, sign_text, hl_group)
+function ExtmarkBlock.set_sign(
+    bufnr,
+    ns_id,
+    extmark_id,
+    row,
+    sign_text,
+    hl_group
+)
     vim.api.nvim_buf_set_extmark(bufnr, ns_id, row, 0, {
         id = extmark_id,
         sign_text = sign_text,

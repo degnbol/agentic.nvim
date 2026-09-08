@@ -391,9 +391,7 @@ function SessionRestore.resolve_query(query, callback)
             return
         elseif #prefix_matches > 1 then
             Logger.notify(
-                "Ambiguous session id prefix: "
-                    .. #prefix_matches
-                    .. " matches",
+                "Ambiguous session id prefix: " .. #prefix_matches .. " matches",
                 vim.log.levels.WARN
             )
             callback()

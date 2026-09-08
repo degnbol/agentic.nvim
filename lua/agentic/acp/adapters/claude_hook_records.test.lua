@@ -36,9 +36,11 @@ describe("ClaudeHookRecords", function()
             toolUseID = "toolu_1",
             command = "/hooks/shell-guard.sh",
             content = "",
-            stdout = hook_specific_output and vim.json.encode({
-                hookSpecificOutput = hook_specific_output,
-            }) or "",
+            stdout = hook_specific_output
+                    and vim.json.encode({
+                        hookSpecificOutput = hook_specific_output,
+                    })
+                or "",
             stderr = "",
             exitCode = 0,
             durationMs = 12,
@@ -199,7 +201,9 @@ describe("ClaudeHookRecords", function()
 
         it("ignores an attachment that is not a hook record", function()
             assert.is_nil(
-                ClaudeHookRecords.decode(line({ type = "file", content = "…" }))
+                ClaudeHookRecords.decode(
+                    line({ type = "file", content = "…" })
+                )
             )
         end)
 

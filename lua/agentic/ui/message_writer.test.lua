@@ -1274,7 +1274,10 @@ describe("agentic.ui.MessageWriter", function()
         it("rails a run as it streams, before the turn ends", function()
             writer:write_message_chunk(make_message_update("one\n\ntwo\n"))
 
-            assert.same({ { 0, "╭─" }, { 1, "│ " }, { 2, "╰─" } }, rail())
+            assert.same(
+                { { 0, "╭─" }, { 1, "│ " }, { 2, "╰─" } },
+                rail()
+            )
 
             -- The corner follows the row just gained rather than waiting for
             -- the next paragraph to complete, which is the only thing that
@@ -1299,7 +1302,10 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_message_chunk(make_message_update("two "))
 
-            assert.same({ { 0, "╭─" }, { 1, "│ " }, { 2, "╰─" } }, rail())
+            assert.same(
+                { { 0, "╭─" }, { 1, "│ " }, { 2, "╰─" } },
+                rail()
+            )
         end)
 
         it("drops a live region's signs when the turn state resets", function()
@@ -1307,9 +1313,7 @@ describe("agentic.ui.MessageWriter", function()
             -- it: the next run starts on the row they end on.
             writer:write_message_chunk(make_message_update("alpha\n\nbeta"))
             writer:reset_turn_state()
-            writer:write_message_chunk(
-                make_message_update(" more\n\ngamma\n")
-            )
+            writer:write_message_chunk(make_message_update(" more\n\ngamma\n"))
 
             assert_one_sign_per_row()
         end)

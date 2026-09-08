@@ -723,20 +723,15 @@ describe("agentic.ui.ChatWidget", function()
             assert.spy(hide_spy).was.called(0)
         end)
 
-        it(
-            "an insert key in the chat reopens a closed input window",
-            function()
-                widget:close_input_window()
-                assert.is_nil(widget.win_nrs.input)
+        it("an insert key in the chat reopens a closed input window", function()
+            widget:close_input_window()
+            assert.is_nil(widget.win_nrs.input)
 
-                vim.api.nvim_set_current_win(widget.win_nrs.chat)
-                widget:focus_input_for_insert()
+            vim.api.nvim_set_current_win(widget.win_nrs.chat)
+            widget:focus_input_for_insert()
 
-                assert.is_true(
-                    vim.api.nvim_win_is_valid(widget.win_nrs.input)
-                )
-            end
-        )
+            assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.input))
+        end)
     end)
 
     describe("prompt navigation", function()
@@ -1073,11 +1068,22 @@ describe("agentic.ui.ChatWidget", function()
         end)
 
         local function set_input(lines)
-            vim.api.nvim_buf_set_lines(widget.buf_nrs.input, 0, -1, false, lines)
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                lines
+            )
         end
 
         local function input_lines()
-            return vim.api.nvim_buf_get_lines(widget.buf_nrs.input, 0, -1, false)
+            return vim.api.nvim_buf_get_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false
+            )
         end
 
         --- Tagged regions as `{ start_row, end_row }` pairs in buffer order.
@@ -1198,12 +1204,13 @@ describe("agentic.ui.ChatWidget", function()
                 widget:_queue_line()
             end, { buffer = widget.buf_nrs.input })
             vim.api.nvim_feedkeys(
-                "9" .. vim.api.nvim_replace_termcodes(
-                    "<Plug>(agentic-test-queue)",
-                    true,
-                    true,
-                    true
-                ),
+                "9"
+                    .. vim.api.nvim_replace_termcodes(
+                        "<Plug>(agentic-test-queue)",
+                        true,
+                        true,
+                        true
+                    ),
                 "x",
                 false
             )

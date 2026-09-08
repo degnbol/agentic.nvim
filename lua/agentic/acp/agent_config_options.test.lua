@@ -74,7 +74,9 @@ describe("agentic.acp.AgentConfigOptions", function()
             { chat = test_bufnr },
             function() end,
             function() end,
-            function() return true end
+            function()
+                return true
+            end
         )
     end)
 
@@ -314,7 +316,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     { chat = test_bufnr },
                     function() end,
                     function() end,
-                    function() return true end
+                    function()
+                        return true
+                    end
                 )
                 local handler = spy.new(function() end)
 
@@ -400,7 +404,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     { chat = test_bufnr },
                     function() end,
                     function() end,
-                    function() return true end
+                    function()
+                        return true
+                    end
                 )
                 fresh.legacy_agent_modes:set_modes({
                     availableModes = {
@@ -441,7 +447,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                 { chat = test_bufnr },
                 function() end,
                 function() end,
-                function() return true end
+                function()
+                    return true
+                end
             )
             local handler = function() end
 
@@ -519,7 +527,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     { chat = test_bufnr },
                     function() end,
                     function() end,
-                    function() return true end
+                    function()
+                        return true
+                    end
                 )
                 fresh.legacy_agent_models:set_models({
                     availableModels = {
@@ -564,7 +574,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     { chat = test_bufnr },
                     function() end,
                     function() end,
-                    function() return true end
+                    function()
+                        return true
+                    end
                 )
 
                 assert.is_false(fresh:show_model_selector(function() end))
@@ -587,14 +599,18 @@ describe("agentic.acp.AgentConfigOptions", function()
                     { chat = test_bufnr },
                     function() end,
                     function() end,
-                    function() return false end
+                    function()
+                        return false
+                    end
                 )
                 fresh:set_options({ model_option })
 
                 assert.is_false(fresh:show_model_selector(function() end))
                 assert.stub(select_stub).was.called(0)
                 assert.stub(notify_stub).was.called(1)
-                assert.truthy(string.find(notify_stub.calls[1][1], "Waiting for provider"))
+                assert.truthy(
+                    string.find(notify_stub.calls[1][1], "Waiting for provider")
+                )
                 assert.equal(vim.log.levels.INFO, notify_stub.calls[1][2])
 
                 notify_stub:revert()
@@ -631,7 +647,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                 { chat = test_bufnr },
                 function() end,
                 function() end,
-                function() return true end
+                function()
+                    return true
+                end
             )
 
             -- Trigger pending before models arrive
@@ -652,7 +670,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     { chat = test_bufnr },
                     function() end,
                     function() end,
-                    function() return true end
+                    function()
+                        return true
+                    end
                 )
 
                 fresh:show_model_selector(function() end)

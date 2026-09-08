@@ -725,8 +725,7 @@ describe("SessionRestore", function()
                 -- suffix rather than re-inserting markers into buffer content.
                 local MessageWriter = require("agentic.ui.message_writer")
                 Config = require("agentic.config")
-                local original_display =
-                    vim.deepcopy(Config.tool_call_display)
+                local original_display = vim.deepcopy(Config.tool_call_display)
                 Config.tool_call_display.execute_formatter = false
 
                 local bufnr = vim.api.nvim_create_buf(false, true)

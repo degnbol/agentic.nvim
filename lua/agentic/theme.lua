@@ -100,7 +100,10 @@ local applied = {}
 --- @param definition vim.api.keyset.highlight
 local function set_hl(name, definition)
     local current = vim.api.nvim_get_hl(0, { name = name })
-    if not vim.tbl_isempty(current) and not vim.deep_equal(current, applied[name]) then
+    if
+        not vim.tbl_isempty(current)
+        and not vim.deep_equal(current, applied[name])
+    then
         return
     end
     vim.api.nvim_set_hl(0, name, definition)

@@ -522,7 +522,10 @@ describe("agentic.SessionRegistry", function()
                         name = "claude-agent-acp",
                         installed = true,
                     })
-                    assert.equal("claude-agent-acp (default) ✓ available", label)
+                    assert.equal(
+                        "claude-agent-acp (default) ✓ available",
+                        label
+                    )
                 end
             )
 
@@ -557,7 +560,10 @@ describe("agentic.SessionRegistry", function()
                         name = "claude-agent-acp",
                         installed = true,
                     })
-                    assert.equal("claude-agent-acp (current) ✓ available", label)
+                    assert.equal(
+                        "claude-agent-acp (current) ✓ available",
+                        label
+                    )
                 end
             )
         end)

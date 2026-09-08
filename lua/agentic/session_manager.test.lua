@@ -274,50 +274,53 @@ describe("agentic.SessionManager", function()
             end
         end)
 
-        it("resets is_generating and stops indicators on reset mid-turn", function()
-            local Recovery = require("agentic.session_recovery")
-            local SlashCommands = require("agentic.acp.slash_commands")
-            local stubs = {
-                spy.stub(Recovery, "remove_reauth_keymap"),
-                spy.stub(Recovery, "cancel_health_check_timer"),
-                spy.stub(Recovery, "cancel_retry_timer"),
-                spy.stub(SlashCommands, "setCommands"),
-            }
+        it(
+            "resets is_generating and stops indicators on reset mid-turn",
+            function()
+                local Recovery = require("agentic.session_recovery")
+                local SlashCommands = require("agentic.acp.slash_commands")
+                local stubs = {
+                    spy.stub(Recovery, "remove_reauth_keymap"),
+                    spy.stub(Recovery, "cancel_health_check_timer"),
+                    spy.stub(Recovery, "cancel_retry_timer"),
+                    spy.stub(SlashCommands, "setCommands"),
+                }
 
-            local noop = function() end
-            local status_stop = spy.new(noop)
-            local subagent_stop = spy.new(noop)
-            local session = {
-                session_id = "live-session", -- exercise the teardown block
-                is_generating = true, -- as if a turn were streaming
-                agent = { cancel_session = noop },
-                permission_manager = { clear = noop },
-                todo_list = { clear = noop },
-                file_list = { clear = noop },
-                code_selection = { clear = noop },
-                diagnostics_list = { clear = noop },
-                config_options = { clear = noop },
-                file_activity = { clear = noop },
-                status_indicator = { stop = status_stop },
-                subagent_status_indicator = { stop = subagent_stop },
-                widget = {
-                    buf_nrs = { input = 0 },
-                    clear = noop,
-                    set_chat_title = noop,
-                },
-                _cancel_session = SessionManager._cancel_session,
-            } --[[@as agentic.SessionManager]]
+                local noop = function() end
+                local status_stop = spy.new(noop)
+                local subagent_stop = spy.new(noop)
+                local session = {
+                    session_id = "live-session", -- exercise the teardown block
+                    is_generating = true, -- as if a turn were streaming
+                    agent = { cancel_session = noop },
+                    permission_manager = { clear = noop },
+                    todo_list = { clear = noop },
+                    file_list = { clear = noop },
+                    code_selection = { clear = noop },
+                    diagnostics_list = { clear = noop },
+                    config_options = { clear = noop },
+                    file_activity = { clear = noop },
+                    status_indicator = { stop = status_stop },
+                    subagent_status_indicator = { stop = subagent_stop },
+                    widget = {
+                        buf_nrs = { input = 0 },
+                        clear = noop,
+                        set_chat_title = noop,
+                    },
+                    _cancel_session = SessionManager._cancel_session,
+                } --[[@as agentic.SessionManager]]
 
-            session:_cancel_session()
+                session:_cancel_session()
 
-            assert.is_false(session.is_generating)
-            assert.spy(status_stop).was.called(1)
-            assert.spy(subagent_stop).was.called(1)
+                assert.is_false(session.is_generating)
+                assert.spy(status_stop).was.called(1)
+                assert.spy(subagent_stop).was.called(1)
 
-            for _, s in ipairs(stubs) do
-                s:revert()
+                for _, s in ipairs(stubs) do
+                    s:revert()
+                end
             end
-        end)
+        )
     end)
 
     describe("_on_session_update: usage_update budget", function()
@@ -485,26 +488,23 @@ describe("agentic.SessionManager", function()
             assert.is_true(math.abs(overshoot - 1.0) < 0.01)
         end)
 
-        it(
-            "steady-state event without utilization: resets only",
-            function()
-                -- Real observed payload: status "allowed" carries no
-                -- utilization; overageStatus "rejected" = no overage credits.
-                local session = make_session({
-                    status = "allowed",
-                    rateLimitType = "five_hour",
-                    resetsAt = os.time() + 3600,
-                    overageStatus = "rejected",
-                    isUsingOverage = false,
-                })
+        it("steady-state event without utilization: resets only", function()
+            -- Real observed payload: status "allowed" carries no
+            -- utilization; overageStatus "rejected" = no overage credits.
+            local session = make_session({
+                status = "allowed",
+                rateLimitType = "five_hour",
+                resetsAt = os.time() + 3600,
+                overageStatus = "rejected",
+                isUsingOverage = false,
+            })
 
-                local util, overshoot, resets = session:_budget_status()
+            local util, overshoot, resets = session:_budget_status()
 
-                assert.is_nil(util)
-                assert.is_nil(overshoot)
-                assert.is_not_nil(resets)
-            end
-        )
+            assert.is_nil(util)
+            assert.is_nil(overshoot)
+            assert.is_not_nil(resets)
+        end)
 
         it("bails to nil when rateLimitType is missing", function()
             local session = make_session({
@@ -832,7 +832,10 @@ describe("agentic.SessionManager", function()
 
             session:announce_model_loaded("ghost-model")
 
-            assert.equal("**Loaded ghost-model** · ghost-model", written_text(write_spy, 1))
+            assert.equal(
+                "**Loaded ghost-model** · ghost-model",
+                written_text(write_spy, 1)
+            )
         end)
 
         it("suppresses a consecutive duplicate id", function()
@@ -1220,7 +1223,10 @@ describe("agentic.SessionManager", function()
             -- Verify _handle_input_submit was called with combined prompts
             -- calls[1] = {self, combined_text} (method call via `:` syntax)
             assert.spy(handle_input_spy).was.called(1)
-            assert.equal("message one\n\nmessage two", handle_input_spy.calls[1][2])
+            assert.equal(
+                "message one\n\nmessage two",
+                handle_input_spy.calls[1][2]
+            )
 
             -- Verify _queued_prompts was cleared by cancel_retry_timer
             assert.is_nil(session._queued_prompts)
@@ -1955,13 +1961,16 @@ describe("agentic.SessionManager", function()
             } --[[@as agentic.SessionManager]]
         end
 
-        it("billing_error offers no reauth, respawn or auto-continue", function()
-            local session = make_session("billing_error")
-            session:_handle_input_submit("hello")
-            assert.spy(reauth_stub).was.called(0)
-            assert.spy(respawn_stub).was.called(0)
-            assert.spy(auto_continue_stub).was.called(0)
-        end)
+        it(
+            "billing_error offers no reauth, respawn or auto-continue",
+            function()
+                local session = make_session("billing_error")
+                session:_handle_input_submit("hello")
+                assert.spy(reauth_stub).was.called(0)
+                assert.spy(respawn_stub).was.called(0)
+                assert.spy(auto_continue_stub).was.called(0)
+            end
+        )
 
         it("authentication_error offers reauth", function()
             local session = make_session("authentication_error")
@@ -2042,7 +2051,10 @@ describe("agentic.SessionManager", function()
                 assert.equal(4, #sink.prompts)
                 assert.equal(3, #sink.synthetic)
                 assert.equal(1, #sink.errors)
-                assert.same({ "Auto-retry gave up (3 attempts)." }, sink.actions)
+                assert.same(
+                    { "Auto-retry gave up (3 attempts)." },
+                    sink.actions
+                )
                 assert.equal(0, session._transient_attempt)
                 assert.same({ "hello" }, sink.headings)
                 assert.spy(bell_stub).was.called(1)
@@ -2102,22 +2114,36 @@ describe("agentic.SessionManager", function()
                 assert.equal(1, #sink.errors)
             end)
 
-            it("reports retries when the chain ends in another class", function()
-                local sink = {}
-                local session = make_session(nil, TRANSIENT, sink)
-                local sent = 0
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
-                    sent = sent + 1
-                    table.insert(sink.prompts, prompt)
-                    cb(nil, sent <= 2 and TRANSIENT or { message = "different" })
-                end
-                session:_handle_input_submit("hello")
+            it(
+                "reports retries when the chain ends in another class",
+                function()
+                    local sink = {}
+                    local session = make_session(nil, TRANSIENT, sink)
+                    local sent = 0
+                    session.agent.send_prompt = function(
+                        _self,
+                        _sid,
+                        prompt,
+                        cb
+                    )
+                        sent = sent + 1
+                        table.insert(sink.prompts, prompt)
+                        cb(
+                            nil,
+                            sent <= 2 and TRANSIENT or { message = "different" }
+                        )
+                    end
+                    session:_handle_input_submit("hello")
 
-                assert.equal(2, #sink.synthetic)
-                assert.equal(1, #sink.errors)
-                assert.same({ "Auto-retry gave up (2 attempts)." }, sink.actions)
-                assert.equal(0, session._transient_attempt)
-            end)
+                    assert.equal(2, #sink.synthetic)
+                    assert.equal(1, #sink.errors)
+                    assert.same(
+                        { "Auto-retry gave up (2 attempts)." },
+                        sink.actions
+                    )
+                    assert.equal(0, session._transient_attempt)
+                end
+            )
         end)
     end)
 
@@ -2535,21 +2561,24 @@ describe("agentic.SessionManager", function()
             assert.spy(stop_spy).was.called(1)
         end)
 
-        it("close is idempotent — a duplicated terminal update is harmless", function()
-            local session = make_session()
-            session:_mark_task_open("task-1")
-            session:_mark_task_open("task-2")
+        it(
+            "close is idempotent — a duplicated terminal update is harmless",
+            function()
+                local session = make_session()
+                session:_mark_task_open("task-1")
+                session:_mark_task_open("task-2")
 
-            -- task-1 closes twice (e.g. consolidated + PostToolUse update)
-            session:_mark_task_closed("task-1")
-            session:_mark_task_closed("task-1")
+                -- task-1 closes twice (e.g. consolidated + PostToolUse update)
+                session:_mark_task_closed("task-1")
+                session:_mark_task_closed("task-1")
 
-            -- sibling still open, so the indicator must not have stopped
-            assert.spy(stop_spy).was.called(0)
-            assert.is_true(session._open_tasks["task-2"])
-            -- membership guard also protects the divider: closed once, not twice
-            assert.spy(divider_spy).was.called(1)
-        end)
+                -- sibling still open, so the indicator must not have stopped
+                assert.spy(stop_spy).was.called(0)
+                assert.is_true(session._open_tasks["task-2"])
+                -- membership guard also protects the divider: closed once, not twice
+                assert.spy(divider_spy).was.called(1)
+            end
+        )
 
         it("emits one divider per closing task", function()
             local session = make_session()
@@ -2582,14 +2611,17 @@ describe("agentic.SessionManager", function()
             assert.spy(close_win_spy).was.called(0)
         end)
 
-        it("assigns ordinals in first-seen order, idempotent per agent", function()
-            local session = make_session()
-            assert.equal(0, session:_ordinal_for("task-a"))
-            assert.equal(1, session:_ordinal_for("task-b"))
-            -- same agent again keeps its number
-            assert.equal(0, session:_ordinal_for("task-a"))
-            assert.equal(2, session:_ordinal_for("task-c"))
-        end)
+        it(
+            "assigns ordinals in first-seen order, idempotent per agent",
+            function()
+                local session = make_session()
+                assert.equal(0, session:_ordinal_for("task-a"))
+                assert.equal(1, session:_ordinal_for("task-b"))
+                -- same agent again keeps its number
+                assert.equal(0, session:_ordinal_for("task-a"))
+                assert.equal(2, session:_ordinal_for("task-c"))
+            end
+        )
 
         it("latches numbering once two tasks run concurrently", function()
             local session = make_session()
@@ -2673,7 +2705,10 @@ describe("agentic.SessionManager", function()
             local noop = function() end
             local indicator = { start = noop, stop = noop, reposition = noop }
             return {
-                message_writer = { write_tool_call_block = noop, reposition = noop },
+                message_writer = {
+                    write_tool_call_block = noop,
+                    reposition = noop,
+                },
                 subagent_writer = MessageWriter:new(sub_bufnr),
                 status_indicator = indicator,
                 subagent_status_indicator = indicator,
@@ -2709,33 +2744,39 @@ describe("agentic.SessionManager", function()
             end
         end)
 
-        it("numbers both when children render before the second task opens", function()
-            local session = make_session()
-            -- both agents' children stream before either kind-resolving update
-            session:_mark_task_open("task-a")
-            session:_on_tool_call(child_call("c-a", "task-a"), false)
-            session:_on_tool_call(child_call("c-b", "task-b"), false)
-            -- second task's kind resolves → latch flips, backfills both
-            session:_mark_task_open("task-b")
+        it(
+            "numbers both when children render before the second task opens",
+            function()
+                local session = make_session()
+                -- both agents' children stream before either kind-resolving update
+                session:_mark_task_open("task-a")
+                session:_on_tool_call(child_call("c-a", "task-a"), false)
+                session:_on_tool_call(child_call("c-b", "task-b"), false)
+                -- second task's kind resolves → latch flips, backfills both
+                session:_mark_task_open("task-b")
 
-            -- full rail: both blocks' borders replaced by their own digit
-            assert.equal(0, count(decoration_signs(), "│ "))
-            assert.is_true(count(decoration_signs(), "0 ") > 0)
-            assert.is_true(count(decoration_signs(), "1 ") > 0)
-        end)
+                -- full rail: both blocks' borders replaced by their own digit
+                assert.equal(0, count(decoration_signs(), "│ "))
+                assert.is_true(count(decoration_signs(), "0 ") > 0)
+                assert.is_true(count(decoration_signs(), "1 ") > 0)
+            end
+        )
 
-        it("numbers both when the second child renders after the latch", function()
-            local session = make_session()
-            session:_mark_task_open("task-a")
-            session:_on_tool_call(child_call("c-a", "task-a"), false)
-            session:_mark_task_open("task-b") -- flip, backfill c-a
-            session:_on_tool_call(child_call("c-b", "task-b"), false) -- live
+        it(
+            "numbers both when the second child renders after the latch",
+            function()
+                local session = make_session()
+                session:_mark_task_open("task-a")
+                session:_on_tool_call(child_call("c-a", "task-a"), false)
+                session:_mark_task_open("task-b") -- flip, backfill c-a
+                session:_on_tool_call(child_call("c-b", "task-b"), false) -- live
 
-            -- full rail: both blocks' borders replaced by their own digit
-            assert.equal(0, count(decoration_signs(), "│ "))
-            assert.is_true(count(decoration_signs(), "0 ") > 0)
-            assert.is_true(count(decoration_signs(), "1 ") > 0)
-        end)
+                -- full rail: both blocks' borders replaced by their own digit
+                assert.equal(0, count(decoration_signs(), "│ "))
+                assert.is_true(count(decoration_signs(), "0 ") > 0)
+                assert.is_true(count(decoration_signs(), "1 ") > 0)
+            end
+        )
     end)
 
     describe("_apply_default_trust", function()
@@ -2780,12 +2821,15 @@ describe("agentic.SessionManager", function()
             Config.permissions.trust_tmp = orig_trust_tmp
         end)
 
-        it("activates a tmp scope when both flags are on and none is set", function()
-            session:_apply_default_trust()
-            assert.equal(1, pm.set_trust_scope.call_count)
-            local scope = pm.set_trust_scope.calls[1][2]
-            assert.equal("tmp", scope.kind)
-        end)
+        it(
+            "activates a tmp scope when both flags are on and none is set",
+            function()
+                session:_apply_default_trust()
+                assert.equal(1, pm.set_trust_scope.call_count)
+                local scope = pm.set_trust_scope.calls[1][2]
+                assert.equal("tmp", scope.kind)
+            end
+        )
 
         it("leaves a user-set scope untouched", function()
             pm.get_trust_scope = spy.new(function()

@@ -52,7 +52,8 @@ end
 --- @return integer|nil open_row 0-indexed
 --- @return integer|nil close_row 0-indexed
 local function find_fences(bufnr, start_row, end_row)
-    local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row + 1, false)
+    local lines =
+        vim.api.nvim_buf_get_lines(bufnr, start_row, end_row + 1, false)
     local open_idx
     for i, line in ipairs(lines) do
         if not open_idx then

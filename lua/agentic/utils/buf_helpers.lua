@@ -187,8 +187,9 @@ function BufHelpers.scroll_down(winid, max_topline)
 
     -- Reserve N rows below the last buffer line so virt_line indicators
     -- (thinking/generating) have breathing room when they appear.
-    local bottom_padding = (Config.auto_scroll and Config.auto_scroll.bottom_padding)
-        or 0
+    local bottom_padding = (
+        Config.auto_scroll and Config.auto_scroll.bottom_padding
+    ) or 0
     local effective_winheight = math.max(1, winheight - bottom_padding)
 
     -- Fold-aware natural target: smallest topline t (1-indexed) such

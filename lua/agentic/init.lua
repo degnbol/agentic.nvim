@@ -447,7 +447,8 @@ function Agentic.setup(opts)
     -- get_parser(bufnr, nil), which infers the language from the filetype, so
     -- the AgenticChat→agentic registration is what makes folding work. Without
     -- it the chat would fall back to no parser and never fold.
-    local md_parser = vim.api.nvim_get_runtime_file("parser/markdown.so", false)[1]
+    local md_parser =
+        vim.api.nvim_get_runtime_file("parser/markdown.so", false)[1]
     local agentic_ok = md_parser ~= nil
         and pcall(vim.treesitter.language.add, "agentic", {
             path = md_parser,

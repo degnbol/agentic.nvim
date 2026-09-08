@@ -102,7 +102,10 @@ describe("diff_jump", function()
             function()
                 read_stub:returns({ "x", "old1", "old2", "y" })
 
-                local block = make_edit_block({ "old1", "old2" }, { "new1", "new2" })
+                local block = make_edit_block(
+                    { "old1", "old2" },
+                    { "new1", "new2" }
+                )
 
                 -- Layout:
                 --   row 0: ### `/file.lua`
@@ -181,25 +184,31 @@ describe("diff_jump", function()
             assert.equal(1, target.file_col)
         end)
 
-        it("accounts for fence on markdown files (now fenced like others)", function()
-            read_stub:returns({ "para1", "old md line", "para3" })
+        it(
+            "accounts for fence on markdown files (now fenced like others)",
+            function()
+                read_stub:returns({ "para1", "old md line", "para3" })
 
-            local block = make_edit_block({ "old md line" }, { "new md line" })
-            block.argument = "/notes.md"
+                local block = make_edit_block(
+                    { "old md line" },
+                    { "new md line" }
+                )
+                block.argument = "/notes.md"
 
-            -- Layout (markdown, fenced like other languages):
-            --   row 0: ### `/notes.md`
-            --   row 1: ```md
-            --   row 2: old md line   ← old
-            --   row 3: new md line   ← new (cursor here)
-            local target = DiffJump.compute_target(block, 0, 3, 4)
+                -- Layout (markdown, fenced like other languages):
+                --   row 0: ### `/notes.md`
+                --   row 1: ```md
+                --   row 2: old md line   ← old
+                --   row 3: new md line   ← new (cursor here)
+                local target = DiffJump.compute_target(block, 0, 3, 4)
 
-            assert.is_not_nil(target)
-            ---@cast target -nil
-            assert.equal(true, target.exact)
-            assert.equal(2, target.file_row)
-            assert.equal(4, target.file_col)
-        end)
+                assert.is_not_nil(target)
+                ---@cast target -nil
+                assert.equal(true, target.exact)
+                assert.equal(2, target.file_row)
+                assert.equal(4, target.file_col)
+            end
+        )
     end)
 
     describe("find_block_at_row", function()
@@ -270,8 +279,7 @@ describe("diff_jump", function()
                 extmark_id = extmark_id,
             } --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
 
-            local found =
-                DiffJump.find_block_at_row(bufnr, 3, { x = block })
+            local found = DiffJump.find_block_at_row(bufnr, 3, { x = block })
 
             assert.is_nil(found)
 

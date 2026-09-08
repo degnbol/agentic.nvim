@@ -75,17 +75,25 @@ describe("ShellParse.extract_commands", function()
 
     describe("transparent prefixes", function()
         it("unwraps an exec-wrapper to the inner command", function()
-            assert.same({ "rm -f x" }, render(ShellParse.extract_commands("timeout 5 rm -f x")))
+            assert.same(
+                { "rm -f x" },
+                render(ShellParse.extract_commands("timeout 5 rm -f x"))
+            )
         end)
 
         it("walks an inline shell -c body", function()
-            assert.same({ "rm -f y" }, render(ShellParse.extract_commands("zsh -c 'rm -f y'")))
+            assert.same(
+                { "rm -f y" },
+                render(ShellParse.extract_commands("zsh -c 'rm -f y'"))
+            )
         end)
 
         it("unwraps a bare `uv run` to the inner command", function()
             assert.same(
                 { "basedpyright probe.py" },
-                render(ShellParse.extract_commands("uv run basedpyright probe.py"))
+                render(
+                    ShellParse.extract_commands("uv run basedpyright probe.py")
+                )
             )
         end)
 
@@ -94,12 +102,19 @@ describe("ShellParse.extract_commands", function()
             -- any option, leaving `uv` to match its own (non-`run`) allow rules.
             assert.same(
                 { "uv --with=evil run basedpyright probe.py" },
-                render(ShellParse.extract_commands("uv run --with=evil basedpyright probe.py"))
+                render(
+                    ShellParse.extract_commands(
+                        "uv run --with=evil basedpyright probe.py"
+                    )
+                )
             )
         end)
 
         it("leaves non-`run` uv subcommands as a leaf", function()
-            assert.same({ "uv pip list" }, render(ShellParse.extract_commands("uv pip list")))
+            assert.same(
+                { "uv pip list" },
+                render(ShellParse.extract_commands("uv pip list"))
+            )
         end)
     end)
 
@@ -162,9 +177,15 @@ describe("ShellParse.extract_commands", function()
             assert.equal("program", root:type())
         end)
 
-        it("returns nil on the hang trigger (never reaches the oracle)", function()
-            assert.equal(nil, ShellParse.parse_zsh_untrusted("c=${x//[^)]}"))
-        end)
+        it(
+            "returns nil on the hang trigger (never reaches the oracle)",
+            function()
+                assert.equal(
+                    nil,
+                    ShellParse.parse_zsh_untrusted("c=${x//[^)]}")
+                )
+            end
+        )
     end)
 
     describe("token_is_dynamic arithmetic gate", function()

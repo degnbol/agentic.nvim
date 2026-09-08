@@ -485,7 +485,10 @@ local function redirect_write_dest(fr, src)
         return nil
     end
     local dt = dest:type()
-    if (op == ">&" or op == "<&") and (dt == "file_descriptor" or dt == "number") then
+    if
+        (op == ">&" or op == "<&")
+        and (dt == "file_descriptor" or dt == "number")
+    then
         return nil
     end
     if vim.treesitter.get_node_text(dest, src) == "/dev/null" then
@@ -543,7 +546,8 @@ local function is_bare_cat(cmd, src)
     if not name_node then
         return false
     end
-    return vim.fs.basename(vim.treesitter.get_node_text(name_node, src)) == "cat"
+    return vim.fs.basename(vim.treesitter.get_node_text(name_node, src))
+        == "cat"
 end
 
 -- ── Parsing ──────────────────────────────────────────────────────────────────
@@ -603,17 +607,15 @@ local function oracle_terminates(body)
     if not parser_so then
         return false
     end
-    local done = vim
-        .system({
-            vim.v.progpath,
-            "--headless",
-            "-u",
-            "NONE",
-            "-l",
-            ORACLE_SCRIPT,
-            parser_so,
-        }, { stdin = body })
-        :wait(ORACLE_TIMEOUT_MS)
+    local done = vim.system({
+        vim.v.progpath,
+        "--headless",
+        "-u",
+        "NONE",
+        "-l",
+        ORACLE_SCRIPT,
+        parser_so,
+    }, { stdin = body }):wait(ORACLE_TIMEOUT_MS)
     return done.code == 0 and done.signal == 0
 end
 
@@ -748,17 +750,36 @@ local EXEC_WRAPPERS = {
     -- `inner_source`. Common flags only; mis-slice fails closed (see docstring).
     xargs = {
         value_opts = {
-            "-I", "-n", "-P", "-a", "-L",
-            "--arg-file", "--replace", "--max-args", "--max-procs", "--max-lines",
+            "-I",
+            "-n",
+            "-P",
+            "-a",
+            "-L",
+            "--arg-file",
+            "--replace",
+            "--max-args",
+            "--max-procs",
+            "--max-lines",
         },
         flag_opts = {
-            "-0", "-r", "-t",
-            "--null", "--no-run-if-empty", "--verbose",
+            "-0",
+            "-r",
+            "-t",
+            "--null",
+            "--no-run-if-empty",
+            "--verbose",
         },
         attached = {
-            "^%-I", "^%-i", "^%-n%d", "^%-P%d", "^%-L%d",
-            "^%-%-arg%-file=", "^%-%-replace=",
-            "^%-%-max%-args=", "^%-%-max%-procs=", "^%-%-max%-lines=",
+            "^%-I",
+            "^%-i",
+            "^%-n%d",
+            "^%-P%d",
+            "^%-L%d",
+            "^%-%-arg%-file=",
+            "^%-%-replace=",
+            "^%-%-max%-args=",
+            "^%-%-max%-procs=",
+            "^%-%-max%-lines=",
         },
     },
 }
@@ -788,7 +809,12 @@ local function skip_wrapper_operands(args, spec)
             elseif
                 -- boolean flag, or self-contained form (`-oL`, `--signal=K`, `-5`)
                 (spec.flag_opts and vim.tbl_contains(spec.flag_opts, opt))
-                or (spec.attached and matches_any_lua_pattern(opt, spec.attached))
+                or (
+                    spec.attached and matches_any_lua_pattern(
+                        opt,
+                        spec.attached
+                    )
+                )
             then
                 i = i + 1
             else
@@ -1046,7 +1072,8 @@ local function collect_command(node, src, out, depth)
     -- Transparent prefix: re-parse and flatten the inner instead of emitting the
     -- wrapper/shell itself, so `timeout 5 rm -f x` and `zsh -c 'rm -f x'` both
     -- yield a record for `rm`.
-    local inner = inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    local inner =
+        inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if inner and inner ~= "" then
         if depth >= NESTED_MAX_DEPTH then
             return false

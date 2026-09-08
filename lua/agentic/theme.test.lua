@@ -35,12 +35,18 @@ describe("agentic.Theme", function()
             assert.equal(Theme.get_language_from_path("foo.sh"), "bash")
         end)
 
-        it("falls back to contents for content-defined extensionless files", function()
-            assert.equal(
-                Theme.get_language_from_path("_brew", { "#compdef brew", "local x" }),
-                "zsh"
-            )
-        end)
+        it(
+            "falls back to contents for content-defined extensionless files",
+            function()
+                assert.equal(
+                    Theme.get_language_from_path(
+                        "_brew",
+                        { "#compdef brew", "local x" }
+                    ),
+                    "zsh"
+                )
+            end
+        )
 
         it("still returns empty when contents are omitted", function()
             assert.equal(Theme.get_language_from_path("_brew"), "")

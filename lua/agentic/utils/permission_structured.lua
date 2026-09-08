@@ -327,7 +327,12 @@ end
 --- @param dynamic boolean[]
 --- @param subcommand_idx table<integer, boolean>
 --- @return boolean
-local function some_first_positional_matches(pattern, words, dynamic, subcommand_idx)
+local function some_first_positional_matches(
+    pattern,
+    words,
+    dynamic,
+    subcommand_idx
+)
     local lua_pat = PermissionRules.glob_to_lua_pattern(pattern)
     for i in pairs(subcommand_idx) do
         if dynamic[i] or words[i]:match(lua_pat) then
@@ -494,7 +499,12 @@ end
 local function allow_parse(words, dynamic, cmd)
     local takers = value_taking_options[cmd] or {}
     --- @type agentic.PermStructured.AllowParse
-    local p = { stream = {}, stream_dynamic = {}, flag_cands = {}, leading_cands = {} }
+    local p = {
+        stream = {},
+        stream_dynamic = {},
+        flag_cands = {},
+        leading_cands = {},
+    }
     local options_ended = false
     local i, n = 1, #words
     while i <= n do

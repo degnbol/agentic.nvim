@@ -648,11 +648,7 @@ end
 --- @return string|nil
 local function resolved_var_name(node, src)
     local t = node:type()
-    if
-        t == "variable_ref"
-        or t == "expansion"
-        or t == "simple_expansion"
-    then
+    if t == "variable_ref" or t == "expansion" or t == "simple_expansion" then
         if node:named_child_count() == 1 then
             local c = node:named_child(0)
             if c and c:type() == "simple_variable_name" then
@@ -824,8 +820,7 @@ local function collect_bindings(node, src, targets)
         return true
     elseif t == "variable_assignment" then
         local name_node = node:field("name")[1]
-        local name = name_node
-            and vim.treesitter.get_node_text(name_node, src)
+        local name = name_node and vim.treesitter.get_node_text(name_node, src)
         -- Only a plain scalar name is enumerable; `arr[$i]=…` / a name carrying
         -- an expansion could rebind anything → clear-all.
         if name and name:match("^[%w_]+$") then
@@ -921,8 +916,7 @@ end
 local function update_known(known, child, src)
     if child:type() == "variable_assignment" then
         local name_node = child:field("name")[1]
-        local name = name_node
-            and vim.treesitter.get_node_text(name_node, src)
+        local name = name_node and vim.treesitter.get_node_text(name_node, src)
         if not name then
             return
         end
@@ -1125,8 +1119,8 @@ local function extract_args(node, src, ctx, known, inner_check)
                 -- falls to `literal_token`, which emits the raw text as one
                 -- dynamic token (`head $d/x`) — same word-split surface as `$d`.
                 local joined = known
-                    and child:type() == "concatenation"
-                    and resolved_concatenation(child, src, known)
+                        and child:type() == "concatenation"
+                        and resolved_concatenation(child, src, known)
                     or nil
                 if joined then
                     table.insert(args, joined)
@@ -1711,7 +1705,9 @@ local function walk_for(node, src, ctx)
             local sub_ctx =
                 vim.tbl_extend("force", ctx, { for_budget = sub_budget })
             for _, v in ipairs(values) do
-                if not walk_sequence(body, src, sub_ctx, { [var_name] = v }) then
+                if
+                    not walk_sequence(body, src, sub_ctx, { [var_name] = v })
+                then
                     return false
                 end
             end
@@ -2309,7 +2305,13 @@ local function tally_for(node, src, ctx, ranges)
             for _, v in ipairs(values) do
                 --- @type agentic.utils.PermissionRules.Range[]
                 local per_value = {}
-                tally_sequence(body, src, sub_ctx, per_value, { [var_name] = v })
+                tally_sequence(
+                    body,
+                    src,
+                    sub_ctx,
+                    per_value,
+                    { [var_name] = v }
+                )
                 for _, r in ipairs(per_value) do
                     local key = table.concat(r, ",")
                     if not seen[key] then
@@ -2518,10 +2520,15 @@ local reject_walk
 --- @param ctx agentic.utils.PermissionRules.RejectCtx
 --- @return boolean
 local function command_is_denied(node, src, ctx)
-    local args, arg_nodes, args_dynamic, name_node =
-        extract_args(node, src, ctx, nil, function()
+    local args, arg_nodes, args_dynamic, name_node = extract_args(
+        node,
+        src,
+        ctx,
+        nil,
+        function()
             return true
-        end)
+        end
+    )
     if not args or not name_node then
         return false
     end

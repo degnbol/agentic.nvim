@@ -627,13 +627,8 @@ end
 --- @param er integer
 function ChatWidget:_clear_queued_in_range(sr, er)
     local buf = self.buf_nrs.input
-    local marks = vim.api.nvim_buf_get_extmarks(
-        buf,
-        NS_QUEUED,
-        0,
-        -1,
-        { details = true }
-    )
+    local marks =
+        vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
     for _, mark in ipairs(marks) do
         if mark[2] <= er and sr <= mark[4].end_row then
             vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, mark[1])
@@ -679,7 +674,8 @@ function ChatWidget:_queue_line()
     end
     local buf = self.buf_nrs.input
     local sr = vim.api.nvim_win_get_cursor(0)[1] - 1
-    local er = math.min(sr + vim.v.count1 - 1, vim.api.nvim_buf_line_count(buf) - 1)
+    local er =
+        math.min(sr + vim.v.count1 - 1, vim.api.nvim_buf_line_count(buf) - 1)
     if span_has_content(buf, sr, er) then
         self:_queue_line_range(sr, er)
     end
@@ -742,13 +738,8 @@ end
 --- @return string|nil
 function ChatWidget:drain_queued_regions()
     local buf = self.buf_nrs.input
-    local marks = vim.api.nvim_buf_get_extmarks(
-        buf,
-        NS_QUEUED,
-        0,
-        -1,
-        { details = true }
-    )
+    local marks =
+        vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
     if #marks == 0 then
         return nil
     end
@@ -765,13 +756,7 @@ function ChatWidget:drain_queued_regions()
     for i = #marks, 1, -1 do
         local mark = marks[i]
         vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, mark[1])
-        vim.api.nvim_buf_set_lines(
-            buf,
-            mark[2],
-            mark[4].end_row + 1,
-            false,
-            {}
-        )
+        vim.api.nvim_buf_set_lines(buf, mark[2], mark[4].end_row + 1, false, {})
     end
     self._draining = false
 
@@ -1003,32 +988,24 @@ function ChatWidget:_setup_prompt_navigation()
 
     local open_diff_file = Config.keymaps.chat
         and Config.keymaps.chat.open_diff_file
-    if
-        open_diff_file
-        and not BufHelpers.is_keymap_disabled(open_diff_file)
-    then
+    if open_diff_file and not BufHelpers.is_keymap_disabled(open_diff_file) then
         local status_messages = {
             no_session = "No agentic session for this tab",
             no_block = "No tool call block under cursor",
             no_diff = "Tool call has no diff (not an Edit/Write)",
             no_target = "Could not locate diff hunks",
         }
-        BufHelpers.multi_keymap_set(
-            open_diff_file,
-            chat_buf,
-            function()
-                local DiffJump = require("agentic.ui.diff_jump")
-                local status = DiffJump.handle()
-                if status ~= "ok" then
-                    Logger.notify(
-                        status_messages[status] or status,
-                        vim.log.levels.INFO,
-                        { title = "Agentic" }
-                    )
-                end
-            end,
-            { desc = "Agentic: Open diff file in new tab" }
-        )
+        BufHelpers.multi_keymap_set(open_diff_file, chat_buf, function()
+            local DiffJump = require("agentic.ui.diff_jump")
+            local status = DiffJump.handle()
+            if status ~= "ok" then
+                Logger.notify(
+                    status_messages[status] or status,
+                    vim.log.levels.INFO,
+                    { title = "Agentic" }
+                )
+            end
+        end, { desc = "Agentic: Open diff file in new tab" })
     end
 end
 

@@ -26,7 +26,12 @@ AgentConfigOptions.__index = AgentConfigOptions
 --- @param set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ModelChangeOpts|nil)
 --- @param is_agent_ready fun(): boolean Returns true if an agent is attached and ready
 --- @return agentic.acp.AgentConfigOptions
-function AgentConfigOptions:new(buffers, set_mode_callback, set_model_callback, is_agent_ready)
+function AgentConfigOptions:new(
+    buffers,
+    set_mode_callback,
+    set_model_callback,
+    is_agent_ready
+)
     local AgentModes = require("agentic.acp.agent_modes")
     local AgentModels = require("agentic.acp.agent_models")
 

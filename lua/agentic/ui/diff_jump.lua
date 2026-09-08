@@ -137,10 +137,8 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
                 cursor = cursor + 1
             end
         else
-            local filtered = ToolCallDiff.filter_unchanged_lines(
-                db.old_lines,
-                db.new_lines
-            )
+            local filtered =
+                ToolCallDiff.filter_unchanged_lines(db.old_lines, db.new_lines)
 
             for _, pair in ipairs(filtered.pairs) do
                 if pair.old_line then

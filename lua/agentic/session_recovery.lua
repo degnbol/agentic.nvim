@@ -34,7 +34,11 @@ function M.surface_unexpected_response(sm, response)
     end
 
     local stop_reason = response.stopReason
-    if stop_reason == nil or stop_reason == "end_turn" or stop_reason == "cancelled" then
+    if
+        stop_reason == nil
+        or stop_reason == "end_turn"
+        or stop_reason == "cancelled"
+    then
         return
     end
 

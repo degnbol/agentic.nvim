@@ -166,8 +166,16 @@ describe("agentic.ui.PermissionManager", function()
                 sessionId = "test-session",
                 toolCall = { toolCallId = "tc-ret-" .. kind, kind = kind },
                 options = {
-                    { optionId = "allow-once", name = "Allow", kind = "allow_once" },
-                    { optionId = "reject-once", name = "Reject", kind = "reject_once" },
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject",
+                        kind = "reject_once",
+                    },
                 },
             }
         end
@@ -378,9 +386,7 @@ describe("agentic.ui.PermissionManager", function()
                 toolCall = {
                     toolCallId = tool_call_id,
                     kind = "execute",
-                    rawInput = command
-                            and { command = command } --[[@as agentic.acp.RawInput]]
-                        or nil,
+                    rawInput = command and { command = command } --[[@as agentic.acp.RawInput]] or nil,
                 },
                 options = {
                     {
@@ -494,30 +500,33 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
-        it("allow_always remembers a clean leaf without a whole-command entry", function()
-            local cb1 = spy.new(function() end)
-            pm:add_request(
-                make_execute_request("frobnicate a", "tc-leaf-1"),
-                cb1 --[[@as function]]
-            )
-            assert.is_not_nil(pm.current_request) -- unknown command prompts
-            pm:_complete_request("allow-always")
+        it(
+            "allow_always remembers a clean leaf without a whole-command entry",
+            function()
+                local cb1 = spy.new(function() end)
+                pm:add_request(
+                    make_execute_request("frobnicate a", "tc-leaf-1"),
+                    cb1 --[[@as function]]
+                )
+                assert.is_not_nil(pm.current_request) -- unknown command prompts
+                pm:_complete_request("allow-always")
 
-            -- A single clean leaf is fully rememberable, so no whole-command
-            -- fallback is stored — only the leaf is remembered.
-            assert.is_true(pm._execute_leaf_allow["frobnicate a"])
-            assert.same({}, pm._always_cache)
+                -- A single clean leaf is fully rememberable, so no whole-command
+                -- fallback is stored — only the leaf is remembered.
+                assert.is_true(pm._execute_leaf_allow["frobnicate a"])
+                assert.same({}, pm._always_cache)
 
-            -- The same leaf, reached through a different surrounding block,
-            -- auto-approves without re-prompting.
-            local cb2 = spy.new(function() end)
-            pm:add_request(
-                make_execute_request("frobnicate a", "tc-leaf-2"),
-                cb2 --[[@as function]]
-            )
-            assert.spy(cb2).was.called(1)
-            assert.is_true(cb2:called_with("allow-once"))
-        end)
+                -- The same leaf, reached through a different surrounding block,
+                -- auto-approves without re-prompting.
+                local cb2 = spy.new(function() end)
+                pm:add_request(
+                    make_execute_request("frobnicate a", "tc-leaf-2"),
+                    cb2 --[[@as function]]
+                )
+                assert.spy(cb2).was.called(1)
+                assert.is_true(cb2:called_with("allow-once"))
+            end
+        )
 
         it("a later block prompts only about its still-unknown leaf", function()
             pm:add_request(
@@ -538,26 +547,29 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
-        it("allow_always on an ask-gated block keeps the whole-command fallback", function()
-            local cb1 = spy.new(function() end)
-            pm:add_request(
-                make_execute_request("git commit -m foo", "tc-leaf-5"),
-                cb1 --[[@as function]]
-            )
-            assert.is_not_nil(pm.current_request) -- ask-tier prompts
-            pm:_complete_request("allow-always")
+        it(
+            "allow_always on an ask-gated block keeps the whole-command fallback",
+            function()
+                local cb1 = spy.new(function() end)
+                pm:add_request(
+                    make_execute_request("git commit -m foo", "tc-leaf-5"),
+                    cb1 --[[@as function]]
+                )
+                assert.is_not_nil(pm.current_request) -- ask-tier prompts
+                pm:_complete_request("allow-always")
 
-            -- The ask-gated leaf is not rememberable, so the whole-command
-            -- cache must hold for the identical block.
-            assert.same({}, pm._execute_leaf_allow)
-            local cb2 = spy.new(function() end)
-            pm:add_request(
-                make_execute_request("git commit -m foo", "tc-leaf-6"),
-                cb2 --[[@as function]]
-            )
-            assert.spy(cb2).was.called(1)
-            assert.is_true(cb2:called_with("allow-once"))
-        end)
+                -- The ask-gated leaf is not rememberable, so the whole-command
+                -- cache must hold for the identical block.
+                assert.same({}, pm._execute_leaf_allow)
+                local cb2 = spy.new(function() end)
+                pm:add_request(
+                    make_execute_request("git commit -m foo", "tc-leaf-6"),
+                    cb2 --[[@as function]]
+                )
+                assert.spy(cb2).was.called(1)
+                assert.is_true(cb2:called_with("allow-once"))
+            end
+        )
 
         it("clear() resets remembered leaves", function()
             pm:add_request(
@@ -1141,8 +1153,16 @@ describe("agentic.ui.PermissionManager", function()
                     rawInput = { command = command } --[[@as agentic.acp.RawInput]],
                 },
                 options = {
-                    { optionId = "allow-once", name = "Allow once", kind = "allow_once" },
-                    { optionId = "reject-once", name = "Reject once", kind = "reject_once" },
+                    {
+                        optionId = "allow-once",
+                        name = "Allow once",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject once",
+                        kind = "reject_once",
+                    },
                 },
             }
         end

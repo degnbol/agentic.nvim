@@ -468,50 +468,53 @@ describe("ToolCallRenderer", function()
             end
         )
 
-        it("shows the reason below the diff and folds it closed when Edit fails", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "tc-2",
-                kind = "edit",
-                argument = "/tmp/foo.lua",
-                status = "failed",
-                diff = {
-                    old = { "old content" },
-                    new = { "new content" },
-                },
-                failure_reason = { "Permission denied." },
-            }
+        it(
+            "shows the reason below the diff and folds it closed when Edit fails",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-2",
+                    kind = "edit",
+                    argument = "/tmp/foo.lua",
+                    status = "failed",
+                    diff = {
+                        old = { "old content" },
+                        new = { "new content" },
+                    },
+                    failure_reason = { "Permission denied." },
+                }
 
-            local lines, _, _, fold_anchor, _, fold_open =
-                Renderer.prepare_block_lines(block, 0)
+                local lines, _, _, fold_anchor, _, fold_open =
+                    Renderer.prepare_block_lines(block, 0)
 
-            -- The diff is kept (not replaced by the reason)...
-            local function index_of(needle)
-                for i, line in ipairs(lines) do
-                    if line == needle then
-                        return i
+                -- The diff is kept (not replaced by the reason)...
+                local function index_of(needle)
+                    for i, line in ipairs(lines) do
+                        if line == needle then
+                            return i
+                        end
                     end
                 end
+                local old_i = index_of("old content")
+                local new_i = index_of("new content")
+                local reason_i = index_of("Permission denied.")
+                assert.is_not_nil(old_i)
+                assert.is_not_nil(new_i)
+                assert.is_not_nil(reason_i)
+
+                -- ...the reason renders below the diff, not in place of it...
+                assert.is_true(reason_i > new_i)
+
+                -- ...the diff fence carries the injection-suppressing fold marker...
+                local fence_i = old_i - 1
+                assert.is_not_nil(lines[fence_i]:match("difffold$"))
+
+                -- ...and a failed edit folds closed: fold_anchor points at the
+                -- first body line with fold_open = false.
+                assert.equal(old_i - 1, fold_anchor)
+                assert.is_false(fold_open)
             end
-            local old_i = index_of("old content")
-            local new_i = index_of("new content")
-            local reason_i = index_of("Permission denied.")
-            assert.is_not_nil(old_i)
-            assert.is_not_nil(new_i)
-            assert.is_not_nil(reason_i)
-
-            -- ...the reason renders below the diff, not in place of it...
-            assert.is_true(reason_i > new_i)
-
-            -- ...the diff fence carries the injection-suppressing fold marker...
-            local fence_i = old_i - 1
-            assert.is_not_nil(lines[fence_i]:match("difffold$"))
-
-            -- ...and a failed edit folds closed: fold_anchor points at the
-            -- first body line with fold_open = false.
-            assert.equal(old_i - 1, fold_anchor)
-            assert.is_false(fold_open)
-        end)
+        )
 
         describe("create collapse", function()
             local Config = require("agentic.config")
@@ -543,7 +546,9 @@ describe("ToolCallRenderer", function()
             end
 
             it("folds a large created file closed", function()
-                assert.is_false(fold_open_for({ old = {}, new = { "a", "b", "c", "d" } }))
+                assert.is_false(
+                    fold_open_for({ old = {}, new = { "a", "b", "c", "d" } })
+                )
             end)
 
             it("leaves a small created file open", function()
@@ -611,31 +616,28 @@ describe("ToolCallRenderer", function()
             end
         end)
 
-        it(
-            "emits no fold markers even past the fold threshold",
-            function()
-                local Config = require("agentic.config")
-                local reason = {}
-                for i = 1, Config.tool_call_display.execute_max_lines + 1 do
-                    table.insert(reason, "err line " .. i)
-                end
-                --- @type agentic.ui.MessageWriter.ToolCallBlock
-                local block = {
-                    tool_call_id = "tc-exec-3",
-                    kind = "execute",
-                    argument = "make build",
-                    status = "failed",
-                    failure_reason = reason,
-                }
-
-                local lines, _ = Renderer.prepare_block_lines(block, 0)
-
-                for _, line in ipairs(lines) do
-                    assert.are_not.equal("{{{", line)
-                    assert.are_not.equal("}}}", line)
-                end
+        it("emits no fold markers even past the fold threshold", function()
+            local Config = require("agentic.config")
+            local reason = {}
+            for i = 1, Config.tool_call_display.execute_max_lines + 1 do
+                table.insert(reason, "err line " .. i)
             end
-        )
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-exec-3",
+                kind = "execute",
+                argument = "make build",
+                status = "failed",
+                failure_reason = reason,
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 0)
+
+            for _, line in ipairs(lines) do
+                assert.are_not.equal("{{{", line)
+                assert.are_not.equal("}}}", line)
+            end
+        end)
 
         it("keeps red error highlight on non-execute failures", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
@@ -777,7 +779,8 @@ describe("ToolCallRenderer", function()
         -- chat buffer injects the command fence's label as that parser, so a
         -- shell label on this command would freeze the editor. Built from char
         -- codes so the literal shape never reaches shell tooling.
-        local HANG_CMD = "c=" .. string.char(36, 123, 120, 47, 47, 91, 94, 41, 93, 125)
+        local HANG_CMD = "c="
+            .. string.char(36, 123, 120, 47, 47, 91, 94, 41, 93, 125)
 
         --- First labelled fence line's info string (the command fence; a bare
         --- closing fence has no label and is skipped).
@@ -793,29 +796,35 @@ describe("ToolCallRenderer", function()
             return nil
         end
 
-        it("uses a non-injecting label for a hang-trigger execute command", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-hang",
-                kind = "execute",
-                argument = HANG_CMD,
-                status = "completed",
-            }
-            local lines, _ = Renderer.prepare_block_lines(block, 0)
-            assert.equal("text", first_fence_label(lines))
-        end)
+        it(
+            "uses a non-injecting label for a hang-trigger execute command",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "exec-hang",
+                    kind = "execute",
+                    argument = HANG_CMD,
+                    status = "completed",
+                }
+                local lines, _ = Renderer.prepare_block_lines(block, 0)
+                assert.equal("text", first_fence_label(lines))
+            end
+        )
 
-        it("uses a non-injecting label for a hang-trigger search command", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "search-hang",
-                kind = "search",
-                argument = "rg '" .. HANG_CMD .. "'",
-                status = "completed",
-            }
-            local lines, _ = Renderer.prepare_block_lines(block, 0)
-            assert.equal("text", first_fence_label(lines))
-        end)
+        it(
+            "uses a non-injecting label for a hang-trigger search command",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "search-hang",
+                    kind = "search",
+                    argument = "rg '" .. HANG_CMD .. "'",
+                    status = "completed",
+                }
+                local lines, _ = Renderer.prepare_block_lines(block, 0)
+                assert.equal("text", first_fence_label(lines))
+            end
+        )
 
         it("keeps the shell label for a benign command", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
@@ -837,8 +846,13 @@ describe("ToolCallRenderer", function()
         --- @return integer|nil row 0-indexed
         local function ansi_extmark_row(bufnr, prefix)
             local ns = vim.api.nvim_get_namespaces()["agentic_diff_highlights"]
-            local marks =
-                vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                ns,
+                0,
+                -1,
+                { details = true }
+            )
             for _, mark in ipairs(marks) do
                 local hl = mark[4] and mark[4].hl_group
                 if hl and vim.startswith(hl, prefix) then
@@ -848,42 +862,48 @@ describe("ToolCallRenderer", function()
             return nil
         end
 
-        it("lands the colour on the content line, not the console fence", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-ansi",
-                status = "completed",
-                kind = "execute",
-                argument = "echo hi",
-                body = { "\27[31mred\27[0m green" },
-            }
+        it(
+            "lands the colour on the content line, not the console fence",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "exec-ansi",
+                    status = "completed",
+                    kind = "execute",
+                    argument = "echo hi",
+                    body = { "\27[31mred\27[0m green" },
+                }
 
-            local lines, highlight_ranges, ansi_highlights =
-                Renderer.prepare_block_lines(block, 80)
+                local lines, highlight_ranges, ansi_highlights =
+                    Renderer.prepare_block_lines(block, 80)
 
-            local bufnr = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+                local bufnr = vim.api.nvim_create_buf(false, true)
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 
-            Renderer.apply_block_highlights(
-                bufnr,
-                0,
-                #lines,
-                "execute",
-                highlight_ranges,
-                ansi_highlights
-            )
+                Renderer.apply_block_highlights(
+                    bufnr,
+                    0,
+                    #lines,
+                    "execute",
+                    highlight_ranges,
+                    ansi_highlights
+                )
 
-            local content_row
-            for i, line in ipairs(lines) do
-                if line == "red green" then
-                    content_row = i - 1
-                    break
+                local content_row
+                for i, line in ipairs(lines) do
+                    if line == "red green" then
+                        content_row = i - 1
+                        break
+                    end
                 end
-            end
-            assert.is_not_nil(content_row)
-            assert.equal(content_row, ansi_extmark_row(bufnr, "AgenticAnsi"))
+                assert.is_not_nil(content_row)
+                assert.equal(
+                    content_row,
+                    ansi_extmark_row(bufnr, "AgenticAnsi")
+                )
 
-            vim.api.nvim_buf_delete(bufnr, { force = true })
-        end)
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end
+        )
     end)
 end)

@@ -220,7 +220,12 @@ local ConfigDefault = {
             win_opts = {},
         },
         todos = { display = true, max_height = 10, win_opts = {} },
-        subagent = { display = true, width = "40%", auto_close = false, win_opts = {} },
+        subagent = {
+            display = true,
+            width = "40%",
+            auto_close = false,
+            win_opts = {},
+        },
     },
 
     --- @type agentic.UserConfig.Keymaps
@@ -417,9 +422,9 @@ local ConfigDefault = {
     --- @field border string|string[] nvim_open_win border style
     --- @field winblend integer 0..100 transparency
     permission_float = {
-        anchor = "SE",       -- chat-window corner to anchor to
+        anchor = "SE", -- chat-window corner to anchor to
         width = 30,
-        row_offset = 1,      -- inset from anchored corner
+        row_offset = 1, -- inset from anchored corner
         col_offset = -1,
         border = "rounded",
         winblend = 0,
