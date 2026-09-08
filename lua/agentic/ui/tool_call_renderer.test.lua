@@ -234,23 +234,136 @@ describe("ToolCallRenderer", function()
         end)
     end)
 
-    describe("collapsed heading width", function()
-        it("fits the wrap width including the frame it adds", function()
+    describe("collapsed heading", function()
+        --- Render `kind`'s tool call block, reporting its heading line.
+        --- @param kind string
+        --- @param argument string
+        --- @param wrap_width? integer
+        --- @return string heading
+        local function heading(kind, argument, wrap_width)
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
-                tool_call_id = "exec-long-desc",
+                tool_call_id = "heading-" .. kind,
+                status = "completed",
+                kind = kind,
+                argument = argument,
+            }
+
+            return (Renderer.prepare_block_lines(block, wrap_width or 80))[1]
+        end
+
+        --- `heading` for an execute block, whose heading name is the model's
+        --- description rather than the command.
+        --- @param description string
+        --- @param wrap_width? integer
+        --- @return string heading
+        local function execute_heading(description, wrap_width)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-heading",
                 status = "completed",
                 kind = "execute",
                 argument = "ls",
-                description = string.rep("long description ", 10),
+                description = description,
             }
 
-            local lines = Renderer.prepare_block_lines(block, 40)
+            return (Renderer.prepare_block_lines(block, wrap_width or 80))[1]
+        end
 
-            -- The heading is ``### `<name>` ``: the truncation budget has to pay
-            -- for the backticks it wraps the name in, not just the prefix.
-            assert.is_true(vim.fn.strdisplaywidth(lines[1]) <= 40)
-            assert.equal("…`", lines[1]:sub(-4))
+        it("leaves a name markdown cannot reinterpret unguarded", function()
+            assert.equal(
+                "### Compact conversation",
+                execute_heading("Compact conversation")
+            )
+            assert.equal("### Plan mode", heading("switch_mode", "Plan mode"))
+            assert.equal(
+                "### Compact conversation",
+                heading("other", "Compact conversation")
+            )
+        end)
+
+        it("guards a name carrying markdown inline syntax", function()
+            -- Bare, the emphasis markers would be parsed away and `<pid>`
+            -- swallowed as an HTML tag.
+            assert.equal(
+                "### `kill _the_ <pid>`",
+                execute_heading("kill _the_ <pid>")
+            )
+        end)
+
+        it("guards a name carrying inline math", function()
+            -- `$` is the one member of the set that is not vanilla
+            -- markdown-inline: the chat buffer inherits markdown's latex_block
+            -- injection, so a bare `$5 and $6` parses as math.
+            assert.equal(
+                "### `raise $5 to $6`",
+                execute_heading("raise $5 to $6")
+            )
+        end)
+
+        it("widens the guard past a backtick run in the name", function()
+            -- A one-tick guard is the delimiter a backtick-bearing name
+            -- defeats: `Run `make x` now` parses as two spans with "make x"
+            -- left unguarded between them.
+            assert.equal(
+                "### ``Run `make x` now``",
+                execute_heading("Run `make x` now")
+            )
+        end)
+
+        it("pads a name whose own backtick abuts the guard", function()
+            -- Without the pad the name's run merges into the delimiter.
+            assert.equal("### `` `x` ``", execute_heading("`x`"))
+        end)
+
+        it("guards a code kind's name that needs no guarding", function()
+            -- A path column reads uniformly only if the guard does not come
+            -- and go with whether one filename happens to hold an emphasised
+            -- component.
+            assert.equal(
+                "### `/tmp/plain.txt`",
+                heading("read", "/tmp/plain.txt")
+            )
+        end)
+
+        it("guards every file-mutating kind's path alike", function()
+            -- SessionManager acts on all five; a path that renders guarded
+            -- under one and bare under another reads as arbitrary.
+            for _, kind in ipairs({
+                "edit",
+                "create",
+                "write",
+                "delete",
+                "move",
+            }) do
+                assert.equal(
+                    "### `/tmp/plain.txt`",
+                    heading(kind, "/tmp/plain.txt")
+                )
+            end
+        end)
+
+        it("fits the wrap width including the frame it adds", function()
+            local head = execute_heading(string.rep("long name ", 10), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("…", head:sub(-3))
+        end)
+
+        it("pays for the guard out of the truncation budget", function()
+            -- The backticks are part of the rendered width, so a guarded name
+            -- has two fewer cells to spend than a bare one.
+            local head = execute_heading("_" .. string.rep("wide ", 20), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("…`", head:sub(-4))
+        end)
+
+        it("pays for a widened guard too", function()
+            local head = execute_heading("`" .. string.rep("wide ", 20), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("… ``", head:sub(-6))
         end)
     end)
 

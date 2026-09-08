@@ -70,19 +70,88 @@ function M.parse_read_range(argument)
     return path, { offset = na, limit = nb - na + 1 }
 end
 
+--- Normalise an ACP kind for table lookup. Adapters mint their own kinds in
+--- CamelCase (`SubAgent`, `SlashCommand`) alongside the protocol's lowercase
+--- ones, so every kind-keyed table in this module is indexed through here.
+--- @param kind string|nil
+--- @return string
+local function kind_key(kind)
+    if not kind then
+        return ""
+    end
+    return vim.trim(kind):lower()
+end
+
 --- The glyph carrying an ACP kind's identity, stamped as the sign on the
 --- block's opening row (see `render_decorations`).
 --- @param kind string
 --- @return string
 local function kind_glyph(kind)
-    return Glyphs.KIND[vim.trim(kind):lower()] or Glyphs.KIND_DEFAULT
+    return Glyphs.KIND[kind_key(kind)] or Glyphs.KIND_DEFAULT
 end
 
---- Build the collapsed tool-call heading: `` ### `name` ``. The kind identity
+--- Characters through which markdown inline parsing can reinterpret heading
+--- text: code spans, emphasis, strikethrough, links and raw HTML, entity
+--- references, backslash escapes, the `$` math injection, and the ATX closing
+--- sequence. `!` is absent because an image needs the `[` that is already here.
+local MARKDOWN_INLINE_SPECIALS = "[`*_~%[%]<>&\\$#]"
+
+--- Kinds whose heading name is a path, URL, command or identifier rather than
+--- prose. They take the code-span guard unconditionally: a column of file heads
+--- that switched on whether one filename happened to contain an emphasised path
+--- component would read as arbitrary, the guard being invisible
+--- (`conceallevel=2` hides the delimiters) yet carrying the name's colour. The
+--- file-mutating half has to match `SessionManager`'s own list of them, or the
+--- same path renders guarded under `read` and bare under `delete`.
+---
+--- Prose kinds — an `execute` description, a `switch_mode` label, a `SubAgent`
+--- line, and the generic title bucket — are guarded only when their own text
+--- needs it. That bucket cannot be typed either way: an adapter's fallback
+--- yields `rawInput.command` or `update.title` under one kind (see
+--- `ClaudeAgentAcpAdapter:__build_tool_call_update`), so a bare command still
+--- reaches a prose-typed head.
+--- @type table<string, boolean>
+local CODE_KINDS = {
+    read = true,
+    edit = true,
+    create = true,
+    write = true,
+    delete = true,
+    move = true,
+    fetch = true,
+    search = true,
+    slashcommand = true,
+    skill = true,
+}
+
+--- The backtick run enclosing `name` as a code span, plus the space pad
+--- CommonMark needs when the name's own text abuts a delimiter.
+---
+--- One tick longer than the longest run inside the name, for the same reason
+--- `M.safe_fence` widens a block fence: a single tick cannot guard a name that
+--- holds one, and `` `Run `make x` now` `` parses as two spans with the middle
+--- left unguarded — the corruption the guard exists to prevent. A name starting
+--- or ending in a backtick needs the pad on top, or its own run merges into the
+--- delimiter.
+--- @param name string
+--- @return string guard
+--- @return string pad
+local function code_span_guard(name)
+    local longest = 0
+    for ticks in name:gmatch("`+") do
+        longest = math.max(longest, #ticks)
+    end
+    local abuts = name:sub(1, 1) == "`" or name:sub(-1) == "`"
+    return string.rep("`", longest + 1), abuts and " " or ""
+end
+
+--- Build the collapsed tool-call heading: `` ### name ``. The kind identity
 --- lives in the sign column, so the heading text is only the informative
 --- content (filename / description / command) that treesitter-context pins as a
---- breadcrumb. `name` is backtick-wrapped so markdown inline parsing (emphasis
---- on `_`, stray `` ` ``) cannot corrupt the heading.
+--- breadcrumb. The name is wrapped in a `code_span_guard` when `kind` is one of
+--- `CODE_KINDS` or when the text holds a `MARKDOWN_INLINE_SPECIALS` character
+--- that would otherwise corrupt the heading; prose that cannot be
+--- reinterpreted is written bare.
 ---
 --- An empty `name` yields a bare `###` — used before the argument has streamed
 --- in, and for execute calls with no model description (the command already
@@ -96,19 +165,30 @@ end
 --- one cell for the ellipsis. That is a single screen line only while
 --- `wrap_width` fits the window — `min_wrap_width` can hold it above the width
 --- of a narrow chat window.
+--- @param kind string
 --- @param name string
 --- @param wrap_width integer
 --- @param truncate boolean
 --- @return string
-local function collapsed_header(name, wrap_width, truncate)
+local function collapsed_header(kind, name, wrap_width, truncate)
     if name == "" then
         return "###"
     end
+    local guard, pad = "", ""
+    if CODE_KINDS[kind_key(kind)] or name:find(MARKDOWN_INLINE_SPECIALS) then
+        guard, pad = code_span_guard(name)
+    end
+    -- Guarding before truncating stays correct: truncation only drops trailing
+    -- bytes and appends an ellipsis, so it can neither introduce a special nor
+    -- lengthen a backtick run — at worst the guard is a tick wider than the
+    -- clamped name needs.
     if truncate then
-        local budget = (wrap_width > 0 and wrap_width or 80) - #"### ``"
+        local budget = (wrap_width > 0 and wrap_width or 80)
+            - #"### "
+            - 2 * (#guard + #pad)
         name = TextWrap.truncate_to_width(name, budget)
     end
-    return string.format("### `%s`", name)
+    return string.format("### %s%s%s%s%s", guard, pad, name, pad, guard)
 end
 
 --- Return a backtick fence string long enough to avoid clashing with any
@@ -489,7 +569,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 and vim.split(description, "\n", { plain = true })[1]
             or ""
         lines = {
-            collapsed_header(head_name, wrap_width, true),
+            collapsed_header(kind, head_name, wrap_width, true),
             fence .. shell_fence_lang(argument, shell_lang()),
         }
         vim.list_extend(lines, cmd_lines)
@@ -498,7 +578,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local cmd_lines = vim.split(argument, "\n", { plain = true })
         local fence = M.safe_fence(cmd_lines)
         lines = {
-            collapsed_header(cmd_lines[1], wrap_width, true),
+            collapsed_header(kind, cmd_lines[1], wrap_width, true),
             fence .. shell_fence_lang(argument, "bash"),
         }
         vim.list_extend(lines, cmd_lines)
@@ -508,16 +588,16 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- is repeated in the body (model instructions to itself).
         local url = argument:match("^(%S+)")
         local name = url or (argument:gsub("\n", "\\n"))
-        lines = { collapsed_header(name, wrap_width, false) }
+        lines = { collapsed_header(kind, name, wrap_width, false) }
     elseif argument == "" then
         -- Argument hasn't streamed in yet (placeholder suppressed in adapter);
         -- the bare head holds the layout until the next update.
-        lines = { collapsed_header("", wrap_width, false) }
+        lines = { collapsed_header(kind, "", wrap_width, false) }
     else
         -- Sanitize argument to prevent embedded newlines — nvim_buf_set_lines
         -- rejects array items containing "\n".
         argument = argument:gsub("\n", "\\n")
-        lines = { collapsed_header(argument, wrap_width, false) }
+        lines = { collapsed_header(kind, argument, wrap_width, false) }
     end
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]
@@ -1088,9 +1168,9 @@ function M.apply_block_highlights(
     if #highlight_ranges > 0 then
         M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
     elseif kind ~= "edit" and kind ~= "switch_mode" then
-        -- The collapsed head is a single "### <glyph> `name`" line, so body
-        -- content starts one row below it. Execute/search override this to
-        -- skip their command fence (found below).
+        -- The collapsed head is a single line, so body content starts one row
+        -- below it. Execute/search override this to skip their command fence
+        -- (found below).
         local body_start = start_row + 1
         if kind == "execute" or kind == "search" then
             -- Find the closing fence to skip the command code fence. The

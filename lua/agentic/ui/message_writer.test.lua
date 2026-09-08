@@ -2181,7 +2181,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-                assert.equal("### `List the temp directory`", lines[1])
+                assert.equal("### List the temp directory", lines[1])
                 assert.equal("```bash", lines[2])
                 assert.equal("ls -la /tmp", lines[3])
                 assert.equal("```", lines[4])
@@ -4085,7 +4085,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- Description is the collapsed heading name, directly above
                 -- the command fence.
                 assert.is_not_nil(
-                    text:match("### `Demo execute folding`\n```bash")
+                    text:match("### Demo execute folding\n```bash")
                 )
                 -- No accumulation divider, no double-wrapped console fence.
                 assert.is_nil(text:match("\n%-%-%-\n"))

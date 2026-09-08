@@ -13,7 +13,7 @@
 ; pins. Injected languages pin their own function/class context independently.
 
 ; Non-empty fence-bearing sections — the collapsed tool-call heads
-; (`` ### `name` ``), whose diff/output fence is what scrolls. The kind glyph is
+; (`### name`), whose diff/output fence is what scrolls. The kind glyph is
 ; a sign-column extmark and cannot reach the breadcrumb, so a pinned head shows
 ; the name alone.
 (section

@@ -54,7 +54,7 @@ Only levels 2 and 3 are dimmed by the chat window's `winhighlight`
 ## Tool call block layout
 
 ```
-󰆍  ### `<argument>`       ← header (sign extmark = kind glyph, NS_DECORATIONS)
+󰆍  ### <argument>         ← header (sign extmark = kind glyph, NS_DECORATIONS)
 │  ```<lang>              ← optional command fence (execute/search)
 │  <command lines>
 │  ```
@@ -85,14 +85,17 @@ around it: every writer that interrupts prose ends the run through
 Because the chat window is `signcolumn=yes:1`, one row holds one sign — a
 second extmark on the identity row silently loses. Status text is real buffer
 text written with `nvim_buf_set_text` then highlighted with an extmark in
-`NS_STATUS`. The heading marker and argument backticks get extmark highlights
-from `apply_block_highlights`. All extmarks share priority 200 so they win over
-markdown injections (priority 100) — see the comment on `get_clean_hl_group`
+`NS_STATUS`. All extmarks share priority 200 so they win over markdown
+injections (priority 100) — see the comment on `get_clean_hl_group`
 for why a higher priority alone is not enough.
 
 A tool head with no name renders as a bare `###`, byte-identical to the
 section-close boundary `write_message_chunk` emits; both must stay uncaptured
 by `queries/agentic/context.scm`.
+
+`collapsed_header` backtick-guards the name when the kind is in `CODE_KINDS`
+or the text holds a `MARKDOWN_INLINE_SPECIALS` character; prose heads are
+otherwise bare. Both docstrings carry the rationale.
 
 ## Fence info-strings — cross-kind reference
 
