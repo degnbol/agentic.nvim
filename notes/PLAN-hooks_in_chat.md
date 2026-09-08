@@ -284,13 +284,13 @@ for Edit/Write (the `already_has_diff` branch in
 return contract in `prepare_block_lines`, and `vim.tbl_deep_extend` replacing
 list-valued fields in the `ToolCallBase` merge.
 
-**Placement of late records.** PreToolUse records (1835/1835, the overwhelming
-majority) are on disk before the terminal `tool_call_update`, so draining there
-appends immediately after the tool-call block — the correct position. PostToolUse
-records (56, of which ~28 are injected context) land after the tool result; if the drain
-waits until turn end, intervening prose will already have been written and the
-block appends after it. Options: accept the slight misordering, or adopt trigger 3
-below to drain promptly. Not blocking — it affects ~28 records.
+**Placement.** A record's position comes from the `toolUseID` it carries, not
+from where the buffer ends when the drain fires — file order in the transcript
+is not write order, so no drain trigger can guess the flush moment
+(`notes/bug-hook-blocks-render-one-drain-late.md`).
+`MessageWriter:write_hook_block` inserts under the block that id names, and
+appends only for a record naming no call (the turn-boundary events) or one whose
+block was never rendered.
 
 **Nothing to do for the blocking case.** A block arrives as a `tool_result` with
 `is_error`, already lifted into `ToolCallBase.failure_reason`.
@@ -299,9 +299,8 @@ below to drain promptly. Not blocking — it affects ~28 records.
 
 Two real signals plus one that needs an adapter change:
 
-1. **Terminal `tool_call_update`** — covers every PreToolUse record, and appends
-   in the right place. Shipped, at the end of `SessionManager:_on_tool_call_update`
-   and skipping subagent calls.
+1. **Terminal `tool_call_update`** — covers every PreToolUse record. Shipped, at
+   the end of `SessionManager:_on_tool_call_update` and skipping subagent calls.
 2. **Turn end.** Shipped as `SessionManager:_finalize_turn`, the chokepoint every
    `message_writer:finalize_turn()` call site now routes through. It drains
    *after* the writer, not before: the turn-usage footer is stamped on the
@@ -312,8 +311,9 @@ Two real signals plus one that needs an adapter change:
 3. **The bridge's PostToolUse-callback `tool_call_update`**
    (`acp-agent.js:5966-5979`) — **currently dropped before the plugin sees it.**
    `ClaudeAgentACPAdapter:__handle_tool_call_update` returns early when `not update.status
-   and (not rawInput or empty)`, and that update has neither. Optional: it only
-   buys prompt placement for the ~28 PostToolUse injected-context records. If adopted the change
+   and (not rawInput or empty)`, and that update has neither. Optional: with
+   placement anchored it only buys an earlier *appearance* for the ~28
+   PostToolUse injected-context records, which otherwise wait for turn end. If adopted the change
    must be **drain-only** — admitting it into `__build_tool_call_update`
    would set `body` from `extract_content_body`, mutating
    `tracker.body` through the `---` divider path (the body-merge divider path in `update_tool_call_block`)

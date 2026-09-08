@@ -63,6 +63,30 @@ describe("ClaudeHookRecords", function()
             assert.equal("u-1", record.uuid)
             assert.equal("u-0", record.parent_uuid)
             assert.equal("2026-08-28T10:00:00.000Z", record.timestamp)
+            assert.equal("hook-abc", record.tool_call_id)
+        end)
+
+        it("carries toolUseID as the tool call the hook fired on", function()
+            local record = ClaudeHookRecords.decode(line({
+                type = "hook_additional_context",
+                content = { "injected" },
+                hookName = "PreToolUse:Write",
+                hookEvent = "PreToolUse",
+                toolUseID = "toolu_01W2Ve",
+            }))
+
+            assert.equal("toolu_01W2Ve", record.tool_call_id)
+        end)
+
+        it("leaves the tool call unset when the event names none", function()
+            local record = ClaudeHookRecords.decode(line({
+                type = "hook_additional_context",
+                content = { "injected" },
+                hookName = "UserPromptSubmit",
+                hookEvent = "UserPromptSubmit",
+            }))
+
+            assert.is_nil(record.tool_call_id)
         end)
 
         it("leaves JSON-looking content as text", function()

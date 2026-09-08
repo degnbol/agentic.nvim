@@ -23,6 +23,7 @@ local M = {}
 --- @field timestamp? string ISO-8601 UTC, fixed width so string order is time order
 --- @field command? string the hook script's invocation
 --- @field script? string basename of the script the body came from; filled in by the reader, which owns the `parentUuid` join
+--- @field tool_call_id? string what the hook fired on, verbatim from `toolUseID`. Only a `toolu_`-prefixed value is a tool call id: an event with no call to name puts `"SessionStart"`, `hook-<uuid>` or a bare message uuid in the same slot
 
 --- Keys of `stdout.hookSpecificOutput` whose meaning is already accounted for:
 --- `permissionDecision` gates a call, `additionalContext` is repeated verbatim
@@ -150,6 +151,7 @@ function M.decode(line)
         parent_uuid = entry.parentUuid,
         timestamp = entry.timestamp,
         command = attachment.command,
+        tool_call_id = attachment.toolUseID,
     }
     return record
 end

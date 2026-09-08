@@ -1037,6 +1037,171 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("```markdown-fold", lines[1])
             assert.equal("```markdown-fold guard.sh", lines[6])
         end)
+
+        --- 1-indexed row of the first line equal to `text`.
+        --- @param text string
+        --- @return integer|nil
+        local function row_of(text)
+            for i, line in ipairs(buffer_lines()) do
+                if line == text then
+                    return i
+                end
+            end
+            return nil
+        end
+
+        --- A completed tool call followed by a two-paragraph prose run, so an
+        --- anchored region has content both above and below it.
+        local function call_then_prose()
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(
+                make_message_update("after the call\n\nand more of it\n")
+            )
+        end
+
+        it("places a record under the call it fired on", function()
+            call_then_prose()
+
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t1")
+
+            local fence = row_of("```markdown-fold guard.sh")
+            assert.is_not_nil(fence)
+            assert.is_true(fence < row_of("after the call"))
+            -- The bare `###` closes the tool call's section, so
+            -- treesitter-context does not pin its heading over the region.
+            assert.equal("###", buffer_lines()[fence - 2])
+            assert_one_sign_per_row()
+        end)
+
+        it("appends when no block carries the id", function()
+            call_then_prose()
+
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t9")
+
+            assert.is_true(
+                row_of("```markdown-fold guard.sh") > row_of("after the call")
+            )
+        end)
+
+        it("appends when the anchor's range has collapsed", function()
+            call_then_prose()
+            local tracker = writer.tool_call_blocks["t1"]
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Renderer.NS_TOOL_BLOCKS,
+                0,
+                0,
+                { id = tracker.extmark_id, end_row = 0 }
+            )
+
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t1")
+
+            assert.is_true(
+                row_of("```markdown-fold guard.sh") > row_of("after the call")
+            )
+        end)
+
+        it("keeps two records on one call in transcript order", function()
+            call_then_prose()
+
+            writer:write_hook_block({ "first", "record" }, "a.sh", "t1")
+            writer:write_hook_block({ "second", "record" }, "b.sh", "t1")
+
+            local first = row_of("```markdown-fold a.sh")
+            local second = row_of("```markdown-fold b.sh")
+            assert.is_true(first < second)
+            assert.is_true(second < row_of("after the call"))
+            -- The first region already closed the block's section.
+            assert.is_false(buffer_lines()[second - 2] == "###")
+        end)
+
+        it("closes the section once when it lands at the end", function()
+            -- The description keeps the tool head off `###`, so a bare one is
+            -- unambiguously a section boundary.
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t1")
+            writer:write_message_chunk(make_message_update("after the call\n"))
+
+            local boundaries = 0
+            for _, line in ipairs(buffer_lines()) do
+                if line == "###" then
+                    boundaries = boundaries + 1
+                end
+            end
+            -- One: the region sits where the pending break would have gone, so
+            -- its own `###` is that break and the prose must not emit a second.
+            assert.equal(1, boundaries)
+        end)
+
+        it("leaves a newer block's pending break alone", function()
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(make_message_update("between\n"))
+            writer:write_tool_call_block(
+                make_tool_call_block("t2", "completed")
+            )
+
+            -- Anchored to the older block, so the break t2 is owed still stands.
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t1")
+
+            assert.is_true(writer._pending_section_break)
+            assert.is_true(
+                row_of("```markdown-fold guard.sh") < row_of("between")
+            )
+        end)
+
+        it("appends when the anchor's extmark is gone", function()
+            call_then_prose()
+            vim.api.nvim_buf_del_extmark(
+                bufnr,
+                Renderer.NS_TOOL_BLOCKS,
+                writer.tool_call_blocks["t1"].extmark_id
+            )
+
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t1")
+
+            assert.is_true(
+                row_of("```markdown-fold guard.sh") > row_of("after the call")
+            )
+        end)
+
+        it("holds the prose pin on the content it was set on", function()
+            call_then_prose()
+            local pinned = buffer_lines()[writer._prose_anchor_line + 1]
+            assert.equal("after the call", pinned)
+
+            writer:write_hook_block({ "injected", "context" }, "guard.sh", "t1")
+
+            assert.equal(pinned, buffer_lines()[writer._prose_anchor_line + 1])
+        end)
+
+        it(
+            "leaves the run below it bracketed from its own first row",
+            function()
+                call_then_prose()
+
+                writer:write_hook_block(
+                    { "injected", "context" },
+                    "guard.sh",
+                    "t1"
+                )
+                writer:finalize_turn()
+
+                local opener
+                for _, mark in ipairs(rail()) do
+                    if mark[2] == "╭─" then
+                        opener = mark[1] + 1
+                    end
+                end
+                assert.equal(row_of("after the call"), opener)
+            end
+        )
     end)
 
     describe("prose run regions", function()

@@ -1370,14 +1370,19 @@ local RENDERED_HOOK_GROUPS = {
     verbatim = true,
 }
 
---- Append the hook activity recorded since the last drain to the chat buffer.
+--- Write the hook activity recorded since the last drain to the chat buffer,
+--- each record under the tool call it names.
 function SessionManager:_drain_hook_records()
     if self._destroyed then
         return
     end
     for _, record in ipairs(self._hook_records:drain()) do
         if RENDERED_HOOK_GROUPS[record.group] then
-            self.message_writer:write_hook_block(record.body, record.script)
+            self.message_writer:write_hook_block(
+                record.body,
+                record.script,
+                record.tool_call_id
+            )
         end
     end
 end
@@ -1391,8 +1396,10 @@ function SessionManager:_finalize_turn(usage)
     self.message_writer:finalize_turn()
     self.message_writer:set_turn_usage(usage)
     -- Last of the three: a region appended before the footer would move the row
-    -- the footer is stamped on. Where it falls relative to the prose run does
-    -- not matter — `_write_collapsed_region` brackets the run it ends.
+    -- the footer is stamped on, and this drain is the one that still appends —
+    -- it collects the records naming no tool call. Where an appended region
+    -- falls relative to the prose run does not matter; `_write_collapsed_region`
+    -- brackets the run it ends.
     self:_drain_hook_records()
 end
 
@@ -1502,11 +1509,10 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         self.status_indicator:start("generating")
     end
 
-    -- A PreToolUse hook's records are on disk before this call's terminal
-    -- update, so draining here puts them directly beneath the block that
-    -- triggered them; PostToolUse records land after it and wait for the
-    -- turn-end drain. Subagent calls are excluded — their hooks write to a
-    -- transcript the reader does not follow.
+    -- Look for records as soon as the call they fired on ends, rather than
+    -- waiting for the turn-end drain — where they land is settled by the id
+    -- each record carries, not by when the drain runs. Subagent calls are
+    -- excluded: their hooks write to a transcript the reader does not follow.
     if
         not is_subagent
         and (
@@ -2441,7 +2447,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     if self.session_id then
         -- Remove subscriber to stop routing stale notifications
         self.agent.subscribers[self.session_id] = nil
-        self.widget:clear()
+        self:clear_chat()
         self.todo_list:clear()
         self.file_list:clear()
         self.code_selection:clear()
@@ -2584,12 +2590,24 @@ function SessionManager:_fallback_restore_from_local(session_id)
     end)
 end
 
+--- Wipe the conversation out of the chat panels: their text, the region signs
+--- over it, and the tool call trackers whose extmarks address rows in it.
+---
+--- The one place those three come apart safely. Clearing the text alone leaves
+--- every extmark collapsed on row 0, where a stale tracker resolves to the top
+--- of the next conversation.
+function SessionManager:clear_chat()
+    self.widget:clear()
+    self.message_writer:clear_blocks()
+    self.subagent_writer:clear_blocks()
+end
+
 function SessionManager:_cancel_session()
     if self.session_id then
         -- only cancel and clear content if there was an session
         -- Otherwise, it clears selections and files when opening for the first time
         self.agent:cancel_session(self.session_id)
-        self.widget:clear()
+        self:clear_chat()
         self.todo_list:clear()
         self.file_list:clear()
         self.code_selection:clear()

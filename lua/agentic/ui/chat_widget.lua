@@ -313,6 +313,11 @@ end
 --- Clears every panel buffer's content without destroying them, except
 --- `input` — it holds the user's unsent draft, which is not conversation
 --- state and must survive session resets/swaps.
+---
+--- Drops the region signs over the text with it, but not a MessageWriter's tool
+--- call trackers — those are instance state, out of reach from here. Clear the
+--- chat through `SessionManager:clear_chat`, which owns both halves; a tracker
+--- outliving its text resolves to row 0 of whatever replaces it.
 function ChatWidget:clear()
     for name, bufnr in pairs(self.buf_nrs) do
         if name ~= "input" then

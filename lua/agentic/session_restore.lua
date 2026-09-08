@@ -94,7 +94,7 @@ local function do_restore(item, tab_page_id, has_conflict)
         else
             if has_conflict and session.session_id then
                 session.agent:cancel_session(session.session_id)
-                session.widget:clear()
+                session:clear_chat()
             end
 
             ChatHistory.load(item.session_id, function(history, err)

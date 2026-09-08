@@ -307,6 +307,9 @@ describe("agentic.SessionManager", function()
                         clear = noop,
                         set_chat_title = noop,
                     },
+                    message_writer = { clear_blocks = noop },
+                    subagent_writer = { clear_blocks = noop },
+                    clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
                 } --[[@as agentic.SessionManager]]
 
@@ -1471,8 +1474,17 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 message_writer = {
-                    write_hook_block = function(_self, body, script)
-                        table.insert(written, { body = body, script = script })
+                    write_hook_block = function(
+                        _self,
+                        body,
+                        script,
+                        tool_call_id
+                    )
+                        table.insert(written, {
+                            body = body,
+                            script = script,
+                            tool_call_id = tool_call_id,
+                        })
                     end,
                 },
             } --[[@as agentic.SessionManager]]
@@ -1487,6 +1499,21 @@ describe("agentic.SessionManager", function()
             session:_drain_hook_records()
 
             assert.same({ { body = { "ctx" }, script = "guard.sh" } }, written)
+        end)
+
+        it("forwards the tool call the record is anchored to", function()
+            local session, written = make_session({
+                {
+                    group = "context",
+                    body = { "ctx" },
+                    script = "guard.sh",
+                    tool_call_id = "toolu_01W2Ve",
+                },
+            })
+
+            session:_drain_hook_records()
+
+            assert.equal("toolu_01W2Ve", written[1].tool_call_id)
         end)
 
         it("renders a record whose line did not parse", function()

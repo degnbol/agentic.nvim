@@ -97,6 +97,7 @@ end
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
 --- @field ordinal? integer Per-turn subagent ordinal (0-9, in spawn order); rendered as a sign only while numbering is active (see MessageWriter._numbering_active)
+--- @field trailing_insert_mark_id? integer Zero-width NS_TOOL_BLOCKS mark riding just below the block, marking where the next region anchored to it goes (see `MessageWriter:_anchor_insert_row`). Absent until the first such region.
 
 --- Append the closing fence for `lines` when they leave one open.
 ---
@@ -132,6 +133,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
 --- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_indicator? agentic.ui.StatusIndicator Reference for auto-scroll virt_lines awareness
+--- @field _chunk_start_line? integer 0-indexed buffer line the unreflowed tail of the current prose run starts at; advanced past each paragraph a streaming reflow wraps, and cleared by the flushing one. Read by `_reflow_chunks` to bound its rewrite.
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
 --- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
 --- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
@@ -169,6 +171,18 @@ function MessageWriter.clear_regions(bufnr)
     }) do
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
     end
+end
+
+--- Forget every tool call block written to this buffer: the trackers and the
+--- extmarks they address rows through.
+---
+--- Emptying a buffer with `nvim_buf_set_lines` collapses extmarks onto row 0
+--- rather than deleting them, so a tracker surviving its conversation resolves
+--- to the top of the next one — where anything anchored to it would be
+--- inserted.
+function MessageWriter:clear_blocks()
+    self.tool_call_blocks = {}
+    vim.api.nvim_buf_clear_namespace(self.bufnr, Renderer.NS_TOOL_BLOCKS, 0, -1)
 end
 
 --- @param bufnr integer
@@ -673,15 +687,68 @@ function MessageWriter:_end_prose_run(bufnr)
     end
 end
 
---- Append a body as one collapsed region: the lines inside a `markdown-fold`
---- fence closed at render, `sign` on the fence's first body row, and the whole
---- body dimmed. The fence delimiters conceal to zero height, so the region
---- occupies the single screen row its foldtext summarises (`agentic.ui.folds`).
+--- The lines of a collapsed region: the body inside a `markdown-fold` fence
+--- closed at render, followed by the blank that separates it from what comes
+--- after. The fence delimiters conceal to zero height, so the region occupies
+--- the single screen row its foldtext summarises (`agentic.ui.folds`).
 ---
---- A body too short to fold — vim cannot close a one-line fold — renders as
---- that line under the glyph, with no fence: a visible ``` around one line is
---- worse than the line itself. `source` is then dropped with it, having no
---- foldtext to name.
+--- A body too short to fold — vim cannot close a one-line fold — is emitted as
+--- that line alone, with no fence: a visible ``` around one line is worse than
+--- the line itself. `source` goes with it, having no foldtext to name.
+--- @param body string[] Already prose-wrapped
+--- @param source string|nil Where the body came from, for the foldtext to name
+--- @param section_break boolean Open with the empty `###` that closes the section of the block above
+--- @return string[] lines
+--- @return integer body_offset 0-indexed offset of the first body row within `lines`
+local function collapsed_region_lines(body, source, section_break)
+    local lines = {}
+    if section_break then
+        vim.list_extend(lines, { "###", "" })
+    end
+
+    local fence = #body > 1 and Renderer.safe_fence(body) or nil
+    if fence then
+        -- `source` as a second word after the language: `folds.scm` and
+        -- `injections.scm` both key on the `(info_string (language))` node,
+        -- which is the first word alone, so the name rides along without
+        -- disturbing either.
+        lines[#lines + 1] = fence
+            .. "markdown-fold"
+            .. (source and (" " .. source) or "")
+    end
+
+    local body_offset = #lines
+    vim.list_extend(lines, body)
+    if fence then
+        lines[#lines + 1] = fence
+    end
+    lines[#lines + 1] = ""
+    return lines, body_offset
+end
+
+--- Stamp a collapsed region already in the buffer: `sign` on its first body
+--- row, the rail beneath, the whole body dimmed, and the fold closed when the
+--- body has one.
+--- @param bufnr integer
+--- @param body_start integer 0-indexed first body row of the region
+--- @param body_end integer 0-indexed last body row of the region, inclusive
+--- @param sign string `sign_text` identifying the region
+function MessageWriter:_decorate_collapsed_region(
+    bufnr,
+    body_start,
+    body_end,
+    sign
+)
+    render_collapsed_region(bufnr, body_start, body_end, sign)
+    Renderer.set_dim_range(bufnr, body_start, body_end)
+    -- Same measure `collapsed_region_lines` folds on: a one-row body has no
+    -- fence, and so no fold to close.
+    if body_end > body_start then
+        self:_close_fold(body_start)
+    end
+end
+
+--- Append a body as one collapsed region at the end of the chat buffer.
 --- @param body string[] Already prose-wrapped
 --- @param sign string `sign_text` identifying the region
 --- @param source string|nil Where the body came from, for the foldtext to name
@@ -690,30 +757,12 @@ function MessageWriter:_write_collapsed_region(body, sign, source)
         return
     end
 
-    local use_fold = #body > 1
-    local lines = {}
     -- A region after a tool call closes that call's section, for the reason
     -- `write_message_chunk` documents: the fence below would otherwise keep the
     -- breadcrumb on the tool call for as long as the region is on screen.
-    if self._pending_section_break then
-        vim.list_extend(lines, { "###", "" })
-        self._pending_section_break = false
-    end
-    if use_fold then
-        local fence = Renderer.safe_fence(body)
-        -- `source` as a second word after the language: `folds.scm` and
-        -- `injections.scm` both key on the `(info_string (language))` node,
-        -- which is the first word alone, so the name rides along without
-        -- disturbing either.
-        lines[#lines + 1] = fence
-            .. "markdown-fold"
-            .. (source and (" " .. source) or "")
-        vim.list_extend(lines, body)
-        lines[#lines + 1] = fence
-    else
-        vim.list_extend(lines, body)
-    end
-    lines[#lines + 1] = ""
+    local lines, body_offset =
+        collapsed_region_lines(body, source, self._pending_section_break)
+    self._pending_section_break = false
 
     -- A collapsed region ends the prose run it follows, so the viewport stops
     -- being anchored to prose the reader has already passed.
@@ -729,21 +778,159 @@ function MessageWriter:_write_collapsed_region(body, sign, source)
 
         self:_append_lines(lines)
 
-        -- Computed AFTER the append: on an empty buffer _append_lines replaces
-        -- row 0 rather than appending, so a pre-capture would be off by one.
-        -- The -1 accounts for the trailing blank, which belongs to no region.
-        local body_end = vim.api.nvim_buf_line_count(bufnr) - 2
-        if use_fold then
-            body_end = body_end - 1 -- the closing fence delimiter
-        end
-        local body_start = body_end - #body + 1
-
-        render_collapsed_region(bufnr, body_start, body_end, sign)
-        Renderer.set_dim_range(bufnr, body_start, body_end)
-        if use_fold then
-            self:_close_fold(body_start)
-        end
+        -- Derived from the line count AFTER the append: on an empty buffer
+        -- _append_lines replaces row 0 rather than appending, so a row captured
+        -- before the call would be off by one.
+        local placed_at = vim.api.nvim_buf_line_count(bufnr) - #lines
+        self:_decorate_collapsed_region(
+            bufnr,
+            placed_at + body_offset,
+            placed_at + body_offset + #body - 1,
+            sign
+        )
     end)
+end
+
+--- Follow the rows tracking the live prose run across an insertion above them.
+---
+--- The degenerate case of `shift_across_block`: an insert swallows nothing, so
+--- every row at or after `row` moves by `delta` and the prose pin never has to
+--- be released. Region signs, fold anchors and block extmarks need no help —
+--- they move with their lines.
+--- Named for prose alone because that is all it covers: `_last_divider_line` is
+--- a line *count*, not a row, and no other absolute-row state survives a write.
+--- @param row integer 0-indexed first row the insertion displaces
+--- @param delta integer number of lines inserted
+function MessageWriter:_shift_prose_rows_below(row, delta)
+    local function shifted(value)
+        if value and value >= row then
+            return value + delta
+        end
+        return value
+    end
+    self._chunk_start_line = shifted(self._chunk_start_line)
+    self._prose_run_start_line = shifted(self._prose_run_start_line)
+    self._prose_anchor_line = shifted(self._prose_anchor_line)
+end
+
+--- The row a region belonging to `tracker`'s tool call goes on: below the
+--- block, and below anything already anchored there.
+---
+--- The block's range extmark ends on its status-footer row and the blank
+--- separating it from what follows is appended after that extmark is set
+--- (`write_tool_call_block`), so the first row past the block is two below its
+--- end. From then on `trailing_insert_mark_id` answers instead: the range
+--- extmark does not move for an insert below it, so a second record would
+--- otherwise land above the first and reverse transcript order.
+--- @param tracker agentic.ui.MessageWriter.ToolCallBlock
+--- @return integer|nil row 0-indexed, nil when the block's range is unusable
+function MessageWriter:_anchor_insert_row(tracker)
+    local row
+    if tracker.trailing_insert_mark_id then
+        row = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            Renderer.NS_TOOL_BLOCKS,
+            tracker.trailing_insert_mark_id,
+            {}
+        )[1]
+    end
+
+    if not row and tracker.extmark_id then
+        local pos = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            Renderer.NS_TOOL_BLOCKS,
+            tracker.extmark_id,
+            { details = true }
+        )
+        local start_row = pos[1]
+        local end_row = pos[3] and pos[3].end_row
+        -- The same sanity gate `update_tool_call_block` gives the range, for
+        -- the same reason: a collapsed range addresses rows that are no longer
+        -- the block's.
+        if start_row and end_row and start_row < end_row then
+            row = end_row + 2
+        end
+    end
+
+    if not row or row > vim.api.nvim_buf_line_count(self.bufnr) then
+        return nil
+    end
+    return row
+end
+
+--- Insert a body as one collapsed region directly beneath the tool call it
+--- belongs to, rather than wherever the buffer happens to end.
+---
+--- Three steps of the append path are deliberately skipped. `_end_prose_run`
+--- and `_release_prose_pin`: the run below a mid-buffer insert is still live,
+--- and an inserted region follows nothing, so releasing the pin would discard a
+--- viewport promise about unrelated content. `_pending_section_break`: the flag
+--- names the most recently written block, which for a mid-buffer insert is not
+--- the anchor, so the `###` is decided from the anchor instead — the layout
+--- still reproduces the append path's byte for byte.
+--- @param body string[] Already prose-wrapped
+--- @param sign string `sign_text` identifying the region
+--- @param source string|nil Where the body came from, for the foldtext to name
+--- @param tool_call_id string The call the region belongs to
+--- @return boolean placed False when the anchor is unusable and the caller should append instead
+function MessageWriter:_insert_collapsed_region(
+    body,
+    sign,
+    source,
+    tool_call_id
+)
+    local tracker = self.tool_call_blocks[tool_call_id]
+    if #body == 0 or not tracker then
+        return false
+    end
+    local insert_row = self:_anchor_insert_row(tracker)
+    if not insert_row then
+        return false
+    end
+
+    -- Only the first region under a block opens a section boundary: the second
+    -- follows one that already closed the block's `###` section.
+    local lines, body_offset = collapsed_region_lines(
+        body,
+        source,
+        tracker.trailing_insert_mark_id == nil
+    )
+
+    -- Nothing has been written under the anchor, so this region lands exactly
+    -- where the pending break would have gone and its own `###` serves it.
+    -- Leaving the flag set would have the next prose chunk emit a second one.
+    if insert_row == vim.api.nvim_buf_line_count(self.bufnr) then
+        self._pending_section_break = false
+    end
+
+    self:_auto_scroll(self.bufnr)
+
+    return self:_with_modifiable_suppressed(function(bufnr)
+        -- right_gravity so the mark rides past the region going in below it and
+        -- the next record on this call reads back a row underneath, not above.
+        tracker.trailing_insert_mark_id = vim.api.nvim_buf_set_extmark(
+            bufnr,
+            Renderer.NS_TOOL_BLOCKS,
+            insert_row,
+            0,
+            { id = tracker.trailing_insert_mark_id, right_gravity = true }
+        )
+
+        vim.api.nvim_buf_set_lines(bufnr, insert_row, insert_row, false, lines)
+        -- Measured from the blank above the insert rather than the insert row:
+        -- that blank closes the anchor block, and a prose run whose first chunk
+        -- appended to it records it as the run's start. Left where it is, the
+        -- run would read as beginning inside the region just put above it.
+        self:_shift_prose_rows_below(insert_row - 1, #lines)
+
+        self:_decorate_collapsed_region(
+            bufnr,
+            insert_row + body_offset,
+            insert_row + body_offset + #body - 1,
+            sign
+        )
+        return true
+    end) == true
 end
 
 --- Render the thinking streamed since the last flush as one collapsed region
@@ -782,18 +969,34 @@ end
 --- the reason `queries/agentic/context.scm` documents — a titled heading over a
 --- fenced body pins the treesitter-context breadcrumb.
 ---
+--- Placed under the tool call the hook fired on when `tool_call_id` names one
+--- still in the buffer, so the record reads under that call rather than under
+--- whatever has been written since the hook ran — the transcript gives no
+--- signal for when its records reach disk, so no drain trigger can place them
+--- by buffer position alone. Appended at the end otherwise: a record from a
+--- turn-boundary event names no call, and one whose block was never rendered
+--- has nothing to sit under.
+---
 --- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
 --- session shows none of these. Missing work, not a rendering bug.
 --- @param body string[] The hook's output, unwrapped
 --- @param script string|nil Basename of the script it came from, if known
-function MessageWriter:write_hook_block(body, script)
-    self:flush_thought_run()
+--- @param tool_call_id string|nil The call the hook fired on, if any
+function MessageWriter:write_hook_block(body, script, tool_call_id)
+    local wrapped = TextWrap.wrap_prose(body, self:_get_wrap_width())
+    local sign = Glyphs.HOOK .. " "
 
-    self:_write_collapsed_region(
-        TextWrap.wrap_prose(body, self:_get_wrap_width()),
-        Glyphs.HOOK .. " ",
-        script
-    )
+    if
+        tool_call_id
+        and self:_insert_collapsed_region(wrapped, sign, script, tool_call_id)
+    then
+        return
+    end
+
+    -- Appending under a buffered thought run would put the region above the
+    -- thinking it followed; an anchored one has no such ordering to keep.
+    self:flush_thought_run()
+    self:_write_collapsed_region(wrapped, sign, script)
 end
 
 --- Write a user prompt to the chat buffer as a bracketed region: the heading
@@ -2137,6 +2340,13 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             }
         )
         -- Remove from tracking — the block is corrupt and cannot be updated
+        if tracker.trailing_insert_mark_id then
+            vim.api.nvim_buf_del_extmark(
+                self.bufnr,
+                Renderer.NS_TOOL_BLOCKS,
+                tracker.trailing_insert_mark_id
+            )
+        end
         self.tool_call_blocks[tool_call_block.tool_call_id] = nil
         return
     end
