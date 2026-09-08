@@ -285,9 +285,9 @@ return contract in `prepare_block_lines`, and `vim.tbl_deep_extend` replacing
 list-valued fields in the `ToolCallBase` merge.
 
 **Placement.** A record's position comes from the `toolUseID` it carries, not
-from where the buffer ends when the drain fires — file order in the transcript
-is not write order, so no drain trigger can guess the flush moment
-(`notes/bug-hook-blocks-render-one-drain-late.md`).
+from where the buffer ends when the drain fires: file order in the transcript
+jsonl is not write order — attachments timestamped minutes earlier sit below
+later lines — so no drain trigger can guess when a hook's records reached disk.
 `MessageWriter:write_hook_block` inserts under the block that id names, and
 appends only for a record naming no call (the turn-boundary events) or one whose
 block was never rendered.
