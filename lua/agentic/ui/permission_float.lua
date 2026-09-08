@@ -1,16 +1,7 @@
+local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
-
---- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
---- @param k string|nil
---- @return string
-local function kind_key(k)
-    if not k then
-        return ""
-    end
-    return vim.trim(k):lower()
-end
 
 --- @class agentic.ui.PermissionFloat
 --- @field message_writer agentic.ui.MessageWriter
@@ -120,7 +111,7 @@ local function build_lines(options)
     local reject_all_inserted = false
     for _, option in ipairs(options) do
         if
-            kind_key(option.kind) == "reject_always"
+            AcpKind.normalise(option.kind) == "reject_always"
             and not reject_all_inserted
         then
             table.insert(merged_options, {
@@ -208,7 +199,9 @@ end
 function PermissionFloat:_register_resize_watcher(chat_winid)
     local id = vim.api.nvim_create_autocmd("WinResized", {
         callback = function()
-            if not self._winid or not vim.api.nvim_win_is_valid(self._winid) then
+            if
+                not self._winid or not vim.api.nvim_win_is_valid(self._winid)
+            then
                 return
             end
             if not vim.api.nvim_win_is_valid(chat_winid) then

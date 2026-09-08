@@ -5,6 +5,7 @@
 -- ensuring that the new session is properly set up and all the previous messages are sent to the new agent provider without duplicating them in the chat widget
 
 local ACPPayloads = require("agentic.acp.acp_payloads")
+local AcpKind = require("agentic.utils.acp_kind")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local DiffPreview = require("agentic.ui.diff_preview")
@@ -33,16 +34,6 @@ local FILE_MUTATING_KINDS = {
     delete = true,
     move = true,
 }
-
---- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
---- @param k string|nil
---- @return string
-local function kind_key(k)
-    if not k then
-        return ""
-    end
-    return vim.trim(k):lower()
-end
 
 --- Safely invoke a user-configured hook
 --- @param hook_name "on_prompt_submit" | "on_response_complete" | "on_permission_request"
@@ -628,11 +619,7 @@ function SessionManager:_on_session_update(update)
     elseif update.sessionUpdate == "session_info_update" then
         -- Provider pushes the SDK's background-generated title at turn-end.
         -- Adopt it unless the user has chosen a title via /rename.
-        if
-            update.title
-            and update.title ~= ""
-            and not self._title_user_set
-        then
+        if update.title and update.title ~= "" and not self._title_user_set then
             self.chat_history.title = update.title
             self.widget:set_chat_title(update.title)
             self:_sync_history_context()
@@ -1020,7 +1007,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
     -- buffer. Grandchildren keep the parent Task open, so nesting needs no
     -- special-casing. Kind usually resolves on the update, not here (see
     -- _on_tool_call_update), but mark open here too for the case it arrives now.
-    if not is_subagent and kind_key(tool_call.kind) == "subagent" then
+    if not is_subagent and AcpKind.normalise(tool_call.kind) == "subagent" then
         self:_mark_task_open(tool_call.tool_call_id)
     end
 
@@ -1067,8 +1054,9 @@ function SessionManager:_try_record_edit_range(tool_call_id)
     if self.permission_manager:has_edit_range(tool_call_id) then
         return
     end
-    local tracker = self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
-    if not tracker or kind_key(tracker.kind) ~= "edit" then
+    local tracker =
+        self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
+    if not tracker or AcpKind.normalise(tracker.kind) ~= "edit" then
         return
     end
     if tracker.status == "completed" or tracker.status == "failed" then
@@ -1134,7 +1122,7 @@ function SessionManager:_record_file_op(tool_call_id)
     if not tracker or tracker.status ~= "completed" then
         return
     end
-    local kind = kind_key(tracker.kind)
+    local kind = AcpKind.normalise(tracker.kind)
     if not FILE_MUTATING_KINDS[kind] then
         return
     end
@@ -1197,7 +1185,10 @@ end
 --- context clearing and plan implementation.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
 function SessionManager:_track_plan_exit(tool_call)
-    if kind_key(tool_call.kind) == "switch_mode" and tool_call.argument == "Normal" then
+    if
+        AcpKind.normalise(tool_call.kind) == "switch_mode"
+        and tool_call.argument == "Normal"
+    then
         self._plan_exit_pending = true
     end
 end
@@ -1249,9 +1240,10 @@ function SessionManager:_on_request_permission(request, callback)
 
     -- Detect ExitPlanMode permission via the tracked tool call block
     local tool_call_id = request.toolCall.toolCallId
-    local tracker = self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
+    local tracker =
+        self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
     local is_plan_exit = tracker
-        and kind_key(tracker.kind) == "switch_mode"
+        and AcpKind.normalise(tracker.kind) == "switch_mode"
         and tracker.argument == "Normal"
 
     if is_plan_exit then
@@ -1271,7 +1263,7 @@ function SessionManager:_on_request_permission(request, callback)
             -- Find the real allow_once option to accept the plan
             local accept_id
             for _, opt in ipairs(request.options) do
-                if kind_key(opt.kind) == "allow_once" then
+                if AcpKind.normalise(opt.kind) == "allow_once" then
                     accept_id = opt.optionId
                     break
                 end
@@ -1451,7 +1443,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     if
         not is_subagent
         and task_tracker
-        and kind_key(task_tracker.kind) == "subagent"
+        and AcpKind.normalise(task_tracker.kind) == "subagent"
     then
         if
             tool_call_update.status == "completed"
@@ -1470,8 +1462,11 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- can overwhelm the event loop and crash neovim.
     if tool_call_update.status == "completed" then
         local tracker = writer.tool_call_blocks[id]
-        if tracker and tracker.kind and FILE_MUTATING_KINDS[kind_key(tracker.kind)] then
-
+        if
+            tracker
+            and tracker.kind
+            and FILE_MUTATING_KINDS[AcpKind.normalise(tracker.kind)]
+        then
             if not self._checktime_scheduled then
                 self._checktime_scheduled = true
                 vim.schedule(function()
@@ -1489,7 +1484,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         -- update itself rarely carries the argument field.
         if
             tracker
-            and FILE_MUTATING_KINDS[kind_key(tracker.kind)]
+            and FILE_MUTATING_KINDS[AcpKind.normalise(tracker.kind)]
             and tracker.argument
             and tracker.argument:match("%.md$")
         then
@@ -1706,11 +1701,14 @@ function SessionManager:_update_chat_header()
             local label = b.rateLimitType == "five_hour" and "5h" or "wk"
             local mins = math.max(0, math.floor((resets - os.time()) / 60))
             local reset = mins >= 60
-                    and string.format("%dh%02dm", math.floor(mins / 60), mins % 60)
+                    and string.format(
+                        "%dh%02dm",
+                        math.floor(mins / 60),
+                        mins % 60
+                    )
                 or string.format("%dm", mins)
             local mark = b.status == "rejected" and "✕"
-                or (b.status == "allowed_warning" or (overshoot and overshoot > 1))
-                    and "⚠"
+                or (b.status == "allowed_warning" or (overshoot and overshoot > 1)) and "⚠"
                 or ""
             local util_str = util
                     and string.format(" %d%%", math.floor(util * 100 + 0.5))
@@ -2249,7 +2247,10 @@ function SessionManager:new_session(opts)
     if not restore_mode and self.config_options then
         local co = self.config_options
         preserved_model = (co.model and co.model.currentValue)
-            or (co.legacy_agent_models and co.legacy_agent_models.current_model_id)
+            or (
+                co.legacy_agent_models
+                and co.legacy_agent_models.current_model_id
+            )
     end
 
     if not restore_mode then
@@ -2694,7 +2695,8 @@ function SessionManager:switch_provider()
                         -- active (previous provider hit usage limit). With the
                         -- new provider, send them now instead of discarding.
                         if queued_prompts and #queued_prompts > 0 then
-                            local combined = table.concat(queued_prompts, "\n\n")
+                            local combined =
+                                table.concat(queued_prompts, "\n\n")
                             vim.schedule(function()
                                 self:_handle_input_submit(combined)
                             end)
@@ -2795,7 +2797,11 @@ function SessionManager:_show_diff_in_buffer(tool_call_id, is_rejection)
 
     -- Strip debounced diffs: when the user approves an edit, the provider
     -- re-sends it instantly — the diff frame is identical.
-    if not tracker or kind_key(tracker.kind) ~= "edit" or tracker.diff == nil then
+    if
+        not tracker
+        or AcpKind.normalise(tracker.kind) ~= "edit"
+        or tracker.diff == nil
+    then
         return
     end
 

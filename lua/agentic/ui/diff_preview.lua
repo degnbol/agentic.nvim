@@ -1,3 +1,4 @@
+local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
@@ -26,16 +27,6 @@ end
 --- @param bufnr number|nil Buffer number (nil to clear)
 local function set_diff_bufnr(tabpage, bufnr)
     vim.t[tabpage]._agentic_diff_preview_bufnr = bufnr
-end
-
---- Normalise an ACP-sourced kind value: strip whitespace, lowercase.
---- @param k string|nil
---- @return string
-local function kind_key(k)
-    if not k then
-        return ""
-    end
-    return vim.trim(k):lower()
 end
 
 --- Get the buffer number with active diff preview for the current or specified tabpage
@@ -456,7 +447,7 @@ function M.add_navigation_hint(tracker, lines_to_append)
     -- Only add hint for edit tools with diff preview enabled
     if
         not tracker
-        or kind_key(tracker.kind) ~= "edit"
+        or AcpKind.normalise(tracker.kind) ~= "edit"
         or not Config.diff_preview
         or not Config.diff_preview.enabled
     then

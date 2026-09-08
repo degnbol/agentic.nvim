@@ -1,3 +1,4 @@
+local AcpKind = require("agentic.utils.acp_kind")
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
 local Ansi = require("agentic.utils.ansi")
 local Config = require("agentic.config")
@@ -70,24 +71,12 @@ function M.parse_read_range(argument)
     return path, { offset = na, limit = nb - na + 1 }
 end
 
---- Normalise an ACP kind for table lookup. Adapters mint their own kinds in
---- CamelCase (`SubAgent`, `SlashCommand`) alongside the protocol's lowercase
---- ones, so every kind-keyed table in this module is indexed through here.
---- @param kind string|nil
---- @return string
-local function kind_key(kind)
-    if not kind then
-        return ""
-    end
-    return vim.trim(kind):lower()
-end
-
 --- The glyph carrying an ACP kind's identity, stamped as the sign on the
 --- block's opening row (see `render_decorations`).
 --- @param kind string
 --- @return string
 local function kind_glyph(kind)
-    return Glyphs.KIND[kind_key(kind)] or Glyphs.KIND_DEFAULT
+    return Glyphs.KIND[AcpKind.normalise(kind)] or Glyphs.KIND_DEFAULT
 end
 
 --- Characters through which markdown inline parsing can reinterpret heading
@@ -175,7 +164,10 @@ local function collapsed_header(kind, name, wrap_width, truncate)
         return "###"
     end
     local guard, pad = "", ""
-    if CODE_KINDS[kind_key(kind)] or name:find(MARKDOWN_INLINE_SPECIALS) then
+    if
+        CODE_KINDS[AcpKind.normalise(kind)]
+        or name:find(MARKDOWN_INLINE_SPECIALS)
+    then
         guard, pad = code_span_guard(name)
     end
     -- Guarding before truncating stays correct: truncation only drops trailing
@@ -934,8 +926,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 -- Insert old lines (removed content)
                 for _, pair in ipairs(filtered.pairs) do
                     if pair.old_line then
-                        local col_hl = old_map
-                            and old_map[pair.old_idx - 1]
+                        local col_hl = old_map and old_map[pair.old_idx - 1]
                             or nil
                         insert_diff_line(
                             pair.old_line,
@@ -960,8 +951,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                             and pair.old_line ~= nil
                         local hl_type = is_paired_mod and "new_modification"
                             or "new"
-                        local col_hl = new_map
-                            and new_map[pair.new_idx - 1]
+                        local col_hl = new_map and new_map[pair.new_idx - 1]
                             or nil
                         insert_diff_line(
                             pair.new_line,
@@ -1056,10 +1046,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local use_fold = max_lines > 0 and count > max_lines
 
             local fence = M.safe_fence(display_body)
-            table.insert(
-                lines,
-                fence .. lang .. (use_fold and "-fold" or "")
-            )
+            table.insert(lines, fence .. lang .. (use_fold and "-fold" or ""))
             if use_fold then
                 -- First body line (fold spans code_fence_content), next.
                 fold_anchor = #lines
@@ -1132,7 +1119,12 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     table.insert(lines, "")
 
-    return lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_open
+    return lines,
+        highlight_ranges,
+        ansi_highlights,
+        fold_anchor,
+        dim_range,
+        fold_open
 end
 
 -- ---------------------------------------------------------------------------
@@ -1194,8 +1186,7 @@ function M.apply_block_highlights(
             -- below). Without this the colours render one row too high.
             local ansi_body_start = body_start
             for i = start_row + 2, end_row - 1 do
-                local l =
-                    vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
+                local l = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
                 if l and l:match("^`+console") then
                     ansi_body_start = i + 1
                     break
@@ -1282,7 +1273,6 @@ function M.apply_block_highlights(
             end
         end
     end
-
 end
 
 --- Cache of derived "clean" highlight groups: target capture name →
@@ -1577,7 +1567,6 @@ function M.set_dim_range(bufnr, start_row, end_row)
         hl_eol = true,
     })
 end
-
 
 --- @param bufnr integer
 --- @param start_row integer

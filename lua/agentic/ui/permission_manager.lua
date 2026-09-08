@@ -1,3 +1,4 @@
+local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
@@ -50,7 +51,11 @@ function PermissionManager:new(message_writer, buf_nrs, tab_page_id, writer_for)
         message_writer = message_writer,
         _writer_for = writer_for,
         _buf_nrs = buf_nrs or { chat = message_writer.bufnr },
-        permission_float = PermissionFloat:new(message_writer, buf_nrs, tab_page_id),
+        permission_float = PermissionFloat:new(
+            message_writer,
+            buf_nrs,
+            tab_page_id
+        ),
         queue = {},
         current_request = nil,
         keymap_info = {},
@@ -125,19 +130,6 @@ local CACHE_NOISE_FIELDS = {
     timeout = true,
 }
 
---- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
---- Use at every ACP kind comparison/lookup site so providers with
---- different casing conventions (opencode capitalises, claude lowercases)
---- all map to the same canonical form.
---- @param k string|nil
---- @return string
-local function kind_key(k)
-    if not k then
-        return ""
-    end
-    return vim.trim(k):lower()
-end
-
 --- Stable string representation of a table for cache keying. Sorts top-level
 --- keys so two tables with the same content always produce the same string
 --- regardless of `pairs()` iteration order.
@@ -174,7 +166,7 @@ end
 --- @param tool_call agentic.acp.ToolCall
 --- @return string|nil
 function PermissionManager:_build_cache_key(tool_call)
-    local kind = kind_key(tool_call.kind)
+    local kind = AcpKind.normalise(tool_call.kind)
     if kind == "" then
         return nil
     end
@@ -185,7 +177,11 @@ function PermissionManager:_build_cache_key(tool_call)
     if kind == "execute" and not (raw_input and raw_input.command) then
         local tracker =
             self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
-        if tracker and kind_key(tracker.kind) == "execute" and tracker.argument then
+        if
+            tracker
+            and AcpKind.normalise(tracker.kind) == "execute"
+            and tracker.argument
+        then
             raw_input = vim.tbl_extend(
                 "force",
                 raw_input or {},
@@ -277,8 +273,9 @@ function PermissionManager:_request_command(request)
     local raw_input = tool_call and tool_call.rawInput
     local command = raw_input and raw_input.command
     if not command and tool_call then
-        local tracker = self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
-        if tracker and kind_key(tracker.kind) == "execute" then
+        local tracker =
+            self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
+        if tracker and AcpKind.normalise(tracker.kind) == "execute" then
             command = tracker.argument
         end
     end
@@ -319,7 +316,7 @@ end
 --- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff for the trust check
 --- @return "allow"|"deny"|nil
 function PermissionManager:decide(kind, tool_call, diff)
-    local kind_lc = kind_key(kind)
+    local kind_lc = AcpKind.normalise(kind)
 
     if Config.auto_approve_read_only_tools and READ_ONLY_KINDS[kind_lc] then
         return "allow"
@@ -380,9 +377,10 @@ function PermissionManager:_try_auto_approve(request, callback)
     -- opencode raises `external_directory` with kind="other" before the
     -- underlying tool's own permission, sharing toolCallId — prefer a
     -- read-only/skill tracker kind so those still auto-approve.
-    local tracker = self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
+    local tracker =
+        self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
     local kind = tool_call.kind
-    local tracker_kind_lc = tracker and kind_key(tracker.kind) or ""
+    local tracker_kind_lc = tracker and AcpKind.normalise(tracker.kind) or ""
     if READ_ONLY_KINDS[tracker_kind_lc] or tracker_kind_lc == "skill" then
         kind = tracker.kind
     end
@@ -508,11 +506,7 @@ function PermissionManager:_bash_effects_clear(effects)
     end
     local scope = self._trust_scope
     if
-        not (
-            Config.auto_approve_trust_scope
-            and scope
-            and scope.kind == "tmp"
-        )
+        not (Config.auto_approve_trust_scope and scope and scope.kind == "tmp")
     then
         return false
     end
@@ -531,7 +525,9 @@ function PermissionManager:_bash_effects_clear(effects)
         if not TrustSafety.is_under_tmp(orig, scope.tmp_roots) then
             return false
         end
-        if real ~= orig and not TrustSafety.is_under_tmp(real, scope.tmp_roots) then
+        if
+            real ~= orig and not TrustSafety.is_under_tmp(real, scope.tmp_roots)
+        then
             return false
         end
         if eff.kind == "delete" then
@@ -810,8 +806,10 @@ function PermissionManager:_process_next()
     local callback = item[3]
     local sorted_options = self._sort_permission_options(request.options)
 
-    local option_mapping =
-        self.permission_float:open(sorted_options, self:_writer(toolCallId).bufnr)
+    local option_mapping = self.permission_float:open(
+        sorted_options,
+        self:_writer(toolCallId).bufnr
+    )
     self:_apply_unapproved_highlight(request)
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
@@ -839,9 +837,13 @@ function PermissionManager:_apply_unapproved_highlight(request)
     if not tool_call then
         return
     end
-    local tracker = self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
-    local tracker_kind_lc = tracker and kind_key(tracker.kind) or ""
-    if kind_key(tool_call.kind) ~= "execute" and tracker_kind_lc ~= "execute" then
+    local tracker =
+        self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
+    local tracker_kind_lc = tracker and AcpKind.normalise(tracker.kind) or ""
+    if
+        AcpKind.normalise(tool_call.kind) ~= "execute"
+        and tracker_kind_lc ~= "execute"
+    then
         return
     end
     if not tracker then
@@ -897,7 +899,7 @@ function PermissionManager:_complete_request(option_id)
             break
         end
     end
-    local selected = kind_key(selected_kind)
+    local selected = AcpKind.normalise(selected_kind)
     if selected == "allow_always" or selected == "reject_always" then
         -- Allow-always on an execute prompt remembers the individual safe-but-
         -- unruled leaves, so a later block sharing them auto-approves. Only the
@@ -919,9 +921,15 @@ function PermissionManager:_complete_request(option_id)
         if store_whole then
             local cache_key = self:_build_cache_key(current.request.toolCall)
             if cache_key then
-                local action = selected == "allow_always" and "allow" or "reject"
+                local action = selected == "allow_always" and "allow"
+                    or "reject"
                 self._always_cache[cache_key] = action
-                Logger.debug("PermissionManager: cached", action, "for", cache_key)
+                Logger.debug(
+                    "PermissionManager: cached",
+                    action,
+                    "for",
+                    cache_key
+                )
             end
         end
     end
@@ -978,7 +986,7 @@ function PermissionManager:reject_and_cancel_remaining()
     -- Find the reject_once option
     local reject_option_id
     for _, option in ipairs(self.current_request.request.options) do
-        if kind_key(option.kind) == "reject_once" then
+        if AcpKind.normalise(option.kind) == "reject_once" then
             reject_option_id = option.optionId
             break
         end

@@ -1,3 +1,4 @@
+local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
@@ -15,16 +16,6 @@ local NS_FOLD_ANCHORS = vim.api.nvim_create_namespace("agentic_fold_anchors")
 --- blank line). Own namespace so it stays out of the fold/tool clear paths;
 --- footers are stamped once and never updated or cleared.
 local NS_TURN_USAGE = vim.api.nvim_create_namespace("agentic_turn_usage")
-
---- Normalize an ACP-sourced kind value: strip whitespace, lowercase.
---- @param k string|nil
---- @return string
-local function kind_key(k)
-    if not k then
-        return ""
-    end
-    return vim.trim(k):lower()
-end
 
 --- Synchronously materialise treesitter injections for a buffer row range.
 --- The chat buffer's highlighter parses injections asynchronously under the
@@ -1926,8 +1917,8 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     -- TodoWrite body is the raw JSON request — hide it since the todo window
     -- shows the rendered todos.
     if
-        kind_key(tool_call_block.kind) == "switch_mode"
-        or kind_key(tool_call_block.kind) == "todowrite"
+        AcpKind.normalise(tool_call_block.kind) == "switch_mode"
+        or AcpKind.normalise(tool_call_block.kind) == "todowrite"
     then
         tool_call_block.body = nil
     end
@@ -2065,8 +2056,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     -- TodoWrite body is the raw JSON request — hide it since the todo window
     -- shows the rendered todos.
     if
-        kind_key(tracker.kind) == "switch_mode"
-        or kind_key(tracker.kind) == "todowrite"
+        AcpKind.normalise(tracker.kind) == "switch_mode"
+        or AcpKind.normalise(tracker.kind) == "todowrite"
     then
         tool_call_block.body = nil
     end
@@ -2074,7 +2065,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     -- For read blocks, extract range from the current argument before the merge
     -- overwrites it — the initial title may contain "(N - M)" that the adapter
     -- update replaces with just the file path.
-    if kind_key(tracker.kind) == "read" and not tracker.read_range then
+    if AcpKind.normalise(tracker.kind) == "read" and not tracker.read_range then
         local _, range = Renderer.parse_read_range(tracker.argument)
         if range then
             tracker.read_range = range
