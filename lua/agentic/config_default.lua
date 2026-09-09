@@ -285,8 +285,8 @@ local ConfigDefault = {
 
             --- Queue keymaps mirror the send keymaps but always defer: instead
             --- of sending now, they tag the covered line(s) as a queued region
-            --- (highlighted in place, still editable) that dispatches
-            --- automatically once the session can take it.
+            --- (highlighted in place, still editable) that dispatches at the
+            --- next turn to end normally.
             --- Queueing is line-granular — a charwise motion queues its full
             --- line(s). `<S-CR>` / `<S-C-c>` are only distinguishable from
             --- `<CR>` / `<C-c>` under the kitty keyboard protocol (kitty +

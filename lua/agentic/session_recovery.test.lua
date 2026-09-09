@@ -9,9 +9,10 @@ describe("agentic.session_recovery", function()
         --- @type TestSpy
         local submit_spy
 
-        --- @param drained boolean Whether queued regions supplied the continuation
+        --- @param dispatched boolean Whether the user left something held,
+        ---        which then supplies the continuation
         --- @return agentic.SessionManager
-        local function session_with(drained)
+        local function session_with(dispatched)
             submit_spy = spy.new(function() end)
             return {
                 session_id = "s1",
@@ -19,8 +20,8 @@ describe("agentic.session_recovery", function()
                 _retry_attempt = 1,
                 _usage_reset_epoch = os.time() + 600,
                 _handle_input_submit = submit_spy,
-                _drain_queue = function()
-                    return drained
+                _dispatch_deferred_prompts = function()
+                    return dispatched
                 end,
             } --[[@as agentic.SessionManager]]
         end
@@ -34,9 +35,10 @@ describe("agentic.session_recovery", function()
             assert.equal("continue", submit_spy.calls[1][2])
         end)
 
-        -- The queued regions ARE the continuation; an extra "continue" would
-        -- fire a second concurrent turn.
-        it("sends no 'continue' when queued regions drained", function()
+        -- Whatever was held IS the continuation, whether that is a tagged
+        -- region or a retained bufferless prompt; an extra "continue" would
+        -- fire a second concurrent turn in front of it.
+        it("sends no 'continue' when something was held", function()
             local session = session_with(true)
 
             Recovery._fire_auto_continue(session)

@@ -461,10 +461,12 @@ function M._fire_auto_continue(sm)
         return
     end
 
-    -- The queued regions ARE the continuation when there are any. The turn
-    -- started here reaches its own Stop, where the next drain runs; draining
-    -- again now would fire a second concurrent send_prompt.
-    if not sm:_drain_queue() then
+    -- Whatever the user left held IS the continuation. A bare "continue" only
+    -- when they left nothing — sending one in front of a held prompt would put
+    -- an unasked-for turn ahead of theirs. The turn started here reaches its
+    -- own Stop, where the next drain runs; draining again now would fire a
+    -- second concurrent send_prompt.
+    if not sm:_dispatch_deferred_prompts() then
         sm:_handle_input_submit("continue")
     end
 end

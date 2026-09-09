@@ -418,8 +418,8 @@ describe("agentic.SessionManager", function()
         end)
 
         -- /new is exempt from the deferral gate precisely so it stays
-        -- reachable to unwedge one. A load or prompt callback that never
-        -- arrives would otherwise defer every submit into the fresh session.
+        -- reachable to unwedge one. A load that never completes would
+        -- otherwise defer every submit into the fresh session.
         it("opens every gate on session reset (/new, /clear)", function()
             local Recovery = require("agentic.session_recovery")
             local SlashCommands = require("agentic.acp.slash_commands")
@@ -434,7 +434,7 @@ describe("agentic.SessionManager", function()
                 session_id = nil, -- skip the cancel/clear-content block
                 agent = { state = "ready" },
                 _loading = true,
-                _prompt_pending = 2,
+                _prompt_pending = 0,
                 _usage_reset_epoch = os.time() + 3600,
                 _pending_bufferless_prompt = "stranded",
                 permission_manager = { clear = function() end },
@@ -449,7 +449,6 @@ describe("agentic.SessionManager", function()
             session:_cancel_session()
 
             assert.is_false(session._loading)
-            assert.equal(0, session._prompt_pending)
             assert.is_nil(session._usage_reset_epoch)
             assert.is_nil(session._pending_bufferless_prompt)
             -- Only the fresh session's own readiness is left to wait on.
@@ -652,6 +651,7 @@ describe("agentic.SessionManager", function()
                 _cancel_retry_timer = noop,
                 _remove_reauth_keymap = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
+                _advance_session_epoch = SessionManager._advance_session_epoch,
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _build_handlers = SessionManager._build_handlers,
@@ -1255,7 +1255,6 @@ describe("agentic.SessionManager", function()
                 is_generating = false,
                 session_id = "old-session",
                 _usage_reset_epoch = os.time() + 3600,
-                _prompt_pending = 0,
                 agent = {
                     cancel_session = spy.new(function() end),
                     provider_config = { name = "Old" },
@@ -1267,7 +1266,6 @@ describe("agentic.SessionManager", function()
                 _is_first_message = false,
                 _history_to_send = nil,
                 new_session = spy.new(function() end),
-                _submit_defer_reason = SessionManager._submit_defer_reason,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
@@ -2106,6 +2104,29 @@ describe("agentic.SessionManager", function()
 
                 assert.equal(1, session._prompt_pending)
             end)
+
+            -- stop_generation only fires a notification, so a forced mid-turn
+            -- submit dispatches the replacement while the cancelled prompt is
+            -- still resolving. Its callback must not run the turn tail —
+            -- indicator, footer, attention badge, completion hook — under the
+            -- turn that replaced it.
+            it("runs no turn tail while a newer turn is live", function()
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                local resolve
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    resolve = cb
+                end
+
+                session:_handle_input_submit("hello")
+                -- A forced submit cancelled this turn and dispatched another.
+                session._prompt_pending = 2
+                session.is_generating = true
+                resolve({ stopReason = "cancelled" }, nil)
+
+                assert.is_true(session.is_generating)
+                assert.equal(0, sink.drains)
+            end)
         end)
 
         describe("drain trigger", function()
@@ -2709,12 +2730,34 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_advance_session_epoch", function()
+        -- Releasing the counter belongs to the epoch, not to _cancel_session:
+        -- a restore advances the epoch without cancelling, and the epoch guard
+        -- then refuses the outgoing turn's decrement, so nothing else would
+        -- ever bring it back down.
+        it("releases the in-flight gate for the outgoing session", function()
+            local session = {
+                _session_epoch = 3,
+                _prompt_pending = 2,
+                agent = { state = "ready" },
+                session_id = "s-1",
+                _advance_session_epoch = SessionManager._advance_session_epoch,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+            } --[[@as agentic.SessionManager]]
+
+            session:_advance_session_epoch()
+
+            assert.equal(4, session._session_epoch)
+            assert.equal(0, session._prompt_pending)
+            assert.is_nil(session:_submit_defer_reason("hello"))
+        end)
+    end)
+
     describe("forced submit", function()
-        --- @param overrides table Applied after construction. A nil value
-        ---        cannot be expressed in a table literal, so pass the string
-        ---        "nil" to clear a field.
+        --- @param close_gate fun(sm: agentic.SessionManager)|nil Puts the
+        ---        session into the state under test
         --- @return agentic.SessionManager, table
-        local function forceable(overrides)
+        local function forceable(close_gate)
             local sink = { inner = 0, stopped = 0, actions = {} }
             local session = {
                 session_id = "s-1",
@@ -2734,16 +2777,18 @@ describe("agentic.SessionManager", function()
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _handle_input_submit = SessionManager._handle_input_submit,
             }
-            for k, v in pairs(overrides) do
-                session[k] = v ~= "nil" and v or nil
-            end
             --- @type agentic.SessionManager
             local typed = session
+            if close_gate then
+                close_gate(typed)
+            end
             return typed, sink
         end
 
         it("sends past a running turn, cancelling it first", function()
-            local session, sink = forceable({ _prompt_pending = 1 })
+            local session, sink = forceable(function(sm)
+                sm._prompt_pending = 1
+            end)
 
             assert.is_true(session:_handle_input_submit("hi", { force = true }))
 
@@ -2752,8 +2797,9 @@ describe("agentic.SessionManager", function()
         end)
 
         it("sends past a usage limit without cancelling", function()
-            local session, sink =
-                forceable({ _usage_reset_epoch = os.time() + 600 })
+            local session, sink = forceable(function(sm)
+                sm._usage_reset_epoch = os.time() + 600
+            end)
 
             assert.is_true(session:_handle_input_submit("hi", { force = true }))
 
@@ -2765,10 +2811,16 @@ describe("agentic.SessionManager", function()
         -- a nil id and lose the text: ChatWidget treats a dispatch as consumed
         -- and deletes it from the input buffer.
         it("still defers when there is no session to send to", function()
-            for _, state in ipairs({ "not_ready", "loading" }) do
-                local overrides = state == "loading" and { _loading = true }
-                    or { session_id = "nil" }
-                local session, sink = forceable(overrides)
+            local gates = {
+                not_ready = function(sm)
+                    sm.session_id = nil
+                end,
+                loading = function(sm)
+                    sm._loading = true
+                end,
+            }
+            for _, close_gate in pairs(gates) do
+                local session, sink = forceable(close_gate)
 
                 assert.is_false(
                     session:_handle_input_submit("hi", { force = true })
@@ -2781,9 +2833,13 @@ describe("agentic.SessionManager", function()
 
         -- A local command arrives ungated, and must leave a running turn alone.
         it("leaves the turn alone for an ungated local command", function()
-            local session, sink = forceable({ _prompt_pending = 1 })
+            local session, sink = forceable(function(sm)
+                sm._prompt_pending = 1
+            end)
 
-            assert.is_true(session:_handle_input_submit("/context"))
+            assert.is_true(
+                session:_handle_input_submit("/context", { force = true })
+            )
 
             assert.equal(0, sink.stopped)
             assert.equal(1, sink.inner)
@@ -2792,7 +2848,9 @@ describe("agentic.SessionManager", function()
         -- A held prompt with no buffer range has nothing on screen to show for
         -- it, so the reason has to be said.
         it("writes why a bufferless prompt was held", function()
-            local session, sink = forceable({ session_id = "nil" })
+            local session, sink = forceable(function(sm)
+                sm.session_id = nil
+            end)
 
             session:_handle_input_submit("hi")
 
@@ -2801,7 +2859,9 @@ describe("agentic.SessionManager", function()
         end)
 
         it("says nothing for a buffer submit, which is tagged", function()
-            local session, sink = forceable({ session_id = "nil" })
+            local session, sink = forceable(function(sm)
+                sm.session_id = nil
+            end)
 
             session:_handle_input_submit("hi", { from_buffer = true })
 
@@ -3404,6 +3464,9 @@ describe("agentic.SessionManager", function()
             local drained = false
             local sm = {
                 _pending_bufferless_prompt = "hi",
+                _submit_defer_reason = function()
+                    return nil
+                end,
                 _handle_input_submit = submit_spy,
                 _drain_queue = function()
                     drained = true
@@ -3420,10 +3483,35 @@ describe("agentic.SessionManager", function()
             assert.is_false(drained)
         end)
 
+        -- Resubmitting blind would retain it again and append a second
+        -- deferral notice, since write_error_action appends unconditionally.
+        it("leaves a still-gated prompt retained and unannounced", function()
+            local submit_spy = spy.new(function() end)
+            local sm = {
+                _pending_bufferless_prompt = "hi",
+                _submit_defer_reason = function()
+                    return "usage_limited"
+                end,
+                _handle_input_submit = submit_spy,
+                _drain_queue = function()
+                    error("should not drain while the prompt is retained")
+                end,
+                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
+            }
+
+            assert.is_false(sm:_dispatch_deferred_prompts())
+
+            assert.spy(submit_spy).was.called(0)
+            assert.equal("hi", sm._pending_bufferless_prompt)
+        end)
+
         it("drains queued regions when nothing is retained", function()
             local drained = false
             local sm = {
                 _pending_bufferless_prompt = nil,
+                _submit_defer_reason = function()
+                    return nil
+                end,
                 _handle_input_submit = function()
                     error("should not submit with nothing retained")
                 end,

@@ -1921,14 +1921,20 @@ end
 
 --- @alias agentic.SubmitDeferReason "usage_limited"|"in_flight"|"loading"|"not_ready"
 
---- What a held prompt is waiting for, for prompts with no queued region to
---- stand in for them on screen.
+--- What a held prompt is waiting on, for prompts with no queued region to stand
+--- in for them on screen.
+---
+--- Each names the condition, not a send time: the release edges are a turn that
+--- ends normally, a session becoming ready, a load completing and a usage retry
+--- firing. A held prompt can outlive its own condition — with
+--- `auto_continue_on_usage_limit` off nothing fires when the limit lifts — and
+--- go out at the next edge of any kind.
 --- @type table<agentic.SubmitDeferReason, string>
 local DEFER_NOTICE = {
-    usage_limited = "Message held — will send when usage resets.",
-    in_flight = "Message held — will send when this turn ends.",
-    loading = "Message held — will send when the session finishes loading.",
-    not_ready = "Message held — will send when the session is ready.",
+    usage_limited = "Message held — usage limit in force.",
+    in_flight = "Message held — a turn is running.",
+    loading = "Message held — the session is still loading.",
+    not_ready = "Message held — no session yet.",
 }
 
 --- Why `prompt` cannot be dispatched right now, or nil if it can.
@@ -2004,12 +2010,29 @@ function SessionManager:_handle_input_submit(input_text, opts)
     -- returns first clears is_generating under the other. Keyed on the counter
     -- rather than on `reason == "in_flight"`, since a usage-limited or loading
     -- session can have a turn in flight too and those reasons outrank it.
-    -- Local commands also arrive ungated, and must leave the turn alone.
-    if opts.force and self._prompt_pending > 0 then
+    -- Local commands reach here ungated as well, and answer without touching
+    -- the provider, so a forced `/context` must leave the turn running.
+    if
+        opts.force
+        and self._prompt_pending > 0
+        and not parse_local_command(input_text)
+    then
         self:stop_generation()
     end
     self:_handle_input_submit_inner(input_text)
     return true
+end
+
+--- Supersede the current session generation, so callbacks still in flight for
+--- the outgoing one are refused.
+---
+--- Releasing the in-flight gate belongs here rather than in `_cancel_session`:
+--- every epoch bump strands whatever prompt callbacks the outgoing session had,
+--- and their decrements are refused from now on, so nothing else would ever
+--- bring the counter back down. A restore leaves `_cancel_session` unrun.
+function SessionManager:_advance_session_epoch()
+    self._session_epoch = self._session_epoch + 1
+    self._prompt_pending = 0
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -2035,14 +2058,20 @@ end
 --- The retained bufferless prompt goes first, and takes the whole call: its
 --- turn reaches its own Stop, where the queued regions drain. Dispatching both
 --- here would fire two concurrent send_prompts.
+--- @return boolean dispatched
 function SessionManager:_dispatch_deferred_prompts()
     local text = self._pending_bufferless_prompt
     if text then
+        -- Re-check rather than resubmit blind: a closed gate would retain the
+        -- prompt again and announce it a second time, since the deferral
+        -- notice is appended to chat unconditionally.
+        if self:_submit_defer_reason(text) then
+            return false
+        end
         self._pending_bufferless_prompt = nil
-        self:_handle_input_submit(text)
-        return
+        return self:_handle_input_submit(text)
     end
-    self:_drain_queue()
+    return self:_drain_queue()
 end
 
 --- Dispatch the input buffer's queued regions as a single new turn.
@@ -2295,7 +2324,7 @@ function SessionManager:_dispatch_turn(prompt)
         -- creating a race where a fast follow-up prompt sets is_generating=true
         -- before the previous turn's cleanup sets it back to false, permanently
         -- desynchronising the generating state ("stuck 1 message behind").
-        self.is_generating = false
+
         -- Only this turn's own session may release the gate. A cancelled
         -- prompt's callback outlives /new or a restore, and decrementing then
         -- would open the gate under the turn that replaced it — the very
@@ -2305,6 +2334,18 @@ function SessionManager:_dispatch_turn(prompt)
         if epoch == self._session_epoch then
             self._prompt_pending = math.max(0, self._prompt_pending - 1)
         end
+
+        -- Everything below ends *a* turn: the indicator, the footer and
+        -- separator, the per-turn writer flags, the attention badge and the
+        -- completion hook. A superseded turn must run none of it, or it ends
+        -- the turn that replaced it. Reachable from a forced mid-turn submit,
+        -- which cancels and dispatches in the same tick while the cancelled
+        -- prompt is still resolving, and from a restore mid-turn.
+        if epoch ~= self._session_epoch or self._prompt_pending > 0 then
+            return
+        end
+
+        self.is_generating = false
 
         --- @type table|nil
         local turn_usage
@@ -2348,12 +2389,13 @@ function SessionManager:_dispatch_turn(prompt)
                 -- the subprocess now so by the time auto-continue fires (or
                 -- the user submits manually), the next prompt hits a fresh
                 -- pipeline. See chunk-flush.md.
-                Recovery.respawn_after_usage_limit(self)
-                -- Gate submits until the limit lifts, whether or not
-                -- auto-continue is enabled: respawn_after_usage_limit runs a
-                -- new_session either way, and its drain would otherwise
-                -- dispatch into a still-limited provider.
+                -- Close the gate before the respawn, not after: respawn runs a
+                -- new_session whether or not auto-continue is enabled, and its
+                -- drain would otherwise dispatch into a still-limited
+                -- provider. Ordering here rather than relying on respawn's
+                -- chain happening to go through vim.schedule.
                 self._usage_reset_epoch = reset_epoch
+                Recovery.respawn_after_usage_limit(self)
                 if reset_epoch then
                     Recovery.offer_auto_continue(self, reset_epoch)
                 end
@@ -2457,7 +2499,7 @@ function SessionManager:new_session(opts)
 
     -- Capture epoch so the callback can detect if a load (or another
     -- new_session) superseded this create while the RPC was in flight.
-    self._session_epoch = self._session_epoch + 1
+    self:_advance_session_epoch()
     local epoch = self._session_epoch
 
     self.agent:create_session(handlers, function(response, err)
@@ -2622,7 +2664,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- Invalidate any in-flight create_session callback. The epoch check in
     -- the create_session callback (new_session) rejects stale responses
     -- even after _restoring is cleared by the load completion handler.
-    self._session_epoch = self._session_epoch + 1
+    self:_advance_session_epoch()
 
     -- Clean up the old session's UI state and subscriber, but do NOT send
     -- session/cancel to the provider. Sending cancel immediately before
@@ -2845,8 +2887,9 @@ function SessionManager:_cancel_session()
     self._history_to_send = nil
     self._pending_bufferless_prompt = nil
     -- Every gate state is per-session, so /new recovers a wedged one. /new is
-    -- exempt from the gate precisely so it stays reachable to do this.
-    self._prompt_pending = 0
+    -- exempt from the gate precisely so it stays reachable to do this. The
+    -- in-flight counter is released by _advance_session_epoch instead, which
+    -- also covers the restore paths that never reach here.
     self._usage_reset_epoch = nil
     self._loading = false
     self._usage = nil
