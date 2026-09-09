@@ -810,10 +810,8 @@ local function skip_wrapper_operands(args, spec)
                 -- boolean flag, or self-contained form (`-oL`, `--signal=K`, `-5`)
                 (spec.flag_opts and vim.tbl_contains(spec.flag_opts, opt))
                 or (
-                    spec.attached and matches_any_lua_pattern(
-                        opt,
-                        spec.attached
-                    )
+                    spec.attached
+                    and matches_any_lua_pattern(opt, spec.attached)
                 )
             then
                 i = i + 1

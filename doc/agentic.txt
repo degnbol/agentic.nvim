@@ -859,7 +859,8 @@ gap-fills, not additions over the TUI:
 - `/clear` — TUI resets the conversation context. Over ACP the pass-through
   is a no-op, so the plugin starts a fresh ACP session instead (aliased
   to `/new`).
-- `/new` — start a fresh session.
+- `/new [name]` — start a fresh session. A name is applied to it as
+  `/rename` would.
 - `/rename <name>` — rename the session. The TUI has this natively, but
   the ACP bridge does not expose it. The plugin stores the name in session
   history and in the header state.

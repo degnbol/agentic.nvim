@@ -26,7 +26,7 @@ function SlashCommands.setCommands(bufnr, available_commands)
         new = {
             word = "new",
             menu = "Start a new session",
-            info = "Start a new session",
+            info = "Start a new session, optionally named: /new [name]",
         },
         context = {
             word = "context",
@@ -36,7 +36,7 @@ function SlashCommands.setCommands(bufnr, available_commands)
         clear = {
             word = "clear",
             menu = "Clear conversation",
-            info = "Clear conversation",
+            info = "Clear conversation, optionally named: /clear [name]",
         },
         rename = {
             word = "rename",

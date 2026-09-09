@@ -1878,8 +1878,21 @@ function SessionManager:_handle_input_submit_inner(input_text)
     -- existing one. Necessary to avoid race conditions — the agent might not
     -- send an identifiable response that could be acted upon. /clear through
     -- ACP doesn't actually reset provider context, so we handle it as /new.
-    if input_text:match("^/new%s*") or input_text:match("^/clear%s*$") then
-        self:new_session()
+    -- An argument names the fresh session, as /rename names the current one.
+    -- The frontier requires whitespace or end-of-string after the command
+    -- word, so `/newsflash: build broken` and `/new/data/f.csv` stay prose;
+    -- [^\n] keeps the title to the submitted line.
+    local reset_arg = input_text:match("^/new%f[%s%z]([^\n]*)$")
+        or input_text:match("^/clear%f[%s%z]([^\n]*)$")
+    if reset_arg then
+        local title = vim.trim(reset_arg)
+        local on_created
+        if title ~= "" then
+            on_created = function()
+                self:_rename_session(title)
+            end
+        end
+        self:new_session({ on_created = on_created })
         return
     end
 
@@ -1903,8 +1916,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
         return
     end
 
-    -- Intercept /trust — set scoped auto-approval for file edits this session
-    local trust_arg = input_text:match("^/trust%s*(.*)$")
+    -- Intercept /trust — set scoped auto-approval for file edits this session.
+    -- The frontier requires whitespace or end-of-string after the command word:
+    -- `%s*` alone matches the empty string, so `/trustworthy people` and
+    -- `/trust/etc` would both compile as edit-trust scopes.
+    local trust_arg = input_text:match("^/trust%f[%s%z]%s*(.*)$")
     if trust_arg then
         self:_handle_trust_command(vim.trim(trust_arg))
         return

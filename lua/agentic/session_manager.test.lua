@@ -2352,6 +2352,133 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("local command interception", function()
+        --- @type agentic.SessionManager
+        local session
+        --- @type TestSpy
+        local dispatch_spy
+        --- @type TestSpy
+        local new_session_spy
+        --- @type TestSpy
+        local trust_spy
+        --- @type TestSpy
+        local delete_spy
+        --- @type TestSpy
+        local rename_spy
+
+        before_each(function()
+            local noop = function() end
+            local empty = function()
+                return true
+            end
+
+            dispatch_spy = spy.new(noop)
+            trust_spy = spy.new(noop)
+            delete_spy = spy.new(noop)
+            rename_spy = spy.new(noop)
+            new_session_spy = spy.new(function(_self, opts)
+                if opts and opts.on_created then
+                    opts.on_created()
+                end
+            end)
+
+            session = {
+                session_id = "s-1",
+                tab_page_id = 1,
+                _is_first_message = false,
+                agent = { state = "ready", provider_config = { name = "Test" } },
+                message_writer = { write_user_prompt = noop },
+                chat_history = { title = "existing", add_message = noop },
+                widget = { clear_unread_badge = noop, set_chat_title = noop },
+                todo_list = { close_if_all_completed = noop },
+                code_selection = { is_empty = empty },
+                file_list = { is_empty = empty },
+                diagnostics_list = { is_empty = empty },
+                new_session = new_session_spy,
+                _rename_session = rename_spy,
+                _handle_trust_command = trust_spy,
+                _delete_session = delete_spy,
+                _dispatch_turn = dispatch_spy,
+                _handle_input_submit = SessionManager._handle_input_submit,
+                _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+            } --[[@as agentic.SessionManager]]
+        end)
+
+        --- Submit each text and return how many reached the provider untouched.
+        --- @param texts string[]
+        --- @return integer
+        local function count_dispatched_as_prose(texts)
+            for _, text in ipairs(texts) do
+                session:_handle_input_submit(text)
+            end
+            assert.equal(0, new_session_spy.call_count)
+            assert.equal(0, trust_spy.call_count)
+            assert.equal(0, delete_spy.call_count)
+            return dispatch_spy.call_count
+        end
+
+        it(
+            "sends a word merely starting with a command name as prose",
+            function()
+                local texts = {
+                    "/newsflash: build broken",
+                    "/trustworthy people",
+                    "/clearance to land",
+                    "/contextual clue",
+                    "/renamed the file",
+                    "/deleted the file",
+                }
+                assert.equal(#texts, count_dispatched_as_prose(texts))
+            end
+        )
+
+        it("sends a command name followed by punctuation as prose", function()
+            -- A word boundary is whitespace or end-of-string, not any non-word
+            -- character: `/trust/etc` compiling as a path scope would silently
+            -- widen edit permissions.
+            local texts = {
+                "/new: build broken",
+                "/new/data/f.csv please read this",
+                "/new-parser is failing",
+                "/trust: what does this mean?",
+                "/trust/etc",
+            }
+            assert.equal(#texts, count_dispatched_as_prose(texts))
+        end)
+
+        it("sends a command spanning two lines as prose", function()
+            -- A title argument stops at the line the command is on, so the
+            -- second line is never swallowed as part of it.
+            assert.equal(1, count_dispatched_as_prose({ "/new\nStart on X" }))
+        end)
+
+        it("still intercepts /new, with or without trailing space", function()
+            session:_handle_input_submit("/new")
+            session:_handle_input_submit("/new ")
+            assert.equal(2, new_session_spy.call_count)
+            assert.equal(0, rename_spy.call_count)
+            assert.equal(0, dispatch_spy.call_count)
+        end)
+
+        it("names the fresh session after a /new or /clear argument", function()
+            session:_handle_input_submit("/new fresh start")
+            session:_handle_input_submit("/clear  my work  ")
+            assert.equal(2, new_session_spy.call_count)
+            assert.equal(0, dispatch_spy.call_count)
+            assert.equal("fresh start", rename_spy.calls[1][2])
+            assert.equal("my work", rename_spy.calls[2][2])
+        end)
+
+        it("still intercepts /trust, bare and with a scope argument", function()
+            session:_handle_input_submit("/trust")
+            session:_handle_input_submit("/trust repo")
+            assert.equal(2, trust_spy.call_count)
+            assert.equal("", trust_spy.calls[1][2])
+            assert.equal("repo", trust_spy.calls[2][2])
+            assert.equal(0, dispatch_spy.call_count)
+        end)
+    end)
+
     describe("/trust dispatch", function()
         --- @type TestStub
         local select_stub
