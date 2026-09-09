@@ -10,15 +10,14 @@ looking at the **chat** buffer while a turn streams, so a prompt they just
 pressed `<CR>` on is off-screen until it dispatches — it reads as lost, which is
 the failure the visible-storage design was meant to remove.
 
-Two submits make this worse than it sounds:
+`Agentic.send_prompt` and `Config.keymaps.prompts` are worse off still: they have
+no range to tag at all, so they retain to `_pending_bufferless_prompt`,
+last-write-wins. They write a one-line notice naming the defer reason, which is a
+stopgap, not a view.
 
-- A whole-buffer `<CR>` tags every line. The next keystroke anywhere in the
-  buffer untags all of it (`_setup_queue`'s `on_bytes`), so a prompt the user
-  believes is pending silently becomes ordinary draft and never dispatches.
-  `<S-CR>` has the same rule, but there the user tagged deliberately.
-- `Agentic.send_prompt` and `Config.keymaps.prompts` have no range to tag at
-  all. They retain to `_pending_bufferless_prompt`, last-write-wins. Today they
-  write a one-line notice naming the defer reason; that is a stopgap, not a view.
+A region losing its tag to an edit is **not** part of this problem. The tag is a
+`hl_eol` background, so both holding and releasing are visible where the edit is
+being made.
 
 ## Design
 
