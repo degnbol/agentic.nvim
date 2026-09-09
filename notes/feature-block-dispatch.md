@@ -1,6 +1,6 @@
 # Plan: block-oriented dispatch — one command, one turn
 
-Implemented in `bde2aa4`. Still open: § Deferred, and the pre-existing
+Implemented in `944b6d6`. Still open: § Deferred, and the pre-existing
 selections bug at the end of § Once-per-submit state. Line numbers against
 `bbbfe7e`.
 Realises TODO "Command queuing" and the pass deferred by
