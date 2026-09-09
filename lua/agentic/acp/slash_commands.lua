@@ -19,7 +19,7 @@ function SlashCommands.setCommands(bufnr, available_commands)
     local commands = {}
 
     --- Commands that should always be available regardless of what the
-    --- provider advertises. All three are intercepted locally in
+    --- provider advertises. All of them are intercepted locally in
     --- SessionManager before reaching the provider.
     --- @type table<string, agentic.acp.SlashCommand>
     local builtins = {

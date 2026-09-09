@@ -6,6 +6,14 @@ minor").
 
 ## Bugs
 
+### `<Plug>(agentic-send)` in visual mode adds to context instead of sending
+
+`plugin/agentic.lua:52` maps the visual-mode form to `add_selection`,
+byte-identical to `<Plug>(agentic-add-selection)` at `:31` — two `<Plug>`
+names for one action, one of them called "send". `:help
+agentic-plug-mappings` documents the intended behaviour (send the selection
+as a prompt) and is correct as written; fix the mapping, not the help.
+
 ### vale-typst
 
 An agent said

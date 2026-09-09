@@ -6,41 +6,50 @@ Licence: MIT
 ==============================================================================
 CONTENTS                                                    *agentic-contents*
 
-    1. Introduction .......................... |agentic-introduction|
-    2. Requirements .......................... |agentic-requirements|
-    3. Setup ................................. |agentic-setup|
-    4. Configuration ......................... |agentic-configuration|
-       4.1 Provider .......................... |agentic-config-provider|
-       4.2 Windows ........................... |agentic-config-windows|
-       4.3 Keymaps ........................... |agentic-config-keymaps|
-       4.4 Tool call display ................. |agentic-config-tool-display|
-       4.5 Diff preview ...................... |agentic-config-diff-preview|
-       4.6 Permissions ....................... |agentic-config-permissions|
-       4.7 Session restore ................... |agentic-config-session-restore|
-       4.8 Hooks ............................. |agentic-config-hooks|
-       4.9 Miscellaneous ..................... |agentic-config-misc|
-    5. Lua API ............................... |agentic-api|
-    6. Keymaps ............................... |agentic-keymaps|
-       6.1 Widget keymaps .................... |agentic-keymaps-widget|
-       6.2 Prompt keymaps .................... |agentic-keymaps-prompt|
-       6.3 Chat keymaps ...................... |agentic-keymaps-chat|
-       6.4 Diff keymaps ...................... |agentic-keymaps-diff|
-       6.5 Permission keymaps ................ |agentic-keymaps-permission|
-       6.6 Plug mappings ..................... |agentic-plug-mappings|
-    7. Shell command auto-approval ........... |agentic-compound-commands|
-    8. Auto-scroll ........................... |agentic-auto-scroll|
-    9. File activity ......................... |agentic-file-activity|
-   10. Command notices ....................... |agentic-notices|
-   11. Highlight groups ...................... |agentic-highlights|
-   12. Autocmds .............................. |agentic-autocmds|
-   13. Health check .......................... |agentic-health|
-   14. Debug mode ............................ |agentic-debug|
-   15. Comparison with Claude TUI ............ |agentic-vs-tui|
-       15.1 Additions ........................ |agentic-vs-tui-additions|
-       15.2 ACP patches ...................... |agentic-vs-tui-patches|
-       15.3 Forwarded transparently .......... |agentic-vs-tui-forwarded|
-       15.4 Behaviour differences ............ |agentic-vs-tui-diffs|
-       15.5 Not available .................... |agentic-vs-tui-missing|
+    1. Introduction ................................... |agentic-introduction|
+    2. Requirements ................................... |agentic-requirements|
+    3. Setup ................................................. |agentic-setup|
+    4. Configuration ................................. |agentic-configuration|
+       4.1  Provider ............................... |agentic-config-provider|
+       4.2  Windows ................................. |agentic-config-windows|
+       4.3  Keymaps ................................. |agentic-config-keymaps|
+       4.4  Tool call display .................. |agentic-config-tool-display|
+       4.5  Diff preview ....................... |agentic-config-diff-preview|
+       4.6  Permissions ......................... |agentic-config-permissions|
+       4.7  Session restore ................. |agentic-config-session-restore|
+       4.8  Hooks ..................................... |agentic-config-hooks|
+       4.9  Settings ............................... |agentic-config-settings|
+       4.10 Miscellaneous .............................. |agentic-config-misc|
+    5. Lua API ................................................. |agentic-api|
+    6. Keymaps ............................................. |agentic-keymaps|
+       6.1 Widget keymaps ........................... |agentic-keymaps-widget|
+       6.2 Prompt keymaps ........................... |agentic-keymaps-prompt|
+       6.3 Chat keymaps ............................... |agentic-keymaps-chat|
+       6.4 Diff keymaps ............................... |agentic-keymaps-diff|
+       6.5 Permission keymaps ................... |agentic-keymaps-permission|
+       6.6 Plug mappings ............................. |agentic-plug-mappings|
+    7. Commands ........................................... |agentic-commands|
+       7.1 Local commands ........................... |agentic-commands-local|
+       7.2 Forwarded commands ................... |agentic-commands-forwarded|
+       7.3 Command notices ................................. |agentic-notices|
+       7.4 :AgenticResume .......................... |agentic-commands-resume|
+    8. Permissions ..................................... |agentic-permissions|
+       8.1 The permission prompt ................ |agentic-permissions-prompt|
+       8.2 Auto-approval .......................... |agentic-permissions-auto|
+       8.3 Trust scopes .......................... |agentic-permissions-trust|
+       8.4 Shell commands ........................ |agentic-permissions-shell|
+    9. Chat behaviour ......................................... |agentic-chat|
+       9.1 Auto-scroll and attention ................... |agentic-auto-scroll|
+       9.2 Message queue ..................................... |agentic-queue|
+       9.3 File activity ............................. |agentic-file-activity|
+       9.4 Subagents ..................................... |agentic-subagents|
+   10. Highlight groups ................................. |agentic-highlights|
+   11. Autocmds ........................................... |agentic-autocmds|
+   12. Health check ......................................... |agentic-health|
+   13. Debug and logging ..................................... |agentic-debug|
+   14. Comparison with Claude TUI ........................... |agentic-vs-tui|
+       14.1 Behaviour differences ..................... |agentic-vs-tui-diffs|
+       14.2 Not available ........................... |agentic-vs-tui-missing|
 
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
@@ -50,23 +59,23 @@ via the Agent Client Protocol (ACP). It provides a sidebar chat widget with
 tool call rendering, diff previews, permission management, and session
 persistence.
 
-This is a fork of carlos-algms/agentic.nvim. See |agentic-vs-tui| for a
-comparison with the native Claude Code TUI, covering plugin additions, ACP
-gap-fills, behaviour differences, and TUI features not available here.
+This is a fork of carlos-algms/agentic.nvim.
 
 ==============================================================================
 2. REQUIREMENTS                                         *agentic-requirements*
 
 - Neovim >= 0.12.0
-- An ACP provider binary on PATH. Supported providers:
+- An ACP provider binary on PATH. `provider` takes the config key; the
+  binary is what must be installed:
 
-  `claude-agent-acp`    Claude (default)
-  `gemini`              Gemini (with --experimental-acp)
-  `codex-acp`           Codex
-  `opencode`            OpenCode (with acp subcommand)
-  `cursor-agent-acp`    Cursor Agent
-  `auggie`              Auggie (with --acp)
-  `vibe-acp`            Mistral Vibe
+  Config key          Binary            Provider ~
+  claude-agent-acp    claude-agent-acp  Claude (default)
+  gemini-acp          gemini            Gemini (--experimental-acp)
+  codex-acp           codex-acp         Codex
+  opencode-acp        opencode          OpenCode (acp subcommand)
+  cursor-acp          cursor-agent-acp  Cursor Agent
+  auggie-acp          auggie            Auggie (--acp)
+  mistral-vibe-acp    vibe-acp          Mistral Vibe
 
 Install claude-agent-acp:
 >
@@ -82,24 +91,22 @@ language injection for fenced code blocks. `markdown` and `markdown_inline`
 ship bundled with Neovim 0.12+.
 
 Shell command blocks (execute tool calls, Bash tool output) are emitted
-inside ```bash code fences. For syntax highlighting inside those fences,
-install either the `bash` or `zsh` parser. The plugin registers `zsh` as an
-alias for `bash`, so either works. The `zsh` grammar is currently the more
-actively maintained of the two.
+inside bash code fences. Syntax highlighting inside those fences needs
+either the `bash` or the `zsh` parser; the plugin registers `zsh` as an
+alias for `bash`, so either works. Without a shell parser, shell commands
+render as plain text inside the fence.
 
-Shell command auto-approval additionally requires the `zsh` parser
-specifically: each command is parsed with the zsh grammar and its parse tree
-walked so every leaf is classified separately. Without `zsh`, no command
-auto-approves through this path (it falls through to a permission prompt).
+Shell command auto-approval (|agentic-permissions-shell|) requires the
+`zsh` parser specifically. Without it, no command auto-approves through
+that path and every Bash command raises a permission prompt.
 
 Parser installers are not shipped with Neovim core. Install via
 nvim-treesitter (https://github.com/nvim-treesitter/nvim-treesitter) with
 `:TSInstall bash` or `:TSInstall zsh`, or compile a parser manually with
-`tree-sitter generate` and a C compiler. Without a shell parser installed,
-shell commands render as plain text inside the fence.
+`tree-sitter generate` and a C compiler.
 
 ==============================================================================
-3. SETUP                                                      *agentic-setup*
+3. SETUP                                                       *agentic-setup*
 
 >lua
     require("agentic").setup({
@@ -112,16 +119,17 @@ All options with defaults are in `lua/agentic/config_default.lua`. Only
 override what you need.
 
 ==============================================================================
-4. CONFIGURATION                                      *agentic-configuration*
+4. CONFIGURATION                                       *agentic-configuration*
 
 ------------------------------------------------------------------------------
-4.1 PROVIDER                                        *agentic-config-provider*
+4.1 PROVIDER                                         *agentic-config-provider*
 
-                                               *agentic-config-provider-name*
+                                                *agentic-config-provider-name*
 `provider` string (default: `"claude-agent-acp"`)
-    Name of the ACP provider to use. Must match a key in `acp_providers`.
+    Name of the ACP provider to use. Must match a key in `acp_providers`;
+    the keys are listed in |agentic-requirements|.
 
-                                                *agentic-config-acp_providers*
+                                               *agentic-config-acp_providers*
 `acp_providers` table
     Provider definitions. Each entry has:
       `name`      Display name
@@ -129,30 +137,33 @@ override what you need.
       `args`      List of CLI arguments (optional)
       `env`       Environment variables (optional)
 
-                                                  *agentic-config-auth_type*
+                                                   *agentic-config-auth_type*
 `auth_type` string (default: `"claudeai"`)
     Auth type for Claude CLI re-authentication. One of `"claudeai"`,
     `"console"`, `"sso"`.
 
 ------------------------------------------------------------------------------
-4.2 WINDOWS                                          *agentic-config-windows*
+4.2 WINDOWS                                           *agentic-config-windows*
 
-                                                 *agentic-config-windows-tbl*
+                                                  *agentic-config-windows-tbl*
 `windows` table
-    Controls widget layout and sizing.
+    Widget layout and sizing.
 
-    `position`          `"right"` | `"left"` | `"bottom"` (default: `"right"`)
+    `position`          `"right"` | `"left"` | `"bottom"` | `"tab"`
+                        (default: `"right"`)
     `width`             string or number (default: `"50%"`)
     `height`            string or number (default: `"20%"`)
     `stack_width_ratio` number (default: 0.4)
     `max_wrap_width`    integer (default: 80)
     `min_wrap_width`    integer (default: 40)
 
+    `"tab"` opens the widget in a dedicated tabpage with no file window and
+    closes that tab on hide. The other three split the current tab.
+
     Chat prose is hard-wrapped to the chat window width, clamped between
-    `min_wrap_width` and `max_wrap_width`; set either to 0 to drop that
-    bound. `max_wrap_width` is an absolute ceiling: it also caps the
-    floor. In a window narrower than the floor, wrapped lines run past
-    the window edge.
+    `min_wrap_width` and `max_wrap_width`. Setting either to 0 drops that
+    bound. `max_wrap_width` also caps `min_wrap_width`. Wrapped lines run
+    past the edge of a window narrower than `min_wrap_width`.
 
     Sub-tables for individual panels:
       `chat`          `{ win_opts = {} }`
@@ -163,99 +174,171 @@ override what you need.
       `activity`      `{ display = true, max_height = 10,`
                       ` hide_reverted = true, win_opts = {} }`
       `todos`         `{ display = true, max_height = 10, win_opts = {} }`
+      `subagent`      `{ display = true, width = "40%",`
+                      ` auto_close = false, win_opts = {} }`
 
     `activity.display` turns off both the panel and its count in the chat
     header. `activity.hide_reverted` drops rows whose change is no longer on
     disk; set it false to keep them. See |agentic-file-activity|.
 
+    `subagent.display` routes subagent work into a split beside the chat.
+    `subagent.width` takes a fraction (0-1), a percentage string, or a
+    column count. `subagent.auto_close` closes the split once every
+    subagent in the turn has finished. See |agentic-subagents|.
+
     `win_opts` is passed to |nvim_set_option_value()| for each window.
 
 ------------------------------------------------------------------------------
-4.3 KEYMAPS                                          *agentic-config-keymaps*
+4.3 KEYMAPS                                           *agentic-config-keymaps*
 
-                                                 *agentic-config-keymaps-tbl*
+                                                  *agentic-config-keymaps-tbl*
 `keymaps` table
-    Keybindings for widget, prompt, chat, diff_preview, and permission
-    scopes. See |agentic-keymaps| for defaults. Each value can be:
+    Keybindings for the `widget`, `prompts`, `prompt`, `chat`,
+    `diff_preview` and `permission` scopes. See |agentic-keymaps| for
+    defaults. Each value can be:
       - A string (`"<CR>"`)
       - A list of strings
       - A list of `{ key, mode = ... }` entries
 
+                                              *agentic-config-keymaps-prompts*
+`keymaps.prompts` table
+    Canned prompts: a key-to-text map applied to every widget buffer. The
+    default binds `<localLeader>c` to "Continue". A value may be
+    `{ prompt, mode, desc }` for mode and description control. Set a key to
+    `vim.NIL` or `""` to disable an inherited binding; plain `nil` does not
+    disable it. >lua
+        require("agentic").setup {
+            keymaps = { prompts = { ["<localLeader>y"] = "Go ahead." } },
+        }
+<
 ------------------------------------------------------------------------------
-4.4 TOOL CALL DISPLAY                          *agentic-config-tool-display*
+4.4 TOOL CALL DISPLAY                            *agentic-config-tool-display*
 
-                                            *agentic-config-tool_call_display*
+                                           *agentic-config-tool_call_display*
 `tool_call_display` table
-    `search_max_lines`     integer (default: 8)
+    Line thresholds for tool call output. A block over its threshold is
+    folded closed; 0 disables that fold.
+
+    `search_max_lines`         integer (default: 8)
         Lines before folding search output.
-    `execute_max_lines`    integer (default: 25)
+    `execute_max_lines`        integer (default: 25)
         Lines before folding execute output.
-    `execute_formatter`    string | false (default: `"shfmt"`)
+    `other_max_lines`          integer (default: 25)
+        Lines before folding generic, MCP and meta tool-result bodies.
+    `execute_formatter`        string | false (default: `"shfmt"`)
         External formatter for execute code blocks. Set to `false` to
-        disable and use the built-in operator-splitting fallback.
+        use the built-in operator-splitting fallback only.
+    `diff_context_max_lines`   integer (default: 5000)
+        Skip context-aware diff highlighting when the edited file exceeds
+        this many lines. 0 disables the feature entirely.
+    `create_max_lines`         integer (default: 50)
+        Fold a created-file diff closed when it exceeds this many lines
+        (0 = always open). Edits are never auto-collapsed.
 
 ------------------------------------------------------------------------------
-4.5 DIFF PREVIEW                                *agentic-config-diff-preview*
+4.5 DIFF PREVIEW                                 *agentic-config-diff-preview*
 
-                                              *agentic-config-diff_preview*
+                                                *agentic-config-diff_preview*
 `diff_preview` table
     `enabled`                    boolean (default: true)
     `layout`                     `"inline"` | `"split"` (default: `"split"`)
     `center_on_navigate_hunks`   boolean (default: true)
 
 ------------------------------------------------------------------------------
-4.6 PERMISSIONS                                *agentic-config-permissions*
+4.6 PERMISSIONS                                   *agentic-config-permissions*
 
                                 *agentic-config-auto_approve_read_only_tools*
 `auto_approve_read_only_tools` boolean (default: true)
     Auto-approve read-only tool calls (Read, Grep, Glob) without prompting,
     regardless of target path.
 
+                                        *agentic-config-auto_approve_skills*
+`auto_approve_skills` boolean (default: true)
+    Auto-approve Skill tool calls without prompting.
+
                                               *agentic-config-permissions-tbl*
 `permissions` table
-    Bash command auto-approval patterns. Precedence between the kinds and how
-    `structured` merges over the bundled rules are documented in
-    |agentic-compound-commands|.
+    Bash command auto-approval. The rule layers, their precedence and the
+    `structured` format are described in |agentic-permissions-shell|.
+
     `use_plugin_defaults`   boolean (default: true)
         Load the bundled patterns from `permissions.json`.
     `use_claude_settings`   boolean (default: true)
         Merge `Bash(...)` patterns from Claude's settings.json files.
-    `auto_approve`          `"allow"` | `"read-only"` | nil (default: `"allow"`)
+    `auto_approve`          `"allow"` | `"read-only"` | nil
+                            (default: `"allow"`)
         Selects which pattern kinds are auto-approved.
     `read_only`             string list (default: {})
         Additional read-only `Bash(...)` glob patterns.
     `safe_write`            string list (default: {})
         Additional safe-write glob patterns.
     `deny`                  string list (default: {})
-        Deny `Bash(...)` glob patterns. Take precedence over all other
-        fields and reject the command immediately (no prompt, it never runs).
+        Deny `Bash(...)` glob patterns.
     `ask`                   string list (default: {})
-        Ask patterns. Withhold approval and prompt (override allow, lower
-        precedence than deny).
+        Ask patterns.
     `structured`            table (default: {})
         Cmd-keyed structured rules merged over the bundled defaults.
     `highlight_unapproved`  boolean (default: true)
         Highlight the non-known-safe parts of an execute prompt while shown.
+    `trust_tmp`             boolean (default: true)
+        Activate the `/trust tmp` scope at session start.
+    `tmp_cleanup`           boolean (default: true)
+        Under `/trust tmp`, auto-approve a plain `rm` of scratch files
+        created earlier in the same Bash command. `rm -f` / `rm --force`
+        is always rejected.
 
                                      *agentic-config-auto_approve_trust_scope*
 `auto_approve_trust_scope` boolean (default: true)
-    Gate the per-session `/trust` scope check.
+    Gate the per-session `/trust` scope check. See
+    |agentic-permissions-trust|.
+
+                                            *agentic-config-permission_float*
+`permission_float` table
+    Floating window that renders permission prompts, anchored to a corner
+    of the chat window.
+
+    `anchor`       `"NE"` | `"NW"` | `"SE"` | `"SW"` (default: `"SE"`)
+    `width`        integer (default: 30)
+        Content width in columns; the border is drawn around it.
+    `row_offset`   integer (default: 1)
+        Inset from the anchored corner. Positive is down for `"N*"`, up
+        for `"S*"`.
+    `col_offset`   integer (default: -1)
+        Inset from the anchored corner. Positive is right for `"*W"`, left
+        for `"*E"`.
+    `border`       string or string list (default: `"rounded"`)
+        |nvim_open_win()| border style.
+    `winblend`     integer 0..100 (default: 0)
+
+                                            *agentic-config-permission_icons*
+`permission_icons` table
+    Icon per permission option kind: `plan_implement`, `allow_once`,
+    `allow_always`, `reject_once`, `__reject_all__`, `reject_always`.
 
 ------------------------------------------------------------------------------
-4.7 SESSION RESTORE                          *agentic-config-session-restore*
+4.7 SESSION RESTORE                           *agentic-config-session-restore*
 
-                                              *agentic-config-session_restore*
+                                             *agentic-config-session_restore*
 `session_restore` table
-    `storage_path`      string | nil (default: `~/.cache/nvim/agentic/sessions/`)
-    `picker`            `"quickfix"` | `"fzf-lua"` | `"select"` (default: `"quickfix"`)
-        Session picker backend.
+    `storage_path`      string | nil
+                        (default: `~/.cache/nvim/agentic/sessions/`)
+    `picker`            `"quickfix"` | `"fzf-lua"` | `"select"`
+                        (default: `"quickfix"`)
+        Session picker backend. `"quickfix"` offers delete, undo and a
+        scope toggle; `"fzf-lua"` adds a preview and falls back to
+        quickfix when not installed; `"select"` delegates to
+        |vim.ui.select()| and offers neither scope toggle nor delete.
     `confirm_delete`    boolean (default: true)
         Prompt before `/delete`.
+    `cd_on_load`        boolean (default: true)
+        Change nvim's working directory to the session's recorded cwd on
+        load. Applies to the picker, `:AgenticResume` and
+        |agentic.load_acp_session()|.
 
 ------------------------------------------------------------------------------
-4.8 HOOKS                                            *agentic-config-hooks*
+4.8 HOOKS                                               *agentic-config-hooks*
 
-                                                  *agentic-config-hooks-tbl*
+                                                   *agentic-config-hooks-tbl*
 `hooks` table
     Callback functions for lifecycle events:
       `on_prompt_submit`       Fires after submitting a prompt. Once per
@@ -271,14 +354,28 @@ override what you need.
     event-specific fields. See type annotations in `config_default.lua`.
 
 ------------------------------------------------------------------------------
-4.9 MISCELLANEOUS                                    *agentic-config-misc*
+4.9 SETTINGS                                         *agentic-config-settings*
 
-                            *agentic-config-auto_continue_on_usage_limit*
+                                                 *agentic-config-settings-tbl*
+`settings` table
+    `move_cursor_to_chat_on_submit`  boolean (default: false)
+        Move focus to the chat window after submitting a prompt.
+    `send_register`                  string | nil (default: nil)
+        Register to copy the sent text into before a partial send deletes
+        it from the input buffer. Nil writes no register.
+    `write_submit`                   boolean (default: true)
+        Register the `:w` / `:wq` / `:x` submit handling in the input
+        buffer. When false the input buffer stays a plain `nofile` buffer.
+
+------------------------------------------------------------------------------
+4.10 MISCELLANEOUS                                       *agentic-config-misc*
+
+                                *agentic-config-auto_continue_on_usage_limit*
 `auto_continue_on_usage_limit` boolean (default: true)
     When the provider reports a usage limit with a reset time, schedule
     a timer to send "continue" automatically.
 
-                           *agentic-config-auto_retry_on_transient_error*
+                               *agentic-config-auto_retry_on_transient_error*
 `auto_retry_on_transient_error` boolean (default: true)
     When a turn ends in a transient server error (connection closed
     mid-response, API unreachable, overloaded), send "continue"
@@ -290,166 +387,192 @@ override what you need.
     Tools already run in a retried turn may run again, as they would if
     you sent "continue" by hand.
 
-                                                     *agentic-config-winbar*
+                                                      *agentic-config-winbar*
 `winbar` boolean (default: true)
-    Set |winbar| on widget windows. Disable if using an external plugin
-    (e.g. incline.nvim) for per-window labels.
+    Set 'winbar' on widget windows to the full header text.
 
-                                             *agentic-config-budget_display*
+                                              *agentic-config-budget_display*
 `budget_display` boolean (default: true)
     Show the claude.ai subscription rate-limit budget in the chat header:
     the binding window ("5h" five-hour or "wk" weekly), the time until it
-    resets, and the utilisation percentage when available. A warning
-    triangle marks a pace that would hit the limit before the reset. A
-    cross marks rejected requests. Only shown under claude.ai
-    subscription auth.
+    resets, and the utilisation percentage when available. Only shown
+    under claude.ai subscription auth.
 
-                                                    *agentic-config-headers*
+                                                     *agentic-config-headers*
 `headers` table
     Customise window headers per panel. Each entry can be a table with a
     `title` field or a function receiving header parts.
 
-                                              *agentic-config-notifications*
+                                               *agentic-config-notifications*
 `notifications` table
     `bell`    boolean (default: false)
-        Ring the vim bell on response complete and on permission prompts
-        that require a response. Auto-approved requests (read-only tools,
-        cached or trust-scoped decisions) are silent.
+        Ring the vim bell when the agent needs attention. See
+        |agentic-auto-scroll|.
 
-                                                *agentic-config-file_picker*
+                                                 *agentic-config-file_picker*
 `file_picker` table
     `enabled`       boolean (default: true)
     `max_files`     integer (default: 20000)
 
-                                                *agentic-config-image_paste*
+                                                 *agentic-config-image_paste*
 `image_paste` table
     `enabled`    boolean (default: true)
         Enable image drag-and-drop to add images to referenced files.
 
-                                                *agentic-config-auto_scroll*
+                                                 *agentic-config-auto_scroll*
 `auto_scroll` table
     `enabled`           boolean (default: true)
         Master switch. When false, no programmatic scrolling.
     `pause_on_prose`    boolean (default: true)
         Pin the start of each prose run to the top of the viewport during
         streaming. See |agentic-auto-scroll|.
+    `bottom_padding`    integer (default: 1)
+        Rows kept below the last buffer line.
 
-                                                      *agentic-config-debug*
+                                                 *agentic-config-status_icons*
+`status_icons` table
+    Tool call state icons: `pending`, `completed`, `failed`.
+
+                                             *agentic-config-diagnostic_icons*
+`diagnostic_icons` table
+    Context panel diagnostic icons: `error`, `warn`, `info`, `hint`.
+
+                                                       *agentic-config-debug*
 `debug` boolean (default: false)
     See |agentic-debug|.
 
+                                                         *agentic-config-log*
+`log` boolean (default: false)
+    See |agentic-debug|.
+
 ==============================================================================
-5. LUA API                                                     *agentic-api*
+5. LUA API                                                       *agentic-api*
 
 All functions are on `require("agentic")`.
 
-                                                          *agentic.setup()*
+                                                             *agentic.setup()*
 agentic.setup({opts})
     Initialise the plugin. Call once from your config. See
     |agentic-configuration| for available options.
 
-                                                           *agentic.open()*
+                                                              *agentic.open()*
 agentic.open({opts})
     Open the chat sidebar. Optional `opts` table.
 
-                                                          *agentic.close()*
+                                                             *agentic.close()*
 agentic.close({tab_page_id})
     Close the chat sidebar. Optional tab page ID.
 
-                                                         *agentic.toggle()*
+                                                            *agentic.toggle()*
 agentic.toggle({opts})
     Toggle the chat sidebar open/closed.
 
-                                                     *agentic.toggle_tab()*
-agentic.toggle_tab()
-    Toggle the chat in a dedicated tab.
+                                                        *agentic.toggle_tab()*
+agentic.toggle_tab({opts})
+    Toggle the chat in a dedicated tab. Optional `opts` table.
 
-                                                  *agentic.rotate_layout()*
+                                                     *agentic.rotate_layout()*
 agentic.rotate_layout({layouts})
     Cycle the sidebar through layout positions. Optional list of positions.
 
-                                                   *agentic.send_prompt()*
+                                                       *agentic.send_prompt()*
 agentic.send_prompt({text})
-    Send {text} as a prompt to the active session.
+    Send {text} as a prompt to the active session. The prompt is held and
+    sent later if the session cannot take it yet; a second call before the
+    first is sent replaces it.
 
-                                                  *agentic.add_selection()*
+                                                     *agentic.add_selection()*
 agentic.add_selection({opts})
     Add the current visual selection to the context panel.
 
-                                                      *agentic.add_file()*
+                                                          *agentic.add_file()*
 agentic.add_file({opts})
     Add the current file to the context panel.
 
-                                      *agentic.add_selection_or_file_to_context()*
+                                  *agentic.add_selection_or_file_to_context()*
 agentic.add_selection_or_file_to_context({opts})
     Add visual selection if active, otherwise the current file.
 
-                                       *agentic.add_current_line_diagnostics()*
+                                      *agentic.add_current_line_diagnostics()*
 agentic.add_current_line_diagnostics({opts})
     Add diagnostics from the cursor line to context.
 
-                                            *agentic.add_buffer_diagnostics()*
+                                           *agentic.add_buffer_diagnostics()*
 agentic.add_buffer_diagnostics({opts})
     Add all buffer diagnostics to context.
 
-                                                    *agentic.new_session()*
+                                                       *agentic.new_session()*
 agentic.new_session({opts})
     Start a new chat session.
 
-                                          *agentic.new_session_with_provider()*
+                                         *agentic.new_session_with_provider()*
 agentic.new_session_with_provider({opts})
     Start a new session with a provider picker.
 
-                                                *agentic.switch_provider()*
+                                                   *agentic.switch_provider()*
 agentic.switch_provider({opts})
     Switch to a different ACP provider.
 
-                                                *agentic.stop_generation()*
+                                                   *agentic.stop_generation()*
 agentic.stop_generation()
     Stop the current response generation.
 
-                                            *agentic.toggle_file_activity()*
+                                              *agentic.toggle_file_activity()*
 agentic.toggle_file_activity()
     Show or hide the panel listing the files this session's agent has
     changed. See |agentic-file-activity|.
 
-                                                *agentic.restart_session()*
+                                                   *agentic.restart_session()*
 agentic.restart_session()
     Restart the current session (new process).
 
-                                                *agentic.restore_session()*
+                                                   *agentic.restore_session()*
 agentic.restore_session()
     Open the session restore picker. Most providers resume with full
     native memory of the session. Some cannot, in which case the saved
-    transcript is replayed as context on the next prompt — the
+    transcript is replayed as context on the next prompt: the
     conversation continues, but the provider has no native memory of
     the prior turns.
 
-                                               *agentic.load_acp_session()*
-agentic.load_acp_session({session_id}, {cwd})
+                                                  *agentic.load_acp_session()*
+agentic.load_acp_session({session_id}, {cwd}, {model})
     Load a specific ACP session by UUID. Optional {cwd} for the working
-    directory. On failure, falls back to the local-history replay
-    described under |agentic.restore_session()|.
+    directory and {model} for the model id saved with the session. On
+    failure, falls back to the local-history replay described under
+    |agentic.restore_session()|.
 
-                                                *agentic.send_operatorfunc()*
+                                                   *agentic.resolve_session()*
+agentic.resolve_session({query}, {callback})
+    Resolve {query} — a `session_id` prefix or an exact title,
+    case-insensitive — against the session cache. {callback} receives
+    `session_id`, `cwd` and `model`, or nil when zero or several sessions
+    match.
+
+                                                      *agentic.resume_query()*
+agentic.resume_query({query})
+    Resolve {query} as |agentic.resolve_session()| does and open the
+    session in a new tab. No match emits a notification and changes
+    nothing.
+
+                                                 *agentic.send_operatorfunc()*
 agentic.send_operatorfunc({type})
-    |operatorfunc| callback for sending a motion/selection as a prompt.
+    'operatorfunc' callback for sending a motion/selection as a prompt.
 
 ==============================================================================
-6. KEYMAPS                                                 *agentic-keymaps*
+6. KEYMAPS                                                   *agentic-keymaps*
 
 Buffer-local keymaps set automatically in agentic buffers. All are
-configurable via `keymaps` in |agentic-configuration|.
+configurable via `keymaps` in |agentic-config-keymaps|.
 
 ------------------------------------------------------------------------------
-6.1 WIDGET KEYMAPS                               *agentic-keymaps-widget*
+6.1 WIDGET KEYMAPS                                    *agentic-keymaps-widget*
 
 Applied to all buffers in the widget (chat, prompt, panels).
 
     Key              Mode    Description ~
     `<localLeader>m`   n/v     Switch agent mode
     `<C-c>`            n/i     Stop generation
-    `<localLeader>c`   n       Send "Continue"
+    `<localLeader>c`   n       Send "Continue" (canned prompt)
     `<localLeader>R`   n       Restore session
     `<localLeader>s`   n       Switch provider
     `<localLeader>M`   n       Switch model
@@ -457,20 +580,12 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>!`   n       Restart session
     `<localLeader>f`   n       Toggle changed-files panel
     `<localLeader>a`   n       Toggle auto-scroll
-    `<localLeader>G`   n       Scroll chat and subagents to bottom (keeps focus)
+    `<localLeader>G`   n       Scroll chat and subagents to bottom, keep focus
 
-`<localLeader>c` is a canned-prompt binding: it sends the fixed text
-"Continue" to the session. These live in `keymaps.prompts`, a key-to-text
-map applied to every widget buffer. Add entries to bind more fixed prompts.
-A value may be `{ prompt, mode, desc }` for mode and description control.
-Set a key to `vim.NIL` or "" to disable an inherited binding — plain `nil`
-does not disable it. >lua
-    require("agentic").setup {
-        keymaps = { prompts = { ["<localLeader>y"] = "Go ahead." } },
-    }
-<
+Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
+
 ------------------------------------------------------------------------------
-6.2 PROMPT KEYMAPS                               *agentic-keymaps-prompt*
+6.2 PROMPT KEYMAPS                                    *agentic-keymaps-prompt*
 
     Key              Mode    Description ~
     `<CR><CR>`         n       Stash-send: send N lines (count1), delete them
@@ -481,65 +596,38 @@ does not disable it. >lua
     `<S-CR>`           x       Queue the selected line(s) for dispatch
     `<S-C-c>`          n       Drop every queued region (text stays as draft)
     `:w`               c       Submit whole buffer
-    `:wq` / `:x`       c       Submit, then close the input window (`:wq!` / `:x!` close the widget)
-    `:q`               c       Close the input window if empty, else warn (unsent draft)
+    `:wq` / `:x`       c       Submit, then close the input window
+    `:wq!` / `:x!`     c       Submit, then close the widget
+    `:q`               c       Close the input window if empty, else warn
     `<localLeader>p`   n       Paste image
     `<C-v>`            i       Paste image
-
-Partial-send deletes the sent text from the input buffer. Set
-`settings.send_register` to a register name (e.g. `"a"`) to copy the sent text
-into that register before deleting.
-
-Submitted text splits at command lines: a line of the form `/word`, with or
-without arguments, is a prompt of its own, and each run of other lines is one
-prompt. They dispatch in buffer order, one per turn — `/compact` above
-`Continue` compacts, then sends `Continue` when that finishes. Text with no
-command line in it is one prompt, as it is when nothing splits. An argument
-belongs on its command's own line; the line below it is the next prompt.
-Indent a `/`-leading line by one space to send it as ordinary text instead.
-
-The queue bindings tag the covered line(s) as a queued region, highlighted in
-place (`AgenticQueuedRegion`) and left editable, instead of sending now —
-always, whether or not a turn is running. Queueing is line-granular: a
-charwise motion queues its whole line(s). A submit the session cannot take
-yet, and every block of one that has not dispatched, is tagged the same way,
-so it stays in the buffer.
-
-The queue dispatches one block per turn in buffer order (top to bottom), at
-each turn that ends normally. A turn stopped with `<C-c>`, or ended early by
-the agent, leaves the rest tagged. Editing a region — any change to it, or
-entering insert mode with the cursor inside it — drops it back to ordinary
-draft. `:w` / `:wq` / `:x` submit the whole buffer, dispatching its first
-block now instead of queueing it, and stop a running turn if there is one;
-before the session is ready they queue it like any other submit.
-
-`/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
-the queue rather than as a submit's first block: pasted text that quotes one
-of them as an example would otherwise run it. Declining leaves every queued
-block as draft. `/delete` also drops the rest of the queue, since the session
-those blocks were meant for is gone.
 
 `<S-CR>` and `<S-C-c>` are only distinguishable from `<CR>` and `<C-c>` under
 the kitty keyboard protocol (kitty terminal with nvim 0.12). On other
 terminals these bindings do not fire.
 
-`settings.write_submit = false` disables `:w` / `:wq` / `:x` handling, leaving
-the input buffer as a plain `nofile` buffer.
+The `:w` family is registered only while `settings.write_submit` is on
+(|agentic-config-settings|). What the queue bindings dispatch, and when, is
+in |agentic-queue|.
 
 ------------------------------------------------------------------------------
-6.3 CHAT KEYMAPS                                   *agentic-keymaps-chat*
+6.3 CHAT KEYMAPS                                        *agentic-keymaps-chat*
 
     Key    Mode    Description ~
     `[[`     n       Previous prompt or command notice
     `]]`     n       Next prompt or command notice
+    `gf`     n       Open the file under the cursor at the diff's line
     `:q`     c       Warns and closes nothing (`:q!` closes the chat window)
 
-An insert key (`i`, `a`, `o`, `c`, `x`, …) in the chat or a panel moves the
+Tool output over its line threshold (|agentic-config-tool-display|) is
+folded; |zo|, |zc| and |za| toggle a fold as usual.
+
+An insert key (`i`, `a`, `o`, `c`, `x`, ...) in the chat or a panel moves the
 cursor to the input window and starts insert there, reopening the input window
 first if it was closed.
 
 ------------------------------------------------------------------------------
-6.4 DIFF KEYMAPS                                   *agentic-keymaps-diff*
+6.4 DIFF KEYMAPS                                        *agentic-keymaps-diff*
 
     Key              Mode    Description ~
     `]c`               n       Next diff hunk
@@ -547,21 +635,22 @@ first if it was closed.
     `<localLeader>d`   n       Open diff in tab
 
 ------------------------------------------------------------------------------
-6.5 PERMISSION KEYMAPS                       *agentic-keymaps-permission*
+6.5 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
 
-While a permission prompt is active, number keys select options:
+While a permission prompt is active, number keys select options by position
+in the prompt. Applied to all widget buffers, configurable via
+`keymaps.permission`. What each option does is in
+|agentic-permissions-prompt|.
 
     Key    Description ~
-    `1`      First option (typically "Allow once")
+    `1`      First option
     `2`      Second option
     `3`      Third option
     `4`      Fourth option
     `5`      Fifth option
 
-Applied to all widget buffers. Configurable via `keymaps.permission`.
-
 ------------------------------------------------------------------------------
-6.6 PLUG MAPPINGS                                 *agentic-plug-mappings*
+6.6 PLUG MAPPINGS                                      *agentic-plug-mappings*
 
 Global `<Plug>` mappings for binding from any buffer:
 
@@ -584,58 +673,185 @@ Global `<Plug>` mappings for binding from any buffer:
     `<Plug>(agentic-rotate-layout)`            n      Rotate layout
 
 ==============================================================================
-7. SHELL COMMAND AUTO-APPROVAL                *agentic-compound-commands*
+7. COMMANDS                                                 *agentic-commands*
 
-ACP providers (e.g. claude-agent-acp) match the full Bash command string
-against permission patterns as a single unit. This means a compound command
-like `cd /path && git status` won't match `Bash(git *)` because the string
-starts with `cd`. This is an upstream limitation tracked at
-https://github.com/anthropics/claude-code/issues/16561
+------------------------------------------------------------------------------
+7.1 LOCAL COMMANDS                                    *agentic-commands-local*
 
-agentic.nvim adds a client-side layer that parses every Bash command with the
-`zsh` treesitter grammar and matches its leaves individually. When a Bash
-permission request arrives:
+Slash commands the plugin answers itself, without forwarding them to the
+provider. They are available whether or not the provider advertises them,
+and appear in slash-command completion.
 
-1. Parse the command with the `zsh` treesitter grammar. An absent parser,
-   a parse error, or a malformed/truncated tree fails closed → prompt.
-2. Walk the parse tree, rejecting by default — anything not proven safe
-   prompts. Command/process substitution (`$(...)`, backticks, `<(...)`),
-   control flow (loops, conditionals, subshells, functions), file-writing
-   redirects (anything but `/dev/null` and fd duplication like `2>&1`),
-   dynamic command names, and code-taking builtins (`eval`/`source`/`.`)
-   all bail.
-3. For each safe leaf command, strip a `stdbuf` wrapper and a system
-   binary-dir prefix, then check it against two complementary layers:
-   - a glob layer reading Claude's `Bash(...)` patterns from
-     `~/.claude/settings.json`, `.claude/settings.json`, and the
-     `Config.permissions.{read_only,safe_write,deny,ask}` lists.
-   - a structured layer reading the plugin's bundled `permissions.json`
-     plus `Config.permissions.structured`. It matches on tokenised flag
-     identifiers, so option clustering (`sort -uo out`), GNU abbreviation
-     (`sort --out=x`), and glued args (`sort -oFILE`) are caught where a
-     glob would let them through.
-4. Auto-approve a leaf only if some layer allows it AND no layer denies or
-   asks: `(glob_allow OR structured_allow) AND NOT (glob_deny OR
-   structured_deny OR glob_ask OR structured_ask)`.
+    `/new [name]`      Start a fresh session, named if a name is given.
+    `/clear [name]`    Alias of `/new`.
+    `/rename {name}`   Rename the session. The name is stored in session
+                       history and in the header state.
+    `/delete`          Delete the current session from disk and clear the
+                       UI. Prompts first while
+                       `session_restore.confirm_delete` is on.
+    `/context`         Token-usage readout for the session.
+    `/trust [scope]`   Set the edit trust scope. See
+                       |agentic-permissions-trust|.
 
-Deny/ask always take precedence over allow (same as upstream), and differ in
-outcome: a `deny` match rejects the command immediately (no prompt, no
-execution), while `ask` only withholds approval so the command prompts. Which
-allow rules count depends on `Config.permissions.auto_approve`: "allow" admits
-read-only + safe-write rules, "read-only" admits read-only only, nil admits
-none. Compiled patterns and the bundled file are cached with mtime-based
-invalidation.
+A command line dispatches as its own prompt; see |agentic-queue|.
+
+------------------------------------------------------------------------------
+7.2 FORWARDED COMMANDS                            *agentic-commands-forwarded*
+
+Slash commands the provider advertises over ACP and the plugin passes
+through. Type them in the input buffer; they appear in slash-command
+completion. With claude-agent-acp:
+
+    `/init`             Generate a project `CLAUDE.md`.
+    `/review`           Pull-request review.
+    `/security-review`  Security review of pending changes.
+    `/compact`          Summarise and compact conversation history.
+    `/extra-usage`      Configure extra usage when limits hit.
+    `/insights`         Session analysis report.
+    `/team-onboarding`  Teammate-ramp guide.
+    `/heapdump`         Dump JS heap for bridge debugging.
+
+The set is provider-specific and changes with the bridge version.
+
+------------------------------------------------------------------------------
+7.3 COMMAND NOTICES                                          *agentic-notices*
+
+`/trust`, `/rename`, `/context`, a model or provider switch and a resumed
+session report back in the chat as a notice heading rather than as agent
+prose.
+
+`[[` and `]]` stop on notices as well as prompts
+(|agentic-keymaps-chat|). Notices are not saved with the session and not
+replayed on restore.
+
+------------------------------------------------------------------------------
+7.4 :AGENTICRESUME                                   *agentic-commands-resume*
+
+                                                              *:AgenticResume*
+:AgenticResume {query}
+    Open a cached session whose `session_id` starts with {query}, or whose
+    title equals it, case-insensitively. Opens the widget in a tab and
+    sends `session/load` to the agent. Zero or several matches emit a
+    notification and change nothing. `session_restore.cd_on_load` governs
+    the working directory.
+
+==============================================================================
+8. PERMISSIONS                                           *agentic-permissions*
+
+------------------------------------------------------------------------------
+8.1 THE PERMISSION PROMPT                         *agentic-permissions-prompt*
+
+A tool call the agent is not cleared to make raises a prompt in a float
+anchored to the chat window (|agentic-config-permission_float|). The options
+come from the provider; the plugin inserts "Reject all" ahead of the
+provider's "Reject always", or appends it when there is none. The number
+keys pick by position (|agentic-keymaps-permission|).
+
+    Option          Effect ~
+    Allow once      Approve this call.
+    Allow always    Approve, and approve the same operation for the rest of
+                    the session without prompting.
+    Reject once     Reject this call.
+    Reject all      Reject this call and cancel every call still queued for
+                    the turn. No rule is stored.
+    Reject always   Reject, and reject the same operation for the rest of
+                    the session without prompting.
+
+The always-decisions are held in a per-session cache keyed on the
+operation's identity — file path, command, URL, query — so a decision on one
+call does not carry to a different call of the same tool. The cache is
+dropped with the session.
+
+While an execute prompt is shown, the parts of the command that are not
+known-safe are highlighted (`permissions.highlight_unapproved`,
+|AgenticUnapprovedCommand|).
+
+------------------------------------------------------------------------------
+8.2 AUTO-APPROVAL                                   *agentic-permissions-auto*
+
+A tool call runs without a prompt when any of these holds:
+
+- It is a read-only tool (Read, Grep, Glob) and
+  `auto_approve_read_only_tools` is on, regardless of target path.
+- It is a Skill tool call and `auto_approve_skills` is on. Loading a skill
+  injects a SKILL.md into the context.
+- It is a shell command every leaf of which matches an allow rule
+  (|agentic-permissions-shell|).
+- It matches a cached "Allow always" decision
+  (|agentic-permissions-prompt|).
+- It writes a file covered by the active trust scope
+  (|agentic-permissions-trust|).
+
+A shell command matching a `deny` rule is rejected outright, with no prompt
+and without running.
+
+------------------------------------------------------------------------------
+8.3 TRUST SCOPES                                   *agentic-permissions-trust*
+
+`/trust` sets a per-session scope in which file-scoped tool calls — edit,
+write, create, delete, move — auto-approve. Bare `/trust` opens a picker.
+
+    `/trust repo`     Git-tracked files anywhere in the repository.
+    `/trust here`     Git-tracked files under the current directory.
+    `/trust tmp`      Scratch files under `/tmp` and `$TMPDIR`.
+    `/trust off`      Clear the scope.
+    `/trust {path}`   A path or glob. Relative paths anchor at the cwd.
+
+`repo` and `here` need a git repository at the cwd; without one the command
+reports an error and leaves the scope untouched. A scope covering a home or
+system directory writes a warning notice.
+
+Inside the scope a file auto-approves only when the change is recoverable:
+a pure addition, a tracked file with no uncommitted change, or a recorded
+agent-owned line range whose content still matches the file on disk.
+Symlinks are resolved to their target, and the file is re-checked against
+its recorded size and mtime immediately before the write.
+
+`/trust tmp` is active from session start while `permissions.trust_tmp` is
+on. `permissions.tmp_cleanup` extends it to a plain `rm` of a scratch file
+created earlier in the same Bash command; `rm -f` and `rm --force` are
+always rejected.
+
+The whole mechanism is gated by `auto_approve_trust_scope`.
+
+------------------------------------------------------------------------------
+8.4 SHELL COMMANDS                                 *agentic-permissions-shell*
+
+Every Bash command is parsed with the `zsh` treesitter grammar
+(|agentic-requirements-parsers|) and its leaf commands are matched one by
+one, so `cd /path && git status` matches `Bash(git *)` on its `git` leaf.
+
+The walk rejects by default: a missing parser, a parse error, command or
+process substitution (`$(...)`, backticks, `<(...)`), control flow (loops,
+conditionals, subshells, functions), a file-writing redirect (anything but
+`/dev/null` and fd duplication such as `2>&1`), a dynamic command name, or
+a code-taking builtin (`eval`, `source`, `.`) all fall through to a prompt.
+
+Each remaining leaf is stripped of a `stdbuf` wrapper and a system
+binary-dir prefix, then checked against two layers:
+
+- Glob rules: `Bash(...)` patterns from `~/.claude/settings.json` and
+  `.claude/settings.json`, plus the `read_only`, `safe_write`, `deny` and
+  `ask` lists in `permissions`.
+- Structured rules: the bundled `permissions.json` plus
+  `permissions.structured`. These match on tokenised flag identifiers, so
+  option clustering (`sort -uo out`), GNU abbreviation (`sort --out=x`)
+  and glued arguments (`sort -oFILE`) are matched.
+
+A leaf auto-approves when a layer allows it and no layer denies or asks.
+`deny` rejects the command immediately, with no prompt and no execution;
+`ask` withholds approval so the command prompts. Which allow rules count
+follows `permissions.auto_approve`: `"allow"` admits read-only and
+safe-write rules, `"read-only"` admits read-only only, nil admits none.
 
 Structured rules are a cmd-keyed table. Each command maps to up to four
 gate-kind arrays — `read_only`, `safe_write`, `ask`, `deny` — and each gate
 constrains `options` (literal flag identifiers) and/or `positionals`
-(literal or glob, matched in order). The kind name encodes the policy:
-`read_only` auto-approves at "read-only"/"allow", `safe_write` only at
-"allow", `ask` withholds approval and prompts, `deny` rejects immediately
-(no prompt, the command never runs). Add or override rules
-via `Config.permissions.structured`, deep-merged over the bundled defaults —
-a cmd key replaces that command's bundled kind-arrays wholesale, and
-`vim.NIL` disables the bundled entry: >lua
+(literal or glob, matched in order). `read_only` auto-approves at
+`"read-only"` and `"allow"`, `safe_write` only at `"allow"`, `ask`
+withholds approval, `deny` rejects. `permissions.structured` is deep-merged
+over the bundled defaults: a cmd key replaces that command's bundled
+kind-arrays wholesale, and `vim.NIL` disables the bundled entry. >lua
     require("agentic").setup({
         permissions = {
             structured = {
@@ -649,28 +865,79 @@ a cmd key replaces that command's bundled kind-arrays wholesale, and
         },
     })
 <
-Implementation: `lua/agentic/utils/permission_rules.lua`
-
 ==============================================================================
-8. AUTO-SCROLL                                          *agentic-auto-scroll*
+9. CHAT BEHAVIOUR                                               *agentic-chat*
 
-While the agent streams, the start of each prose run is pinned to the
-top of the viewport so the response can be read from the beginning.
-The pin releases on the next write to chat. In practice only the
-final prose's pin persists, pausing the view on the agent's summary.
+------------------------------------------------------------------------------
+9.1 AUTO-SCROLL AND ATTENTION                            *agentic-auto-scroll*
 
-Toggle via `<localLeader>a` (|agentic-config-keymaps|). Disable the pin
-with `pause_on_prose = false` (|agentic-config-auto_scroll|).
+While the agent streams, the chat follows the trailing edge of the buffer.
+Scrolling the chat window away from the bottom stops the following until the
+view reaches the bottom again. `<localLeader>a` toggles auto-scroll off and
+on; `<localLeader>G` returns the chat and the subagent split to the bottom
+without moving focus.
 
-==============================================================================
-9. FILE ACTIVITY                                     *agentic-file-activity*
+With `pause_on_prose` the start of each prose run is pinned to the top of
+the viewport, released by the next write to chat. In practice only the final
+prose run's pin persists, leaving the view on the agent's summary.
+`auto_scroll.bottom_padding` rows are kept below the last buffer line.
+
+When a turn completes, and when a permission prompt needs an answer, the
+plugin signals two ways:
+
+- The vim bell rings if the chat window is not the current window
+  (`notifications.bell`, off by default). Focus in another window of the
+  widget, the input window included, still rings it.
+- The chat buffer name carries an unread badge if the chat is scrolled away
+  from the bottom. The badge clears when the chat reaches the bottom again.
+  A permission prompt sets no badge; its float is visible regardless of
+  scroll position.
+
+Auto-approved requests do neither.
+
+------------------------------------------------------------------------------
+9.2 MESSAGE QUEUE                                              *agentic-queue*
+
+Submitted text splits at command lines: a line of the form `/word`, with or
+without arguments, is a prompt of its own, and each run of other lines is one
+prompt. They dispatch in buffer order, one per turn — `/compact` above
+`Continue` compacts, then sends `Continue` when that finishes. Text with no
+command line in it is one prompt, as it is when nothing splits. An argument
+belongs on its command's own line; the line below it is the next prompt.
+Indent a `/`-leading line by one space to send it as ordinary text instead.
+
+The queue bindings (|agentic-keymaps-prompt|) tag the covered line(s) as a
+queued region, highlighted in place (`AgenticQueuedRegion`,
+|agentic-highlights|) and left editable, instead of sending now — always,
+whether or not a turn is running. Queueing is line-granular: a charwise
+motion queues its whole line(s). A submit the session cannot take yet, and
+every block of one that has not dispatched, is tagged the same way, so it
+stays in the buffer.
+
+The queue dispatches one block per turn in buffer order, at each turn that
+ends normally. A turn stopped with `<C-c>`, or ended early by the agent,
+leaves the rest tagged. Editing a region — any change to it, or entering
+insert mode with the cursor inside it — drops it back to ordinary draft.
+`:w` / `:wq` / `:x` submit the whole buffer, dispatching its first block now
+instead of queueing it; before the session is ready they queue it like any
+other submit.
+
+`/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
+the queue rather than as a submit's first block. Declining leaves every
+queued block as draft. `/delete` also drops the rest of the queue.
+
+A partial send deletes the sent text from the input buffer;
+`settings.send_register` copies it to a register first.
+
+------------------------------------------------------------------------------
+9.3 FILE ACTIVITY                                      *agentic-file-activity*
 
 A toggled panel listing the files the agent has changed over the session,
 one row per file however many times it was touched. Subagent (Task) edits
 appear alongside the main agent's, unmarked.
 
-Toggle with `<localLeader>f`. The chat header also carries the number of
-changed files, so the count is available with the panel closed.
+Toggle with `<localLeader>f`. The chat header carries the number of changed
+files.
 
     Row      Meaning ~
     `+ path`   File created
@@ -688,99 +955,110 @@ Inside the panel:
     `<CR>`  Open the file at its first recorded change
     `Q`     Send every row to the |quickfix| list
 
-Opening the panel re-checks each change against disk and drops the rows that
-are no longer changes: a created file that no longer exists, and a tracked
-file git no longer reports as differing from HEAD. Committing the agent's
-work drops its rows too. Set `windows.activity.hide_reverted = false` to keep
-them. Outside a git repository, and for untracked files that still exist,
-there is nothing to compare against and every row stays.
+Opening the panel drops rows whose change is no longer on disk: a created
+file that no longer exists, and a tracked file that no longer differs from
+HEAD — so committing the agent's work drops its rows. Rows for untracked
+files that still exist, and every row outside a git repository, stay.
+`windows.activity.hide_reverted = false` keeps them all.
 
 The list survives |agentic.restore_session()| and a provider switch. `/new`
 and `/clear` start a new conversation, and empty it.
 
 Only the file-editing tools are tracked. Files a shell command changes are
-not listed: no provider reports which files a command touched, and deriving
-them from the working tree attributes every concurrent change to the agent.
+not listed.
+
+------------------------------------------------------------------------------
+9.4 SUBAGENTS                                              *agentic-subagents*
+
+Subagent (Task) work renders in a split beside the chat rather than inline,
+configured under `windows.subagent` (|agentic-config-windows|).
+
+A subagent's prose and thinking appear there alongside its tool calls with
+claude-agent-acp 0.66.0 and later. Earlier bridges send only the tool calls.
+
+`<localLeader>G` returns the subagent split to the bottom along with the
+chat.
 
 ==============================================================================
-10. COMMAND NOTICES                                        *agentic-notices*
-
-Commands the plugin answers itself — `/trust`, `/rename`, `/context`, a model
-or provider switch, a resumed session — report back as a heading whose sign
-column carries a glyph naming the command, rather than as agent prose:
-
-    󱈘  ## repo
-    󱈤  ## New Name
-    󰊚  ## 72.4k / 200k · 36%
-    ╰─ - Cost: $0.0412 USD
-
-Since the glyph says which command ran, the heading text is just the result.
-A notice with a body closes with `╰─` on its last row, the same bracket a
-multi-line prompt, a tool call block and a run of agent prose get.
-
-`[[` and `]]` stop on notices as well as prompts (|agentic-keymaps-chat|).
-Notices are display-only — not saved with the session, not replayed on restore.
-
-==============================================================================
-11. HIGHLIGHT GROUPS                                    *agentic-highlights*
+10. HIGHLIGHT GROUPS                                      *agentic-highlights*
 
 Any of these groups you define yourself is left alone; the plugin only
 overwrites definitions it made itself, and re-derives them on |ColorScheme|.
+Backticked defaults are groups with no help tag of their own: syntax groups
+(|group-name|) and treesitter captures (|treesitter-highlight-groups|).
 
-    Group                        Default link                   Purpose ~
-    `AgenticDiffDelete`            |DiffDelete|                   Deleted lines
-    `AgenticDiffAdd`               |DiffAdd|                      Added lines
-    `AgenticDiffDeleteWord`        |DiffText|                     Word deletions
-    `AgenticDiffAddWord`           |DiffText|                     Word additions
-    `AgenticStatusPending`         |DiagnosticVirtualTextHint|    Pending tool call
-    `AgenticStatusCompleted`       |DiagnosticVirtualTextOk|      Completed tool call
-    `AgenticStatusFailed`          |DiagnosticVirtualTextError|   Failed tool call
-    `AgenticCodeBlockFence`        |NonText|                      Code fences and region rails
-    `AgenticHeading`               @punctuation.special          Chat section heading markers (## / ###)
-    `AgenticGlyphUser`             `Prompt`, else |Normal|          Identity glyph of a user row (prompt, notice)
-    `AgenticGlyphAgent`            |Normal|                       Identity glyph of an agent row (tool call, thinking)
-    `AgenticGlyphOff`              (user glyph fg, struck)        Glyph of a command that cleared its own setting
-    `AgenticSearchMatch`           |Search|                       Search match
-    `AgenticGrepPath`              @string.special.path          Grep file path
-    `AgenticGrepLineNr`            |LineNr|                       Grep line number
-    `AgenticGrepSeparator`         |Delimiter|                    Grep separator
-    `AgenticSlashCommandPrefix`    @punctuation.special          `/` prefix
-    `AgenticSlashCommand`          @function.call                Command body
-    `AgenticMentionPrefix`         @punctuation.special          `@` prefix
-    `AgenticMention`               @string.special.path          Mention body
-    `AgenticErrorHeading`          |DiagnosticError|              Error heading
-    `AgenticErrorBody`             |DiagnosticVirtualTextError|   Error body
-    `AgenticDimmedBlock`           (set in ftplugin)             Dimmed fence lines
-    `AgenticUnapprovedCommand`     |DiagnosticVirtualTextWarn|   Non-known-safe parts of an execute permission prompt
-    `AgenticTurnUsage`             |Comment|                      Per-turn token-usage footer
-    `AgenticQueuedRegion`          |DiffChange|                   Input region queued for dispatch
-    `AgenticActivityCreate`        |hl-Added|                     File activity: created marker
-    `AgenticActivityEdit`          |hl-Changed|                   File activity: changed marker
-    `AgenticActivityDelete`        |hl-Removed|                   File activity: deleted marker
-    `AgenticActivityRead`          |Comment|                      File activity: read marker
-    `AgenticActivityUnseen`        |DiagnosticHint|               File activity: changed-since-last-viewed dot
+Diff preview ~
+    AgenticDiffAdd            |hl-DiffAdd|      Added lines
+    AgenticDiffDelete         |hl-DiffDelete|   Deleted lines
+    AgenticDiffAddWord        |hl-DiffText|     Word-level additions
+    AgenticDiffDeleteWord     |hl-DiffText|     Word-level deletions
 
+Tool call status ~
+    AgenticStatusPending      |hl-DiagnosticVirtualTextHint|
+    AgenticStatusCompleted    |hl-DiagnosticVirtualTextOk|
+    AgenticStatusFailed       |hl-DiagnosticVirtualTextError|
+
+Chat text ~
+    AgenticHeading            `@punctuation.special`   Heading markers
+    AgenticCodeBlockFence     |hl-NonText|             Fences, region rails
+    AgenticDimmedBlock        `Comment`                Dimmed fence lines
+    AgenticTurnUsage          `Comment`                Token-usage footer
+    AgenticSearchMatch        |hl-Search|              Search match
+    AgenticErrorHeading       |hl-DiagnosticError|     Error heading
+    AgenticErrorBody          |hl-DiagnosticVirtualTextError|
+
+Sign-column glyphs ~
+    AgenticGlyphUser          `Prompt`, else |hl-Normal|   User rows
+    AgenticGlyphAgent         |hl-Normal|                 Agent rows
+    AgenticGlyphOff           user glyph fg, struck     Cleared setting
+
+Grep output ~
+    AgenticGrepPath           `@string.special.path`   File path
+    AgenticGrepLineNr         |hl-LineNr|              Line number
+    AgenticGrepSeparator      `Delimiter`              Separator
+
+Input buffer ~
+    AgenticSlashCommandPrefix  `@punctuation.special`   `/` prefix
+    AgenticSlashCommand        `@function.call`         Command body
+    AgenticMentionPrefix       `@punctuation.special`   `@` prefix
+    AgenticMention             `@string.special.path`   Mention body
+    AgenticQueuedRegion        |hl-DiffChange|          Queued region
+
+File activity ~
+    AgenticActivityCreate     `Added`               Created marker
+    AgenticActivityEdit       `Changed`             Changed marker
+    AgenticActivityDelete     `Removed`             Deleted marker
+    AgenticActivityRead       `Comment`             Read marker
+    AgenticActivityUnseen     |hl-DiagnosticHint|   Changed-since-viewed dot
+
+Session picker ~
+    AgenticPickerDate         `Comment`     Session timestamp
+    AgenticPickerDelim        `Delimiter`   Field separator
+
+Permission prompt ~
+    AgenticUnapprovedCommand  |hl-DiagnosticVirtualTextWarn|
+
+                                                    *AgenticUnapprovedCommand*
 `AgenticUnapprovedCommand` washes the leaves and structural parts of an
-`execute` permission prompt that are not known-safe (anything not matching a
+execute permission prompt that are not known-safe (anything not matching a
 `read_only`/`safe_write` rule, or matching a `deny`/`ask` rule, plus
 substitutions and unsafe redirects) while the prompt is shown. It is gated by
-`permissions.highlight_unapproved` (default true). |DiagnosticVirtualTextWarn|
-is fg+bg in some colorschemes and fg-only in others. On a bare theme set an
-explicit `bg` for the wash to be visible.
+`permissions.highlight_unapproved`. |hl-DiagnosticVirtualTextWarn| is fg+bg in
+some colorschemes and fg-only in others; on a bare theme set an explicit `bg`
+for the wash to be visible.
 
-`AgenticGlyphUser` links to `Prompt` when the colorscheme defines that group and
-to |hl-Normal| otherwise; `Prompt` is not one of Neovim's own groups, and a link
-to an undefined group leaves the sign at |hl-SignColumn|.
+`AgenticGlyphUser` links to `Prompt` when the colorscheme defines that group
+and to |hl-Normal| otherwise. `Prompt` is not one of Neovim's own groups, and
+a link to an undefined group leaves the sign at |hl-SignColumn|.
 
-`AgenticGlyphOff` needs a foreground of its own to strike through, so when the
-group `AgenticGlyphUser` follows leaves its foreground to the terminal it falls
-back to `AgenticGlyphUser` unstruck. Define it explicitly to keep the
-strikethrough there.
+`AgenticGlyphOff` falls back to `AgenticGlyphUser` unstruck when that group
+leaves its foreground to the terminal. Define it explicitly to keep the
+strikethrough.
 
 ==============================================================================
-12. AUTOCMDS                                             *agentic-autocmds*
+11. AUTOCMDS                                                *agentic-autocmds*
 
-                                               *AgenticSessionChanged*
+                                                       *AgenticSessionChanged*
 User AgenticSessionChanged
     Fired when the session ID changes (new session, `/new`, `/clear`,
     session load). The `data` table contains `session_id`.
@@ -793,124 +1071,37 @@ User AgenticSessionChanged
             end,
         })
 <
+                                                      *AgenticHeadersChanged*
+User AgenticHeadersChanged
+    Fired when a tabpage's widget header state changes. The `data` table
+    contains `tab_page_id`. The state itself is
+    `vim.t[tab_page_id].agentic_headers`, a table keyed by panel name
+    (`chat`, `input`, `files`, `code`, `diagnostics`, `todos`) whose entries
+    carry a `title` and a `context` string.
 
 ==============================================================================
-13. HEALTH CHECK                                          *agentic-health*
+12. HEALTH CHECK                                              *agentic-health*
 >vim
     :checkhealth agentic
 <
 
 ==============================================================================
-14. DEBUG MODE                                             *agentic-debug*
+13. DEBUG AND LOGGING                                          *agentic-debug*
 
 >lua
-    require("agentic").setup({ debug = true })
+    require("agentic").setup({ debug = true, log = true })
 <
 
-View logs with |:messages| or in `~/.cache/nvim/agentic_debug.log`.
+`debug` prints debug messages, readable with |:messages|. `log` appends them
+to `~/.cache/nvim/agentic_debug.log`. The two are independent.
 
 ==============================================================================
-15. COMPARISON WITH CLAUDE TUI                              *agentic-vs-tui*
+14. COMPARISON WITH CLAUDE TUI                                *agentic-vs-tui*
 
-This section documents how agentic.nvim differs from the native `claude`
-CLI (the Claude Code TUI). The comparison is against the TUI as of Claude
-Code v2.1.x.
+Against the native `claude` CLI as of Claude Code v2.1.x.
 
 ------------------------------------------------------------------------------
-15.1 ADDITIONS                                    *agentic-vs-tui-additions*
-
-Features present here that the TUI does not have:
-
-Rendering ~
-- Bash-formatted shell commands via `shfmt` and treesitter injection.
-- Grep / search output colouring: file paths, line numbers, separators,
-  and match highlights.
-- Diff preview for Edit tool calls with hunk navigation (`]c` / `[c`).
-- Treesitter folding for long tool output, toggleable with `zo` / `zc` / `za`.
-- Each run of agent thinking collapsed to one dimmed row, marked 󰧑 in the sign
-  column and summarised as `··· N lines · N chars ···`. `zo` expands it.
-- Context a hook injected shown as its own dimmed row, marked 󰛢 in the sign
-  column and named after the script that produced it. Claude provider only.
-- Sign-column decorations on tool-call blocks.
-- Slash-command and `@`-mention syntax highlighting in input and chat.
-
-Permissions ~
-- `/trust` per-session scope for file-scoped edits (edit, write, create,
-  delete, move). Layered with recoverability checks: pure addition,
-  tracked + clean, or a recorded Claude-owned line range whose content
-  still matches disk. Includes symlink resolution, mtime/size TOCTOU
-  revalidation, and a wide-scope warning.
-- Auto-approve read-only tools (Read / Grep / Glob) regardless of path.
-  The TUI's permission rules still scope these to the working directory
-  and `additionalDirectories`.
-- Compound Bash command auto-approval: walks the zsh parse tree and
-  checks each leaf command against `settings.json` patterns. Fills
-  upstream gap tracked at anthropics/claude-code#16561.
-- Allow-always / reject-always cache: the ACP protocol leaves persistence
-  of these decisions to the provider, and claude-agent-acp does not
-  reliably persist them. The plugin caches per-session.
-- Permission keys `1`-`5` with escalating severity. `4` rejects all
-  currently-queued prompts for the turn without creating a persistent
-  rule. `5` installs a reject-always rule. See
-  |agentic-keymaps-permission|.
-
-Session & workflow ~
-- Multi-tabpage: one session per tabpage with fully isolated UI (chat,
-  panels, permission prompts). The TUI is single-session per process.
-- Auto-continue after usage-limit reset: detects the provider's
-  "out of extra usage · resets Xpm" message and schedules `continue` at
-  the reset time.
-- Attention notifications: rings the vim bell and/or sets a badge in
-  the chat buffer name when the widget is unfocused or scrolled away
-  from the bottom. The TUI offers a `Notification` hook event but no
-  built-in bell or badge.
-- Auto-scroll with runtime toggle (`<localLeader>a`).
-- Panels alongside chat: todos, code, files, diagnostics.
-- External UI integration: `AgenticHeadersChanged` autocmd plus
-  `vim.t.agentic_headers` state table for per-tab header consumers
-  (e.g. incline.nvim, custom tablines).
-
-------------------------------------------------------------------------------
-15.2 ACP PATCHES                                    *agentic-vs-tui-patches*
-
-The following commands exist in the TUI but are not forwarded through
-ACP by claude-agent-acp. The plugin intercepts them locally. These are
-gap-fills, not additions over the TUI:
-
-- `/clear` — TUI resets the conversation context. Over ACP the pass-through
-  is a no-op, so the plugin starts a fresh ACP session instead (aliased
-  to `/new`).
-- `/new [name]` — start a fresh session. A name is applied to it as
-  `/rename` would.
-- `/rename <name>` — rename the session. The TUI has this natively, but
-  the ACP bridge does not expose it. The plugin stores the name in session
-  history and in the header state.
-- `/context` — compact token-usage readout built from
-  `session/update` `usage_update` notifications. A strict subset of
-  the TUI's `/context`, which shows a coloured grid and optimisation
-  suggestions.
-
-------------------------------------------------------------------------------
-15.3 FORWARDED TRANSPARENTLY                     *agentic-vs-tui-forwarded*
-
-Claude TUI commands advertised by claude-agent-acp via
-`available_commands_update` and not intercepted by the plugin. Type them
-in the input buffer. They appear in slash-command completion.
-
-- `/init` — generate a project `CLAUDE.md`.
-- `/review` — pull-request review.
-- `/security-review` — security review of pending changes.
-- `/compact` — summarise and compact conversation history.
-- `/extra-usage` — configure extra usage when limits hit.
-- `/insights` — session analysis report.
-- `/team-onboarding` — teammate-ramp guide.
-- `/heapdump` — dump JS heap for bridge debugging.
-
-Provider-specific. Re-verify with the probe in
-`.claude/skills/acp/references/claude-agent.md` after bridge upgrades.
-
-------------------------------------------------------------------------------
-15.4 BEHAVIOUR DIFFERENCES                            *agentic-vs-tui-diffs*
+14.1 BEHAVIOUR DIFFERENCES                              *agentic-vs-tui-diffs*
 
 Same feature, different behaviour:
 
@@ -920,9 +1111,14 @@ Same feature, different behaviour:
 - Scrolling: the TUI auto-scrolls aggressively during streaming. See
   |agentic-auto-scroll| for this plugin's pin + pause-on-user-scroll
   behaviour.
+- Permission rules: the TUI scopes read-only tools to the working directory
+  and `additionalDirectories`; this plugin approves them regardless of path
+  (|agentic-permissions-auto|).
+- Sessions: the TUI runs one session per process; this plugin runs one per
+  tabpage, with its own chat, panels and permission prompts.
 
 ------------------------------------------------------------------------------
-15.5 NOT AVAILABLE                                  *agentic-vs-tui-missing*
+14.2 NOT AVAILABLE                                    *agentic-vs-tui-missing*
 
 TUI features this plugin does not currently provide:
 
@@ -950,14 +1146,12 @@ Interactive management UIs ~
 - `/memory`, `/hooks`, `/bashes`, `/pr-comments`, `/vim`, `/ide`.
 
 All of the above are either filtered out by the bridge
-(`/cost`, `/login`, `/logout`) or simply not advertised by it,
-verified via `available_commands_update` probe.
+(`/cost`, `/login`, `/logout`) or simply not advertised by it.
 
 Runtime controls ~
 - `/effort` dynamic thought-level control. The ACP schema reserves
   `thought_level` as a config-option category but claude-agent-acp does
-  not emit it — the plugin's dispatch code path is ready but unreachable
-  until the bridge changes.
+  not emit it.
 
 Input ~
 - PDF attachments. The plugin supports image drag-and-drop (see

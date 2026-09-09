@@ -548,9 +548,9 @@ local ConfigDefault = {
         send_register = nil,
 
         --- When true, `:w` in the input buffer submits the prompt. `:wq` and
-        --- `:x` submit and emit a warning instead of closing; `:wq!` and `:x!`
-        --- submit and close. When false, none of these are registered and the
-        --- input buffer remains a plain `nofile` buffer.
+        --- `:x` submit and close the input window; `:wq!` and `:x!` submit and
+        --- close the whole widget. When false, none of these are registered
+        --- and the input buffer remains a plain `nofile` buffer.
         write_submit = true,
     },
 

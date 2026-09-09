@@ -111,7 +111,7 @@ All options with defaults: [`lua/agentic/config_default.lua`](lua/agentic/config
 
 ## Documentation
 
-Full reference: `:help agentic`
+Full reference: `:help agentic.txt`
 
 ## Licence
 

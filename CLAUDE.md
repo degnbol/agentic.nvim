@@ -44,7 +44,7 @@ Log paths: `.local/agentic_{luals,selene,helptags,test}_output.log`
 ## Key files
 
 - `lua/agentic/config_default.lua` — all user-configurable options
-- `lua/agentic/theme.lua` — highlight groups, `glyphs.lua` — glyph vocabulary (list new ones in `doc/agentic.txt`)
+- `lua/agentic/theme.lua` — highlight groups, `glyphs.lua` — glyph vocabulary (canonical; not in the help)
 - `lua/agentic/acp/adapters/` — provider-specific adapters
 
 ## Session cache location
@@ -94,8 +94,8 @@ in `AgenticChat.vim`.
 ## Keymaps and configuration
 
 All user-configurable options live in `config_default.lua`. Keymaps are grouped
-by scope: `keymaps.widget` (all Agentic buffers), `keymaps.prompt` (input
-buffer only), `keymaps.chat` (chat buffer only), `keymaps.diff_preview`.
+by scope: `keymaps.widget` and `keymaps.prompts` (all Agentic buffers),
+`keymaps.prompt` (input only), `keymaps.chat` (chat only), `keymaps.diff_preview`.
 
 Keymap values use `BufHelpers.multi_keymap_set` which accepts a string, a list
 of strings, or a list of `{ key, mode = ... }` tables for multi-mode bindings.
