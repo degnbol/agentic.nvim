@@ -434,33 +434,40 @@ function M.offer_auto_continue(sm, reset_epoch)
         delay_s * 1000,
         0,
         vim.schedule_wrap(function()
-            M.cancel_retry_timer(sm, false)
-
-            if sm._destroyed then
-                return
-            end
-
-            if not sm.session_id then
-                Logger.notify(
-                    "No active session for auto-continue.",
-                    vim.log.levels.WARN
-                )
-                return
-            end
-
-            local queued = sm._queued_prompts
-            sm._queued_prompts = nil
-
-            if queued then
-                sm:_handle_input_submit(table.concat(queued, "\n\n"))
-            else
-                sm:_handle_input_submit("continue")
-            end
-            -- The turn started above reaches its own Stop with the retry gate
-            -- cleared, where _drain_queue dispatches any tagged regions. Do NOT
-            -- drain here too — that would fire a second concurrent send_prompt.
+            M._fire_auto_continue(sm)
         end)
     )
+end
+
+--- Resume after a usage-limit pause: send whatever the user queued during it,
+--- or a bare "continue" if they queued nothing.
+--- @param sm agentic.SessionManager
+function M._fire_auto_continue(sm)
+    -- Read the queue before cancelling — cancel_retry_timer clears it
+    -- unconditionally, for every other caller's benefit.
+    local queued = sm._queued_prompts
+    M.cancel_retry_timer(sm, false)
+
+    if sm._destroyed then
+        return
+    end
+
+    if not sm.session_id then
+        Logger.notify(
+            "No active session for auto-continue.",
+            vim.log.levels.WARN
+        )
+        return
+    end
+
+    if queued then
+        sm:_handle_input_submit(table.concat(queued, "\n\n"))
+    else
+        sm:_handle_input_submit("continue")
+    end
+    -- The turn started above reaches its own Stop with the retry gate
+    -- cleared, where _drain_queue dispatches any tagged regions. Do NOT
+    -- drain here too — that would fire a second concurrent send_prompt.
 end
 
 --- How many consecutive transient failures are retried before the error

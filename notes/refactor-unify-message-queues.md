@@ -5,10 +5,7 @@ Line numbers are against `bbbfe7e`. TODO entries are cited by title, since
 
 Land this **before**
 [`feature-block-dispatch.md`](feature-block-dispatch.md) — that plan's sequencer
-needs the gate predicate defined here. Land
-[`bug-auto-continue-discards-queued-prompts.md`](bug-auto-continue-discards-queued-prompts.md)
-before either, since this refactor's correctness rests on knowing what the current
-behaviour is.
+needs the gate predicate defined here.
 
 Four mechanisms defer a user message today. Three are ours, one is not:
 
@@ -24,14 +21,9 @@ The fourth row is what a mid-turn `<CR>` does: `_handle_input_submit` has no
 This is the observed "queued during `/compact`" behaviour — invisible to us,
 uncancellable.
 
-Only the first mechanism works. The other two lose messages, and both losses come
-from the storage choice, not from rendering:
-
-- **`_pending_input` clobbers.** A bare assignment, so a second pre-ready submit
-  overwrites the first. (TODO "Message queuing during resume".)
-- **`_queued_prompts` discards everything.** The retry callback clears the list
-  before reading it, so auto-continue always sends the literal `"continue"`. See
-  the bug note linked above.
+**`_pending_input` clobbers**, and the loss comes from the storage choice, not from
+rendering: it is a bare assignment, so a second pre-ready submit overwrites the
+first. (TODO "Message queuing during resume".)
 
 ## Design
 

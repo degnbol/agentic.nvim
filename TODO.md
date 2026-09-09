@@ -24,12 +24,6 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
 
-- **Auto-continue discards queued messages entirely** (was filed as "not
-  shown in chat"; it is worse than that — the message is never sent). The
-  retry callback clears `_queued_prompts` before reading it, so `"continue"`
-  is always what goes out. Live data loss, untested:
-  [`notes/bug-auto-continue-discards-queued-prompts.md`](notes/bug-auto-continue-discards-queued-prompts.md).
-
 - **`<C-c>` dispatches the mid-turn queue**: `Agentic.stop_generation`
   sends `session/cancel`, the in-flight prompt resolves with
   `stopReason = "cancelled"`, and the prompt callback falls through to an
