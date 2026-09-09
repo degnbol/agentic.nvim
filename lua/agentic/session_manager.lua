@@ -15,6 +15,7 @@ local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local HookRecordReader = require("agentic.hook_record_reader")
 local Logger = require("agentic.utils.logger")
+local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
@@ -95,6 +96,7 @@ end
 --- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
 --- @field _health_check_timer? uv.uv_timer_t Exponential backoff timer for server health checks
 --- @field _pending_bufferless_prompt? string Deferred prompt with no buffer range to tag
+--- @field _draining_queue? boolean A queued block is being taken; guards _drain_queue against re-entry
 --- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
 --- @field _usage_reset_epoch? number Epoch seconds the provider's usage limit lifts at
 --- @field _loading? boolean A session/load RPC is in flight
@@ -259,6 +261,13 @@ function SessionManager:new(tab_page_id)
     self._hook_records = HookRecordReader:new()
 
     self.widget = ChatWidget:new(tab_page_id, function(input_text, opts)
+        -- A submit is the user acting: their attention is back on the chat and
+        -- last turn's todo panel is stale. Answered here rather than deeper in
+        -- the dispatch path, which the automatic drains also reach — one of
+        -- those clears the `[done]` badge in the tick it was set, and the user
+        -- never sees it.
+        self.widget:clear_unread_badge()
+        self.todo_list:close_if_all_completed()
         return self:_handle_input_submit(input_text, opts)
     end)
 
@@ -813,7 +822,11 @@ local function ui_select(prompt, items, on_choice, format_item)
 end
 
 --- Open the /trust selector menu (no argument form).
-function SessionManager:_show_trust_picker()
+--- @param on_done? fun() Called once the scope question is settled, cancelling
+---   included. Both dialogs here outlive the call, so this is what the
+---   sequencer waits on before dispatching the next queued block.
+function SessionManager:_show_trust_picker(on_done)
+    on_done = on_done or function() end
     local cwd = vim.uv.cwd() or vim.fn.getcwd()
     --- @type { kind: "repo"|"here"|"tmp"|"path"|"off", label: string }[]
     local items = {
@@ -831,19 +844,22 @@ function SessionManager:_show_trust_picker()
     }
     ui_select("Agentic trust scope:", items, function(choice)
         if not choice then
+            on_done()
             return
         end
         if choice.kind == "off" then
             self:_clear_trust_scope()
+            on_done()
         elseif choice.kind == "path" then
             vim.ui.input({ prompt = "Path or glob: " }, function(input)
                 if not input or vim.trim(input) == "" then
+                    on_done()
                     return
                 end
-                self:_handle_trust_command(vim.trim(input))
+                self:_handle_trust_command(vim.trim(input), on_done)
             end)
         else
-            self:_handle_trust_command(choice.kind)
+            self:_handle_trust_command(choice.kind, on_done)
         end
     end, function(item)
         return item.label
@@ -854,21 +870,27 @@ end
 --- reserved literals are handled directly; anything else is treated as a
 --- path or glob.
 --- @param arg string Trimmed argument
-function SessionManager:_handle_trust_command(arg)
+--- @param on_done? fun() Called once the scope question is settled — every
+---   branch here answers it before returning except the picker, which owns it.
+function SessionManager:_handle_trust_command(arg, on_done)
+    on_done = on_done or function() end
+
     if not Config.auto_approve_trust_scope then
         self.message_writer:write_error_action(
             "/trust is disabled (Config.auto_approve_trust_scope = false)."
         )
+        on_done()
         return
     end
 
     if arg == "" then
-        self:_show_trust_picker()
+        self:_show_trust_picker(on_done)
         return
     end
 
     if arg == "off" then
         self:_clear_trust_scope()
+        on_done()
         return
     end
 
@@ -876,6 +898,7 @@ function SessionManager:_handle_trust_command(arg)
 
     if arg == "tmp" then
         self:_apply_trust_scope(TrustSafety.build_tmp_scope(cwd))
+        on_done()
         return
     end
 
@@ -885,15 +908,18 @@ function SessionManager:_handle_trust_command(arg)
             self.message_writer:write_error_action(
                 string.format("/trust %s: no git repository at %s.", arg, cwd)
             )
+            on_done()
             return
         end
         local scope = TrustSafety.build_reserved_scope(arg, cwd, git_root)
         self:_apply_trust_scope(scope)
+        on_done()
         return
     end
 
     local scope = TrustSafety.compile_path_scope(arg, cwd)
     self:_apply_trust_scope(scope)
+    on_done()
 end
 
 --- Delete the current session from disk and clear the UI.
@@ -1839,41 +1865,45 @@ end
 --- `takes_arg = false` rejects any argument, so `/context foo` reaches the
 --- provider as prose. For the rest, `_run_local_command` decides what an empty
 --- argument means.
---- @type table<string, { takes_arg: boolean }>
+---
+--- `async` means the command can return with a dialog still open, so the
+--- sequencer must wait for its `on_done` before dispatching the next block
+--- rather than reading the gate — which is clear, the command needing no
+--- provider round-trip. `/delete` also opens one, but truncates the sequence
+--- instead of resuming it (`_truncate_queue`).
+---
+--- `session_ending` marks the commands that end the current session, so
+--- running one on text the user did not mean as a command destroys work.
+--- Pasted notes, changelogs and transcripts quote them as examples — this
+--- repo's own `TODO.md` and `doc/agentic.txt` do. See
+--- `_confirm_queued_command`.
+--- @type table<string, { takes_arg: boolean, async: boolean, session_ending: boolean }>
 local LOCAL_COMMANDS = {
-    new = { takes_arg = true },
-    clear = { takes_arg = true },
-    context = { takes_arg = false },
-    rename = { takes_arg = true },
-    trust = { takes_arg = true },
-    delete = { takes_arg = false },
+    new = { takes_arg = true, async = false, session_ending = true },
+    clear = { takes_arg = true, async = false, session_ending = true },
+    context = { takes_arg = false, async = false, session_ending = false },
+    rename = { takes_arg = true, async = false, session_ending = false },
+    trust = { takes_arg = true, async = true, session_ending = false },
+    delete = { takes_arg = false, async = false, session_ending = true },
 }
 
---- Split a submit into a local command word and its argument, or nil when the
---- text is not one of them.
+--- Read a block's text as a local command word and its argument, or nil when
+--- it is not one of them.
 ---
---- An argument never spans lines, so `/rename a\nb` is prose rather than a
---- two-line title, and `/new\nStart on X` is prose rather than a session named
---- `Start on X`. Splitting such a submit into a command turn and a prose turn
---- is block dispatch's job, not this parser's.
+--- The line shape (and with it the fact that an argument never spans lines) is
+--- `PromptBlocks.command`'s, shared with the splitter and the chat highlight.
 --- @param text string
 --- @return string|nil word
 --- @return string arg Empty when the command took none
 local function parse_local_command(text)
-    local word, rest = text:match("^/([%w_-]+)([^\n]*)$")
+    local word, arg = PromptBlocks.command(text)
     if not word then
-        return nil, ""
-    end
-    -- Anything but whitespace after the word means the word never ended there:
-    -- `/trust/etc` is a path, not an edit-trust scope.
-    if rest ~= "" and not rest:match("^%s") then
         return nil, ""
     end
     local spec = LOCAL_COMMANDS[word]
     if not spec then
         return nil, ""
     end
-    local arg = vim.trim(rest)
     if arg ~= "" and not spec.takes_arg then
         return nil, ""
     end
@@ -1883,7 +1913,9 @@ end
 --- Run a local command parsed out by `parse_local_command`.
 --- @param word string A key of LOCAL_COMMANDS
 --- @param arg string
-function SessionManager:_run_local_command(word, arg)
+--- @param on_done? fun() Called by the `async` commands when their dialog
+---   resolves. The rest are finished when this returns.
+function SessionManager:_run_local_command(word, arg, on_done)
     if word == "new" or word == "clear" then
         -- Resetting locally avoids a race: the agent might not send an
         -- identifiable response to act on. /clear through ACP doesn't
@@ -1913,7 +1945,7 @@ function SessionManager:_run_local_command(word, arg)
         end
         self:_rename_session(arg)
     elseif word == "trust" then
-        self:_handle_trust_command(arg)
+        self:_handle_trust_command(arg, on_done)
     elseif word == "delete" then
         self:_delete_session()
     end
@@ -2056,8 +2088,8 @@ end
 --- cleared benignly. Called at each such edge.
 ---
 --- The retained bufferless prompt goes first, and takes the whole call: its
---- turn reaches its own Stop, where the queued regions drain. Dispatching both
---- here would fire two concurrent send_prompts.
+--- turn reaches its own Stop, where the queue drains. Dispatching both here
+--- would fire two concurrent send_prompts.
 --- @return boolean dispatched
 function SessionManager:_dispatch_deferred_prompts()
     local text = self._pending_bufferless_prompt
@@ -2074,44 +2106,204 @@ function SessionManager:_dispatch_deferred_prompts()
     return self:_drain_queue()
 end
 
---- Dispatch the input buffer's queued regions as a single new turn.
+--- Drop the rest of the queue when `/delete` is dispatched: a block queued
+--- against a session that is being deleted has no destination left. Warning
+--- about work left undone beats inventing somewhere to send it.
+function SessionManager:_truncate_queue()
+    local count = self.widget:queued_block_count()
+    if count == 0 then
+        return
+    end
+    self.widget:cancel_queue()
+    self.message_writer:write_error_action(
+        string.format(
+            "/delete: %d queued block(s) left as draft, unsent.",
+            count
+        )
+    )
+end
+
+--- Confirm a session-ending command that reached the queue behind other
+--- content, and report whether to run it.
+---
+--- A submit's own first block is unambiguous — there the user typed the
+--- command *as* the message — and that block never comes through the queue.
+--- Behind other content is the signature of pasted data instead: a note or
+--- transcript that quotes `/new` runs it. Declining drops every tag, leaving
+--- all remaining text as draft, because text that turned out to be data wants
+--- editing rather than dispatching.
+---
+--- Blocking rather than scheduled: callers act on the verdict this returns
+--- (auto-continue invents a bare "continue" when nothing dispatched), which an
+--- answer arriving a tick later cannot supply. The wait is not inert — vim
+--- keeps running scheduled callbacks and timers while a dialog is open — so
+--- the drain guards itself against being re-entered across this call.
+--- @param text string
+--- @return boolean run
+function SessionManager:_confirm_queued_command(text)
+    local word = parse_local_command(text)
+    local spec = word and LOCAL_COMMANDS[word]
+    if not (spec and spec.session_ending) then
+        return true
+    end
+    local count = self.widget:queued_block_count()
+    local choice = vim.fn.confirm( -- no nvim_* equivalent
+        string.format(
+            "Run /%s? It is the first of %d queued block(s).",
+            word,
+            count
+        ),
+        "&Yes\n&No",
+        2
+    )
+    if choice == 1 then
+        return true
+    end
+    self.widget:cancel_queue()
+    self.message_writer:write_error_action(
+        string.format(
+            "/%s declined — %d queued block(s) left as draft.",
+            word,
+            count
+        )
+    )
+    return false
+end
+
+--- Dispatch the queue's next block as a new turn.
 ---
 --- Re-checks the gate itself, so overlapping conditions (a usage-limit retry
 --- armed during a turn that then ended normally) need no per-case guard at any
---- call site. Reads the text before consuming it, so a still-gated drain
---- leaves the regions tagged and visible rather than eating them.
+--- call site. Reads the block before consuming it, so a still-gated drain
+--- leaves it tagged and visible rather than eating it, and dispatches what the
+--- consume actually took — the block read first is only a candidate.
+---
+--- Non-reentrant. The confirm below waits for a keypress without stopping the
+--- event loop, so a drain edge landing in that window would otherwise take the
+--- same unconsumed block and dispatch it twice.
 --- @return boolean dispatched
 function SessionManager:_drain_queue()
-    local text = self.widget:queued_text()
-    if not text or not text:match("%S") or self:_submit_defer_reason(text) then
+    if self._draining_queue then
         return false
     end
-    self.widget:consume_queued_regions()
-    self:_handle_input_submit_inner(text)
+    local candidate = self.widget:next_queued_block()
+    if not candidate then
+        return false
+    end
+    if self:_submit_defer_reason(candidate.text) then
+        return false
+    end
+    -- Held only across the confirm and the consume: a dispatch can error, and
+    -- a flag still set afterwards would wedge every later drain.
+    self._draining_queue = true
+    local run = self:_confirm_queued_command(candidate.text)
+    --- @type agentic.utils.PromptBlocks.Block|nil
+    local block
+    -- A destroy can also have run while the dialog was open.
+    if run and not self._destroyed then
+        block = self.widget:consume_queued_block()
+    end
+    self._draining_queue = false
+
+    if not block then
+        return false
+    end
+    self:_handle_input_submit_inner(block.text)
     return true
 end
 
+--- Warn when a command block names neither a local command nor an advertised
+--- one.
+---
+--- Membership decides nothing about command-ness — the provider intercepts
+--- every line-start `/word` whether or not it advertised it — but opencode
+--- drops the unknown ones without a single session update, so the block would
+--- otherwise vanish without a trace. Silent while the advertised list is empty,
+--- which every session reset leaves it as.
+--- @param text string
+function SessionManager:_warn_unadvertised_command(text)
+    local word = PromptBlocks.command(text)
+    if not word then
+        return
+    end
+    local commands =
+        States.getSlashCommandsForBuffer(self.widget.buf_nrs.input)
+    if #commands == 0 then
+        return
+    end
+    for _, command in ipairs(commands) do
+        if command.word == word then
+            return
+        end
+    end
+    self.message_writer:write_error_action(
+        string.format(
+            "/%s is not a known command — the provider may drop it silently.",
+            word
+        )
+    )
+end
+
+--- Dispatch one block: a local command, or one turn to the provider.
+---
+--- Blocks arrive one at a time — the submit's first from
+--- `_handle_input_submit`, the rest from `_drain_queue` — so what used to
+--- happen once per submit happens on the first *prose* block instead: the
+--- session title, the restored-history prefix, the system info and the context
+--- panels. A command is not a message about the work, and any text block ahead
+--- of one shadows it for opencode.
 --- @param input_text string
 function SessionManager:_handle_input_submit_inner(input_text)
-    self.widget:clear_unread_badge()
-    self.todo_list:close_if_all_completed()
-
     local word, arg = parse_local_command(input_text)
     if word then
-        self:_run_local_command(word, arg)
+        if word == "delete" then
+            self:_truncate_queue()
+        end
+        -- The gate cannot hold the next block behind a local command: local
+        -- commands are exempt from it, and one that answers synchronously
+        -- reaches no Stop for the drain to run at. So the sequence continues
+        -- from here — after the synchronous commands, from the completion
+        -- callback for those that leave a dialog open.
+        --
+        -- Scheduled rather than called outright: the submit that dispatched
+        -- this command has not deleted its own lines yet, and consuming the
+        -- next block edits the rows it is about to delete by number.
+        local function dispatch_next()
+            vim.schedule(function()
+                if self._destroyed then
+                    return
+                end
+                self:_drain_queue()
+            end)
+        end
+        if LOCAL_COMMANDS[word].async then
+            self:_run_local_command(word, arg, dispatch_next)
+        else
+            self:_run_local_command(word, arg)
+            dispatch_next()
+        end
         return
     end
 
     --- @type agentic.acp.Content[]
     local prompt = {}
 
-    -- If restored/switched session, prepend history on first submit
-    if self._history_to_send then
-        ChatHistory.prepend_restored_messages(self._history_to_send, prompt)
-        self._history_to_send = nil
-    elseif self.chat_history.title == "" then
-        self.chat_history.title = input_text -- Set title for new session
-        self.widget:set_chat_title(input_text)
+    -- The splitter's line shape, so a block dispatches as what it was split
+    -- as, and text that never went through the splitter (`Agentic.send_prompt`,
+    -- `Config.keymaps.prompts`) classifies the same way.
+    local is_command = PromptBlocks.command(input_text) ~= nil
+
+    if is_command then
+        self:_warn_unadvertised_command(input_text)
+    else
+        -- If restored/switched session, prepend history on first submit
+        if self._history_to_send then
+            ChatHistory.prepend_restored_messages(self._history_to_send, prompt)
+            self._history_to_send = nil
+        elseif self.chat_history.title == "" then
+            self.chat_history.title = input_text -- Set title for new session
+            self.widget:set_chat_title(input_text)
+        end
     end
 
     -- Context blocks (system info, selected code, files, diagnostics) go
@@ -2121,24 +2313,20 @@ function SessionManager:_handle_input_submit_inner(input_text)
     -- preceding text would shadow the command. The Claude Code SDK instead
     -- extracts its `inputString` from the last text block only, so context
     -- before user text works for claude-agent-acp.
-    local is_slash_command = input_text:match("^/")
-
-    if self._is_first_message then
+    if self._is_first_message and not is_command then
         self._is_first_message = false
 
-        if not is_slash_command then
-            table.insert(prompt, {
-                type = "text",
-                text = self:_get_system_info(),
-            })
-        end
+        table.insert(prompt, {
+            type = "text",
+            text = self:_get_system_info(),
+        })
     end
 
     --- Display-only lines appended after the prompt body in the chat widget
     --- (heading and region signs are owned by MessageWriter:write_user_prompt)
     local extra_lines = {}
 
-    if not is_slash_command and not self.code_selection:is_empty() then
+    if not is_command and not self.code_selection:is_empty() then
         table.insert(extra_lines, "\n- **Selected code**:\n")
 
         table.insert(prompt, {
@@ -2203,7 +2391,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    if not is_slash_command and not self.file_list:is_empty() then
+    if not is_command and not self.file_list:is_empty() then
         table.insert(extra_lines, "\n- **Referenced files**:")
 
         local files = self.file_list:get_files()
@@ -2219,7 +2407,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    if not is_slash_command and not self.diagnostics_list:is_empty() then
+    if not is_command and not self.diagnostics_list:is_empty() then
         table.insert(extra_lines, "\n- **Diagnostics**:")
 
         local diagnostics = self.diagnostics_list:get_diagnostics()

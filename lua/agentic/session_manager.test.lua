@@ -1896,10 +1896,10 @@ describe("agentic.SessionManager", function()
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
                     set_chat_title = noop,
-                    queued_text = function()
+                    next_queued_block = function()
                         return nil
                     end,
-                    consume_queued_regions = noop,
+                    consume_queued_block = noop,
                 },
                 permission_manager = {
                     current_request = nil,
@@ -2045,11 +2045,11 @@ describe("agentic.SessionManager", function()
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
                     set_chat_title = noop,
-                    queued_text = function()
+                    next_queued_block = function()
                         sink.drains = (sink.drains or 0) + 1
                         return nil
                     end,
-                    consume_queued_regions = noop,
+                    consume_queued_block = noop,
                 },
                 permission_manager = { current_request = nil, queue = {} },
                 todo_list = { close_if_all_completed = noop },
@@ -2568,9 +2568,23 @@ describe("agentic.SessionManager", function()
                 _is_first_message = false,
                 _prompt_pending = 0,
                 agent = { state = "ready", provider_config = { name = "Test" } },
-                message_writer = { write_user_prompt = noop },
+                message_writer = {
+                    write_user_prompt = noop,
+                    write_error_action = noop,
+                },
                 chat_history = { title = "existing", add_message = noop },
-                widget = { clear_unread_badge = noop, set_chat_title = noop },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    clear_unread_badge = noop,
+                    set_chat_title = noop,
+                    cancel_queue = noop,
+                    next_queued_block = function()
+                        return nil
+                    end,
+                    queued_block_count = function()
+                        return 0
+                    end,
+                },
                 todo_list = { close_if_all_completed = noop },
                 code_selection = { is_empty = empty },
                 file_list = { is_empty = empty },
@@ -2582,6 +2596,9 @@ describe("agentic.SessionManager", function()
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _run_local_command = SessionManager._run_local_command,
+                _drain_queue = SessionManager._drain_queue,
+                _truncate_queue = SessionManager._truncate_queue,
+                _warn_unadvertised_command = SessionManager._warn_unadvertised_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
             } --[[@as agentic.SessionManager]]
@@ -3397,35 +3414,249 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("block sequencing", function()
+        local dispatch_spy
+        local new_session_spy
+        local trust_spy
+        local delete_spy
+        local context_spy
+        local rename_spy
+        local errors
+        local session
+        --- Block texts still tagged in the input buffer, in dispatch order.
+        local queued
+
+        --- @param head string The block that dispatches now
+        --- @param texts string[] What the queue holds after it
+        local function submit(head, texts)
+            queued = texts
+            session:_handle_input_submit_inner(head)
+            -- A local command's continuation is scheduled, so the sequence
+            -- advances a tick after the command answers.
+            vim.wait(20)
+        end
+
+        before_each(function()
+            local noop = function() end
+            local empty = function()
+                return true
+            end
+
+            errors = {}
+            dispatch_spy = spy.new(noop)
+            context_spy = spy.new(noop)
+            trust_spy = spy.new(noop)
+            delete_spy = spy.new(noop)
+            rename_spy = spy.new(noop)
+            new_session_spy = spy.new(function(this)
+                -- What _cancel_session leaves behind: no session to send into,
+                -- so the gate holds the next block until one is created.
+                this.session_id = nil
+            end)
+
+            session = {
+                session_id = "s-1",
+                tab_page_id = 1,
+                _is_first_message = false,
+                _prompt_pending = 0,
+                agent = { state = "ready", provider_config = { name = "Test" } },
+                message_writer = {
+                    write_user_prompt = noop,
+                    write_error_action = function(_self, text)
+                        table.insert(errors, text)
+                    end,
+                },
+                chat_history = { title = "existing", add_message = noop },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    clear_unread_badge = noop,
+                    set_chat_title = noop,
+                    next_queued_block = function()
+                        local text = queued[1]
+                        return text and { text = text, sr = 0, er = 0 }
+                    end,
+                    consume_queued_block = function()
+                        local text = table.remove(queued, 1)
+                        return text and { text = text, sr = 0, er = 0 }
+                    end,
+                    queued_block_count = function()
+                        return #queued
+                    end,
+                    cancel_queue = function()
+                        for i = #queued, 1, -1 do
+                            table.remove(queued, i)
+                        end
+                    end,
+                },
+                todo_list = { close_if_all_completed = noop },
+                code_selection = { is_empty = empty },
+                file_list = { is_empty = empty },
+                diagnostics_list = { is_empty = empty },
+                new_session = new_session_spy,
+                _display_context_usage = context_spy,
+                _handle_trust_command = trust_spy,
+                _delete_session = delete_spy,
+                _rename_session = rename_spy,
+                _dispatch_turn = dispatch_spy,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+                _run_local_command = SessionManager._run_local_command,
+                _drain_queue = SessionManager._drain_queue,
+                _truncate_queue = SessionManager._truncate_queue,
+                _confirm_queued_command = SessionManager._confirm_queued_command,
+                _warn_unadvertised_command = SessionManager._warn_unadvertised_command,
+                _handle_input_submit = SessionManager._handle_input_submit,
+                _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+            } --[[@as agentic.SessionManager]]
+        end)
+
+        -- A synchronously-answered command reaches no Stop, so the sequence
+        -- would stall there if the drain waited for a turn to end.
+        it("dispatches the next block after a synchronous command", function()
+            submit("/context", { "then do X" })
+
+            assert.equal(1, context_spy.call_count)
+            assert.spy(dispatch_spy).was.called(1)
+            assert.equal(0, #queued)
+        end)
+
+        -- The submit that dispatched the command has not deleted its own lines
+        -- yet, and consuming the next block edits the rows it is about to
+        -- delete by number. So the continuation waits for the next tick.
+        it("does not drain inside the command's own dispatch", function()
+            queued = { "then do X" }
+
+            session:_handle_input_submit_inner("/context")
+
+            assert.equal(1, #queued)
+            assert.spy(dispatch_spy).was.called(0)
+
+            vim.wait(20)
+
+            assert.equal(0, #queued)
+            assert.spy(dispatch_spy).was.called(1)
+        end)
+
+        -- A command's argument stops at its own line, so the block queued
+        -- behind it can never end up inside the argument.
+        it("keeps a command's argument on its own line", function()
+            submit("/rename a b", { "then do X" })
+
+            assert.equal("a b", rename_spy.calls[1][2])
+            assert.spy(dispatch_spy).was.called(1)
+            assert.equal(0, #queued)
+        end)
+
+        it("passes a trust scope without the block behind it", function()
+            submit("/trust repo", { "Also do X" })
+
+            assert.equal("repo", trust_spy.calls[1][2])
+        end)
+
+        -- The confirm belongs to the drain path only: as a submit's own first
+        -- block the user typed /new *as* the message.
+        it("does not confirm /new as a submit's first block", function()
+            local confirm = spy.stub(vim.fn, "confirm")
+
+            submit("/new", { "Start on X" })
+
+            assert.equal(0, confirm.call_count)
+            assert.equal(1, new_session_spy.call_count)
+            confirm:revert()
+        end)
+
+        it("holds the next block until /new has a session again", function()
+            submit("/new", { "Start on X" })
+
+            assert.equal(1, new_session_spy.call_count)
+            assert.spy(dispatch_spy).was.called(0)
+            assert.equal(1, #queued)
+
+            -- The session-created edge, where the gate clears.
+            session.session_id = "s-2"
+            session:_drain_queue()
+
+            assert.spy(dispatch_spy).was.called(1)
+            assert.equal(0, #queued)
+        end)
+
+        -- The picker outlives the call, so dispatching now would race a dialog
+        -- the user is still answering.
+        it("waits for an async command's dialog to resolve", function()
+            submit("/trust", { "Also do X" })
+
+            assert.equal(1, trust_spy.call_count)
+            assert.spy(dispatch_spy).was.called(0)
+
+            -- The scope question is settled: on_done resumes the sequence.
+            trust_spy.calls[1][3]()
+            vim.wait(20)
+
+            assert.spy(dispatch_spy).was.called(1)
+        end)
+
+        it("truncates the sequence at /delete", function()
+            submit("/delete", { "foo", "bar" })
+
+            assert.equal(1, delete_spy.call_count)
+            assert.spy(dispatch_spy).was.called(0)
+            assert.equal(0, #queued)
+            assert.is_true(errors[1]:match("^/delete: 2 queued") ~= nil)
+        end)
+
+        -- One block per turn: a prose head takes its own turn and the drain
+        -- that follows its Stop takes the next block.
+        it("dispatches one block per turn", function()
+            submit("Do X", { "/compact", "then Y" })
+
+            assert.spy(dispatch_spy).was.called(1)
+            assert.equal(2, #queued)
+        end)
+    end)
+
     describe("_drain_queue", function()
-        --- @param queued string|nil Text the input buffer's regions hold
+        --- @param queued string|nil Text of the queue's next block
         --- @param gate agentic.SubmitDeferReason|nil
         local function drainable(queued, gate)
-            return {
+            local block = queued and { text = queued, sr = 0, er = 0 }
+            local sm
+            sm = {
                 consumed = false,
+                cancelled = false,
                 inner_spy = spy.new(function() end),
+                message_writer = { write_error_action = function() end },
                 widget = {
-                    queued_text = function()
-                        return queued
+                    next_queued_block = function()
+                        return block
+                    end,
+                    queued_block_count = function()
+                        return 1
+                    end,
+                    -- Returns what it deleted, as the real one does: the drain
+                    -- dispatches that rather than the block it read first.
+                    consume_queued_block = function()
+                        sm.consumed = true
+                        return block
+                    end,
+                    cancel_queue = function()
+                        sm.cancelled = true
                     end,
                 },
                 _submit_defer_reason = function()
                     return gate
                 end,
+                _confirm_queued_command = SessionManager._confirm_queued_command,
                 _drain_queue = SessionManager._drain_queue,
             }
+            return sm
         end
 
         --- @param sm table
         local function run(sm)
-            sm.widget.consume_queued_regions = function()
-                sm.consumed = true
-            end
             sm._handle_input_submit_inner = sm.inner_spy
             return sm:_drain_queue()
         end
 
-        it("dispatches queued regions when no gate is active", function()
+        it("dispatches the next block when no gate is active", function()
             local sm = drainable("queued text", nil)
 
             assert.is_true(run(sm))
@@ -3435,9 +3666,9 @@ describe("agentic.SessionManager", function()
             assert.equal("queued text", sm.inner_spy.calls[1][2])
         end)
 
-        -- The regions must stay tagged and visible: consuming them first and
+        -- The block must stay tagged and visible: consuming it first and
         -- finding the gate closed afterwards would eat the text.
-        it("leaves regions tagged while the gate is closed", function()
+        it("leaves the block tagged while the gate is closed", function()
             local sm = drainable("x", "usage_limited")
 
             assert.is_false(run(sm))
@@ -3452,6 +3683,44 @@ describe("agentic.SessionManager", function()
             assert.is_false(run(sm))
 
             assert.spy(sm.inner_spy).was.called(0)
+        end)
+
+        -- A queued /new is pasted data as often as it is intent, and running
+        -- it destroys the session it was pasted into.
+        it("confirms a session-ending command and runs it on yes", function()
+            local sm = drainable("/new", nil)
+            local confirm = spy.stub(vim.fn, "confirm")
+            confirm:returns(1)
+
+            assert.is_true(run(sm))
+
+            assert.equal(1, confirm.call_count)
+            assert.is_true(sm.consumed)
+            assert.spy(sm.inner_spy).was.called(1)
+            confirm:revert()
+        end)
+
+        it("drops the whole queue when the command is declined", function()
+            local sm = drainable("/new", nil)
+            local confirm = spy.stub(vim.fn, "confirm")
+            confirm:returns(2)
+
+            assert.is_false(run(sm))
+
+            assert.is_true(sm.cancelled)
+            assert.is_false(sm.consumed)
+            assert.spy(sm.inner_spy).was.called(0)
+            confirm:revert()
+        end)
+
+        it("does not confirm an ordinary command block", function()
+            local sm = drainable("/compact", nil)
+            local confirm = spy.stub(vim.fn, "confirm")
+
+            assert.is_true(run(sm))
+
+            assert.equal(0, confirm.call_count)
+            confirm:revert()
         end)
     end)
 

@@ -1040,6 +1040,48 @@ describe("agentic.ui.ChatWidget", function()
                 assert.is_false(vim.bo[widget.buf_nrs.input].modified)
             end)
 
+            it("dispatches the first block and tags the rest", function()
+                set_input({ "/compact", "then continue" })
+
+                widget:submit()
+
+                assert.spy(submit_spy).was.called(1)
+                assert.equal("/compact", submit_spy.calls[1][1])
+                -- The remainder stays visible and editable, tagged for the
+                -- drain that runs at the command's turn end.
+                assert.same({ "then continue" }, input_lines())
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    widget.buf_nrs.input,
+                    ns,
+                    0,
+                    -1,
+                    { details = true }
+                )
+                assert.equal(1, #marks)
+                assert.same({ 0, 0 }, { marks[1][2], marks[1][4].end_row })
+            end)
+
+            it("tags the deferred head above the untouched rest", function()
+                set_input({ "/compact", "then continue" })
+                widget.on_submit_input = spy.new(function()
+                    return false
+                end)
+
+                widget:submit()
+
+                assert.same({ "/compact", "then continue" }, input_lines())
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    widget.buf_nrs.input,
+                    ns,
+                    0,
+                    -1,
+                    { details = true }
+                )
+                assert.equal(2, #marks)
+                assert.same({ 0, 0 }, { marks[1][2], marks[1][4].end_row })
+                assert.same({ 1, 1 }, { marks[2][2], marks[2][4].end_row })
+            end)
+
             it("passes force through from the write commands", function()
                 set_input({ "line1" })
 
@@ -1172,6 +1214,20 @@ describe("agentic.ui.ChatWidget", function()
             assert.same({ { 0, 2 } }, tags())
         end)
 
+        -- Sending the line above a region must not drop it to draft: the
+        -- delete abuts the region, which is indistinguishable from an edit
+        -- inside it unless the dispatch says so.
+        it("keeps a region tagged when the line above it is sent", function()
+            set_input({ "send me", "queued task" })
+            widget:_queue_line_range(1, 1)
+            vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
+
+            widget:_send_line()
+
+            assert.same({ "queued task" }, input_lines())
+            assert.same({ { 0, 0 } }, tags())
+        end)
+
         it("editing inside a region drops its tag", function()
             set_input({ "one", "two", "three" })
             widget:_queue_line_range(0, 1)
@@ -1216,32 +1272,66 @@ describe("agentic.ui.ChatWidget", function()
             assert.same({ "one", "two", "three" }, input_lines())
         end)
 
-        it("reads regions in buffer order without consuming them", function()
+        it("reads the topmost region's first block, consuming none", function()
             set_input({ "one", "two", "three" })
             -- Queue bottom then top: buffer order must still be top-to-bottom.
             widget:_queue_line_range(2, 2)
             widget:_queue_line_range(0, 0)
 
-            assert.equal("one\n\nthree", widget:queued_text())
+            assert.equal("one", widget:next_queued_block().text)
             -- A caller that decides not to dispatch leaves them visible.
             assert.equal(2, #tags())
             assert.same({ "one", "two", "three" }, input_lines())
         end)
 
-        it("consuming deletes the regions' text and their tags", function()
+        it("splits a region into one block per command line", function()
+            set_input({ "/compact", "then continue", "with X" })
+            widget:_queue_line_range(0, 2)
+
+            assert.equal(2, widget:queued_block_count())
+            assert.equal("/compact", widget:next_queued_block().text)
+        end)
+
+        it("consuming a region's only block takes the region", function()
             set_input({ "one", "two", "three" })
             widget:_queue_line_range(2, 2)
             widget:_queue_line_range(0, 0)
 
-            widget:consume_queued_regions()
+            widget:consume_queued_block()
 
-            assert.equal(0, #tags())
-            assert.same({ "two" }, input_lines())
+            assert.same({ { 1, 1 } }, tags())
+            assert.same({ "two", "three" }, input_lines())
+        end)
+
+        -- Consuming a region's last block must delete its mark: a collapsed
+        -- zero-width mark would read the untagged draft line below it as the
+        -- next queued block and send it.
+        it("never reads the draft line below a consumed region", function()
+            set_input({ "queued", "draft" })
+            widget:_queue_line_range(0, 0)
+
+            widget:consume_queued_block()
+
+            assert.same({}, tags())
+            assert.is_nil(widget:next_queued_block())
+            assert.same({ "draft" }, input_lines())
+        end)
+
+        it("consuming one block of a region leaves the rest tagged", function()
+            set_input({ "/compact", "then continue", "draft" })
+            widget:_queue_line_range(0, 1)
+
+            widget:consume_queued_block()
+
+            assert.same({ { 0, 0 } }, tags())
+            assert.same({ "then continue", "draft" }, input_lines())
+            assert.equal("then continue", widget:next_queued_block().text)
         end)
 
         it("reads nil when nothing is queued", function()
             set_input({ "one" })
-            assert.is_nil(widget:queued_text())
+            assert.is_nil(widget:next_queued_block())
+            assert.equal(0, widget:queued_block_count())
         end)
 
         it("clamps a count past buffer end (no crash)", function()

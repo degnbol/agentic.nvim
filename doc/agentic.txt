@@ -258,7 +258,9 @@ override what you need.
                                                   *agentic-config-hooks-tbl*
 `hooks` table
     Callback functions for lifecycle events:
-      `on_prompt_submit`       Fires after submitting a prompt.
+      `on_prompt_submit`       Fires after submitting a prompt. Once per
+                               dispatched block, so a submit that splits at a
+                               command line fires it more than once.
       `on_response_complete`   Fires when response finishes. Once per
                                submitted prompt, so turns resent by
                                |agentic-config-auto_retry_on_transient_error|
@@ -488,19 +490,34 @@ Partial-send deletes the sent text from the input buffer. Set
 `settings.send_register` to a register name (e.g. `"a"`) to copy the sent text
 into that register before deleting.
 
+Submitted text splits at command lines: a line of the form `/word`, with or
+without arguments, is a prompt of its own, and each run of other lines is one
+prompt. They dispatch in buffer order, one per turn — `/compact` above
+`Continue` compacts, then sends `Continue` when that finishes. Text with no
+command line in it is one prompt, as it is when nothing splits. An argument
+belongs on its command's own line; the line below it is the next prompt.
+Indent a `/`-leading line by one space to send it as ordinary text instead.
+
 The queue bindings tag the covered line(s) as a queued region, highlighted in
 place (`AgenticQueuedRegion`) and left editable, instead of sending now —
 always, whether or not a turn is running. Queueing is line-granular: a
-charwise motion queues its whole line(s). A submit the session cannot take yet
-is tagged the same way, so it stays in the buffer.
+charwise motion queues its whole line(s). A submit the session cannot take
+yet, and every block of one that has not dispatched, is tagged the same way,
+so it stays in the buffer.
 
-Queued regions dispatch as one prompt in buffer order (top to bottom) at the
-next turn that ends normally. A turn stopped with `<C-c>`, or ended early by
-the agent, leaves them tagged. Editing a region — any change to it, or
+The queue dispatches one block per turn in buffer order (top to bottom), at
+each turn that ends normally. A turn stopped with `<C-c>`, or ended early by
+the agent, leaves the rest tagged. Editing a region — any change to it, or
 entering insert mode with the cursor inside it — drops it back to ordinary
-draft. `:w` / `:wq` / `:x` submit the whole buffer as one prompt now, stopping
-a running turn if there is one; before the session is ready they queue it like
-any other submit.
+draft. `:w` / `:wq` / `:x` submit the whole buffer, dispatching its first
+block now instead of queueing it, and stop a running turn if there is one;
+before the session is ready they queue it like any other submit.
+
+`/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
+the queue rather than as a submit's first block: pasted text that quotes one
+of them as an example would otherwise run it. Declining leaves every queued
+block as draft. `/delete` also drops the rest of the queue, since the session
+those blocks were meant for is gone.
 
 `<S-CR>` and `<S-C-c>` are only distinguishable from `<CR>` and `<C-c>` under
 the kitty keyboard protocol (kitty terminal with nvim 0.12). On other

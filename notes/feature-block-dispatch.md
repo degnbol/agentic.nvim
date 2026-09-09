@@ -1,7 +1,33 @@
 # Plan: block-oriented dispatch — one command, one turn
 
-Line numbers against `bbbfe7e`. Realises TODO "Command queuing" and the pass
-deferred by [`feature-mid-turn-queue.md`](feature-mid-turn-queue.md) § Deferred.
+Implemented in `bde2aa4`. Still open: § Deferred, and the pre-existing
+selections bug at the end of § Once-per-submit state. Line numbers against
+`bbbfe7e`.
+Realises TODO "Command queuing" and the pass deferred by
+[`feature-mid-turn-queue.md`](feature-mid-turn-queue.md) § Deferred.
+
+Five decisions here were settled differently in the implementation:
+
+- **A block has no `kind` field.** Per-block trimming keeps the first content
+  line's indentation — which the escape hatch needs anyway, or an un-indented
+  `  /compact` reaches the provider and is intercepted there — and that makes
+  `PromptBlocks.command(text)` re-derive the kind exactly. So
+  `_handle_input_submit_inner` classifies its own text, a bufferless prompt
+  classifies like a block for free, and the field had no reader left.
+- **The drain is non-reentrant and dispatches what the consume returned.** A
+  `vim.fn.confirm` keeps running scheduled callbacks and timers while it waits,
+  so a drain edge landing in that window took the same unconsumed block and
+  dispatched it twice. For the same reason the continuation after a local
+  command is scheduled rather than called outright: the submit that dispatched
+  it still holds buffer rows it means to delete.
+- **`async` is set for `/trust` only.** `/delete` truncates the sequence, so it
+  never has a next block to hold back.
+- **The destructive-command confirm lives on the drain path.** A submit's head
+  dispatches directly and the blocks after it are tagged, so "not the first
+  block of the submit" *is* "arrived through the queue" — no per-region
+  bookkeeping.
+- **Separately queued regions are separate prompts.** The drain takes one block
+  from the topmost region; it no longer joins every region into one prompt.
 
 The queue this sequences on top of landed in `19fa6d6`: one storage (extmark
 regions in AgenticInput), one gate (`SessionManager:_submit_defer_reason`), and a

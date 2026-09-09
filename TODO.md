@@ -108,14 +108,6 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   scenarios (but not persistent stopping based on task etc.). The numbered
   options are for other reject behaviours.
 
-- **Command queuing**: `/compact\nContinue` should fire `/compact` correctly
-  (it doesn't — the whole submit reaches the provider as prose), and then fire
-  `Continue` when compaction is complete.
-  Essentially work as if the user prompts `/compact` and then a moment later
-  the rest. Applies to every command, not just `/compact`, and includes two
-  silent data-loss cases (`/new\nStart on X` discards `Start on X`) —
-  planned in [`notes/feature-block-dispatch.md`](notes/feature-block-dispatch.md).
-
 - **Resume after compacting**: resume right after compacting doesn't show
   history from before compacting, just the compacting summary. Both would be
   ideal.

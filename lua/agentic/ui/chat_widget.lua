@@ -3,6 +3,7 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
 local MessageWriter = require("agentic.ui.message_writer")
+local PromptBlocks = require("agentic.utils.prompt_blocks")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local WindowDecoration = require("agentic.ui.window_decoration")
@@ -387,32 +388,48 @@ end
 --- @field force? boolean Send now even if the session would defer the prompt
 
 --- Copy sent text into `Config.settings.send_register` if configured.
---- @param opts agentic.ui.ChatWidget.SendOpts
-local function copy_to_send_register(opts)
+--- @param text string What was dispatched, which is one block of the selection
+--- @param mode "line"|"char"
+local function copy_to_send_register(text, mode)
     local reg = Config.settings and Config.settings.send_register
     if type(reg) ~= "string" or reg == "" then
         return
     end
-    local regtype = opts.delete_range.mode == "line" and "l" or "c"
-    vim.fn.setreg(reg, opts.text, regtype)
+    vim.fn.setreg(reg, text, mode == "line" and "l" or "c")
 end
 
---- Delete the sent range from the input buffer.
+--- Delete a dispatched charwise range from the input buffer. Whole lines go
+--- through `ChatWidget:_delete_dispatched_lines` instead, which keeps the
+--- queued tags around them.
 --- @param bufnr integer
 --- @param range agentic.ui.ChatWidget.SendDeleteRange
-local function apply_send_delete(bufnr, range)
-    if range.mode == "line" then
-        vim.api.nvim_buf_set_lines(bufnr, range.sr, range.er + 1, false, {})
-    else
-        vim.api.nvim_buf_set_text(
-            bufnr,
-            range.sr,
-            range.sc,
-            range.er,
-            range.ec,
-            {}
-        )
+local function delete_sent_chars(bufnr, range)
+    vim.api.nvim_buf_set_text(bufnr, range.sr, range.sc, range.er, range.ec, {})
+end
+
+--- The blocks a submit dispatches, with rows in buffer coordinates.
+--- @param text string
+--- @param range agentic.ui.ChatWidget.SendDeleteRange
+--- @return agentic.utils.PromptBlocks.Block[]
+local function submit_blocks(text, range)
+    if range.mode == "char" then
+        -- A charwise range dispatches whole: it can start and end mid-line, so
+        -- its blocks would have no lines of their own to delete. Trimmed by the
+        -- same rule as a block, or an indented `/word` would classify one way
+        -- charwise and the other linewise.
+        local trimmed = PromptBlocks.trim_lines(vim.split(text, "\n"))
+        if trimmed == "" then
+            return {}
+        end
+        return { { text = trimmed, sr = range.sr, er = range.er } }
     end
+    local blocks = PromptBlocks.split(vim.split(text, "\n"))
+    -- Rows come back relative to the lines that were split.
+    for _, block in ipairs(blocks) do
+        block.sr = block.sr + range.sr
+        block.er = block.er + range.sr
+    end
+    return blocks
 end
 
 --- Submit a prompt. With no `text`, submits the whole input buffer; with it,
@@ -420,9 +437,15 @@ end
 --- entrypoint — the submit keymap, `:w` (BufWriteCmd) and the `:Wq` / `:X`
 --- safeguards all funnel through here.
 ---
---- The session decides whether the prompt goes now. If it defers, the lines
---- stay put and are tagged as a queued region instead of being deleted, and
---- the context panels keep their contents — nothing has been sent yet. A
+--- The submitted lines split into blocks (`utils/prompt_blocks.lua`) and only
+--- the first one dispatches now; the rest stay in the buffer as a queued
+--- region and drain one per turn, so buffer order is the whole record of the
+--- sequence. Prose-only text is a single block, which is every submit that
+--- names no command.
+---
+--- The session decides whether the first block goes now. If it defers, the
+--- lines stay put and are tagged as a queued region instead of being deleted,
+--- and the context panels keep their contents — nothing has been sent yet. A
 --- charwise range widens to whole lines, since a tag is line-granular.
 --- @param opts? agentic.ui.ChatWidget.SubmitOpts
 function ChatWidget:submit(opts)
@@ -430,17 +453,17 @@ function ChatWidget:submit(opts)
     vim.cmd("stopinsert")
 
     --- @type string
-    local prompt
+    local text
     --- @type agentic.ui.ChatWidget.SendDeleteRange
     local range
     local send = opts.send
     if send then
-        prompt = send.text:match("^%s*(.-)%s*$")
+        text = send.text
         range = send.delete_range
     else
         local lines =
             vim.api.nvim_buf_get_lines(self.buf_nrs.input, 0, -1, false)
-        prompt = table.concat(lines, "\n"):match("^%s*(.-)%s*$")
+        text = table.concat(lines, "\n")
         range = {
             sr = 0,
             sc = 0,
@@ -450,14 +473,31 @@ function ChatWidget:submit(opts)
         }
     end
 
-    if not prompt or prompt == "" or not prompt:match("%S") then
+    local blocks = submit_blocks(text, range)
+    local head = blocks[1]
+    if not head then
         return
     end
+    local next_block = blocks[2]
 
-    local dispatched =
-        self.on_submit_input(prompt, { from_buffer = true, force = opts.force })
+    -- Any tag on the head's own lines is superseded: they dispatch now, and
+    -- the delete that follows suppresses untagging, so a mark left there would
+    -- collapse onto whatever text moved into its place.
+    self:_clear_queued_in_range(range.sr, head.er)
+
+    -- The rest is tagged before the head dispatches, not after: dispatching it
+    -- can ask for the next block on its way out, so the region has to be
+    -- readable by then.
+    if next_block then
+        self:_queue_line_range(next_block.sr, range.er)
+    end
+
+    local dispatched = self.on_submit_input(
+        head.text,
+        { from_buffer = true, force = opts.force }
+    )
     if not dispatched then
-        self:_queue_line_range(range.sr, range.er)
+        self:_queue_line_range(range.sr, head.er)
         -- The text is held, not unsaved: `:w` deferring would otherwise leave
         -- the buffer modified and re-prompt on close.
         vim.bo[self.buf_nrs.input].modified = false
@@ -465,9 +505,20 @@ function ChatWidget:submit(opts)
     end
 
     if send then
-        copy_to_send_register(send)
+        copy_to_send_register(head.text, range.mode)
     end
-    apply_send_delete(self.buf_nrs.input, range)
+    if range.mode == "line" then
+        -- Up to the next block, so the head's own blank lines go with it. Via
+        -- the tag-preserving delete even when nothing follows in this submit:
+        -- a plain line delete untags a region *below* it, which is how a
+        -- partial-send above a queued one used to drop it to draft.
+        self:_delete_dispatched_lines(
+            range.sr,
+            next_block and next_block.sr - 1 or range.er
+        )
+    else
+        delete_sent_chars(self.buf_nrs.input, range)
+    end
     vim.bo[self.buf_nrs.input].modified = false
 
     BufHelpers.with_modifiable(self.buf_nrs.code, function(bufnr)
@@ -743,43 +794,111 @@ function ChatWidget:_queue_visual()
     self:_queue_line_range(sr, er)
 end
 
---- The queued regions' text in buffer order (top-to-bottom = priority), joined
---- by blank lines, or nil when nothing is queued. Reads only, so a caller that
---- decides not to dispatch leaves the regions tagged and visible.
---- @return string|nil
-function ChatWidget:queued_text()
-    local buf = self.buf_nrs.input
-    local marks =
-        vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
-    if #marks == 0 then
-        return nil
-    end
-
-    -- get_extmarks returns marks in ascending position order.
-    local texts = {}
-    for _, mark in ipairs(marks) do
-        local lines =
-            vim.api.nvim_buf_get_lines(buf, mark[2], mark[4].end_row + 1, false)
-        table.insert(texts, table.concat(lines, "\n"))
-    end
-    return table.concat(texts, "\n\n")
+--- Delete lines [sr, er] (0-indexed, inclusive) as dispatched, leaving the
+--- queued tags around them alone. `on_bytes` cannot tell a dispatch's own
+--- delete from a user edit inside a region, and the edit that consumes one
+--- block abuts the region holding the next.
+--- @param sr integer
+--- @param er integer
+function ChatWidget:_delete_dispatched_lines(sr, er)
+    self._draining = true
+    vim.api.nvim_buf_set_lines(self.buf_nrs.input, sr, er + 1, false, {})
+    self._draining = false
 end
 
---- Delete the queued regions' text from the input buffer and clear their tags,
---- mirroring partial-send: a dispatched region leaves the input buffer.
---- Bottom-to-top keeps row indices valid across the deletes.
-function ChatWidget:consume_queued_regions()
-    local buf = self.buf_nrs.input
+--- The blocks a region's lines hold, with rows in buffer coordinates.
+--- @param buf integer
+--- @param sr integer
+--- @param er integer
+--- @return agentic.utils.PromptBlocks.Block[]
+local function region_blocks(buf, sr, er)
+    local blocks =
+        PromptBlocks.split(vim.api.nvim_buf_get_lines(buf, sr, er + 1, false))
+    for _, block in ipairs(blocks) do
+        block.sr = block.sr + sr
+        block.er = block.er + sr
+    end
+    return blocks
+end
+
+--- The queue's head: the first block of the topmost region that still holds
+--- one, with that region's mark and span. Regions left with nothing but blank
+--- lines are skipped, so one can never wedge the queue.
+--- @param buf integer
+--- @return { block: agentic.utils.PromptBlocks.Block, mark_id: integer, sr: integer, er: integer, last: boolean }|nil
+local function queue_head(buf)
+    -- get_extmarks returns marks in ascending position order, which is the
+    -- dispatch order: top-to-bottom is priority.
     local marks =
         vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
-
-    self._draining = true
-    for i = #marks, 1, -1 do
-        local mark = marks[i]
-        vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, mark[1])
-        vim.api.nvim_buf_set_lines(buf, mark[2], mark[4].end_row + 1, false, {})
+    for _, mark in ipairs(marks) do
+        local sr = mark[2]
+        local er = mark[4].end_row --[[@as integer]]
+        local blocks = region_blocks(buf, sr, er)
+        if blocks[1] then
+            return {
+                block = blocks[1],
+                mark_id = mark[1],
+                sr = sr,
+                er = er,
+                last = #blocks == 1,
+            }
+        end
     end
-    self._draining = false
+    return nil
+end
+
+--- The next queued block in buffer order, or nil when nothing is queued. Reads
+--- only, so a caller that decides not to dispatch leaves the region tagged and
+--- visible.
+--- @return agentic.utils.PromptBlocks.Block|nil
+function ChatWidget:next_queued_block()
+    local head = queue_head(self.buf_nrs.input)
+    return head and head.block or nil
+end
+
+--- How many blocks the queue still holds, across every region.
+--- @return integer
+function ChatWidget:queued_block_count()
+    local buf = self.buf_nrs.input
+    local count = 0
+    local marks =
+        vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
+    for _, mark in ipairs(marks) do
+        local er = mark[4].end_row --[[@as integer]]
+        count = count + #region_blocks(buf, mark[2], er)
+    end
+    return count
+end
+
+--- Delete the next queued block's lines from the input buffer and return the
+--- block that was deleted, mirroring partial-send: a dispatched block leaves
+--- the input buffer. Nil when nothing is queued.
+---
+--- The caller must dispatch what this returns rather than what
+--- `next_queued_block` reported: the two calls read the queue independently,
+--- and anything that runs between them (a modal prompt lets scheduled
+--- callbacks and timers run) can move the head on.
+---
+--- Consuming a region's last block takes the whole region and its mark with
+--- it. The mark has to go: a fully-consumed region collapses to zero width at
+--- the deletion point, and the next read would take the untagged draft line
+--- that followed it as a queued block.
+--- @return agentic.utils.PromptBlocks.Block|nil
+function ChatWidget:consume_queued_block()
+    local buf = self.buf_nrs.input
+    local head = queue_head(buf)
+    if not head then
+        return nil
+    end
+    if head.last then
+        vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, head.mark_id)
+        self:_delete_dispatched_lines(head.sr, head.er)
+    else
+        -- Up to the block's end, so any blank lines above it go with it.
+        self:_delete_dispatched_lines(head.sr, head.block.er)
+    end
+    return head.block
 end
 
 --- Drop every queued region, leaving the text as ordinary draft in place.

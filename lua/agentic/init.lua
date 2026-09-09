@@ -391,6 +391,13 @@ end
 --- @param text string
 function Agentic.send_prompt(text)
     SessionRegistry.get_session_for_tab_page(nil, function(session)
+        -- The same reset a submit from the input buffer does: this is the user
+        -- asking for something, so the badge and last turn's todo panel are
+        -- answered. The dispatch path cannot do it — the automatic drains
+        -- reach that too, and one of them would clear the badge in the tick it
+        -- was set.
+        session.widget:clear_unread_badge()
+        session.todo_list:close_if_all_completed()
         session:_handle_input_submit(text)
         session.widget:show({ focus_prompt = false })
     end)
