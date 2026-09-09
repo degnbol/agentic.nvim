@@ -299,6 +299,26 @@ providers don't advertise them in `available_commands_update`):
   headers state (for external UI plugins via `AgenticHeadersChanged`), persists
   to the session JSON, and updates the buffer name. Resets on `/new`.
 
+Providers intercept a line-start `/word` whether or not they advertised it,
+which is why `PromptBlocks.command` classifies on line shape and the advertised
+list is only used to warn. Measured 2026-09-09 by sending an unadvertised
+command:
+
+| Provider | Advertised | Unknown `/word` |
+| --- | --- | --- |
+| claude-agent-acp | 72, all `[%w_-]+` | `end_turn`, zero usage, one chunk `Unknown command: …` |
+| opencode | 32, all `[%w_-]+` | `end_turn` with **no session updates at all** — dropped silently |
+
+No advertised name on either escapes the shape rule. opencode's silent drop is
+what `SessionManager:_warn_unadvertised_command` exists for: without the
+warning, a stray `/word` line vanishes with no trace once the splitter gives it
+its own turn.
+
+gemini, codex, cursor, auggie and vibe are unverified — not installed here, and
+their adapters carry no slash-command logic at all (only `rawInput.command`
+display remaps), so nothing in-repo either supports or contradicts the
+interception claim for them.
+
 ### `thought_level` (effort) ConfigOption — claude-agent-acp
 
 As of `claude-agent-acp` 0.39.0 the bridge emits a `thought_level` ConfigOption

@@ -112,6 +112,20 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   history from before compacting, just the compacting summary. Both would be
   ideal.
 
+- **Selections outlive the panel that showed them**: `code_selection` is only
+  cleared on the branch that attaches it, so a command-only submit leaves the
+  selections pending while `ChatWidget:submit` has already wiped the display
+  buffer. The next prose submit then attaches selections the user can no longer
+  see.
+
+- **A `/command` line inside a fenced block splits**: block dispatch and the
+  `syntax/AgenticChat.vim` highlight both read line shape, so a `/word` line
+  inside a prompt's own code fence becomes its own prompt (and highlights as a
+  command). A treesitter-markdown pass over the input buffer would fix both.
+  Related: the highlight's `\s` word boundary is space/tab while the splitter's
+  Lua `%s` also matches `\r`, so a pasted CRLF line classifies differently in
+  the two.
+
 ### OpenCode adapter
 
 Several issues cluster here; suggests work done for claude wasn't generalised

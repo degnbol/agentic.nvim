@@ -108,13 +108,13 @@ A submit splits into blocks (`lua/agentic/utils/prompt_blocks.lua`): one line
 per `/command`, each run of other lines as prose. `ChatWidget:submit`
 dispatches the first block and tags the rest as queued regions;
 `SessionManager:_drain_queue` takes one block per benign gate-clear edge.
-Command-ness is line shape, never membership of the advertised list. Per-site
-rationale — the escape hatch that lets the kind be re-derived from the text,
-the once-per-submit state that moved to the first prose block, `async` local
+Command-ness is line shape, never membership of the advertised list (measured
+provider interception behaviour: `provider-system` skill). Per-site rationale —
+the escape hatch that lets the kind be re-derived from the text, the
+once-per-submit state that moved to the first prose block, `async` local
 commands, the session-ending confirm — is in docstrings on
 `PromptBlocks.command`, `_handle_input_submit_inner`, `LOCAL_COMMANDS` and
-`_confirm_queued_command`. Measured provider interception behaviour is in
-[notes/feature-block-dispatch.md](notes/feature-block-dispatch.md).
+`_confirm_queued_command`.
 
 ## Client-side auto-approval
 
