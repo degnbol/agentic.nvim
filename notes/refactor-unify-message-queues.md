@@ -54,9 +54,7 @@ today. A gate that only knew "a submit happened" would tag `/new` and park it.
 
 Reuse the `LOCAL_COMMANDS` table from
 [`feature-block-dispatch.md`](feature-block-dispatch.md) § Local command table for
-the exemption lookup rather than re-matching patterns here; exact-word lookup also
-avoids inheriting the prefix bug in
-[`bug-command-interception-prefix-match.md`](bug-command-interception-prefix-match.md).
+the exemption lookup rather than re-matching patterns here.
 
 **Submit hook returns how much it consumed**, not a boolean:
 

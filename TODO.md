@@ -30,12 +30,6 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
   is always what goes out. Live data loss, untested:
   [`notes/bug-auto-continue-discards-queued-prompts.md`](notes/bug-auto-continue-discards-queued-prompts.md).
 
-- **`/new` and `/trust` intercept on prefix, not on the command word**:
-  `/newsflash: build broken` destroys the session and discards the text;
-  `/trustworthy people` applies `"worthy people"` as an edit-trust scope.
-  The other four local commands are end-anchored and safe.
-  [`notes/bug-command-interception-prefix-match.md`](notes/bug-command-interception-prefix-match.md).
-
 - **`<C-c>` dispatches the mid-turn queue**: `Agentic.stop_generation`
   sends `session/cancel`, the in-flight prompt resolves with
   `stopReason = "cancelled"`, and the prompt callback falls through to an

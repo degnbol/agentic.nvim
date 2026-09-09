@@ -3,14 +3,9 @@
 Line numbers against `bbbfe7e`. Realises TODO "Command queuing" and the pass
 deferred by [`feature-mid-turn-queue.md`](feature-mid-turn-queue.md) § Deferred.
 
-Prerequisites, in order:
-
-1. [`bug-command-interception-prefix-match.md`](bug-command-interception-prefix-match.md)
-   — this plan classifies every line, so a prefix-matching `/new` becomes reachable
-   from any line of a paste rather than only the first.
-2. [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md) — the
-   sequencer here is that plan's queue with the drain yielding one block instead of
-   all regions concatenated, and it needs that plan's gate predicate.
+Prerequisite: [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md)
+— the sequencer here is that plan's queue with the drain yielding one block instead
+of all regions concatenated, and it needs that plan's gate predicate.
 
 ## Problem
 
@@ -18,23 +13,19 @@ Prerequisites, in order:
 `is_slash_command = input_text:match("^/")` (`:1689`), and the local interception
 patterns above it are anchored at the start of that same whole text. Every command
 therefore needs its own turn, not just `/compact`, and mixing one with anything else
-fails in three ways:
+fails in two ways:
 
-- **Silent truncation.** `^/new%s*` (`:1625`) has no end anchor, so
-  `/new\nStart on X` matches (returning `"/new\n"`), starts a new session, and
-  discards `Start on X` entirely. `/new` is the only command with this shape.
-- **Argument capture.** `^/rename%s+(.+)$` (`:1638`) and `^/trust%s*(.*)$` (`:1651`)
-  both use `.`, which matches newlines in Lua patterns, so `/trust repo\nAlso do X`
-  passes `"repo\nAlso do X"` as the trust scope.
-- **No interception at all.** `^/context%s*$` (`:1632`), `^/clear%s*$` (`:1625`) and
-  `^/delete%s*$` (`:1576`) all require end-of-string, so `/context\nfoo` falls
-  through the whole chain and reaches the provider as prose. Symmetrically, any
-  command that is not the *first* line (`Continue\n/compact`) is classified as prose
-  and never intercepted by either side.
+- **Argument capture.** `^/rename%s+(.+)$` and `^/trust%f[%s%z]%s*(.*)$` both use
+  `.`, which matches newlines in Lua patterns, so `/trust repo\nAlso do X` passes
+  `"repo\nAlso do X"` as the trust scope.
+- **No interception at all.** The four no-argument commands are `^/cmd%s*$`, so
+  `/context\nfoo` falls through the whole chain and reaches the provider as prose.
+  Symmetrically, any command that is not the *first* line (`Continue\n/compact`) is
+  classified as prose and never intercepted by either side.
 
 All of the above is confirmed by running the patterns under `nvim -l`, not inferred.
 
-The provider path adds a fourth failure: a command must arrive with no preceding
+The provider path adds a third failure: a command must arrive with no preceding
 text at all, because opencode joins every text block to detect the leading `/` and
 the Claude SDK reads its `inputString` from the last text block only (the rationale
 already at `:1683-1688`).
@@ -115,7 +106,8 @@ keyed by exact command word:
 { handler = fn, arg = "none"|"line"|"optional", async = boolean }
 ```
 
-- **Exact-word keys** eliminate the prefix bug by construction.
+- **Exact-word keys** carry the word boundary structurally, instead of each of the
+  six patterns having to anchor it.
 - **`arg`** gives each command its argument grammar in one place instead of six
   ad-hoc patterns.
 - **`async`** tells the sequencer whether to wait, which the gate cannot answer
@@ -189,8 +181,7 @@ first block of the submit.** A lone command, or a command opening the submit
 appearing after other content is the signature of pasted data. The confirm names
 the command and the block count.
 
-This risk exists today for the first line; block dispatch extends it to every line,
-which is why the prefix bug is a prerequisite rather than a follow-up.
+This risk exists today for the first line; block dispatch extends it to every line.
 
 ## Once-per-submit state
 
@@ -257,8 +248,8 @@ Splitter (`prompt_blocks.test.lua`, pure):
 
 Sequencing:
 
-- `/new\nStart on X` → new session, then `Start on X` sent to it (today `X` is
-  discarded).
+- `/new\nStart on X` → new session, then `Start on X` sent to it (today the whole
+  submit reaches the provider as prose).
 - `/commit\n/new` → `/commit` turn completes, then the session clears.
 - `/rename a b\nthen do X` → title exactly `a b`, `then do X` sent as prose.
 - `/trust repo\nAlso do X` → scope exactly `repo`.
