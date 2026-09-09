@@ -3,27 +3,24 @@
 Line numbers against `bbbfe7e`. Realises TODO "Command queuing" and the pass
 deferred by [`feature-mid-turn-queue.md`](feature-mid-turn-queue.md) § Deferred.
 
-Prerequisite: [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md)
-— the sequencer here is that plan's queue with the drain yielding one block instead
-of all regions concatenated, and it needs that plan's gate predicate.
+The queue this sequences on top of landed in `19fa6d6`: one storage (extmark
+regions in AgenticInput), one gate (`SessionManager:_submit_defer_reason`), and a
+drain that fires only at a normal Stop. What is left is for that drain to yield
+one block per turn instead of all regions concatenated.
 
 ## Problem
 
 `_handle_input_submit_inner` classifies the **whole** submitted text with
-`is_slash_command = input_text:match("^/")` (`:1689`), and the local interception
-patterns above it are anchored at the start of that same whole text. Every command
-therefore needs its own turn, not just `/compact`, and mixing one with anything else
-fails in two ways:
+`is_slash_command = input_text:match("^/")`, and `parse_local_command` above it is
+anchored at the start of that same whole text. Every command therefore needs its
+own turn, not just `/compact`.
 
-- **Argument capture.** `^/rename%s+(.+)$` and `^/trust%f[%s%z]%s*(.*)$` both use
-  `.`, which matches newlines in Lua patterns, so `/trust repo\nAlso do X` passes
-  `"repo\nAlso do X"` as the trust scope.
-- **No interception at all.** The four no-argument commands are `^/cmd%s*$`, so
-  `/context\nfoo` falls through the whole chain and reaches the provider as prose.
-  Symmetrically, any command that is not the *first* line (`Continue\n/compact`) is
-  classified as prose and never intercepted by either side.
-
-All of the above is confirmed by running the patterns under `nvim -l`, not inferred.
+Since `19fa6d6` a multi-line submit is never a command: `parse_local_command`
+bounds the word and its argument to one line, so `/trust repo\nAlso do X` no longer
+compiles `"repo\nAlso do X"` as a trust scope. It reaches the provider whole
+instead, which is correct but not useful — and a command on any line but the first
+(`Continue\n/compact`) is still classified as prose and intercepted by neither
+side. Splitting is what turns "not corrupted" into "does what was asked".
 
 The provider path adds a third failure: a command must arrive with no preceding
 text at all, because opencode joins every text block to detect the leading `/` and
@@ -97,23 +94,20 @@ to tag, so a remainder block would need a second queue.
 
 ## Local command table
 
-The six local commands are currently an if/elseif chain in
-`_handle_input_submit_inner`. Three separate needs now want the same facts, so make
-it one table — `lua/agentic/local_commands.lua`, or a `LOCAL_COMMANDS` local —
-keyed by exact command word:
+`19fa6d6` made the six local commands a `LOCAL_COMMANDS` local in
+`session_manager.lua`, keyed by exact command word — the boundary is structural
+rather than re-anchored in six patterns — with `{ takes_arg = boolean }` and
+dispatch in `SessionManager:_run_local_command`. The gate reads the same table for
+its exemption list.
+
+The sequencer needs one field added:
 
 ```
-{ handler = fn, arg = "none"|"line"|"optional", async = boolean }
+{ takes_arg = boolean, async = boolean }
 ```
 
-- **Exact-word keys** carry the word boundary structurally, instead of each of the
-  six patterns having to anchor it.
-- **`arg`** gives each command its argument grammar in one place instead of six
-  ad-hoc patterns.
-- **`async`** tells the sequencer whether to wait, which the gate cannot answer
-  (below).
-- The deferral gate in the sibling plan reads the same table for its exemption list
-  instead of re-matching text.
+**`async`** tells the sequencer whether to wait, which the gate cannot answer
+(below). It was left out deliberately, having had no consumer until now.
 
 ## Sequencing
 
@@ -126,14 +120,14 @@ timestamps, no separate in-flight store, no before/after bookkeeping. Two worked
 cases:
 
 - `/commit` then `/new` — clear after the turn finishes. `/commit` takes its turn;
-  `/new` is gated by the sibling plan's `in_flight` reason and fires at that turn's
-  normal Stop.
+  `/new` fires at that turn's normal Stop. Note that `/new` is *exempt* from the
+  gate, so the sequencer must hold it rather than relying on `in_flight` to.
 - `/new` then `Fresh session prompt.` — the prose block is gated `not_ready` after
   `_cancel_session` and drains at the session-created edge.
 
-Both require that regions **survive** `_cancel_session`, which they do in shipped
-code (nothing clears `NS_QUEUED`) and which the sibling plan preserves by not adding
-a `cancel_queue()` call there.
+Both require that regions **survive** `_cancel_session`, which they do — nothing
+clears `NS_QUEUED`, and `19fa6d6` deliberately did not add a `cancel_queue()` call
+there.
 
 ### The gate does not answer everything
 
@@ -166,7 +160,8 @@ depends on. Two mechanics:
   reads the *following untagged draft line* as a queued region and sends it. The
   current whole-region drain is immune because it deletes marks explicitly.
 
-`drain_queued_regions` becomes `drain_next_block`, returning one block.
+`queued_text` / `consume_queued_regions` gain a next-block form, so the drain
+takes one block instead of every region.
 
 ## Destructive commands in pasted content
 

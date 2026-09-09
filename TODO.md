@@ -24,14 +24,6 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
 
-- **`<C-c>` dispatches the mid-turn queue**: `Agentic.stop_generation`
-  sends `session/cancel`, the in-flight prompt resolves with
-  `stopReason = "cancelled"`, and the prompt callback falls through to an
-  unconditional `_drain_queue()`. So stopping a turn that went sideways
-  immediately sends the queued message — the risk the "Queue message"
-  entry below flagged. Fixed by narrowing the drain trigger to a normal
-  Stop (same plan note).
-
 - **Cancelled tool calls keep their pending footer forever**: `<C-c>` never
   terminalises the blocks that were mid-flight, and the stale status is persisted
   and replayed. Cause and fix design (including that it needs a status word):
@@ -116,13 +108,9 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   scenarios (but not persistent stopping based on task etc.). The numbered
   options are for other reject behaviours.
 
-- **Message queuing during resume**: queuing a message doesn't work while
-  waiting for a slow resume — `_pending_input` is a bare assignment, so a
-  second submit clobbers the first. Fixed by
-  [`notes/refactor-unify-message-queues.md`](notes/refactor-unify-message-queues.md).
-
 - **Command queuing**: `/compact\nContinue` should fire `/compact` correctly
-  (it doesn't), and then fire `Continue` when compaction is complete.
+  (it doesn't — the whole submit reaches the provider as prose), and then fire
+  `Continue` when compaction is complete.
   Essentially work as if the user prompts `/compact` and then a moment later
   the rest. Applies to every command, not just `/compact`, and includes two
   silent data-loss cases (`/new\nStart on X` discards `Start on X`) —
@@ -558,15 +546,21 @@ The glyph 󰋚 (nf-md-history) is reserved for this — see
 [`feature-command-notices.md`](notes/feature-command-notices.md) § "Glyph options
 considered".
 
-### Queue message
+### Queue message: the overlooked-question risk
 
-In regular interaction (not when waiting for cool-down) it could be useful to queue a message.
-This could be done by waiting for the stop hook, and submitting the queued message then.
-The danger is this would be intended for being able to queue a next task 
-without interrupting the agent, but could lead to a question or follow up from 
-the agent in the stop hook summary message being overlooked.
-The agent may repeat unanswered questions, it may not.
-We could think of ways to mitigate this risk, and if we can think of any then this queue feature might be justified.
+The queue itself shipped in `f170629` and `19fa6d6`. The risk that motivated
+holding it back is only partly addressed.
+
+Queueing is for releasing the next task without interrupting the agent, but the
+turn may end with a question rather than finished work — and the queued message
+answers a question that was never asked. Narrowing the drain to a normal Stop
+covers the cases where the turn visibly did not finish (`<C-c>`, `refusal`,
+`max_tokens`, an error): those park the queue. It does not cover a turn that
+ends `end_turn` *with* a question in its summary, which is the common shape.
+
+The agent may or may not repeat an unanswered question. Mitigating this needs a
+way to tell "finished" from "asked" at Stop — worth solving before leaning on
+the queue harder.
 
 ### Grey out agentic inner thinking
 

@@ -58,9 +58,8 @@ no rendering work and left for the note that owns the submit paths.
    accept, and the fix is the same shape: replay would have to bracket at each
    user→agent boundary.
 
-4. Mid-turn prompt splitting the prose run — folded into
-   [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md) §§ "One
-   submit rule" and "Intended consequences". Nothing was left for the renderer:
+4. Mid-turn prompt splitting the prose run — folded into the queue gate, landed
+   in `19fa6d6`. Nothing was left for the renderer:
    `write_user_prompt` already ends the run it interrupts (its
    `_reflow_chunks(bufnr, true)` drops `_prose_run_start_line`), so unit 3's
    bracket never spans the wedge, and the residual paragraph split is the cost

@@ -1,9 +1,8 @@
 # Plan: mid-turn message queue
 
-Implemented in `f170629`. Three decisions here are superseded by
-[`refactor-unify-message-queues.md`](refactor-unify-message-queues.md): storage is
-unified across all three queues, the idle send-now degrade is dropped, and the
-drain trigger narrows to a normal Stop.
+Implemented in `f170629`. Three decisions here were superseded by `19fa6d6`:
+storage is unified across all three queues, the idle send-now degrade is dropped,
+and the drain trigger narrows to a normal Stop.
 
 ## Problem
 
@@ -189,9 +188,8 @@ override.
 - **Full storage unification.** The two string queues (`_pending_input`,
   `_queued_prompts`) could also become buffer-region-based, but they carry
   committed-text semantics and work today. Not worth folding in now.
-  (Superseded — planned in
-  [`refactor-unify-message-queues.md`](refactor-unify-message-queues.md); their
-  committed-text semantics are the cause of two open TODO bugs.)
+  (Superseded — done in `19fa6d6`; their committed-text semantics were the cause
+  of two data-loss bugs.)
 - **`:w` as a priority flush** (queued-then-draft across presses) —
   rejected; breaks the one-submit-one-turn invariant. Priority comes from
   buffer order instead.
