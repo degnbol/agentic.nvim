@@ -474,7 +474,7 @@ does not disable it. >lua
     `<CR><CR>`         n       Stash-send: send N lines (count1), delete them
     `<CR>{motion}`     n       Stash-send: send motion range, delete
     `<CR>`             x       Stash-send: send visual selection, delete
-    `<S-CR><S-CR>`     n       Queue N lines (count1) for dispatch at turn end
+    `<S-CR><S-CR>`     n       Queue N lines (count1) for later dispatch
     `<S-CR>{motion}`   n       Queue the motion's line(s) for dispatch
     `<S-CR>`           x       Queue the selected line(s) for dispatch
     `<S-C-c>`          n       Drop every queued region (text stays as draft)
@@ -488,15 +488,19 @@ Partial-send deletes the sent text from the input buffer. Set
 `settings.send_register` to a register name (e.g. `"a"`) to copy the sent text
 into that register before deleting.
 
-While the agent is generating, the queue bindings tag the covered line(s) as
-a queued region, highlighted in place (`AgenticQueuedRegion`) and left
-editable, instead of sending now. Queued regions dispatch as one prompt at the
-next turn end, in buffer order (top to bottom). Editing a region — any change
-to it, or entering insert mode with the cursor inside it — drops it back to
-ordinary draft. When idle the queue bindings send immediately, exactly like
-the matching partial-send binding. Queueing is line-granular: a charwise
-motion queues its whole line(s). `:w` / `:wq` / `:x` always submit the whole
-buffer as one prompt now, dropping any queued tags.
+The queue bindings tag the covered line(s) as a queued region, highlighted in
+place (`AgenticQueuedRegion`) and left editable, instead of sending now —
+always, whether or not a turn is running. Queueing is line-granular: a
+charwise motion queues its whole line(s). A submit the session cannot take yet
+is tagged the same way, so it stays in the buffer.
+
+Queued regions dispatch as one prompt in buffer order (top to bottom) at the
+next turn that ends normally. A turn stopped with `<C-c>`, or ended early by
+the agent, leaves them tagged. Editing a region — any change to it, or
+entering insert mode with the cursor inside it — drops it back to ordinary
+draft. `:w` / `:wq` / `:x` submit the whole buffer as one prompt now, stopping
+a running turn if there is one; before the session is ready they queue it like
+any other submit.
 
 `<S-CR>` and `<S-C-c>` are only distinguishable from `<CR>` and `<C-c>` under
 the kitty keyboard protocol (kitty terminal with nvim 0.12). On other

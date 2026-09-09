@@ -283,11 +283,10 @@ local ConfigDefault = {
             --- Visual-mode binding. Sends the selection, then deletes it.
             send_visual = "<CR>",
 
-            --- Queue keymaps mirror the send keymaps but defer while the agent
-            --- is generating: instead of sending now, they tag the covered
-            --- line(s) as a queued region (highlighted in place, still
-            --- editable) that dispatches automatically at the next turn Stop.
-            --- When idle they behave exactly as the matching send keymap.
+            --- Queue keymaps mirror the send keymaps but always defer: instead
+            --- of sending now, they tag the covered line(s) as a queued region
+            --- (highlighted in place, still editable) that dispatches
+            --- automatically once the session can take it.
             --- Queueing is line-granular — a charwise motion queues its full
             --- line(s). `<S-CR>` / `<S-C-c>` are only distinguishable from
             --- `<CR>` / `<C-c>` under the kitty keyboard protocol (kitty +

@@ -297,14 +297,7 @@ end
 --- Safe to call multiple times or when no generation is active
 function Agentic.stop_generation()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
-        if not session.session_id then
-            return
-        end
-
-        session.agent:stop_generation(session.session_id)
-        session.permission_manager:clear()
-        session.is_generating = false
-        session.status_indicator:stop()
+        session:stop_generation()
     end)
 end
 
@@ -391,6 +384,10 @@ end
 ---   vim.keymap.set("n", "<localLeader>x", function()
 ---       require("agentic").send_prompt("Explain the last error")
 ---   end)
+---
+--- The prompt is held and sent later if the session cannot take it yet, with
+--- the reason written to chat. It has no buffer range to tag, so a second call
+--- before the first is sent replaces it.
 --- @param text string
 function Agentic.send_prompt(text)
     SessionRegistry.get_session_for_tab_page(nil, function(session)

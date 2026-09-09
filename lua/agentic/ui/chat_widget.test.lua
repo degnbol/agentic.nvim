@@ -878,7 +878,9 @@ describe("agentic.ui.ChatWidget", function()
 
         before_each(function()
             vim.cmd("tabnew")
-            submit_spy = spy.new(function() end)
+            submit_spy = spy.new(function()
+                return true
+            end)
             widget = ChatWidget:new(
                 vim.api.nvim_get_current_tabpage(),
                 submit_spy --[[@as function]]
@@ -989,6 +991,8 @@ describe("agentic.ui.ChatWidget", function()
         end)
 
         describe("submit regression", function()
+            local ns = vim.api.nvim_create_namespace("agentic_queued_region")
+
             it("no-arg path still sends whole buffer and clears it", function()
                 set_input({ "line1", "line2" })
 
@@ -997,6 +1001,57 @@ describe("agentic.ui.ChatWidget", function()
                 assert.spy(submit_spy).was.called(1)
                 assert.equal("line1\nline2", submit_spy.calls[1][1])
                 assert.same({ "" }, input_lines())
+            end)
+
+            it("tags and keeps the text when the session defers", function()
+                Config.settings.send_register = "a"
+                vim.fn.setreg("a", "untouched")
+                set_input({ "line1", "line2" })
+                local code_buf = widget.buf_nrs.code
+                vim.bo[code_buf].modifiable = true
+                vim.api.nvim_buf_set_lines(code_buf, 0, -1, false, { "ctx" })
+                submit_spy = spy.new(function()
+                    return false
+                end)
+                widget.on_submit_input = submit_spy
+
+                widget:submit()
+
+                assert.spy(submit_spy).was.called(1)
+                assert.same({ "line1", "line2" }, input_lines())
+                -- One tag over the whole submitted range.
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    widget.buf_nrs.input,
+                    ns,
+                    0,
+                    -1,
+                    { details = true }
+                )
+                assert.equal(1, #marks)
+                assert.equal(0, marks[1][2])
+                assert.equal(1, marks[1][4].end_row)
+                -- Nothing was sent, so the context panels keep their contents
+                -- and the register is not written.
+                assert.same(
+                    { "ctx" },
+                    vim.api.nvim_buf_get_lines(code_buf, 0, -1, false)
+                )
+                assert.equal("untouched", vim.fn.getreg("a"))
+                assert.is_false(vim.bo[widget.buf_nrs.input].modified)
+            end)
+
+            it("passes force through from the write commands", function()
+                set_input({ "line1" })
+
+                -- Fire the BufWriteCmd rather than `:write`: the `acwrite`
+                -- buftype that lets `:write` reach it is set in a vim.schedule
+                -- that has not run yet under the test harness.
+                vim.api.nvim_exec_autocmds("BufWriteCmd", {
+                    buffer = widget.buf_nrs.input,
+                })
+
+                assert.spy(submit_spy).was.called(1)
+                assert.is_true(submit_spy.calls[1][2].force)
             end)
         end)
 
@@ -1045,17 +1100,15 @@ describe("agentic.ui.ChatWidget", function()
 
         before_each(function()
             vim.cmd("tabnew")
-            submit_spy = spy.new(function() end)
+            submit_spy = spy.new(function()
+                return true
+            end)
             widget = ChatWidget:new(
                 vim.api.nvim_get_current_tabpage(),
                 submit_spy --[[@as function]]
             )
             widget:show()
             vim.api.nvim_set_current_win(widget.win_nrs.input)
-            -- Default to generating so queue keymaps defer rather than send.
-            widget.on_query_generating = function()
-                return true
-            end
         end)
 
         after_each(function()
@@ -1100,7 +1153,7 @@ describe("agentic.ui.ChatWidget", function()
             end, marks)
         end
 
-        it("tags the cursor line while generating, does not send", function()
+        it("tags the cursor line and never sends, even when idle", function()
             set_input({ "one", "two", "three" })
             vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
 
@@ -1109,21 +1162,6 @@ describe("agentic.ui.ChatWidget", function()
             assert.same({ { 0, 0 } }, tags())
             assert.spy(submit_spy).was.called(0)
             assert.same({ "one", "two", "three" }, input_lines())
-        end)
-
-        it("sends immediately when idle (no turn to defer to)", function()
-            widget.on_query_generating = function()
-                return false
-            end
-            set_input({ "one", "two" })
-            vim.api.nvim_win_set_cursor(widget.win_nrs.input, { 1, 0 })
-
-            widget:_queue_line()
-
-            assert.spy(submit_spy).was.called(1)
-            assert.equal("one", submit_spy.calls[1][1])
-            assert.equal(0, #tags())
-            assert.same({ "two" }, input_lines())
         end)
 
         it("re-queueing an overlapping range replaces, never stacks", function()
@@ -1178,22 +1216,32 @@ describe("agentic.ui.ChatWidget", function()
             assert.same({ "one", "two", "three" }, input_lines())
         end)
 
-        it("drain returns regions in buffer order and deletes them", function()
+        it("reads regions in buffer order without consuming them", function()
             set_input({ "one", "two", "three" })
             -- Queue bottom then top: buffer order must still be top-to-bottom.
             widget:_queue_line_range(2, 2)
             widget:_queue_line_range(0, 0)
 
-            local text = widget:drain_queued_regions()
+            assert.equal("one\n\nthree", widget:queued_text())
+            -- A caller that decides not to dispatch leaves them visible.
+            assert.equal(2, #tags())
+            assert.same({ "one", "two", "three" }, input_lines())
+        end)
 
-            assert.equal("one\n\nthree", text)
+        it("consuming deletes the regions' text and their tags", function()
+            set_input({ "one", "two", "three" })
+            widget:_queue_line_range(2, 2)
+            widget:_queue_line_range(0, 0)
+
+            widget:consume_queued_regions()
+
             assert.equal(0, #tags())
             assert.same({ "two" }, input_lines())
         end)
 
-        it("drain returns nil when nothing is queued", function()
+        it("reads nil when nothing is queued", function()
             set_input({ "one" })
-            assert.is_nil(widget:drain_queued_regions())
+            assert.is_nil(widget:queued_text())
         end)
 
         it("clamps a count past buffer end (no crash)", function()

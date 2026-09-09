@@ -41,10 +41,9 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field tab_page_id integer
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
---- @field on_submit_input fun(prompt: string) external callback to be called when user submits the input
+--- @field on_submit_input fun(prompt: string, opts?: agentic.SessionManager.SubmitOpts): boolean external callback for a submitted prompt; false means it was deferred and the range should be tagged
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
 --- @field on_hide? fun() external callback called after the widget is hidden
---- @field on_query_generating? fun(): boolean external callback: is the agent generating a turn right now?
 --- @field _hiding boolean re-entrancy guard for hide()
 --- @field _draining? boolean guard so drain's own buffer edits don't self-untag
 --- @field _unread_badge? string Badge appended to chat buffer name (e.g. "[done]", "[?]")
@@ -167,7 +166,7 @@ function ChatWidget._install_quit_guard()
 end
 
 --- @param tab_page_id integer
---- @param on_submit_input fun(prompt: string)
+--- @param on_submit_input fun(prompt: string, opts: agentic.SessionManager.SubmitOpts|nil): boolean
 function ChatWidget:new(tab_page_id, on_submit_input)
     self = setmetatable({}, self)
 
@@ -383,6 +382,10 @@ end
 --- @field text string
 --- @field delete_range agentic.ui.ChatWidget.SendDeleteRange
 
+--- @class agentic.ui.ChatWidget.SubmitOpts
+--- @field send? agentic.ui.ChatWidget.SendOpts Slice to submit; the whole input buffer when absent
+--- @field force? boolean Send now even if the session would defer the prompt
+
 --- Copy sent text into `Config.settings.send_register` if configured.
 --- @param opts agentic.ui.ChatWidget.SendOpts
 local function copy_to_send_register(opts)
@@ -412,35 +415,59 @@ local function apply_send_delete(bufnr, range)
     end
 end
 
---- Submit the current prompt. With no argument, submits the whole input buffer
---- and clears it. With a send argument, submits a slice and deletes the sent
---- range (optionally saving to a register). Single submit entrypoint — the
---- submit keymap, `:w` (BufWriteCmd), and the `:Wq` / `:X` safeguards all funnel
---- through here.
---- @param send? agentic.ui.ChatWidget.SendOpts
-function ChatWidget:submit(send)
+--- Submit a prompt. With no `text`, submits the whole input buffer; with it,
+--- submits that slice and saves it to the send register. Single submit
+--- entrypoint — the submit keymap, `:w` (BufWriteCmd) and the `:Wq` / `:X`
+--- safeguards all funnel through here.
+---
+--- The session decides whether the prompt goes now. If it defers, the lines
+--- stay put and are tagged as a queued region instead of being deleted, and
+--- the context panels keep their contents — nothing has been sent yet. A
+--- charwise range widens to whole lines, since a tag is line-granular.
+--- @param opts? agentic.ui.ChatWidget.SubmitOpts
+function ChatWidget:submit(opts)
+    opts = opts or {}
     vim.cmd("stopinsert")
 
     --- @type string
     local prompt
+    --- @type agentic.ui.ChatWidget.SendDeleteRange
+    local range
+    local send = opts.send
     if send then
         prompt = send.text:match("^%s*(.-)%s*$")
+        range = send.delete_range
     else
         local lines =
             vim.api.nvim_buf_get_lines(self.buf_nrs.input, 0, -1, false)
         prompt = table.concat(lines, "\n"):match("^%s*(.-)%s*$")
+        range = {
+            sr = 0,
+            sc = 0,
+            er = math.max(0, #lines - 1),
+            ec = 0,
+            mode = "line",
+        }
     end
 
     if not prompt or prompt == "" or not prompt:match("%S") then
         return
     end
 
+    local dispatched =
+        self.on_submit_input(prompt, { from_buffer = true, force = opts.force })
+    if not dispatched then
+        self:_queue_line_range(range.sr, range.er)
+        -- The text is held, not unsaved: `:w` deferring would otherwise leave
+        -- the buffer modified and re-prompt on close.
+        vim.bo[self.buf_nrs.input].modified = false
+        return
+    end
+
     if send then
         copy_to_send_register(send)
-        apply_send_delete(self.buf_nrs.input, send.delete_range)
-    else
-        vim.api.nvim_buf_set_lines(self.buf_nrs.input, 0, -1, false, {})
     end
+    apply_send_delete(self.buf_nrs.input, range)
     vim.bo[self.buf_nrs.input].modified = false
 
     BufHelpers.with_modifiable(self.buf_nrs.code, function(bufnr)
@@ -454,8 +481,6 @@ function ChatWidget:submit(send)
     BufHelpers.with_modifiable(self.buf_nrs.diagnostics, function(bufnr)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
     end)
-
-    self.on_submit_input(prompt)
 
     self:close_optional_window("code")
     self:close_optional_window("files")
@@ -514,8 +539,10 @@ function ChatWidget:_send_line()
         return
     end
     self:submit({
-        text = text,
-        delete_range = { sr = sr, sc = 0, er = er, ec = 0, mode = "line" },
+        send = {
+            text = text,
+            delete_range = { sr = sr, sc = 0, er = er, ec = 0, mode = "line" },
+        },
     })
 end
 
@@ -557,7 +584,7 @@ function ChatWidget:_send_operator(type)
     if not text:match("%S") then
         return
     end
-    self:submit({ text = text, delete_range = delete_range })
+    self:submit({ send = { text = text, delete_range = delete_range } })
 end
 
 function ChatWidget:_send_visual()
@@ -615,15 +642,7 @@ function ChatWidget:_send_visual()
     -- selection (which would otherwise trigger vim's own selection edit).
     vim.cmd("normal! \27")
 
-    self:submit({ text = text, delete_range = delete_range })
-end
-
---- Whether the agent is mid-turn. The queue keymaps only defer while it is;
---- idle they degrade to the matching send-now action (no turn to defer to).
---- @return boolean
-function ChatWidget:_is_generating()
-    return self.on_query_generating ~= nil
-        and self.on_query_generating() == true
+    self:submit({ send = { text = text, delete_range = delete_range } })
 end
 
 --- Delete every queued-region extmark whose line span intersects [sr, er]
@@ -671,12 +690,9 @@ local function span_has_content(buf, sr, er)
     return #lines > 0 and table.concat(lines, "\n"):match("%S") ~= nil
 end
 
---- Queue N lines (vim.v.count1) from the cursor, or send them now when idle.
+--- Queue N lines (vim.v.count1) from the cursor. Always tags, so the binding's
+--- meaning does not depend on whether a turn happens to be running.
 function ChatWidget:_queue_line()
-    if not self:_is_generating() then
-        self:_send_line()
-        return
-    end
     local buf = self.buf_nrs.input
     local sr = vim.api.nvim_win_get_cursor(0)[1] - 1
     local er =
@@ -687,13 +703,9 @@ function ChatWidget:_queue_line()
 end
 
 --- Operatorfunc callback for queueing (after `<S-CR>{motion}`). Queues the
---- full line(s) the motion covers, or sends now when idle.
+--- full line(s) the motion covers.
 --- @param type "char"|"line"|"block"
 function ChatWidget:_queue_operator(type)
-    if not self:_is_generating() then
-        self:_send_operator(type)
-        return
-    end
     if type == "block" then
         Logger.debug("queue: blockwise motion ignored")
         return
@@ -709,12 +721,8 @@ function ChatWidget:_queue_operator(type)
     end
 end
 
---- Queue the selected line(s), or send them now when idle.
+--- Queue the selected line(s).
 function ChatWidget:_queue_visual()
-    if not self:_is_generating() then
-        self:_send_visual()
-        return
-    end
     local mode = vim.api.nvim_get_mode().mode
     if mode == "\22" then
         Logger.debug("queue: blockwise visual ignored")
@@ -735,13 +743,11 @@ function ChatWidget:_queue_visual()
     self:_queue_line_range(sr, er)
 end
 
---- Collect queued regions in buffer order (top-to-bottom = priority), delete
---- their text from the input buffer, clear the tags, and return the regions'
---- text joined by blank lines. Returns nil when nothing is queued. Deletion
---- mirrors partial-send (a dispatched region leaves the input buffer);
---- bottom-to-top keeps row indices valid across deletes.
+--- The queued regions' text in buffer order (top-to-bottom = priority), joined
+--- by blank lines, or nil when nothing is queued. Reads only, so a caller that
+--- decides not to dispatch leaves the regions tagged and visible.
 --- @return string|nil
-function ChatWidget:drain_queued_regions()
+function ChatWidget:queued_text()
     local buf = self.buf_nrs.input
     local marks =
         vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
@@ -756,6 +762,16 @@ function ChatWidget:drain_queued_regions()
             vim.api.nvim_buf_get_lines(buf, mark[2], mark[4].end_row + 1, false)
         table.insert(texts, table.concat(lines, "\n"))
     end
+    return table.concat(texts, "\n\n")
+end
+
+--- Delete the queued regions' text from the input buffer and clear their tags,
+--- mirroring partial-send: a dispatched region leaves the input buffer.
+--- Bottom-to-top keeps row indices valid across the deletes.
+function ChatWidget:consume_queued_regions()
+    local buf = self.buf_nrs.input
+    local marks =
+        vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
 
     self._draining = true
     for i = #marks, 1, -1 do
@@ -764,8 +780,6 @@ function ChatWidget:drain_queued_regions()
         vim.api.nvim_buf_set_lines(buf, mark[2], mark[4].end_row + 1, false, {})
     end
     self._draining = false
-
-    return table.concat(texts, "\n\n")
 end
 
 --- Drop every queued region, leaving the text as ordinary draft in place.
@@ -899,10 +913,12 @@ function ChatWidget:_setup_write_submit()
         return
     end
 
+    -- The write commands are the deliberate escape hatch: send now regardless
+    -- of what the session would otherwise defer for.
     vim.api.nvim_create_autocmd("BufWriteCmd", {
         buffer = input_buf,
         callback = function()
-            self:submit()
+            self:submit({ force = true })
         end,
     })
 
@@ -914,7 +930,7 @@ function ChatWidget:_setup_write_submit()
     -- buffer-local `cnoreabbrev`.
     for _, pair in ipairs({ { "Wq", "wq" }, { "X", "x" } }) do
         vim.api.nvim_buf_create_user_command(input_buf, pair[1], function(opts)
-            self:submit()
+            self:submit({ force = true })
             if opts.bang then
                 self:hide()
             else

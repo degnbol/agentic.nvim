@@ -9,30 +9,24 @@ describe("agentic.session_recovery", function()
         --- @type TestSpy
         local submit_spy
 
-        --- @param queued string[]|nil
+        --- @param drained boolean Whether queued regions supplied the continuation
         --- @return agentic.SessionManager
-        local function session_with(queued)
+        local function session_with(drained)
             submit_spy = spy.new(function() end)
             return {
                 session_id = "s1",
                 _destroyed = false,
                 _retry_attempt = 1,
-                _queued_prompts = queued,
+                _usage_reset_epoch = os.time() + 600,
                 _handle_input_submit = submit_spy,
+                _drain_queue = function()
+                    return drained
+                end,
             } --[[@as agentic.SessionManager]]
         end
 
-        it("sends what the user queued during the pause", function()
-            local session = session_with({ "message one", "message two" })
-
-            Recovery._fire_auto_continue(session)
-
-            assert.spy(submit_spy).was.called(1)
-            assert.equal("message one\n\nmessage two", submit_spy.calls[1][2])
-        end)
-
         it("sends 'continue' when nothing was queued", function()
-            local session = session_with(nil)
+            local session = session_with(false)
 
             Recovery._fire_auto_continue(session)
 
@@ -40,19 +34,57 @@ describe("agentic.session_recovery", function()
             assert.equal("continue", submit_spy.calls[1][2])
         end)
 
-        it("clears the queue so a later fire does not resend", function()
-            local session = session_with({ "message one" })
+        -- The queued regions ARE the continuation; an extra "continue" would
+        -- fire a second concurrent turn.
+        it("sends no 'continue' when queued regions drained", function()
+            local session = session_with(true)
 
             Recovery._fire_auto_continue(session)
+
+            assert.spy(submit_spy).was.called(0)
+        end)
+
+        -- The gate must open first, or it would defer both branches above and
+        -- the pause would never end.
+        it("releases the usage gate before dispatching", function()
+            local session = session_with(false)
+            local epoch_at_submit
+            session._handle_input_submit = spy.new(function(sm)
+                epoch_at_submit = sm._usage_reset_epoch
+            end)
+
             Recovery._fire_auto_continue(session)
 
-            assert.spy(submit_spy).was.called(2)
-            assert.equal("continue", submit_spy.calls[2][2])
+            assert.is_nil(epoch_at_submit)
+            assert.is_nil(session._usage_reset_epoch)
+        end)
+
+        -- cancel_retry_timer(sm, false) spares the attempt counter. Resetting
+        -- it would stop offer_auto_continue's MAX_RETRIES check from ever
+        -- tripping, retrying every 130s indefinitely.
+        it("keeps the attempt counter so a repeat limit backs off", function()
+            local session = session_with(false)
+
+            Recovery._fire_auto_continue(session)
+
+            assert.equal(1, session._retry_attempt)
         end)
 
         it("sends nothing for a destroyed session", function()
-            local session = session_with({ "message one" })
+            local session = session_with(false)
             session._destroyed = true
+
+            Recovery._fire_auto_continue(session)
+
+            assert.spy(submit_spy).was.called(0)
+        end)
+
+        -- respawn_after_usage_limit clears session_id and repopulates it from
+        -- an async new_session, so this window is reachable. An unprompted turn
+        -- must not land on a half-respawned provider.
+        it("sends nothing without a session", function()
+            local session = session_with(false)
+            session.session_id = nil
 
             Recovery._fire_auto_continue(session)
 

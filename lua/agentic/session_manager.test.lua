@@ -416,6 +416,49 @@ describe("agentic.SessionManager", function()
                 s:revert()
             end
         end)
+
+        -- /new is exempt from the deferral gate precisely so it stays
+        -- reachable to unwedge one. A load or prompt callback that never
+        -- arrives would otherwise defer every submit into the fresh session.
+        it("opens every gate on session reset (/new, /clear)", function()
+            local Recovery = require("agentic.session_recovery")
+            local SlashCommands = require("agentic.acp.slash_commands")
+            local stubs = {
+                spy.stub(Recovery, "remove_reauth_keymap"),
+                spy.stub(Recovery, "cancel_health_check_timer"),
+                spy.stub(Recovery, "cancel_retry_timer"),
+                spy.stub(SlashCommands, "setCommands"),
+            }
+
+            local session = {
+                session_id = nil, -- skip the cancel/clear-content block
+                agent = { state = "ready" },
+                _loading = true,
+                _prompt_pending = 2,
+                _usage_reset_epoch = os.time() + 3600,
+                _pending_bufferless_prompt = "stranded",
+                permission_manager = { clear = function() end },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    set_chat_title = function() end,
+                },
+                _cancel_session = SessionManager._cancel_session,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+            } --[[@as agentic.SessionManager]]
+
+            session:_cancel_session()
+
+            assert.is_false(session._loading)
+            assert.equal(0, session._prompt_pending)
+            assert.is_nil(session._usage_reset_epoch)
+            assert.is_nil(session._pending_bufferless_prompt)
+            -- Only the fresh session's own readiness is left to wait on.
+            assert.equal("not_ready", session:_submit_defer_reason("hello"))
+
+            for _, s in ipairs(stubs) do
+                s:revert()
+            end
+        end)
     end)
 
     describe("_budget_status", function()
@@ -609,6 +652,7 @@ describe("agentic.SessionManager", function()
                 _cancel_retry_timer = noop,
                 _remove_reauth_keymap = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
+                _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _build_handlers = SessionManager._build_handlers,
                 _apply_default_trust = noop,
@@ -674,6 +718,65 @@ describe("agentic.SessionManager", function()
             captured_load_cb(nil, { message = "not found" })
 
             assert.is_false(session._restoring)
+            notify_stub:revert()
+        end)
+
+        -- session_id is assigned before the load RPC, so without this flag the
+        -- readiness check reads clear while the session is still replaying.
+        it("defers submits for the length of the load", function()
+            local session = make_load_session()
+            session._prompt_pending = 0
+            session.agent.state = "ready"
+            session._submit_defer_reason = SessionManager._submit_defer_reason
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+
+            assert.is_true(session._loading)
+            assert.equal("loading", session:_submit_defer_reason("hello"))
+
+            captured_load_cb(nil, nil)
+
+            assert.is_false(session._loading)
+            assert.is_nil(session:_submit_defer_reason("hello"))
+        end)
+
+        it("clears the load gate when the load fails", function()
+            local session = make_load_session()
+            local notify_stub = spy.stub(Logger, "notify")
+            session._fallback_restore_from_local = function() end
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            captured_load_cb(nil, { message = "not found" })
+
+            assert.is_false(session._loading)
+            notify_stub:revert()
+        end)
+
+        -- The success branch is the only drain on this path, and the failure
+        -- branch must not also drain — it reaches one via the local-history
+        -- fallback, so draining here too would double-send.
+        it("drains once on load success and never on failure", function()
+            local drains = 0
+            local session = make_load_session()
+            session._dispatch_deferred_prompts = function()
+                drains = drains + 1
+            end
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            captured_load_cb(nil, nil)
+            assert.equal(1, drains)
+
+            local notify_stub = spy.stub(Logger, "notify")
+            local failed = make_load_session()
+            failed._fallback_restore_from_local = function() end
+            failed._dispatch_deferred_prompts = function()
+                drains = drains + 1
+            end
+
+            failed:_do_load_acp_session("test-session-id", "/tmp")
+            captured_load_cb(nil, { message = "not found" })
+
+            assert.equal(1, drains)
             notify_stub:revert()
         end)
 
@@ -1133,6 +1236,46 @@ describe("agentic.SessionManager", function()
             end
         )
 
+        -- A usage limit is the main reason to switch provider at all. Carrying
+        -- the outgoing provider's reset time over would defer every submit to
+        -- the new one until it elapsed.
+        it("opens the usage gate for the new provider", function()
+            local AgentInstance = require("agentic.acp.agent_instance")
+            get_instance_stub = spy.stub(AgentInstance, "get_instance")
+            get_instance_stub:invokes(function(_provider, on_ready)
+                local agent = {
+                    provider_config = { name = "New" },
+                    create_session = spy.new(function() end),
+                }
+                on_ready(agent)
+                return agent
+            end)
+
+            local session = {
+                is_generating = false,
+                session_id = "old-session",
+                _usage_reset_epoch = os.time() + 3600,
+                _prompt_pending = 0,
+                agent = {
+                    cancel_session = spy.new(function() end),
+                    provider_config = { name = "Old" },
+                },
+                permission_manager = { clear = function() end },
+                todo_list = { clear = function() end },
+                message_writer = { write_notice = spy.new(function() end) },
+                chat_history = { messages = {}, session_id = "old" },
+                _is_first_message = false,
+                _history_to_send = nil,
+                new_session = spy.new(function() end),
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+                switch_provider = SessionManager.switch_provider,
+            } --[[@as agentic.SessionManager]]
+
+            session:switch_provider()
+
+            assert.is_nil(session._usage_reset_epoch)
+        end)
+
         it("no-ops soft cancel when session_id is nil", function()
             local AgentInstance = require("agentic.acp.agent_instance")
             local mock_agent = {
@@ -1168,71 +1311,6 @@ describe("agentic.SessionManager", function()
             assert.spy(session.permission_manager.clear).was.called(1)
             assert.spy(session.todo_list.clear).was.called(1)
             assert.spy(session.new_session).was.called(1)
-        end)
-
-        it("drains queued prompts to the new provider in on_created", function()
-            local AgentInstance = require("agentic.acp.agent_instance")
-            local mock_new_agent = {
-                provider_config = { name = "New Provider" },
-                create_session = spy.new(function() end),
-            }
-            get_instance_stub = spy.stub(AgentInstance, "get_instance")
-            get_instance_stub:invokes(function(_provider, on_ready)
-                on_ready(mock_new_agent)
-                return mock_new_agent
-            end)
-
-            local handle_input_spy = spy.new(function() end)
-            local captured_on_created
-            local new_session_spy = spy.new(function(_self, opts)
-                captured_on_created = opts.on_created
-            end)
-
-            Config.provider = "target-provider"
-
-            local session = {
-                is_generating = false,
-                session_id = "old-session",
-                _queued_prompts = { "message one", "message two" },
-
-                agent = {
-                    cancel_session = spy.new(function() end),
-                    provider_config = { name = "Old" },
-                },
-                permission_manager = { clear = function() end },
-                todo_list = { clear = function() end },
-                message_writer = { write_notice = spy.new(function() end) },
-                chat_history = { messages = {}, session_id = "old" },
-                _is_first_message = false,
-                _history_to_send = nil,
-                _handle_input_submit = handle_input_spy,
-                new_session = new_session_spy,
-                switch_provider = SessionManager.switch_provider,
-            } --[[@as agentic.SessionManager]]
-
-            session:switch_provider()
-
-            -- on_created should have been captured
-            assert.is_not_nil(captured_on_created)
-
-            -- Simulate the new session being created
-            session.chat_history = {
-                messages = {},
-                session_id = "new-session",
-                timestamp = os.time(),
-            }
-            captured_on_created()
-
-            -- Verify _handle_input_submit was called with combined prompts
-            -- calls[1] = {self, combined_text} (method call via `:` syntax)
-            assert.spy(handle_input_spy).was.called(1)
-            assert.equal(
-                "message one\n\nmessage two",
-                handle_input_spy.calls[1][2]
-            )
-
-            -- Verify _queued_prompts was cleared by cancel_retry_timer
-            assert.is_nil(session._queued_prompts)
         end)
 
         it("names the new provider in a notice from on_created", function()
@@ -1820,9 +1898,10 @@ describe("agentic.SessionManager", function()
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
                     set_chat_title = noop,
-                    drain_queued_regions = function()
+                    queued_text = function()
                         return nil
                     end,
+                    consume_queued_regions = noop,
                 },
                 permission_manager = {
                     current_request = nil,
@@ -1838,6 +1917,9 @@ describe("agentic.SessionManager", function()
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _drain_queue = SessionManager._drain_queue,
+                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+                _prompt_pending = 0,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -1911,6 +1993,7 @@ describe("agentic.SessionManager", function()
                 _destroyed = false,
                 _retry_attempt = 0,
                 _transient_attempt = 0,
+                _session_epoch = 0,
                 agent = {
                     state = "ready",
                     provider_config = { name = "Test" },
@@ -1964,10 +2047,11 @@ describe("agentic.SessionManager", function()
                     clear_unread_badge = noop,
                     set_unread_badge = noop,
                     set_chat_title = noop,
-                    drain_queued_regions = function()
+                    queued_text = function()
                         sink.drains = (sink.drains or 0) + 1
                         return nil
                     end,
+                    consume_queued_regions = noop,
                 },
                 permission_manager = { current_request = nil, queue = {} },
                 todo_list = { close_if_all_completed = noop },
@@ -1985,8 +2069,80 @@ describe("agentic.SessionManager", function()
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _drain_queue = SessionManager._drain_queue,
+                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+                _prompt_pending = 0,
             } --[[@as agentic.SessionManager]]
         end
+
+        describe("in-flight gate accounting", function()
+            it("releases the gate when the turn's callback lands", function()
+                local session = make_session(nil, nil, {})
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    assert.equal(1, session._prompt_pending)
+                    cb({ stopReason = "end_turn" }, nil)
+                end
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, session._prompt_pending)
+            end)
+
+            -- A cancelled prompt's callback outlives /new or a restore.
+            -- Decrementing then would open the gate under the turn that
+            -- replaced it, which is the concurrency the counter prevents.
+            it("ignores a callback from a superseded session", function()
+                local session = make_session(nil, nil, {})
+                local resolve
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    resolve = cb
+                end
+
+                session:_handle_input_submit("hello")
+                -- /new or a restore between send and callback.
+                session._session_epoch = session._session_epoch + 1
+                session._prompt_pending = 1 -- the replacement turn
+                resolve({ stopReason = "cancelled" }, nil)
+
+                assert.equal(1, session._prompt_pending)
+            end)
+        end)
+
+        describe("drain trigger", function()
+            --- Run one turn that resolves with `response`, no error.
+            --- @param response table|nil
+            --- @return integer drains
+            local function drains_after(response)
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    table.insert(sink.prompts, prompt)
+                    cb(response, nil)
+                end
+                session:_handle_input_submit("hello")
+                return sink.drains
+            end
+
+            it("drains on a normal end_turn", function()
+                assert.equal(1, drains_after({ stopReason = "end_turn" }))
+                assert.equal(1, drains_after({}))
+            end)
+
+            -- <C-c>. The user stopping a turn that went sideways is asking a
+            -- question, not releasing the next task.
+            it("does not drain a cancelled turn", function()
+                assert.equal(0, drains_after({ stopReason = "cancelled" }))
+            end)
+
+            it("does not drain a turn that ended early", function()
+                assert.equal(0, drains_after({ stopReason = "refusal" }))
+                assert.equal(0, drains_after({ stopReason = "max_tokens" }))
+                assert.equal(
+                    0,
+                    drains_after({ stopReason = "max_turn_requests" })
+                )
+            end)
+        end)
 
         it(
             "billing_error offers no reauth, respawn or auto-continue",
@@ -2085,7 +2241,10 @@ describe("agentic.SessionManager", function()
                 assert.equal(0, session._transient_attempt)
                 assert.same({ "hello" }, sink.headings)
                 assert.spy(bell_stub).was.called(1)
-                assert.equal(1, sink.drains)
+                -- An abnormal Stop parks the queue: launching a follow-up onto
+                -- a turn that never finished its work is wrong, and the text
+                -- stays visible in the input buffer meanwhile.
+                assert.equal(0, sink.drains)
                 assert.equal(1, #completions)
                 assert.is_false(completions[1].success)
             end)
@@ -2104,7 +2263,7 @@ describe("agentic.SessionManager", function()
 
                 assert.equal(0, #sink.synthetic)
                 assert.equal(1, #sink.errors)
-                assert.equal(1, sink.drains)
+                assert.equal(0, sink.drains)
             end)
 
             it("does not retry when the agent is not ready", function()
@@ -2386,6 +2545,7 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 tab_page_id = 1,
                 _is_first_message = false,
+                _prompt_pending = 0,
                 agent = { state = "ready", provider_config = { name = "Test" } },
                 message_writer = { write_user_prompt = noop },
                 chat_history = { title = "existing", add_message = noop },
@@ -2399,6 +2559,8 @@ describe("agentic.SessionManager", function()
                 _handle_trust_command = trust_spy,
                 _delete_session = delete_spy,
                 _dispatch_turn = dispatch_spy,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+                _run_local_command = SessionManager._run_local_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
             } --[[@as agentic.SessionManager]]
@@ -2476,6 +2638,175 @@ describe("agentic.SessionManager", function()
             assert.equal("", trust_spy.calls[1][2])
             assert.equal("repo", trust_spy.calls[2][2])
             assert.equal(0, dispatch_spy.call_count)
+        end)
+
+        -- Local commands need no provider round-trip, so the gate must never
+        -- park them: they are how a wedged session gets recovered.
+        it("runs local commands mid-turn and before the session", function()
+            session._prompt_pending = 1
+            assert.is_true(session:_handle_input_submit("/new"))
+
+            session._prompt_pending = 0
+            session.session_id = nil
+            assert.is_true(session:_handle_input_submit("/delete"))
+
+            session._usage_reset_epoch = os.time() + 600
+            assert.is_true(session:_handle_input_submit("/trust repo"))
+
+            assert.equal(1, new_session_spy.call_count)
+            assert.equal(1, delete_spy.call_count)
+            assert.equal(1, trust_spy.call_count)
+            assert.equal(0, dispatch_spy.call_count)
+        end)
+    end)
+
+    describe("_submit_defer_reason", function()
+        --- @return agentic.SessionManager
+        local function ready_session()
+            return {
+                session_id = "s-1",
+                agent = { state = "ready" },
+                _prompt_pending = 0,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("clears a prose submit on a ready idle session", function()
+            assert.is_nil(ready_session():_submit_defer_reason("hello"))
+        end)
+
+        it("defers while a prompt callback is outstanding", function()
+            local session = ready_session()
+            session._prompt_pending = 1
+            assert.equal("in_flight", session:_submit_defer_reason("hello"))
+        end)
+
+        it("defers while a session/load is in flight", function()
+            local session = ready_session()
+            session._loading = true
+            assert.equal("loading", session:_submit_defer_reason("hello"))
+        end)
+
+        it("defers before the session is ready", function()
+            local session = ready_session()
+            session.session_id = nil
+            assert.equal("not_ready", session:_submit_defer_reason("hello"))
+        end)
+
+        it("defers until the reported usage reset time", function()
+            local session = ready_session()
+            session._usage_reset_epoch = os.time() + 600
+            assert.equal("usage_limited", session:_submit_defer_reason("hello"))
+        end)
+
+        -- Without this, disabling auto_continue_on_usage_limit would wedge
+        -- every submit forever: no turn can complete normally, so a
+        -- clear-on-Stop rule would never fire.
+        it("clears once the reset time has passed", function()
+            local session = ready_session()
+            session._usage_reset_epoch = os.time() - 1
+            assert.is_nil(session:_submit_defer_reason("hello"))
+        end)
+    end)
+
+    describe("forced submit", function()
+        --- @param overrides table Applied after construction. A nil value
+        ---        cannot be expressed in a table literal, so pass the string
+        ---        "nil" to clear a field.
+        --- @return agentic.SessionManager, table
+        local function forceable(overrides)
+            local sink = { inner = 0, stopped = 0, actions = {} }
+            local session = {
+                session_id = "s-1",
+                agent = { state = "ready" },
+                _prompt_pending = 0,
+                message_writer = {
+                    write_error_action = function(_self, text)
+                        table.insert(sink.actions, text)
+                    end,
+                },
+                stop_generation = function()
+                    sink.stopped = sink.stopped + 1
+                end,
+                _handle_input_submit_inner = function()
+                    sink.inner = sink.inner + 1
+                end,
+                _submit_defer_reason = SessionManager._submit_defer_reason,
+                _handle_input_submit = SessionManager._handle_input_submit,
+            }
+            for k, v in pairs(overrides) do
+                session[k] = v ~= "nil" and v or nil
+            end
+            --- @type agentic.SessionManager
+            local typed = session
+            return typed, sink
+        end
+
+        it("sends past a running turn, cancelling it first", function()
+            local session, sink = forceable({ _prompt_pending = 1 })
+
+            assert.is_true(session:_handle_input_submit("hi", { force = true }))
+
+            assert.equal(1, sink.stopped)
+            assert.equal(1, sink.inner)
+        end)
+
+        it("sends past a usage limit without cancelling", function()
+            local session, sink =
+                forceable({ _usage_reset_epoch = os.time() + 600 })
+
+            assert.is_true(session:_handle_input_submit("hi", { force = true }))
+
+            assert.equal(0, sink.stopped)
+            assert.equal(1, sink.inner)
+        end)
+
+        -- There is no session to send into, so forcing would hand send_prompt
+        -- a nil id and lose the text: ChatWidget treats a dispatch as consumed
+        -- and deletes it from the input buffer.
+        it("still defers when there is no session to send to", function()
+            for _, state in ipairs({ "not_ready", "loading" }) do
+                local overrides = state == "loading" and { _loading = true }
+                    or { session_id = "nil" }
+                local session, sink = forceable(overrides)
+
+                assert.is_false(
+                    session:_handle_input_submit("hi", { force = true })
+                )
+
+                assert.equal(0, sink.inner)
+                assert.equal("hi", session._pending_bufferless_prompt)
+            end
+        end)
+
+        -- A local command arrives ungated, and must leave a running turn alone.
+        it("leaves the turn alone for an ungated local command", function()
+            local session, sink = forceable({ _prompt_pending = 1 })
+
+            assert.is_true(session:_handle_input_submit("/context"))
+
+            assert.equal(0, sink.stopped)
+            assert.equal(1, sink.inner)
+        end)
+
+        -- A held prompt with no buffer range has nothing on screen to show for
+        -- it, so the reason has to be said.
+        it("writes why a bufferless prompt was held", function()
+            local session, sink = forceable({ session_id = "nil" })
+
+            session:_handle_input_submit("hi")
+
+            assert.equal(1, #sink.actions)
+            assert.is_true(sink.actions[1]:find("held") ~= nil)
+        end)
+
+        it("says nothing for a buffer submit, which is tagged", function()
+            local session, sink = forceable({ session_id = "nil" })
+
+            session:_handle_input_submit("hi", { from_buffer = true })
+
+            assert.equal(0, #sink.actions)
+            assert.is_nil(session._pending_bufferless_prompt)
         end)
     end)
 
@@ -3007,102 +3338,104 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("_drain_queue", function()
-        it("dispatches queued regions when no gate is active", function()
-            local submit_spy = spy.new(function() end)
-            local drained = false
-            local sm = {
-                _retry_timer = nil,
+        --- @param queued string|nil Text the input buffer's regions hold
+        --- @param gate agentic.SubmitDeferReason|nil
+        local function drainable(queued, gate)
+            return {
+                consumed = false,
+                inner_spy = spy.new(function() end),
                 widget = {
-                    drain_queued_regions = function()
-                        drained = true
-                        return "queued text"
+                    queued_text = function()
+                        return queued
                     end,
                 },
-                _handle_input_submit = submit_spy,
+                _submit_defer_reason = function()
+                    return gate
+                end,
+                _drain_queue = SessionManager._drain_queue,
             }
-            SessionManager._drain_queue(sm)
-            assert.is_true(drained)
-            assert.spy(submit_spy).was.called(1)
-            assert.equal("queued text", submit_spy.calls[1][2])
+        end
+
+        --- @param sm table
+        local function run(sm)
+            sm.widget.consume_queued_regions = function()
+                sm.consumed = true
+            end
+            sm._handle_input_submit_inner = sm.inner_spy
+            return sm:_drain_queue()
+        end
+
+        it("dispatches queued regions when no gate is active", function()
+            local sm = drainable("queued text", nil)
+
+            assert.is_true(run(sm))
+
+            assert.is_true(sm.consumed)
+            assert.spy(sm.inner_spy).was.called(1)
+            assert.equal("queued text", sm.inner_spy.calls[1][2])
         end)
 
-        it("leaves regions tagged while a retry timer is armed", function()
-            local drained = false
-            local submit_spy = spy.new(function() end)
-            local sm = {
-                _retry_timer = 123,
-                widget = {
-                    drain_queued_regions = function()
-                        drained = true
-                        return "x"
-                    end,
-                },
-                _handle_input_submit = submit_spy,
-            }
-            SessionManager._drain_queue(sm)
-            assert.is_false(drained)
-            assert.spy(submit_spy).was.called(0)
+        -- The regions must stay tagged and visible: consuming them first and
+        -- finding the gate closed afterwards would eat the text.
+        it("leaves regions tagged while the gate is closed", function()
+            local sm = drainable("x", "usage_limited")
+
+            assert.is_false(run(sm))
+
+            assert.is_false(sm.consumed)
+            assert.spy(sm.inner_spy).was.called(0)
         end)
 
         it("does nothing when the queue is empty", function()
-            local submit_spy = spy.new(function() end)
-            local sm = {
-                _retry_timer = nil,
-                widget = {
-                    drain_queued_regions = function()
-                        return nil
-                    end,
-                },
-                _handle_input_submit = submit_spy,
-            }
-            SessionManager._drain_queue(sm)
-            assert.spy(submit_spy).was.called(0)
+            local sm = drainable(nil, nil)
+
+            assert.is_false(run(sm))
+
+            assert.spy(sm.inner_spy).was.called(0)
         end)
     end)
 
-    describe("_flush_pending_input", function()
-        -- Regression: flushing pending text must not ALSO drain the region
-        -- queue in the same tick — that fires a second concurrent send_prompt
-        -- (the flushed turn's own Stop drains the regions instead).
-        it("submits pending text without also draining", function()
-            local inner_spy = spy.new(function() end)
+    describe("_dispatch_deferred_prompts", function()
+        -- Regression: sending the retained prompt must not ALSO drain the
+        -- region queue in the same tick — that fires a second concurrent
+        -- send_prompt (the retained prompt's own Stop drains the regions).
+        it("sends the retained prompt without also draining", function()
+            local submit_spy = spy.new(function() end)
             local drained = false
             local sm = {
-                _pending_input = "hi",
-                _handle_input_submit_inner = inner_spy,
-                _drain_queue = SessionManager._drain_queue,
-                _retry_timer = nil,
-                widget = {
-                    drain_queued_regions = function()
-                        drained = true
-                        return "regions"
-                    end,
-                },
-                _handle_input_submit = function() end,
+                _pending_bufferless_prompt = "hi",
+                _handle_input_submit = submit_spy,
+                _drain_queue = function()
+                    drained = true
+                    return true
+                end,
+                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
             }
-            SessionManager._flush_pending_input(sm)
-            assert.spy(inner_spy).was.called(1)
+
+            sm:_dispatch_deferred_prompts()
+
+            assert.spy(submit_spy).was.called(1)
+            assert.equal("hi", submit_spy.calls[1][2])
+            assert.is_nil(sm._pending_bufferless_prompt)
             assert.is_false(drained)
         end)
 
-        it("drains queued regions when there is no pending text", function()
+        it("drains queued regions when nothing is retained", function()
             local drained = false
             local sm = {
-                _pending_input = nil,
-                _handle_input_submit_inner = function()
-                    error("should not submit with no pending input")
+                _pending_bufferless_prompt = nil,
+                _handle_input_submit = function()
+                    error("should not submit with nothing retained")
                 end,
-                _drain_queue = SessionManager._drain_queue,
-                _retry_timer = nil,
-                widget = {
-                    drain_queued_regions = function()
-                        drained = true
-                        return nil
-                    end,
-                },
-                _handle_input_submit = function() end,
+                _drain_queue = function()
+                    drained = true
+                    return false
+                end,
+                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
             }
-            SessionManager._flush_pending_input(sm)
+
+            sm:_dispatch_deferred_prompts()
+
             assert.is_true(drained)
         end)
     end)

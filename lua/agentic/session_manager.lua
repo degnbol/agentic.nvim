@@ -94,12 +94,14 @@ end
 --- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
 --- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
 --- @field _health_check_timer? uv.uv_timer_t Exponential backoff timer for server health checks
---- @field _pending_input? string Prompt queued before the ACP session is ready
+--- @field _pending_bufferless_prompt? string Deferred prompt with no buffer range to tag
+--- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
+--- @field _usage_reset_epoch? number Epoch seconds the provider's usage limit lifts at
+--- @field _loading? boolean A session/load RPC is in flight
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
 --- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
---- @field _queued_prompts? string[] User messages queued while waiting for auto-continue timer
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
 local SessionManager = {}
 SessionManager.__index = SessionManager
@@ -210,6 +212,7 @@ function SessionManager:new(tab_page_id)
         _plan_exit_pending = false,
         _retry_attempt = 0,
         _transient_attempt = 0,
+        _prompt_pending = 0,
         _checktime_scheduled = false,
         _tool_call_owner = {},
         _open_tasks = {},
@@ -255,16 +258,12 @@ function SessionManager:new(tab_page_id)
     self.chat_history = ChatHistory:new()
     self._hook_records = HookRecordReader:new()
 
-    self.widget = ChatWidget:new(tab_page_id, function(input_text)
-        self:_handle_input_submit(input_text)
+    self.widget = ChatWidget:new(tab_page_id, function(input_text, opts)
+        return self:_handle_input_submit(input_text, opts)
     end)
 
     self.widget.on_refresh = function()
         self:_refresh()
-    end
-
-    self.widget.on_query_generating = function()
-        return self.is_generating
     end
 
     self.widget.on_hide = function()
@@ -651,6 +650,12 @@ function SessionManager:_refresh()
         self.status_indicator:stop()
         self.subagent_status_indicator:stop()
     end
+
+    -- Release the gate states a lost callback can wedge. A prompt callback or
+    -- a session/load that never completes would otherwise defer every later
+    -- submit with no way back, and unwedging that is what this function is for.
+    self._prompt_pending = 0
+    self._loading = false
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display
     -- (rejection suppression, chunk tracking, etc.). Cosmetic-only effect
@@ -1825,48 +1830,236 @@ function SessionManager:_notice_model_switched(model_id)
     })
 end
 
---- @param input_text string
-function SessionManager:_handle_input_submit(input_text)
-    -- Intercept /delete before the ready-state guard — it's a local-only
-    -- command that doesn't need the ACP provider.
-    if input_text:match("^/delete%s*$") then
-        self:_delete_session()
-        return
-    end
+--- Commands answered entirely in the client, with no provider round-trip.
+---
+--- Keyed by the exact command word, which carries the word boundary
+--- structurally instead of each entry re-anchoring it: `/newsflash` and
+--- `/new/data/f.csv` are prose because neither yields the word `new`.
+---
+--- `takes_arg = false` rejects any argument, so `/context foo` reaches the
+--- provider as prose. For the rest, `_run_local_command` decides what an empty
+--- argument means.
+--- @type table<string, { takes_arg: boolean }>
+local LOCAL_COMMANDS = {
+    new = { takes_arg = true },
+    clear = { takes_arg = true },
+    context = { takes_arg = false },
+    rename = { takes_arg = true },
+    trust = { takes_arg = true },
+    delete = { takes_arg = false },
+}
 
+--- Split a submit into a local command word and its argument, or nil when the
+--- text is not one of them.
+---
+--- An argument never spans lines, so `/rename a\nb` is prose rather than a
+--- two-line title, and `/new\nStart on X` is prose rather than a session named
+--- `Start on X`. Splitting such a submit into a command turn and a prose turn
+--- is block dispatch's job, not this parser's.
+--- @param text string
+--- @return string|nil word
+--- @return string arg Empty when the command took none
+local function parse_local_command(text)
+    local word, rest = text:match("^/([%w_-]+)([^\n]*)$")
+    if not word then
+        return nil, ""
+    end
+    -- Anything but whitespace after the word means the word never ended there:
+    -- `/trust/etc` is a path, not an edit-trust scope.
+    if rest ~= "" and not rest:match("^%s") then
+        return nil, ""
+    end
+    local spec = LOCAL_COMMANDS[word]
+    if not spec then
+        return nil, ""
+    end
+    local arg = vim.trim(rest)
+    if arg ~= "" and not spec.takes_arg then
+        return nil, ""
+    end
+    return word, arg
+end
+
+--- Run a local command parsed out by `parse_local_command`.
+--- @param word string A key of LOCAL_COMMANDS
+--- @param arg string
+function SessionManager:_run_local_command(word, arg)
+    if word == "new" or word == "clear" then
+        -- Resetting locally avoids a race: the agent might not send an
+        -- identifiable response to act on. /clear through ACP doesn't
+        -- actually reset provider context, so it is handled as /new.
+        local on_created
+        if arg ~= "" then
+            -- An argument names the fresh session, as /rename names the
+            -- current one.
+            on_created = function()
+                self:_rename_session(arg)
+            end
+        end
+        self:new_session({ on_created = on_created })
+    elseif word == "context" then
+        -- ACP providers don't emit context info over the protocol, so this
+        -- shows the last known usage_update locally.
+        self:_display_context_usage()
+    elseif word == "rename" then
+        if arg == "" then
+            self.message_writer:write_message(
+                ACPPayloads.generate_agent_message(
+                    "Usage: `/rename <new name>`"
+                )
+            )
+            self:_finalize_turn()
+            return
+        end
+        self:_rename_session(arg)
+    elseif word == "trust" then
+        self:_handle_trust_command(arg)
+    elseif word == "delete" then
+        self:_delete_session()
+    end
+end
+
+--- @alias agentic.SubmitDeferReason "usage_limited"|"in_flight"|"loading"|"not_ready"
+
+--- What a held prompt is waiting for, for prompts with no queued region to
+--- stand in for them on screen.
+--- @type table<agentic.SubmitDeferReason, string>
+local DEFER_NOTICE = {
+    usage_limited = "Message held — will send when usage resets.",
+    in_flight = "Message held — will send when this turn ends.",
+    loading = "Message held — will send when the session finishes loading.",
+    not_ready = "Message held — will send when the session is ready.",
+}
+
+--- Why `prompt` cannot be dispatched right now, or nil if it can.
+---
+--- Local commands are never deferred — they need no provider round-trip, so
+--- they answer mid-turn and before a session exists, which is what makes
+--- `/new` and `/delete` usable to recover a wedged one.
+---
+--- Ordered most-durable reason first, so the answer names the condition the
+--- user waits longest on.
+--- @param prompt string
+--- @return agentic.SubmitDeferReason|nil
+function SessionManager:_submit_defer_reason(prompt)
+    if parse_local_command(prompt) then
+        return nil
+    end
+    -- The epoch elapsing is itself a clear edge. Without it, disabling
+    -- auto_continue_on_usage_limit would leave every submit deferred forever:
+    -- no turn can complete normally, so a clear-on-Stop rule never fires.
+    if self._usage_reset_epoch and os.time() < self._usage_reset_epoch then
+        return "usage_limited"
+    end
+    -- Not is_generating: stop_generation and _refresh both clear that flag
+    -- while the prompt callback is still pending, so gating on it lets a <CR>
+    -- right after <C-c> fire a concurrent send_prompt whose stale callback
+    -- then clears is_generating under the new turn.
+    if self._prompt_pending > 0 then
+        return "in_flight"
+    end
+    -- session_id is assigned before the session/load RPC, so the readiness
+    -- check below reads clear while a session is still being replayed.
+    if self._loading then
+        return "loading"
+    end
     if not (self.session_id and self.agent and self.agent.state == "ready") then
-        -- Store for _flush_pending_input when session becomes ready
-        self._pending_input = input_text
-        return
+        return "not_ready"
+    end
+    return nil
+end
+
+--- @class agentic.SessionManager.SubmitOpts
+--- @field from_buffer? boolean The caller owns a buffer range and tags it when the submit defers
+--- @field force? boolean Bypass the deferral gate, cancelling a running turn if one is in flight
+
+--- Dispatch a submitted prompt, or report that the gate deferred it.
+---
+--- A deferred submit that came from the input buffer stays there as a tagged
+--- region for the caller to mark; one that did not (`Agentic.send_prompt`,
+--- `Config.keymaps.prompts`, the synthetic "continue") has no range to tag and
+--- is retained here instead, last-write-wins. Those have nothing on screen to
+--- show they were held, so the reason is written to chat.
+--- @param input_text string
+--- @param opts? agentic.SessionManager.SubmitOpts
+--- @return boolean dispatched
+function SessionManager:_handle_input_submit(input_text, opts)
+    opts = opts or {}
+    local reason = self:_submit_defer_reason(input_text)
+    -- `force` bypasses waiting for a turn or a usage reset, but there is no
+    -- session to send into under the other two — forcing would hand
+    -- send_prompt a nil session id and lose the text, since the caller treats
+    -- a dispatch as consumed.
+    local unsendable = reason == "not_ready" or reason == "loading"
+    if reason and (not opts.force or unsendable) then
+        if not opts.from_buffer then
+            self._pending_bufferless_prompt = input_text
+            self.message_writer:write_error_action(DEFER_NOTICE[reason])
+        end
+        return false
+    end
+    -- A forced submit cancels the running turn first: a second concurrent
+    -- send_prompt would strand the first turn's in-flight tool calls, because
+    -- _dispatch_turn resets the per-turn tool state and whichever callback
+    -- returns first clears is_generating under the other. Keyed on the counter
+    -- rather than on `reason == "in_flight"`, since a usage-limited or loading
+    -- session can have a turn in flight too and those reasons outrank it.
+    -- Local commands also arrive ungated, and must leave the turn alone.
+    if opts.force and self._prompt_pending > 0 then
+        self:stop_generation()
     end
     self:_handle_input_submit_inner(input_text)
+    return true
 end
 
---- Send any prompt that was queued before the ACP session was ready.
-function SessionManager:_flush_pending_input()
-    local text = self._pending_input
-    if text then
-        -- The flushed turn reaches its own Stop where _drain_queue dispatches
-        -- any tagged regions; draining here too would double-submit.
-        self._pending_input = nil
-        self:_handle_input_submit_inner(text)
-    else
-        self:_drain_queue()
-    end
-end
-
---- Dispatch the input buffer's queued regions (see ChatWidget.drain_queued_regions)
---- as a single new turn. Composes with the two string queues: while a usage-limit
---- retry timer is armed the regions stay tagged and drain when that gate clears,
---- not now. Called at each gate-clear site and at turn Stop.
-function SessionManager:_drain_queue()
-    if self._retry_timer then
+--- Stop the running turn without ending the session. Safe when nothing is
+--- running.
+---
+--- Leaves `_prompt_pending` alone: the cancelled prompt's callback still
+--- fires (with `stopReason = "cancelled"`) and decrements it there. Clearing
+--- it here would open the in_flight gate while the old turn is still
+--- resolving, so the next submit would race it.
+function SessionManager:stop_generation()
+    if not self.session_id then
         return
     end
-    local text = self.widget:drain_queued_regions()
-    if text and text:match("%S") then
+    self.agent:stop_generation(self.session_id)
+    self.permission_manager:clear()
+    self.is_generating = false
+    self.status_indicator:stop()
+end
+
+--- Dispatch whatever the gate deferred, now that a blocking condition has
+--- cleared benignly. Called at each such edge.
+---
+--- The retained bufferless prompt goes first, and takes the whole call: its
+--- turn reaches its own Stop, where the queued regions drain. Dispatching both
+--- here would fire two concurrent send_prompts.
+function SessionManager:_dispatch_deferred_prompts()
+    local text = self._pending_bufferless_prompt
+    if text then
+        self._pending_bufferless_prompt = nil
         self:_handle_input_submit(text)
+        return
     end
+    self:_drain_queue()
+end
+
+--- Dispatch the input buffer's queued regions as a single new turn.
+---
+--- Re-checks the gate itself, so overlapping conditions (a usage-limit retry
+--- armed during a turn that then ended normally) need no per-case guard at any
+--- call site. Reads the text before consuming it, so a still-gated drain
+--- leaves the regions tagged and visible rather than eating them.
+--- @return boolean dispatched
+function SessionManager:_drain_queue()
+    local text = self.widget:queued_text()
+    if not text or not text:match("%S") or self:_submit_defer_reason(text) then
+        return false
+    end
+    self.widget:consume_queued_regions()
+    self:_handle_input_submit_inner(text)
+    return true
 end
 
 --- @param input_text string
@@ -1874,68 +2067,9 @@ function SessionManager:_handle_input_submit_inner(input_text)
     self.widget:clear_unread_badge()
     self.todo_list:close_if_all_completed()
 
-    -- Intercept /new and /clear to start new session locally, cancelling
-    -- existing one. Necessary to avoid race conditions — the agent might not
-    -- send an identifiable response that could be acted upon. /clear through
-    -- ACP doesn't actually reset provider context, so we handle it as /new.
-    -- An argument names the fresh session, as /rename names the current one.
-    -- The frontier requires whitespace or end-of-string after the command
-    -- word, so `/newsflash: build broken` and `/new/data/f.csv` stay prose;
-    -- [^\n] keeps the title to the submitted line.
-    local reset_arg = input_text:match("^/new%f[%s%z]([^\n]*)$")
-        or input_text:match("^/clear%f[%s%z]([^\n]*)$")
-    if reset_arg then
-        local title = vim.trim(reset_arg)
-        local on_created
-        if title ~= "" then
-            on_created = function()
-                self:_rename_session(title)
-            end
-        end
-        self:new_session({ on_created = on_created })
-        return
-    end
-
-    -- Intercept /context — ACP providers don't emit context info via the protocol,
-    -- so we display the last known usage_update data locally
-    if input_text:match("^/context%s*$") then
-        self:_display_context_usage()
-        return
-    end
-
-    -- Intercept /rename — rename the current session
-    local rename_arg = input_text:match("^/rename%s+(.+)$")
-    if rename_arg then
-        self:_rename_session(rename_arg)
-        return
-    elseif input_text:match("^/rename%s*$") then
-        self.message_writer:write_message(
-            ACPPayloads.generate_agent_message("Usage: `/rename <new name>`")
-        )
-        self:_finalize_turn()
-        return
-    end
-
-    -- Intercept /trust — set scoped auto-approval for file edits this session.
-    -- The frontier requires whitespace or end-of-string after the command word:
-    -- `%s*` alone matches the empty string, so `/trustworthy people` and
-    -- `/trust/etc` would both compile as edit-trust scopes.
-    local trust_arg = input_text:match("^/trust%f[%s%z]%s*(.*)$")
-    if trust_arg then
-        self:_handle_trust_command(vim.trim(trust_arg))
-        return
-    end
-
-    -- Queue message if waiting for usage limit reset — sending now would
-    -- just hit the same limit. The timer callback drains the queue.
-    if self._retry_timer then
-        if not self._queued_prompts then
-            self._queued_prompts = {}
-        end
-        table.insert(self._queued_prompts, input_text)
-        self.message_writer:write_error_action(
-            "Message queued — will send when usage resets."
-        )
+    local word, arg = parse_local_command(input_text)
+    if word then
+        self:_run_local_command(word, arg)
         return
     end
 
@@ -2130,9 +2264,18 @@ function SessionManager:_dispatch_turn(prompt)
 
     local session_id = self.session_id
     local tab_page_id = self.tab_page_id
+    local epoch = self._session_epoch
     -- Capture chat_history before send to avoid race with _cancel_session
     -- replacing self.chat_history while the callback is pending
     local chat_history = self.chat_history
+
+    -- This turn supersedes any pending auto-continue: the user has taken over.
+    -- The gate opens at the reported reset time but the timer fires ~2 min
+    -- later, so without this a turn started in that window is followed by an
+    -- unwanted synthetic "continue". Keep the attempt counter — a repeat limit
+    -- must still back off. No-op when nothing is armed, and _fire_auto_continue
+    -- has already cancelled by the time its own turn reaches here.
+    Recovery.cancel_retry_timer(self, false)
 
     self.is_generating = true
 
@@ -2144,6 +2287,8 @@ function SessionManager:_dispatch_turn(prompt)
     self._next_ordinal = 0
     self._numbering_latched = false
 
+    self._prompt_pending = self._prompt_pending + 1
+
     self.agent:send_prompt(self.session_id, prompt, function(response, err)
         -- This callback already runs inside vim.schedule (from _handle_message).
         -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
@@ -2151,6 +2296,15 @@ function SessionManager:_dispatch_turn(prompt)
         -- before the previous turn's cleanup sets it back to false, permanently
         -- desynchronising the generating state ("stuck 1 message behind").
         self.is_generating = false
+        -- Only this turn's own session may release the gate. A cancelled
+        -- prompt's callback outlives /new or a restore, and decrementing then
+        -- would open the gate under the turn that replaced it — the very
+        -- concurrency the counter exists to prevent. The floor covers _refresh,
+        -- which zeroes the counter to unwedge a lost callback without advancing
+        -- the epoch.
+        if epoch == self._session_epoch then
+            self._prompt_pending = math.max(0, self._prompt_pending - 1)
+        end
 
         --- @type table|nil
         local turn_usage
@@ -2195,6 +2349,11 @@ function SessionManager:_dispatch_turn(prompt)
                 -- the user submits manually), the next prompt hits a fresh
                 -- pipeline. See chunk-flush.md.
                 Recovery.respawn_after_usage_limit(self)
+                -- Gate submits until the limit lifts, whether or not
+                -- auto-continue is enabled: respawn_after_usage_limit runs a
+                -- new_session either way, and its drain would otherwise
+                -- dispatch into a still-limited provider.
+                self._usage_reset_epoch = reset_epoch
                 if reset_epoch then
                     Recovery.offer_auto_continue(self, reset_epoch)
                 end
@@ -2239,16 +2398,25 @@ function SessionManager:_dispatch_turn(prompt)
         end
 
         if retrying then
-            -- The retry turn reaches its own Stop where _drain_queue runs.
+            -- The retry turn reaches its own Stop where the drain runs.
             -- Draining here too would fire a second concurrent send_prompt,
-            -- so mid-turn queued regions defer up to MAX_TRANSIENT_RETRIES
-            -- turns (same reasoning as offer_auto_continue's timer callback).
+            -- so deferred prompts wait up to MAX_TRANSIENT_RETRIES turns
+            -- (same reasoning as offer_auto_continue's timer callback).
             Recovery.retry_after_transient_error(self)
-        else
-            -- Dispatch any mid-turn queued regions now the turn is complete
-            -- (no-op while a usage-limit retry timer is armed — see
-            -- _drain_queue).
-            self:_drain_queue()
+        elseif
+            err == nil
+            and (
+                type(response) ~= "table"
+                or response.stopReason == nil
+                or response.stopReason == "end_turn"
+            )
+        then
+            -- Only a normal Stop. `cancelled` is <C-c>, where the user is
+            -- asking a question rather than queueing the next task; `refusal`,
+            -- `max_tokens` and `max_turn_requests` all left the work unfinished,
+            -- and launching a follow-up onto a truncated state is wrong.
+            -- Deferred prompts stay visible in the input buffer meanwhile.
+            self:_dispatch_deferred_prompts()
         end
     end)
 end
@@ -2409,7 +2577,7 @@ function SessionManager:new_session(opts)
                 on_created()
             end
 
-            self:_flush_pending_input()
+            self:_dispatch_deferred_prompts()
         end)
     end)
 end
@@ -2449,6 +2617,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- = nil, _restoring = false and creates a fresh session that overwrites
     -- the loaded one — destroying all restored context.
     self._restoring = true
+    self._loading = true
 
     -- Invalidate any in-flight create_session callback. The epoch check in
     -- the create_session callback (new_session) rejects stale responses
@@ -2523,11 +2692,13 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                         vim.log.levels.WARN
                     )
                     self._restoring = false
+                    self._loading = false
                     self:_fallback_restore_from_local(session_id)
                     return
                 end
 
                 self._restoring = false
+                self._loading = false
                 self.status_indicator:stop()
 
                 -- Restore title and file tally from local history — the ACP
@@ -2582,6 +2753,17 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                         ),
                     },
                 })
+
+                -- The only drain on this path: new_session's is skipped by the
+                -- _restoring early return, and restore_from_history does not
+                -- run. Placed after the welcome write, never at the top of the
+                -- callback — the error branch above reaches a drain of its own
+                -- and a top-of-callback one would double-send.
+                --
+                -- set_pending_initial_model applies the saved model
+                -- asynchronously, so a drained turn may run on the provider
+                -- default rather than the session's own model.
+                self:_dispatch_deferred_prompts()
             end)
         end
     )
@@ -2661,15 +2843,20 @@ function SessionManager:_cancel_session()
     self._title_user_set = false -- Fresh session: allow provider auto-summary again
     self.widget:set_chat_title(nil) -- Reset buffer name to default
     self._history_to_send = nil
-    self._pending_input = nil
+    self._pending_bufferless_prompt = nil
+    -- Every gate state is per-session, so /new recovers a wedged one. /new is
+    -- exempt from the gate precisely so it stays reachable to do this.
+    self._prompt_pending = 0
+    self._usage_reset_epoch = nil
+    self._loading = false
     self._usage = nil
     self._budget = nil
 end
 
 --- Switch to a different ACP provider while preserving chat UI and history.
 --- Reads Config.provider (already set by caller) for the target provider.
---- If an auto-continue timer is active (usage limit), cancels it and drains
---- any queued prompts to the new provider after the session is created.
+--- Cancels any auto-continue timer — the outgoing provider's usage limit does
+--- not apply to the new one.
 function SessionManager:switch_provider()
     if self.is_generating then
         Logger.notify(
@@ -2681,13 +2868,12 @@ function SessionManager:switch_provider()
 
     local AgentInstance = require("agentic.acp.agent_instance")
 
-    -- Capture any queued prompts from auto-continue before cancelling the
-    -- timer. These will be sent to the new provider after session creation.
-    local queued_prompts = self._queued_prompts
-
     -- Cancel pending auto-continue timer — switching provider renders the
-    -- current provider's usage limit irrelevant.
+    -- current provider's usage limit irrelevant, so the gate opens with it. A
+    -- usage limit is the main reason to switch at all, and leaving the epoch
+    -- set would defer every submit to the new provider until it elapsed.
     Recovery.cancel_retry_timer(self)
+    self._usage_reset_epoch = nil
     self._transient_attempt = 0
 
     -- Save references before get_instance (on_ready may fire synchronously)
@@ -2723,18 +2909,6 @@ function SessionManager:switch_provider()
                         self.chat_history.timestamp = new_timestamp
                         self._history_to_send = saved_history.messages
                         self._is_first_message = true
-
-                        -- Drain any queued prompts to the new provider.
-                        -- These were queued while the auto-continue timer was
-                        -- active (previous provider hit usage limit). With the
-                        -- new provider, send them now instead of discarding.
-                        if queued_prompts and #queued_prompts > 0 then
-                            local combined =
-                                table.concat(queued_prompts, "\n\n")
-                            vim.schedule(function()
-                                self:_handle_input_submit(combined)
-                            end)
-                        end
                     end,
                 })
             end)

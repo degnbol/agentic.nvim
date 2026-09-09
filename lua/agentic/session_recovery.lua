@@ -278,8 +278,6 @@ function M.cancel_retry_timer(sm, reset_attempts)
         sm._retry_keymap = nil
     end
 
-    sm._queued_prompts = nil
-
     if reset_attempts ~= false then
         sm._retry_attempt = 0
     end
@@ -443,16 +441,19 @@ end
 --- or a bare "continue" if they queued nothing.
 --- @param sm agentic.SessionManager
 function M._fire_auto_continue(sm)
-    -- Read the queue before cancelling — cancel_retry_timer clears it
-    -- unconditionally, for every other caller's benefit.
-    local queued = sm._queued_prompts
     M.cancel_retry_timer(sm, false)
+    -- Release the gate before dispatching. It would otherwise defer both
+    -- branches below and the pause would never end.
+    sm._usage_reset_epoch = nil
 
     if sm._destroyed then
         return
     end
 
     if not sm.session_id then
+        -- Nothing is lost: whatever the user typed during the pause is still
+        -- tagged and visible in the input buffer, and drains at the next
+        -- benign gate-clear edge.
         Logger.notify(
             "No active session for auto-continue.",
             vim.log.levels.WARN
@@ -460,14 +461,12 @@ function M._fire_auto_continue(sm)
         return
     end
 
-    if queued then
-        sm:_handle_input_submit(table.concat(queued, "\n\n"))
-    else
+    -- The queued regions ARE the continuation when there are any. The turn
+    -- started here reaches its own Stop, where the next drain runs; draining
+    -- again now would fire a second concurrent send_prompt.
+    if not sm:_drain_queue() then
         sm:_handle_input_submit("continue")
     end
-    -- The turn started above reaches its own Stop with the retry gate
-    -- cleared, where _drain_queue dispatches any tagged regions. Do NOT
-    -- drain here too — that would fire a second concurrent send_prompt.
 end
 
 --- How many consecutive transient failures are retried before the error
@@ -516,7 +515,7 @@ function M.should_retry_transient(sm, err, turn_session_id)
         return false
     end
     -- send_prompt has no ready-state guard of its own (unlike
-    -- _handle_input_submit, which stashes to _pending_input). Writing to an
+    -- _handle_input_submit, which defers). Writing to an
     -- up-but-not-ready subprocess would leave is_generating stuck true.
     return sm.agent ~= nil and sm.agent.state == "ready"
 end
