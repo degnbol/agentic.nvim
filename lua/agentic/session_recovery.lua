@@ -516,6 +516,12 @@ function M.should_retry_transient(sm, err, turn_session_id)
     if sm.session_id == nil or sm.session_id ~= turn_session_id then
         return false
     end
+    -- Another turn is already outstanding: the user submitted mid-turn and has
+    -- taken over. A silent resend would land behind their prompt and read as a
+    -- follow-up to it, so the failure is reported instead.
+    if sm._prompt_pending > 0 then
+        return false
+    end
     -- send_prompt has no ready-state guard of its own (unlike
     -- _handle_input_submit, which defers). Writing to an
     -- up-but-not-ready subprocess would leave is_generating stuck true.

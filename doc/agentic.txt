@@ -588,9 +588,9 @@ Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
 6.2 PROMPT KEYMAPS                                    *agentic-keymaps-prompt*
 
     Key              Mode    Description ~
-    `<CR><CR>`         n       Stash-send: send N lines (count1), delete them
-    `<CR>{motion}`     n       Stash-send: send motion range, delete
-    `<CR>`             x       Stash-send: send visual selection, delete
+    `<CR><CR>`         n       Send N lines (count1), delete them
+    `<CR>{motion}`     n       Send the motion range, delete
+    `<CR>`             x       Send the visual selection, delete
     `<S-CR><S-CR>`     n       Queue N lines (count1) for later dispatch
     `<S-CR>{motion}`   n       Queue the motion's line(s) for dispatch
     `<S-CR>`           x       Queue the selected line(s) for dispatch
@@ -602,9 +602,8 @@ Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
     `<localLeader>p`   n       Paste image
     `<C-v>`            i       Paste image
 
-`<S-CR>` and `<S-C-c>` are only distinguishable from `<CR>` and `<C-c>` under
-the kitty keyboard protocol (kitty terminal with nvim 0.12). On other
-terminals these bindings do not fire.
+`<S-CR>` and `<S-C-c>` require the kitty keyboard protocol (kitty terminal
+with nvim 0.12), which is what distinguishes them from `<CR>` and `<C-c>`.
 
 The `:w` family is registered only while `settings.write_submit` is on
 (|agentic-config-settings|). What the queue bindings dispatch, and when, is
@@ -902,25 +901,24 @@ Submitted text splits at command lines: a line of the form `/word`, with or
 without arguments, is a prompt of its own, and each run of other lines is one
 prompt. They dispatch in buffer order, one per turn — `/compact` above
 `Continue` compacts, then sends `Continue` when that finishes. Text with no
-command line in it is one prompt, as it is when nothing splits. An argument
-belongs on its command's own line; the line below it is the next prompt.
-Indent a `/`-leading line by one space to send it as ordinary text instead.
+command line in it is one prompt. An argument belongs on its command's own
+line; the line below it is the next prompt. A `/`-leading line indented by
+one space is ordinary text.
 
 The queue bindings (|agentic-keymaps-prompt|) tag the covered line(s) as a
-queued region, highlighted in place (`AgenticQueuedRegion`,
-|agentic-highlights|) and left editable, instead of sending now — always,
-whether or not a turn is running. Queueing is line-granular: a charwise
-motion queues its whole line(s). A submit the session cannot take yet, and
-every block of one that has not dispatched, is tagged the same way, so it
-stays in the buffer.
+queued region (`AgenticQueuedRegion`, |agentic-highlights|) instead of
+sending now — always, whether or not a turn is running. Queueing is
+line-granular: a charwise motion queues its whole line(s). A submit the
+session cannot take yet is tagged the same way, as is every block of one that
+has not dispatched.
 
-The queue dispatches one block per turn in buffer order, at each turn that
-ends normally. A turn stopped with `<C-c>`, or ended early by the agent,
-leaves the rest tagged. Editing a region — any change to it, or entering
-insert mode with the cursor inside it — drops it back to ordinary draft.
-`:w` / `:wq` / `:x` submit the whole buffer, dispatching its first block now
-instead of queueing it; before the session is ready they queue it like any
-other submit.
+The queue dispatches one block in buffer order at each turn that ends
+normally, and one when a session becomes ready. A turn stopped with `<C-c>`,
+or ended early by the agent, leaves the rest tagged. Editing a region — any
+change to it, or entering insert mode with the cursor inside it — drops it
+back to ordinary draft. `:w` / `:wq` / `:x` submit the whole buffer through a
+usage limit; with no session yet, or a session still loading, they queue like
+any other submit.
 
 `/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
 the queue rather than as a submit's first block. Declining leaves every

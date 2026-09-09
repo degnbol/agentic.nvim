@@ -92,6 +92,17 @@ Three race conditions can overwrite `self.session_id` during ACP
   otherwise the header stays on the previous provider's model after a
   cross-provider restore.
 
+## The in-flight counter
+
+`_prompt_pending` counts outstanding prompt callbacks. It gates no submit — the
+provider runs a mid-turn prompt as the next turn — only the automatic drains
+(`_drain_queue`, `_dispatch_deferred_prompts`), which is what advances the queue
+one block per turn. Two sites read it as "a turn is still streaming":
+`_dispatch_turn` skips the per-turn tool-state wipe (the running turn resolves
+its writer and Task bookkeeping through those tables), and the prompt callback
+runs the turn boundary below but not the idle signals (`is_generating`,
+indicator, `[done]`). An epoch mismatch runs neither.
+
 ## Cross-turn state hazards in MessageWriter
 
 MessageWriter carries mutable flags that persist across turns. Any flag set

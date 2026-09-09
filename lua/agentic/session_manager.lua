@@ -1961,15 +1961,22 @@ end
 --- firing. A held prompt can outlive its own condition — with
 --- `auto_continue_on_usage_limit` off nothing fires when the limit lifts — and
 --- go out at the next edge of any kind.
+---
+--- No entry for `in_flight`: a running turn holds only the automatic drains,
+--- which have the queue's own highlight to stand in for them, never a submit.
 --- @type table<agentic.SubmitDeferReason, string>
 local DEFER_NOTICE = {
     usage_limited = "Message held — usage limit in force.",
-    in_flight = "Message held — a turn is running.",
     loading = "Message held — the session is still loading.",
     not_ready = "Message held — no session yet.",
 }
 
---- Why `prompt` cannot be dispatched right now, or nil if it can.
+--- Why `prompt` cannot go out as a turn of its own right now, or nil if it can.
+---
+--- Three of the reasons are about the session's ability to take a prompt at
+--- all. `in_flight` is not: the provider accepts a mid-turn prompt and runs it
+--- as the next turn, so this reason exists to sequence the automatic drains one
+--- block per turn, and `_handle_input_submit` ignores it.
 ---
 --- Local commands are never deferred — they need no provider round-trip, so
 --- they answer mid-turn and before a session exists, which is what makes
@@ -1990,9 +1997,9 @@ function SessionManager:_submit_defer_reason(prompt)
         return "usage_limited"
     end
     -- Not is_generating: stop_generation and _refresh both clear that flag
-    -- while the prompt callback is still pending, so gating on it lets a <CR>
-    -- right after <C-c> fire a concurrent send_prompt whose stale callback
-    -- then clears is_generating under the new turn.
+    -- while the prompt callback is still pending, so a drain gated on it would
+    -- dispatch into a turn that is still resolving — and the drain is what
+    -- keeps one queued block per turn.
     if self._prompt_pending > 0 then
         return "in_flight"
     end
@@ -2009,9 +2016,14 @@ end
 
 --- @class agentic.SessionManager.SubmitOpts
 --- @field from_buffer? boolean The caller owns a buffer range and tags it when the submit defers
---- @field force? boolean Bypass the deferral gate, cancelling a running turn if one is in flight
+--- @field force? boolean Bypass the usage-limit gate
 
 --- Dispatch a submitted prompt, or report that the gate deferred it.
+---
+--- A running turn is not a reason to hold a submit. The provider takes a
+--- mid-turn prompt as a turn of its own and runs it after the current one
+--- (claude-agent-acp queues it on `session.turnQueue`), so the text goes out
+--- now and the running turn is the user's to interrupt with `<C-c>`.
 ---
 --- A deferred submit that came from the input buffer stays there as a tagged
 --- region for the caller to mark; one that did not (`Agentic.send_prompt`,
@@ -2024,10 +2036,13 @@ end
 function SessionManager:_handle_input_submit(input_text, opts)
     opts = opts or {}
     local reason = self:_submit_defer_reason(input_text)
-    -- `force` bypasses waiting for a turn or a usage reset, but there is no
-    -- session to send into under the other two — forcing would hand
-    -- send_prompt a nil session id and lose the text, since the caller treats
-    -- a dispatch as consumed.
+    if reason == "in_flight" then
+        reason = nil
+    end
+    -- `force` bypasses waiting for a usage reset, but there is no session to
+    -- send into under the other two — forcing would hand send_prompt a nil
+    -- session id and lose the text, since the caller treats a dispatch as
+    -- consumed.
     local unsendable = reason == "not_ready" or reason == "loading"
     if reason and (not opts.force or unsendable) then
         if not opts.from_buffer then
@@ -2035,21 +2050,6 @@ function SessionManager:_handle_input_submit(input_text, opts)
             self.message_writer:write_error_action(DEFER_NOTICE[reason])
         end
         return false
-    end
-    -- A forced submit cancels the running turn first: a second concurrent
-    -- send_prompt would strand the first turn's in-flight tool calls, because
-    -- _dispatch_turn resets the per-turn tool state and whichever callback
-    -- returns first clears is_generating under the other. Keyed on the counter
-    -- rather than on `reason == "in_flight"`, since a usage-limited or loading
-    -- session can have a turn in flight too and those reasons outrank it.
-    -- Local commands reach here ungated as well, and answer without touching
-    -- the provider, so a forced `/context` must leave the turn running.
-    if
-        opts.force
-        and self._prompt_pending > 0
-        and not parse_local_command(input_text)
-    then
-        self:stop_generation()
     end
     self:_handle_input_submit_inner(input_text)
     return true
@@ -2072,8 +2072,8 @@ end
 ---
 --- Leaves `_prompt_pending` alone: the cancelled prompt's callback still
 --- fires (with `stopReason = "cancelled"`) and decrements it there. Clearing
---- it here would open the in_flight gate while the old turn is still
---- resolving, so the next submit would race it.
+--- it here would report the session idle while the old turn is still
+--- resolving, so the queue would drain into it.
 function SessionManager:stop_generation()
     if not self.session_id then
         return
@@ -2496,13 +2496,21 @@ function SessionManager:_dispatch_turn(prompt)
 
     self.is_generating = true
 
-    -- Tool-call ownership and the subagent auto-open guard are per-turn.
-    self._tool_call_owner = {}
-    self._open_tasks = {}
-    self._subagent_win_opened_this_turn = false
-    self._task_ordinal = {}
-    self._next_ordinal = 0
-    self._numbering_latched = false
+    -- Tool-call ownership and the subagent auto-open guard are per-turn, but a
+    -- turn dispatched while another is still outstanding inherits them rather
+    -- than wiping them: the running turn's tool calls resolve their writer
+    -- (`_writer_for`) and their Task bookkeeping (`_mark_task_closed`) through
+    -- these tables for as long as it streams, and a mid-turn submit is an
+    -- ordinary thing to do. The provider runs the two turns in sequence, so the
+    -- inheriting turn has nothing of its own in flight to confuse with them.
+    if self._prompt_pending == 0 then
+        self._tool_call_owner = {}
+        self._open_tasks = {}
+        self._subagent_win_opened_this_turn = false
+        self._task_ordinal = {}
+        self._next_ordinal = 0
+        self._numbering_latched = false
+    end
 
     self._prompt_pending = self._prompt_pending + 1
 
@@ -2513,12 +2521,11 @@ function SessionManager:_dispatch_turn(prompt)
         -- before the previous turn's cleanup sets it back to false, permanently
         -- desynchronising the generating state ("stuck 1 message behind").
 
-        -- Only this turn's own session may release the gate. A cancelled
+        -- Only this turn's own session may release the counter. A cancelled
         -- prompt's callback outlives /new or a restore, and decrementing then
-        -- would open the gate under the turn that replaced it — the very
-        -- concurrency the counter exists to prevent. The floor covers _refresh,
-        -- which zeroes the counter to unwedge a lost callback without advancing
-        -- the epoch.
+        -- would report the session idle while the turn that replaced it is
+        -- still running. The floor covers _refresh, which zeroes the counter to
+        -- unwedge a lost callback without advancing the epoch.
         if epoch == self._session_epoch then
             self._prompt_pending = math.max(0, self._prompt_pending - 1)
         end
@@ -2526,14 +2533,20 @@ function SessionManager:_dispatch_turn(prompt)
         -- Everything below ends *a* turn: the indicator, the footer and
         -- separator, the per-turn writer flags, the attention badge and the
         -- completion hook. A superseded turn must run none of it, or it ends
-        -- the turn that replaced it. Reachable from a forced mid-turn submit,
-        -- which cancels and dispatches in the same tick while the cancelled
-        -- prompt is still resolving, and from a restore mid-turn.
-        if epoch ~= self._session_epoch or self._prompt_pending > 0 then
+        -- the turn that replaced it. Reachable from a restore mid-turn.
+        if epoch ~= self._session_epoch then
             return
         end
 
-        self.is_generating = false
+        -- A turn that ends with a later one still outstanding — the user
+        -- submitted mid-turn and the provider ran the two in sequence — still
+        -- owes the reader its own boundary: the usage footer, the separator and
+        -- the per-turn writer flags, which corrupt the next turn if they carry
+        -- into it. What it does not owe is the signals that say the session went
+        -- idle, since the next turn is already running.
+        local session_busy = self._prompt_pending > 0
+
+        self.is_generating = session_busy
 
         --- @type table|nil
         local turn_usage
@@ -2602,10 +2615,14 @@ function SessionManager:_dispatch_turn(prompt)
         self.subagent_status_indicator:stop()
         self._open_tasks = {}
 
-        self.status_indicator:stop()
+        if not session_busy then
+            self.status_indicator:stop()
+        end
 
         if not retrying then
-            self:_notify_attention("[done]")
+            if not session_busy then
+                self:_notify_attention("[done]")
+            end
 
             -- Fires once per user turn, not once per provider turn: the
             -- retried attempts are not outcomes the user asked about.

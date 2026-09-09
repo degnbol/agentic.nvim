@@ -2087,8 +2087,8 @@ describe("agentic.SessionManager", function()
             end)
 
             -- A cancelled prompt's callback outlives /new or a restore.
-            -- Decrementing then would open the gate under the turn that
-            -- replaced it, which is the concurrency the counter prevents.
+            -- Decrementing then would report the session idle while the turn
+            -- that replaced it is still running.
             it("ignores a callback from a superseded session", function()
                 local session = make_session(nil, nil, {})
                 local resolve
@@ -2105,27 +2105,74 @@ describe("agentic.SessionManager", function()
                 assert.equal(1, session._prompt_pending)
             end)
 
-            -- stop_generation only fires a notification, so a forced mid-turn
-            -- submit dispatches the replacement while the cancelled prompt is
-            -- still resolving. Its callback must not run the turn tail —
-            -- indicator, footer, attention badge, completion hook — under the
-            -- turn that replaced it.
-            it("runs no turn tail while a newer turn is live", function()
+            -- The running turn's tool calls resolve their writer and their Task
+            -- bookkeeping through these tables for as long as it streams, so
+            -- the turn dispatched over it inherits them instead of wiping them.
+            it("leaves the running turn's tool state alone", function()
+                local session = make_session(nil, nil, {})
+                session.agent.send_prompt = function() end
+
+                session:_handle_input_submit("first")
+                session._tool_call_owner["tc-1"] = true
+                session._open_tasks["task-1"] = true
+                session:_handle_input_submit("second")
+
+                assert.is_true(session._tool_call_owner["tc-1"])
+                assert.is_true(session._open_tasks["task-1"])
+            end)
+
+            it("keeps a turn outstanding when a submit lands mid-turn", function()
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                session.agent.send_prompt = function(_self, _sid, prompt)
+                    table.insert(sink.prompts, prompt)
+                end
+
+                assert.is_true(session:_handle_input_submit("first"))
+                assert.is_true(session:_handle_input_submit("second"))
+
+                assert.equal(2, #sink.prompts)
+                assert.equal(2, session._prompt_pending)
+            end)
+
+            -- A turn ending with the mid-turn submit's turn still outstanding
+            -- owes the reader its own boundary — the footer, the separator and
+            -- the per-turn writer flags, which corrupt the next turn if they
+            -- carry — but none of the signals that say the session went idle.
+            it("ends its own turn without ending the session's", function()
                 local sink = {}
                 local session = make_session(nil, nil, sink)
                 local resolve
                 session.agent.send_prompt = function(_self, _sid, _p, cb)
                     resolve = cb
                 end
+                local finalized = 0
+                session.message_writer.finalize_turn = function()
+                    finalized = finalized + 1
+                end
+                local stopped = 0
+                session.status_indicator.stop = function()
+                    stopped = stopped + 1
+                end
+                local consumed = 0
+                session.widget.next_queued_block = function()
+                    return { text = "queued", sr = 0, er = 0 }
+                end
+                session.widget.consume_queued_block = function()
+                    consumed = consumed + 1
+                end
 
                 session:_handle_input_submit("hello")
-                -- A forced submit cancelled this turn and dispatched another.
-                session._prompt_pending = 2
+                session._prompt_pending = 2 -- the mid-turn submit's own turn
                 session.is_generating = true
-                resolve({ stopReason = "cancelled" }, nil)
+                resolve({ stopReason = "end_turn" }, nil)
 
+                assert.equal(1, finalized)
                 assert.is_true(session.is_generating)
-                assert.equal(0, sink.drains)
+                assert.equal(0, stopped)
+                -- The queue still advances one block per turn, which is the one
+                -- thing the in-flight reason is left to hold.
+                assert.equal(0, consumed)
             end)
         end)
 
@@ -2293,6 +2340,22 @@ describe("agentic.SessionManager", function()
                 session.agent.send_prompt = function(_self, _sid, prompt, cb)
                     table.insert(sink.prompts, prompt)
                     session.agent.state = "connecting"
+                    cb(nil, TRANSIENT)
+                end
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, #sink.synthetic)
+                assert.equal(1, #sink.errors)
+            end)
+
+            -- The user submitted mid-turn and has taken over. A silent resend
+            -- would land behind their prompt and read as a follow-up to it.
+            it("does not retry under a turn the user submitted", function()
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    table.insert(sink.prompts, prompt)
+                    session._prompt_pending = 2 -- the mid-turn submit's turn
                     cb(nil, TRANSIENT)
                 end
                 session:_handle_input_submit("hello")
@@ -2770,11 +2833,11 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("forced submit", function()
+    describe("submit gating", function()
         --- @param close_gate fun(sm: agentic.SessionManager)|nil Puts the
         ---        session into the state under test
         --- @return agentic.SessionManager, table
-        local function forceable(close_gate)
+        local function gated(close_gate)
             local sink = { inner = 0, stopped = 0, actions = {} }
             local session = {
                 session_id = "s-1",
@@ -2802,21 +2865,27 @@ describe("agentic.SessionManager", function()
             return typed, sink
         end
 
-        it("sends past a running turn, cancelling it first", function()
-            local session, sink = forceable(function(sm)
+        -- The provider takes a mid-turn prompt as a turn of its own and runs it
+        -- after the current one, so an ordinary submit needs no force to go out
+        -- — and must not cancel what is running to do it.
+        it("sends past a running turn, leaving it alone", function()
+            local session, sink = gated(function(sm)
                 sm._prompt_pending = 1
             end)
 
-            assert.is_true(session:_handle_input_submit("hi", { force = true }))
+            assert.is_true(session:_handle_input_submit("hi"))
 
-            assert.equal(1, sink.stopped)
+            assert.equal(0, sink.stopped)
             assert.equal(1, sink.inner)
         end)
 
-        it("sends past a usage limit without cancelling", function()
-            local session, sink = forceable(function(sm)
+        it("sends past a usage limit only when forced", function()
+            local session, sink = gated(function(sm)
                 sm._usage_reset_epoch = os.time() + 600
             end)
+
+            assert.is_false(session:_handle_input_submit("hi"))
+            assert.equal(0, sink.inner)
 
             assert.is_true(session:_handle_input_submit("hi", { force = true }))
 
@@ -2837,7 +2906,7 @@ describe("agentic.SessionManager", function()
                 end,
             }
             for _, close_gate in pairs(gates) do
-                local session, sink = forceable(close_gate)
+                local session, sink = gated(close_gate)
 
                 assert.is_false(
                     session:_handle_input_submit("hi", { force = true })
@@ -2848,24 +2917,22 @@ describe("agentic.SessionManager", function()
             end
         end)
 
-        -- A local command arrives ungated, and must leave a running turn alone.
-        it("leaves the turn alone for an ungated local command", function()
-            local session, sink = forceable(function(sm)
-                sm._prompt_pending = 1
+        -- A local command needs no provider round-trip, so it answers under
+        -- every gate, including a usage limit no force was given for.
+        it("dispatches a local command under a closed gate", function()
+            local session, sink = gated(function(sm)
+                sm._usage_reset_epoch = os.time() + 600
             end)
 
-            assert.is_true(
-                session:_handle_input_submit("/context", { force = true })
-            )
+            assert.is_true(session:_handle_input_submit("/context"))
 
-            assert.equal(0, sink.stopped)
             assert.equal(1, sink.inner)
         end)
 
         -- A held prompt with no buffer range has nothing on screen to show for
         -- it, so the reason has to be said.
         it("writes why a bufferless prompt was held", function()
-            local session, sink = forceable(function(sm)
+            local session, sink = gated(function(sm)
                 sm.session_id = nil
             end)
 
@@ -2876,7 +2943,7 @@ describe("agentic.SessionManager", function()
         end)
 
         it("says nothing for a buffer submit, which is tagged", function()
-            local session, sink = forceable(function(sm)
+            local session, sink = gated(function(sm)
                 sm.session_id = nil
             end)
 
