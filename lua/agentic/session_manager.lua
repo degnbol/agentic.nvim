@@ -2312,7 +2312,9 @@ function SessionManager:_handle_input_submit_inner(input_text)
     -- (e.g. opencode) join ALL text blocks to detect the leading `/`, and any
     -- preceding text would shadow the command. The Claude Code SDK instead
     -- extracts its `inputString` from the last text block only, so context
-    -- before user text works for claude-agent-acp.
+    -- before user text works for claude-agent-acp. Its hooks are the exception:
+    -- a UserPromptSubmit payload's `.prompt` is the join of every text block,
+    -- so a keyword-matching hook reads these blocks as the user's own words.
     if self._is_first_message and not is_command then
         self._is_first_message = false
 
