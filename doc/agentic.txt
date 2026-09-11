@@ -431,7 +431,8 @@ override what you need.
 
                                                  *agentic-config-status_icons*
 `status_icons` table
-    Tool call state icons: `pending`, `in_progress`, `completed`, `failed`.
+    Tool call state icons: `pending`, `in_progress`, `completed`, `failed`,
+    `cancelled`.
 
                                              *agentic-config-diagnostic_icons*
 `diagnostic_icons` table
@@ -995,6 +996,7 @@ Tool call status ~
     AgenticStatusPending      |hl-DiagnosticVirtualTextHint|
     AgenticStatusCompleted    |hl-DiagnosticVirtualTextOk|
     AgenticStatusFailed       |hl-DiagnosticVirtualTextError|
+    AgenticStatusCancelled    |hl-DiagnosticVirtualTextWarn|
 
 Chat text ~
     AgenticHeading            `@punctuation.special`   Heading markers

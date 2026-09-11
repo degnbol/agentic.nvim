@@ -238,9 +238,10 @@ function SessionRestore.format_preview(messages)
             end
             table.insert(lines, "")
         elseif msg.type == "tool_call" then
-            local status_icon = msg.status == "completed" and "✔"
-                or msg.status == "failed" and "✖"
-                or "…"
+            -- Same glyph vocabulary as the live footer, so a status this
+            -- preview has never heard of still reads as the chat buffer
+            -- renders it. Unconfigured statuses fall through to the ellipsis.
+            local status_icon = (Config.status_icons or {})[msg.status] or "…"
             local arg = (msg.argument or ""):match("^([^\n]+)") or ""
             table.insert(
                 lines,

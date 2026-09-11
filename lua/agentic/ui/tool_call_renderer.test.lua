@@ -908,8 +908,14 @@ describe("ToolCallRenderer", function()
     end)
 
     describe("status footer", function()
-        --- @type agentic.acp.ToolCallStatus[]
-        local statuses = { "pending", "in_progress", "completed", "failed" }
+        --- @type agentic.ui.ToolCallStatus[]
+        local statuses = {
+            "pending",
+            "in_progress",
+            "completed",
+            "failed",
+            "cancelled",
+        }
 
         --- @param status string
         --- @return string footer

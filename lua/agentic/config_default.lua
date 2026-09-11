@@ -351,6 +351,7 @@ local ConfigDefault = {
         in_progress = "󰁪",
         completed = "✔",
         failed = "",
+        cancelled = "󰜺",
     },
 
     --- Icons used for diagnostics in the context panel

@@ -1935,6 +1935,7 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("send_prompt error dispatch", function()
+        local MessageWriter = require("agentic.ui.message_writer")
         local Recovery = require("agentic.session_recovery")
         --- @type TestStub
         local reauth_stub
@@ -1983,6 +1984,22 @@ describe("agentic.SessionManager", function()
             sink.synthetic = sink.synthetic or {}
             sink.headings = sink.headings or {}
             sink.history = sink.history or {}
+            sink.history_updates = sink.history_updates or {}
+            sink.stamped = sink.stamped or {}
+
+            --- Records the stamp under `key` and makes the status stick, so a
+            --- second sweep over the same writer finds nothing left.
+            --- @param key string Which writer the stamp went to
+            --- @return fun(this: table, update: table)
+            local function record_stamp(key)
+                sink.stamped[key] = {}
+                return function(this, update)
+                    table.insert(sink.stamped[key], update)
+                    this.tool_call_blocks[update.tool_call_id].status =
+                        update.status
+                end
+            end
+
             return {
                 session_id = "s-1",
                 tab_page_id = 1,
@@ -2017,8 +2034,16 @@ describe("agentic.SessionManager", function()
                     scroll_to_bottom = noop,
                     is_near_bottom = empty,
                     tool_call_blocks = {},
+                    nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
+                    update_tool_call_block = record_stamp("main"),
                 },
-                subagent_writer = { finalize_turn = noop },
+                subagent_writer = {
+                    finalize_turn = noop,
+                    tool_call_blocks = {},
+                    nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
+                    update_tool_call_block = record_stamp("subagent"),
+                },
+                _cancel_unresolved_tool_calls = SessionManager._cancel_unresolved_tool_calls,
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_hook_records = SessionManager._drain_hook_records,
                 _hook_records = {
@@ -2032,7 +2057,12 @@ describe("agentic.SessionManager", function()
                     add_message = function(_self, msg)
                         table.insert(sink.history, msg)
                     end,
-                    save = noop,
+                    update_tool_call = function(_self, id, update)
+                        table.insert(sink.history_updates, { id, update })
+                    end,
+                    save = function()
+                        sink.updates_at_save = #sink.history_updates
+                    end,
                     messages = {},
                     title = "",
                 },
@@ -2173,6 +2203,72 @@ describe("agentic.SessionManager", function()
                 -- The queue still advances one block per turn, which is the one
                 -- thing the in-flight reason is left to hold.
                 assert.equal(0, consumed)
+            end)
+        end)
+
+        describe("cancelled tool call sweep", function()
+            --- Run one turn that resolves with `response`, over a session
+            --- holding one non-final and one completed call in each writer.
+            --- @param response table
+            --- @return table sink
+            local function turn_over_pending_calls(response)
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                session.message_writer.tool_call_blocks = {
+                    ["main-pending"] = { status = "pending" },
+                    ["main-done"] = { status = "completed" },
+                }
+                session.subagent_writer.tool_call_blocks = {
+                    ["sub-running"] = { status = "in_progress" },
+                    ["sub-done"] = { status = "completed" },
+                }
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb(response, nil)
+                end
+                session:_handle_input_submit("hello")
+                return sink
+            end
+
+            it("stamps the non-final calls in both writers", function()
+                local sink =
+                    turn_over_pending_calls({ stopReason = "cancelled" })
+
+                assert.same({
+                    { tool_call_id = "main-pending", status = "cancelled" },
+                }, sink.stamped.main)
+                assert.same({
+                    { tool_call_id = "sub-running", status = "cancelled" },
+                }, sink.stamped.subagent)
+            end)
+
+            -- Subagent interim is not restored, so only the main writer's
+            -- calls have a persisted status to correct.
+            it("persists the main writer's stamps only", function()
+                local sink =
+                    turn_over_pending_calls({ stopReason = "cancelled" })
+
+                assert.same({
+                    {
+                        "main-pending",
+                        {
+                            type = "tool_call",
+                            tool_call_id = "main-pending",
+                            status = "cancelled",
+                        },
+                    },
+                }, sink.history_updates)
+                -- The sweep has to precede the save, or the footer comes back
+                -- from a restore still reading `pending`.
+                assert.equal(1, sink.updates_at_save)
+            end)
+
+            it("leaves a normally-ended turn's calls alone", function()
+                local sink =
+                    turn_over_pending_calls({ stopReason = "end_turn" })
+
+                assert.same({}, sink.stamped.main)
+                assert.same({}, sink.stamped.subagent)
+                assert.same({}, sink.history_updates)
             end)
         end)
 

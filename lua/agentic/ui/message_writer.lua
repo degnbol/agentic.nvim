@@ -46,7 +46,7 @@ end
 --- @param status string|nil
 --- @return boolean
 local function is_final_status(status)
-    return status == "completed" or status == "failed"
+    return status == "completed" or status == "failed" or status == "cancelled"
 end
 
 --- @class agentic.ui.MessageWriter.HighlightRange
@@ -72,9 +72,14 @@ end
 --- @field start_line integer
 --- @field end_line integer
 
+--- A tool call status as this plugin renders it: the wire enum plus the
+--- client-stamped `cancelled`, which a turn's cancellation puts on the calls
+--- the provider abandoned without a final update of its own.
+--- @alias agentic.ui.ToolCallStatus agentic.acp.ToolCallStatus|"cancelled"
+
 --- @class agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id string
---- @field status agentic.acp.ToolCallStatus
+--- @field status agentic.ui.ToolCallStatus
 --- @field body? string[]
 --- @field diff? agentic.ui.MessageWriter.ToolCallDiff
 --- @field kind? agentic.acp.ToolKind
@@ -2219,6 +2224,22 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self:_append_lines({ "" })
         self:_mark_section_break()
     end)
+end
+
+--- Ids of the tracked tool call blocks whose status can still change.
+---
+--- A collected list, not a live iterator: a caller stamping each id resizes the
+--- buffer, and `update_tool_call_block` drops a tracker outright when its range
+--- extmark has collapsed — both mutate `tool_call_blocks` mid-walk.
+--- @return string[] tool_call_ids
+function MessageWriter:nonfinal_tool_call_ids()
+    local ids = {}
+    for id, block in pairs(self.tool_call_blocks) do
+        if not is_final_status(block.status) then
+            table.insert(ids, id)
+        end
+    end
+    return ids
 end
 
 --- Follow a prose row across a tool call block's resize, so a row recorded

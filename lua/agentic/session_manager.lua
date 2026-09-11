@@ -1418,6 +1418,45 @@ function SessionManager:_drain_hook_records()
     end
 end
 
+--- Stamp `cancelled` on one writer's tool call blocks that have no final
+--- status yet.
+---
+--- Goes straight to the writer rather than through
+--- `SessionManager:_on_tool_call_update`, which would also restart the status
+--- indicator, re-record edit ranges and re-open the cancelled Tasks. The
+--- permission cleanup that funnel does has already run, in
+--- `stop_generation`'s `permission_manager:clear()`.
+--- @param writer agentic.ui.MessageWriter
+--- @return string[] tool_call_ids The ids that were stamped
+local function stamp_cancelled(writer)
+    local ids = writer:nonfinal_tool_call_ids()
+    for _, id in ipairs(ids) do
+        writer:update_tool_call_block({
+            tool_call_id = id,
+            status = "cancelled",
+        })
+    end
+    return ids
+end
+
+--- Give every tool call left hanging by a cancelled turn a `cancelled` footer.
+---
+--- Whether the provider sends a late update for a call it abandoned is
+--- provider-dependent, so without this sweep a block interrupted while pending
+--- keeps that footer for the rest of the session, and after a restore too.
+function SessionManager:_cancel_unresolved_tool_calls()
+    stamp_cancelled(self.subagent_writer)
+
+    -- Subagent interim is not restored, so only the main writer's calls have a
+    -- persisted status to correct — the same split `_on_tool_call_update` makes.
+    for _, id in ipairs(stamp_cancelled(self.message_writer)) do
+        --- @type agentic.ui.ChatHistory.ToolCall
+        local tool_call =
+            { type = "tool_call", tool_call_id = id, status = "cancelled" }
+        self.chat_history:update_tool_call(id, tool_call)
+    end
+end
+
 --- Close out a turn dispatched to the agent: end it in the chat buffer, stamp
 --- its usage footer, then append the hook activity it produced. The single
 --- chokepoint for those three — client-side notices end their own turn through
@@ -2605,6 +2644,14 @@ function SessionManager:_dispatch_turn(prompt)
             else
                 self._retry_attempt = 0
             end
+        end
+
+        -- Above the history save below, so the corrected statuses are the ones
+        -- persisted. `stop_generation` reaches this callback two ways — the
+        -- `session/cancel` it sends, and the outstanding permission request its
+        -- `permission_manager:clear()` resolves with nil.
+        if type(response) == "table" and response.stopReason == "cancelled" then
+            self:_cancel_unresolved_tool_calls()
         end
 
         self:_finalize_turn(turn_usage)

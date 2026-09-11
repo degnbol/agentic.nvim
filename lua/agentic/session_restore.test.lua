@@ -216,6 +216,28 @@ describe("SessionRestore", function()
             assert.truthy(tool_line[1]:match("✔"))
         end)
 
+        it("marks a cancelled tool call as over, not running", function()
+            local lines = SessionRestore.format_preview({
+                {
+                    type = "tool_call",
+                    kind = "edit",
+                    argument = "file.lua",
+                    status = "cancelled",
+                },
+            })
+            local tool_line = vim.tbl_filter(function(l)
+                return l:match("edit")
+            end, lines)
+            assert.equal(1, #tool_line)
+            -- The preview reads the same glyph vocabulary as the live footer,
+            -- so a cancelled call no longer takes the "…" that means the turn
+            -- is still working on it.
+            assert.truthy(
+                tool_line[1]:find(Config.status_icons.cancelled, 1, true)
+            )
+            assert.is_nil(tool_line[1]:find("…", 1, true))
+        end)
+
         it("produces no lines with embedded newlines", function()
             local lines = SessionRestore.format_preview({
                 { type = "user", text = "line1\nline2\nline3" },

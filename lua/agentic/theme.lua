@@ -14,6 +14,7 @@ Theme.HL_GROUPS = {
     STATUS_PENDING = "AgenticStatusPending",
     STATUS_COMPLETED = "AgenticStatusCompleted",
     STATUS_FAILED = "AgenticStatusFailed",
+    STATUS_CANCELLED = "AgenticStatusCancelled",
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
 
     HEADING = "AgenticHeading",
@@ -48,6 +49,7 @@ local status_hl = {
     in_progress = Theme.HL_GROUPS.STATUS_PENDING,
     completed = Theme.HL_GROUPS.STATUS_COMPLETED,
     failed = Theme.HL_GROUPS.STATUS_FAILED,
+    cancelled = Theme.HL_GROUPS.STATUS_CANCELLED,
 }
 
 --- Group the user-side identity glyphs follow: `Prompt` where the colorscheme
@@ -125,6 +127,9 @@ function Theme.setup()
         { Theme.HL_GROUPS.STATUS_PENDING, { link = "DiagnosticVirtualTextHint" } },
         { Theme.HL_GROUPS.STATUS_COMPLETED, { link = "DiagnosticVirtualTextOk" } },
         { Theme.HL_GROUPS.STATUS_FAILED, { link = "DiagnosticVirtualTextError" } },
+        -- Warn, not Error: the turn was stopped on request, so the call did not
+        -- go wrong — it just never got an answer.
+        { Theme.HL_GROUPS.STATUS_CANCELLED, { link = "DiagnosticVirtualTextWarn" } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
 
         -- Chat section heading markers (`##` prompt, `###` tool call). Linked

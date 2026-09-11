@@ -85,6 +85,25 @@ describe("agentic.Theme", function()
             vim.api.nvim_set_hl(0, "Normal", normal)
         end)
 
+        -- A `status_hl` entry naming a group `setup` never defines is the
+        -- failure mode: `get_status_hl_group` reports it happily and the
+        -- footer sign drops through to whatever the row already had.
+        it("defines a group for every tool call status", function()
+            Theme.setup()
+
+            for _, status in ipairs({
+                "pending",
+                "in_progress",
+                "completed",
+                "failed",
+                "cancelled",
+            }) do
+                local group = Theme.get_status_hl_group(status)
+                assert.is_not.equal(group, "Comment")
+                assert.is_not_nil(link_of(group))
+            end
+        end)
+
         it("redefines its groups after a colorscheme wipes them", function()
             Theme.setup()
             vim.cmd.colorscheme("default")

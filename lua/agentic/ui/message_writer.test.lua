@@ -99,7 +99,7 @@ describe("agentic.ui.MessageWriter", function()
     end
 
     --- @param id string
-    --- @param status agentic.acp.ToolCallStatus
+    --- @param status agentic.ui.ToolCallStatus
     --- @param body? string[]
     --- @return agentic.ui.MessageWriter.ToolCallBlock
     local function make_tool_call_block(id, status, body)
@@ -3632,6 +3632,31 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("nonfinal_tool_call_ids", function()
+        it("returns the ids whose status can still change", function()
+            for id, status in pairs({
+                still_pending = "pending",
+                running = "in_progress",
+                done = "completed",
+                broke = "failed",
+                stopped = "cancelled",
+            }) do
+                writer:write_tool_call_block(make_tool_call_block(id, status))
+            end
+            -- An adapter may pass a tracker through with no status at all.
+            --- @diagnostic disable-next-line: missing-fields
+            writer:write_tool_call_block({
+                tool_call_id = "unreported",
+                kind = "execute",
+                argument = "ls",
+            })
+
+            local ids = writer:nonfinal_tool_call_ids()
+            table.sort(ids)
+            assert.same({ "running", "still_pending", "unreported" }, ids)
+        end)
+    end)
+
     --- @diagnostic disable: missing-fields, redundant-parameter
     describe("parallel tool calls", function()
         it(
@@ -4129,6 +4154,45 @@ describe("agentic.ui.MessageWriter", function()
                 )
             end
         )
+
+        it("stamps a cancel on the footer, leaving the diff open", function()
+            --- @return string
+            local function buffer_text()
+                return table.concat(
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                    "\n"
+                )
+            end
+
+            writer:write_tool_call_block({
+                tool_call_id = "diff-cancel",
+                status = "in_progress",
+                kind = "edit",
+                argument = "/tmp/agentic_difffold_cancel.lua",
+                diff = { old = { "stub" }, new = diff_new },
+            })
+            local fence = difffold_fence_line()
+            assert.equal(-1, vim.fn.foldclosed(fence + 1))
+            assert.is_not_nil(buffer_text():find("in_progress", 1, true))
+
+            writer:update_tool_call_block({
+                tool_call_id = "diff-cancel",
+                status = "cancelled",
+            })
+
+            -- The footer word is the whole reported symptom.
+            local text = buffer_text()
+            assert.is_not_nil(text:find("cancelled", 1, true))
+            assert.is_nil(text:find("in_progress", 1, true))
+
+            -- A cancellation can have hit disk mid-flight, so `cancelled` takes
+            -- the highlight-only path: the diff is neither re-extracted from
+            -- the file nor folded away, as a `failed` edit's is.
+            assert.is_not_nil(text:find("local function foo()", 1, true))
+            assert.equal(fence, difffold_fence_line())
+            wait_closed(fence + 1)
+            assert.equal(-1, vim.fn.foldclosed(fence + 1))
+        end)
 
         it("opens an applied edit diff appended after a closed fold", function()
             -- A closed fold poisons foldexpr: a fold created afterwards
