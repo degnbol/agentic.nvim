@@ -70,6 +70,7 @@ local KNOWN_ACP_KINDS = {
 --- @field agent_capabilities? agentic.acp.AgentCapabilities
 --- @field agent_info? agentic.acp.AgentInfo
 --- @field auth_methods? agentic.acp.AuthMethod[]
+--- @field auth_status? agentic.acp.AuthStatus Identity the agent process authenticates with; nil while none is reported, which is distinct from a reported `kind = "none"`
 --- @field callbacks table<number, fun(result: table|nil, err: agentic.acp.ACPError|nil)>
 --- @field transport? agentic.acp.ACPTransportInstance
 --- @field subscribers table<string, agentic.acp.ClientHandlers>
@@ -242,6 +243,9 @@ function ACPClient:_set_state(state)
     -- hanging forever with orphaned callbacks.
     if state == "disconnected" or state == "error" then
         self:_fail_pending_callbacks(state)
+        -- A fresh subprocess probes its identity asynchronously, so an
+        -- identity must not outlive the subprocess that reported it.
+        self.auth_status = nil
     end
 end
 
@@ -450,6 +454,8 @@ function ACPClient:_handle_notification(message_id, method, params)
         self:_handle_fs_read(message_id, params)
     elseif method == "fs/write_text_file" then
         self:_handle_fs_write(message_id, params)
+    elseif method == "_auth/status_update" then
+        self.auth_status = params.authStatus
     else
         Logger.notify("Unknown notification method: " .. method)
     end
@@ -1167,6 +1173,22 @@ return ACPClient
 --- @field id string
 --- @field name string
 --- @field description? string
+
+--- Which credential resolved, as the agent reports it. `kind` follows the
+--- agent's own credential precedence, which need not match how the user
+--- logged in — claude-agent-acp ranks an `apiKeyHelper` above a subscription.
+--- `detail` and `vendor` populate only for the non-subscription kinds.
+--- @class agentic.acp.AuthStatus
+--- @field kind "account"|"api_key"|"gateway"|"external"|"none"
+--- @field label string UI-ready name, e.g. "Claude Team", "Anthropic API key"
+--- @field detail? string Second line, e.g. key source or gateway host
+--- @field account? agentic.acp.AuthAccount
+--- @field vendor? table<string, table> Namespaced extras, e.g. `claudeCode`
+
+--- @class agentic.acp.AuthAccount
+--- @field email? string
+--- @field organization? string
+--- @field plan? string
 
 --- @class agentic.acp.McpServer
 --- @field name string

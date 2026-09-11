@@ -1,4 +1,5 @@
 --- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch
+local Logger = require("agentic.utils.logger")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -525,6 +526,73 @@ describe("agentic.acp.ACPClient", function()
             assert.is_nil(client.agent_info)
             assert.same({}, client.auth_methods)
         end)
+    end)
+
+    describe("_auth/status_update", function()
+        local client
+        local notify_stub
+
+        local account_status = {
+            kind = "account",
+            label = "Claude Team",
+            account = {
+                email = "name@example.com",
+                organization = "Example Org",
+                plan = "team",
+            },
+        }
+
+        before_each(function()
+            client = setmetatable({ callbacks = {} }, { __index = ACPClient })
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        --- @param status agentic.acp.AuthStatus
+        local function push_status(status)
+            client:_handle_notification(
+                nil,
+                "_auth/status_update",
+                { authStatus = status }
+            )
+        end
+
+        it("leaves the status nil until the agent pushes one", function()
+            assert.is_nil(client.auth_status)
+        end)
+
+        it("stores the pushed status on the client", function()
+            push_status(account_status)
+
+            assert.same(account_status, client.auth_status)
+        end)
+
+        it("does not reach the unknown-method fallback", function()
+            push_status(account_status)
+
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("replaces the previous status wholesale", function()
+            push_status(account_status)
+            push_status({ kind = "none", label = "Not logged in" })
+
+            assert.equal("none", client.auth_status.kind)
+            assert.is_nil(client.auth_status.account)
+        end)
+
+        for _, state in ipairs({ "disconnected", "error" }) do
+            it("drops the status on " .. state, function()
+                push_status(account_status)
+
+                client:_set_state(state)
+
+                assert.is_nil(client.auth_status)
+            end)
+        end
     end)
 
     describe("extract_failure_reason", function()

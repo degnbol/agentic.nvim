@@ -217,6 +217,14 @@ Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
   TUI's `/status`, `/cost`, `/stats`, `/usage` — none of which are
   forwarded over ACP.
 
+  Auth identity belongs here too, read from `ACPClient.auth_status`:
+  `kind` (`account`/`api_key`/`gateway`/`external`/`none`, reporting
+  which credential Claude Code's precedence resolved to), `label`,
+  optional `detail`, and `account.{email,organization,plan}`. Too noisy
+  for the chat or the header; fine in a panel. A nil status must render
+  as unknown rather than as logged out — an agent that cannot read its
+  identity stays silent, while `none` arrives as a payload.
+
 **Already works — just undocumented**
 
 Verified via a live `available_commands_update` probe of claude-agent-acp:
