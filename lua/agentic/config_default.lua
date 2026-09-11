@@ -348,6 +348,7 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.StatusIcons
     status_icons = {
         pending = "󰔛",
+        in_progress = "󰁪",
         completed = "✔",
         failed = "",
     },

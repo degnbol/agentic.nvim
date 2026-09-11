@@ -1461,6 +1461,10 @@ end
 --- Write status text directly into the footer buffer line and apply highlight.
 --- Uses set_text (not set_lines) so sign_text extmarks on the footer line
 --- are not shifted — set_lines replaces the line, displacing extmarks.
+---
+--- The icon is optional: `status_icons` is user-configurable and need not cover
+--- every `agentic.acp.ToolCallStatus`, so an absent or empty one drops the glyph
+--- column rather than padding it with a second space.
 --- @param bufnr integer
 --- @param footer_line integer 0-indexed footer line number
 --- @param status string Status value (pending, completed, etc.)
@@ -1469,9 +1473,11 @@ function M.apply_status_footer(bufnr, footer_line, status)
         return
     end
 
-    local icons = Config.status_icons or {}
-    local icon = icons[status] or ""
-    local status_text = string.format(" %s %s ", icon, status)
+    local icon = (Config.status_icons or {})[status]
+    local status_text = string.format(" %s ", status)
+    if icon and icon ~= "" then
+        status_text = string.format(" %s %s ", icon, status)
+    end
     local hl_group = Theme.get_status_hl_group(status)
 
     local current = vim.api.nvim_buf_get_lines(

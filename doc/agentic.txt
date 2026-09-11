@@ -431,7 +431,7 @@ override what you need.
 
                                                  *agentic-config-status_icons*
 `status_icons` table
-    Tool call state icons: `pending`, `completed`, `failed`.
+    Tool call state icons: `pending`, `in_progress`, `completed`, `failed`.
 
                                              *agentic-config-diagnostic_icons*
 `diagnostic_icons` table

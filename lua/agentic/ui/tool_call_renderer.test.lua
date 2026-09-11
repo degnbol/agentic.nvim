@@ -906,4 +906,46 @@ describe("ToolCallRenderer", function()
             end
         )
     end)
+
+    describe("status footer", function()
+        --- @type agentic.acp.ToolCallStatus[]
+        local statuses = { "pending", "in_progress", "completed", "failed" }
+
+        --- @param status string
+        --- @return string footer
+        local function render_footer(status)
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            Renderer.apply_status_footer(bufnr, 0, status)
+            local line = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            return line
+        end
+
+        for _, status in ipairs(statuses) do
+            it("gives " .. status .. " an icon", function()
+                local icon, label = render_footer(status):match("^ (%S+) (%S+) $")
+
+                assert.equal(status, label)
+                assert.truthy(icon)
+            end)
+        end
+
+        describe("without a configured icon", function()
+            local Config = require("agentic.config")
+            local original_icons
+
+            before_each(function()
+                original_icons = vim.deepcopy(Config.status_icons)
+                Config.status_icons = {}
+            end)
+
+            after_each(function()
+                Config.status_icons = original_icons
+            end)
+
+            it("drops the glyph column", function()
+                assert.equal(" pending ", render_footer("pending"))
+            end)
+        end)
+    end)
 end)
