@@ -1444,7 +1444,7 @@ end
 --- Whether the provider sends a late update for a call it abandoned is
 --- provider-dependent, so without this sweep a block interrupted while pending
 --- keeps that footer for the rest of the session, and after a restore too.
-function SessionManager:_cancel_unresolved_tool_calls()
+function SessionManager:_mark_unresolved_tool_calls_cancelled()
     stamp_cancelled(self.subagent_writer)
 
     -- Subagent interim is not restored, so only the main writer's calls have a
@@ -2651,7 +2651,7 @@ function SessionManager:_dispatch_turn(prompt)
         -- `session/cancel` it sends, and the outstanding permission request its
         -- `permission_manager:clear()` resolves with nil.
         if type(response) == "table" and response.stopReason == "cancelled" then
-            self:_cancel_unresolved_tool_calls()
+            self:_mark_unresolved_tool_calls_cancelled()
         end
 
         self:_finalize_turn(turn_usage)

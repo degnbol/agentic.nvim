@@ -108,8 +108,15 @@ Status text is always real buffer content (written via `nvim_buf_set_text` to
 avoid displacing sign extmarks), then highlighted with an extmark in the
 `NS_STATUS` namespace. Extmarks work regardless of `vim.bo.syntax` state —
 whether treesitter has disabled it (default) or a user re-enables it with
-`vim.bo.syntax = 'ON'`. No deferred freezing, no cleanup passes. Blocks remain
-tracked after terminal status.
+`vim.bo.syntax = 'ON'`. No deferred freezing, and blocks remain tracked after a
+terminal status.
+
+One cleanup pass runs at the turn tail: on `stopReason == "cancelled"`,
+`SessionManager:_mark_unresolved_tool_calls_cancelled` stamps `cancelled` on
+every still-non-final block, in both writers and in history — no provider is
+obliged to report back on a call it abandoned. `cancelled` is client-side only;
+the wire enum stays at four values. The sweep selects by current status, not by
+turn, so it assumes sequential turns (claude-agent-acp's `session.turnQueue`).
 
 ### rawInput on tool_call vs update (claude-agent-acp)
 
@@ -135,7 +142,9 @@ path or body. The edit diff is the one field not taken from `rawInput`; see
 - **Status is always real buffer text:** Footer line content is written via
   `nvim_buf_set_text` (not `set_lines`, which displaces extmarks), then
   highlighted with an extmark in the `NS_STATUS` namespace. No deferred
-  freezing. Blocks stay tracked after terminal status.
+  freezing. Blocks stay tracked after terminal status. An adapter neither
+  receives nor emits `cancelled` — the client stamps that one itself (see
+  "Tool call lifecycle").
 - **Sign column for borders:** Block decorations (╭─ │ ╰─) use `sign_text`
   extmarks in the sign column rather than inline virtual text. This is more
   stable during buffer edits — signs survive line content replacement without
@@ -503,8 +512,8 @@ in `_handle_input_submit_inner`): render `response.stopReason` +
 `end_turn` or `cancelled`. That covers the provider-initiated reasons
 (`max_tokens`, `max_turn_requests`, `refusal`) which arrive on the
 success path and would otherwise be silently dropped. `end_turn`
-(normal completion) and `cancelled` (user pressed Ctrl-C, see SKILL.md
-§ "Stop reasons") are skipped. Auth-rejection cases like opencode +
+(normal completion) and `cancelled` (user pressed Ctrl-C, see "Tool call
+lifecycle" above) are skipped. Auth-rejection cases like opencode +
 litellm now manifest as an empty chat after the thinking indicator
 clears; the user resolves them by checking provider credentials.
 

@@ -2043,7 +2043,7 @@ describe("agentic.SessionManager", function()
                     nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
                     update_tool_call_block = record_stamp("subagent"),
                 },
-                _cancel_unresolved_tool_calls = SessionManager._cancel_unresolved_tool_calls,
+                _mark_unresolved_tool_calls_cancelled = SessionManager._mark_unresolved_tool_calls_cancelled,
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_hook_records = SessionManager._drain_hook_records,
                 _hook_records = {

@@ -32,10 +32,9 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
 
-- **Cancelled tool calls keep their pending footer forever**: `<C-c>` never
-  terminalises the blocks that were mid-flight, and the stale status is persisted
-  and replayed. Cause and fix design (including that it needs a status word):
-  [`notes/bug-cancelled-tool-calls-stay-pending.md`](notes/bug-cancelled-tool-calls-stay-pending.md).
+- **Cancel sweep misses errored turns**: it keys on `stopReason == "cancelled"`,
+  so an errored turn strands the same footers. A provider that never answers at
+  all needs a sweep in `SessionManager:_refresh`.
 
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
   After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
@@ -310,6 +309,10 @@ screen so we can read it.
 - **Comment filtering**: HTML comments (`<!-- ... -->`) in the input buffer
   should be rendered in the chat panel but stripped before sending to the
   agent. Consider concealing the `<!--`/`-->` delimiters in both buffers.
+
+- **Selective queue cancel**: a quickfix-like window over the queued regions,
+  for dropping some of them. Today the choices are editing one region or the
+  cancel-all keymap.
 
 ### Session / workflow
 
