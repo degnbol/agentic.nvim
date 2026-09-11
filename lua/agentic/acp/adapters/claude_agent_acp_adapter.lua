@@ -172,7 +172,12 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
         self:__resolve_fetch_fields(message, rawInput)
     elseif kind == "think" and rawInput.subagent_type then
         message.kind = "SubAgent"
-        message.argument = rawInput.description or rawInput.subagent_type
+        -- The bridge falsy-guards `description` but the plugin never has, so
+        -- an empty one would render a dangling "### <type>: ".
+        local description = rawInput.description
+        message.argument = (description and description ~= "")
+                and rawInput.subagent_type .. ": " .. description
+            or rawInput.subagent_type
     elseif
         kind == "SubAgent" or (kind == "other" and rawInput.subagent_type)
     then

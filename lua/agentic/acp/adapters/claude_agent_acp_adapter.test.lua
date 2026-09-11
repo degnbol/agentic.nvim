@@ -431,4 +431,52 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.equal(0, #updates)
         end)
     end)
+
+    describe("subagent heading", function()
+        --- @param rawInput table
+        --- @return agentic.ui.MessageWriter.ToolCallBase message
+        local function think_update(rawInput)
+            return make_adapter():__build_tool_call_update({
+                toolCallId = "tc-task",
+                kind = "think",
+                status = "in_progress",
+                title = "Review the diff",
+                rawInput = rawInput,
+            })
+        end
+
+        it("names the agent ahead of the description", function()
+            local msg = think_update({
+                subagent_type = "code-reviewer",
+                description = "Review the diff",
+            })
+
+            assert.equal("SubAgent", msg.kind)
+            assert.equal("code-reviewer: Review the diff", msg.argument)
+        end)
+
+        it("falls back to the bare type before a description lands", function()
+            local msg = think_update({ subagent_type = "code-reviewer" })
+
+            assert.equal("SubAgent", msg.kind)
+            assert.equal("code-reviewer", msg.argument)
+        end)
+
+        it("treats an empty description as absent", function()
+            local msg = think_update({
+                subagent_type = "code-reviewer",
+                description = "",
+            })
+
+            assert.equal("code-reviewer", msg.argument)
+        end)
+
+        -- Guards the branch order: a think call without a subagent_type is a
+        -- plain thought and must not take the SubAgent branch.
+        it("leaves a think call without a type alone", function()
+            local msg = think_update({ description = "Review the diff" })
+
+            assert.is_nil(msg.kind)
+        end)
+    end)
 end)
