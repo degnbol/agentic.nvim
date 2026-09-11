@@ -343,18 +343,20 @@ unblocked: it would read `self.thought_level.options` and send the chosen value
 via `session/set_config_option`. Provider-specific — non-Claude bridges may not
 emit it.
 
-### Mode switch kind inconsistency (claude-agent-acp)
+### Tool identity is `_meta.claudeCode.toolName`, not `title` (claude-agent-acp)
 
-The provider sends different `kind` values for plan mode entry vs exit:
+`title` is a display string `tools.js` rewords between releases (0.75.1 turned
+`Skill` into `Load skill: <name>` and `ExitPlanMode` into `Approve Plan`), so a
+branch keyed on it dies silently at the next bump. Every notification built from
+a cached `tool_use` — initial `tool_call`, refining `tool_call_update`,
+`streamedInputRefinement` — carries the tool's own name on
+`_meta.claudeCode.toolName` (`claudeCodeMetaFromToolUse` in `acp-agent.js`);
+dispatch on that. The untracked-tool fallback and permission-denial updates
+carry no `_meta` at all — hence the guard in `ClaudeUtils.claude_meta`.
 
-| Tool | `kind` on `tool_call` | `title` on `tool_call` | `title` on final `tool_call_update` |
-| --- | --- | --- | --- |
-| EnterPlanMode | `"other"` | `"EnterPlanMode"` | `"EnterPlanMode"` |
-| ExitPlanMode | `"switch_mode"` | `"Ready to code?"` | `"Exited Plan Mode"` |
-
-Adapters must check both `kind == "other"` and `kind == "switch_mode"` in any
-branch that handles mode switches. The `title` field is unstable — use pattern
-matching (e.g. `title:match("^Ready%s")`) rather than exact string comparison.
+`kind` identifies a tool no better: the provider sends `"other"` for
+EnterPlanMode but `"switch_mode"` for ExitPlanMode, so any kind-keyed branch
+that handles mode switches must accept both.
 
 ### Tool kind casing varies by provider
 

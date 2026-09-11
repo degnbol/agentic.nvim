@@ -54,10 +54,10 @@ end
 --- @param session_id string
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
-    -- Provider sends kind="other" for EnterPlanMode but kind="switch_mode"
-    -- for ExitPlanMode ("Ready to code?"). Check both.
-    local mode_label = (update.kind == "other" or update.kind == "switch_mode")
-        and ClaudeUtils.mode_switch_label(update.title)
+    -- The provider disagrees with itself on `kind` here (EnterPlanMode is
+    -- "other", ExitPlanMode "switch_mode"), so the tool name decides alone.
+    local mode_label =
+        ClaudeUtils.MODE_SWITCH_TOOLS[ClaudeUtils.tool_name(update)]
     if mode_label then
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local message = {
@@ -141,6 +141,29 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
         return
     end
 
+    -- The tools the plugin re-kinds are matched by name, ahead of the kind
+    -- ladder below. The bridge kinds them "other" or "switch_mode" — a literal
+    -- of its own choosing that identifies no tool, and that disagrees with
+    -- itself across the two plan-mode tools — so it cannot gate the dispatch.
+    local tool_name = ClaudeUtils.tool_name(update)
+    local mode_label = ClaudeUtils.MODE_SWITCH_TOOLS[tool_name]
+    if tool_name == "SlashCommand" then
+        message.kind = "SlashCommand"
+        message.argument = rawInput.command or ""
+        return
+    elseif tool_name == "Skill" then
+        message.kind = "Skill"
+        message.argument = rawInput.skill or "unknown skill"
+        if rawInput.args then
+            message.body = self:safe_split(rawInput.args)
+        end
+        return
+    elseif mode_label then
+        message.kind = "switch_mode"
+        message.argument = mode_label
+        return
+    end
+
     local kind = update.kind
 
     if kind == "read" or kind == "edit" then
@@ -191,23 +214,6 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
 
         if rawInput.prompt then
             message.body = self:safe_split(rawInput.prompt)
-        end
-    elseif kind == "other" or kind == "switch_mode" then
-        if update.title == "SlashCommand" then
-            message.kind = "SlashCommand"
-            message.argument = rawInput.command or ""
-        elseif update.title == "Skill" then
-            message.kind = "Skill"
-            message.argument = rawInput.skill or "unknown skill"
-            if rawInput.args then
-                message.body = self:safe_split(rawInput.args)
-            end
-        else
-            local ml = ClaudeUtils.mode_switch_label(update.title)
-            if ml then
-                message.kind = "switch_mode"
-                message.argument = ml
-            end
         end
     else
         message.argument = self:__ensure_command_string(rawInput.command)
@@ -279,8 +285,7 @@ end
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 --- @return agentic.ui.MessageWriter.ToolCallBase|nil
 local function hook_patch_facts(update)
-    local claude_meta = update._meta and update._meta.claudeCode
-    local response = claude_meta and claude_meta.toolResponse
+    local response = ClaudeUtils.claude_meta(update).toolResponse
     local patch = response and response.structuredPatch
     -- Other notifications also carry `_meta.claudeCode.toolResponse` (mode
     -- switches, permission denials, subagent progress); a structuredPatch with

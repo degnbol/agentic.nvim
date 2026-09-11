@@ -1,7 +1,7 @@
 --- Constants and helpers for the Claude ACP adapter (claude_agent_acp).
 local M = {}
 
---- Mode-switching tools: maps ACP tool_call title to a short display label.
+--- Mode-switching tools: maps claude tool name to a short display label.
 --- Body contains internal instructions, not user-facing content.
 M.MODE_SWITCH_TOOLS = {
     EnterPlanMode = "Plan",
@@ -9,22 +9,24 @@ M.MODE_SWITCH_TOOLS = {
     EnterWorktree = "Normal",
 }
 
---- Resolve mode-switch label from a tool_call title.
---- ACP has no stable tool-name field — `title` is the only identifier, and
---- the provider may send a user-facing string (e.g. "Ready to code?",
---- "Ready for implementation") instead of the internal tool name.
---- @param title string
---- @return string|nil label "Plan" or "Normal", or nil if not a mode switch
-function M.mode_switch_label(title)
-    local label = M.MODE_SWITCH_TOOLS[title]
-    if label then
-        return label
-    end
-    -- Provider exit-plan titles start with "Ready" (e.g. "Ready to code?")
-    if title:match("^Ready%s") then
-        return "Normal"
-    end
-    return nil
+--- claude-agent-acp's per-notification metadata, or an empty table when the
+--- notification carries none — `_meta` is genuinely optional (the bridge's
+--- untracked-tool fallback emits a `tool_call_update` without it), so a bare
+--- three-level index throws.
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @return agentic.acp.ClaudeCodeMeta
+function M.claude_meta(update)
+    return update._meta and update._meta.claudeCode or {}
+end
+
+--- The provider's own name for the tool (`Skill`, `ExitPlanMode`, …), the one
+--- stable identifier on a tool-call notification. `title` is a display string
+--- the bridge rewords between releases — 0.75.1 turned `Skill` into
+--- "Load skill: <name>" and `ExitPlanMode` into "Approve Plan".
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @return string|nil
+function M.tool_name(update)
+    return M.claude_meta(update).toolName
 end
 
 --- Rewrite a leading "grep " in a synthesised search command to "rg ".
@@ -55,6 +57,7 @@ M.PLACEHOLDER_TITLES = {
     Edit = true, -- Edit with no file_path
     grep = true, -- Grep with no flags/pattern
     Find = true, -- Glob with no pattern/path
+    ["Load skill"] = true, -- Skill with no skill name
     Fetch = true, -- WebFetch with no URL
     ["Web search"] = true, -- WebSearch with no query
     ["Unknown Tool"] = true, -- catch-all in tools.js

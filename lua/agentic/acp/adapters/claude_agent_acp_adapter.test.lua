@@ -432,6 +432,103 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
+    describe("dispatch on the tool name", function()
+        --- Adapter whose initial tool_call notifications are captured.
+        --- @return agentic.acp.ACPClient adapter
+        --- @return agentic.ui.MessageWriter.ToolCallBlock[] calls
+        local function make_capturing_adapter()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock[]
+            local calls = {}
+            local adapter = setmetatable({
+                __with_subscriber = function(_self, _session_id, fn)
+                    fn({
+                        on_tool_call = function(message)
+                            table.insert(calls, message)
+                        end,
+                    })
+                end,
+            }, { __index = ClaudeAgentACPAdapter })
+            return adapter, calls
+        end
+
+        -- Titles are display strings the bridge rewords between releases
+        -- (0.75.1: "Skill" → "Load skill: <name>", "ExitPlanMode" →
+        -- "Approve Plan"); `_meta.claudeCode.toolName` carries the tool's
+        -- own name on every tool-call notification.
+        it("mints the Skill kind once the input has streamed", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-skill",
+                kind = "other",
+                status = "in_progress",
+                title = "Load skill: coding",
+                rawInput = { skill = "coding", args = "--strict" },
+                _meta = { claudeCode = { toolName = "Skill" } },
+            })
+
+            assert.equal("Skill", msg.kind)
+            assert.equal("coding", msg.argument)
+            assert.same({ "--strict" }, msg.body)
+        end)
+
+        it("shows a blank argument until the skill name lands", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-skill",
+                kind = "other",
+                status = "pending",
+                title = "Load skill",
+                rawInput = {},
+                _meta = { claudeCode = { toolName = "Skill" } },
+            })
+
+            assert.equal("", calls[1].argument)
+        end)
+
+        it("renders ExitPlanMode as a switch to Normal", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-plan",
+                kind = "switch_mode",
+                status = "pending",
+                title = "Approve Plan",
+                content = {
+                    {
+                        type = "content",
+                        content = { type = "text", text = "the plan" },
+                    },
+                },
+                _meta = { claudeCode = { toolName = "ExitPlanMode" } },
+            })
+
+            assert.equal(1, #calls)
+            assert.equal("switch_mode", calls[1].kind)
+            assert.equal("Normal", calls[1].argument)
+            -- The body holds internal instructions, not user-facing content.
+            assert.is_nil(calls[1].body)
+        end)
+
+        -- The bridge's untracked-tool fallback sends no `_meta` at all, and a
+        -- title alone must no longer reach a mode-switch branch.
+        it("leaves a notification without _meta on the generic path", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-other",
+                kind = "other",
+                status = "pending",
+                title = "Approve Plan",
+            })
+
+            assert.equal("other", calls[1].kind)
+            assert.equal("Approve Plan", calls[1].argument)
+        end)
+    end)
+
     describe("subagent heading", function()
         --- @param rawInput table
         --- @return agentic.ui.MessageWriter.ToolCallBase message

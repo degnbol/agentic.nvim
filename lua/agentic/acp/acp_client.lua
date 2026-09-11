@@ -1221,7 +1221,7 @@ return ACPClient
 --- | "low"
 
 --- @class agentic.acp.RawInput
---- @field file_path string
+--- @field file_path? string
 --- @field new_string? string
 --- @field old_string? string
 --- @field replace_all? boolean
@@ -1331,9 +1331,15 @@ return ACPClient
 --- @field structuredPatch? agentic.acp.ClaudePatchHunk[]
 
 --- claude-agent-acp per-notification metadata. `parentToolUseId` is set on
---- subagent (Task) notifications — present ⟺ subagent content.
+--- subagent (Task) notifications — present ⟺ subagent content. `toolName` is
+--- the provider's internal tool name, set on every tool-call notification.
+--- @class agentic.acp.ClaudeCodeMeta
+--- @field parentToolUseId? string
+--- @field toolName? string
+--- @field toolResponse? agentic.acp.ClaudeToolResponse
+
 --- @class agentic.acp.ClaudeMeta
---- @field claudeCode? { parentToolUseId?: string, toolName?: string, toolResponse?: agentic.acp.ClaudeToolResponse }
+--- @field claudeCode? agentic.acp.ClaudeCodeMeta
 
 --- @class agentic.acp.ToolCallMessage
 --- @field sessionUpdate "tool_call"

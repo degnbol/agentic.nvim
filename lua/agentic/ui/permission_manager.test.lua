@@ -214,13 +214,22 @@ describe("agentic.ui.PermissionManager", function()
             Config = require("agentic.config")
         end)
 
+        --- The wire shape: the provider kinds a skill load "other", and the
+        --- skill kind only exists on the tracker the adapter minted from the
+        --- tool name.
         --- @return agentic.acp.RequestPermission
         local function make_skill_request()
+            writer.tool_call_blocks["tc-skill"] = {
+                tool_call_id = "tc-skill",
+                kind = "Skill",
+                argument = "foo",
+            }
             return {
                 sessionId = "test-session",
                 toolCall = {
                     toolCallId = "tc-skill",
-                    kind = "Skill",
+                    kind = "other",
+                    rawInput = { skill = "foo" },
                 },
                 options = {
                     {
@@ -237,7 +246,7 @@ describe("agentic.ui.PermissionManager", function()
             }
         end
 
-        it("auto-approves Skill kind", function()
+        it("auto-approves a skill load", function()
             local cb = spy.new(function() end)
             pm:add_request(make_skill_request(), cb --[[@as function]])
             assert.spy(cb).was.called(1)

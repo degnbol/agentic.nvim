@@ -1534,6 +1534,59 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("plan exit", function()
+        -- The block the claude adapter mints for ExitPlanMode. The option is
+        -- offered off the tracker, never off the permission request.
+        local PLAN_EXIT_BLOCK = { kind = "switch_mode", argument = "Normal" }
+
+        --- @param block table|nil Tracker for the requesting tool call
+        --- @return agentic.acp.RequestPermission request as add_request saw it
+        local function request_for(block)
+            --- @type agentic.acp.RequestPermission
+            local seen
+            --- @type agentic.SessionManager
+            local session = {
+                status_indicator = { stop = function() end },
+                message_writer = { tool_call_blocks = { ["tc-plan"] = block } },
+                _tool_call_owner = {},
+                _writer_for = SessionManager._writer_for,
+                permission_manager = {
+                    add_request = function(_self, request)
+                        seen = request
+                        return false
+                    end,
+                },
+            } --[[@as agentic.SessionManager]]
+
+            SessionManager._on_request_permission(session, {
+                sessionId = "s-1",
+                toolCall = { toolCallId = "tc-plan", kind = "switch_mode" },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Yes",
+                        kind = "allow_once",
+                    },
+                },
+            }, function() end)
+
+            return seen
+        end
+
+        it("offers to clear context and implement the plan", function()
+            local options = request_for(PLAN_EXIT_BLOCK).options
+
+            assert.equal(2, #options)
+            assert.equal("plan_implement", options[2].kind)
+        end)
+
+        it("leaves other tool calls' options alone", function()
+            local options = request_for({ kind = "edit" }).options
+
+            assert.equal(1, #options)
+        end)
+    end)
+
     describe("_drain_hook_records", function()
         --- @param records table[]
         --- @return agentic.SessionManager
