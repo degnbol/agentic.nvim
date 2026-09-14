@@ -130,6 +130,11 @@ end
 --- model, not the user.
 local REJECTION_PREFIX = "The user doesn't want to proceed"
 
+--- @class agentic.ui.MessageWriter.ErrorBlock
+--- @field heading_id integer NS_ERROR extmark on the block's `## Error` row — the anchor its rail is re-stamped from. Doubles as the heading's own highlight, so the block costs no mark of its own.
+--- @field rail_ids integer[] NS_DECORATIONS marks of the block's `│`/`╰─` rail, freed and re-stamped whole each time the block grows.
+--- @field line_count integer Buffer line count the block last ended at. A different count means something else has been written since, so the block is closed and the next action starts on its own.
+
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
@@ -150,6 +155,7 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
 --- @field _numbering_active? boolean When true (set by `enable_numbering` once ≥2 subagents run concurrently in the turn), blocks carrying an `ordinal` render it as the sign on every body row (the whole left rail), replacing the │ border. Reset per turn.
+--- @field _error_block? agentic.ui.MessageWriter.ErrorBlock The `## Error` region still open at the end of the buffer, which `write_error_action` extends. Not per-turn state: the line-count check on `ErrorBlock` is what closes it, and it closes a block against a mid-turn write too, which a turn-boundary reset would miss.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -162,8 +168,8 @@ MessageWriter.__index = MessageWriter
 MessageWriter.NS_USER_ACTIONS =
     vim.api.nvim_create_namespace("agentic_user_actions")
 
---- Drop every region sign the writer placed in `bufnr`: the identity marks and
---- the rails under them.
+--- Drop every mark the writer placed in `bufnr` that no tracker frees: the
+--- region identity marks, the rails under them, and the error highlights.
 ---
 --- Emptying a buffer with `nvim_buf_set_lines` collapses extmarks onto (0,0)
 --- instead of deleting them, so without this a reset leaves `[[`/`]]` jumping to
@@ -175,20 +181,23 @@ function MessageWriter.clear_regions(bufnr)
     for _, ns in ipairs({
         MessageWriter.NS_USER_ACTIONS,
         Renderer.NS_DECORATIONS,
+        NS_ERROR,
     }) do
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
     end
 end
 
---- Forget every tool call block written to this buffer: the trackers and the
---- extmarks they address rows through.
+--- Forget every block written to this buffer: the tool call trackers, the
+--- extmarks they address rows through, and any error region left open.
 ---
 --- Emptying a buffer with `nvim_buf_set_lines` collapses extmarks onto row 0
 --- rather than deleting them, so a tracker surviving its conversation resolves
 --- to the top of the next one — where anything anchored to it would be
---- inserted.
+--- inserted. `MessageWriter.clear_regions` frees the marks this leaves behind
+--- (the error block's live in NS_ERROR); the two are called together.
 function MessageWriter:clear_blocks()
     self.tool_call_blocks = {}
+    self._error_block = nil
     vim.api.nvim_buf_clear_namespace(self.bufnr, Renderer.NS_TOOL_BLOCKS, 0, -1)
 end
 
@@ -317,19 +326,29 @@ function MessageWriter:_mark_section_break()
     self._pending_section_break = true
 end
 
+--- Drop the live prose run without bracketing it: its tracking, its reflow
+--- marker and its signs. The counterpart of `_end_prose_run`, for a run whose
+--- rows are gone or are being abandoned mid-stream.
+---
+--- The signs go with the run, not just the tracking: the next run starts on the
+--- row they end on, where a surviving `╰─` would contend with its `╭─` for the
+--- one sign cell.
+--- @param bufnr integer
+--- @private
+function MessageWriter:_abandon_prose_run(bufnr)
+    self._chunk_start_line = nil
+    self._prose_run_start_line = nil
+    Renderer.clear_decoration_extmarks(bufnr, self._prose_region_ids)
+    self._prose_region_ids = nil
+end
+
 --- Reset all per-turn mutable state. Called by refresh to unstick a
 --- desynchronised display without restarting the session.
 function MessageWriter:reset_turn_state()
     self._suppressing_rejection = false
     self._rejection_buffer = ""
     self._pending_section_break = false
-    self._chunk_start_line = nil
-    self._prose_run_start_line = nil
-    -- The signs go with the run, not just the tracking: this abandons the run
-    -- mid-stream, and the next one starts on the row they end on, where a
-    -- surviving `╰─` would contend with its `╭─` for the one sign cell.
-    Renderer.clear_decoration_extmarks(self.bufnr, self._prose_region_ids)
-    self._prose_region_ids = nil
+    self:_abandon_prose_run(self.bufnr)
     self._thought_run = nil
     self._numbering_active = false
     self:_release_prose_pin()
@@ -521,12 +540,13 @@ end
 --- @param bufnr integer
 --- @param identity_row integer 0-indexed row carrying the identity sign
 --- @param last_row integer 0-indexed last row of the region, inclusive
+--- @return integer[] decoration_extmark_ids Empty for a region drawing one row
 local function render_region_rail(bufnr, identity_row, last_row)
     local end_row = last_drawn_row(bufnr, identity_row, last_row)
     if end_row <= identity_row then
-        return
+        return {}
     end
-    ExtmarkBlock.render_rail(bufnr, Renderer.NS_DECORATIONS, {
+    return ExtmarkBlock.render_rail(bufnr, Renderer.NS_DECORATIONS, {
         body_start = identity_row + 1,
         body_end = end_row - 1,
         footer_line = end_row,
@@ -1189,13 +1209,24 @@ local error_kind_class = {
     billing_error = "billing_error",
 }
 
---- Strip the bridge's `Internal error: ` / `API Error: NNN` wrapper prefix.
+--- Strip the bridge's `Internal error: ` wrapper. It names the transport the
+--- failure came back over, never the failure.
+--- @param msg string
+--- @return string stripped
+local function strip_bridge_wrapper(msg)
+    return (msg:gsub("^Internal error:%s*", ""))
+end
+
+--- Strip the bridge's wrapper and the `API Error: NNN` status behind it.
+---
+--- Only for a message whose class is already known, where a hint below says
+--- what the status would have. On an unclassified message the status is the
+--- one machine-readable fact in the line, and dropping it can leave nothing at
+--- all: `API Error: 401` is entirely prefix.
 --- @param msg string
 --- @return string stripped
 local function strip_error_prefix(msg)
-    msg = msg:gsub("^Internal error:%s*", "")
-    msg = msg:gsub("^API Error:%s*%d+%s*", "")
-    return msg
+    return (strip_bridge_wrapper(msg):gsub("^API Error:%s*%d+%s*", ""))
 end
 
 --- Parse a reset time like "5pm (Europe/London)" or "17:30 (Europe/London)"
@@ -1303,6 +1334,12 @@ local function format_error_lines(err)
         return lines, kind_class, nil
     end
 
+    -- Unclassified from here down, so the message is all the reader gets: it
+    -- keeps everything but the bridge's wrapper. The provider streams a fatal
+    -- error as prose too, and the two copies have to match word for word for
+    -- `drop_repeated_prose` to recognise the duplicate.
+    msg = strip_bridge_wrapper(msg)
+
     -- Detect usage limit errors: "You're out of extra usage · resets 5pm (Europe/London)"
     local time_str, tz = msg:match("resets%s+(%d+:?%d*%s*[ap]m)%s+%(([%w/]+)%)")
     if not time_str then
@@ -1315,7 +1352,6 @@ local function format_error_lines(err)
         return lines, "usage_limit", reset_epoch
     end
 
-    -- Fallback: just use the raw message, split on newlines
     vim.list_extend(lines, vim.split(msg, "\n", { plain = true }))
     return lines, nil
 end
@@ -1323,10 +1359,110 @@ end
 local HEADING = "## Error"
 local HEADING_PREFIX_LEN = #"## "
 
---- Write an error message to the chat buffer with red error highlighting.
+--- The words of a string, one space between each.
+--- @param text string
+--- @return string
+local function collapse_spaces(text)
+    return vim.trim((text:gsub("%s+", " ")))
+end
+
+--- What the error says in its own words: the display lines up to the first
+--- blank, which is where a class hint starts if the classifier added one.
+--- @param lines string[] Formatted error lines
+--- @return string
+local function reported_text(lines)
+    local said = {}
+    for _, line in ipairs(lines) do
+        if not line:match("%S") then
+            break
+        end
+        said[#said + 1] = line
+    end
+    return table.concat(said, " ")
+end
+
+--- Delete the prose run's last paragraph when it says the same thing as `text`.
+---
+--- A fatal error reaches the chat twice: the provider streams it as assistant
+--- prose, then returns it again as the prompt's JSON-RPC error. Only the second
+--- copy carries the class and the reset time the plugin acts on, so the prose
+--- copy is the one to drop — otherwise the reader sees the sentence, then sees
+--- it again under `## Error`.
+---
+--- Matching is on words alone: the prose copy has been hard-wrapped to the
+--- window by now and the error copy has not, so the two differ only in where
+--- their line breaks fall. Only the run's *last* paragraph is a candidate, so a
+--- duplicate spanning several paragraphs falls through and renders twice —
+--- fail-safe, the direction that never eats prose the provider meant.
+--- @param bufnr integer
+--- @param run_start integer 0-indexed row the prose run began on
+--- @param text string What the error is about to report
+--- @return boolean removed
+local function drop_repeated_prose(bufnr, run_start, text)
+    local rows = vim.api.nvim_buf_get_lines(bufnr, run_start, -1, false)
+
+    local last = #rows
+    while last >= 1 and not rows[last]:match("%S") do
+        last = last - 1
+    end
+    if last < 1 then
+        return false
+    end
+    local first = last
+    while first > 1 and rows[first - 1]:match("%S") do
+        first = first - 1
+    end
+
+    local paragraph = table.concat(vim.list_slice(rows, first, last), " ")
+    if collapse_spaces(paragraph) ~= collapse_spaces(text) then
+        return false
+    end
+
+    -- The rows the run opened on — a blank, or the empty `###` that closed the
+    -- section of the block above — introduce nothing once the only paragraph
+    -- they led is gone, so they go with it.
+    local leads_run = table
+        .concat(vim.list_slice(rows, 1, first - 1), "")
+        :match("^[#%s]*$") ~= nil
+    vim.api.nvim_buf_set_lines(
+        bufnr,
+        run_start + (leads_run and 0 or first - 1),
+        -1,
+        false,
+        {}
+    )
+    return true
+end
+
+--- Stamp ERROR_BODY over every non-blank row of an inclusive range.
+--- @param bufnr integer
+--- @param from_row integer 0-indexed first row
+--- @param to_row integer 0-indexed last row, inclusive
+local function highlight_error_body(bufnr, from_row, to_row)
+    local rows = vim.api.nvim_buf_get_lines(bufnr, from_row, to_row + 1, false)
+    for i, line in ipairs(rows) do
+        if line ~= "" then
+            vim.api.nvim_buf_set_extmark(bufnr, NS_ERROR, from_row + i - 1, 0, {
+                end_col = #line,
+                hl_group = Theme.HL_GROUPS.ERROR_BODY,
+            })
+        end
+    end
+end
+
+--- Write an error message to the chat buffer as a signed, red-highlighted
+--- region: `## Error` on the heading row under the error glyph, the provider's
+--- own words wrapped beneath it, a `│`/`╰─` rail marking how far it reaches.
+---
 --- The `##` heading puts the error where it belongs in the section tree: a
---- turn-level report from the provider, a sibling of the prompt it answers,
---- not one of that turn's `###` tool calls.
+--- turn-level report from the provider, a sibling of the prompt it answers, not
+--- one of that turn's `###` tool calls. The identity sign stays out of
+--- NS_USER_ACTIONS, unlike a prompt's or a notice's: `[[`/`]]` walks what the
+--- user did, and an error is not that.
+---
+--- The block stays open — `write_error_action` extends it with whatever the
+--- classification leads to (a countdown, a reauth offer), so the error and the
+--- plugin's response to it read as one region.
 --- @param err agentic.acp.ACPError
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
@@ -1334,13 +1470,31 @@ function MessageWriter:write_error_message(err)
     self:flush_thought_run()
 
     local body_lines, error_type, reset_epoch = format_error_lines(err)
-    local all_lines = { HEADING, "" }
-    vim.list_extend(all_lines, body_lines)
+    local all_lines = { HEADING }
+    vim.list_extend(
+        all_lines,
+        TextWrap.wrap_prose(body_lines, self:_get_wrap_width())
+    )
 
     self:_release_prose_pin()
     self:_auto_scroll(self.bufnr)
 
     self:_with_modifiable_suppressed(function(bufnr)
+        -- Before the run is bracketed, not after: `_end_prose_run` leaves the
+        -- final bracket's marks untracked, and marks inside a deleted range
+        -- collapse onto the deletion point instead of going with the text — a
+        -- `╰─` stranded on the error's own heading row, with no id to free it.
+        -- Every other mark that can fall in the range is tracked and freed by
+        -- id, bar `_insert_collapsed_region`'s trailing insert mark, which no
+        -- second sidecar arrives after a fatal error to resolve.
+        local run_start = self._prose_run_start_line
+        if
+            run_start
+            and drop_repeated_prose(bufnr, run_start, reported_text(body_lines))
+        then
+            self:_abandon_prose_run(bufnr)
+        end
+
         -- An error ends the prose run. Without this the error block lands inside
         -- a fence the interrupted prose left open, and finalize_turn's reflow
         -- would later span it and move its NS_ERROR extmarks.
@@ -1358,7 +1512,7 @@ function MessageWriter:write_error_message(err)
         end
 
         -- Highlight "Error" portion of "## Error" (after "## ")
-        vim.api.nvim_buf_set_extmark(
+        local heading_id = vim.api.nvim_buf_set_extmark(
             bufnr,
             NS_ERROR,
             start_row,
@@ -1369,37 +1523,97 @@ function MessageWriter:write_error_message(err)
                 priority = 200,
             }
         )
+        highlight_error_body(bufnr, start_row + 1, end_row)
 
-        -- Highlight body lines (skip the blank separator at start_row + 1)
-        for i = start_row + 2, end_row do
-            local line = vim.api.nvim_buf_get_lines(bufnr, i, i + 1, false)[1]
-            if line and line ~= "" then
-                vim.api.nvim_buf_set_extmark(bufnr, NS_ERROR, i, 0, {
-                    end_col = #line,
-                    hl_group = Theme.HL_GROUPS.ERROR_BODY,
-                })
-            end
-        end
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            Renderer.NS_DECORATIONS,
+            start_row,
+            0,
+            {
+                sign_text = Glyphs.ERROR .. " ",
+                sign_hl_group = Theme.HL_GROUPS.ERROR_HEADING,
+            }
+        )
+        local rail_ids = render_region_rail(bufnr, start_row, end_row)
 
         self:_append_lines({ "" })
+
+        self._error_block = {
+            heading_id = heading_id,
+            rail_ids = rail_ids,
+            line_count = vim.api.nvim_buf_line_count(bufnr),
+        }
     end)
 
     return error_type, reset_epoch
 end
 
---- Write an action hint line after an error, styled with ERROR_BODY highlight.
+--- Grow the open error block down to the end of the buffer, re-stamping its rail
+--- so the `╰─` sits on the row the block now ends on.
+---
+--- Re-stamped whole rather than repaired at the corner (the cadence
+--- `_extend_prose_region` needs): an error block gains a row at a time, at most
+--- a handful of times, so there is no streaming cost to amortise.
+--- @param bufnr integer
+--- @private
+function MessageWriter:_extend_error_block(bufnr)
+    local block = self._error_block
+    if not block then
+        return
+    end
+    local heading_row = vim.api.nvim_buf_get_extmark_by_id(
+        bufnr,
+        NS_ERROR,
+        block.heading_id,
+        {}
+    )[1]
+    if not heading_row then
+        self._error_block = nil
+        return
+    end
+
+    Renderer.clear_decoration_extmarks(bufnr, block.rail_ids)
+    block.rail_ids = render_region_rail(
+        bufnr,
+        heading_row,
+        vim.api.nvim_buf_line_count(bufnr) - 1
+    )
+    block.line_count = vim.api.nvim_buf_line_count(bufnr)
+end
+
+--- Write a line in the error style, joined to the error region above it when it
+--- directly follows one.
+---
+--- Two populations of caller. What an error led to — an auto-continue
+--- countdown, a health check, a reauth offer — lands under the error that
+--- prompted it and belongs in its region. Standalone plugin notices (a rejected
+--- `/trust` scope, a truncated queue) reach the same styling with no error
+--- above them, and get no region.
+---
+--- Which one it is comes from the buffer no longer ending where the block did,
+--- rather than from a boundary call in every other writer: cheaper, and it
+--- cannot be forgotten by the next writer added. It also closes the block
+--- against a write that lands mid-turn, which a turn-boundary reset would miss.
 --- @param text string The action hint text (e.g. "Press [r] to re-authenticate")
 function MessageWriter:write_error_action(text)
     self:_auto_scroll(self.bufnr)
 
-    self:_with_modifiable_suppressed(function(bufnr)
-        self:_append_lines({ text, "" })
+    local lines = TextWrap.wrap_prose({ text }, self:_get_wrap_width())
 
-        local row = vim.api.nvim_buf_line_count(bufnr) - 2
-        vim.api.nvim_buf_set_extmark(bufnr, NS_ERROR, row, 0, {
-            end_col = #text,
-            hl_group = Theme.HL_GROUPS.ERROR_BODY,
-        })
+    self:_with_modifiable_suppressed(function(bufnr)
+        local block = self._error_block
+        if block and block.line_count ~= vim.api.nvim_buf_line_count(bufnr) then
+            self._error_block = nil
+        end
+
+        self:_append_lines(lines)
+        self:_append_lines({ "" })
+
+        local end_row = vim.api.nvim_buf_line_count(bufnr) - 2
+        highlight_error_body(bufnr, end_row - #lines + 1, end_row)
+
+        self:_extend_error_block(bufnr)
     end)
 end
 

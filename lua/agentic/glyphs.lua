@@ -71,6 +71,12 @@ Glyphs.KIND.think = Glyphs.THINKING
 --- deliver anything, so the reader's question is which script spoke.
 Glyphs.HOOK = "󰛢"
 
+--- Identity of a failure the provider reported for the turn
+--- (`MessageWriter:write_error_message`). A crossed circle rather than the alert
+--- triangle: the triangle reads as a warning, and every region this marks is a
+--- turn that produced no answer.
+Glyphs.ERROR = "󰅚"
+
 --- Identity of a prompt the user wrote themselves — the absence of a command
 --- word rather than a glyph of its own, and the only sign here that is not
 --- `nf-md`. In `COMMAND`'s channel, so it belongs to the same check for

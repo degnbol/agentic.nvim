@@ -74,6 +74,13 @@ rail only, for a region whose identity mark lives in another namespace — see
 `AgenticGlyph{User,Agent}` rather than the rail's `AgenticCodeBlockFence`,
 which would dim it.
 
+An error is a region too: `## Error` under `Glyphs.ERROR`, the wrapped body
+`format_error_lines` builds (the provider's words, then any class hint), and a
+rail that `write_error_action` re-stamps as the
+countdown or reauth offer that follows joins the block. Its identity sign is in
+`NS_DECORATIONS`, not `NS_USER_ACTIONS` — `[[`/`]]` walks user actions. See
+`write_error_message` and `_extend_error_block`.
+
 Prose is the exception with no identity to announce: a run of it opens on a
 plain `╭─` instead, on its first row of text — never on the empty `###`
 boundary above, which belongs to the block that boundary closes. Only a run

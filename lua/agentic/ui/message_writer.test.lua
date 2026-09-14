@@ -3245,7 +3245,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(error_type)
         end)
 
-        it("falls back to raw message when JSON is invalid", function()
+        it("falls back to the message when JSON is invalid", function()
             --- @type agentic.acp.ACPError
             local err = {
                 code = -32603,
@@ -3254,8 +3254,25 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, error_type = MessageWriter._format_error_lines(err)
 
-            assert.equal("Internal error: {not valid json}", lines[1])
+            assert.equal("{not valid json}", lines[1])
             assert.is_nil(error_type)
+        end)
+
+        it("strips the bridge wrapper prefix off a usage limit", function()
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "Internal error: You've hit your limit"
+                    .. " · resets 5pm (Europe/London)",
+            }
+
+            local lines, error_type = MessageWriter._format_error_lines(err)
+
+            assert.equal(
+                "You've hit your limit · resets 5pm (Europe/London)",
+                lines[1]
+            )
+            assert.equal("usage_limit", error_type)
         end)
 
         it("uses error type as fallback when message is empty", function()
@@ -3433,6 +3450,18 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
+        -- The counterpart of the mapped-kind case below: with no class and no
+        -- hint, the status code is the only thing the line says, so stripping
+        -- it would leave a `## Error` with an empty body.
+        it("keeps the API Error status on an unclassified body", function()
+            --- @type agentic.acp.ACPError
+            local err = { code = -32603, message = "API Error: 401" }
+
+            local lines = MessageWriter._format_error_lines(err)
+
+            assert.equal("API Error: 401", lines[1])
+        end)
+
         it("strips the API Error prefix from a mapped-kind body", function()
             --- @type agentic.acp.ACPError
             local err = {
@@ -3525,8 +3554,7 @@ describe("agentic.ui.MessageWriter", function()
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
                 assert.equal("## Error", lines[1])
-                assert.equal("", lines[2])
-                assert.equal("Authentication required", lines[3])
+                assert.equal("Authentication required", lines[2])
                 -- No embedded JSON, so error_type is nil
                 assert.is_nil(error_type)
             end
@@ -3637,6 +3665,238 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(found_heading)
             assert.is_true(found_body)
         end)
+
+        it("wraps the body to the chat window width", function()
+            vim.wo[winid].wrap = false
+
+            --- @type agentic.acp.ACPError
+            local err = {
+                code = -32603,
+                message = "You've hit your individual spend limit · run"
+                    .. " /usage-credits to ask your admin for a higher limit ·"
+                    .. " your session limit resets 7:20pm (Europe/London)",
+            }
+
+            writer:write_error_message(err)
+
+            local width = writer:_get_wrap_width()
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            assert.equal("## Error", lines[1])
+            assert.is_true(#lines > 3)
+            for i = 2, #lines do
+                assert.is_true(#lines[i] <= width)
+            end
+        end)
+
+        it("signs the heading with the error glyph", function()
+            writer:write_error_message({ code = 1, message = "boom" })
+
+            local signs = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            assert.equal(0, signs[1][2])
+            assert.equal(Glyphs.ERROR .. " ", signs[1][4].sign_text)
+            assert.equal(
+                Theme.HL_GROUPS.ERROR_HEADING,
+                signs[1][4].sign_hl_group
+            )
+        end)
+
+        it("rails a multi-line error down to its last words", function()
+            writer:write_error_message({
+                code = 1,
+                message = "first line\nsecond line",
+            })
+
+            -- ## Error / first line / second line / (blank)
+            local signs = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local by_row = {}
+            for _, mark in ipairs(signs) do
+                by_row[mark[2]] = mark[4].sign_text
+            end
+            assert.equal(Glyphs.ERROR .. " ", by_row[0])
+            assert.equal("│ ", by_row[1])
+            assert.equal("╰─", by_row[2])
+            assert.is_nil(by_row[3])
+        end)
+
+        -- The provider streams a fatal error as prose before returning it as
+        -- the prompt's error, so these run against a hard-wrapping window: the
+        -- prose copy reaches the buffer already broken across rows and the
+        -- error copy does not, which is the whole reason the comparison
+        -- collapses whitespace rather than matching the text raw.
+        describe("deduplicating the streamed copy", function()
+            --- The provider's own words, long enough to wrap at any sane width.
+            local SAID = "You've hit your individual spend limit · run"
+                .. " /usage-credits to ask your admin for a higher limit ·"
+                .. " your session limit resets 7:20pm (Europe/London)"
+
+            before_each(function()
+                vim.wo[winid].wrap = false
+            end)
+
+            --- @param text string
+            local function stream(text)
+                writer:write_message_chunk({
+                    sessionUpdate = "agent_message_chunk",
+                    content = { type = "text", text = text },
+                })
+            end
+
+            --- @param line string
+            --- @return integer
+            local function count_rows(line)
+                local n = 0
+                for _, row in
+                    ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+                do
+                    n = n + (row == line and 1 or 0)
+                end
+                return n
+            end
+
+            it("drops the prose copy the provider streamed first", function()
+                stream(SAID)
+                local streamed_rows = vim.api.nvim_buf_line_count(bufnr)
+                    - count_rows("")
+                assert.is_true(streamed_rows > 1)
+
+                writer:write_error_message({
+                    code = -32603,
+                    message = "Internal error: " .. SAID,
+                })
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                assert.equal("## Error", lines[1])
+                assert.equal(1, count_rows("## Error"))
+                -- Same words, once, in the wrapped form the error block writes.
+                assert.equal(
+                    SAID,
+                    table.concat(vim.list_slice(lines, 2, #lines - 1), " ")
+                )
+            end)
+
+            it("leaves no sign behind on the rows it deletes", function()
+                -- Two paragraphs, so the run earns a real ╭─/│/╰─ bracket
+                -- before the error deletes the rows carrying it.
+                stream("Here is the summary.\n\n" .. SAID)
+
+                writer:write_error_message({
+                    code = -32603,
+                    message = "Internal error: " .. SAID,
+                })
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local heading_row = vim.fn.index(lines, "## Error")
+                local signs = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    Renderer.NS_DECORATIONS,
+                    0,
+                    -1,
+                    { details = true }
+                )
+                for _, mark in ipairs(signs) do
+                    assert.is_true(mark[2] >= heading_row)
+                end
+            end)
+
+            it("drops a copy the run opened a section break for", function()
+                -- The run shape a real turn produces: a tool call interrupted
+                -- the prose, so the next chunk opens on `###` and a blank.
+                writer:write_tool_call_block({
+                    tool_call_id = "t1",
+                    kind = "read",
+                    argument = "init.lua",
+                    status = "completed",
+                })
+                stream(SAID)
+                assert.is_true(
+                    vim.fn.index(
+                        vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                        "###"
+                    ) >= 0
+                )
+
+                writer:write_error_message({
+                    code = -32603,
+                    message = "Internal error: " .. SAID,
+                })
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                local heading_row = vim.fn.index(lines, "## Error")
+                assert.is_true(heading_row > 0)
+                assert.equal(
+                    SAID,
+                    table.concat(
+                        vim.list_slice(lines, heading_row + 2, #lines - 1),
+                        " "
+                    )
+                )
+            end)
+
+            -- Wrapping rebuilds a line word by word with one space between, so
+            -- any run of whitespace the provider sent survives in the error
+            -- copy and not in the prose copy. The only difference the two can
+            -- actually have, and the reason the match is not on raw text.
+            it("drops a copy whose spacing the wrap collapsed", function()
+                local spaced = SAID:gsub(" · ", "  ·  ")
+                stream(spaced)
+
+                writer:write_error_message({
+                    code = -32603,
+                    message = "Internal error: " .. spaced,
+                })
+
+                assert.equal(1, count_rows("## Error"))
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                assert.equal("## Error", lines[1])
+            end)
+
+            it("keeps prose that says something else", function()
+                stream("Running the tests now.")
+
+                writer:write_error_message({
+                    code = -32603,
+                    message = "Internal error: the provider gave up",
+                })
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                assert.equal("Running the tests now.", lines[1])
+                assert.equal("## Error", lines[2])
+            end)
+
+            it("keeps the paragraphs above the duplicated one", function()
+                stream("Here is the summary.\n\n" .. SAID)
+
+                writer:write_error_message({
+                    code = -32603,
+                    message = "Internal error: " .. SAID,
+                })
+
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                assert.equal("Here is the summary.", lines[1])
+                assert.equal(1, count_rows("## Error"))
+
+                local heading_row = vim.fn.index(lines, "## Error")
+                assert.equal(
+                    SAID,
+                    table.concat(
+                        vim.list_slice(lines, heading_row + 2, #lines - 1),
+                        " "
+                    )
+                )
+            end)
+        end)
     end)
 
     describe("write_error_action", function()
@@ -3690,6 +3950,64 @@ describe("agentic.ui.MessageWriter", function()
                 return ext[4].hl_group == "AgenticErrorBody"
             end, extmarks)
             assert.is_true(#body_extmarks > 0)
+        end)
+
+        --- Row → sign text of every decoration mark in the chat buffer.
+        --- @return table<integer, string>
+        local function signs_by_row()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                Renderer.NS_DECORATIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            local by_row = {}
+            for _, mark in ipairs(marks) do
+                by_row[mark[2]] = mark[4].sign_text
+            end
+            return by_row
+        end
+
+        it("extends the rail of the error it follows", function()
+            writer:write_error_message({ code = 1, message = "out of credit" })
+            writer:write_error_action("Auto-continuing in 3h 7m.")
+
+            -- ## Error / out of credit / (blank) / Auto-continuing / (blank)
+            local by_row = signs_by_row()
+            assert.equal(Glyphs.ERROR .. " ", by_row[0])
+            assert.equal("│ ", by_row[1])
+            assert.equal("│ ", by_row[2])
+            assert.equal("╰─", by_row[3])
+            assert.is_nil(by_row[4])
+        end)
+
+        it("stands alone once something else has been written", function()
+            writer:write_error_message({ code = 1, message = "out of credit" })
+            writer:write_user_prompt("try again")
+            writer:write_error_action("Auto-continuing in 3h 7m.")
+
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local action_row = vim.fn.index(lines, "Auto-continuing in 3h 7m.")
+            assert.is_true(action_row > 0)
+            assert.is_nil(signs_by_row()[action_row])
+        end)
+
+        it("wraps a long action to the chat window width", function()
+            vim.wo[winid].wrap = false
+            writer:write_error_message({ code = 1, message = "out of credit" })
+
+            writer:write_error_action(
+                "Auto-continue gave up after 3 attempts. Send a message"
+                    .. " manually when usage resets."
+            )
+
+            local width = writer:_get_wrap_width()
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            assert.is_true(#lines > 4)
+            for _, line in ipairs(lines) do
+                assert.is_true(#line <= width)
+            end
         end)
     end)
 
