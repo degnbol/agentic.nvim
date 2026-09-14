@@ -1,4 +1,5 @@
 local ACPClient = require("agentic.acp.acp_client")
+local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 
@@ -19,6 +20,28 @@ local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 local ClaudeAgentACPAdapter = ACPClient.extend()
+
+--- Spawn the bridge with the todo/task tools enabled. The Claude Code CLI
+--- withholds them from Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and newer models
+--- unless `CLAUDE_CODE_ENABLE_TODO_TOOLS` is set (TaskCreate's `isEnabled`, and
+--- the CHANGELOG entry naming the same variable). The bridge turns Task* calls
+--- into ACP `plan` updates, so without the flag `SessionManager` receives no
+--- `plan` and the todos split stays empty.
+--- An explicit `acp_providers` env entry wins over the flag.
+--- @param config agentic.acp.ACPProviderConfig
+--- @param on_ready fun(client: agentic.acp.ACPClient)
+--- @return agentic.acp.ACPClient
+function ClaudeAgentACPAdapter:new(config, on_ready)
+    if Config.todo_tools then
+        config = vim.tbl_deep_extend(
+            "force",
+            { env = { CLAUDE_CODE_ENABLE_TODO_TOOLS = "1" } },
+            config
+        )
+    end
+
+    return ACPClient.new(self, config, on_ready)
+end
 
 --- Separate a Bash tool call's description from its output. claude-agent-acp
 --- sends `input.description` as the initial tool_call content and wraps

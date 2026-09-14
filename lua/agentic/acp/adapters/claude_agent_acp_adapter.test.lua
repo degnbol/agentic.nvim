@@ -576,4 +576,63 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.is_nil(msg.kind)
         end)
     end)
+
+    describe("new", function()
+        local Config
+        local original_todo_tools
+
+        before_each(function()
+            Config = require("agentic.config")
+            original_todo_tools = Config.todo_tools
+        end)
+
+        after_each(function()
+            Config.todo_tools = original_todo_tools
+        end)
+
+        --- Construct through a subclass that stubs out the subprocess, and
+        --- report the provider config the transport would have spawned with.
+        --- @param provider_config agentic.acp.ACPProviderConfig
+        --- @return agentic.acp.ACPProviderConfig
+        local function spawn_config(provider_config)
+            local captured
+            local Stub = setmetatable({}, { __index = ClaudeAgentACPAdapter })
+            Stub.__index = Stub
+            function Stub:_setup_transport()
+                captured = self.provider_config
+            end
+            function Stub:_connect() end
+
+            Stub:new(provider_config, function() end)
+            return captured
+        end
+
+        it("enables the todo tools in the provider env", function()
+            Config.todo_tools = true
+
+            local config = spawn_config({ command = "claude-agent-acp" })
+
+            assert.equal("1", config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
+        end)
+
+        it("leaves the env alone when the todo tools are off", function()
+            Config.todo_tools = false
+
+            local config =
+                spawn_config({ command = "claude-agent-acp", env = {} })
+
+            assert.is_nil(config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
+        end)
+
+        it("yields to an explicit env entry", function()
+            Config.todo_tools = true
+
+            local config = spawn_config({
+                command = "claude-agent-acp",
+                env = { CLAUDE_CODE_ENABLE_TODO_TOOLS = "0" },
+            })
+
+            assert.equal("0", config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
+        end)
+    end)
 end)

@@ -79,7 +79,7 @@ This is a fork of carlos-algms/agentic.nvim.
 
 Install claude-agent-acp:
 >
-    pnpm add -g @agentclientprotocol/claude-agent-acp@0.66.0
+    pnpm add -g @agentclientprotocol/claude-agent-acp@0.75.1
 <
 Or download a binary from the releases page. That version is the one the
 plugin is developed against, not a hard floor.
@@ -141,6 +141,14 @@ override what you need.
 `auth_type` string (default: `"claudeai"`)
     Auth type for Claude CLI re-authentication. One of `"claudeai"`,
     `"console"`, `"sso"`.
+
+                                                  *agentic-config-todo_tools*
+`todo_tools` boolean (default: true)
+    Offer the `claude-agent-acp` agent the Claude Code todo/task tools
+    (TaskCreate, TaskUpdate, TaskList, TaskGet, TodoWrite), by setting
+    `CLAUDE_CODE_ENABLE_TODO_TOOLS` in the provider environment. These tools
+    fill the todos split. An `env` entry for that variable in
+    |agentic-config-acp_providers| takes precedence.
 
 ------------------------------------------------------------------------------
 4.2 WINDOWS                                           *agentic-config-windows*

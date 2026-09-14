@@ -76,6 +76,12 @@ local ConfigDefault = {
     --- @type "claudeai" | "console" | "sso"
     auth_type = "claudeai",
 
+    --- Offer the Claude Code todo/task tools (TaskCreate, TaskUpdate,
+    --- TaskList, TaskGet, TodoWrite) to the agent. claude-agent-acp only.
+    --- Turns the plan pane on and off: the bridge renders Task* calls as ACP
+    --- `plan` updates rather than tool calls, and nothing else writes there.
+    todo_tools = true,
+
     --- Auto-continue after usage limit errors.
     --- When the provider reports "out of extra usage · resets Xpm", schedules
     --- a timer to send "continue" once the reset time arrives.
