@@ -2504,7 +2504,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### `/tmp/file.txt`", lines[1])
+            assert.equal("### `/tmp/file.txt:1`", lines[1])
             assert.equal("Read 100 lines (1 - 100)", lines[2])
         end)
 
@@ -2521,8 +2521,25 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("### `/tmp/file.txt`", lines[1])
+            assert.equal("### `/tmp/file.txt:10`", lines[1])
             assert.equal("Read 3 lines (10 - 12)", lines[2])
+        end)
+
+        it("heads an open-ended read with its start line", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-open-range",
+                status = "pending",
+                kind = "read",
+                argument = "/tmp/file.txt",
+                body = { "a", "b", "c" },
+                read_range = { offset = 10 },
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
+
+            assert.equal("### `/tmp/file.txt:10`", lines[1])
+            assert.equal("Read 3 lines (10 - …)", lines[2])
         end)
 
         it("creates highlight ranges for pure insertion hunks", function()

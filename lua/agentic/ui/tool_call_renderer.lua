@@ -536,8 +536,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         end
     end
 
-    -- For read blocks, strip a trailing "(N - M)" range from the argument
-    -- (often baked into the ACP title) — it belongs on the info line, not here.
+    -- The ACP title often bakes the read range in as a trailing "(N - M)".
+    -- Split it off the path and re-attach only the first line, as `path:N` —
+    -- the shape `gF`, `CTRL-W gF` and file:line plugins parse, which makes the
+    -- head a jump target. The full range stays on the info line below: a
+    -- `path:N-M` head would fail the anchored patterns those plugins match
+    -- with (fileline.nvim uses `^([^:]+):([0-9:]+)$`), and only `gF`, which
+    -- scans digits and stops at the `-`, tolerates it.
     if kind == "read" then
         local path, range = M.parse_read_range(argument)
         if path then
@@ -545,6 +550,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             if not tool_call_block.read_range then
                 tool_call_block.read_range = range
             end
+        end
+        local read_range = tool_call_block.read_range
+        if read_range and argument ~= "" then
+            argument = argument .. ":" .. read_range.offset
         end
     end
 
