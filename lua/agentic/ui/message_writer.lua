@@ -4,6 +4,7 @@ local Config = require("agentic.config")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
+local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Renderer = require("agentic.ui.tool_call_renderer")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
@@ -1004,8 +1005,26 @@ function MessageWriter:write_hook_block(body, script, tool_call_id)
     self:_write_collapsed_region(wrapped, sign, script)
 end
 
+--- The identity sign for a prompt heading row: the command's own glyph when the
+--- prompt is a `/command`, the generic prompt marker otherwise.
+---
+--- A forwarded command reaches the buffer as a prompt like any other text, so
+--- without this every one of them would read as "the user said something". The
+--- word carries more than the marker does, and the same word gets the same
+--- glyph whether the provider or `SessionManager` answers it — a local
+--- command's notice takes its sign from the same table.
+--- @param text string Raw prompt text
+--- @return string sign
+local function prompt_sign(text)
+    local word = PromptBlocks.command(text)
+    if not word then
+        return Glyphs.PROMPT .. " "
+    end
+    return (Glyphs.COMMAND[word] or Glyphs.COMMAND_DEFAULT) .. " "
+end
+
 --- Write a user prompt to the chat buffer as a bracketed region: the heading
---- row takes a `❯` identity mark (which also drives `[[`/`]]` navigation), and a
+--- row takes an identity mark (which also drives `[[`/`]]` navigation), and a
 --- multi-line prompt grows a `│`/`╰─` rail beneath it. Standalone rather than
 --- delegating to write_message: it owns those signs and needs the heading row
 --- post-append to place them.
@@ -1051,7 +1070,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
             0,
             {
                 right_gravity = false,
-                sign_text = "❯ ",
+                sign_text = prompt_sign(text),
                 sign_hl_group = Theme.HL_GROUPS.GLYPH_USER,
             }
         )
@@ -1070,7 +1089,7 @@ end
 --- Write the result of a locally-handled command as a glyph-signed heading.
 ---
 --- A notice records something the *user* did, so its row carries an identity
---- sign in the same channel as a prompt's `❯` and is navigable with `[[`/`]]`.
+--- sign in the same channel as a prompt's own and is navigable with `[[`/`]]`.
 --- A notice with a body grows a `│`/`╰─` rail over those rows.
 ---
 --- Always `##`. The heading level says whose row it is, not when it was written

@@ -812,7 +812,7 @@ describe("agentic.ui.ChatWidget", function()
         it("]] stops on a command notice between prompts", function()
             writer:write_user_prompt("First prompt")
             writer:write_notice({
-                glyph = Glyphs.NOTICE.RENAME,
+                glyph = Glyphs.COMMAND.rename,
                 title = "New Name",
             })
 

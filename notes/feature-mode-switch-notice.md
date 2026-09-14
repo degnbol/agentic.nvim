@@ -12,8 +12,10 @@ channel for "the user changed session config locally" — see its docstring
 (`message_writer.lua:875`, *"A notice records something the user did"*).
 Callers: `/trust` set (`session_manager.lua:759`), `/trust off` (`:805`),
 `/rename` (`:728`), `/context` (`:708`), model switch (`:1816`), provider
-change (`:2676`), resume (`:2551`). `Glyphs.NOTICE` has TRUST, RENAME,
-CONTEXT, MODEL, PROVIDER, RESUME — no MODE.
+change (`:2676`), resume (`:2551`). A notice takes its glyph from
+`Glyphs.COMMAND`, keyed by command word, except the two no command triggers —
+provider swap and resume — which are standalone `Glyphs.PROVIDER` and
+`Glyphs.RESUME`. Mode switch has neither.
 
 Mode switch is the one holdout on `Logger.notify` (`session_manager.lua:1556`),
 directly above the model switch that already went the other way
@@ -38,13 +40,22 @@ header).
 
 Mirror `_notice_model_switched` exactly.
 
-- **`glyphs.lua`** — add `Glyphs.NOTICE.MODE`. Must be distinct from every
-  `KIND` value and every other `NOTICE` value (the module docstring states the
-  constraint). `󰓾` (`nf-md-toggle_switch`, U+F04FE) is the proposal: a mode is a
-  switch position. Verified distinct from every `KIND`, `KIND_DEFAULT`,
-  `THINKING`, `HOOK`, `NOTICE` and panel-title glyph. Not `󰒓` — that is
-  `KIND_DEFAULT`. `doc/agentic.txt` has no glyph list as such; the edit is the
-  command enumeration at `:686`.
+- **`glyphs.lua`** — add `Glyphs.MODE`, standalone beside `Glyphs.PROVIDER`
+  and `Glyphs.RESUME` rather than in `Glyphs.COMMAND`: no command asks for a
+  mode switch, which is the split that table's docstring states. Must be
+  distinct from every `KIND` and `COMMAND` value (the module docstring states
+  the constraint). `󰓾` (U+F04FE, `nf-md-target`) is the proposal: a mode is a
+  switch position. Verified distinct from every `KIND`, `COMMAND`,
+  `KIND_DEFAULT`, `COMMAND_DEFAULT`, `THINKING`, `HOOK`, `PROVIDER`, `RESUME`,
+  `PROMPT` and panel-title glyph. Not `󰒓` — that is `KIND_DEFAULT` — and not
+  `󰍍`, which is `KIND.switch_mode`, the agent's own plan-mode tool calls.
+
+  The glyph and its rationale disagree and one of them has to give: `󰓾` is
+  `nf-md-target`, while "a mode is a switch position" describes
+  `nf-md-toggle_switch` (`󰔡`, U+F0521). Pick before implementing.
+
+  `doc/agentic.txt` has no glyph list as such; the edit is the command
+  enumeration at `:686`.
 
   The notice title uses the raw mode name, where `_update_chat_header:1670`
   strips a `" Mode"` suffix — "Plan Mode" in the notice, "Plan" in the header.
@@ -134,7 +145,7 @@ Follow the shape of the existing model-notice coverage
 (`session_manager.test.lua:760-890`), which never drives `_handle_model_change`
 — it builds a stub session and calls `_notice_model_switched` directly.
 
-- `_notice_mode_switched` → `write_notice` with `Glyphs.NOTICE.MODE` and the
+- `_notice_mode_switched` → `write_notice` with `Glyphs.MODE` and the
   resolved name; body present/absent for a mode with/without a description.
 - `mid_turn` passthrough: notice written while `is_generating` does not
   finalize the turn (mirrors the model-notice assertion).

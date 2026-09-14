@@ -3183,7 +3183,7 @@ describe("agentic.SessionManager", function()
             local scope = pm.set_trust_scope.calls[1][2]
             assert.equal("repo", scope.kind)
             assert.equal(scope.display, notices[1].title)
-            assert.equal(Glyphs.NOTICE.TRUST, notices[1].glyph)
+            assert.equal(Glyphs.COMMAND.trust, notices[1].glyph)
             assert.is_nil(notices[1].glyph_hl)
         end)
 
@@ -3206,7 +3206,7 @@ describe("agentic.SessionManager", function()
             session:_handle_trust_command("off")
             assert.equal(1, pm.clear_trust_scope.call_count)
             -- The cleared notice reuses the set glyph, struck through.
-            assert.equal(Glyphs.NOTICE.TRUST, notices[1].glyph)
+            assert.equal(Glyphs.COMMAND.trust, notices[1].glyph)
             assert.equal(Theme.HL_GROUPS.GLYPH_OFF, notices[1].glyph_hl)
         end)
 

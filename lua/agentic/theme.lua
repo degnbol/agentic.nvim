@@ -142,7 +142,7 @@ function Theme.setup()
         { Theme.HL_GROUPS.HEADING, { link = "@punctuation.special" } },
 
         -- Identity glyphs in the sign column, split by whose row they open:
-        -- the user's `❯` prompt and command notices, the agent's tool calls.
+        -- the user's prompts and command notices, the agent's tool calls.
         -- An omitted `sign_hl_group` falls through to SignColumn, which is
         -- dimmer than the text the glyph announces — hence an explicit group
         -- rather than no group at all.

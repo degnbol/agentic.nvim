@@ -70,7 +70,7 @@ title gate never matches, as does `ExitPlanMode`'s; see
 inside §1; lowercasing a dead branch is still correct.
 
 Tables these are looked up in, all keyed lowercase: `Glyphs.KIND`
-(`glyphs.lua:19`), `CODE_KINDS` (`tool_call_renderer.lua:103`),
+(`glyphs.lua:25`), `CODE_KINDS` (`tool_call_renderer.lua:103`),
 `FILE_MUTATING_KINDS` (`session_manager.lua:30`), `READ_ONLY_KINDS` /
 `FILE_SCOPED_KINDS` (`permission_manager.lua:85`, `:91`), `KNOWN_ACP_KINDS`
 (`acp_client.lua:44`).
@@ -362,7 +362,7 @@ block field only, per § Scope.
 - **Documentation §1a invalidates**, beyond the four premise copies:
   `tool_call_renderer.lua:33` (*"Leaves already-capitalised kinds (WebSearch,
   SubAgent, etc.) unchanged"*), `config_default.lua:499` (*"ACP kind
-  `Skill`"*), `auggie_acp_adapter.lua:9`, `theme.lua:158`, `glyphs.lua:19`
+  `Skill`"*), `auggie_acp_adapter.lua:9`, `theme.lua:158`, `glyphs.lua:14`
   (*"keyed on the lowercased ACP kind"* — vacuous once lowercase is an
   invariant), `.claude/skills/rendering/SKILL.md:113`, `:158`. A
   prose-reviewer pass over `provider-system/SKILL.md` should follow §1: its
@@ -379,8 +379,11 @@ block field only, per § Scope.
 - **Nothing outside the plugin reads a kind.** `WINDOW_HEADERS`
   (`window_decoration.lua:10`) carries only `title`; its `subagent` key is a
   window name.
-- **`Glyphs.KIND` neither gains nor loses.** `skill`, `slashcommand` and
-  `todowrite` have no entry before or after and fall to `KIND_DEFAULT`.
+- **`Glyphs.KIND` resolves the same either way.** `kind_glyph`
+  (`tool_call_renderer.lua:79`) already normalises before the lookup, so the
+  lowercase-keyed entries — including `skill`, `slashcommand` and `todowrite`,
+  which now have their own — hit whether the kind arrives CamelCase or not.
+  The refactor makes that `normalise` call redundant, not load-bearing.
 
 ## Sequencing
 

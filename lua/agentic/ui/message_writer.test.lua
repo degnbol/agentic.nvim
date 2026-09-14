@@ -596,6 +596,50 @@ describe("agentic.ui.MessageWriter", function()
             return vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
         end
 
+        --- Sign text of the first prompt marker in the buffer.
+        local function marker_sign()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                MessageWriter.NS_USER_ACTIONS,
+                0,
+                -1,
+                { details = true }
+            )
+            return marks[1] and marks[1][4].sign_text
+        end
+
+        it("marks a prose prompt with the prompt marker", function()
+            writer:write_user_prompt("Hello there")
+
+            assert.equal("❯ ", marker_sign())
+        end)
+
+        it("marks a forwarded command with its own glyph", function()
+            writer:write_user_prompt("/compact")
+
+            assert.equal(Glyphs.COMMAND.compact .. " ", marker_sign())
+        end)
+
+        it("marks a command carrying an argument", function()
+            writer:write_user_prompt("/compact focus on the parser")
+
+            assert.equal(Glyphs.COMMAND.compact .. " ", marker_sign())
+        end)
+
+        it("falls back for a command word with no glyph", function()
+            writer:write_user_prompt("/vendor-specific-thing")
+
+            assert.equal(Glyphs.COMMAND_DEFAULT .. " ", marker_sign())
+        end)
+
+        -- The escape hatch `PromptBlocks.command` documents: an indented
+        -- `/word` is prose, and must not take a command's identity.
+        it("marks an indented slash line as prose", function()
+            writer:write_user_prompt("  /compact")
+
+            assert.equal("❯ ", marker_sign())
+        end)
+
         it(
             "marks the heading row when writing into a non-empty buffer",
             function()
@@ -673,7 +717,7 @@ describe("agentic.ui.MessageWriter", function()
     end)
 
     describe("write_notice", function()
-        local GLYPH = Glyphs.NOTICE.TRUST
+        local GLYPH = Glyphs.COMMAND.trust
         local original_windows
 
         before_each(function()
@@ -728,7 +772,7 @@ describe("agentic.ui.MessageWriter", function()
 
         it("appends body lines verbatim and a trailing blank", function()
             writer:write_notice({
-                glyph = Glyphs.NOTICE.CONTEXT,
+                glyph = Glyphs.COMMAND.context,
                 title = "72.4k / 200k · 36%",
                 body = { "- Cost: $0.0412 USD" },
             })
@@ -950,7 +994,7 @@ describe("agentic.ui.MessageWriter", function()
         it("flushes before a mid-turn notice", function()
             writer:write_message_chunk(make_thought_update("mid\nthought"))
             writer:write_notice({
-                glyph = Glyphs.NOTICE.TRUST,
+                glyph = Glyphs.COMMAND.trust,
                 title = "repo",
                 mid_turn = true,
             })

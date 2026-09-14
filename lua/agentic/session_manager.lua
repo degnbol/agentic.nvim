@@ -707,7 +707,7 @@ function SessionManager:_display_context_usage()
     end
 
     self.message_writer:write_notice({
-        glyph = Glyphs.NOTICE.CONTEXT,
+        glyph = Glyphs.COMMAND.context,
         title = title,
         body = body,
         mid_turn = self.is_generating,
@@ -727,7 +727,7 @@ function SessionManager:_rename_session(new_title)
     self.widget:set_chat_title(trimmed)
 
     self.message_writer:write_notice({
-        glyph = Glyphs.NOTICE.RENAME,
+        glyph = Glyphs.COMMAND.rename,
         title = trimmed,
         mid_turn = self.is_generating,
     })
@@ -758,7 +758,7 @@ function SessionManager:_apply_trust_scope(scope)
     self:_push_trust_to_headers(scope.display)
 
     self.message_writer:write_notice({
-        glyph = Glyphs.NOTICE.TRUST,
+        glyph = Glyphs.COMMAND.trust,
         title = scope.display,
         mid_turn = self.is_generating,
     })
@@ -804,7 +804,7 @@ function SessionManager:_clear_trust_scope()
     -- Same glyph as the set notice, struck through — Nerd Fonts has no
     -- struck-through handshake to switch to.
     self.message_writer:write_notice({
-        glyph = Glyphs.NOTICE.TRUST,
+        glyph = Glyphs.COMMAND.trust,
         glyph_hl = Theme.HL_GROUPS.GLYPH_OFF,
         title = "trust cleared",
         mid_turn = self.is_generating,
@@ -1888,7 +1888,7 @@ function SessionManager:_notice_model_switched(model_id)
     end
 
     self.message_writer:write_notice({
-        glyph = Glyphs.NOTICE.MODEL,
+        glyph = Glyphs.COMMAND.model,
         title = string.format("%s · %s", name, model_id),
         body = body,
         mid_turn = self.is_generating,
@@ -2502,7 +2502,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 end
 
 --- Send a prompt that the user did not author, recording nothing that would
---- attribute it to them: no `## ` heading, `❯` sign or `---` separator
+--- attribute it to them: no `## ` heading, prompt sign or `---` separator
 --- (`write_user_prompt`), no `chat_history` entry — so a Path B restore reads
 --- the response as one continuous turn — and no context blocks, because
 --- pending @files, selections and diagnostics belong to the user's *next*
@@ -3039,7 +3039,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                         and opts.legacy_agent_models.current_model_id
                     )
                 self.message_writer:write_notice({
-                    glyph = Glyphs.NOTICE.RESUME,
+                    glyph = Glyphs.RESUME,
                     title = session_id:sub(1, 8),
                     body = {
                         string.format(
@@ -3192,7 +3192,7 @@ function SessionManager:switch_provider()
                         -- header takes it and discards it, and restore_mode
                         -- skips the model announce.
                         self.message_writer:write_notice({
-                            glyph = Glyphs.NOTICE.PROVIDER,
+                            glyph = Glyphs.PROVIDER,
                             title = self.agent.provider_config.name,
                         })
 
