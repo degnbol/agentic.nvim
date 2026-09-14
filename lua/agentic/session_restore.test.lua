@@ -739,6 +739,40 @@ describe("SessionRestore", function()
             assert.equal(1, write_tool_spy.call_count)
         end)
 
+        -- The record → block projection is hand-picked field by field, so a
+        -- field the writer never receives is lost on replay alone, with the
+        -- saved session still holding it.
+        it("replays the SKILL.md path of a skill call", function()
+            local write_tool_spy = spy.new(function() end)
+
+            local writer = {
+                write_message = spy.new(function() end),
+                write_message_chunk = spy.new(function() end),
+                write_tool_call_block = write_tool_spy,
+                flush_thought_run = spy.new(function() end),
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "tool_call",
+                        tool_call_id = "t-skill",
+                        kind = "Skill",
+                        argument = "coding",
+                        status = "completed",
+                        skill_path = "/skills/coding/SKILL.md",
+                    },
+                }
+            )
+
+            -- Called with `:`, so the block is the second recorded argument.
+            assert.equal(
+                "/skills/coding/SKILL.md",
+                write_tool_spy.calls[1][2].skill_path
+            )
+        end)
+
         it(
             "replays a foldable search tool call without emitting marker lines",
             function()

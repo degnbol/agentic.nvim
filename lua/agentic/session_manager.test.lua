@@ -613,6 +613,7 @@ describe("agentic.SessionManager", function()
                 _is_first_message = true,
                 agent = {
                     agent_capabilities = { loadSession = true },
+                    subscribers = {},
                     load_session = function(
                         _self,
                         _sid,
@@ -624,6 +625,9 @@ describe("agentic.SessionManager", function()
                         captured_load_cb = cb
                     end,
                     cancel_session = noop,
+                    unsubscribe = function(this, session_id)
+                        this.subscribers[session_id] = nil
+                    end,
                 },
                 message_writer = {
                     write_message = noop,

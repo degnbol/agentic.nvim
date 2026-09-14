@@ -367,6 +367,39 @@ describe("ToolCallRenderer", function()
         end)
     end)
 
+    describe("skill path line", function()
+        --- @param skill_path string|nil
+        --- @return string[] lines
+        --- @return agentic.ui.MessageWriter.HighlightRange[] highlight_ranges
+        local function skill_block(skill_path)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-skill",
+                status = "completed",
+                kind = "Skill",
+                argument = "coding",
+                skill_path = skill_path,
+            }
+
+            return Renderer.prepare_block_lines(block, 80)
+        end
+
+        it("puts the path under the header", function()
+            local lines, highlight_ranges = skill_block("/skills/x/SKILL.md")
+
+            assert.equal("/skills/x/SKILL.md", lines[2])
+            -- Empty ranges are what routes the block through the generic
+            -- Comment pass in apply_block_highlights; an entry here would take
+            -- that pass away from the rest of the block.
+            assert.equal(0, #highlight_ranges)
+        end)
+
+        it("renders the header alone when no path resolved", function()
+            -- The header, then the empty status footer every block ends on.
+            assert.equal(2, #skill_block(nil))
+        end)
+    end)
+
     describe("buffer side effects", function()
         --- Render `block`, reporting how many buffers the render added and the
         --- lines it produced. Measures a single render: `bufadd` is idempotent

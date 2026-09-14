@@ -658,4 +658,70 @@ describe("agentic.acp.ACPClient", function()
             assert.is_nil(msg.failure_reason)
         end)
     end)
+
+    describe("session roots", function()
+        --- @param overrides table
+        --- @return agentic.acp.ACPClient
+        local function make_client(overrides)
+            return setmetatable(
+                vim.tbl_extend("force", {
+                    subscribers = {},
+                    _loading_sessions = {},
+                    _session_roots = {},
+                }, overrides),
+                { __index = ACPClient }
+            )
+        end
+
+        -- The bridge replays a loaded session's tool calls as notifications,
+        -- which resolve skill names against these roots. Populating them after
+        -- the request would let the replay outrun them.
+        it("records them before session/load is sent", function()
+            --- @type string[]|nil
+            local roots_at_send
+
+            local client = make_client({
+                agent_capabilities = { loadSession = true },
+                _send_request = function(this)
+                    roots_at_send = this:__session_roots("s-load")
+                end,
+            })
+
+            client:load_session(
+                "s-load",
+                "/tmp/project",
+                nil,
+                {},
+                function() end
+            )
+
+            assert.is_not_nil(roots_at_send)
+            --- @cast roots_at_send -nil
+            assert.equal("/tmp/project", roots_at_send[1])
+        end)
+
+        it("records them for a created session", function()
+            local client = make_client({
+                _send_request = function(_this, _method, _params, callback)
+                    callback({ sessionId = "s-new" }, nil)
+                end,
+            })
+
+            client:create_session({}, function() end)
+
+            assert.equal(vim.fn.getcwd(), client:__session_roots("s-new")[1])
+        end)
+
+        it("drops them with the subscriber", function()
+            local client = make_client({
+                _session_roots = { ["s-1"] = { "/tmp/project" } },
+                subscribers = { ["s-1"] = {} },
+            })
+
+            client:unsubscribe("s-1")
+
+            assert.same({}, client:__session_roots("s-1"))
+            assert.is_nil(client.subscribers["s-1"])
+        end)
+    end)
 end)

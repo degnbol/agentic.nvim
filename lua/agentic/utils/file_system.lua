@@ -240,6 +240,15 @@ function FileSystem.to_smart_path(path)
     return vim.fn.fnamemodify(path, ":p:~:.")
 end
 
+--- Whether `path` names an existing regular file. A directory of that name is
+--- not one, which bare `fs_stat` would not distinguish.
+--- @param path string
+--- @return boolean
+function FileSystem.is_file(path)
+    local stat = vim.uv.fs_stat(path)
+    return stat ~= nil and stat.type == "file"
+end
+
 --- Absolute path with symlinked directory components resolved, usable as a
 --- map key that identifies a file by identity rather than by spelling.
 ---

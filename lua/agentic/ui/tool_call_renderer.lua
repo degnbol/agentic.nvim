@@ -5,6 +5,7 @@ local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
 local ExecShell = require("agentic.utils.exec_shell")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
+local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
@@ -599,6 +600,17 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- rejects array items containing "\n".
         argument = argument:gsub("\n", "\\n")
         lines = { collapsed_header(kind, argument, wrap_width, false) }
+    end
+
+    -- The name alone says neither which of several same-named skills was
+    -- loaded nor where to read it. Gated on the kind because execute and
+    -- search already have their opening fence at lines[2] — an ungated insert
+    -- would splice a bare line between a header and its fence.
+    if kind == "Skill" and tool_call_block.skill_path then
+        table.insert(
+            lines,
+            FileSystem.to_smart_path(tool_call_block.skill_path)
+        )
     end
 
     --- @type agentic.ui.MessageWriter.HighlightRange[]

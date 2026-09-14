@@ -1,6 +1,7 @@
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
+local SkillPath = require("agentic.utils.skill_path")
 local transport_module = require("agentic.acp.acp_transport")
 
 -- Absolute path to the PreToolUse hook script (plugin_root/hooks/...). This
@@ -79,6 +80,7 @@ local KNOWN_ACP_KINDS = {
 --- @field _on_ready fun(client: agentic.acp.ACPClient)
 --- @field _broadcast_stdout_text fun(self: agentic.acp.ACPClient, text: string)
 --- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
+--- @field _session_roots table<string, string[]> Skill-search roots per session, from the cwd and additional directories that session was opened with
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -139,6 +141,7 @@ function ACPClient:new(config, on_ready)
     local client = setmetatable(instance, self) --[[@as agentic.acp.ACPClient]]
     client._on_ready = on_ready
     client._loading_sessions = {}
+    client._session_roots = {}
 
     client:_setup_transport()
     client:_connect()
@@ -149,6 +152,15 @@ end
 --- @param handlers agentic.acp.ClientHandlers
 function ACPClient:_subscribe(session_id, handlers)
     self.subscribers[session_id] = handlers
+end
+
+--- Stop routing this session's notifications, and drop the per-session state
+--- that exists only to serve them. Every caller that abandons a session goes
+--- through here, so the parallel maps cannot drift apart.
+--- @param session_id string
+function ACPClient:unsubscribe(session_id)
+    self.subscribers[session_id] = nil
+    self._session_roots[session_id] = nil
 end
 
 --- @protected
@@ -626,12 +638,26 @@ function ACPClient:safe_split(possible_string)
     return {}
 end
 
+--- Directories a skill loaded in this session may live under, in precedence
+--- order (see `SkillPath.roots`). Per session rather than per client: one
+--- client serves every tabpage using the provider, and a restored session
+--- carries the cwd it was saved with, not the editor's current one.
+--- @protected
+--- @param session_id string|nil
+--- @return string[] roots Empty for a session this client neither created nor loaded
+function ACPClient:__session_roots(session_id)
+    return self._session_roots[session_id] or {}
+end
+
 --- Build the message for a tool_call. it's usually the first update received for a tool call
 --- Adapters override this to add provider-specific fields or transformations.
+--- The session is passed for overrides that resolve session-scoped state
+--- (`__session_roots`); nothing in the standard fields needs it.
 --- @protected
 --- @param update agentic.acp.ToolCallMessage
+--- @param _session_id string|nil
 --- @return agentic.ui.MessageWriter.ToolCallBlock message
-function ACPClient:__build_tool_call_message(update)
+function ACPClient:__build_tool_call_message(update, _session_id)
     --- @type agentic.ui.MessageWriter.ToolCallBlock
     local message = {
         tool_call_id = update.toolCallId,
@@ -657,7 +683,7 @@ end
 --- @param session_id string
 --- @param update agentic.acp.ToolCallMessage
 function ACPClient:__handle_tool_call(session_id, update)
-    local message = self:__build_tool_call_message(update)
+    local message = self:__build_tool_call_message(update, session_id)
 
     self:__with_subscriber(session_id, function(subscriber)
         subscriber.on_tool_call(message)
@@ -666,10 +692,13 @@ end
 
 --- Build the message for a tool_call_update.
 --- Adapters override this to add provider-specific fields.
+--- The session is passed for overrides that resolve session-scoped state
+--- (`__session_roots`); nothing in the standard fields needs it.
 --- @protected
 --- @param update agentic.acp.ToolCallUpdate
+--- @param _session_id string|nil
 --- @return agentic.ui.MessageWriter.ToolCallBase message
-function ACPClient:__build_tool_call_update(update)
+function ACPClient:__build_tool_call_update(update, _session_id)
     --- @type agentic.ui.MessageWriter.ToolCallBase
     local message = {
         tool_call_id = update.toolCallId,
@@ -691,7 +720,7 @@ function ACPClient:__handle_tool_call_update(session_id, update)
         return
     end
 
-    local message = self:__build_tool_call_update(update)
+    local message = self:__build_tool_call_update(update, session_id)
 
     self:__with_subscriber(session_id, function(subscriber)
         subscriber.on_tool_call_update(message)
@@ -989,6 +1018,8 @@ function ACPClient:create_session(handlers, callback)
 
         if result.sessionId then
             self:_subscribe(result.sessionId, handlers)
+            self._session_roots[result.sessionId] =
+                SkillPath.roots(cwd, additional_dirs)
         end
 
         --- @cast result agentic.acp.SessionCreationResponse
@@ -1022,6 +1053,9 @@ function ACPClient:load_session(
     self._loading_sessions[session_id] = true
 
     local additional_dirs = PermissionRules.get_additional_directories()
+    -- Before the request: the bridge replays the session's tool calls as
+    -- notifications, which must not outrun the roots they resolve against.
+    self._session_roots[session_id] = SkillPath.roots(cwd, additional_dirs)
 
     self:_send_request("session/load", {
         sessionId = session_id,
@@ -1117,7 +1151,7 @@ function ACPClient:cancel_session(session_id)
     end
 
     -- remove subscriber first to avoid handling any further messages
-    self.subscribers[session_id] = nil
+    self:unsubscribe(session_id)
 
     self:_send_notification("session/cancel", {
         sessionId = session_id,
@@ -1359,6 +1393,8 @@ return ACPClient
 --- @field parentToolUseId? string
 --- @field toolName? string
 --- @field toolResponse? agentic.acp.ClaudeToolResponse
+--- @field skill? string Skill name, on a Skill tool call
+--- @field skillPath? string The skill's SKILL.md, resolved by the bridge against `cwd` and `$HOME` only — absent for a skill discovered under any other root
 
 --- @class agentic.acp.ClaudeMeta
 --- @field claudeCode? agentic.acp.ClaudeCodeMeta

@@ -2,6 +2,7 @@ local ACPClient = require("agentic.acp.acp_client")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
+local SkillPath = require("agentic.utils.skill_path")
 
 --- @class agentic.acp.ClaudeAgentRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -110,12 +111,14 @@ end
 --- enrichment here, subagent Edit/Write calls render with no diff.
 --- @protected
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @param session_id string|nil
 --- @return agentic.ui.MessageWriter.ToolCallBlock message
-function ClaudeAgentACPAdapter:__build_tool_call_message(update)
-    local message = ACPClient.__build_tool_call_message(self, update)
+function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
+    local message =
+        ACPClient.__build_tool_call_message(self, update, session_id)
     local had_raw_input = update.rawInput
         and not vim.tbl_isempty(update.rawInput)
-    self:__apply_raw_input(message, update)
+    self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
     -- Top-level execute tool_calls arrive with empty rawInput (input streams
     -- separately), so __apply_raw_input's execute branch is skipped — lift the
@@ -131,8 +134,9 @@ end
 --- sends on tool_call_update instead of tool_call.
 --- @protected
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @param session_id string|nil
 --- @return agentic.ui.MessageWriter.ToolCallBase message
-function ClaudeAgentACPAdapter:__build_tool_call_update(update)
+function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     --- @type agentic.ui.MessageWriter.ToolCallBase
     local message = {
         tool_call_id = update.toolCallId,
@@ -143,7 +147,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update)
         message.failure_reason = self:extract_failure_reason(update.rawOutput)
     end
 
-    self:__apply_raw_input(message, update)
+    self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
 
     return message
@@ -158,7 +162,8 @@ end
 --- @protected
 --- @param message agentic.ui.MessageWriter.ToolCallBase
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
-function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
+--- @param session_id string|nil Session whose roots a skill name resolves against
+function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
     local rawInput = update.rawInput
     if not rawInput or vim.tbl_isempty(rawInput) then
         return
@@ -175,10 +180,23 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update)
         message.argument = rawInput.command or ""
         return
     elseif tool_name == "Skill" then
+        local skill = rawInput.skill
         message.kind = "Skill"
-        message.argument = rawInput.skill or "unknown skill"
+        -- The sentinel is a display string for a name that has not streamed
+        -- yet; only the real field below is ever probed as a skill name.
+        message.argument = skill or "unknown skill"
         if rawInput.args then
             message.body = self:safe_split(rawInput.args)
+        end
+        if skill and skill ~= "" then
+            -- Prefer what the bridge resolved, but it probes `cwd` and `$HOME`
+            -- alone, so a skill discovered under an ancestor or an additional
+            -- directory arrives without one. Both branches pass an existence
+            -- check, so only a real file is ever handed on.
+            local reported = ClaudeUtils.claude_meta(update).skillPath
+            message.skill_path = (reported and FileSystem.is_file(reported))
+                    and reported
+                or SkillPath.find(skill, self:__session_roots(session_id))
         end
         return
     elseif mode_label then
@@ -364,7 +382,7 @@ function ClaudeAgentACPAdapter:__handle_tool_call_update(session_id, update)
         return
     end
 
-    local message = self:__build_tool_call_update(update)
+    local message = self:__build_tool_call_update(update, session_id)
 
     self:__with_subscriber(session_id, function(subscriber)
         subscriber.on_tool_call_update(message)

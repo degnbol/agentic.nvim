@@ -11,9 +11,13 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         ClaudeUtils = require("agentic.acp.adapters.claude_utils")
     end)
 
+    --- @param session_roots? table<string, string[]>
     --- @return agentic.acp.ACPClient
-    local function make_adapter()
-        return setmetatable({}, { __index = ClaudeAgentACPAdapter })
+    local function make_adapter(session_roots)
+        return setmetatable(
+            { _session_roots = session_roots or {} },
+            { __index = ClaudeAgentACPAdapter }
+        )
     end
 
     describe("strip_console_fence", function()
@@ -247,6 +251,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             --- @type agentic.ui.MessageWriter.ToolCallBase[]
             local updates = {}
             local adapter = setmetatable({
+                _session_roots = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
                         on_tool_call_update = function(message)
@@ -440,6 +445,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock[]
             local calls = {}
             local adapter = setmetatable({
+                _session_roots = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
                         on_tool_call = function(message)
@@ -484,6 +490,79 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             })
 
             assert.equal("", calls[1].argument)
+        end)
+
+        describe("the SKILL.md a Skill call loaded", function()
+            --- @type string
+            local root
+            --- @type string
+            local skill_md
+
+            before_each(function()
+                root = vim.fn.tempname()
+                skill_md =
+                    vim.fs.joinpath(root, ".claude/skills/coding/SKILL.md")
+                vim.fn.mkdir(vim.fs.dirname(skill_md), "p")
+                local file = io.open(skill_md, "w")
+                assert.is_not_nil(file)
+                --- @cast file -nil
+                file:close()
+            end)
+
+            after_each(function()
+                vim.fs.rm(root, { recursive = true })
+            end)
+
+            --- @param skillPath string|nil
+            --- @param rawInput table
+            --- @return agentic.ui.MessageWriter.ToolCallBase message
+            local function skill_update(skillPath, rawInput)
+                local adapter = make_adapter({ ["s-1"] = { root } })
+                return adapter:__build_tool_call_update({
+                    toolCallId = "tc-skill",
+                    kind = "other",
+                    status = "in_progress",
+                    title = "Load skill: coding",
+                    rawInput = rawInput,
+                    _meta = {
+                        claudeCode = {
+                            toolName = "Skill",
+                            skillPath = skillPath,
+                        },
+                    },
+                }, "s-1")
+            end
+
+            it("takes the path the bridge reported", function()
+                local reported = vim.fs.joinpath(root, "elsewhere/SKILL.md")
+                vim.fn.mkdir(vim.fs.dirname(reported), "p")
+                local file = io.open(reported, "w")
+                assert.is_not_nil(file)
+                --- @cast file -nil
+                file:close()
+
+                local msg = skill_update(reported, { skill = "coding" })
+
+                assert.equal(reported, msg.skill_path)
+            end)
+
+            it("probes when the reported path names no file", function()
+                local msg = skill_update(
+                    vim.fs.joinpath(root, "gone/SKILL.md"),
+                    { skill = "coding" }
+                )
+
+                assert.equal(skill_md, msg.skill_path)
+            end)
+
+            -- "unknown skill" is a display sentinel; probing it would search
+            -- every root for a skill of that name.
+            it("probes nothing before the name streams", function()
+                local msg = skill_update(nil, { args = "--strict" })
+
+                assert.equal("unknown skill", msg.argument)
+                assert.is_nil(msg.skill_path)
+            end)
         end)
 
         it("renders ExitPlanMode as a switch to Normal", function()

@@ -354,6 +354,7 @@ function SessionRestore.replay_messages(writer, messages)
                 description = msg.description,
                 body = msg.body,
                 diff = msg.diff,
+                skill_path = msg.skill_path,
             }
             writer:write_tool_call_block(tool_block)
         end

@@ -1054,6 +1054,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
             description = tool_call.description,
             body = tool_call.body,
             diff = tool_call.diff,
+            skill_path = tool_call.skill_path,
         }
         self.chat_history:add_message(tool_msg)
     end
@@ -1494,6 +1495,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
             description = tool_call_update.description,
             body = tool_call_update.body,
             diff = tool_call_update.diff,
+            skill_path = tool_call_update.skill_path,
         }
         self.chat_history:update_tool_call(id, tool_call)
     end
@@ -2766,7 +2768,7 @@ function SessionManager:new_session(opts)
         -- replacement session's UI on the same tab.
         if self._destroyed then
             if response and response.sessionId and self.agent then
-                self.agent.subscribers[response.sessionId] = nil
+                self.agent:unsubscribe(response.sessionId)
             end
             return
         end
@@ -2791,7 +2793,7 @@ function SessionManager:new_session(opts)
         -- loaded session context when a cancel arrives for a different session
         -- around the same time).
         if self._restoring or epoch ~= self._session_epoch then
-            self.agent.subscribers[response.sessionId] = nil
+            self.agent:unsubscribe(response.sessionId)
             return
         end
 
@@ -2927,7 +2929,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- on the provider side or be replaced by the loaded session's subscriber.
     if self.session_id then
         -- Remove subscriber to stop routing stale notifications
-        self.agent.subscribers[self.session_id] = nil
+        self.agent:unsubscribe(self.session_id)
         self:clear_chat()
         self.todo_list:clear()
         self.file_list:clear()
