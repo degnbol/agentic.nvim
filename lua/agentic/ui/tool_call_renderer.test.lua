@@ -13,6 +13,7 @@ describe("ToolCallRenderer", function()
     local Renderer
     local FileSystem
     local read_stub
+    local disk_stub
     local path_stub
 
     before_each(function()
@@ -23,10 +24,16 @@ describe("ToolCallRenderer", function()
             return path
         end)
         read_stub = spy.stub(FileSystem, "read_from_buffer_or_disk")
+        -- extract_diff_blocks retries against real disk when the first match
+        -- fails, so a fixture path that happens to exist (/tmp/file.txt is
+        -- exactly what a scratch session leaves behind) would supply content
+        -- no test declared.
+        disk_stub = spy.stub(FileSystem, "read_from_disk")
     end)
 
     after_each(function()
         read_stub:revert()
+        disk_stub:revert()
         path_stub:revert()
     end)
 
@@ -231,6 +238,116 @@ describe("ToolCallRenderer", function()
             for _, hr in ipairs(highlight_ranges) do
                 assert.is_nil(hr.block_col_hl)
             end
+        end)
+    end)
+
+    describe("diff heading line number", function()
+        --- Render a diff-bearing block over `file_lines`, reporting its
+        --- heading line.
+        --- @param kind string
+        --- @param diff agentic.ui.MessageWriter.ToolCallDiff
+        --- @param file_lines string[]
+        --- @return string heading
+        local function diff_heading(kind, diff, file_lines)
+            read_stub:invokes(function()
+                return file_lines, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "diff-heading-" .. kind,
+                status = "pending",
+                kind = kind,
+                argument = "/tmp/file.txt",
+                diff = diff,
+            }
+
+            return (Renderer.prepare_block_lines(block, 80))[1]
+        end
+
+        it("heads an edit with the first changed line", function()
+            assert.equal(
+                "### `/tmp/file.txt:3`",
+                diff_heading(
+                    "edit",
+                    { old = { "c" }, new = { "C" } },
+                    { "a", "b", "c", "d" }
+                )
+            )
+        end)
+
+        -- The two hunk shapes ToolCallDiff.hunk_to_block computes differently:
+        -- a replacement offsets by `start_a - 1`, a pure insertion by `start_a`.
+        -- Both must land on the same post-edit line for the first hunk. The
+        -- single-line cases above miss them — one takes minimize_diff_blocks's
+        -- single-line fast path, the other cancels the offset at start_a == 1.
+
+        it("heads a replacement hunk below the matched block", function()
+            assert.equal(
+                "### `/tmp/file.txt:3`",
+                diff_heading(
+                    "edit",
+                    { old = { "b", "c", "d" }, new = { "b", "C", "d" } },
+                    { "a", "b", "c", "d" }
+                )
+            )
+        end)
+
+        it("heads a pure insertion at the inserted line", function()
+            assert.equal(
+                "### `/tmp/file.txt:3`",
+                diff_heading(
+                    "edit",
+                    { old = { "b", "c" }, new = { "b", "X", "c" } },
+                    { "a", "b", "c", "d" }
+                )
+            )
+        end)
+
+        it("heads a replace_all edit with its earliest site", function()
+            -- The head is one number, so a later site's line must not win —
+            -- only the first is still valid post-edit, the rest have shifted.
+            assert.equal(
+                "### `/tmp/file.txt:2`",
+                diff_heading(
+                    "edit",
+                    { old = { "x" }, new = { "y" }, all = true },
+                    { "a", "x", "b", "x" }
+                )
+            )
+        end)
+
+        it("leaves the head bare when the old text is missing", function()
+            -- No match means no coordinate: the renderer's fallback block
+            -- indexes nothing, so a number here would be fabricated.
+            assert.equal(
+                "### `/tmp/file.txt`",
+                diff_heading(
+                    "edit",
+                    { old = { "gone" }, new = { "new" } },
+                    { "a", "b" }
+                )
+            )
+        end)
+
+        it("leaves a created file's head bare", function()
+            -- The diff is the whole file, so line 1 names nothing.
+            assert.equal(
+                "### `/tmp/file.txt`",
+                diff_heading("create", { old = {}, new = { "a", "b" } }, {})
+            )
+        end)
+
+        it("heads a write that changes an existing file's line 1", function()
+            -- Write sends no old_string, so this differs from a creation only
+            -- by the file having content to diff against.
+            assert.equal(
+                "### `/tmp/file.txt:1`",
+                diff_heading("write", { old = {}, new = { "A", "b" } }, {
+                    "a",
+                    "b",
+                })
+            )
         end)
     end)
 

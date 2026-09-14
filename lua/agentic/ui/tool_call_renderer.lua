@@ -537,13 +537,18 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         end
     end
 
+    -- The first line the call touches, appended to the path-kinded head below
+    -- as `path:N` — the shape `gF`, `CTRL-W gF` and file:line plugins parse,
+    -- which makes the head a jump target. One line, never a range: a
+    -- `path:N-M` head fails the anchored patterns those plugins match with
+    -- (fileline.nvim uses `^([^:]+):([0-9:]+)$`), and only `gF`, which scans
+    -- digits and stops at the `-`, tolerates it. `argument` stays a bare path
+    -- throughout, for the matchers and language inference that need one.
+    --- @type integer|nil
+    local head_line
+
     -- The ACP title often bakes the read range in as a trailing "(N - M)".
-    -- Split it off the path and re-attach only the first line, as `path:N` —
-    -- the shape `gF`, `CTRL-W gF` and file:line plugins parse, which makes the
-    -- head a jump target. The full range stays on the info line below: a
-    -- `path:N-M` head would fail the anchored patterns those plugins match
-    -- with (fileline.nvim uses `^([^:]+):([0-9:]+)$`), and only `gF`, which
-    -- scans digits and stops at the `-`, tolerates it.
+    -- Split it off the path; the full range stays on the info line below.
     if kind == "read" then
         local path, range = M.parse_read_range(argument)
         if path then
@@ -552,9 +557,48 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 tool_call_block.read_range = range
             end
         end
-        local read_range = tool_call_block.read_range
-        if read_range and argument ~= "" then
-            argument = argument .. ":" .. read_range.offset
+        head_line = tool_call_block.read_range
+            and tool_call_block.read_range.offset
+    end
+
+    --- @type agentic.ui.ToolCallDiff.DiffBlock[]
+    local diff_blocks = {}
+    --- @type string[]
+    local source_lines = {}
+    local is_create = false
+
+    -- Extracted here rather than in the diff branch that consumes it, because
+    -- the first hunk's line number is the head's. `start_line` is a coordinate
+    -- in the matched (pre-edit) source, but for the *first* hunk pre- and
+    -- post-edit agree: nothing above it moved. Later hunks do shift — the
+    -- second reason the head names one line only.
+    if tool_call_block.diff then
+        diff_blocks, source_lines = ToolCallDiff.extract_diff_blocks({
+            path = argument,
+            old_text = tool_call_block.diff.old,
+            new_text = tool_call_block.diff.new,
+            replace_all = tool_call_block.diff.all,
+        })
+
+        -- Both clauses are load-bearing: Write sends no old_string even when
+        -- overwriting an existing file (empty diff.old alone would call a
+        -- fragment diff a creation), and an unresolved path yields no source
+        -- content even though old_string does anchor a fragment.
+        is_create = #source_lines == 0
+            and (not tool_call_block.diff.old or #tool_call_block.diff.old == 0)
+
+        -- Capture the matched blocks for diff_jump navigation. Re-extracting
+        -- at gf-press time can fail if the file's loaded buffer was refreshed
+        -- to post-edit content (e.g. after a tabedit reload), at which point
+        -- the OLD-based matcher no longer finds anything.
+        if #diff_blocks > 0 then
+            tool_call_block.cached_diff_blocks = diff_blocks
+            -- A creation's diff is the whole file: line 1 is where every file
+            -- starts, so the suffix would carry no information. Only a diff
+            -- that lands somewhere in a file has a somewhere to name.
+            if not is_create then
+                head_line = diff_blocks[1].start_line
+            end
         end
     end
 
@@ -598,8 +642,11 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     else
         -- Sanitize argument to prevent embedded newlines — nvim_buf_set_lines
         -- rejects array items containing "\n".
-        argument = argument:gsub("\n", "\\n")
-        lines = { collapsed_header(kind, argument, wrap_width, false) }
+        local name = argument:gsub("\n", "\\n")
+        if head_line then
+            name = name .. ":" .. head_line
+        end
+        lines = { collapsed_header(kind, name, wrap_width, false) }
     end
 
     -- The name alone says neither which of several same-named skills was
@@ -770,21 +817,6 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             table.insert(lines, fence)
         end
     elseif tool_call_block.diff then
-        local diff_blocks, source_lines = ToolCallDiff.extract_diff_blocks({
-            path = argument,
-            old_text = tool_call_block.diff.old,
-            new_text = tool_call_block.diff.new,
-            replace_all = tool_call_block.diff.all,
-        })
-
-        -- Capture the matched blocks for diff_jump navigation. Re-extracting
-        -- at gf-press time can fail if the file's loaded buffer was refreshed
-        -- to post-edit content (e.g. after a tabedit reload), at which point
-        -- the OLD-based matcher no longer finds anything.
-        if #diff_blocks > 0 then
-            tool_call_block.cached_diff_blocks = diff_blocks
-        end
-
         -- `lang` (inferred from the path) is the fence label and the language
         -- for context-aware highlighting; it is NOT the injection language
         -- (see the `-difffold` note below). Strip any path-induced `-fold`
@@ -819,12 +851,6 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         fold_anchor = #lines
         -- A created file's diff is the whole file, so collapse large ones
         -- closed; an edit shows only fragments and is never auto-collapsed.
-        -- Both clauses are load-bearing: Write sends no old_string even when
-        -- overwriting an existing file (empty diff.old alone would collapse
-        -- a fragment diff), and an unresolved path yields no source content
-        -- even though old_string does anchor a fragment.
-        local is_create = #source_lines == 0
-            and (not tool_call_block.diff.old or #tool_call_block.diff.old == 0)
         local create_max = Config.tool_call_display
                 and Config.tool_call_display.create_max_lines
             or 0
