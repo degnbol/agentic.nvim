@@ -15,12 +15,20 @@ local Glyphs = {}
 --- fall back to `KIND_DEFAULT`.
 ---
 --- Covers every kind any adapter can produce — the lowercase protocol set and
---- the CamelCase kinds this plugin's own adapters mint (`acp_kind.lua` names
---- the split). Sized that way because a gutter that cannot tell a file deletion
---- from an unrecognised tool is the thing this table exists to prevent, and
---- only the Claude adapter's subset was covered before. `write` is deliberately
---- the closest neighbour of `edit` — a whole-file write and a hunk edit are the
---- same act at different granularity, and the diff already separates them.
+--- the CamelCase kinds this plugin's own adapters mint
+--- (`ClaudeUtils.TOOL_KINDS`, plus the pattern-derived `Mcp`). Sized that way
+--- because a gutter that cannot tell a file deletion from an unrecognised tool
+--- is the thing this table exists to prevent, and only the Claude adapter's
+--- subset was covered before. `write` is deliberately the closest neighbour of
+--- `edit` — a whole-file write and a hunk edit are the same act at different
+--- granularity, and the diff already separates them.
+---
+--- The agent-orchestration family is the other place one glyph covers several
+--- tools: `taskcontrol` and `cron` are a family each, and their head names the
+--- operation. `md-robot_outline` against `subagent`'s filled 󰚩, and `md-alarm`
+--- or `md-autorenew` against the round `status_icons` faces, are the
+--- outline-vs-filled indistinguishability this module exists to prevent — hence
+--- a tray and a calendar.
 --- @type table<string, string>
 Glyphs.KIND = {
     read = "󰈈",
@@ -39,8 +47,20 @@ Glyphs.KIND = {
     -- Both plan-mode tools and EnterWorktree arrive as this one kind; the head
     -- text ("Plan" / "Normal") is what tells them apart.
     switch_mode = "󰍍",
-    -- `think` and `slashcommand` are assigned below, from THINKING and
-    -- COMMAND_DEFAULT: each is one identity reached through two channels.
+    -- The toolbox is what a tool search searches; the magnifier is spent on
+    -- `search`, and the head carries the query either way.
+    toolsearch = "󰦬",
+    sendmessage = "󰒊",
+    -- A radar sweeping until a condition holds, rather than `md-monitor_eye`,
+    -- which reads as a screen and collides in spirit with `read`'s eye.
+    monitor = "󰐷",
+    taskcontrol = "󱊖",
+    -- A "Z" for a single fire, against `cron`'s recurring calendar.
+    schedulewakeup = "󰒲",
+    cron = "󰃰",
+    -- `think`, `slashcommand`, `listagents` and `mcp` are assigned below, from
+    -- THINKING, COMMAND_DEFAULT and COMMAND: each is one identity reached
+    -- through two channels.
 }
 
 --- The kind carries no identity worth showing. Two populations reach it, and
@@ -152,6 +172,14 @@ Glyphs.COMMAND = {
     help = "󰘥",
     heapdump = "󰍛",
 }
+
+--- `/agents` and the `ListAgents` tool are one identity reached through two
+--- channels, as are `/mcp` and an `mcp__*` tool call — the relation
+--- `KIND.think`/`THINKING` and `COMMAND.hooks`/`HOOK` already encode. Written
+--- as assignments rather than repeated codepoints so the shared identity
+--- survives a later change to either side.
+Glyphs.KIND.listagents = Glyphs.COMMAND.agents
+Glyphs.KIND.mcp = Glyphs.COMMAND.mcp
 
 --- A command word with no entry of its own. A book rather than something
 --- neutral because skills dominate this population: the provider keeps skills

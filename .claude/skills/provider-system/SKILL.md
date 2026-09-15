@@ -361,7 +361,20 @@ carry no `_meta` at all — hence the guard in `ClaudeUtils.claude_meta`.
 
 `kind` identifies a tool no better: the provider sends `"other"` for
 EnterPlanMode but `"switch_mode"` for ExitPlanMode, so any kind-keyed branch
-that handles mode switches must accept both.
+that handles mode switches must accept both. The bridge also has no display
+formatter for its own orchestration tools (tool search, inter-agent messaging,
+background-task control, cron, MCP), so it kinds them all `other`.
+
+`ClaudeAgentACPAdapter:__apply_tool_identity` re-kinds those from the name
+(`ClaudeUtils.TOOL_KINDS`, `ClaudeUtils.tool_kind` for the `mcp__*` pattern) and
+sets the head the name alone gives (`ClaudeUtils.tool_head` with an empty
+input); `__apply_raw_input` calls `tool_head` again with the real input to
+refine it. Two placement constraints keep it out of `__apply_raw_input`'s
+`rawInput` gate: a streamed top-level call's initial `tool_call` carries an
+empty `rawInput`, and `SessionManager:_on_tool_call` persists `kind` on that
+phase alone — a kind first minted on an update is absent from the session JSON.
+Per-kind field knowledge lives in `claude_utils.lua`, not in the adapter, and
+every kind it can mint needs a `Glyphs.KIND` entry.
 
 ### Tool kind casing varies by provider
 
@@ -370,7 +383,10 @@ The ACP schema spells kinds in lowercase (`"read"`, `"search"`, `"execute"`,
 (`"Read"`, `"Search"`) — which still render correctly because
 `tool_call_renderer.display_kind` normalises case for the chat heading,
 but a case-sensitive lookup table (e.g. `READ_ONLY_KINDS["Read"]`) silently
-misses. Any kind-based dispatch must lowercase before lookup, or compose a
+misses. The vocabulary itself is `AcpKind.PROTOCOL_KINDS`, which is also how a
+consumer tells a bridge-assigned kind from an adapter-minted one (see
+`ToolCallRenderer.strip_kind_prefix`). Any kind-based dispatch must lowercase
+before lookup, or compose a
 table that includes both casings. The chat heading is not a reliable signal
 that the right `kind` arrived — `display_kind` hides the difference.
 

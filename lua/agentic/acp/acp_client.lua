@@ -1,3 +1,4 @@
+local AcpKind = require("agentic.utils.acp_kind")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
@@ -40,23 +41,6 @@ end
 CRITICAL: Type annotations in this file are essential for Lua Language Server support.
 DO NOT REMOVE them. Only update them if the underlying types change.
 --]]
-
---- Known ACP protocol tool call kinds.
---- Used to detect unknown kinds from providers we don't use daily.
-local KNOWN_ACP_KINDS = {
-    read = true,
-    edit = true,
-    delete = true,
-    move = true,
-    search = true,
-    execute = true,
-    think = true,
-    fetch = true,
-    other = true,
-    create = true,
-    write = true,
-    switch_mode = true,
-}
 
 --- Data fields set in the constructor. Separated from the full class
 --- so LuaLS validates instance fields without requiring methods that
@@ -505,7 +489,7 @@ function ACPClient:__handle_session_update(params)
     end
 
     if session_update_type == "tool_call" then
-        if not KNOWN_ACP_KINDS[update.kind] then
+        if not AcpKind.PROTOCOL_KINDS[update.kind] then
             -- Using notify intentionally so users of providers
             -- we don't use daily report unknown kinds as issues
             Logger.notify(
@@ -1241,6 +1225,10 @@ return ACPClient
 --- | "refusal"
 --- | "cancelled"
 
+--- A tool kind on the wire (`AcpKind.PROTOCOL_KINDS`) or one an adapter minted
+--- on top of it. The minted half is deliberately left as `string` rather than
+--- enumerated: `ClaudeUtils.TOOL_KINDS` is where those live, and a second copy
+--- here is a second thing to drift.
 --- @alias agentic.acp.ToolKind
 --- | "read"
 --- | "edit"
@@ -1250,15 +1238,11 @@ return ACPClient
 --- | "execute"
 --- | "think"
 --- | "fetch"
---- | "WebSearch"
---- | "SlashCommand"
---- | "SubAgent"
 --- | "other"
 --- | "create"
 --- | "write"
---- | "Skill"
 --- | "switch_mode"
---- | "TodoWrite"
+--- | string
 
 --- @alias agentic.acp.ToolCallStatus
 --- | "pending"

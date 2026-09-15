@@ -12,6 +12,11 @@ local SkillPath = require("agentic.utils.skill_path")
 --- @field args? string Arguments for the skill
 --- @field offset? integer Line offset for range reads
 --- @field limit? integer Line count for range reads
+--- @field to? string Addressee of a SendMessage
+--- @field summary? string Transcript-row label of a SendMessage (not transmitted)
+--- @field reason? string Why a ScheduleWakeup picked its delay
+--- @field task_id? string Background task a TaskStop/TaskOutput acts on
+--- @field cron? string Schedule expression of a CronCreate
 
 --- claude-agent-acp sends rawInput/title/kind on tool_call_update, not just tool_call
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
@@ -118,6 +123,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
         ACPClient.__build_tool_call_message(self, update, session_id)
     local had_raw_input = update.rawInput
         and not vim.tbl_isempty(update.rawInput)
+    self:__apply_tool_identity(message, update)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
     -- Top-level execute tool_calls arrive with empty rawInput (input streams
@@ -147,18 +153,71 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
         message.failure_reason = self:extract_failure_reason(update.rawOutput)
     end
 
+    self:__apply_tool_identity(message, update)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
 
     return message
 end
 
+--- Write a head built by `ClaudeUtils.tool_head`, unless it would erase one an
+--- earlier notification established.
+---
+--- An empty head exists to clear a title that is only the tool's own name, so
+--- it is written only where such a title is present — on any later
+--- notification there is none, and `update_tool_call_block` merges partials
+--- with "force", so writing it would drop the refined head instead. Both the
+--- base head and the refined one go through here, and neither caller has to
+--- know which notification it is on.
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param head string|nil
+local function set_head(message, head)
+    if head and (head ~= "" or message.argument) then
+        message.argument = head
+    end
+end
+
+--- Establish the kind this plugin gives the tool, and the part of the head
+--- derivable from the tool name alone (`ClaudeUtils.TOOL_KINDS` /
+--- `ClaudeUtils.tool_head`).
+---
+--- Runs ahead of `__apply_raw_input` rather than inside it, because minting
+--- needs nothing from `rawInput` — `_meta.claudeCode.toolName` is on every
+--- notification built from a cached `tool_use` — and the gate would cost both
+--- phases:
+---
+--- - `__apply_raw_input` early-returns on empty `rawInput`, which is what a
+---   streamed top-level call carries on its initial `tool_call`. Minting inside
+---   the gate renders a gear on the first frame and then flips it, and
+---   `ListAgents`/`CronList`, whose input is empty by definition, would never
+---   mint at all.
+--- - `SessionManager:_on_tool_call` persists `kind` on phase 1 only. A kind
+---   that first arrives on phase 2 is absent from the session JSON, so a
+---   restored session renders the gear forever.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+function ClaudeAgentACPAdapter:__apply_tool_identity(message, update)
+    local tool_name = ClaudeUtils.tool_name(update)
+    if not tool_name then
+        return
+    end
+
+    local kind = ClaudeUtils.tool_kind(tool_name, update.kind)
+    if not kind then
+        return
+    end
+    message.kind = kind
+
+    set_head(message, ClaudeUtils.tool_head(kind, {}, tool_name))
+end
+
 --- Enrich a tool-call message from claude-agent-acp's rawInput fields (file
 --- path, read range, fetch/subagent/skill/slash-command remaps, search
---- pattern, execute description). Shared by the initial `tool_call` and
---- follow-up `tool_call_update` paths — see `__build_tool_call_message` for
---- why the tool_call path needs it too. The edit diff is deliberately not
---- built here; see `__apply_edit_diff`.
+--- pattern, execute description, and the field a minted kind heads with).
+--- Shared by the initial `tool_call` and follow-up `tool_call_update` paths —
+--- see `__build_tool_call_message` for why the tool_call path needs it too.
+--- The edit diff is deliberately not built here; see `__apply_edit_diff`.
 --- @protected
 --- @param message agentic.ui.MessageWriter.ToolCallBase
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
@@ -169,19 +228,19 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
         return
     end
 
-    -- The tools the plugin re-kinds are matched by name, ahead of the kind
-    -- ladder below. The bridge kinds them "other" or "switch_mode" — a literal
-    -- of its own choosing that identifies no tool, and that disagrees with
-    -- itself across the two plan-mode tools — so it cannot gate the dispatch.
+    -- `__apply_tool_identity` has already re-kinded the tools the bridge kinds
+    -- `other`, so the ladder reads its kind ahead of the bridge's. The mode
+    -- switches keep their name lookup: the bridge disagrees with itself on
+    -- their kind (EnterPlanMode "other", ExitPlanMode "switch_mode"), and the
+    -- label is per-tool, so no name→kind map can carry it.
     local tool_name = ClaudeUtils.tool_name(update)
+    local kind = message.kind or update.kind
     local mode_label = ClaudeUtils.MODE_SWITCH_TOOLS[tool_name]
-    if tool_name == "SlashCommand" then
-        message.kind = "SlashCommand"
+    if kind == "SlashCommand" then
         message.argument = rawInput.command or ""
         return
-    elseif tool_name == "Skill" then
+    elseif kind == "Skill" then
         local skill = rawInput.skill
-        message.kind = "Skill"
         -- The sentinel is a display string for a name that has not streamed
         -- yet; only the real field below is ever probed as a skill name.
         message.argument = skill or "unknown skill"
@@ -205,7 +264,11 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
         return
     end
 
-    local kind = update.kind
+    local head = tool_name and ClaudeUtils.tool_head(kind, rawInput, tool_name)
+    if head then
+        set_head(message, head)
+        return
+    end
 
     if kind == "read" or kind == "edit" then
         if rawInput.file_path then

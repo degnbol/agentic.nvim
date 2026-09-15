@@ -460,6 +460,32 @@ describe("ToolCallRenderer", function()
             end
         end)
 
+        it("strips a bridge title that repeats its kind", function()
+            assert.equal(
+                "### `/tmp/plain.txt`",
+                heading("read", "Read /tmp/plain.txt")
+            )
+        end)
+
+        -- opencode capitalises the kinds it assigns, so the strip keys on
+        -- membership of the protocol vocabulary rather than on casing.
+        it("strips a capitalised bridge kind's prefix too", function()
+            assert.equal(
+                "### `/tmp/plain.txt`",
+                heading("Read", "Read /tmp/plain.txt")
+            )
+        end)
+
+        -- An adapter-minted head needs no undoing, and the strip can only
+        -- misfire on it: a Monitor description opening with the word "Monitor"
+        -- would lose it.
+        it("leaves a minted head that opens with its kind intact", function()
+            assert.equal(
+                "### Monitor the CI run until it settles",
+                heading("Monitor", "Monitor the CI run until it settles")
+            )
+        end)
+
         it("fits the wrap width including the frame it adds", function()
             local head = execute_heading(string.rep("long name ", 10), 40)
 

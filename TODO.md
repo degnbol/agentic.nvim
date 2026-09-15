@@ -178,6 +178,16 @@ read-only commands that we can populate from my claude settings.json.
 - **Fetch tool output not folded**: Fetch/WebFetch output dumps full text
   into chat without folding, causing clutter.
 
+- **Capitalised kinds may warn on every tool call**: the unknown-kind notify
+  (`acp_client.lua:492`) tests the raw `update.kind` against
+  `AcpKind.PROTOCOL_KINDS`, whose keys are the protocol's lowercase spelling. If
+  opencode capitalises kinds — as the `provider-system` skill and
+  `session_manager.test.lua:1784` both say — then every tool call raises
+  "Unknown ACP tool call kind: Read". Unverified, and this adapter's own
+  `update.kind == "other"` / `== "execute"` comparisons (`:151`, `:162`) only
+  work on lowercase, so measure what actually arrives before normalising the
+  lookup.
+
 - **Hide `todowrite` tool call from chat**: not strictly a bug — opencode's
   `todowrite` tool call already renders cleanly after mapping `title ==
   "todowrite"` to `kind = "todowrite"` and stripping the body in
@@ -200,6 +210,25 @@ Internal error: You've hit your org's monthly spend limit · run /usage-credits 
 It is a wrong message. It is not the monthly limit, I don't understand why it says that.
 
 2. Sending a message shouldn't work. There's no agent to send to. `<CR>` should probably queue, and `<S-CR>` should definitely queue, yet doesn't.
+
+### `_plan_exit_pending` is write-only
+
+`session_manager.lua` initialises it at `:214`, writes `true` at `:1223` and
+resets it at `:2950` and `:3133`. Nothing reads it, and the turn-end callback
+its docstring promises does not exist — so either the callback is the missing
+work, or the flag is dead state to delete. Decide which; it was masked until
+recently by the plan-exit detection never firing at all.
+
+### `allow_always` caches on kinds its own table cannot match
+
+`_build_cache_key` normalises the kind (`permission_manager.lua:169`) before
+looking it up in `CACHE_KEY_FIELDS` (`:193`), but four of that table's rows are
+spelled CamelCase — `WebSearch`, `SlashCommand`, `SubAgent`, `Skill` — so they
+never match. Those four fall to the hybrid path instead, keying on the whole
+`rawInput` minus `CACHE_NOISE_FIELDS`. Safe but under-caching, never over: the
+key is narrower than intended, so "always allow this subagent type" behaves as
+"always allow this exact prompt" and the next call prompts again. Lowercase the
+four keys, or look the table up under the raw kind as well.
 
 ## Feature ideas
 
@@ -410,6 +439,25 @@ screen so we can read it.
   goes through unvalidated. Completion for subcommands (`repo`, `here`,
   `off`) would prevent typos.
 
+- **Permission float is not settled by `$/cancel_request`**: the ACP SDK
+  sends that notification when an outgoing request carrying a
+  `cancellationSignal` aborts, and claude-agent-acp attaches one to
+  `session/request_permission`. So cancelling a turn with a float open
+  should retract the request, and nothing acts on it. Reachable from
+  source but unobserved — zero occurrences across 7.9 M lines of debug
+  log against 1331 inbound permission requests, so confirm it arrives
+  before building the handler.
+
+- **Four `CACHE_KEY_FIELDS` rows are unreachable**: `Skill`,
+  `SlashCommand`, `SubAgent` and `WebSearch` are spelled CamelCase while
+  `_build_cache_key` lowercases before indexing
+  (`permission_manager.lua:169,193`) — an instance of the casing defect
+  the `provider-system` skill documents under "Tool kind casing varies by
+  provider". Lowercasing them is not a typo fix: it moves those kinds
+  from the hybrid whole-`rawInput` cache key to a field-scoped key, which
+  changes what one allow-always or reject-always decision covers. Decide
+  the scoping, then fix.
+
 - **`/trust` glob coverage**: verify the `/trust` system works with glob
   patterns using `~/`, relative paths, and absolute folders.
 
@@ -608,22 +656,18 @@ Is there any pre-existing tool, etc., that can check safety of a python snippet 
 
 ## Auto-/login
 
-With some interval claude will ask for user to run /login to refresh credentials.
+The bare `Failed to authenticate. API Error: 401` this section was written
+against no longer happens. `SessionManager` branches on the bridge's structured
+`authentication_error`, and `Recovery.offer_reauth` runs a server-health
+backoff, binds `[r]` and spawns `claude auth login`.
 
-In the plugin currently this shows as:
-```
-Failed to authenticate. API Error: 401 Invalid authentication credentials
-### Error
-
-Internal error: Failed to authenticate. API Error: 401 Invalid authentication
-credentials
-```
-
-Which is not that helpful. Caching the login approach (there are 3 or more 
-options) and other info from successful login could maybe help towards a more 
-automatic future login.
-Re-authenticating is infrequent, so making the whole process fully automatic is low priority.
-But if the /login command can be called in the plugin, then a simple improvement would be to replace the unhelpful error, with a nvim builtin yes/no prompt for running /login.
+What is left is the in-protocol path. The bridge advertises `claude-ai-login`,
+`console-login` and `claude-login` as ACP auth methods, gated on a
+`clientCapabilities.auth.terminal` capability the plugin does not advertise —
+which is why `authMethods` is empty in every observed `initialize` result.
+Advertising it would move re-authentication from shelling out to the CLI into
+the session the error arrived on. Worth weighing against the shell-out, which
+already works.
 
 ## trust git rm
 
@@ -647,5 +691,11 @@ We could consider adding a code comment or some other acp docs to point this out
 
 - **README demos**: images or gifs in the readme or elsewhere demoing the differences
   between this plugin and the stock TUI.
+
+- **Claude tool-name vocabulary lives in two places**: `ClaudeUtils` now holds
+  `tool_name` and `MODE_SWITCH_TOOLS`, while `permission_hook.lua:18` keeps its
+  own `NAME_TO_KIND` for `Bash`/`Edit`/`Write`. Either give the vocabulary one
+  home, or record that the hook's table is deliberately scoped to the three
+  tools it registers for — leaving it undecided is how the two drift apart.
 
 - Should we switch to `just` instead of `make`?

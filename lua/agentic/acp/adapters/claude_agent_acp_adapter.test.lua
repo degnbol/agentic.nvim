@@ -590,6 +590,313 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.is_nil(calls[1].body)
         end)
 
+        -- The bridge has no formatter for SlashCommand, so its title is the
+        -- bare tool name — the glyph's job, not the head's.
+        it("clears the SlashCommand title until the command lands", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-cmd",
+                kind = "other",
+                status = "pending",
+                title = "SlashCommand",
+                rawInput = {},
+                _meta = { claudeCode = { toolName = "SlashCommand" } },
+            })
+
+            assert.equal("SlashCommand", calls[1].kind)
+            assert.equal("", calls[1].argument)
+        end)
+
+        it("heads a SlashCommand call with the command line", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-cmd",
+                kind = "other",
+                status = "in_progress",
+                title = "SlashCommand",
+                rawInput = { command = "/review --fix" },
+                _meta = { claudeCode = { toolName = "SlashCommand" } },
+            })
+
+            assert.equal("SlashCommand", msg.kind)
+            assert.equal("/review --fix", msg.argument)
+        end)
+
+        -- A streamed top-level call carries an empty rawInput on its initial
+        -- tool_call, and `_on_tool_call` persists `kind` on that phase alone.
+        it("mints the kind before any input has streamed", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-search",
+                kind = "other",
+                status = "pending",
+                title = "ToolSearch",
+                rawInput = {},
+                _meta = { claudeCode = { toolName = "ToolSearch" } },
+            })
+
+            assert.equal("ToolSearch", calls[1].kind)
+            -- The bridge's title is the tool's own name, which the glyph says.
+            assert.equal("", calls[1].argument)
+        end)
+
+        it("heads a tool search with its query", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-search",
+                kind = "other",
+                status = "in_progress",
+                title = "ToolSearch",
+                rawInput = { query = "select:Read,Edit" },
+                _meta = { claudeCode = { toolName = "ToolSearch" } },
+            })
+
+            assert.equal("ToolSearch", msg.kind)
+            assert.equal("select:Read,Edit", msg.argument)
+        end)
+
+        it("leaves ListAgents bare through both phases", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-agents",
+                kind = "other",
+                status = "pending",
+                title = "ListAgents",
+                rawInput = {},
+                _meta = { claudeCode = { toolName = "ListAgents" } },
+            })
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-agents",
+                kind = "other",
+                status = "completed",
+                rawInput = { channel = "" },
+                _meta = { claudeCode = { toolName = "ListAgents" } },
+            })
+
+            assert.equal("ListAgents", calls[1].kind)
+            assert.equal("", calls[1].argument)
+            assert.equal("ListAgents", msg.kind)
+            -- Nothing to clear on an update, so the head the initial call
+            -- established stands through the merge.
+            assert.is_nil(msg.argument)
+        end)
+
+        -- The refined head has to survive the terminal update, which carries
+        -- status and content but no rawInput to rebuild it from.
+        it("keeps a refined head off the completed update", function()
+            local adapter = make_adapter()
+            local refined = adapter:__build_tool_call_update({
+                toolCallId = "tc-search",
+                kind = "other",
+                status = "in_progress",
+                rawInput = { query = "select:Read" },
+                _meta = { claudeCode = { toolName = "ToolSearch" } },
+            })
+            local completed = adapter:__build_tool_call_update({
+                toolCallId = "tc-search",
+                kind = "other",
+                status = "completed",
+                content = {
+                    {
+                        type = "content",
+                        content = { type = "text", text = "1 tool" },
+                    },
+                },
+                _meta = { claudeCode = { toolName = "ToolSearch" } },
+            })
+
+            assert.equal("select:Read", refined.argument)
+            assert.is_nil(completed.argument)
+        end)
+
+        it("heads a monitor with its description", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-monitor",
+                kind = "other",
+                status = "in_progress",
+                title = "Monitor",
+                rawInput = { description = "Wait for the CI run" },
+                _meta = { claudeCode = { toolName = "Monitor" } },
+            })
+
+            assert.equal("Monitor", msg.kind)
+            assert.equal("Wait for the CI run", msg.argument)
+        end)
+
+        describe("SendMessage", function()
+            --- @param rawInput table
+            --- @return agentic.ui.MessageWriter.ToolCallBase message
+            local function message_update(rawInput)
+                return make_adapter():__build_tool_call_update({
+                    toolCallId = "tc-msg",
+                    kind = "other",
+                    status = "in_progress",
+                    title = "SendMessage",
+                    rawInput = rawInput,
+                    _meta = { claudeCode = { toolName = "SendMessage" } },
+                })
+            end
+
+            it("names the addressee alone", function()
+                local msg = message_update({ to = "code-reviewer" })
+
+                assert.equal("SendMessage", msg.kind)
+                assert.equal("code-reviewer", msg.argument)
+            end)
+
+            it("adds the summary when both are present", function()
+                local msg = message_update({
+                    to = "code-reviewer",
+                    summary = "ask about the fold anchor",
+                })
+
+                assert.equal(
+                    "code-reviewer: ask about the fold anchor",
+                    msg.argument
+                )
+            end)
+        end)
+
+        describe("the task-control family", function()
+            --- @param toolName string
+            --- @param rawInput table
+            --- @return agentic.ui.MessageWriter.ToolCallBase message
+            local function task_update(toolName, rawInput)
+                return make_adapter():__build_tool_call_update({
+                    toolCallId = "tc-task",
+                    kind = "other",
+                    status = "in_progress",
+                    title = toolName,
+                    rawInput = rawInput,
+                    _meta = { claudeCode = { toolName = toolName } },
+                })
+            end
+
+            -- One glyph covers the family, so the head has to name which
+            -- operation ran.
+            it("keeps the operation in the head", function()
+                local stop = task_update("TaskStop", { task_id = "t-7" })
+                local output = task_update("TaskOutput", { task_id = "t-7" })
+
+                assert.equal("TaskControl", stop.kind)
+                assert.equal("TaskStop: t-7", stop.argument)
+                assert.equal("TaskControl", output.kind)
+                assert.equal("TaskOutput: t-7", output.argument)
+            end)
+
+            -- `task_id` is optional on TaskStop (it stops every task without
+            -- one), so the name-only head is the whole head, not a prefix
+            -- waiting for a field.
+            it("renders name-only without a task id", function()
+                local msg = task_update("TaskStop", { description = "halt" })
+
+                assert.equal("TaskStop", msg.argument)
+            end)
+        end)
+
+        it("heads a cron deletion with the tool name alone", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-cron",
+                kind = "other",
+                status = "in_progress",
+                title = "CronDelete",
+                rawInput = { id = "cron-3" },
+                _meta = { claudeCode = { toolName = "CronDelete" } },
+            })
+
+            assert.equal("Cron", msg.kind)
+            assert.equal("CronDelete", msg.argument)
+        end)
+
+        it("heads a cron creation with the schedule", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-cron",
+                kind = "other",
+                status = "in_progress",
+                title = "CronCreate",
+                rawInput = { cron = "0 9 * * 1" },
+                _meta = { claudeCode = { toolName = "CronCreate" } },
+            })
+
+            assert.equal("Cron", msg.kind)
+            assert.equal("CronCreate: 0 9 * * 1", msg.argument)
+        end)
+
+        it("splits an MCP name into server and tool", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-mcp",
+                kind = "other",
+                status = "in_progress",
+                title = "mcp__cclsp__rename_symbol",
+                rawInput = { file_path = "/tmp/a.lua" },
+                _meta = {
+                    claudeCode = { toolName = "mcp__cclsp__rename_symbol" },
+                },
+            })
+
+            assert.equal("Mcp", msg.kind)
+            assert.equal("cclsp: rename_symbol", msg.argument)
+        end)
+
+        -- The `mcp__` population is unbounded, so a kind the bridge did have a
+        -- formatter for is richer than anything a name can derive.
+        it("leaves an MCP tool the bridge kinded alone", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-mcp",
+                kind = "read",
+                status = "in_progress",
+                title = "Read /tmp/a.lua",
+                rawInput = { file_path = "/tmp/a.lua" },
+                _meta = {
+                    claudeCode = { toolName = "mcp__filesystem__read_file" },
+                },
+            })
+
+            assert.is_nil(msg.kind)
+            assert.equal("/tmp/a.lua", msg.argument)
+        end)
+
+        it("leaves an unlisted tool name on the generic path", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-report",
+                kind = "other",
+                status = "in_progress",
+                title = "ReportFindings",
+                rawInput = { level = "high" },
+                _meta = { claudeCode = { toolName = "ReportFindings" } },
+            })
+
+            assert.is_nil(msg.kind)
+            assert.equal("ReportFindings", msg.argument)
+        end)
+
+        -- A minted kind with no glyph renders a silent gear, which neither the
+        -- adapter nor the glyph module can see on its own.
+        it("mints no kind without a glyph", function()
+            local Glyphs = require("agentic.glyphs")
+            local AcpKind = require("agentic.utils.acp_kind")
+
+            local kinds = vim.tbl_values(ClaudeUtils.TOOL_KINDS)
+            table.insert(
+                kinds,
+                ClaudeUtils.tool_kind("mcp__cclsp__rename_symbol", "other")
+            )
+
+            --- @type string[]
+            local glyphless = {}
+            for _, kind in ipairs(kinds) do
+                if not Glyphs.KIND[AcpKind.normalise(kind)] then
+                    table.insert(glyphless, kind)
+                end
+            end
+
+            assert.same({}, glyphless)
+        end)
+
         -- The bridge's untracked-tool fallback sends no `_meta` at all, and a
         -- title alone must no longer reach a mode-switch branch.
         it("leaves a notification without _meta on the generic path", function()

@@ -5,8 +5,9 @@ local M = {}
 ---
 --- Use at every ACP kind comparison or table lookup. The protocol's own kind
 --- vocabulary is lowercase, but this plugin's adapters mint CamelCase kinds
---- alongside it (`SubAgent`, `WebSearch`, `SlashCommand`, `TodoWrite`,
---- `Skill`), so a raw `kind` is only comparable once it has been through here.
+--- alongside it (`ClaudeUtils.TOOL_KINDS`, plus the ones the adapters' kind
+--- ladders derive from `rawInput`: `SubAgent`, `WebSearch`, `TodoWrite`), so a
+--- raw `kind` is only comparable once it has been through here.
 --- `nil` normalises to the empty string, which matches no kind, so callers need
 --- no nil check of their own.
 --- @param kind string|nil
@@ -17,5 +18,29 @@ function M.normalise(kind)
     end
     return vim.trim(kind):lower()
 end
+
+--- The protocol's own kind vocabulary — the values a bridge is allowed to
+--- assign, as against the CamelCase ones an adapter mints on top.
+---
+--- Membership is what separates "the bridge said this" from "this plugin
+--- decided this", and both readings matter: `ACPClient` warns about a kind no
+--- provider should have sent, and `ToolCallRenderer.strip_kind_prefix` undoes a
+--- bridge-written title only for a kind the bridge wrote. Key through
+--- `normalise` — opencode capitalises these.
+--- @type table<string, boolean>
+M.PROTOCOL_KINDS = {
+    read = true,
+    edit = true,
+    delete = true,
+    move = true,
+    search = true,
+    execute = true,
+    think = true,
+    fetch = true,
+    other = true,
+    create = true,
+    write = true,
+    switch_mode = true,
+}
 
 return M

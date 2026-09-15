@@ -43,12 +43,20 @@ end
 
 --- Strip redundant kind prefix from an argument string.
 --- The header already shows the kind, so "Read filename.txt" → "filename.txt".
+---
+--- Only a title the bridge wrote is stripped, so only a kind the bridge
+--- assigned qualifies (`AcpKind.PROTOCOL_KINDS`). Against a head an adapter
+--- built itself the strip can only misfire — a `Monitor` whose description
+--- opens "Monitor the CI run" would render as "the CI run".
 --- @param kind string ACP tool kind
 --- @param argument string|nil
 --- @return string
 function M.strip_kind_prefix(kind, argument)
     if not argument or argument == "" then
         return ""
+    end
+    if not AcpKind.PROTOCOL_KINDS[AcpKind.normalise(kind)] then
+        return argument
     end
     local display = M.display_kind(kind)
     if argument:sub(1, #display + 1):lower() == display:lower() .. " " then
@@ -86,10 +94,10 @@ end
 --- sequence. `!` is absent because an image needs the `[` that is already here.
 local MARKDOWN_INLINE_SPECIALS = "[`*_~%[%]<>&\\$#]"
 
---- Kinds whose heading name is a path, URL, command or identifier rather than
---- prose. They take the code-span guard unconditionally: a column of file heads
---- that switched on whether one filename happened to contain an emphasised path
---- component would read as arbitrary, the guard being invisible
+--- Kinds whose heading name is a path, URL, command, identifier or expression
+--- rather than prose. They take the code-span guard unconditionally: a column
+--- of file heads that switched on whether one filename happened to contain an
+--- emphasised path component would read as arbitrary, the guard being invisible
 --- (`conceallevel=2` hides the delimiters) yet carrying the name's colour. The
 --- file-mutating half has to match `SessionManager`'s own list of them, or the
 --- same path renders guarded under `read` and bare under `delete`.
@@ -112,6 +120,9 @@ local CODE_KINDS = {
     search = true,
     slashcommand = true,
     skill = true,
+    mcp = true,
+    taskcontrol = true,
+    cron = true,
 }
 
 --- The backtick run enclosing `name` as a code span, plus the space pad
