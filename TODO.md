@@ -219,6 +219,14 @@ its docstring promises does not exist — so either the callback is the missing
 work, or the flag is dead state to delete. Decide which; it was masked until
 recently by the plan-exit detection never firing at all.
 
+### `ExitWorktree` renders as an unrecognised tool
+
+`ClaudeUtils.MODE_SWITCH_TOOLS` (`claude_utils.lua:6-10`) maps `EnterPlanMode`,
+`ExitPlanMode` and `EnterWorktree`, but not `ExitWorktree` — which the SDK does
+define (`sdk-tools.d.ts:56`). It falls to the generic branch and takes the gear
+with a title-derived head. Never once observed in the session cache, which is
+why it was flagged rather than fixed with the rest of the family.
+
 ### `allow_always` caches on kinds its own table cannot match
 
 `_build_cache_key` normalises the kind (`permission_manager.lua:169`) before
