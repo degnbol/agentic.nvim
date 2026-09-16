@@ -705,11 +705,14 @@ end
 --- Cross-file coupling: any builtin allowlisted in `permissions.json` that can
 --- rebind a shell variable must appear here, else the binding survives a plain
 --- command unscathed and the matcher resolves a stale `known[var]` while the
---- shell ran the rebound value. Today only `printf` satisfies "allowlisted ∧
---- rebinds", which is why its membership is load-bearing, not insurance.
+--- shell ran the rebound value. `read`, `printf` and zsh's `print` (`-v NAME`)
+--- satisfy "allowlisted ∧ rebinds", so their membership is load-bearing, not
+--- insurance. `print` gets no `-v` carve-out because its short options cluster
+--- (`print -rv NAME`), which the exact-token scan for `-v` would miss.
 local NAMESPACE_MUTATING = {
     read = true,
     printf = true,
+    print = true,
     mapfile = true,
     readarray = true,
     getopts = true,

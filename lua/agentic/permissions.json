@@ -78,6 +78,13 @@
   "shift":     { "read_only": [{}] },
   "read":      { "read_only": [{}] },
 
+  "print": {
+    "read_only": [{}],
+    "ask": [
+      { "options": ["s", "S", "z", "p", "u", "v"] }
+    ]
+  },
+
   "grep":      { "read_only": [{}] },
   "zgrep":     { "read_only": [{}] },
   "rg":        { "read_only": [{}] },

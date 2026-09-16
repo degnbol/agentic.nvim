@@ -2278,6 +2278,32 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("sort -oFILE"))
         end)
 
+        it("auto-approves plain print", function()
+            assert.is_true(PermissionRules.should_auto_approve("print hello"))
+        end)
+
+        -- zsh `print` writes off stdout under -s/-S (history), -z (editor
+        -- buffer stack), -p (coprocess), -u (arbitrary fd) and -v (parameter).
+        it("does not auto-approve print -s (history write)", function()
+            assert.is_false(PermissionRules.should_auto_approve("print -s foo"))
+        end)
+
+        it("does not auto-approve print -rz (short cluster)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("print -rz 'rm -rf x'")
+            )
+        end)
+
+        it("does not auto-approve print -u2 (glued arg)", function()
+            assert.is_false(PermissionRules.should_auto_approve("print -u2 hi"))
+        end)
+
+        it("does not auto-approve print -v (parameter rebind)", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("print -v out hi")
+            )
+        end)
+
         it("does not auto-approve git -C diff push", function()
             -- option walker consumes `-C diff`, positionals = ["push"]; no
             -- entry matches positionals[1]="push" as allow.
