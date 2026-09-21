@@ -1,7 +1,8 @@
 -- Recovery flows for the session manager:
 --   - Re-authentication when the Claude provider returns an auth error.
 --   - Server-health backoff before offering reauth.
---   - Provider subprocess restart after re-authentication.
+--   - Conversation-preserving subprocess respawn, after a usage_limit stall or
+--     a re-login the subprocess did not survive.
 --   - Auto-continue retry after usage_limit errors.
 --   - Silent auto-retry after transient server errors.
 --   - Surfacing of "successful but empty" prompt responses.
@@ -13,6 +14,7 @@
 --- @diagnostic disable: invisible
 
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 
 local M = {}
@@ -201,19 +203,23 @@ function M.run_reauth(sm)
 
     Logger.notify("Opening browser for re-authentication...")
 
+    -- The conversation can be replaced during the OAuth round-trip (`/new`, a
+    -- restore, a provider switch, `/delete`); recovering into the replacement
+    -- would recover the wrong conversation.
+    local epoch = sm._session_epoch
+
     sm._reauth_job = vim.system(
         { "claude", "auth", "login", flag },
         {},
         function(result)
             vim.schedule(function()
                 sm._reauth_job = nil
-                if sm._destroyed then
+                if sm._destroyed or epoch ~= sm._session_epoch then
                     return
                 end
 
                 if result.code == 0 then
-                    Logger.notify("Re-authenticated. Restarting provider...")
-                    M.restart_provider(sm)
+                    M.recover_after_reauth(sm)
                 else
                     Logger.notify(
                         "Re-authentication failed. Try running 'claude auth login' manually.",
@@ -234,30 +240,54 @@ function M.kill_reauth_job(sm)
     end
 end
 
---- Kill the dead cached agent, spawn a fresh provider subprocess,
---- and create a new session. Used after re-authentication when the
---- provider process has exited.
+--- Recover the session after a successful re-login.
+---
+--- Usually there is nothing to recover: the bridge rejects the turn but leaves
+--- the subprocess and its query stream up, so the live session takes the next
+--- prompt with the refreshed credentials. A subprocess that did exit — the case
+--- `1ccfdaa` was written for — shows up as a non-`ready` `agent.state`, since
+--- the transport reports the exit as `disconnected`; that one respawns, keeping
+--- the conversation.
+---
+--- The live branch is taken at most once per unresolved auth failure. Whether a
+--- running query picks up the refreshed credentials is unknowable from here
+--- (the CLI is a compiled binary), so `_reauth_live_retry` records that the
+--- cheap recovery has been spent and a second auth error respawns rather than
+--- offering the same retry forever. A successful turn clears it — that is the
+--- only evidence the credentials took — so the flag deliberately outlives
+--- `/new` and a restore, where nothing about the subprocess has been settled.
 --- @param sm agentic.SessionManager
-function M.restart_provider(sm)
-    local AgentInstance = require("agentic.acp.agent_instance")
-
-    -- Remove the dead cached instance so get_instance spawns a fresh one
-    sm.agent:stop()
-    AgentInstance._instances[Config.provider] = nil
-
-    local new_agent = AgentInstance.get_instance(
-        Config.provider,
-        function(client)
-            vim.schedule(function()
-                sm.agent = client
-                sm:new_session()
-            end)
-        end
-    )
-
-    if new_agent then
-        sm.agent = new_agent
+function M.recover_after_reauth(sm)
+    if
+        not sm._reauth_live_retry
+        and sm.agent
+        and sm.agent.state == "ready"
+        and sm.session_id
+    then
+        sm._reauth_live_retry = true
+        M._announce_reauth(sm)
+        return
     end
+
+    M.respawn_preserving_history(sm, function()
+        M._announce_reauth(sm, {
+            "New session — your conversation is re-sent as context on the next message.",
+        })
+    end)
+end
+
+--- Record the re-login in the chat as a landmark the reader can scroll back to.
+--- @param sm agentic.SessionManager
+--- @param body string[]|nil Lines under the heading
+function M._announce_reauth(sm, body)
+    sm.message_writer:write_notice({
+        glyph = Glyphs.AUTH,
+        title = "re-authenticated",
+        body = body,
+        -- The OAuth round-trip is long enough for the user to have submitted
+        -- again while it ran.
+        mid_turn = sm.is_generating,
+    })
 end
 
 --- Cancel a pending auto-continue timer and remove the cancel keymap.
@@ -283,30 +313,25 @@ function M.cancel_retry_timer(sm, reset_attempts)
     end
 end
 
---- Force-respawn the ACP subprocess for the current provider after a
---- usage_limit error. claude-agent-acp's prompt generator does NOT close on
---- RequestError.internalError (acp-agent.js:449-450, 600-609), so the next
---- prompt to the same subprocess returns end_turn with zero usage and no
---- chunks — silent failure. We kill the subprocess immediately so the next
---- prompt (auto-continue or manual) lands on a fresh pipeline. Chat history
---- is preserved and prepended on the next submit via _history_to_send.
---- See chunk-flush.md.
+--- Replace the provider subprocess while keeping the conversation.
+--- The replacement ACP session is empty provider-side, so the prior messages
+--- are queued as context for the next submit.
 --- @param sm agentic.SessionManager
-function M.respawn_after_usage_limit(sm)
+--- @param on_created fun()|nil Runs after the replacement session is created
+function M.respawn_preserving_history(sm, on_created)
     local AgentInstance = require("agentic.acp.agent_instance")
     local provider_name = Config.provider
 
     local saved_history = sm.chat_history
 
-    -- Kill the stuck subprocess and drop the cached instance so the next
-    -- get_instance spawns a fresh one. Pending callbacks fail with the
-    -- "disconnected" state via _fail_pending_callbacks.
+    -- Stopping the instance disconnects the transport, which fails every
+    -- request callback still pending on it rather than orphaning them.
     AgentInstance.invalidate(provider_name)
     sm.session_id = nil
     sm.permission_manager:clear()
     sm.todo_list:clear()
 
-    local new_agent = AgentInstance.get_instance(provider_name, function(client)
+    sm.agent = AgentInstance.get_instance(provider_name, function(client)
         vim.schedule(function()
             if sm._destroyed then
                 return
@@ -317,28 +342,14 @@ function M.respawn_after_usage_limit(sm)
                 restore_mode = true,
                 quiet_welcome = true,
                 on_created = function()
-                    -- new_session built a fresh ChatHistory; swap back to the
-                    -- saved one but keep the new session_id/timestamp.
-                    local new_session_id = sm.chat_history.session_id
-                    local new_timestamp = sm.chat_history.timestamp
-
-                    sm.chat_history = saved_history
-                    sm.chat_history.session_id = new_session_id
-                    sm.chat_history.timestamp = new_timestamp
-
-                    -- Prepend prior conversation on the next prompt submit so
-                    -- the fresh provider-side session has context.
-                    sm._history_to_send = saved_history.messages
-                    sm._is_first_message = true
+                    sm:_adopt_history(saved_history)
+                    if on_created then
+                        on_created()
+                    end
                 end,
             })
         end)
     end)
-
-    if not new_agent then
-        return
-    end
-    sm.agent = new_agent
 end
 
 --- Format seconds into a human-readable duration (e.g. "2h 15m", "45m", "30s").

@@ -441,11 +441,12 @@ There are three restore mechanisms that use this asymmetry differently:
   call (…): …\nResult:\n…"`) ahead of the user's prompt. The provider
   sees one large user message — tool-call provenance is collapsed
   into prose, no native conversation state.
-- **Path C — `respawn_after_usage_limit`** (`session_recovery.lua`).
+- **Path C — `respawn_preserving_history`** (`session_recovery.lua`).
   Triggered by `max_tokens` / usage-limit stalls on the
-  claude-agent-acp subprocess. Kills the agent, saves
-  `chat_history.messages` onto `_history_to_send`, and lets the next
-  `session/new` reuse Path B's prefix-stitching to continue the
+  claude-agent-acp subprocess, and by a re-login the subprocess did not
+  survive. Kills the agent, saves `chat_history.messages` onto
+  `_history_to_send` (`SessionManager:_adopt_history`), and lets the
+  next `session/new` reuse Path B's prefix-stitching to continue the
   conversation under a fresh subprocess.
 
 This is the inverse of the "user_message_chunk replay" point below:
@@ -497,7 +498,7 @@ prompt generator — the bytes never leave the bridge, so:
 - **Do not add client-side state resets** ("redraw", reset turn state) as a
   "fix" — they don't touch the bridge's stalled generator.
 - Viable workarounds are upstream-level: respawn the subprocess before
-  auto-continue (Path C `respawn_after_usage_limit`), re-prepending history.
+  auto-continue (Path C `respawn_preserving_history`), re-prepending history.
 
 ### Silent upstream failure — opencode + litellm
 
@@ -524,7 +525,7 @@ otherwise-working sessions — stalled generators per "Prompt loop stall",
 cancelled turns reusing the prompt loop, models that simply return
 nothing. There is no protocol-level way to distinguish these from a
 client. A first-turn-only gate was tried and removed: `_is_first_message`
-is also reset by `respawn_after_usage_limit`, so "first turn" doesn't
+is also reset by a Path C respawn, so "first turn" doesn't
 correspond to "first user prompt to the live agent", and the heuristic
 produced false-positive Error blocks for normal empty responses.
 

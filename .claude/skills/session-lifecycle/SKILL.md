@@ -8,7 +8,7 @@ description: Session lifecycle races, epoch guard, cross-turn MessageWriter stat
 ## Session lifecycle races and the epoch guard
 
 For the three restore paths (`session/load`, `restore_from_history`,
-`respawn_after_usage_limit`) and what each sends on the wire, see the
+`respawn_preserving_history`) and what each sends on the wire, see the
 `provider-system` skill § "Chat buffer is UI only".
 The races below all concern Path A (`session/load`) interleaving with
 the constructor's `session/new`.
@@ -70,10 +70,13 @@ Three race conditions can overwrite `self.session_id` during ACP
 
 - `_restoring` flag — prevents the deferred on-ready callback (race 1) and
   catches in-flight create callbacks while load is active.
-- `_session_epoch` counter — monotonically incremented by both `new_session()`
-  and `_do_load_acp_session`. The `create_session` callback captures the epoch
+- `_session_epoch` counter — monotonically incremented by `new_session()`,
+  `_do_load_acp_session` and `_delete_session` (which ends a conversation with
+  no `new_session` behind it). The `create_session` callback captures the epoch
   at call time and rejects the response if the epoch has advanced (race 2).
-  This catches stale responses even after `_restoring` is cleared.
+  This catches stale responses even after `_restoring` is cleared. Long-running
+  side flows capture it too: `run_reauth` holds the epoch across the browser
+  OAuth round-trip so its callback cannot recover into a replaced conversation.
 - `_destroyed` flag — set in `SessionManager:destroy`. Checked at the top of
   the `create_session` callback for race 3c (epoch/restoring can't catch it
   because they track the replacement's state, not the destroyed sender's).

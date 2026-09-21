@@ -104,9 +104,11 @@ Glyphs.ERROR = "󰅚"
 Glyphs.PROMPT = "❯"
 
 --- Identities reported after the fact, with no command that asks for them: a
---- provider swap, and a session restored through the picker or `:AgenticResume`.
+--- provider swap, a session restored through the picker or `:AgenticResume`,
+--- and a re-login from the error block's `[r]` keymap.
 Glyphs.PROVIDER = "󰚥"
 Glyphs.RESUME = "󰁯"
+Glyphs.AUTH = "󰍂"
 
 --- Per-command glyph, keyed on the command word without its leading slash (the
 --- word `PromptBlocks.command` returns). Stamped on the heading row of whatever
@@ -165,7 +167,7 @@ Glyphs.COMMAND = {
     insights = "󱕍",
     ["team-onboarding"] = "󱟄",
     -- Account
-    login = "󰍂",
+    login = Glyphs.AUTH,
     logout = "󰍃",
     -- Diagnostics
     doctor = "󰓙",

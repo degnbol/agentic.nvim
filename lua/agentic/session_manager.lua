@@ -103,6 +103,7 @@ end
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
+--- @field _reauth_live_retry boolean Set when a re-login was answered by keeping the live session, cleared by the next successful turn; a re-login while still set respawns instead
 --- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
 local SessionManager = {}
@@ -160,31 +161,73 @@ function SessionManager._generate_welcome_header(_, session_id)
     return string.format("# %s · %s", ts, short_id)
 end
 
---- Refresh chat_history.provider / provider_version / model / file_activity
---- from current state so the next save records which provider, provider version
---- and model produced the conversation, and which files it changed.
-function SessionManager:_sync_history_context()
-    if not self.chat_history then
-        return
-    end
+--- Refresh `history`'s provider / provider_version / model / file_activity from
+--- current state so the next save records which provider, provider version and
+--- model produced the conversation, and which files it changed.
+---
+--- Takes its target rather than reading `self.chat_history`, which an async
+--- caller holding an earlier history is not necessarily writing back.
+--- @param history agentic.ui.ChatHistory
+function SessionManager:_sync_history_context(history)
     if self.file_activity then
-        self.chat_history.file_activity = self.file_activity:serialize()
+        history.file_activity = self.file_activity:serialize()
     end
-    self.chat_history.provider = Config.provider
+    history.provider = Config.provider
     -- Guarded: a provider that reports no agentInfo, or whose initialize is
     -- still in flight, must not erase the version a restored session recorded.
     local agent_info = self.agent and self.agent.agent_info
     if agent_info then
-        self.chat_history.provider_version = agent_info.version
+        history.provider_version = agent_info.version
     end
     local opts = self.config_options
     if opts then
-        self.chat_history.model = (opts.model and opts.model.currentValue)
+        history.model = (opts.model and opts.model.currentValue)
             or (
                 opts.legacy_agent_models
                 and opts.legacy_agent_models.current_model_id
             )
     end
+end
+
+--- Sync the session context onto `history` and write it to disk. A history
+--- with no session id has no file to write and is left alone.
+--- @param history agentic.ui.ChatHistory
+function SessionManager:_persist_history(history)
+    -- Not delegated to `ChatHistory:save`, which notifies the user about the
+    -- missing id. Reaching here before a session exists is expected.
+    if not history.session_id then
+        return
+    end
+
+    self:_sync_history_context(history)
+    history:save(function(save_err)
+        if save_err then
+            -- Not a debug-only line: this is the write that makes a
+            -- conversation survive a crash, so a failure has to reach whoever
+            -- would otherwise assume it is on disk.
+            Logger.notify(
+                "Chat history save failed: " .. save_err,
+                vim.log.levels.WARN
+            )
+        end
+    end)
+end
+
+--- Carry `saved_history` into the current session, keeping that session's own
+--- id and timestamp, and queue its messages to be prepended to the next submit
+--- — the session is empty provider-side, so that is the only way the
+--- conversation reaches the agent again.
+--- @param saved_history agentic.ui.ChatHistory
+function SessionManager:_adopt_history(saved_history)
+    local new_session_id = self.chat_history.session_id
+    local new_timestamp = self.chat_history.timestamp
+
+    self.chat_history = saved_history
+    self.chat_history.session_id = new_session_id
+    self.chat_history.timestamp = new_timestamp
+
+    self._history_to_send = saved_history.messages
+    self._is_first_message = true
 end
 
 --- @param tab_page_id integer
@@ -213,6 +256,7 @@ function SessionManager:new(tab_page_id)
         --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
         _plan_exit_pending = false,
         _retry_attempt = 0,
+        _reauth_live_retry = false,
         _transient_attempt = 0,
         _prompt_pending = 0,
         _checktime_scheduled = false,
@@ -630,8 +674,7 @@ function SessionManager:_on_session_update(update)
         if update.title and update.title ~= "" and not self._title_user_set then
             self.chat_history.title = update.title
             self.widget:set_chat_title(update.title)
-            self:_sync_history_context()
-            self.chat_history:save()
+            self:_persist_history(self.chat_history)
         end
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
@@ -733,8 +776,7 @@ function SessionManager:_rename_session(new_title)
     })
 
     -- Persist the updated title
-    self:_sync_history_context()
-    self.chat_history:save()
+    self:_persist_history(self.chat_history)
 end
 
 --- Push the trust scope display into the chat panel headers state so
@@ -939,6 +981,11 @@ function SessionManager:_delete_session()
         local ok, err = ChatHistory.delete_session(session_id)
         if ok then
             self:_cancel_session()
+            -- Deleting is the one transition with no new_session after it, so
+            -- nothing else supersedes the callbacks left in flight: a turn
+            -- callback would write the file back, a re-auth callback would
+            -- respawn what the user just removed.
+            self:_advance_session_epoch()
             Logger.notify(
                 "Session " .. session_id:sub(1, 8) .. " deleted.",
                 vim.log.levels.INFO
@@ -1204,12 +1251,8 @@ function SessionManager:toggle_file_activity()
         self.file_activity:mark_viewed()
         -- Persist immediately rather than waiting for the next turn to save.
         -- The marker's whole point is surviving a quit-and-resume, and quitting
-        -- straight after looking at the panel is the ordinary case. Gated on a
-        -- session: `save` warns when there is nothing to save under.
-        if self.session_id then
-            self:_sync_history_context()
-            self.chat_history:save()
-        end
+        -- straight after looking at the panel is the ordinary case.
+        self:_persist_history(self.chat_history)
     end)
 end
 
@@ -2603,6 +2646,7 @@ function SessionManager:_dispatch_turn(prompt)
         if not err then
             self._retry_attempt = 0
             self._transient_attempt = 0
+            self._reauth_live_retry = false
             Recovery.surface_unexpected_response(self, response)
             if type(response) == "table" then
                 turn_usage = response.usage
@@ -2630,16 +2674,16 @@ function SessionManager:_dispatch_turn(prompt)
                 -- RequestError.internalError (acp-agent.js:449-450, 600-609),
                 -- so subsequent prompts to the same subprocess return
                 -- end_turn with zero usage — content silently lost. Respawn
-                -- the subprocess now so by the time auto-continue fires (or
-                -- the user submits manually), the next prompt hits a fresh
-                -- pipeline. See chunk-flush.md.
+                -- now so that by the time auto-continue fires (or the user
+                -- submits manually), the next prompt hits a fresh pipeline.
+                -- See `.claude/skills/issues/references/chunk-flush.md`.
                 -- Close the gate before the respawn, not after: respawn runs a
                 -- new_session whether or not auto-continue is enabled, and its
                 -- drain would otherwise dispatch into a still-limited
                 -- provider. Ordering here rather than relying on respawn's
                 -- chain happening to go through vim.schedule.
                 self._usage_reset_epoch = reset_epoch
-                Recovery.respawn_after_usage_limit(self)
+                Recovery.respawn_preserving_history(self)
                 if reset_epoch then
                     Recovery.offer_auto_continue(self, reset_epoch)
                 end
@@ -2685,14 +2729,13 @@ function SessionManager:_dispatch_turn(prompt)
             })
         end
 
-        -- Save chat history after successful turn completion
-        if not err then
-            self:_sync_history_context()
-            chat_history:save(function(save_err)
-                if save_err then
-                    Logger.debug("Chat history save error:", save_err)
-                end
-            end)
+        -- Persist on failure too: the user prompt is already in `chat_history`,
+        -- so a turn that dies before the session's first success would
+        -- otherwise leave the conversation with no on-disk copy at all. Not
+        -- while retrying — the resent turn writes the same history at its own
+        -- completion, and each save is a synchronous disk write.
+        if not retrying then
+            self:_persist_history(chat_history)
         end
 
         if retrying then
@@ -3198,16 +3241,7 @@ function SessionManager:switch_provider()
                             title = self.agent.provider_config.name,
                         })
 
-                        -- Capture new session metadata before overwriting
-                        local new_session_id = self.chat_history.session_id
-                        local new_timestamp = self.chat_history.timestamp
-
-                        -- Restore saved messages (new_session created a fresh one)
-                        self.chat_history = saved_history
-                        self.chat_history.session_id = new_session_id
-                        self.chat_history.timestamp = new_timestamp
-                        self._history_to_send = saved_history.messages
-                        self._is_first_message = true
+                        self:_adopt_history(saved_history)
                     end,
                 })
             end)

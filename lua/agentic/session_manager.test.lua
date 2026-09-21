@@ -196,6 +196,7 @@ describe("agentic.SessionManager", function()
             local session = {
                 _title_user_set = user_renamed,
                 chat_history = {
+                    session_id = "s-1",
                     title = current_title,
                     save = save_spy,
                 },
@@ -203,6 +204,7 @@ describe("agentic.SessionManager", function()
                     set_chat_title = set_title_spy,
                 },
                 _sync_history_context = function() end,
+                _persist_history = SessionManager._persist_history,
                 _on_session_update = SessionManager._on_session_update,
             } --[[@as agentic.SessionManager]]
             return session, set_title_spy, save_spy
@@ -1217,6 +1219,7 @@ describe("agentic.SessionManager", function()
                     _is_first_message = false,
                     _history_to_send = nil,
                     new_session = new_session_spy,
+                    _adopt_history = SessionManager._adopt_history,
                     switch_provider = SessionManager.switch_provider,
                 } --[[@as agentic.SessionManager]]
 
@@ -1343,6 +1346,7 @@ describe("agentic.SessionManager", function()
                 new_session = spy.new(function(_self, opts)
                     captured_on_created = opts.on_created
                 end),
+                _adopt_history = SessionManager._adopt_history,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
@@ -1939,6 +1943,7 @@ describe("agentic.SessionManager", function()
                 status_indicator = { start = noop, stop = noop },
                 subagent_status_indicator = { stop = noop },
                 chat_history = {
+                    session_id = "s-1",
                     add_message = noop,
                     save = noop,
                     messages = {},
@@ -1971,6 +1976,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_turn = SessionManager._dispatch_turn,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
+                _persist_history = SessionManager._persist_history,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -2005,7 +2011,7 @@ describe("agentic.SessionManager", function()
 
         before_each(function()
             reauth_stub = spy.stub(Recovery, "offer_reauth")
-            respawn_stub = spy.stub(Recovery, "respawn_after_usage_limit")
+            respawn_stub = spy.stub(Recovery, "respawn_preserving_history")
             auto_continue_stub = spy.stub(Recovery, "offer_auto_continue")
             schedule_stub = spy.stub(vim, "schedule")
             schedule_stub:invokes(function(fn)
@@ -2111,6 +2117,7 @@ describe("agentic.SessionManager", function()
                 status_indicator = { start = noop, stop = noop },
                 subagent_status_indicator = { stop = noop },
                 chat_history = {
+                    session_id = "s-1",
                     add_message = function(_self, msg)
                         table.insert(sink.history, msg)
                     end,
@@ -2118,6 +2125,7 @@ describe("agentic.SessionManager", function()
                         table.insert(sink.history_updates, { id, update })
                     end,
                     save = function()
+                        sink.saves = (sink.saves or 0) + 1
                         sink.updates_at_save = #sink.history_updates
                     end,
                     messages = {},
@@ -2153,6 +2161,7 @@ describe("agentic.SessionManager", function()
                 end,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
+                _persist_history = SessionManager._persist_history,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -2381,6 +2390,65 @@ describe("agentic.SessionManager", function()
             session:_handle_input_submit("hello")
             assert.spy(reauth_stub).was.called(1)
             assert.spy(respawn_stub).was.called(0)
+        end)
+
+        -- A turn that worked is the only evidence the refreshed credentials
+        -- took, and so the only thing that re-arms the cheap recovery.
+        it("clears a spent live re-auth retry on success", function()
+            local session = make_session(nil, nil, {})
+            session._reauth_live_retry = true
+            session.agent.send_prompt = function(_self, _sid, _p, cb)
+                cb({ stopReason = "end_turn" }, nil)
+            end
+
+            session:_handle_input_submit("hello")
+
+            assert.is_false(session._reauth_live_retry)
+        end)
+
+        describe("persisting the conversation", function()
+            local TRANSIENT =
+                { message = "boom", data = { errorKind = "server_error" } }
+            local original_enabled
+
+            before_each(function()
+                original_enabled = Config.auto_retry_on_transient_error
+                Config.auto_retry_on_transient_error = true
+            end)
+
+            after_each(function()
+                Config.auto_retry_on_transient_error = original_enabled
+            end)
+
+            -- The user prompt is in chat_history from submit, so a first turn
+            -- that fails would otherwise leave no file to recover it from.
+            it("saves the history a failed turn holds", function()
+                local sink = {}
+                local session = make_session(nil, { message = "boom" }, sink)
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(1, sink.saves)
+            end)
+
+            it("saves once when the failed turn is resent", function()
+                local sink = {}
+                local session = make_session(nil, TRANSIENT, sink)
+                local sent = 0
+                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    sent = sent + 1
+                    table.insert(sink.prompts, prompt)
+                    cb(
+                        { stopReason = "end_turn" },
+                        sent == 1 and TRANSIENT or nil
+                    )
+                end
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(2, #sink.prompts)
+                assert.equal(1, sink.saves)
+            end)
         end)
 
         describe("transient auto-retry", function()
@@ -4032,7 +4100,7 @@ describe("agentic.SessionManager", function()
         it("records the version the agent reported", function()
             local session = make_session({ name = "acp", version = "0.66.0" })
 
-            session:_sync_history_context()
+            session:_sync_history_context(session.chat_history)
 
             assert.equal("0.66.0", session.chat_history.provider_version)
         end)
@@ -4040,9 +4108,78 @@ describe("agentic.SessionManager", function()
         it("keeps a restored version when the agent reports none", function()
             local session = make_session(nil, "0.65.0")
 
-            session:_sync_history_context()
+            session:_sync_history_context(session.chat_history)
 
             assert.equal("0.65.0", session.chat_history.provider_version)
+        end)
+    end)
+
+    describe("_persist_history", function()
+        --- @param saves table Collects each history that reached `save`
+        --- @return agentic.SessionManager
+        local function make_session(saves)
+            return {
+                chat_history = {
+                    session_id = "current",
+                    save = function(this)
+                        table.insert(saves, this)
+                    end,
+                },
+                agent = { agent_info = { name = "acp", version = "0.66.0" } },
+                _sync_history_context = SessionManager._sync_history_context,
+                _persist_history = SessionManager._persist_history,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        -- A turn callback holds the history captured at dispatch, which the
+        -- session may since have swapped for another.
+        it("syncs the history it was handed", function()
+            local saves = {}
+            local session = make_session(saves)
+            local captured =
+                { session_id = "captured", save = session.chat_history.save }
+
+            session:_persist_history(captured)
+
+            assert.equal("0.66.0", captured.provider_version)
+            assert.is_nil(session.chat_history.provider_version)
+            assert.equal("captured", saves[1].session_id)
+        end)
+
+        it("writes nothing before a session exists", function()
+            local saves = {}
+            local session = make_session(saves)
+            session.chat_history.session_id = nil
+
+            session:_persist_history(session.chat_history)
+
+            assert.equal(0, #saves)
+        end)
+    end)
+
+    describe("_adopt_history", function()
+        it("keeps the new session's id and timestamp", function()
+            local saved_history = {
+                session_id = "old",
+                timestamp = 100,
+                messages = { { type = "user", text = "hi" } },
+            }
+            local session = {
+                chat_history = {
+                    session_id = "new",
+                    timestamp = 200,
+                    messages = {},
+                },
+                _adopt_history = SessionManager._adopt_history,
+            } --[[@as agentic.SessionManager]]
+
+            session:_adopt_history(saved_history)
+
+            assert.equal("new", session.chat_history.session_id)
+            assert.equal(200, session.chat_history.timestamp)
+            assert.equal(1, #session.chat_history.messages)
+            assert.same(saved_history.messages, session._history_to_send)
+            assert.is_true(session._is_first_message)
         end)
     end)
 end)

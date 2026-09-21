@@ -81,7 +81,7 @@ describe("agentic.session_recovery", function()
             assert.spy(submit_spy).was.called(0)
         end)
 
-        -- respawn_after_usage_limit clears session_id and repopulates it from
+        -- respawn_preserving_history clears session_id and repopulates it from
         -- an async new_session, so this window is reachable. An unprompted turn
         -- must not land on a half-respawned provider.
         it("sends nothing without a session", function()
@@ -91,6 +91,219 @@ describe("agentic.session_recovery", function()
             Recovery._fire_auto_continue(session)
 
             assert.spy(submit_spy).was.called(0)
+        end)
+    end)
+
+    describe("re-authentication", function()
+        local AgentInstance = require("agentic.acp.agent_instance")
+        local Logger = require("agentic.utils.logger")
+        local SessionManager = require("agentic.session_manager")
+
+        --- @type TestStub
+        local system_stub
+        --- @type TestStub
+        local schedule_stub
+        --- @type TestStub
+        local notify_stub
+        --- Exit code `claude auth login` reports; overridden per case.
+        local exit_code
+
+        before_each(function()
+            exit_code = 0
+            system_stub = spy.stub(vim, "system")
+            system_stub:invokes(function(_cmd, _opts, cb)
+                cb({ code = exit_code })
+            end)
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            system_stub:revert()
+            schedule_stub:revert()
+            notify_stub:revert()
+        end)
+
+        describe("choosing the recovery", function()
+            --- @type TestStub
+            local respawn_stub
+            --- @type table[]
+            local notices
+
+            before_each(function()
+                notices = {}
+                respawn_stub =
+                    spy.stub(Recovery, "respawn_preserving_history")
+                respawn_stub:invokes(function(_sm, on_created)
+                    on_created()
+                end)
+            end)
+
+            after_each(function()
+                respawn_stub:revert()
+            end)
+
+            --- @return agentic.SessionManager
+            local function make_session()
+                return {
+                    session_id = "s-1",
+                    _destroyed = false,
+                    _session_epoch = 0,
+                    _reauth_live_retry = false,
+                    is_generating = false,
+                    agent = { state = "ready" },
+                    message_writer = {
+                        write_notice = function(_self, notice)
+                            table.insert(notices, notice)
+                        end,
+                    },
+                } --[[@as agentic.SessionManager]]
+            end
+
+            -- A subprocess that outlived the auth failure takes the next
+            -- prompt with the refreshed credentials, so nothing is replaced.
+            it("keeps a ready session", function()
+                local session = make_session()
+
+                Recovery.run_reauth(session)
+
+                assert.spy(respawn_stub).was.called(0)
+                assert.equal(1, #notices)
+                assert.is_nil(notices[1].body)
+                assert.is_true(session._reauth_live_retry)
+            end)
+
+            -- The flag survives only while no turn has succeeded, so a second
+            -- auth error means keeping the session did not work.
+            it("respawns once the live retry is spent", function()
+                local session = make_session()
+                session._reauth_live_retry = true
+
+                Recovery.run_reauth(session)
+
+                assert.spy(respawn_stub).was.called(1)
+                assert.equal(1, #notices[1].body)
+            end)
+
+            it("respawns when the subprocess did not survive", function()
+                local session = make_session()
+                session.agent.state = "disconnected"
+
+                Recovery.run_reauth(session)
+
+                assert.spy(respawn_stub).was.called(1)
+                assert.equal(1, #notices[1].body)
+            end)
+
+            it("recovers nothing after a failed login", function()
+                local session = make_session()
+                exit_code = 1
+
+                Recovery.run_reauth(session)
+
+                assert.spy(respawn_stub).was.called(0)
+                assert.equal(0, #notices)
+                assert.spy(notify_stub).was.called(2)
+            end)
+
+            -- An advanced epoch is `/new`, a restore, a provider switch or
+            -- `/delete` landing during the OAuth round-trip.
+            it("recovers nothing into a replaced session", function()
+                local session = make_session()
+                system_stub:invokes(function(_cmd, _opts, cb)
+                    session._session_epoch = session._session_epoch + 1
+                    cb({ code = 0 })
+                end)
+
+                Recovery.run_reauth(session)
+
+                assert.spy(respawn_stub).was.called(0)
+                assert.equal(0, #notices)
+            end)
+
+            it("does not spawn a second login", function()
+                local session = make_session()
+                session._reauth_job = {}
+
+                Recovery.run_reauth(session)
+
+                assert.spy(system_stub).was.called(0)
+            end)
+        end)
+
+        describe("respawn_preserving_history", function()
+            --- @type TestStub
+            local invalidate_stub
+            --- @type TestStub
+            local get_instance_stub
+            --- @type fun(client: table)
+            local fire_ready
+
+            before_each(function()
+                invalidate_stub = spy.stub(AgentInstance, "invalidate")
+                get_instance_stub = spy.stub(AgentInstance, "get_instance")
+                get_instance_stub:invokes(function(_name, on_ready)
+                    fire_ready = on_ready
+                end)
+            end)
+
+            after_each(function()
+                invalidate_stub:revert()
+                get_instance_stub:revert()
+            end)
+
+            --- @return agentic.SessionManager
+            local function make_session()
+                return {
+                    session_id = "old",
+                    _destroyed = false,
+                    chat_history = {
+                        session_id = "old",
+                        timestamp = 1,
+                        messages = { { type = "user", text = "hi" } },
+                    },
+                    permission_manager = { clear = function() end },
+                    todo_list = { clear = function() end },
+                    _adopt_history = SessionManager._adopt_history,
+                    new_session = function(this, opts)
+                        this.chat_history = {
+                            session_id = "new",
+                            timestamp = 2,
+                            messages = {},
+                        }
+                        opts.on_created()
+                    end,
+                } --[[@as agentic.SessionManager]]
+            end
+
+            it("carries the conversation into the new session", function()
+                local session = make_session()
+                local created = false
+
+                Recovery.respawn_preserving_history(session, function()
+                    created = true
+                end)
+                fire_ready({ state = "ready" })
+
+                assert.equal("new", session.chat_history.session_id)
+                assert.equal(1, #session.chat_history.messages)
+                assert.equal(1, #session._history_to_send)
+                assert.is_true(created)
+            end)
+
+            it("creates nothing for a session destroyed meanwhile", function()
+                local session = make_session()
+
+                Recovery.respawn_preserving_history(session)
+                session._destroyed = true
+                fire_ready({ state = "ready" })
+
+                assert.equal("old", session.chat_history.session_id)
+                assert.is_nil(session._history_to_send)
+            end)
         end)
     end)
 end)
