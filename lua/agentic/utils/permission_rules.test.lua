@@ -2278,6 +2278,43 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("sort -oFILE"))
         end)
 
+        it("auto-approves pkg-config queries", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    "pkg-config --cflags --libs foo"
+                )
+            )
+        end)
+
+        it("does not auto-approve pkg-config --log-file=x", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve("pkg-config --log-file=x foo")
+            )
+        end)
+
+        it("does not auto-approve a PKG_CONFIG_LOG prefix", function()
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "PKG_CONFIG_LOG=x pkg-config --libs foo"
+                )
+            )
+        end)
+
+        it("auto-approves gzip stdout and test modes", function()
+            assert.is_true(PermissionRules.should_auto_approve("gzip -dc a.gz"))
+            assert.is_true(PermissionRules.should_auto_approve("gzip -t a.gz"))
+        end)
+
+        it("does not auto-approve in-place gzip", function()
+            assert.is_false(PermissionRules.should_auto_approve("gzip a.txt"))
+            assert.is_false(PermissionRules.should_auto_approve("gzip -kf a.txt"))
+        end)
+
+        it("auto-approves fc-list and whence", function()
+            assert.is_true(PermissionRules.should_auto_approve("fc-list :lang=ja"))
+            assert.is_true(PermissionRules.should_auto_approve("whence -v ls"))
+        end)
+
         it("auto-approves plain print", function()
             assert.is_true(PermissionRules.should_auto_approve("print hello"))
         end)

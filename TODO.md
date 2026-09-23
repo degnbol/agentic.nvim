@@ -656,6 +656,11 @@ E.g. to be able to indicate arity, if term is first, last, if there's exactly n 
 Brainstorm ideas for the simplest increase in code complexity and usage in 
 permissions.json complexity that generalises to the most useful use cases.
 
+Concrete need: a gate field matching a pattern against any argument
+(`any_positional: ["*;"]`). tmux chains commands with `;`/`\;` tokens at
+any index (`tmux capture-pane -p \; run-shell …` runs the shell command),
+so a read-only tmux entry is unsound until `ask` can catch them.
+
 ## Auto-allow non-zsh
 
 Consider if it would be a huge unrealistic endevour to extend the auto-allow system from zsh to other languages.

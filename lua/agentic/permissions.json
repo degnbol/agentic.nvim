@@ -20,10 +20,12 @@
   "bat":       { "read_only": [{}] },
   "mdfind":    { "read_only": [{}] },
   "locate":    { "read_only": [{}] },
+  "fc-list":   { "read_only": [{}] },
 
   "which":     { "read_only": [{}] },
   "whereis":   { "read_only": [{}] },
   "type":      { "read_only": [{}] },
+  "whence":    { "read_only": [{}] },
   "realpath":  { "read_only": [{}] },
   "readlink":  { "read_only": [{}] },
   "dirname":   { "read_only": [{}] },
@@ -36,7 +38,8 @@
   "tail":      { "read_only": [{}] },
   "less":      { "read_only": [{}] },
   "zless":     { "read_only": [{}] },
-  "gunzip":    { "read_only": [{ "options": ["c"]}] },
+  "gzip":      { "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }] },
+  "gunzip":    { "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }] },
   "gzcat":     { "read_only": [{}] },
   "bzcat":     { "read_only": [{}] },
   "xzcat":     { "read_only": [{}] },
@@ -299,6 +302,14 @@
   "kpsewhich": { "read_only":  [{}] },
 
   "javap": { "read_only": [{}] },
+  "pkgconf": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["log-file"] }]
+  },
+  "pkg-config": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["log-file"] }]
+  },
 
   "brew": {
     "read_only": [
