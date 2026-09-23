@@ -34,9 +34,10 @@ end
 --- `tools.js` `toolInfoFromToolUse` kinds every one of these `other`, and for
 --- the agent-orchestration family it has no display formatter either, so its
 --- default branch titles them with the bare tool name — a gear glyph beside a
---- word the gutter should be saying. Tools sharing one glyph share one kind
---- (`TaskStop`/`TaskOutput`, the three `Cron*`), and their head names the
---- operation instead — see `tool_head`.
+--- word the gutter should be saying. Tools doing one act share one kind
+--- (`TaskStop`/`TaskOutput`, the three `Cron*`, `SendMessage` and the
+--- subagent's `SubagentHandback` to its caller), and the head tells them apart
+--- — see `tool_head`.
 ---
 --- Every value needs a `Glyphs.KIND` entry, or the kind renders a gear that
 --- reads as an unrecognised tool; `claude_agent_acp_adapter.test.lua` asserts
@@ -51,6 +52,7 @@ M.TOOL_KINDS = {
     Skill = "Skill",
     ToolSearch = "ToolSearch",
     SendMessage = "SendMessage",
+    SubagentHandback = "SendMessage",
     ListAgents = "ListAgents",
     Monitor = "Monitor",
     ScheduleWakeup = "ScheduleWakeup",
@@ -119,8 +121,10 @@ end
 --- Head text per minted kind. A head drops the tool name exactly when the
 --- glyph is unique to that tool, and keeps it when the glyph is a family's —
 --- so the family builders read the name and the rest return "" until their
---- field lands. Nothing is lost for the two sign-less consumers: the picker
---- preview and the Path B prose prefix both print the kind beside the head.
+--- field lands. `SendMessage` names its addressee instead, which only
+--- `SendMessage` itself has: a handback's addressee is always the caller.
+--- Nothing is lost for the two sign-less consumers: the picker preview and the
+--- Path B prose prefix both print the kind beside the head.
 --- @type table<string, fun(raw_input: agentic.acp.ClaudeAgentRawInput, tool_name: string): string>
 local HEADS = {
     ToolSearch = function(raw_input)
@@ -129,7 +133,10 @@ local HEADS = {
     -- `summary` is documented in the tool's own input schema as "a 5-10 word
     -- label for your own transcript row (not transmitted)" — a head is
     -- precisely what it is for. Shape matches the SubAgent head.
-    SendMessage = function(raw_input)
+    SendMessage = function(raw_input, tool_name)
+        if tool_name ~= "SendMessage" then
+            return tool_name
+        end
         local to = nonempty(raw_input, "to")
         return to and qualified(to, nonempty(raw_input, "summary")) or ""
     end,

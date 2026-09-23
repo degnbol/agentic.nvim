@@ -1,7 +1,8 @@
 --- Nerd Font glyph vocabulary for the chat buffer. Collected in one module so a
 --- new glyph can be checked against every existing one at a glance: the chat
---- window is `signcolumn=yes:1`, so a glyph is the whole identity a row gets and
---- two regions sharing one are indistinguishable.
+--- window is `signcolumn=yes:1`, so a glyph is the whole gutter identity a row
+--- gets. Two acts sharing one are indistinguishable in the gutter; two tools
+--- doing one act may share one, and the head text names which tool ran.
 ---
 --- Glyphs are `nf-md-*`, never emoji. A `sign_text` must be `glyph .. " "` —
 --- `nvim_buf_set_extmark` accepts 1-2 cells and rejects 3, and the trailing
@@ -24,11 +25,12 @@ local Glyphs = {}
 --- granularity, and the diff already separates them.
 ---
 --- The agent-orchestration family is the other place one glyph covers several
---- tools: `taskcontrol` and `cron` are a family each, and their head names the
---- operation. `md-robot_outline` against `subagent`'s filled 󰚩, and `md-alarm`
---- or `md-autorenew` against the round `status_icons` faces, are the
---- outline-vs-filled indistinguishability this module exists to prevent — hence
---- a tray and a calendar.
+--- tools: `taskcontrol`, `cron` and `sendmessage` (which also carries a
+--- subagent's `SubagentHandback` to its caller) are a family each, and their
+--- head names the operation. `md-robot_outline` against `subagent`'s filled 󰚩,
+--- and `md-alarm` or `md-autorenew` against the round `status_icons` faces, are
+--- the outline-vs-filled indistinguishability this module exists to prevent —
+--- hence a tray and a calendar.
 --- @type table<string, string>
 Glyphs.KIND = {
     read = "󰈈",

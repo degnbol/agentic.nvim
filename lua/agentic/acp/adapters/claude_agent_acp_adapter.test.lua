@@ -729,17 +729,29 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
 
         describe("SendMessage", function()
             --- @param rawInput table
+            --- @param toolName string|nil
             --- @return agentic.ui.MessageWriter.ToolCallBase message
-            local function message_update(rawInput)
+            local function message_update(rawInput, toolName)
+                toolName = toolName or "SendMessage"
                 return make_adapter():__build_tool_call_update({
                     toolCallId = "tc-msg",
                     kind = "other",
                     status = "in_progress",
-                    title = "SendMessage",
+                    title = toolName,
                     rawInput = rawInput,
-                    _meta = { claudeCode = { toolName = "SendMessage" } },
+                    _meta = { claudeCode = { toolName = toolName } },
                 })
             end
+
+            it("heads a subagent handback with the tool name", function()
+                local msg = message_update(
+                    { message = "Report" },
+                    "SubagentHandback"
+                )
+
+                assert.equal("SendMessage", msg.kind)
+                assert.equal("SubagentHandback", msg.argument)
+            end)
 
             it("names the addressee alone", function()
                 local msg = message_update({ to = "code-reviewer" })
