@@ -170,6 +170,11 @@
     "ask":       [{ "options": ["o", "output"] }]
   },
 
+  "shuf": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["o", "output"] }]
+  },
+
   "uniq": { "read_only": [{}] },
   "cut":  { "read_only": [{}] },
   "tr":   { "read_only": [{}] },

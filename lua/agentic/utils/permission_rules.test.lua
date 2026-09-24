@@ -2278,6 +2278,18 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("sort -oFILE"))
         end)
 
+        it("auto-approves shuf -n 5 file", function()
+            assert.is_true(PermissionRules.should_auto_approve("shuf -n 5 file"))
+        end)
+
+        it("denies shuf -rn5 -o out (cluster + output)", function()
+            assert.is_false(PermissionRules.should_auto_approve("shuf -rn5 -o out"))
+        end)
+
+        it("denies shuf --out=x (GNU abbreviation)", function()
+            assert.is_false(PermissionRules.should_auto_approve("shuf --out=x"))
+        end)
+
         it("auto-approves pkg-config queries", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
