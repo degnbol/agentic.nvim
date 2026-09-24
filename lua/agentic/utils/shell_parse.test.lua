@@ -173,6 +173,71 @@ describe("ShellParse.extract_commands", function()
         it("returns empty for a bare string (parsed, no command)", function()
             assert.same({}, ShellParse.extract_commands("# just a comment"))
         end)
+
+        it("returns nil on a backtick substitution the tree hides", function()
+            local parsed = {}
+            for _, src in ipairs({
+                "echo a`id`b",
+                'echo "a`id`"',
+                'x="a`id`"',
+                'for f in "a`id`"; do :; done',
+                'case "a`id`" in *) :;; esac',
+                "cat <<EOF\nx `id` y\nEOF",
+                "cat <<-EOF\n\t`id`\nEOF",
+                "echo `echo \\`id\\``",
+                "echo `echo 'a`b'`",
+            }) do
+                if ShellParse.extract_commands(src) ~= nil then
+                    table.insert(parsed, src)
+                end
+            end
+            assert.same({}, parsed)
+        end)
+
+        it("returns nil on a line continuation inside a word", function()
+            assert.equal(nil, ShellParse.extract_commands("find . -del\\\nete"))
+            assert.equal(
+                nil,
+                ShellParse.extract_commands('echo "$(find . -del\\\nete)"')
+            )
+        end)
+
+        it("returns nil on a line continuation before an indented line", function()
+            -- zsh runs `find . -name x -delete`; the tree ends at the newline.
+            assert.equal(
+                nil,
+                ShellParse.extract_commands("find . -name\\\n  x -delete")
+            )
+        end)
+
+        it("keeps parsing backticks the tree represents", function()
+            local rejected = {}
+            for _, src in ipairs({
+                "echo `id`",
+                "echo $(echo `id`)",
+                "echo 'a`b'",
+                "echo $'a`b'",
+                "echo a\\`b",
+                'echo "a\\`b"',
+                "echo hi # `x`",
+                "cat <<'EOF'\n```lua\n`id`\nEOF",
+                "cat << 'EOF'\n```lua\n`id`\nEOF",
+                'cat <<"EOF"\n```lua\n`id`\nEOF',
+                "cat <<\\EOF\n```lua\n`id`\nEOF",
+                "git commit -m \"$(cat <<'EOF'\nfix\n\n```\ncode\n```\nEOF\n)\"",
+            }) do
+                if ShellParse.parse_zsh(src) == nil then
+                    table.insert(rejected, src)
+                end
+            end
+            assert.same({}, rejected)
+        end)
+
+        it("keeps parsing a line continuation between words", function()
+            assert.is_not_nil(ShellParse.parse_zsh("cmd a \\\n  --flag"))
+            assert.is_not_nil(ShellParse.parse_zsh("echo a |\\\ngrep a"))
+            assert.is_not_nil(ShellParse.parse_zsh("echo a &&\\\necho b"))
+        end)
     end)
 
     describe("zsh-hang trigger (must not reach parse())", function()

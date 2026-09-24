@@ -153,7 +153,9 @@ handling.
 ## Pipeline
 
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
-   failure, or any error node → prompt. The zsh parser is a hard dependency.
+   failure, any error node, or syntax the grammar parses differently from zsh
+   (a hidden backtick substitution, a line continuation inside a word) →
+   prompt. The zsh parser is a hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
    builtins (`eval`/`source`/`.`). A **transparent prefix** is not a leaf:
    `inner_source` slices out its inner command and re-walks that on its own

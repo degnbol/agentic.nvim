@@ -128,8 +128,8 @@ it).
 `leading_options`, the over-approximation soundness argument, the full pipeline
 — are in [references/parsing.md](references/parsing.md)):
 
-- **Fail-closed parse.** No parser, parse failure, or any error node → prompt.
-  The zsh parser is a hard dependency.
+- **Fail-closed parse.** A missing parser, or a tree that may not match what
+  zsh runs → prompt (conditions: parsing.md § Pipeline, step 1).
 - **Reject-by-default walk.** Bails on dynamic command names and code-taking
   builtins (`eval`/`source`/`.`). Loops and `if`/`case` recurse into every
   branch — each body command must itself approve. A bare `command_substitution`

@@ -4447,6 +4447,35 @@ describe("PermissionRules", function()
                 PermissionRules.should_auto_approve("cat <<'EOF'\nls /tmp\nEOF")
             assert.is_true(ok)
         end)
+
+        it("approves a quoted heredoc whose body holds backticks", function()
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    "cat <<'EOF'\n```lua\n`rm -rf /tmp/zz`\n```\nEOF"
+                )
+            )
+        end)
+    end)
+
+    describe("backtick substitution hidden from the parse tree", function()
+        it("never auto-approves", function()
+            local approved = {}
+            for _, cmd in ipairs({
+                "echo a`rm -rf /tmp/zz`b",
+                'grep "x`rm -rf /tmp/zz`" f',
+                'x="a`rm -rf /tmp/zz`"',
+                'for f in "a`rm -rf /tmp/zz`"; do echo $f; done',
+                'case "a`rm -rf /tmp/zz`" in *) echo;; esac',
+                "cat <<EOF\n`rm -rf /tmp/zz`\nEOF",
+                "echo `echo \\`rm -rf /tmp/zz\\``",
+                "find /tmp/zz -name\\\n  x -delete",
+            }) do
+                if PermissionRules.should_auto_approve(cmd) then
+                    table.insert(approved, cmd)
+                end
+            end
+            assert.same({}, approved)
+        end)
     end)
 
     describe("arithmetic argument gate", function()

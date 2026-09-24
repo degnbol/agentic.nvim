@@ -552,9 +552,184 @@ end
 
 -- ── Parsing ──────────────────────────────────────────────────────────────────
 
+local BACKSLASH = ("\\"):byte()
+local BACKTICK = ("`"):byte()
+
+--- 0-based `[start, end)` byte ranges of every node in the tree that satisfies
+--- `pred`, in document order.
+--- @param root TSNode
+--- @param pred fun(node: TSNode): boolean
+--- @return [integer, integer][] ranges
+local function node_ranges(root, pred)
+    local ranges = {}
+    local function visit(node)
+        if pred(node) then
+            local _, _, start_byte, _, _, end_byte = node:range(true)
+            table.insert(ranges, { start_byte, end_byte })
+        end
+        for child in node:iter_children() do
+            visit(child)
+        end
+    end
+    visit(root)
+    return ranges
+end
+
+--- Membership test for the union of `ranges`, answered in amortised O(1) by a
+--- cursor that only moves forward.
+--- @param ranges [integer, integer][] 0-based `[start, end)` byte ranges, sorted
+--- by start
+--- @return fun(i: integer): boolean covers true iff 0-based offset `i` lies in
+--- the union; successive calls must pass non-decreasing `i`
+local function ascending_cover(ranges)
+    local merged = {}
+    for _, r in ipairs(ranges) do
+        local last = merged[#merged]
+        if last and r[1] <= last[2] then
+            last[2] = math.max(last[2], r[2])
+        else
+            table.insert(merged, { r[1], r[2] })
+        end
+    end
+    local k = 1
+    return function(i)
+        while merged[k] and merged[k][2] <= i do
+            k = k + 1
+        end
+        return merged[k] ~= nil and i >= merged[k][1]
+    end
+end
+
+--- True iff the byte at 0-based offset `i` is escaped: preceded by an odd run
+--- of backslashes.
+--- @param src string
+--- @param i integer
+--- @return boolean
+local function is_escaped(src, i)
+    local n_backslashes = 0
+    while i - n_backslashes > 0 and src:byte(i - n_backslashes) == BACKSLASH do
+        n_backslashes = n_backslashes + 1
+    end
+    return n_backslashes % 2 == 1
+end
+
+--- True iff a `heredoc_body` node's delimiter is quoted (`<<'EOF'`, `<<"EOF"`,
+--- `<<\EOF`). zsh treats any quoting of the delimiter as making the body
+--- literal.
+--- @param body TSNode heredoc_body node
+--- @param src string
+--- @return boolean
+local function heredoc_is_literal(body, src)
+    for child in assert(body:parent()):iter_children() do
+        if child:type() == "heredoc_start" then
+            return vim.treesitter.get_node_text(child, src):find("['\"\\]")
+                ~= nil
+        end
+    end
+    return false
+end
+
+--- Byte ranges where zsh neither runs a backtick substitution nor joins a
+--- backslash-newline: single-quoted and `$'…'` strings, comments, and
+--- quoted-delimiter heredoc bodies.
+--- @param root TSNode
+--- @param src string
+--- @return [integer, integer][] ranges 0-based `[start, end)` byte ranges
+local function literal_ranges(root, src)
+    return node_ranges(root, function(node)
+        local t = node:type()
+        return t == "raw_string"
+            or t == "ansi_c_string"
+            or t == "comment"
+            or (t == "heredoc_body" and heredoc_is_literal(node, src))
+    end)
+end
+
+--- True iff a backtick in `src` is neither a `command_substitution` delimiter
+--- nor literal text, i.e. a substitution zsh runs that has no node in the tree.
+--- Any other backtick inside a backtick body counts, even in quotes or a
+--- comment: zsh ends the body at the first unescaped one, and the grammar emits
+--- no node for an escaped (nested) one.
+--- @param root TSNode
+--- @param src string
+--- @param literal [integer, integer][] 0-based `[start, end)` byte ranges where
+--- a backtick is literal text, sorted by start
+--- @return boolean
+local function hides_backtick_substitution(root, src, literal)
+    if not src:find("`", 1, true) then
+        return false
+    end
+    local substitutions = node_ranges(root, function(node)
+        return node:type() == "command_substitution"
+    end)
+    local delimiters = {}
+    local bodies = {}
+    for _, r in ipairs(substitutions) do
+        if src:byte(r[1] + 1) == BACKTICK then
+            delimiters[r[1]] = true
+            delimiters[r[2] - 1] = true
+            table.insert(bodies, { r[1] + 1, r[2] - 1 })
+        end
+    end
+    local in_body = ascending_cover(bodies)
+    local in_literal = ascending_cover(literal)
+    local i = src:find("`", 1, true)
+    while i do
+        local offset = i - 1
+        if in_body(offset) then
+            return true
+        end
+        if
+            not delimiters[offset]
+            and not in_literal(offset)
+            and not is_escaped(src, offset)
+        then
+            return true
+        end
+        i = src:find("`", i + 1, true)
+    end
+    return false
+end
+
+--- True iff an unescaped, unquoted backslash-newline directly follows a word
+--- byte (anything but a blank or `|`, `&`, `;`). zsh removes the pair before
+--- splitting words, so `a\<newline>b` is the word `ab` and `a\<newline>  b`
+--- continues the command. The grammar ends the command at the newline in both.
+--- @param root TSNode
+--- @param src string
+--- @param literal [integer, integer][] 0-based `[start, end)` byte ranges where
+--- a backslash-newline is literal text, sorted by start
+--- @return boolean
+local function continues_inside_word(root, src, literal)
+    if not src:find("\\\n", 1, true) then
+        return false
+    end
+    local in_literal = ascending_cover(literal)
+    local in_quoted = ascending_cover(node_ranges(root, function(node)
+        local t = node:type()
+        return t == "string_content" or t == "heredoc_body"
+    end))
+    local i = src:find("\\\n", 1, true)
+    while i do
+        local offset = i - 1
+        if
+            offset > 0
+            and not src:sub(i - 1, i - 1):match("[%s|&;]")
+            and not is_escaped(src, offset)
+            and not in_literal(offset)
+            and not in_quoted(offset)
+        then
+            return true
+        end
+        i = src:find("\\\n", i + 1, true)
+    end
+    return false
+end
+
 --- Parse a command string with the zsh grammar. Returns the root node, or nil
---- on missing parser / parse error / any error node (fail-closed). Shared by the
---- decision walk, the tally walk, and the inline `-c` body recursion.
+--- (fail-closed) on missing parser, parse error, any error node, or syntax the
+--- grammar parses differently from zsh (a hidden backtick substitution, a line
+--- continuation inside a word).
 ---
 --- Bails before parsing on the tree-sitter-zsh hang trigger (see
 --- `zsh_parse_guard`): `parse()` would never return and no in-process mechanism
@@ -573,6 +748,15 @@ local function parse_zsh(src)
     end)
     if not ok or not root or root:has_error() then
         return nil
+    end
+    if src:find("[`\\]") then
+        local literal = literal_ranges(root, src)
+        if
+            hides_backtick_substitution(root, src, literal)
+            or continues_inside_word(root, src, literal)
+        then
+            return nil
+        end
     end
     return root
 end
