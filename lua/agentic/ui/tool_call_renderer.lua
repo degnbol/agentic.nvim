@@ -105,11 +105,12 @@ local MARKDOWN_INLINE_SPECIALS = "[`*_~%[%]<>&\\$#]"
 --- same path renders guarded under `read` and bare under `delete`.
 ---
 --- Prose kinds — an `execute` description, a `switch_mode` label, a `SubAgent`
---- line, and the generic title bucket — are guarded only when their own text
---- needs it. That bucket cannot be typed either way: an adapter's fallback
---- yields `rawInput.command` or `update.title` under one kind (see
---- `ClaudeAgentAcpAdapter:__build_tool_call_update`), so a bare command still
---- reaches a prose-typed head.
+--- line, a `Skill` name, a `SlashCommand` line (bare, like the user's own
+--- `/command` prompt), and the generic title bucket — are guarded only when
+--- their own text needs it. That bucket cannot be typed either way: an
+--- adapter's fallback yields `rawInput.command` or `update.title` under one
+--- kind (see `ClaudeAgentAcpAdapter:__build_tool_call_update`), so a bare
+--- command still reaches a prose-typed head.
 --- @type table<string, boolean>
 local CODE_KINDS = {
     read = true,
@@ -120,8 +121,6 @@ local CODE_KINDS = {
     move = true,
     fetch = true,
     search = true,
-    slashcommand = true,
-    skill = true,
     mcp = true,
     taskcontrol = true,
     cron = true,

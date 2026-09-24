@@ -397,6 +397,11 @@ describe("ToolCallRenderer", function()
                 "### Compact conversation",
                 heading("other", "Compact conversation")
             )
+            assert.equal("### implement", heading("Skill", "implement"))
+            assert.equal(
+                "### /implement",
+                heading("SlashCommand", "/implement")
+            )
         end)
 
         it("guards a name carrying markdown inline syntax", function()
