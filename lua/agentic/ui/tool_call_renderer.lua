@@ -274,11 +274,11 @@ local function grep_terms_for(argument)
 end
 
 --- Match a search pattern against body lines and return SearchMatch entries.
---- Uses vim's \v (very magic) mode for PCRE-like matching.
+--- `pattern` is read as a very-magic Vim regex (`:help /\v`).
 --- @param body string[] Raw body lines
 --- @param line_index_offset integer Offset added to each line_index
 --- @param pattern string|nil nil, empty, or invalid yields no matches
---- @param ignore_case boolean|nil
+--- @param ignore_case boolean|nil true matches case-insensitively, else case matters
 --- @return agentic.ui.MessageWriter.SearchMatch[]
 local function extract_search_term_highlights(
     body,
@@ -290,78 +290,95 @@ local function extract_search_term_highlights(
         return {}
     end
 
-    local ok, regex =
-        pcall(vim.regex, (ignore_case and "\\c" or "") .. "\\v" .. pattern)
-    if not ok then
+    -- \C, since matchstrpos() follows 'ignorecase' (`:help match-pattern`).
+    local vim_pattern = (ignore_case and "\\c" or "\\C") .. "\\v" .. pattern
+    if not pcall(vim.regex, vim_pattern) then
         return {}
     end
 
     --- @type agentic.ui.MessageWriter.SearchMatch[]
     local matches = {}
-    for i, line in ipairs(body) do
-        local idx = line_index_offset + i - 1
-        local offset = 0
-        while offset < #line do
-            local s, e = regex:match_str(line:sub(offset + 1))
-            if not s then
+    for i, raw_line in ipairs(body) do
+        -- vim.fn turns a string holding NUL into a Blob (E976, `:help lua-eval`); a one-byte
+        -- stand-in keeps the columns.
+        local line = raw_line:gsub("%z", "\1")
+        -- With {count} given, matches before {start} are ignored rather than
+        -- the line cut there, so `^` still anchors at column 0 (`:help match()`).
+        local start = 0
+        while true do
+            local _, s, e =
+                unpack(vim.fn.matchstrpos(line, vim_pattern, start, 1))
+            if s < 0 then
                 break
             end
-            table.insert(matches, {
-                line_index = idx,
-                col_start = offset + s,
-                col_end = offset + e,
-            })
-            offset = offset + math.max(e --[[@as integer]], 1)
+            if e > s then
+                table.insert(matches, {
+                    line_index = line_index_offset + i - 1,
+                    col_start = s,
+                    col_end = e,
+                })
+            end
+            if e > s then
+                start = e
+            elseif e >= #line then
+                break
+            else
+                -- Past a zero-width match by one whole character, not a byte.
+                start = e + 1 + vim.str_utf_end(line, e + 1)
+            end
         end
     end
     return matches
 end
 
---- Parse grep-format lines (path:linenum: or path:linenum-) and return
---- SearchMatch entries for the path, line number, and separator characters.
+--- Split a grep-format line prefix into highlighted parts: `path:N:` (or
+--- `path:N-` for a context line), else, when `pathless`, `N:`/`N-` as grep
+--- prints it for a single file or stdin. A path-less line whose text starts
+--- with `M:` or `M-` parses as `path:N:`, since only the command's file
+--- operands tell the two apart.
+--- @param line string one output line
+--- @param pathless boolean also accept a bare `N:`/`N-` prefix
+--- @return { text: string, hl_group: string }[]|nil parts in line order, nil when no prefix
+local function grep_prefix_parts(line, pathless)
+    local HL = Theme.HL_GROUPS
+    local path, sep1, linenum, sep2 = line:match("^([^:]+)(:)(%d+)([:-])")
+    if path then
+        return {
+            { text = path, hl_group = HL.GREP_PATH },
+            { text = sep1, hl_group = HL.GREP_SEPARATOR },
+            { text = linenum, hl_group = HL.GREP_LINE_NR },
+            { text = sep2, hl_group = HL.GREP_SEPARATOR },
+        }
+    end
+    linenum, sep2 = line:match("^(%d+)([:-])")
+    if pathless and linenum then
+        return {
+            { text = linenum, hl_group = HL.GREP_LINE_NR },
+            { text = sep2, hl_group = HL.GREP_SEPARATOR },
+        }
+    end
+    return nil
+end
+
+--- SearchMatch entries for the path, line number and separators of each
+--- grep-format line.
 --- @param body string[] Raw body lines
 --- @param line_index_offset integer Offset added to each line_index (accounts for fences/headers)
+--- @param pathless boolean also accept a bare `N:`/`N-` prefix
 --- @return agentic.ui.MessageWriter.SearchMatch[]
-local function extract_grep_line_highlights(body, line_index_offset)
+local function extract_grep_line_highlights(body, line_index_offset, pathless)
     --- @type agentic.ui.MessageWriter.SearchMatch[]
     local matches = {}
     for i, line in ipairs(body) do
-        -- Match path:linenum: or path:linenum- (context lines from grep -C)
-        local path, sep1, linenum, sep2 = line:match("^([^:]+)(:)(%d+)([:-])")
-        if path then
-            local idx = line_index_offset + i - 1
-            local col = 0
-            -- File path
+        local col = 0
+        for _, part in ipairs(grep_prefix_parts(line, pathless) or {}) do
             table.insert(matches, {
-                line_index = idx,
+                line_index = line_index_offset + i - 1,
                 col_start = col,
-                col_end = col + #path,
-                hl_group = Theme.HL_GROUPS.GREP_PATH,
+                col_end = col + #part.text,
+                hl_group = part.hl_group,
             })
-            col = col + #path
-            -- First separator (:)
-            table.insert(matches, {
-                line_index = idx,
-                col_start = col,
-                col_end = col + #sep1,
-                hl_group = Theme.HL_GROUPS.GREP_SEPARATOR,
-            })
-            col = col + #sep1
-            -- Line number
-            table.insert(matches, {
-                line_index = idx,
-                col_start = col,
-                col_end = col + #linenum,
-                hl_group = Theme.HL_GROUPS.GREP_LINE_NR,
-            })
-            col = col + #linenum
-            -- Second separator (: or -)
-            table.insert(matches, {
-                line_index = idx,
-                col_start = col,
-                col_end = col + #sep2,
-                hl_group = Theme.HL_GROUPS.GREP_SEPARATOR,
-            })
+            col = col + #part.text
         end
     end
     return matches
@@ -784,13 +801,18 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             --    command string and re-match against body lines. Not
             --    ideal (double work) but necessary while ACP strips ANSI.
             local ansi_result = Ansi.process_lines(body)
+            local shown_body = ansi_result.has_ansi and ansi_result.lines
+                or body
 
             for i = 1, count do
-                local line = ansi_result.has_ansi and ansi_result.lines[i]
-                    or body[i]
-                table.insert(lines, line)
+                table.insert(lines, shown_body[i])
             end
 
+            -- Body lines occupy indices [#lines - count .. #lines - 1] in the
+            -- lines array (0-based).
+            --- @type agentic.ui.MessageWriter.SearchMatch[]
+            local matches = {}
+            tool_call_block.search_ansi = nil
             if ansi_result.has_ansi then
                 local displayed = {}
                 for i = 1, count do
@@ -798,28 +820,18 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 end
                 tool_call_block.search_ansi = displayed
             else
-                local term_hl = extract_search_term_highlights(
+                matches = extract_search_term_highlights(
                     body,
                     #lines - count,
                     tool_call_block.search_pattern
                         or first_quoted_string(argument)
                 )
-                if #term_hl > 0 then
-                    tool_call_block.search_matches = term_hl
-                end
             end
-
-            -- Highlight grep-format path:linenum: prefixes on each body line.
-            -- Body lines occupy indices [#lines - count .. #lines - 1] in the
-            -- lines array (0-based).
-            local grep_hl = extract_grep_line_highlights(body, #lines - count)
-            if #grep_hl > 0 then
-                if tool_call_block.search_matches then
-                    vim.list_extend(tool_call_block.search_matches, grep_hl)
-                else
-                    tool_call_block.search_matches = grep_hl
-                end
-            end
+            vim.list_extend(
+                matches,
+                extract_grep_line_highlights(shown_body, #lines - count, false)
+            )
+            tool_call_block.search_matches = #matches > 0 and matches or nil
 
             table.insert(lines, fence)
         end
@@ -1142,30 +1154,41 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
     -- Grep-format highlighting for execute tool calls that run a grep-family
     -- command anywhere: path:linenum: prefixes plus each grep's search terms.
-    local grep_terms = kind == "execute"
-        and tool_call_block.body
-        and body_start_offset
-        and grep_terms_for(argument)
-    if grep_terms then
-        --- @type string[]
-        local body = tool_call_block.body
-        local matches = extract_grep_line_highlights(body, body_start_offset)
-        for _, terms in ipairs(grep_terms) do
-            for _, pattern in ipairs(terms.patterns) do
-                vim.list_extend(
-                    matches,
-                    extract_search_term_highlights(
-                        body,
-                        body_start_offset,
-                        pattern,
-                        terms.ignore_case
+    if kind == "execute" and tool_call_block.body and body_start_offset then
+        --- @type agentic.ui.MessageWriter.SearchMatch[]
+        local matches = {}
+        local grep_terms = grep_terms_for(argument)
+        if grep_terms then
+            -- The rows as displayed, after ANSI stripping above.
+            local shown_body = vim.list_slice(
+                lines,
+                body_start_offset + 1,
+                body_start_offset + #tool_call_block.body
+            )
+            local line_numbers = false
+            for _, terms in ipairs(grep_terms) do
+                line_numbers = line_numbers or terms.line_numbers
+            end
+            matches = extract_grep_line_highlights(
+                shown_body,
+                body_start_offset,
+                line_numbers
+            )
+            for _, terms in ipairs(grep_terms) do
+                for _, pattern in ipairs(terms.patterns) do
+                    vim.list_extend(
+                        matches,
+                        extract_search_term_highlights(
+                            shown_body,
+                            body_start_offset,
+                            pattern,
+                            terms.ignore_case
+                        )
                     )
-                )
+                end
             end
         end
-        if #matches > 0 then
-            tool_call_block.search_matches = matches
-        end
+        tool_call_block.search_matches = #matches > 0 and matches or nil
     end
 
     table.insert(lines, "")
@@ -1184,8 +1207,8 @@ end
 
 --- Apply highlights to block content (either diff highlights or Comment for non-edit blocks)
 --- @param bufnr integer
---- @param start_row integer Header line number
---- @param end_row integer Footer line number
+--- @param start_row integer Header line number, within the buffer
+--- @param end_row integer Footer line number, within the buffer
 --- @param kind string Tool call kind
 --- @param highlight_ranges agentic.ui.MessageWriter.HighlightRange[] Diff highlight ranges
 --- @param ansi_highlights? agentic.utils.Ansi.Span[][] Per-line ANSI highlight spans
@@ -1201,12 +1224,7 @@ function M.apply_block_highlights(
     search_matches,
     search_ansi
 )
-    -- This runs via vim.schedule — buffer may have changed since the
-    -- caller captured start_row/end_row. Bail if rows are now out of range.
     local line_count = vim.api.nvim_buf_line_count(bufnr)
-    if start_row >= line_count or end_row > line_count then
-        return
-    end
 
     if #highlight_ranges > 0 then
         M.apply_diff_highlights(bufnr, start_row, highlight_ranges)

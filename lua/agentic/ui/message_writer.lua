@@ -105,6 +105,7 @@ end
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
 --- @field ordinal? integer Per-turn subagent ordinal (0-9, in spawn order); rendered as a sign only while numbering is active (see MessageWriter._numbering_active)
 --- @field trailing_insert_mark_id? integer Zero-width NS_TOOL_BLOCKS mark riding just below the block, marking where the next region anchored to it goes (see `MessageWriter:_anchor_insert_row`). Absent until the first such region.
+--- @field highlight_pass? integer Sequence number of the latest scheduled highlight pass. A pass that is no longer the latest skips.
 
 --- Append the closing fence for `lines` when they leave one open.
 ---
@@ -1708,8 +1709,28 @@ end
 function MessageWriter:_stamp_ordinal(block)
     local sign = self:_ordinal_sign(block)
     local ids = block.decoration_extmark_ids
-    if not sign or not block.extmark_id or not ids then
+    if not sign or not ids then
         return
+    end
+    local start_row, end_row = self:_block_rows(block)
+    if not start_row then
+        return
+    end
+    for row = start_row + 1, end_row - 1 do
+        local id = ids[row - start_row + 1]
+        if id then
+            Renderer.restamp_border(self.bufnr, id, row, sign)
+        end
+    end
+end
+
+--- Current rows of a tool call block, read from its range extmark.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @return integer|nil start_row header row, nil when the range extmark is absent or deleted
+--- @return integer|nil end_row footer row
+function MessageWriter:_block_rows(block)
+    if not block.extmark_id then
+        return nil, nil
     end
     local pos = vim.api.nvim_buf_get_extmark_by_id(
         self.bufnr,
@@ -1717,16 +1738,11 @@ function MessageWriter:_stamp_ordinal(block)
         block.extmark_id,
         { details = true }
     )
-    local start_row, details = pos[1], pos[3]
-    if not start_row or not details or not details.end_row then
-        return
+    local details = pos[3]
+    if not pos[1] or not details or not details.end_row then
+        return nil, nil
     end
-    for row = start_row + 1, details.end_row - 1 do
-        local id = ids[row - start_row + 1]
-        if id then
-            Renderer.restamp_border(self.bufnr, id, row, sign)
-        end
-    end
+    return pos[1], details.end_row
 end
 
 --- Stamp the per-turn token-usage footer on the trailing blank line that
@@ -2731,17 +2747,32 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             end
         end
 
+        -- Rows are read when the callback runs, since lines written above
+        -- the block in the meantime move it down. A later update replaces
+        -- this pass's lines.
+        local pass = (tracker.highlight_pass or 0) + 1
+        tracker.highlight_pass = pass
+        local tool_call_id = tracker.tool_call_id
         vim.schedule(function()
-            if vim.api.nvim_buf_is_valid(bufnr) then
+            local current = self.tool_call_blocks[tool_call_id]
+            if
+                not current
+                or current.highlight_pass ~= pass
+                or not vim.api.nvim_buf_is_valid(bufnr)
+            then
+                return
+            end
+            local block_start, block_end = self:_block_rows(current)
+            if block_start then
                 Renderer.apply_block_highlights(
                     bufnr,
-                    start_row,
-                    new_end_row,
-                    tracker.kind,
+                    block_start,
+                    block_end,
+                    current.kind,
                     highlight_ranges,
                     ansi_highlights,
-                    tracker.search_matches,
-                    tracker.search_ansi
+                    current.search_matches,
+                    current.search_ansi
                 )
             end
         end)

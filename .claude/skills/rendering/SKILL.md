@@ -189,8 +189,10 @@ anywhere (`ShellParse.extract_commands`) take each pattern from that
 command's argv (`GrepArgs.search_terms`, which honours `-i`).
 Grep-format lines (`path:linenum:rest`) get per-component highlights
 (`AgenticGrepPath` / `AgenticGrepLineNr` / `AgenticGrepSeparator`); these
-fire for all search blocks and for those same execute blocks. The two
-coexist via the optional `hl_group` field on `SearchMatch`.
+fire for all search blocks and for those same execute blocks. Execute
+blocks whose grep asked for line numbers (`GrepArgs.Terms.line_numbers`)
+also accept a path-less `linenum:rest`. The two coexist via the optional
+`hl_group` field on `SearchMatch`.
 
 ## Update-path invariants (read before changing `update_tool_call_block`)
 

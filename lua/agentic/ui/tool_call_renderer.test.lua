@@ -1135,6 +1135,93 @@ describe("ToolCallRenderer", function()
             assert.same({ "plot" }, texts.terms)
         end)
 
+        it("highlights line numbers of path-less grep output", function()
+            local texts = execute_texts(
+                "grep -nA 1 foo f",
+                { "12:foo", "13-bar", "--", "20:foo" }
+            )
+            assert.same({ "12", ":", "13", "-", "20", ":" }, texts.grep_parts)
+        end)
+
+        it("leaves path-less prefixes alone without -n", function()
+            local texts =
+                execute_texts("ls | grep 2024", { "2024-01-notes.md" })
+            assert.same({}, texts.grep_parts)
+        end)
+
+        it("leaves path-less prefixes of search blocks alone", function()
+            local texts = matched_texts({
+                tool_call_id = "search-dated",
+                status = "completed",
+                kind = "search",
+                argument = "notes/*.md",
+                body = { "2024-01-notes.md" },
+            })
+            assert.same({}, texts.grep_parts)
+        end)
+
+        it("keeps a search block's matches across re-renders", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "search-rerender",
+                status = "completed",
+                kind = "search",
+                argument = "foo",
+                body = { "a:1:x" },
+            }
+            Renderer.prepare_block_lines(block, 200)
+            local first = #block.search_matches
+            Renderer.prepare_block_lines(block, 200)
+            assert.equal(first, #block.search_matches)
+        end)
+
+        it("matches the ANSI-stripped text of an execute body", function()
+            local texts = execute_texts(
+                "grep -n foo f",
+                { "\27[32m1\27[0m:\27[31mfoo\27[0m" }
+            )
+            assert.same({ "foo" }, texts.terms)
+            assert.same({ "1", ":" }, texts.grep_parts)
+        end)
+
+        it(
+            "advances past a multibyte character after a zero-width match",
+            function()
+                -- `^` matches empty at column 0; the next try must not start
+                -- inside `é`, where `\S` would match its continuation byte.
+                local texts = execute_texts([[grep '^|\S' f]], { "é" })
+                assert.same({}, texts.terms)
+            end
+        )
+
+        it("anchors `^` at the line start only", function()
+            local texts = execute_texts("grep '^foo' f", { "foofoo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("drops zero-width matches", function()
+            local texts = execute_texts("grep 'x*' f", { "ab" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("does not overlap matches", function()
+            local texts = execute_texts("grep aa f", { "aaaa" })
+            assert.same({ "aa", "aa" }, texts.terms)
+        end)
+
+        it("matches case-sensitively under 'ignorecase'", function()
+            local ignorecase = vim.o.ignorecase
+            vim.o.ignorecase = true
+            local texts = execute_texts("grep foo f", { "Foo foo" })
+            vim.o.ignorecase = ignorecase
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("matches a line holding a NUL byte", function()
+            local texts = execute_texts("grep foo f", { "a\0foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
         it("matches case-insensitively under -i", function()
             local texts = execute_texts("cat f | grep -i FOO", { "foo" })
             assert.same({ "foo" }, texts.terms)

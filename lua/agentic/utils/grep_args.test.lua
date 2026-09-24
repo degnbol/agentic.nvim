@@ -12,13 +12,31 @@ local function all_static(argv)
 end
 
 describe("GrepArgs.search_terms", function()
-    --- @type { name: string, argv: string[], dynamic?: boolean[], patterns: string[], ignore_case?: boolean }[]
+    --- @type { name: string, argv: string[], dynamic?: boolean[], patterns: string[], ignore_case?: boolean, line_numbers?: boolean }[]
     local cases = {
-        { name = "grep", argv = { "-rn", "x", "." }, patterns = { "x" } },
+        {
+            name = "grep",
+            argv = { "-rn", "x", "." },
+            patterns = { "x" },
+            line_numbers = true,
+        },
         {
             name = "grep",
             argv = { "-nA", "3", "foo", "f" },
             patterns = { "foo" },
+            line_numbers = true,
+        },
+        {
+            name = "grep",
+            argv = { "--line-number", "foo" },
+            patterns = { "foo" },
+            line_numbers = true,
+        },
+        {
+            name = "rg",
+            argv = { "--vimgrep", "foo" },
+            patterns = { "foo" },
+            line_numbers = true,
         },
         { name = "grep", argv = { "-A3", "foo", "f" }, patterns = { "foo" } },
         {
@@ -56,6 +74,7 @@ describe("GrepArgs.search_terms", function()
             name = "git",
             argv = { "-C", "dir", "grep", "-n", "foo" },
             patterns = { "foo" },
+            line_numbers = true,
         },
         {
             name = "grep",
@@ -110,6 +129,7 @@ describe("GrepArgs.search_terms", function()
             assert.same({
                 patterns = c.patterns,
                 ignore_case = c.ignore_case == true,
+                line_numbers = c.line_numbers == true,
             }, terms)
         end)
     end

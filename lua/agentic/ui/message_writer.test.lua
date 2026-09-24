@@ -3192,6 +3192,87 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
+    describe("deferred block highlights", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        local function run_scheduled()
+            for _, call in ipairs(schedule_stub.calls) do
+                call[1]()
+            end
+        end
+
+        --- @return integer[] rows 0-indexed rows holding a search-term extmark
+        local function term_rows()
+            local ns = vim.api.nvim_create_namespace("agentic_diff_highlights")
+            local rows = {}
+            local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, {
+                details = true,
+            })
+            for _, m in ipairs(marks) do
+                if m[4].hl_group == "AgenticSearchMatch" then
+                    table.insert(rows, m[2])
+                end
+            end
+            return rows
+        end
+
+        it("follow the block when rows are inserted above it", function()
+            writer:write_tool_call_block({
+                tool_call_id = "grep-shift",
+                status = "pending",
+                kind = "execute",
+                argument = "grep -n foo f",
+            })
+            writer:update_tool_call_block({
+                tool_call_id = "grep-shift",
+                status = "completed",
+                body = { "12:foo" },
+            })
+
+            vim.bo[bufnr].modifiable = true
+            vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { "a", "b", "c" })
+            run_scheduled()
+
+            local rows = term_rows()
+            assert.equal(1, #rows)
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            assert.equal("12:foo", lines[rows[1] + 1])
+        end)
+
+        it("apply only the latest update's pass", function()
+            writer:write_tool_call_block({
+                tool_call_id = "grep-twice",
+                status = "pending",
+                kind = "execute",
+                argument = "grep -n foo f",
+            })
+            writer:update_tool_call_block({
+                tool_call_id = "grep-twice",
+                status = "in_progress",
+                body = { "12:foo" },
+            })
+            writer:update_tool_call_block({
+                tool_call_id = "grep-twice",
+                status = "completed",
+                body = { "13:foo" },
+            })
+            run_scheduled()
+
+            -- The merged body holds both lines; a stale first pass would add
+            -- a third mark.
+            assert.equal(2, #term_rows())
+        end)
+    end)
+
     describe("_format_error_lines", function()
         it("parses auth error with embedded JSON", function()
             --- @type agentic.acp.ACPError

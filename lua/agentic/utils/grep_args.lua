@@ -99,6 +99,7 @@ end
 --- @class agentic.utils.GrepArgs.Terms
 --- @field patterns string[] statically known patterns, as written, maybe empty
 --- @field ignore_case boolean `-i` or `--ignore-case` given
+--- @field line_numbers boolean `-n` (grep, rg), `--line-number` or `--vimgrep` given
 
 --- Read the search patterns of a grep-family command. Explicit `-e`/`--regexp`
 --- patterns win; without them (and without `-f`/`--file`) the first positional
@@ -126,7 +127,9 @@ function M.search_terms(name, argv, argv_dynamic)
     local value_opts = VALUE_OPTS[tool]
 
     --- @type agentic.utils.GrepArgs.Terms
-    local terms = { patterns = {}, ignore_case = false }
+    local terms = { patterns = {}, ignore_case = false, line_numbers = false }
+    -- ag and ack spell no-recursion `-n`
+    local numbers_short = tool == "grep" or tool == "rg"
     -- `-e`/`-f` seen: every positional is a file
     local has_pattern_option = false
     local lists_files = false
@@ -180,6 +183,8 @@ function M.search_terms(name, argv, argv_dynamic)
             end
             if long == "--ignore-case" then
                 terms.ignore_case = true
+            elseif long == "--line-number" or long == "--vimgrep" then
+                terms.line_numbers = true
             elseif
                 tool == "rg"
                 and (long == "--files" or long == "--type-list")
@@ -193,6 +198,8 @@ function M.search_terms(name, argv, argv_dynamic)
                 local char = token:sub(c, c)
                 if char == "i" then
                     terms.ignore_case = true
+                elseif char == "n" and numbers_short then
+                    terms.line_numbers = true
                 elseif value_opts["-" .. char] then
                     local value, dynamic = token:sub(c + 1), argv_dynamic[i]
                     if value == "" then
