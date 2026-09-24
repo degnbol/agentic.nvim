@@ -996,9 +996,9 @@ end
 local collect
 
 --- Process a `command` node: resolve its name, unwrap transparent prefixes
---- (exec-wrapper / inline `-c` body) by re-parsing the inner, else emit a
---- `{name, flags, args}` record. Substitutions in arguments or in an env-prefix
---- value are flattened by recursing `collect` over them, so a live
+--- (exec-wrapper / inline `-c` body) by re-parsing the inner, else emit an
+--- `agentic.ShellCommand` record. Substitutions in arguments or in an
+--- env-prefix value are flattened by recursing `collect` over them, so a live
 --- `git commit -m "$(rm -rf /)"` yields both `git` and the inner `rm`.
 --- @param node TSNode
 --- @param src string
@@ -1084,7 +1084,13 @@ local function collect_command(node, src, out, depth)
     end
 
     --- @type agentic.ShellCommand
-    local rec = { name = cmd_name, flags = {}, args = {} }
+    local rec = {
+        name = cmd_name,
+        flags = {},
+        args = {},
+        argv = args,
+        argv_dynamic = args_dynamic,
+    }
     for _, tok in ipairs(args) do
         classify_token(tok, rec.flags, rec.args)
     end
@@ -1125,11 +1131,13 @@ end
 --- @field name string unwrapped inner command name, path-stripped
 --- @field flags string[] short clusters split (`-rf` → `-r`,`-f`), long flags whole
 --- @field args string[] positional arguments (literal text where resolvable)
+--- @field argv string[] every token after the name in source order, flags unsplit (literal text where resolvable)
+--- @field argv_dynamic boolean[] parallel to `argv`: true where the token is not a static literal (expansion, substitution, xargs' stand-in `$__xargs_stdin`)
 
 --- Extract the flat list of statically-resolvable commands a shell string would
 --- run — across pipelines, control flow, exec-wrappers, inline `-c` bodies, and
---- live command substitutions. Each record is normalised to
---- `{ name, flags, args }`.
+--- live command substitutions. Each record is normalised to an
+--- `agentic.ShellCommand`.
 ---
 --- Fail-closed: parse error, absent parser, an `ERROR` node, a dynamic command
 --- name, a code-taking builtin (`eval`/`source`/`.`), or an unextractable token

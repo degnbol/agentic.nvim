@@ -181,14 +181,16 @@ Adding a new foldable kind:
 
 ## Search match highlighting
 
-`extract_search_term_highlights` in `tool_call_renderer.lua` extracts the
-pattern from the command's first quoted string (or an explicit `pattern`
-argument). Highlights via `AgenticSearchMatch` extmarks (priority 200).
+`extract_search_term_highlights` in `tool_call_renderer.lua` matches a
+pattern against the body via `AgenticSearchMatch` extmarks (priority 200).
+Search blocks take the pattern from `search_pattern`, else the command's
+first quoted string. Execute blocks that contain a grep-family command
+anywhere (`ShellParse.extract_commands`) take each pattern from that
+command's argv (`GrepArgs.search_terms`, which honours `-i`).
 Grep-format lines (`path:linenum:rest`) get per-component highlights
 (`AgenticGrepPath` / `AgenticGrepLineNr` / `AgenticGrepSeparator`); these
-fire for all search blocks and for execute blocks whose command starts with
-a grep-family tool (`is_grep_command`). The two coexist via the optional
-`hl_group` field on `SearchMatch`.
+fire for all search blocks and for those same execute blocks. The two
+coexist via the optional `hl_group` field on `SearchMatch`.
 
 ## Update-path invariants (read before changing `update_tool_call_block`)
 

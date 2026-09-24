@@ -1083,6 +1083,101 @@ describe("ToolCallRenderer", function()
         )
     end)
 
+    describe("search term highlights", function()
+        --- Render a block and return the text under each search match, split
+        --- by whether the match is a term or a grep-line part.
+        --- @param block agentic.ui.MessageWriter.ToolCallBlock
+        --- @return { terms: string[], grep_parts: string[] }
+        local function matched_texts(block)
+            local lines = Renderer.prepare_block_lines(block, 200)
+            local texts = { terms = {}, grep_parts = {} }
+            for _, m in ipairs(block.search_matches or {}) do
+                local text =
+                    lines[m.line_index + 1]:sub(m.col_start + 1, m.col_end)
+                table.insert(
+                    m.hl_group and texts.grep_parts or texts.terms,
+                    text
+                )
+            end
+            return texts
+        end
+
+        --- @param argument string
+        --- @param body string[]
+        --- @return { terms: string[], grep_parts: string[] }
+        local function execute_texts(argument, body)
+            return matched_texts({
+                tool_call_id = "exec-grep",
+                status = "completed",
+                kind = "execute",
+                argument = argument,
+                body = body,
+            })
+        end
+
+        it("highlights a grep that follows `cd …;`", function()
+            local texts =
+                execute_texts('cd /x; rg -n "foo" .', { "a.lua:3:foo bar" })
+            assert.same({ "foo" }, texts.terms)
+            assert.same({ "a.lua", ":", "3", ":" }, texts.grep_parts)
+        end)
+
+        it("takes the pattern from the grep, not an earlier command", function()
+            local texts = execute_texts(
+                'find . -name "*.py" | xargs grep -l "plot"',
+                { "src/plot.py" }
+            )
+            assert.same({ "plot" }, texts.terms)
+        end)
+
+        it("matches case-insensitively under -i", function()
+            local texts = execute_texts("cat f | grep -i FOO", { "foo" })
+            assert.same({ "foo" }, texts.terms)
+            assert.same({}, texts.grep_parts)
+        end)
+
+        it("highlights through a downstream grep -v", function()
+            local texts = execute_texts("grep a f | grep -v b", { "ac" })
+            assert.same({ "a" }, texts.terms)
+        end)
+
+        it("highlights every pattern of every grep", function()
+            local texts =
+                execute_texts("grep -e x -e y f | grep z", { "x y z" })
+            assert.same({ "x", "y", "z" }, texts.terms)
+        end)
+
+        it("leaves a command without grep unhighlighted", function()
+            assert.same(
+                { terms = {}, grep_parts = {} },
+                execute_texts("echo x | head", { "a.lua:3:x" })
+            )
+        end)
+
+        it("uses a search block's explicit pattern", function()
+            local texts = matched_texts({
+                tool_call_id = "search-pattern",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'quoted'",
+                search_pattern = "fo+",
+                body = { "foo quoted" },
+            })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("falls back to a search block's first quoted string", function()
+            local texts = matched_texts({
+                tool_call_id = "search-quoted",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'bar'",
+                body = { "foo bar" },
+            })
+            assert.same({ "bar" }, texts.terms)
+        end)
+    end)
+
     describe("status footer", function()
         --- @type agentic.ui.ToolCallStatus[]
         local statuses = {
@@ -1105,7 +1200,8 @@ describe("ToolCallRenderer", function()
 
         for _, status in ipairs(statuses) do
             it("gives " .. status .. " an icon", function()
-                local icon, label = render_footer(status):match("^ (%S+) (%S+) $")
+                local icon, label =
+                    render_footer(status):match("^ (%S+) (%S+) $")
 
                 assert.equal(status, label)
                 assert.truthy(icon)

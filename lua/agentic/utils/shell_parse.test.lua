@@ -44,6 +44,27 @@ describe("ShellParse.extract_commands", function()
         it("strips a system binary-dir prefix from the name", function()
             assert.same({ "rm" }, names("/usr/bin/rm -f x"))
         end)
+
+        it("keeps argv in source order with flags unsplit", function()
+            local recs = ShellParse.extract_commands('grep -rn -A 3 "x" .')
+            assert.same({ "-rn", "-A", "3", "x", "." }, recs[1].argv)
+            assert.same(
+                { false, false, false, false, false },
+                recs[1].argv_dynamic
+            )
+        end)
+
+        it("marks expansion tokens dynamic in argv_dynamic", function()
+            local recs = ShellParse.extract_commands('grep "$p" f')
+            assert.same({ true, false }, recs[1].argv_dynamic)
+        end)
+
+        it("gives xargs' inner grep a dynamic stdin token", function()
+            local recs = ShellParse.extract_commands("xargs grep -l x")
+            assert.same("grep", recs[1].name)
+            assert.same({ "-l", "x", "$__xargs_stdin" }, recs[1].argv)
+            assert.same({ false, false, true }, recs[1].argv_dynamic)
+        end)
     end)
 
     describe("the headline false positive", function()

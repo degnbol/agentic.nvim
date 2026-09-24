@@ -7,6 +7,8 @@ local ExecShell = require("agentic.utils.exec_shell")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
+local GrepArgs = require("agentic.utils.grep_args")
+local ShellParse = require("agentic.utils.shell_parse")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local Treesitter = require("agentic.utils.treesitter")
@@ -242,60 +244,55 @@ local function shell_fence_lang(argument, lang)
     return lang
 end
 
---- Check if a command string starts with a grep-family tool.
---- Handles leading env vars (VAR=val) and common pipe patterns.
---- @param argument string Shell command string
---- @return boolean
-local function is_grep_command(argument)
-    -- Strip leading env var assignments (e.g. "LANG=C grep ...")
-    local cmd = argument:gsub("^%s*[%w_]+=[^%s]*%s+", "")
-    -- Extract first word
-    local first = cmd:match("^%s*(%S+)")
-    if not first then
-        return false
+--- First single- or double-quoted string in a command, unquoted.
+--- @param argument string|nil
+--- @return string|nil
+local function first_quoted_string(argument)
+    return argument
+        and (argument:match('"([^"]+)"') or argument:match("'([^']+)'"))
+end
+
+--- Search terms of every grep-family command a shell command line runs,
+--- wherever it sits in the line.
+--- @param argument string shell command line
+--- @return agentic.utils.GrepArgs.Terms[]|nil terms one per grep-family
+---   command, nil when there is none or the line does not parse
+local function grep_terms_for(argument)
+    local records = ShellParse.extract_commands(argument)
+    if not records then
+        return nil
     end
-    -- Check grep-family tools
-    if
-        first == "grep"
-        or first == "rg"
-        or first == "ag"
-        or first == "ack"
-        or first == "ugrep"
-    then
-        return true
-    end
-    -- "git grep"
-    if first == "git" then
-        local second = cmd:match("^%s*git%s+(%S+)")
-        if second == "grep" then
-            return true
+    --- @type agentic.utils.GrepArgs.Terms[]
+    local terms = {}
+    for _, rec in ipairs(records) do
+        local rec_terms =
+            GrepArgs.search_terms(rec.name, rec.argv, rec.argv_dynamic)
+        if rec_terms then
+            table.insert(terms, rec_terms)
         end
     end
-    return false
+    return #terms > 0 and terms or nil
 end
 
 --- Match a search pattern against body lines and return SearchMatch entries.
---- Extracts the pattern from a command argument's first quoted string if not
---- provided explicitly. Uses vim's \v (very magic) mode for PCRE-like matching.
+--- Uses vim's \v (very magic) mode for PCRE-like matching.
 --- @param body string[] Raw body lines
 --- @param line_index_offset integer Offset added to each line_index
---- @param pattern string|nil Explicit search pattern (falls back to argument extraction)
---- @param argument string|nil Command string to extract pattern from
+--- @param pattern string|nil nil, empty, or invalid yields no matches
+--- @param ignore_case boolean|nil
 --- @return agentic.ui.MessageWriter.SearchMatch[]
 local function extract_search_term_highlights(
     body,
     line_index_offset,
     pattern,
-    argument
+    ignore_case
 )
-    if not pattern and argument then
-        pattern = argument:match('"([^"]+)"') or argument:match("'([^']+)'")
-    end
     if not pattern or pattern == "" then
         return {}
     end
 
-    local ok, regex = pcall(vim.regex, "\\v" .. pattern)
+    local ok, regex =
+        pcall(vim.regex, (ignore_case and "\\c" or "") .. "\\v" .. pattern)
     if not ok then
         return {}
     end
@@ -805,8 +802,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 local term_hl = extract_search_term_highlights(
                     body,
                     #lines - count,
-                    tool_call_block.search_pattern,
-                    argument
+                    tool_call_block.search_pattern
+                        or first_quoted_string(argument)
                 )
                 if #term_hl > 0 then
                     tool_call_block.search_matches = term_hl
@@ -1144,34 +1141,31 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         end
     end
 
-    -- Grep-format highlighting for execute tool calls.
-    -- Detect grep-family commands and highlight path:linenum: prefixes + search term.
-    if
-        kind == "execute"
+    -- Grep-format highlighting for execute tool calls that run a grep-family
+    -- command anywhere: path:linenum: prefixes plus each grep's search terms.
+    local grep_terms = kind == "execute"
         and tool_call_block.body
         and body_start_offset
-        and is_grep_command(argument)
-    then
+        and grep_terms_for(argument)
+    if grep_terms then
         --- @type string[]
         local body = tool_call_block.body
-
-        local grep_hl = extract_grep_line_highlights(body, body_start_offset)
-        if #grep_hl > 0 then
-            tool_call_block.search_matches = grep_hl
-        end
-
-        local term_hl = extract_search_term_highlights(
-            body,
-            body_start_offset,
-            nil,
-            argument
-        )
-        if #term_hl > 0 then
-            if tool_call_block.search_matches then
-                vim.list_extend(tool_call_block.search_matches, term_hl)
-            else
-                tool_call_block.search_matches = term_hl
+        local matches = extract_grep_line_highlights(body, body_start_offset)
+        for _, terms in ipairs(grep_terms) do
+            for _, pattern in ipairs(terms.patterns) do
+                vim.list_extend(
+                    matches,
+                    extract_search_term_highlights(
+                        body,
+                        body_start_offset,
+                        pattern,
+                        terms.ignore_case
+                    )
+                )
             end
+        end
+        if #matches > 0 then
+            tool_call_block.search_matches = matches
         end
     end
 
