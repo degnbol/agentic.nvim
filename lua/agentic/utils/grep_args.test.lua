@@ -234,6 +234,14 @@ describe("GrepArgs.parse", function()
             ignore_case = true,
         },
         { name = "ack", argv = { "-n", "foo" }, patterns = { "foo" } },
+        -- a newline: grep and git grep read each line as a pattern
+        { name = "grep", argv = { "a\n\nb" }, patterns = { "a", "b" } },
+        {
+            name = "git",
+            argv = { "grep", "-e", "a\nb" },
+            patterns = { "a", "b" },
+        },
+        { name = "rg", argv = { "-F", "a\nb" }, patterns = {} },
     }
 
     for _, c in ipairs(cases) do
@@ -632,4 +640,152 @@ describe("GrepArgs.parse layout", function()
         --- @cast inv -nil
         assert.same({ "grep", "ugrep" }, inv.diagnostic_names)
     end)
+end)
+
+describe("GrepArgs.parse dialect", function()
+    local GIT_DEFAULT = { "basic", "extended", "perl", "fixed" }
+
+    --- @type { name: string, argv: string[], dialects: agentic.utils.GrepDialect[], whole?: "word"|"line" }[]
+    local cases = {
+        { name = "grep", argv = { "foo" }, dialects = { "basic" } },
+        { name = "ugrep", argv = { "foo" }, dialects = { "extended" } },
+        { name = "rg", argv = { "foo" }, dialects = { "rust" } },
+        { name = "ag", argv = { "foo" }, dialects = { "perl_bytes" } },
+        { name = "ack", argv = { "foo" }, dialects = { "perl_bytes" } },
+        { name = "git", argv = { "grep", "foo" }, dialects = GIT_DEFAULT },
+        { name = "grep", argv = { "-E", "foo" }, dialects = { "extended" } },
+        { name = "ugrep", argv = { "-G", "foo" }, dialects = { "basic" } },
+        { name = "grep", argv = { "-P", "foo" }, dialects = { "perl" } },
+        { name = "grep", argv = { "-rF", "foo" }, dialects = { "fixed" } },
+        -- grep may be ugrep, GNU or BSD, which each resolve two flags apart
+        {
+            name = "grep",
+            argv = { "-F", "-E", "foo" },
+            dialects = { "fixed", "extended" },
+        },
+        {
+            name = "grep",
+            argv = { "--perl-regexp", "--basic-regexp", "foo" },
+            dialects = { "perl", "basic" },
+        },
+        { name = "grep", argv = { "--bool", "foo" }, dialects = {} },
+        { name = "ugrep", argv = { "-%", "foo" }, dialects = {} },
+        { name = "rg", argv = { "--no-unicode", "foo" }, dialects = {} },
+        {
+            name = "git",
+            argv = { "grep", "-E", "foo" },
+            dialects = { "extended" },
+        },
+        {
+            name = "git",
+            argv = { "grep", "-F", "--no-fixed-strings", "foo" },
+            dialects = { "basic", "extended" },
+        },
+        { name = "rg", argv = { "-P", "foo" }, dialects = { "perl" } },
+        {
+            name = "rg",
+            argv = { "--engine=pcre2", "foo" },
+            dialects = { "perl" },
+        },
+        {
+            name = "rg",
+            argv = { "--engine", "pcre2", "foo" },
+            dialects = { "perl" },
+        },
+        {
+            name = "rg",
+            argv = { "-P", "--engine=auto", "foo" },
+            dialects = { "rust" },
+        },
+        {
+            name = "rg",
+            argv = { "-P", "--no-pcre2", "foo" },
+            dialects = { "rust" },
+        },
+        { name = "rg", argv = { "-F", "foo" }, dialects = { "fixed" } },
+        { name = "rg", argv = { "-F", "-P", "foo" }, dialects = { "fixed" } },
+        {
+            name = "rg",
+            argv = { "-F", "--no-fixed-strings", "-P", "foo" },
+            dialects = { "perl" },
+        },
+        { name = "ag", argv = { "-Q", "foo" }, dialects = { "fixed" } },
+        {
+            name = "ag",
+            argv = { "--fixed-strings", "foo" },
+            dialects = { "fixed" },
+        },
+        { name = "ack", argv = { "--literal", "foo" }, dialects = { "fixed" } },
+        -- whole word or line
+        {
+            name = "grep",
+            argv = { "-w", "foo" },
+            dialects = { "basic" },
+            whole = "word",
+        },
+        {
+            name = "grep",
+            argv = { "-x", "foo" },
+            dialects = { "basic" },
+            whole = "line",
+        },
+        {
+            name = "grep",
+            argv = { "-w", "-x", "foo" },
+            dialects = { "basic" },
+            whole = "line",
+        },
+        {
+            name = "grep",
+            argv = { "-x", "-w", "foo" },
+            dialects = { "basic" },
+            whole = "line",
+        },
+        {
+            name = "rg",
+            argv = { "-w", "-x", "foo" },
+            dialects = { "rust" },
+            whole = "line",
+        },
+        {
+            name = "rg",
+            argv = { "-x", "-w", "foo" },
+            dialects = { "rust" },
+            whole = "word",
+        },
+        {
+            name = "git",
+            argv = { "grep", "-w", "--no-word-regexp", "foo" },
+            dialects = GIT_DEFAULT,
+        },
+        {
+            name = "ag",
+            argv = { "-w", "foo" },
+            dialects = { "perl_bytes" },
+            whole = "word",
+        },
+        {
+            name = "ack",
+            argv = { "-w", "foo" },
+            dialects = { "perl_bytes" },
+            whole = "word",
+        },
+    }
+
+    for _, c in ipairs(cases) do
+        local label = c.name .. " " .. table.concat(c.argv, " ")
+        it(label, function()
+            local inv = GrepArgs.parse(c.name, c.argv, all_static(c.argv))
+            assert.is_not_nil(inv)
+            --- @cast inv -nil
+            assert.same(
+                { patterns = { "foo" }, dialects = c.dialects, whole = c.whole },
+                {
+                    patterns = inv.patterns,
+                    dialects = inv.dialects,
+                    whole = inv.whole,
+                }
+            )
+        end)
+    end
 end)

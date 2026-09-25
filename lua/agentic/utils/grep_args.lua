@@ -29,6 +29,11 @@ end
 --- @field context? true prints context lines
 --- @field stats? true prints summary lines after the matches
 --- @field no_text? true the output does not show matched text as `prefix:text`
+--- @field dialects? agentic.utils.GrepDialect[] every dialect the patterns may be read in
+--- @field fixed? boolean patterns are fixed strings, whatever the regex engine (rg)
+--- @field word? boolean a match must be a whole word
+--- @field line? boolean a match must be a whole line, whatever `word` is
+--- @field unmodelled? true patterns match in a way no dialect models
 
 --- Index each effect by every one of its spellings.
 --- @param ... { [1]: string[], [2]: agentic.utils.GrepArgs.Effect }[] rows of spellings and their effect; a later row wins
@@ -66,9 +71,23 @@ local BYTE_OFFSET = { byte_offset = true }
 local CONTEXT = { context = true }
 local STATS = { stats = true }
 local NO_TEXT = { no_text = true }
+local BASIC = { dialects = { "basic" } }
+local EXTENDED = { dialects = { "extended" } }
+local PERL = { dialects = { "perl" } }
+local RUST = { dialects = { "rust" } }
+local FIXED = { dialects = { "fixed" } }
+-- `git grep` reads `grep.patternType` from git config without a dialect flag.
+local GIT_DIALECTS = { "basic", "extended", "perl", "fixed" }
+local WORD = { word = true }
+local UNMODELLED = { unmodelled = true }
 
 -- GNU grep's options, which git grep shares.
 local GNU_FLAG_ROWS = {
+    { { "-G", "--basic-regexp" }, BASIC },
+    { { "-E", "--extended-regexp" }, EXTENDED },
+    { { "-P", "--perl-regexp" }, PERL },
+    { { "-F", "--fixed-strings" }, FIXED },
+    { { "-w", "--word-regexp" }, WORD },
     { { "-i", "--ignore-case" }, INSENSITIVE },
     { { "--no-ignore-case" }, SENSITIVE },
     { { "-H", "--with-filename" }, FILENAME },
@@ -124,6 +143,8 @@ local GNU_FLAG_ROWS = {
 -- stays insensitive); reading it last-wins then gives case-sensitive, which
 -- only drops highlights.
 local UGREP_FLAG_ROWS = {
+    -- Boolean queries, and patterns matched byte by byte
+    { { "-%", "--bool", "-U", "--ascii", "--binary" }, UNMODELLED },
     { { "-j", "--smart-case" }, SMART },
     { { "--heading", "-+" }, HEADING },
     { { "--no-heading" }, NO_HEADING },
@@ -158,6 +179,17 @@ local UGREP_FLAG_ROWS = {
 }
 
 local GIT_GREP_FLAG_ROWS = {
+    {
+        {
+            "--no-basic-regexp",
+            "--no-extended-regexp",
+            "--no-perl-regexp",
+            "--no-fixed-strings",
+        },
+        -- git config can make the default basic or extended, not perl or fixed
+        { dialects = { "basic", "extended" } },
+    },
+    { { "--no-word-regexp" }, { word = false } },
     { { "--heading" }, HEADING },
     { { "--column" }, COLUMN },
     { { "-p", "--show-function", "-W", "--function-context" }, CONTEXT },
@@ -165,6 +197,25 @@ local GIT_GREP_FLAG_ROWS = {
 }
 
 local RG_FLAGS = flag_table({
+    { { "-P", "--pcre2", "--engine=pcre2" }, PERL },
+    {
+        {
+            "--no-pcre2",
+            "--engine=default",
+            -- auto takes pcre2 only for a pattern the rust engine rejects,
+            -- and GrepRegex translates none of those.
+            "--engine=auto",
+            "--auto-hybrid-regex",
+        },
+        RUST,
+    },
+    { { "-F", "--fixed-strings" }, { fixed = true } },
+    { { "--no-fixed-strings" }, { fixed = false } },
+    -- patterns matched byte by byte
+    { { "--no-unicode", "--no-pcre2-unicode" }, UNMODELLED },
+    -- rg's last whole-word or whole-line flag wins
+    { { "-w", "--word-regexp" }, { word = true, line = false } },
+    { { "-x", "--line-regexp" }, { line = true, word = false } },
     { { "-i", "--ignore-case" }, INSENSITIVE },
     { { "-s", "--case-sensitive" }, SENSITIVE },
     { { "-S", "--smart-case" }, SMART },
@@ -217,6 +268,8 @@ local RG_FLAGS = flag_table({
 })
 
 local AG_FLAGS = flag_table({
+    { { "-Q", "--literal", "-F", "--fixed-strings" }, FIXED },
+    { { "-w", "--word-regexp" }, WORD },
     { { "-i", "--ignore-case" }, INSENSITIVE },
     { { "-s", "--case-sensitive" }, SENSITIVE },
     { { "-S", "--smart-case" }, SMART },
@@ -262,7 +315,10 @@ local AG_FLAGS = flag_table({
     },
 })
 
+-- ack's `-x` reads file names from stdin. ack has no whole-line flag.
 local ACK_FLAGS = flag_table({
+    { { "-Q", "--literal" }, FIXED },
+    { { "-w", "--word-regexp" }, WORD },
     { { "-i", "--ignore-case" }, INSENSITIVE },
     { { "-I", "--no-ignore-case" }, SENSITIVE },
     { { "-S", "--smart-case" }, SMART },
@@ -340,7 +396,8 @@ local UGREP_VALUE_OPTS = {
 
 --- The option grammar and output defaults of one grep-family tool.
 --- @class agentic.utils.GrepArgs.Tool
---- @field flags table<string, agentic.utils.GrepArgs.Effect> by full spelling
+--- @field flags table<string, agentic.utils.GrepArgs.Effect> by full spelling,
+---   or by `--option=value` for an option whose effect depends on its value
 --- @field value_opts table<string, true> options that take a value, by full
 ---   spelling; an unlisted one makes its value read as the positional pattern
 --- @field number_opts table<string, true> options whose value is optional and
@@ -350,12 +407,22 @@ local UGREP_VALUE_OPTS = {
 --- @field line_numbers integer[] possible line-number field counts without a flag
 --- @field columns integer[] possible column field counts without a flag
 --- @field diagnostic_names string[] names the tool's own messages start with
+--- @field joins_dialects? true every dialect flag given adds a dialect the
+---   patterns may be read in, instead of the last one winning
+--- @field line_per_pattern? true each line of a pattern is a pattern of its
+---   own; without it, a pattern that holds a newline is dropped
 
 --- @type table<string, agentic.utils.GrepArgs.Tool>
 local TOOLS = {
     -- GNU grep and ugrep together, since `grep` may be either.
     grep = {
-        flags = flag_table(GNU_FLAG_ROWS, UGREP_FLAG_ROWS),
+        -- `-x` beats `-w` in either order in GNU grep and ugrep. git grep
+        -- has no `-x`.
+        flags = flag_table(
+            GNU_FLAG_ROWS,
+            UGREP_FLAG_ROWS,
+            { { { "-x", "--line-regexp" }, { line = true } } }
+        ),
         value_opts = set_of(PATTERN_OPTS, GNU_VALUE_OPTS, UGREP_VALUE_OPTS),
         number_opts = {},
         case = "sensitive",
@@ -363,6 +430,10 @@ local TOOLS = {
         line_numbers = { 0 },
         columns = { 0 },
         diagnostic_names = { "grep", "ugrep" },
+        -- ugrep keeps `-F` and `-P` over a later `-G` or `-E`, BSD grep
+        -- takes the last flag, and GNU grep rejects two different ones.
+        joins_dialects = true,
+        line_per_pattern = true,
     },
     -- `grep.lineNumber` and `grep.column` in git config can turn both on.
     git = {
@@ -374,6 +445,7 @@ local TOOLS = {
         line_numbers = { 0, 1 },
         columns = { 0, 1 },
         diagnostic_names = { "fatal", "error", "warning" },
+        line_per_pattern = true,
     },
     rg = {
         flags = RG_FLAGS,
@@ -401,6 +473,7 @@ local TOOLS = {
             "--color",
             "--colors",
             "--pre",
+            "--engine",
         }),
         number_opts = {},
         case = "sensitive",
@@ -488,6 +561,17 @@ local TOOL_OF_COMMAND = {
     ack = "ack",
 }
 
+--- Dialects each command name reads its patterns in without a dialect flag.
+--- @type table<string, agentic.utils.GrepDialect[]>
+local DIALECTS_OF_COMMAND = {
+    grep = { "basic" },
+    ugrep = { "extended" },
+    git = GIT_DIALECTS,
+    rg = { "rust" },
+    ag = { "perl_bytes" },
+    ack = { "perl_bytes" },
+}
+
 --- git global options that take the next token as their value.
 local GIT_VALUE_OPTS =
     set_of({ "-C", "-c", "--git-dir", "--work-tree", "--namespace" })
@@ -516,9 +600,14 @@ end
 
 --- One grep-family command, parsed.
 --- @class agentic.utils.GrepArgs.Invocation
---- @field patterns string[] its patterns, as written; empty when any pattern's
----   text is unknown (dynamic, or read from a file)
+--- @field patterns string[] its patterns, as written, one per line for a tool
+---   that reads each line as a pattern; empty when any pattern's text is
+---   unknown (dynamic, or read from a file) or holds a newline the tool does
+---   not split
 --- @field ignore_case boolean every pattern matches case-insensitively, smart case resolved
+--- @field dialects agentic.utils.GrepDialect[] every dialect the patterns may
+---   be read in; empty when the flags make them match in a way no dialect models
+--- @field whole? "word"|"line" a match must be a whole word or line
 --- @field line_numbers boolean line numbers are on by flag
 --- @field layout agentic.utils.GrepArgs.Layout
 --- @field diagnostic_names string[] names the tool's own messages start with
@@ -600,6 +689,9 @@ function M.parse(name, argv, argv_dynamic)
     --- @param effect agentic.utils.GrepArgs.Effect|nil
     local function apply(effect)
         for key, value in pairs(effect or {}) do
+            if key == "dialects" and tool.joins_dialects and state.dialects then
+                value = vim.list_extend(vim.list_slice(state.dialects), value)
+            end
             state[key] = value
         end
     end
@@ -660,6 +752,9 @@ function M.parse(name, argv, argv_dynamic)
                 end
             end
             apply(tool.flags[long])
+            if value and not dynamic then
+                apply(tool.flags[long .. "=" .. value])
+            end
             if
                 tool_name == "rg"
                 and (long == "--files" or long == "--type-list")
@@ -695,6 +790,24 @@ function M.parse(name, argv, argv_dynamic)
     -- The tool matches all its patterns together, so an unknown one can take
     -- the text a known one would highlight.
     if lists_files or has_unknown_pattern then
+        patterns = {}
+    end
+    if tool.line_per_pattern then
+        patterns = vim.iter(patterns)
+            :map(function(pattern)
+                return vim.split(pattern, "\n", { plain = true })
+            end)
+            :flatten()
+            :filter(function(pattern)
+                return pattern ~= ""
+            end)
+            :totable()
+    elseif
+        vim.iter(patterns):any(function(pattern)
+            return pattern:find("\n") ~= nil
+        end)
+    then
+        -- rg rejects a newline without `-U`; ag and ack are not measured.
         patterns = {}
     end
 
@@ -754,6 +867,11 @@ function M.parse(name, argv, argv_dynamic)
         patterns = patterns,
         ignore_case = state.case == "insensitive"
             or (state.case == "smart" and smart_case_folds(patterns)),
+        dialects = state.unmodelled and {}
+            or state.fixed and { "fixed" }
+            or state.dialects
+            or DIALECTS_OF_COMMAND[name],
+        whole = state.line and "line" or state.word and "word" or nil,
         line_numbers = line_number == true,
         layout = { names = names, fields = fields },
         diagnostic_names = tool.diagnostic_names,

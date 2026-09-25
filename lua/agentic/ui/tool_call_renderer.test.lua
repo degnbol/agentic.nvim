@@ -1,5 +1,6 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local Logger = require("agentic.utils.logger")
 
 --- Check whether a parser for `lang` is installed.
 --- @param lang string
@@ -1234,9 +1235,78 @@ describe("ToolCallRenderer", function()
         end)
 
         it("highlights every pattern of every grep", function()
-            local texts =
-                execute_texts("grep -e x -e y f | grep z", { "x y z" })
+            local texts = execute_texts("rg -e x -e y f | grep z", { "x y z" })
             assert.same({ "x", "y", "z" }, texts.terms)
+        end)
+
+        it("reads each grep's pattern in its own dialect", function()
+            assert.same(
+                { "foo" },
+                execute_texts([[rg 'foo\b' f]], { "foox", "foo x" }).terms
+            )
+            assert.same(
+                { "a|b" },
+                execute_texts("grep 'a|b' f", { "a b a|b" }).terms
+            )
+            assert.same(
+                { "a.b" },
+                execute_texts("grep -F 'a.b' f", { "axb a.b" }).terms
+            )
+            assert.same(
+                { "foo" },
+                execute_texts("grep -w foo f", { "foox foo" }).terms
+            )
+        end)
+
+        it("keeps only the first match where POSIX order may differ", function()
+            -- grep matches `ab` then nothing; Vim alone would match `a`, `bc`.
+            local texts = execute_texts([[grep -o 'a\|ab\|bc' f]], { "abc" })
+            assert.same({ "a" }, texts.terms)
+        end)
+
+        it("keeps prefix colours for an untranslatable pattern", function()
+            local texts = execute_texts("rg -n -P '(?=x)y' f", { "a.lua:3:xy" })
+            assert.same({}, texts.terms)
+            assert.same({ "a.lua", ":", "3", ":" }, texts.grep_parts)
+        end)
+
+        it("needs every dialect grep's flags allow to agree", function()
+            local texts = execute_texts("grep -F -E 'a.b' f", { "a.b axb" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves an echoed pattern ugrep rejects alone", function()
+            local texts = execute_texts("grep -E '(|a)b' f", { "(?m)(|a)b" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves non-ASCII text alone under an ASCII class", function()
+            assert.same(
+                {},
+                execute_texts([[rg '\w{2}' f]], { "x naïve" }).terms
+            )
+            assert.same(
+                { "ab" },
+                execute_texts([[rg '\w{2}' f]], { "ab" }).terms
+            )
+        end)
+
+        it("does not match an end anchor where rg cut the line", function()
+            local texts = execute_texts(
+                "rg -n 'foo$' f",
+                { "1:xfoo [... omitted end of long line]", "2:foo" }
+            )
+            assert.same({ "foo" }, texts.terms)
+            assert.same({ "1", ":", "2", ":" }, texts.grep_parts)
+        end)
+
+        it("notifies a failed match and leaves the terms alone", function()
+            local notify_stub = spy.stub(Logger, "notify")
+            local texts =
+                execute_texts([[rg '(\w*\b\s*)*;' f]], { ("word "):rep(40) })
+            notify_stub:revert()
+            assert.same({}, texts.terms)
+            assert.equal(1, notify_stub.call_count)
         end)
 
         it("leaves a command without grep unhighlighted", function()

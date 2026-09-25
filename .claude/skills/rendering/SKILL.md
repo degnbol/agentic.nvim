@@ -190,7 +190,10 @@ Search blocks take the pattern from `search_pattern`, else the command's
 first quoted string, and `-i` from the title (a ` -P` multiline title gets
 no term highlights). Execute blocks that contain a
 grep-family command anywhere (`ShellParse.extract_commands`) take each
-command's patterns, case rule and layouts from its argv (`GrepArgs.parse`).
+command's patterns, case rule, dialect, `-w`/`-x` and layouts from its argv
+(`GrepArgs.parse`). Patterns are translated from the grep's dialect
+(`GrepRegex.translate`); a construct outside the supported set gives no term
+highlight.
 Grep-format lines (`path:linenum:rest`) get per-component highlights
 (`AgenticGrepPath` / `AgenticGrepLineNr` / `AgenticGrepSeparator`); these
 fire for all search blocks and for those same execute blocks. Execute

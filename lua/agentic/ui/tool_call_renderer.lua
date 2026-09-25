@@ -9,6 +9,8 @@ local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local GrepArgs = require("agentic.utils.grep_args")
 local GrepOutput = require("agentic.utils.grep_output")
+local GrepRegex = require("agentic.utils.grep_regex")
+local Logger = require("agentic.utils.logger")
 local ShellParse = require("agentic.utils.shell_parse")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
@@ -305,77 +307,68 @@ local function grep_invocations_in(argument)
     return #invocations > 0 and invocations or nil
 end
 
---- One Vim regex that matches any of `patterns` the way a single rg run
---- does: leftmost first, alternatives tried in order. Each pattern is read as
---- very-magic (`:help /\v`).
---- @param patterns string[] empty ones are dropped
---- @param ignore_case boolean
---- @return string|nil vim_pattern nil when no pattern is left or the result
----   is not a valid Vim regex
-local function term_regex(patterns, ignore_case)
-    patterns = vim.tbl_filter(function(pattern)
-        return pattern ~= ""
-    end, patterns)
-    if #patterns == 0 then
-        return nil
-    end
-    -- \C, since matchstrpos() follows 'ignorecase' (`:help match-pattern`).
-    local vim_pattern = (ignore_case and "\\c" or "\\C")
-        .. "\\v%("
-        .. table.concat(patterns, ")|%(")
-        .. ")"
-    return pcall(vim.regex, vim_pattern) and vim_pattern or nil
-end
-
 --- Non-overlapping, non-empty matches of a Vim regex in a string.
 --- @param text string
 --- @param vim_pattern string
---- @return { [1]: integer, [2]: integer }[] spans 0-based start and exclusive end bytes
-local function regex_spans(text, vim_pattern)
+--- @param first_only boolean try the first match only, and give none if it is empty
+--- @return { [1]: integer, [2]: integer }[]|nil spans 0-based start and
+---   exclusive end bytes; nil when matching fails
+--- @return string|nil err why matching failed, such as E363 past 'maxmempattern'
+local function regex_spans(text, vim_pattern, first_only)
     local spans = {}
     -- With {count} given, matches before {start} are ignored rather than
     -- the text cut there, so `^` still anchors at column 0 (`:help match()`).
     local start = 0
     while true do
-        local _, s, e = unpack(vim.fn.matchstrpos(text, vim_pattern, start, 1))
+        local ok, result =
+            pcall(vim.fn.matchstrpos, text, vim_pattern, start, 1)
+        if not ok then
+            return nil, tostring(result)
+        end
+        local _, s, e = unpack(result)
         if s < 0 then
             break
         end
         if e > s then
             table.insert(spans, { s, e })
-            start = e
-        elseif e >= #text then
-            break
-        else
-            -- Past a zero-width match by one whole character, not a byte.
-            start = e + 1 + vim.str_utf_end(text, e + 1)
         end
+        if first_only or (e == s and e >= #text) then
+            break
+        end
+        -- Past a zero-width match by one whole character, not a byte.
+        start = e > s and e or e + 1 + vim.str_utf_end(text, e + 1)
     end
     return spans
 end
 
---- Match a search regex against the text of each match line and return
---- SearchMatch entries. A line's text starts where a prefix pattern ends.
---- When several prefixes parse, only matches found at the same columns from
---- every start are kept.
+--- Match a translated search pattern against the text of each match line and
+--- return SearchMatch entries. A line's text starts where a prefix pattern
+--- ends. When several prefixes parse, only matches found at the same columns
+--- from every start are kept. A failed match is notified and gives no entries.
 --- @param body string[] Raw body lines
 --- @param line_index_offset integer Offset added to each line_index
---- @param vim_pattern string|nil full Vim pattern, `\c`/`\C` included, nil yields no matches
+--- @param translation agentic.utils.GrepRegex.Translation|nil nil yields no matches
+--- @param ignore_case boolean
 --- @param prefixes string[] Lua patterns for a match-line prefix
 --- @param diagnostic_names string[] see `GrepOutput.text_starts`
 --- @return agentic.ui.MessageWriter.SearchMatch[]
 local function extract_search_term_highlights(
     body,
     line_index_offset,
-    vim_pattern,
+    translation,
+    ignore_case,
     prefixes,
     diagnostic_names
 )
     --- @type agentic.ui.MessageWriter.SearchMatch[]
     local matches = {}
-    if not vim_pattern then
+    if not translation then
         return matches
     end
+    -- \C, since matchstrpos() follows 'ignorecase' (`:help match-pattern`).
+    local vim_pattern = (ignore_case and "\\c" or "\\C")
+        .. "\\V"
+        .. translation.vim_pattern
     for i, raw_line in ipairs(body) do
         -- vim.fn turns a string holding NUL into a Blob (E976, `:help lua-eval`); a one-byte
         -- stand-in keeps the columns.
@@ -386,8 +379,28 @@ local function extract_search_term_highlights(
         local candidates = {}
         local starts = GrepOutput.text_starts(line, prefixes, diagnostic_names)
         for _, start in ipairs(starts) do
-            local text = GrepOutput.strip_omitted(line:sub(start + 1))
-            for _, span in ipairs(text and regex_spans(text, vim_pattern) or {}) do
+            local full_text = line:sub(start + 1)
+            local text = GrepOutput.strip_omitted(full_text)
+            if text and translation.ascii_only and text:find("[\128-\255]") then
+                text = nil
+            end
+            local spans, err
+            if text then
+                -- Where rg cut the line, a stand-in word character keeps
+                -- `$`, `\b` and word ends from matching at the cut.
+                local subject = #text < #full_text and text .. "é" or text
+                spans, err =
+                    regex_spans(subject, vim_pattern, translation.first_only)
+            end
+            if err then
+                Logger.notify("Search highlight failed: " .. err)
+                return {}
+            end
+            for _, span in ipairs(spans or {}) do
+                --- @cast text string
+                if span[2] > #text then
+                    break
+                end
                 local s, e = span[1] + start, span[2] + start
                 local key = s .. ":" .. e
                 if not votes[key] then
@@ -902,15 +915,15 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 local flags = search_title_flags(argument)
                 local pattern = tool_call_block.search_pattern
                     or first_quoted_string(argument)
-                --- @type string|nil
-                local vim_pattern
-                if pattern and not flags.multiline then
-                    vim_pattern = term_regex({ pattern }, flags.ignore_case)
-                end
+                -- Claude's Grep tool and opencode's grep run ripgrep.
+                local translation = pattern
+                    and not flags.multiline
+                    and GrepRegex.translate({ pattern }, { "rust" }, nil)
                 matches = extract_search_term_highlights(
                     body,
                     #lines - count,
-                    vim_pattern,
+                    translation or nil,
+                    flags.ignore_case,
                     GrepOutput.SEARCH_PREFIXES,
                     {}
                 )
@@ -1268,7 +1281,12 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                     extract_search_term_highlights(
                         shown_body,
                         body_start_offset,
-                        term_regex(invocation.patterns, invocation.ignore_case),
+                        GrepRegex.translate(
+                            invocation.patterns,
+                            invocation.dialects,
+                            invocation.whole
+                        ),
+                        invocation.ignore_case,
                         GrepOutput.prefix_patterns(invocation.layout),
                         invocation.diagnostic_names
                     )
