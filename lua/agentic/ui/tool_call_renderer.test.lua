@@ -1129,8 +1129,8 @@ describe("ToolCallRenderer", function()
 
         it("takes the pattern from the grep, not an earlier command", function()
             local texts = execute_texts(
-                'find . -name "*.py" | xargs grep -l "plot"',
-                { "src/plot.py" }
+                'find . -name "*.py" | xargs grep "plot"',
+                { "src/a.py:plot(x)" }
             )
             assert.same({ "plot" }, texts.terms)
         end)
@@ -1253,7 +1253,7 @@ describe("ToolCallRenderer", function()
                 kind = "search",
                 argument = "rg 'quoted'",
                 search_pattern = "fo+",
-                body = { "foo quoted" },
+                body = { "3:foo quoted" },
             })
             assert.same({ "foo" }, texts.terms)
         end)
@@ -1264,9 +1264,142 @@ describe("ToolCallRenderer", function()
                 status = "completed",
                 kind = "search",
                 argument = "rg 'bar'",
-                body = { "foo bar" },
+                body = { "3:foo bar" },
             })
             assert.same({ "bar" }, texts.terms)
+        end)
+
+        --- @param argument string
+        --- @param body string[]
+        --- @return { terms: string[], grep_parts: string[] }
+        local function search_texts(argument, body)
+            return matched_texts({
+                tool_call_id = "search",
+                status = "completed",
+                kind = "search",
+                argument = argument,
+                body = body,
+            })
+        end
+
+        it("leaves the path of a match line alone", function()
+            local texts = execute_texts(
+                "grep -r util lua/",
+                { "lua/utils/x.lua:util here" }
+            )
+            assert.same({ "util" }, texts.terms)
+        end)
+
+        it("leaves context lines alone when a file name may show", function()
+            local texts =
+                execute_texts("grep -r -C1 util d", { "d/utils.lua-x" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("anchors `^` at the start of the text", function()
+            local texts = execute_texts("grep -n '^cd ' f", { "12:cd foo" })
+            assert.same({ "cd " }, texts.terms)
+        end)
+
+        it("matches a grep's patterns together", function()
+            local texts = execute_texts("grep -o -e ab -e bc f", { "abc" })
+            assert.same({ "ab" }, texts.terms)
+        end)
+
+        for _, argument in ipairs({
+            "grep -l foo d",
+            "grep -c foo d",
+            "grep -v foo d",
+            "rg -r X foo d",
+        }) do
+            it(
+                "leaves output without matched text alone: " .. argument,
+                function()
+                    local texts = execute_texts(argument, { "a.lua:3:foo" })
+                    assert.same({}, texts.terms)
+                    assert.same({ "a.lua", ":", "3", ":" }, texts.grep_parts)
+                end
+            )
+        end
+
+        it("leaves diagnostics alone", function()
+            local texts = execute_texts("grep foo d", {
+                "grep: d/foo.bin: binary file matches",
+                "Binary file d/foo.bin matches",
+            })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves rg's long-line placeholder alone", function()
+            local texts = execute_texts("rg -n Omitted", {
+                "3:[Omitted long matching line]",
+                "4:Omitted [... omitted end of long line]",
+            })
+            assert.same({ "Omitted" }, texts.terms)
+        end)
+
+        it("leaves the path after a git grep revision alone", function()
+            local texts = execute_texts(
+                "git grep util HEAD",
+                { "HEAD:lua/utils.lua:util" }
+            )
+            assert.same({ "util" }, texts.terms)
+        end)
+
+        it("leaves rg's summary lines alone", function()
+            local texts = execute_texts(
+                "rg -n --stats match f",
+                { "3:a match", "", "2 matches", "1 files contained matches" }
+            )
+            assert.same({ "match" }, texts.terms)
+        end)
+
+        it("finds a search title's pattern past an unmatched quote", function()
+            local texts = search_texts([[rg don't "foo"]], { "3:foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("ignores an empty search pattern", function()
+            local texts = matched_texts({
+                tool_call_id = "search-empty",
+                status = "completed",
+                kind = "search",
+                argument = "rg",
+                search_pattern = "",
+                body = { "3:foo" },
+            })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves a search block's file list alone", function()
+            local texts = search_texts(
+                'grep -l "foo"',
+                { "Found 2 files", "a.lua", "foo.lua" }
+            )
+            assert.same({}, texts.terms)
+        end)
+
+        it("honours a search block's -i", function()
+            local texts = search_texts('grep -i -n "Foo" x', { "3:foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("leaves a multiline search block alone", function()
+            local texts = search_texts('grep -n -P "foo" x', { "3:foo" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("matches the text of opencode's search output", function()
+            local texts = search_texts('rg "foo"', { "  Line 57: foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("skips a quoted option value in a search title", function()
+            local texts = search_texts(
+                'grep -n --include="lua/**" "foo"',
+                { "lua/a.lua:3:lua foo" }
+            )
+            assert.same({ "foo" }, texts.terms)
         end)
     end)
 

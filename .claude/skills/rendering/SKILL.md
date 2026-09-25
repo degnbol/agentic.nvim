@@ -183,14 +183,18 @@ Adding a new foldable kind:
 
 `extract_search_term_highlights` in `tool_call_renderer.lua` matches a
 pattern against the body via `AgenticSearchMatch` extmarks (priority 200).
+Terms match only the text of a match line, after its `path:N:` prefix, and a
+match must be the same under every layout the grep's flags allow (see
+`GrepOutput`); a missing highlight is acceptable, a false one is not.
 Search blocks take the pattern from `search_pattern`, else the command's
-first quoted string. Execute blocks that contain a grep-family command
-anywhere (`ShellParse.extract_commands`) take each pattern from that
-command's argv (`GrepArgs.search_terms`, which honours `-i`).
+first quoted string, and `-i` from the title (a ` -P` multiline title gets
+no term highlights). Execute blocks that contain a
+grep-family command anywhere (`ShellParse.extract_commands`) take each
+command's patterns, case rule and layouts from its argv (`GrepArgs.parse`).
 Grep-format lines (`path:linenum:rest`) get per-component highlights
 (`AgenticGrepPath` / `AgenticGrepLineNr` / `AgenticGrepSeparator`); these
 fire for all search blocks and for those same execute blocks. Execute
-blocks whose grep asked for line numbers (`GrepArgs.Terms.line_numbers`)
+blocks whose grep asked for line numbers (`GrepArgs.Invocation.line_numbers`)
 also accept a path-less `linenum:rest`. The two coexist via the optional
 `hl_group` field on `SearchMatch`.
 

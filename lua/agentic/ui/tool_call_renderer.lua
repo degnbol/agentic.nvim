@@ -8,6 +8,7 @@ local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local GrepArgs = require("agentic.utils.grep_args")
+local GrepOutput = require("agentic.utils.grep_output")
 local ShellParse = require("agentic.utils.shell_parse")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
@@ -243,88 +244,166 @@ local function shell_fence_lang(argument, lang)
     return lang
 end
 
---- First single- or double-quoted string in a command, unquoted.
+--- First single- or double-quoted string in a command, unquoted, skipping
+--- empty ones, unmatched quotes (`don't`) and a value attached to an option by
+--- `=` (`--include="*.lua"`).
 --- @param argument string|nil
 --- @return string|nil
 local function first_quoted_string(argument)
-    return argument
-        and (argument:match('"([^"]+)"') or argument:match("'([^']+)'"))
+    local pos = 1
+    while argument do
+        local open, quote = argument:match("()([\"'])", pos)
+        if not open then
+            return nil
+        end
+        local close = argument:find(quote, open + 1, true)
+        if not close then
+            pos = open + 1
+        elseif close > open + 1 and argument:sub(open - 1, open - 1) ~= "=" then
+            return argument:sub(open + 1, close - 1)
+        else
+            pos = close + 1
+        end
+    end
+    return nil
 end
 
---- Search terms of every grep-family command a shell command line runs,
---- wherever it sits in the line.
+--- Flags of a search-block title, read as the space-separated words before
+--- its first quoted word. In the Claude Grep title ` -P` means multiline.
+--- @param argument string
+--- @return { ignore_case: boolean, multiline: boolean }
+local function search_title_flags(argument)
+    local flags = { ignore_case = false, multiline = false }
+    for word in argument:gmatch("%S+") do
+        if word:find("^[\"']") then
+            break
+        end
+        flags.ignore_case = flags.ignore_case or word == "-i"
+        flags.multiline = flags.multiline or word == "-P"
+    end
+    return flags
+end
+
+--- Every grep-family command a shell command line runs, wherever it sits in
+--- the line.
 --- @param argument string shell command line
---- @return agentic.utils.GrepArgs.Terms[]|nil terms one per grep-family
----   command, nil when there is none or the line does not parse
-local function grep_terms_for(argument)
+--- @return agentic.utils.GrepArgs.Invocation[]|nil invocations nil when there
+---   is none or the line does not parse
+local function grep_invocations_in(argument)
     local records = ShellParse.extract_commands(argument)
     if not records then
         return nil
     end
-    --- @type agentic.utils.GrepArgs.Terms[]
-    local terms = {}
+    --- @type agentic.utils.GrepArgs.Invocation[]
+    local invocations = {}
     for _, rec in ipairs(records) do
-        local rec_terms =
-            GrepArgs.search_terms(rec.name, rec.argv, rec.argv_dynamic)
-        if rec_terms then
-            table.insert(terms, rec_terms)
+        local invocation = GrepArgs.parse(rec.name, rec.argv, rec.argv_dynamic)
+        if invocation then
+            table.insert(invocations, invocation)
         end
     end
-    return #terms > 0 and terms or nil
+    return #invocations > 0 and invocations or nil
 end
 
---- Match a search pattern against body lines and return SearchMatch entries.
---- `pattern` is read as a very-magic Vim regex (`:help /\v`).
+--- One Vim regex that matches any of `patterns` the way a single rg run
+--- does: leftmost first, alternatives tried in order. Each pattern is read as
+--- very-magic (`:help /\v`).
+--- @param patterns string[] empty ones are dropped
+--- @param ignore_case boolean
+--- @return string|nil vim_pattern nil when no pattern is left or the result
+---   is not a valid Vim regex
+local function term_regex(patterns, ignore_case)
+    patterns = vim.tbl_filter(function(pattern)
+        return pattern ~= ""
+    end, patterns)
+    if #patterns == 0 then
+        return nil
+    end
+    -- \C, since matchstrpos() follows 'ignorecase' (`:help match-pattern`).
+    local vim_pattern = (ignore_case and "\\c" or "\\C")
+        .. "\\v%("
+        .. table.concat(patterns, ")|%(")
+        .. ")"
+    return pcall(vim.regex, vim_pattern) and vim_pattern or nil
+end
+
+--- Non-overlapping, non-empty matches of a Vim regex in a string.
+--- @param text string
+--- @param vim_pattern string
+--- @return { [1]: integer, [2]: integer }[] spans 0-based start and exclusive end bytes
+local function regex_spans(text, vim_pattern)
+    local spans = {}
+    -- With {count} given, matches before {start} are ignored rather than
+    -- the text cut there, so `^` still anchors at column 0 (`:help match()`).
+    local start = 0
+    while true do
+        local _, s, e = unpack(vim.fn.matchstrpos(text, vim_pattern, start, 1))
+        if s < 0 then
+            break
+        end
+        if e > s then
+            table.insert(spans, { s, e })
+            start = e
+        elseif e >= #text then
+            break
+        else
+            -- Past a zero-width match by one whole character, not a byte.
+            start = e + 1 + vim.str_utf_end(text, e + 1)
+        end
+    end
+    return spans
+end
+
+--- Match a search regex against the text of each match line and return
+--- SearchMatch entries. A line's text starts where a prefix pattern ends.
+--- When several prefixes parse, only matches found at the same columns from
+--- every start are kept.
 --- @param body string[] Raw body lines
 --- @param line_index_offset integer Offset added to each line_index
---- @param pattern string|nil nil, empty, or invalid yields no matches
---- @param ignore_case boolean|nil true matches case-insensitively, else case matters
+--- @param vim_pattern string|nil full Vim pattern, `\c`/`\C` included, nil yields no matches
+--- @param prefixes string[] Lua patterns for a match-line prefix
+--- @param diagnostic_names string[] see `GrepOutput.text_starts`
 --- @return agentic.ui.MessageWriter.SearchMatch[]
 local function extract_search_term_highlights(
     body,
     line_index_offset,
-    pattern,
-    ignore_case
+    vim_pattern,
+    prefixes,
+    diagnostic_names
 )
-    if not pattern or pattern == "" then
-        return {}
-    end
-
-    -- \C, since matchstrpos() follows 'ignorecase' (`:help match-pattern`).
-    local vim_pattern = (ignore_case and "\\c" or "\\C") .. "\\v" .. pattern
-    if not pcall(vim.regex, vim_pattern) then
-        return {}
-    end
-
     --- @type agentic.ui.MessageWriter.SearchMatch[]
     local matches = {}
+    if not vim_pattern then
+        return matches
+    end
     for i, raw_line in ipairs(body) do
         -- vim.fn turns a string holding NUL into a Blob (E976, `:help lua-eval`); a one-byte
         -- stand-in keeps the columns.
         local line = raw_line:gsub("%z", "\1")
-        -- With {count} given, matches before {start} are ignored rather than
-        -- the line cut there, so `^` still anchors at column 0 (`:help match()`).
-        local start = 0
-        while true do
-            local _, s, e =
-                unpack(vim.fn.matchstrpos(line, vim_pattern, start, 1))
-            if s < 0 then
-                break
+        --- @type table<string, integer> votes per `start:end` span
+        local votes = {}
+        --- @type { [1]: integer, [2]: integer }[]
+        local candidates = {}
+        local starts = GrepOutput.text_starts(line, prefixes, diagnostic_names)
+        for _, start in ipairs(starts) do
+            local text = GrepOutput.strip_omitted(line:sub(start + 1))
+            for _, span in ipairs(text and regex_spans(text, vim_pattern) or {}) do
+                local s, e = span[1] + start, span[2] + start
+                local key = s .. ":" .. e
+                if not votes[key] then
+                    votes[key] = 0
+                    table.insert(candidates, { s, e })
+                end
+                votes[key] = votes[key] + 1
             end
-            if e > s then
+        end
+        for _, span in ipairs(candidates) do
+            if votes[span[1] .. ":" .. span[2]] == #starts then
                 table.insert(matches, {
                     line_index = line_index_offset + i - 1,
-                    col_start = s,
-                    col_end = e,
+                    col_start = span[1],
+                    col_end = span[2],
                 })
-            end
-            if e > s then
-                start = e
-            elseif e >= #line then
-                break
-            else
-                -- Past a zero-width match by one whole character, not a byte.
-                start = e + 1 + vim.str_utf_end(line, e + 1)
             end
         end
     end
@@ -820,11 +899,20 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 end
                 tool_call_block.search_ansi = displayed
             else
+                local flags = search_title_flags(argument)
+                local pattern = tool_call_block.search_pattern
+                    or first_quoted_string(argument)
+                --- @type string|nil
+                local vim_pattern
+                if pattern and not flags.multiline then
+                    vim_pattern = term_regex({ pattern }, flags.ignore_case)
+                end
                 matches = extract_search_term_highlights(
                     body,
                     #lines - count,
-                    tool_call_block.search_pattern
-                        or first_quoted_string(argument)
+                    vim_pattern,
+                    GrepOutput.SEARCH_PREFIXES,
+                    {}
                 )
             end
             vim.list_extend(
@@ -1157,8 +1245,8 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
     if kind == "execute" and tool_call_block.body and body_start_offset then
         --- @type agentic.ui.MessageWriter.SearchMatch[]
         local matches = {}
-        local grep_terms = grep_terms_for(argument)
-        if grep_terms then
+        local invocations = grep_invocations_in(argument)
+        if invocations then
             -- The rows as displayed, after ANSI stripping above.
             local shown_body = vim.list_slice(
                 lines,
@@ -1166,26 +1254,25 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
                 body_start_offset + #tool_call_block.body
             )
             local line_numbers = false
-            for _, terms in ipairs(grep_terms) do
-                line_numbers = line_numbers or terms.line_numbers
+            for _, invocation in ipairs(invocations) do
+                line_numbers = line_numbers or invocation.line_numbers
             end
             matches = extract_grep_line_highlights(
                 shown_body,
                 body_start_offset,
                 line_numbers
             )
-            for _, terms in ipairs(grep_terms) do
-                for _, pattern in ipairs(terms.patterns) do
-                    vim.list_extend(
-                        matches,
-                        extract_search_term_highlights(
-                            shown_body,
-                            body_start_offset,
-                            pattern,
-                            terms.ignore_case
-                        )
+            for _, invocation in ipairs(invocations) do
+                vim.list_extend(
+                    matches,
+                    extract_search_term_highlights(
+                        shown_body,
+                        body_start_offset,
+                        term_regex(invocation.patterns, invocation.ignore_case),
+                        GrepOutput.prefix_patterns(invocation.layout),
+                        invocation.diagnostic_names
                     )
-                end
+                )
             end
         end
         tool_call_block.search_matches = #matches > 0 and matches or nil
