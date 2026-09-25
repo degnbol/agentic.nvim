@@ -207,47 +207,7 @@ describe("auto-continue chunk flush", function()
 
             -- MessageWriter per-turn state must be clean after the full
             -- flow, otherwise the NEXT turn would get corrupted.
-            assert.is_false(writer._suppressing_rejection)
-            assert.equal("", writer._rejection_buffer)
             assert.is_nil(writer._chunk_start_line)
-        end
-    )
-
-    it(
-        "rejection suppression from the pre-limit turn does not eat post-continue chunks",
-        function()
-            -- Edge case: user rejected a permission in the turn that hit
-            -- the usage limit. suppress_next_rejection() was called, and
-            -- we need to confirm the state resets across the error +
-            -- auto-continue boundary.
-            writer:write_message(user_message("Rejected-then-limit prompt."))
-            writer:write_tool_call_block(
-                tool_call("tc-rejected", "pending", "edit", "/tmp/thing.txt")
-            )
-            writer:suppress_next_rejection()
-            writer:write_message_chunk(
-                chunk("The user doesn't want to proceed with this change.")
-            )
-
-            -- Usage limit fires before the rejection boilerplate completes.
-            writer:write_error_message(usage_limit_err())
-            writer:finalize_turn()
-
-            -- Auto-continue fires.
-            writer:write_message(user_message("continue"))
-            writer:write_message_chunk(
-                chunk("OK, picking a different approach.")
-            )
-            writer:finalize_turn()
-
-            local dump = table.concat(buf_text(bufnr), "\n")
-
-            assert.is_true(
-                buf_contains(bufnr, "picking a different approach"),
-                "Post-continue chunk must NOT be swallowed by stale rejection suppression.\n"
-                    .. "Buffer:\n"
-                    .. dump
-            )
         end
     )
 end)

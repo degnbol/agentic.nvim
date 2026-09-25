@@ -64,7 +64,7 @@ failure mode. Do the search even if you think you recognise the symptom.
   (agent_message_chunks, tool call frames) is missing during the wait and only
   appears when the user submits a new prompt. NOT a redraw issue. NOT the
   per-turn state leak class. Symptom family — most variants fixed
-  (parallel-tool-calls, rejection-buffer, per-turn-state-leak). Last open
+  (parallel-tool-calls, per-turn-state-leak). Last open
   variant: auto-continue after usage-limit reset.
 
 ## Adding a new entry

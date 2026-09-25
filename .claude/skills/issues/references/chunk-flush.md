@@ -39,10 +39,6 @@ Search these commits and surrounding history when diagnosing:
   permission buttons (at buffer end), then reanchoring displaced them. Fix
   was to remove permission buttons before appending the next tool call block.
   This was the "parallel tasks" variant the user refers to.
-- `e8da343 fix rejection suppression permanently eating message chunks
-  across turns` — `_suppressing_rejection` flag not cleared at turn
-  boundary; next turn's chunks got swallowed while matching the rejection
-  prefix.
 - `610472b Reset all per-turn MessageWriter state at turn boundary and on
   refresh` — broader cleanup of per-turn MessageWriter flags so
   `_chunk_start_line`, `_last_wrote_tool_call`, `_last_message_type` can't
@@ -103,10 +99,8 @@ auto-continue sequence:
 - **MessageWriter** —
   `tests/integration/auto_continue_chunk_flush.test.lua`. Normal turn
   → usage-limit error → `append_separator` → "## continue" → streamed
-  chunks + tool_call + tool_call_update, including the
-  rejection-suppression edge case. Per-turn state
-  (`_suppressing_rejection`, `_rejection_buffer`,
-  `_chunk_start_line`) resets correctly and all content lands in the
+  chunks + tool_call + tool_call_update. `_chunk_start_line`
+  resets correctly and all content lands in the
   buffer.
 - **ACPClient dispatch** —
   `lua/agentic/acp/acp_client.test.lua` → `describe("dispatch after

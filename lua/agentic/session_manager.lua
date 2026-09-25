@@ -747,9 +747,9 @@ function SessionManager:_refresh()
     self._prompt_pending = 0
     self._loading = false
 
-    -- Clear per-turn MessageWriter flags that can desynchronise the display
-    -- (rejection suppression, chunk tracking, etc.). Cosmetic-only effect
-    -- mid-turn; essential for recovering from a stuck state between turns.
+    -- Clear per-turn MessageWriter flags that can desynchronise the display.
+    -- Cosmetic-only effect mid-turn; essential for recovering from a stuck
+    -- state between turns.
     -- Both writers are reset — the cross-turn flag hazard applies per buffer.
     self.message_writer:reset_turn_state()
     self.subagent_writer:reset_turn_state()
@@ -1420,11 +1420,7 @@ function SessionManager:_on_request_permission(request, callback)
 
         local is_rejection = option_kind == "reject_once"
             or option_kind == "reject_always"
-        self:_show_diff_in_buffer(request.toolCall.toolCallId, is_rejection)
-
-        if is_rejection then
-            self:_writer_for(tool_call_id):suppress_next_rejection()
-        end
+        self:_show_diff_in_buffer(tool_call_id, is_rejection)
 
         if
             not self.permission_manager.current_request
@@ -1451,7 +1447,7 @@ function SessionManager:_on_request_permission(request, callback)
             P.invoke_hook("on_permission_request", {
                 session_id = self.session_id,
                 tab_page_id = self.tab_page_id,
-                tool_call_id = request.toolCall.toolCallId,
+                tool_call_id = tool_call_id,
             })
         end)
 

@@ -126,11 +126,6 @@ local function close_fence(lines)
     end
 end
 
---- Known prefix of the rejection boilerplate injected by the provider after
---- a permission denial. Streamed as agent_message_chunk but meant for the
---- model, not the user.
-local REJECTION_PREFIX = "The user doesn't want to proceed"
-
 --- @class agentic.ui.MessageWriter.ErrorBlock
 --- @field heading_id integer NS_ERROR extmark on the block's `## Error` row — the anchor its rail is re-stamped from. Doubles as the heading's own highlight, so the block costs no mark of its own.
 --- @field rail_ids integer[] NS_DECORATIONS marks of the block's `│`/`╰─` rail, freed and re-stamped whole each time the block grows.
@@ -143,8 +138,6 @@ local REJECTION_PREFIX = "The user doesn't want to proceed"
 --- @field _fold_retry_armed? boolean True while an InsertLeave autocmd is waiting to retry deferred fold ops (see `flush_pending_fold_ops`). Guards against arming a second one per pending batch.
 --- @field _should_auto_scroll? boolean The frozen scroll verdict captured before a write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so a verdict deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold. The insert-mode hold is the one deferral the callback does not wait on — see the skip condition, which reads `_fold_retry_armed`.
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
---- @field _suppressing_rejection boolean When true, buffering chunks to detect rejection boilerplate
---- @field _rejection_buffer string Accumulated text while detecting rejection
 --- @field _status_indicator? agentic.ui.StatusIndicator Reference for auto-scroll virt_lines awareness
 --- @field _chunk_start_line? integer 0-indexed buffer line the unreflowed tail of the current prose run starts at; advanced past each paragraph a streaming reflow wraps, and cleared by the flushing one. Read by `_reflow_chunks` to bound its rewrite.
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared on tool_call/separator/error so auto-scroll can resume
@@ -221,8 +214,6 @@ function MessageWriter:new(bufnr, status_indicator)
         _prose_run_start_line = nil,
         _prose_region_ids = nil,
         _pending_section_break = false,
-        _suppressing_rejection = false,
-        _rejection_buffer = "",
         _status_indicator = status_indicator,
         _prose_anchor_line = nil,
         _suppress_pin_release = false,
@@ -303,13 +294,6 @@ function MessageWriter:on_user_scroll()
     end
 end
 
---- Start buffering the next message chunks to detect and suppress the
---- rejection boilerplate that the provider injects after permission denial.
-function MessageWriter:suppress_next_rejection()
-    self._suppressing_rejection = true
-    self._rejection_buffer = ""
-end
-
 --- Drop the prose-pin anchor so the next auto-scroll falls back to the
 --- normal scroll-to-bottom path. Called at turn boundaries (tool call,
 --- separator, error, /new).
@@ -346,8 +330,6 @@ end
 --- Reset all per-turn mutable state. Called by refresh to unstick a
 --- desynchronised display without restarting the session.
 function MessageWriter:reset_turn_state()
-    self._suppressing_rejection = false
-    self._rejection_buffer = ""
     self._pending_section_break = false
     self:_abandon_prose_run(self.bufnr)
     self._thought_run = nil
@@ -1629,8 +1611,6 @@ function MessageWriter:finalize_turn()
     -- Reset ALL per-turn state at the turn boundary. Any flag that was set
     -- during the turn must be cleared here, otherwise it silently corrupts
     -- subsequent turns (the "stuck 1 message behind" family of bugs).
-    self._suppressing_rejection = false
-    self._rejection_buffer = ""
     self._pending_section_break = false
     self._numbering_active = false
     self:_release_prose_pin()
@@ -1894,36 +1874,6 @@ function MessageWriter:write_message_chunk(update, starts_response)
         return
     end
     self:flush_thought_run()
-
-    -- After a permission rejection, the provider streams boilerplate
-    -- instructions meant for the model ("The user doesn't want to proceed…").
-    -- Buffer incoming chunks and check for the known prefix. Once we have
-    -- enough text: if it matches, suppress the whole paragraph; if not, flush
-    -- the buffer and continue rendering normally.
-    if self._suppressing_rejection then
-        self._rejection_buffer = self._rejection_buffer .. text
-        local buf = self._rejection_buffer
-
-        -- Still accumulating — not enough text to decide yet
-        if #buf < #REJECTION_PREFIX then
-            -- Check that what we have so far could still match
-            if REJECTION_PREFIX:sub(1, #buf) == buf then
-                return
-            end
-            -- Mismatch — not rejection text, flush below
-        elseif buf:sub(1, #REJECTION_PREFIX) == REJECTION_PREFIX then
-            -- Confirmed rejection boilerplate — suppress entirely.
-            -- Keep _suppressing_rejection true to drop remaining chunks
-            -- of this paragraph. Reset on next tool call via
-            -- write_tool_call_block.
-            return
-        end
-
-        -- Not rejection text — stop suppressing and flush the buffer
-        self._suppressing_rejection = false
-        text = self._rejection_buffer
-        self._rejection_buffer = ""
-    end
 
     -- Prose that resumes after a tool call must close its section so
     -- treesitter-context stops pinning the tool call's filename while the user
@@ -2376,12 +2326,6 @@ end
 function MessageWriter:write_tool_call_block(tool_call_block)
     -- Thinking interrupted by a tool call belongs above it.
     self:flush_thought_run()
-
-    -- A new tool call means any rejection boilerplate is over
-    if self._suppressing_rejection then
-        self._suppressing_rejection = false
-        self._rejection_buffer = ""
-    end
 
     -- A tool call ends the current prose run, so auto-scroll resumes.
     self:_release_prose_pin()
