@@ -1874,7 +1874,8 @@ end
 --- Appends message chunks to the last line and column in the chat buffer
 --- Some ACP providers stream chunks instead of full messages
 --- @param update agentic.acp.SessionUpdateMessage
-function MessageWriter:write_message_chunk(update)
+--- @param starts_response boolean|nil The chunk starts a new model response, which is separated by a blank line from prose it follows
+function MessageWriter:write_message_chunk(update, starts_response)
     -- _on_session_update routes chunks to the writer for the agent that
     -- produced them (main → chat, subagent → subagents window), so each window
     -- shows its own agent's prose and thinking.
@@ -1937,8 +1938,22 @@ function MessageWriter:write_message_chunk(update)
 
     self:_auto_scroll(self.bufnr)
 
+    -- Read before the write, which opens a run at its first chunk. A response
+    -- that opens a run needs no break: whatever ended the previous run (a tool
+    -- call's section close, a thought region, a user prompt) separates it.
+    local run_open = self._prose_run_start_line ~= nil
+
     self:_with_modifiable_suppressed(function(bufnr)
         local last_line = vim.api.nvim_buf_line_count(bufnr) - 1
+
+        if starts_response and run_open then
+            text = TextWrap.paragraph_break(
+                text,
+                -- The last row is the open line, so its count of blank rows
+                -- is the count of newlines ending the buffer.
+                BufHelpers.trailing_blank_rows(bufnr, 2)
+            )
+        end
 
         -- Record where streamed content starts (0-indexed)
         if not self._chunk_start_line then
@@ -1962,7 +1977,9 @@ function MessageWriter:write_message_chunk(update)
         )[1] or ""
         local start_col = #current_line
 
-        -- Guard against two messages being concatenated with no whitespace
+        -- Fallback for response starts that `starts_response` cannot mark
+        -- (chunks without a `messageId`). Guard against two messages being
+        -- concatenated with no whitespace
         -- (e.g. auto-compaction text followed by resumed response). Normal
         -- streaming tokens include leading whitespace at word boundaries, so
         -- an uppercase letter directly after a lowercase letter, digit, or

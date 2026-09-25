@@ -153,4 +153,35 @@ describe("BufHelpers", function()
             assert.are.equal(0, cmd_stub.call_count)
         end)
     end)
+
+    describe("trailing_blank_rows", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("counts whitespace-only rows as blank", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "text", "  " })
+            assert.equal(1, BufHelpers.trailing_blank_rows(bufnr, 2))
+        end)
+
+        it("stops at the first row with text", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "text" })
+            assert.equal(0, BufHelpers.trailing_blank_rows(bufnr, 2))
+        end)
+
+        it("counts at most max rows", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "a", "", "", "" })
+            assert.equal(2, BufHelpers.trailing_blank_rows(bufnr, 2))
+        end)
+
+        it("counts the one row of an empty buffer", function()
+            assert.equal(1, BufHelpers.trailing_blank_rows(bufnr, 2))
+        end)
+    end)
 end)

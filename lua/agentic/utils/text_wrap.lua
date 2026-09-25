@@ -444,6 +444,15 @@ function M.is_fence_delimiter(line)
     return delim:sub(1, 1) == "~" or not rest:find("`", 1, true)
 end
 
+--- Prepend the newlines `text` needs to start a new paragraph: one blank line
+--- after what precedes it.
+--- @param text string Text that starts a new paragraph
+--- @param trailing_newlines integer Newlines already ending what precedes `text`
+--- @return string text `text` behind the newlines that make up the blank line
+function M.paragraph_break(text, trailing_newlines)
+    return string.rep("\n", math.max(0, 2 - trailing_newlines)) .. text
+end
+
 --- Hard-wrap prose in a block of lines, skipping fenced code blocks and
 --- formatting markdown tables with aligned columns.
 --- @param lines string[]

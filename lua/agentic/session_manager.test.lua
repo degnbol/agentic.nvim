@@ -4182,4 +4182,100 @@ describe("agentic.SessionManager", function()
             assert.is_true(session._is_first_message)
         end)
     end)
+
+    describe("_on_session_update: agent_message_chunk", function()
+        local ChatHistory = require("agentic.ui.chat_history")
+        local ResponseBoundary = require("agentic.acp.response_boundary")
+
+        --- @type agentic.SessionManager
+        local session
+        --- @type TestSpy
+        local main_write
+        --- @type TestSpy
+        local subagent_write
+
+        before_each(function()
+            main_write = spy.new(function() end)
+            subagent_write = spy.new(function() end)
+            session = {
+                _response_boundaries = {
+                    main = ResponseBoundary:new(),
+                    subagent = ResponseBoundary:new(),
+                },
+                message_writer = { write_message_chunk = main_write },
+                subagent_writer = { write_message_chunk = subagent_write },
+                status_indicator = { start = function() end },
+                subagent_status_indicator = { reposition = function() end },
+                chat_history = ChatHistory:new(),
+                agent = { provider_config = { name = "test-provider" } },
+                _ensure_subagent_window = function() end,
+                _on_session_update = SessionManager._on_session_update,
+            } --[[@as agentic.SessionManager]]
+        end)
+
+        --- @param message_id string|vim.NIL
+        --- @param text string
+        --- @param parent_tool_use_id string|nil Tags the chunk as subagent content
+        --- @return agentic.acp.AgentMessageChunk
+        local function chunk(message_id, text, parent_tool_use_id)
+            return {
+                sessionUpdate = "agent_message_chunk",
+                content = { type = "text", text = text },
+                messageId = message_id,
+                _meta = parent_tool_use_id and {
+                    claudeCode = { parentToolUseId = parent_tool_use_id },
+                } or nil,
+            }
+        end
+
+        --- `{ text, starts_response }` of each call a writer received.
+        --- @param write TestSpy
+        --- @return { [1]: string, [2]: boolean }[]
+        local function writes(write)
+            local out = {}
+            for _, call in ipairs(write.calls) do
+                table.insert(out, { call[2].content.text, call[3] })
+            end
+            return out
+        end
+
+        it("marks the first text of a new response", function()
+            session:_on_session_update(chunk("X", "reviewer."))
+            session:_on_session_update(chunk(vim.NIL, " more"))
+            session:_on_session_update(chunk("Y", "\n"))
+            session:_on_session_update(chunk("Y", "Next"))
+
+            assert.same({
+                { "reviewer.", false },
+                { " more", false },
+                { "Next", true },
+            }, writes(main_write))
+            assert.equal(
+                "reviewer. more\n\nNext",
+                session.chat_history.messages[1].text
+            )
+        end)
+
+        it("leaves the update it was given unchanged", function()
+            session:_on_session_update(chunk("X", "a"))
+            local update = chunk("Y", "\nb")
+
+            session:_on_session_update(update)
+
+            assert.equal("\nb", update.content.text)
+        end)
+
+        it("tracks subagent responses apart from the main agent's", function()
+            session:_on_session_update(chunk("X", "main"))
+            session:_on_session_update(chunk("S1", "sub", "task"))
+            session:_on_session_update(chunk("S2", "next", "task"))
+
+            assert.same({ { "main", false } }, writes(main_write))
+            assert.same(
+                { { "sub", false }, { "next", true } },
+                writes(subagent_write)
+            )
+            assert.equal(1, #session.chat_history.messages)
+        end)
+    end)
 end)

@@ -1,6 +1,7 @@
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
+local TextWrap = require("agentic.utils.text_wrap")
 
 --- @class agentic.ui.ChatHistory.UserMessage
 --- @field type "user"
@@ -110,10 +111,16 @@ end
 
 --- Append text to the last agent or thought message, or create a new one
 --- @param msg { type: "agent"|"thought", text: string, provider_name: string  }
-function ChatHistory:append_agent_text(msg)
+--- @param starts_response boolean|nil `msg.text` starts a new model response, so a merge into the last message puts a blank line before it
+function ChatHistory:append_agent_text(msg, starts_response)
     local last = self.messages[#self.messages]
     if last and last.type == msg.type then
-        last.text = last.text .. msg.text
+        local text = msg.text
+        if starts_response then
+            local _, trailing_newlines = last.text:match("%s*$"):gsub("\n", "")
+            text = TextWrap.paragraph_break(text, trailing_newlines)
+        end
+        last.text = last.text .. text
     else
         table.insert(self.messages, msg)
     end

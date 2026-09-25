@@ -400,6 +400,17 @@ block itself stays in the main chat. The subagents split auto-opens on first
 subagent activity of a turn. claude-agent-acp only — untagged providers never
 populate the second buffer. See `notes/feature-subagent-separation.md`.
 
+### Response boundaries come from `messageId` (claude-agent-acp)
+
+Message and thought chunks carry `update.messageId`, the API id of the model
+response they belong to: `currentStreamMessageId` (set on each streamed
+`message_start`) for main-agent chunks, `messageIdForGrouping(message)` for
+subagent chunks and consolidated remainders. System output (`/usage`, refusal
+text, the result fallback) carries none. No end-of-message event reaches the
+client, so a response's end is only visible as the next chunk's id change —
+which `ResponseBoundary` turns into a blank line inside an open prose run.
+Other providers are unverified; without the field, nothing changes.
+
 ### Permission optionId is opaque
 
 `request.options[].optionId` is a provider-assigned opaque string (e.g.

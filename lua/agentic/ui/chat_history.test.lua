@@ -200,6 +200,44 @@ describe("ChatHistory", function()
                 assert.equal("agent", history.messages[1].type)
                 assert.equal("thought", history.messages[2].type)
             end)
+
+            --- Text of one agent message built from `first` then `second`.
+            --- @param first string
+            --- @param second string
+            --- @param starts_response boolean|nil Passed with `second`
+            --- @return string
+            local function merged(first, second, starts_response)
+                local history = ChatHistory:new()
+                history:append_agent_text({
+                    type = "agent",
+                    text = first,
+                    provider_name = "test-provider",
+                })
+                history:append_agent_text({
+                    type = "agent",
+                    text = second,
+                    provider_name = "test-provider",
+                }, starts_response)
+                assert.equal(1, #history.messages)
+                return history.messages[1].text
+            end
+
+            it("separates a new response by a blank line", function()
+                assert.equal("one.\n\nTwo", merged("one.", "Two", true))
+            end)
+
+            it("joins directly within one response", function()
+                assert.equal("one.Two", merged("one.", "Two", false))
+                assert.equal("one.Two", merged("one.", "Two", nil))
+            end)
+
+            it("adds nothing after a blank line", function()
+                assert.equal("one.\n\nTwo", merged("one.\n\n", "Two", true))
+                assert.equal(
+                    "one.\n  \nTwo",
+                    merged("one.\n  \n", "Two", true)
+                )
+            end)
         end)
 
         describe("update_tool_call", function()

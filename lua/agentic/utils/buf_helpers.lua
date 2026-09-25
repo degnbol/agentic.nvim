@@ -129,6 +129,22 @@ function BufHelpers.is_buffer_empty(bufnr)
     return true
 end
 
+--- Count the blank (whitespace-only) rows that end a buffer.
+--- @param bufnr integer
+--- @param max integer Stop counting at this many
+--- @return integer count Blank rows ending the buffer, at most `max`
+function BufHelpers.trailing_blank_rows(bufnr, max)
+    local rows = vim.api.nvim_buf_get_lines(bufnr, -max - 1, -1, false)
+    local count = 0
+    for i = #rows, 1, -1 do
+        if count == max or rows[i]:match("%S") then
+            break
+        end
+        count = count + 1
+    end
+    return count
+end
+
 function BufHelpers.feed_ESC_key()
     vim.api.nvim_feedkeys(
         vim.api.nvim_replace_termcodes("<Esc>", true, false, true),

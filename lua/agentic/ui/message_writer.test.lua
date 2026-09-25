@@ -4922,4 +4922,76 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(0, #dim_extmarks())
         end)
     end)
+
+    describe("response starts", function()
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("separates a new response by a blank line", function()
+            writer:write_message_chunk(make_message_update("reviewer."))
+            writer:write_message_chunk(
+                make_message_update("# Code review"),
+                true
+            )
+
+            assert.same({ "reviewer.", "", "# Code review" }, buffer_lines())
+        end)
+
+        it("completes a blank line after one newline", function()
+            writer:write_message_chunk(make_message_update("reviewer.\n"))
+            writer:write_message_chunk(
+                make_message_update("# Code review"),
+                true
+            )
+
+            assert.same({ "reviewer.", "", "# Code review" }, buffer_lines())
+        end)
+
+        it("adds nothing after a whitespace-only row", function()
+            writer:write_message_chunk(make_message_update("reviewer.\n  \n"))
+            writer:write_message_chunk(
+                make_message_update("# Code review"),
+                true
+            )
+
+            assert.equal(3, #buffer_lines())
+        end)
+
+        it("adds nothing after a blank line", function()
+            writer:write_message_chunk(make_message_update("reviewer.\n\n"))
+            writer:write_message_chunk(
+                make_message_update("# Code review"),
+                true
+            )
+
+            assert.same({ "reviewer.", "", "# Code review" }, buffer_lines())
+        end)
+
+        it("adds nothing at the first chunk of a run", function()
+            writer:write_message_chunk(
+                make_message_update("# Code review"),
+                true
+            )
+
+            assert.same({ "# Code review" }, buffer_lines())
+        end)
+
+        it("leaves the break after a tool call to the section close", function()
+            writer:write_message_chunk(make_message_update("reviewer."))
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(
+                make_message_update("# Code review"),
+                true
+            )
+
+            local lines = buffer_lines()
+            assert.same(
+                { "###", "", "# Code review" },
+                { unpack(lines, #lines - 2) }
+            )
+        end)
+    end)
 end)

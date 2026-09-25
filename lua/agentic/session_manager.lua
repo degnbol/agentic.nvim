@@ -17,6 +17,7 @@ local HookRecordReader = require("agentic.hook_record_reader")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
+local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local Theme = require("agentic.theme")
@@ -80,6 +81,7 @@ end
 --- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
+--- @field _response_boundaries { main: agentic.acp.ResponseBoundary, subagent: agentic.acp.ResponseBoundary } One per destination writer, so a break separates responses adjacent in one buffer, including two subagents' responses in the subagents buffer. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field _hook_records agentic.HookRecordReader Tail of the CLI transcript for hook activity the ACP feed drops. Replaced alongside `chat_history` wherever the ACP session is torn down, so its path and offset cannot outlive the session they belong to
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
@@ -303,6 +305,8 @@ function SessionManager:new(tab_page_id)
 
     self.chat_history = ChatHistory:new()
     self._hook_records = HookRecordReader:new()
+    self._response_boundaries =
+        { main = ResponseBoundary:new(), subagent = ResponseBoundary:new() }
 
     self.widget = ChatWidget:new(tab_page_id, function(input_text, opts)
         -- A submit is the user acting: their attention is back on the chat and
@@ -477,6 +481,31 @@ local function is_subagent_update(update)
         and update._meta.claudeCode.parentToolUseId ~= nil
 end
 
+--- Run a message chunk's text through `boundary`. `update` is not modified.
+--- @param boundary agentic.acp.ResponseBoundary
+--- @param update agentic.acp.AgentMessageChunk
+--- @return agentic.acp.AgentMessageChunk|nil chunk `update` with the filtered text, nil when no text is left
+--- @return boolean starts_response The chunk is the first text of a new response
+local function filter_chunk(boundary, update)
+    local content = update.content
+    if not (content and content.text) then
+        return update, false
+    end
+    local message_id = update.messageId
+    if message_id == vim.NIL then
+        message_id = nil
+    end
+    --- @cast message_id string|nil
+    local text, starts_response = boundary:filter(message_id, content.text)
+    if text == "" then
+        return nil, false
+    end
+    local chunk = vim.tbl_extend("force", update, {
+        content = vim.tbl_extend("force", content, { text = text }),
+    }) --[[@as agentic.acp.AgentMessageChunk]]
+    return chunk, starts_response
+end
+
 --- Reveal the subagents split on first subagent activity of the turn. Opens at
 --- most once per turn so a manual close is not undone by later chunks.
 function SessionManager:_ensure_subagent_window()
@@ -573,22 +602,31 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        if is_subagent_update(update) then
+        local is_subagent = is_subagent_update(update)
+        local boundaries = self._response_boundaries
+        local chunk, starts_response = filter_chunk(
+            is_subagent and boundaries.subagent or boundaries.main,
+            update
+        )
+        if not chunk then
+            return
+        end
+        if is_subagent then
             -- Subagent prose: route to the subagents buffer, not chat history
             -- (interim subagent detail is not persisted — see the feature note).
             self:_ensure_subagent_window()
-            self.subagent_writer:write_message_chunk(update)
+            self.subagent_writer:write_message_chunk(chunk, starts_response)
             self.subagent_status_indicator:reposition()
         else
-            self.message_writer:write_message_chunk(update)
+            self.message_writer:write_message_chunk(chunk, starts_response)
             self.status_indicator:start("generating")
 
-            if update.content and update.content.text then
+            if chunk.content and chunk.content.text then
                 self.chat_history:append_agent_text({
                     type = "agent",
-                    text = update.content.text,
+                    text = chunk.content.text,
                     provider_name = self.agent.provider_config.name,
-                })
+                }, starts_response)
             end
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
