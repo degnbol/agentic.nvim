@@ -298,6 +298,8 @@ function M._make_handlers()
             if method == "initialize" then
                 callback(nil, {
                     capabilities = {
+                        -- Columns are Lua string (byte) offsets throughout.
+                        positionEncoding = "utf-8",
                         completionProvider = {
                             triggerCharacters = { "/", "@" },
                             resolveProvider = false,

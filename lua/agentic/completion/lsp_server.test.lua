@@ -1,6 +1,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
+local Child = require("tests.helpers.child")
 local LspServer = require("agentic.completion.lsp_server")
 
 --- Helper: call the textDocument/completion handler directly
@@ -474,6 +475,87 @@ describe("agentic.completion.LspServer", function()
             local result = complete(handlers, bufnr, 0, 14, "/")
 
             assert.equal(0, #result.items)
+        end)
+    end)
+
+    -- The client converts positions and ranges with its offset encoding,
+    -- which calling the handler directly skips. `buf_request_sync` would
+    -- `vim.wait` and let mini.test re-enter sibling cases, so these run in a
+    -- child neovim.
+    describe("through the LSP client", function()
+        local child = Child.new()
+
+        before_each(function()
+            child.setup()
+            child.lua([[
+                local input = vim.api.nvim_get_current_buf()
+                local chat = vim.api.nvim_create_buf(false, true)
+                vim.api.nvim_buf_set_lines(chat, 0, -1, false, {
+                    "the structure is here",
+                })
+                require("agentic.states").setChatBufnr(input, chat)
+                require("agentic.completion.lsp_server").attach(input)
+
+                --- Request completion at the end of `text` and apply the
+                --- "structure" item; the result lands in `_G.completed_line`.
+                --- @param text string
+                _G.complete_structure = function(text)
+                    vim.api.nvim_buf_set_lines(input, 0, -1, false, { text })
+                    local client = vim.lsp.get_clients({ bufnr = input })[1]
+                    local params = {
+                        textDocument = { uri = vim.uri_from_bufnr(input) },
+                        position = {
+                            line = 0,
+                            character = vim.str_utfindex(
+                                text,
+                                client.offset_encoding
+                            ),
+                        },
+                    }
+                    client:request(
+                        "textDocument/completion",
+                        params,
+                        function(_err, result)
+                            _G.completed_line = vim.NIL
+                            for _, item in ipairs(result.items) do
+                                if item.label == "structure" then
+                                    vim.lsp.util.apply_text_edits(
+                                        { item.textEdit },
+                                        input,
+                                        client.offset_encoding
+                                    )
+                                    _G.completed_line = vim.api.nvim_buf_get_lines(
+                                        input, 0, 1, false
+                                    )[1]
+                                end
+                            end
+                        end,
+                        input
+                    )
+                end
+            ]])
+        end)
+
+        after_each(child.stop)
+
+        --- @param text string
+        --- @return string|nil line
+        local function complete_structure(text)
+            child.lua("_G.complete_structure(...)", { text })
+            for _ = 1, 50 do
+                if child.lua_get("_G.completed_line ~= nil") then
+                    break
+                end
+                vim.uv.sleep(10)
+            end
+            return child.lua_get("_G.completed_line")
+        end
+
+        it("replaces the typed word after multi-byte characters", function()
+            assert.equal(
+                "see → a — structure",
+                complete_structure("see → a — stru")
+            )
         end)
     end)
 
