@@ -881,7 +881,8 @@ kind-arrays wholesale, and `vim.NIL` disables the bundled entry. >lua
 
 While the agent streams, the chat follows the trailing edge of the buffer.
 Scrolling the chat window away from the bottom stops the following until the
-view reaches the bottom again. `<localLeader>a` toggles auto-scroll off and
+view reaches the bottom again or a prompt is submitted. Prompts sent from the
+queue do not resume it. `<localLeader>a` toggles auto-scroll off and
 on; `<localLeader>G` returns the chat and the subagent split to the bottom
 without moving focus.
 

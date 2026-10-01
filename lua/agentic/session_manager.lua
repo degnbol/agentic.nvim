@@ -309,13 +309,7 @@ function SessionManager:new(tab_page_id)
         { main = ResponseBoundary:new(), subagent = ResponseBoundary:new() }
 
     self.widget = ChatWidget:new(tab_page_id, function(input_text, opts)
-        -- A submit is the user acting: their attention is back on the chat and
-        -- last turn's todo panel is stale. Answered here rather than deeper in
-        -- the dispatch path, which the automatic drains also reach — one of
-        -- those clears the `[done]` badge in the tick it was set, and the user
-        -- never sees it.
-        self.widget:clear_unread_badge()
-        self.todo_list:close_if_all_completed()
+        self:on_user_submit()
         return self:_handle_input_submit(input_text, opts)
     end)
 
@@ -2130,6 +2124,17 @@ function SessionManager:_submit_defer_reason(prompt)
         return "not_ready"
     end
     return nil
+end
+
+--- Answer a prompt the user submitted: their attention is back on the chat, so
+--- the `[done]` badge clears, last turn's finished todo panel closes, and a
+--- manual-scroll pause lifts. Call it from the user's submit, never from the
+--- dispatch path: the automatic queue drains reach that too, and one of them
+--- would clear the badge in the tick it was set, or jump a reader to the bottom.
+function SessionManager:on_user_submit()
+    self.widget:clear_unread_badge()
+    self.todo_list:close_if_all_completed()
+    self.message_writer:resume_auto_scroll()
 end
 
 --- @class agentic.SessionManager.SubmitOpts

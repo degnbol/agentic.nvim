@@ -144,7 +144,7 @@ end
 --- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
 --- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
---- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom). Survives turn boundaries — the user has to opt back in explicitly.
+--- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom) or submits a prompt (`resume_auto_scroll`). Survives turn boundaries — the user has to opt back in explicitly.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
@@ -292,6 +292,14 @@ function MessageWriter:on_user_scroll()
         self._auto_scroll_paused = true
         self:_release_prose_pin()
     end
+end
+
+--- Lift a manual-scroll pause and scroll the chat to the bottom now. The
+--- scroll is not left to the next write, whose at-bottom check would still
+--- see the paused viewport.
+function MessageWriter:resume_auto_scroll()
+    self._auto_scroll_paused = false
+    self:_scroll_now(self.bufnr)
 end
 
 --- Drop the prose-pin anchor so the next auto-scroll falls back to the

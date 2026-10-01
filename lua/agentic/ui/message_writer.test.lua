@@ -2074,6 +2074,22 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_false(writer._auto_scroll_paused)
         end)
 
+        it("resume_auto_scroll unpauses and scrolls to the bottom", function()
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+            writer:on_user_scroll()
+            assert.is_true(writer._auto_scroll_paused)
+
+            writer:resume_auto_scroll()
+
+            assert.is_false(writer._auto_scroll_paused)
+            assert.equal(vim.fn.getwininfo(winid)[1].botline, 50)
+        end)
+
         it(
             "ignores on_user_scroll while _suppress_pin_release is set",
             function()

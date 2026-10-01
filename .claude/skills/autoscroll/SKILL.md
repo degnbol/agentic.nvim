@@ -22,8 +22,11 @@ Auto-scroll follows streaming content under two independent gates:
 
 1. **Manual-scroll pause.** When the user scrolls away from the bottom we
    stop following — otherwise auto-scroll would yank them back while they
-   read earlier content. The signal that the user wants to follow again is
-   reaching the bottom (e.g. `G`).
+   read earlier content. The signals that the user wants to follow again are
+   reaching the bottom (e.g. `G`) and submitting a prompt
+   (`SessionManager:on_user_submit` → `resume_auto_scroll`, which also
+   scrolls to the bottom). Queue drains never resume: they are not user
+   input.
 2. **Prose pin.** A pin caps the viewport at the start of the current
    prose run so the response can be read from the top. The pin is set on
    each prose run and released by the next non-prose write to chat. In
@@ -50,7 +53,7 @@ return to the bottom.
 | Field | Set by | Cleared by |
 |---|---|---|
 | `_prose_anchor_line` | First prose chunk of a run, while not paused | Turn boundaries (`write_tool_call_block`, `append_separator`, `write_error_message`, `reset_turn_state`) and user-scroll-away (`on_user_scroll` → `_release_prose_pin`) |
-| `_auto_scroll_paused` | `on_user_scroll` when user is not at bottom | `on_user_scroll` when user reaches bottom — *only*. Survives turn boundaries |
+| `_auto_scroll_paused` | `on_user_scroll` when user is not at bottom | `on_user_scroll` when user reaches bottom, and `resume_auto_scroll` on a user submit. Survives turn boundaries |
 | `_suppress_pin_release` | `_with_modifiable_suppressed` and the deferred scroll callback | Same scope — wraps each synchronous write/scroll |
 | `_should_auto_scroll` | `_auto_scroll`, before the write — the frozen scroll *verdict* | Whichever site executes the scroll — `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never on the callback's skip branch (fold op pending), so the verdict rides along to flush or the BufWinEnter retry — except while ops are held for insert mode (`_fold_retry_armed`), where the callback scrolls as usual rather than wait out the insert session |
 | `_scroll_callback_queued` | `_auto_scroll` — a callback is queued this tick | The scheduled callback (per-tick coalescing guard) |
