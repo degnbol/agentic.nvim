@@ -512,6 +512,36 @@ local function redirect_is_truncate(fr)
     return false
 end
 
+--- @class agentic.utils.ShellParse.Heredoc
+--- @field text string the body as written, expansions unexpanded
+--- @field dynamic boolean the body contains an expansion
+
+--- The body of a `heredoc_redirect`.
+--- @param hr TSNode heredoc_redirect node
+--- @param src string
+--- @return agentic.utils.ShellParse.Heredoc heredoc
+local function heredoc_text(hr, src)
+    local body, delimiter
+    for child in hr:iter_children() do
+        if child:type() == "heredoc_body" then
+            body = child
+        elseif child:type() == "heredoc_end" then
+            delimiter = child
+        end
+    end
+    if not body or not delimiter then
+        return { text = "", dynamic = false }
+    end
+    local _, _, body_start = body:start()
+    local _, _, delimiter_start = delimiter:start()
+    -- Up to the delimiter, not the `heredoc_body` end: the node omits the final
+    -- newline when the body ends in an expansion.
+    return {
+        text = src:sub(body_start + 1, delimiter_start),
+        dynamic = body:named_child_count() > 0,
+    }
+end
+
 --- The verbatim text of a `heredoc_redirect`'s body, or nil if the body carries
 --- an expansion (`<<EOF` with `$var`/`$(…)`), which the shell runs at *write*
 --- time and must therefore bail. A quoted `<<'EOF'` always parses as pure text
@@ -520,15 +550,11 @@ end
 --- @param src string
 --- @return string|nil
 local function heredoc_pure_body(hr, src)
-    for child in hr:iter_children() do
-        if child:type() == "heredoc_body" then
-            if child:named_child_count() > 0 then
-                return nil
-            end
-            return vim.treesitter.get_node_text(child, src)
-        end
+    local heredoc = heredoc_text(hr, src)
+    if heredoc.dynamic then
+        return nil
     end
-    return ""
+    return heredoc.text
 end
 
 --- True iff the command node is exactly `cat` with no arguments or env-prefix —
@@ -968,6 +994,42 @@ local EXEC_WRAPPERS = {
     },
 }
 
+--- `EXEC_WRAPPERS` for reporting what runs rather than deciding approval: `uv
+--- run` also skips its code-injecting options (`--with`, `--python`, ...),
+--- which change the environment but not which command runs. `--script`/`-s`
+--- and `--directory` still stop the skip.
+--- @type table<string, agentic.utils.ShellParse.WrapperSpec>
+local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
+    uv = vim.tbl_extend("force", EXEC_WRAPPERS.uv, {
+        value_opts = {
+            "--with",
+            "-w",
+            "--with-requirements",
+            "--with-editable",
+            "--python",
+            "-p",
+            "--project",
+        },
+        flag_opts = {
+            "--no-project",
+            "--quiet",
+            "-q",
+            "--no-sync",
+            "--frozen",
+            "--locked",
+            "--offline",
+            "--isolated",
+        },
+        attached = {
+            "^%-%-with=",
+            "^%-%-python=",
+            "^%-%-project=",
+            "^%-%-with%-requirements=",
+            "^%-%-with%-editable=",
+        },
+    }),
+})
+
 --- Consume an exec-wrapper's own operands per its spec and return the 1-based
 --- index into `args` where the inner command begins, or nil to bail.
 ---
@@ -1040,12 +1102,22 @@ end
 --- @param arg_nodes TSNode[] the arg token nodes, parallel to `args`
 --- @param args_dynamic boolean[]
 --- @param src string
+--- @param wrappers table<string, agentic.utils.ShellParse.WrapperSpec>|nil
+---        exec-wrapper specs, default `EXEC_WRAPPERS`
 --- @return string|nil inner
 --- @return agentic.utils.ShellParse.Origin|nil origin
 --- @return boolean writes whether the prefix has a recoverable side effect of its
 ---         own (the wrapper's `writes` flag); false for shells (`-c` bodies are
 ---         vetted command-by-command in the recursion).
-local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+local function inner_source(
+    cmd_name,
+    node,
+    args,
+    arg_nodes,
+    args_dynamic,
+    src,
+    wrappers
+)
     if SHELL_C_COMMANDS[cmd_name] then
         for i, arg in ipairs(args) do
             if arg:match("^%-[a-zA-Z]*c$") then
@@ -1073,7 +1145,7 @@ local function inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
         return nil, nil, false
     end
 
-    local spec = EXEC_WRAPPERS[cmd_name]
+    local spec = (wrappers or EXEC_WRAPPERS)[cmd_name]
     if not spec then
         return nil, nil, false
     end
@@ -1175,8 +1247,80 @@ local function classify_token(tok, flags, args)
     end
 end
 
+--- @class agentic.utils.ShellParse.Shell
+--- @field cwd? string|false current directory: nil = the caller's cwd, false = unknown
+
+--- Map each `command` that reads a heredoc on stdin to that heredoc. Only the
+--- last simple command of a redirected statement reads it. A heredoc on a
+--- non-zero fd, or on a statement ending in anything but a command (compound
+--- statement, subshell, `negated_command`), has no reader.
+--- @param root TSNode
+--- @param src string
+--- @return table<string, agentic.utils.ShellParse.Heredoc> heredocs keyed by the
+---         reading command's `node:id()`
+local function heredoc_targets(root, src)
+    --- @type table<string, agentic.utils.ShellParse.Heredoc>
+    local targets = {}
+    local function visit(node)
+        if node:type() == "redirected_statement" then
+            -- The grammar hangs the heredoc on the whole list or pipeline, but
+            -- the shell feeds it to the last command.
+            local target = node:field("body")[1]
+            while
+                target
+                and (target:type() == "list" or target:type() == "pipeline")
+            do
+                target = target:named_child(target:named_child_count() - 1)
+            end
+            if target and target:type() == "command" then
+                for _, hr in ipairs(node:field("redirect")) do
+                    local fd = hr:field("descriptor")[1]
+                    if
+                        hr:type() == "heredoc_redirect"
+                        and (
+                            not fd
+                            or vim.treesitter.get_node_text(fd, src) == "0"
+                        )
+                    then
+                        targets[target:id()] = heredoc_text(hr, src)
+                    end
+                end
+            end
+        end
+        for child in node:iter_children() do
+            visit(child)
+        end
+    end
+    visit(root)
+    return targets
+end
+
+--- The directory a shell is in after `cd` with the given operands. No
+--- normalisation (`/a/../b` stays as is, `~` stays unexpanded).
+--- @param cwd string|false|nil directory before the `cd`: nil = the caller's
+---        cwd, false = unknown
+--- @param args string[] the `cd` operands
+--- @param args_dynamic boolean[] parallel to `args`
+--- @return string|false|nil cwd same encoding as the `cwd` parameter
+local function cwd_after_cd(cwd, args, args_dynamic)
+    if #args == 0 then
+        return "~"
+    end
+    local dir = args[1]
+    if #args > 1 or args_dynamic[1] or dir == "" or dir:sub(1, 1) == "-" then
+        return false
+    end
+    if dir:match("^[/~]") or cwd == nil then
+        return dir
+    end
+    if cwd == false then
+        return false
+    end
+    return cwd .. "/" .. dir
+end
+
 --- Forward declaration — `collect` and `collect_command` are mutually recursive.
---- @type fun(node: TSNode, src: string, out: agentic.ShellCommand[], depth: integer): boolean
+--- @type fun(node: TSNode, src: string, out: agentic.ShellCommand[], depth: integer, shell: agentic.utils.ShellParse.Shell, stdin_of: table<string, agentic.utils.ShellParse.Heredoc>): boolean
 local collect
 
 --- Process a `command` node: resolve its name, unwrap transparent prefixes
@@ -1188,8 +1332,12 @@ local collect
 --- @param src string
 --- @param out agentic.ShellCommand[]
 --- @param depth integer
+--- @param shell agentic.utils.ShellParse.Shell state of the shell running
+---        `node`, updated in place by `cd`, `pushd` and `popd`
+--- @param stdin_of table<string, agentic.utils.ShellParse.Heredoc> the
+---        heredoc each `command` in `src` reads on stdin, keyed by `node:id()`
 --- @return boolean ok
-local function collect_command(node, src, out, depth)
+local function collect_command(node, src, out, depth, shell, stdin_of)
     local name_node
     --- @type string[]
     local args = {}
@@ -1254,8 +1402,15 @@ local function collect_command(node, src, out, depth)
     -- Transparent prefix: re-parse and flatten the inner instead of emitting the
     -- wrapper/shell itself, so `timeout 5 rm -f x` and `zsh -c 'rm -f x'` both
     -- yield a record for `rm`.
-    local inner =
-        inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
+    local inner = inner_source(
+        cmd_name,
+        node,
+        args,
+        arg_nodes,
+        args_dynamic,
+        src,
+        VISIBLE_WRAPPERS
+    )
     if inner and inner ~= "" then
         if depth >= NESTED_MAX_DEPTH then
             return false
@@ -1264,7 +1419,29 @@ local function collect_command(node, src, out, depth)
         if not root then
             return false
         end
-        return collect(root, inner, out, depth + 1)
+        local inner_stdin_of = heredoc_targets(root, inner)
+        -- The wrapper's stdin reaches the inner, except xargs' (read as its
+        -- argument list).
+        local inner_cmd = root:named_child(0)
+        if
+            stdin_of[node:id()]
+            and not SHELL_C_COMMANDS[cmd_name]
+            and cmd_name ~= "xargs"
+            and root:named_child_count() == 1
+            and inner_cmd
+            and inner_cmd:type() == "command"
+        then
+            inner_stdin_of[inner_cmd:id()] = stdin_of[node:id()]
+        end
+        -- The inner runs in a process of its own, so its `cd` does not leak out.
+        return collect(
+            root,
+            inner,
+            out,
+            depth + 1,
+            { cwd = shell.cwd },
+            inner_stdin_of
+        )
     end
 
     --- @type agentic.ShellCommand
@@ -1274,6 +1451,8 @@ local function collect_command(node, src, out, depth)
         args = {},
         argv = args,
         argv_dynamic = args_dynamic,
+        stdin = stdin_of[node:id()],
+        cwd = shell.cwd,
     }
     for _, tok in ipairs(args) do
         classify_token(tok, rec.flags, rec.args)
@@ -1281,29 +1460,75 @@ local function collect_command(node, src, out, depth)
     table.insert(out, rec)
 
     for _, sub in ipairs(to_flatten) do
-        if not collect(sub, src, out, depth) then
+        if not collect(sub, src, out, depth, shell, stdin_of) then
             return false
         end
     end
+
+    if cmd_name == "cd" then
+        shell.cwd = cwd_after_cd(shell.cwd, args, args_dynamic)
+    elseif cmd_name == "pushd" or cmd_name == "popd" then
+        shell.cwd = false
+    end
     return true
+end
+
+--- Node types whose commands run in a child shell, which gets a copy of the
+--- parent's state (its own `cd` does not leak out). A function body runs at
+--- call time, not where it is defined, so it is walked the same way.
+local CHILD_SHELL_TYPES = {
+    subshell = true,
+    command_substitution = true,
+    process_substitution = true,
+    function_definition = true,
+}
+
+--- Operators that run the statement before them in the background, in a child
+--- shell. The grammar has no node for the backgrounded statement, only this
+--- trailing sibling.
+local BACKGROUND_OPERATORS = { ["&"] = true, ["&!"] = true, ["&|"] = true }
+
+--- Whether `child` of `parent` runs in a child shell of its own: a background
+--- statement, or (in zsh) any pipeline element but the last.
+--- @param parent TSNode
+--- @param child TSNode
+--- @return boolean
+local function runs_in_child_shell(parent, child)
+    local next_sibling = child:next_sibling()
+    if next_sibling and BACKGROUND_OPERATORS[next_sibling:type()] then
+        return true
+    end
+    return parent:type() == "pipeline" and child:next_named_sibling() ~= nil
 end
 
 --- @param node TSNode
 --- @param src string
 --- @param out agentic.ShellCommand[]
 --- @param depth integer
+--- @param shell agentic.utils.ShellParse.Shell state of the shell running
+---        `node`, updated in place by its directory changes outside child
+---        shells
+--- @param stdin_of table<string, agentic.utils.ShellParse.Heredoc> the
+---        heredoc each `command` in `src` reads on stdin, keyed by `node:id()`
 --- @return boolean ok
-function collect(node, src, out, depth)
-    if node:type() == "command" then
-        return collect_command(node, src, out, depth)
+function collect(node, src, out, depth, shell, stdin_of)
+    local t = node:type()
+    if t == "command" then
+        return collect_command(node, src, out, depth, shell, stdin_of)
+    end
+    if CHILD_SHELL_TYPES[t] then
+        shell = { cwd = shell.cwd }
     end
     -- Every other node (containers, pipelines, control flow, redirected
     -- statements, assignments, substitutions): recurse named children. A
     -- redirect target / env prefix does not hide a command, so we never bail
     -- here — only `collect_command` decides safety.
-    for child in node:iter_children() do
-        if child:named() and child:type() ~= "comment" then
-            if not collect(child, src, out, depth) then
+    for _, child in ipairs(node:named_children()) do
+        if child:type() ~= "comment" then
+            local child_shell = runs_in_child_shell(node, child)
+                    and { cwd = shell.cwd }
+                or shell
+            if not collect(child, src, out, depth, child_shell, stdin_of) then
                 return false
             end
         end
@@ -1317,6 +1542,8 @@ end
 --- @field args string[] positional arguments (literal text where resolvable)
 --- @field argv string[] every token after the name in source order, flags unsplit (literal text where resolvable)
 --- @field argv_dynamic boolean[] parallel to `argv`: true where the token is not a static literal (expansion, substitution, xargs' stand-in `$__xargs_stdin`)
+--- @field stdin? agentic.utils.ShellParse.Heredoc the heredoc this command reads on stdin
+--- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell. Not normalised, and relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
 
 --- Extract the flat list of statically-resolvable commands a shell string would
 --- run — across pipelines, control flow, exec-wrappers, inline `-c` bodies, and
@@ -1344,7 +1571,7 @@ function M.extract_commands(src)
     end
     --- @type agentic.ShellCommand[]
     local out = {}
-    if not collect(root, src, out, 0) then
+    if not collect(root, src, out, 0, {}, heredoc_targets(root, src)) then
         return nil
     end
     return out

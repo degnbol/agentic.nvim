@@ -118,17 +118,23 @@ describe("ShellParse.extract_commands", function()
             )
         end)
 
-        it("does not unwrap `uv run` with a code-injecting option", function()
-            -- `--with=evil` could install arbitrary code; the wrapper bails on
-            -- any option, leaving `uv` to match its own (non-`run`) allow rules.
+        it("unwraps `uv run` with a code-injecting option", function()
             assert.same(
-                { "uv --with=evil run basedpyright probe.py" },
+                { "basedpyright probe.py" },
                 render(
                     ShellParse.extract_commands(
                         "uv run --with=evil basedpyright probe.py"
                     )
                 )
             )
+            assert.same(
+                { "rm -f y" },
+                render(ShellParse.extract_commands("uv run --with x rm -f y"))
+            )
+        end)
+
+        it("does not unwrap `uv run --script`", function()
+            assert.same({ "uv" }, names("uv run --script s.py"))
         end)
 
         it("leaves non-`run` uv subcommands as a leaf", function()
@@ -146,6 +152,155 @@ describe("ShellParse.extract_commands", function()
 
         it("recurses into loop bodies", function()
             assert.same({ "rm" }, names("for f in a b; do rm -f $f; done"))
+        end)
+    end)
+
+    describe("stdin and cwd", function()
+        --- The record named `name` in the extraction of `src`.
+        --- @param src string
+        --- @param name string
+        --- @return agentic.ShellCommand
+        local function record(src, name)
+            for _, r in ipairs(ShellParse.extract_commands(src) or {}) do
+                if r.name == name then
+                    return r
+                end
+            end
+            error("no record " .. name .. " in " .. src)
+        end
+
+        local HEREDOC = { text = "x\n", dynamic = false }
+
+        it("feeds a statement's heredoc to its last command", function()
+            local src = "a && b <<EOF\nx\nEOF"
+            assert.equal(nil, record(src, "a").stdin)
+            assert.same(HEREDOC, record(src, "b").stdin)
+        end)
+
+        it("feeds a heredoc before `&&` to the command it follows", function()
+            local src = "a <<EOF && b\nx\nEOF"
+            assert.same(HEREDOC, record(src, "a").stdin)
+            assert.equal(nil, record(src, "b").stdin)
+        end)
+
+        it("marks an expanding heredoc body dynamic", function()
+            assert.same(
+                { text = "$x\n", dynamic = true },
+                record("python3 - <<EOF\n$x\nEOF", "python3").stdin
+            )
+        end)
+
+        it("feeds a pipeline's heredoc to its last command", function()
+            local src = "a | b <<EOF\nx\nEOF"
+            assert.equal(nil, record(src, "a").stdin)
+            assert.same(HEREDOC, record(src, "b").stdin)
+        end)
+
+        it("feeds a heredoc inside a -c body", function()
+            assert.same(
+                HEREDOC,
+                record("zsh -c 'python3 - <<EOF\nx\nEOF'", "python3").stdin
+            )
+        end)
+
+        it("gives no stdin to a non-command statement body", function()
+            for _, src in ipairs({
+                "{ python3 -; } <<EOF\nx\nEOF",
+                "(python3 -) <<EOF\nx\nEOF",
+                "! python3 - <<EOF\nx\nEOF",
+            }) do
+                assert.equal(nil, record(src, "python3").stdin)
+            end
+        end)
+
+        it("gives no stdin for a heredoc on another fd", function()
+            assert.equal(
+                nil,
+                record("python3 - 3<<EOF\nx\nEOF", "python3").stdin
+            )
+        end)
+
+        it("passes stdin through an exec-wrapper to its inner", function()
+            local src = "timeout 5 a && python3 - <<EOF\nx\nEOF"
+            assert.equal(nil, record(src, "a").stdin)
+            assert.same(HEREDOC, record(src, "python3").stdin)
+            assert.same(
+                HEREDOC,
+                record("timeout 5 python3 - <<EOF\nx\nEOF", "python3").stdin
+            )
+            assert.same(
+                HEREDOC,
+                record("uv run --no-project python - <<EOF\nx\nEOF", "python").stdin
+            )
+        end)
+
+        it("does not pass stdin through xargs", function()
+            assert.equal(
+                nil,
+                record("xargs python3 - <<EOF\nx\nEOF", "python3").stdin
+            )
+        end)
+
+        it("tracks literal cds in the same shell", function()
+            assert.equal(
+                "/a/b",
+                record("cd /a && cd b && python3", "python3").cwd
+            )
+            assert.equal("b", record("cd b && python3", "python3").cwd)
+            assert.equal(
+                "/x",
+                record("cd /x 2>/dev/null && python3", "python3").cwd
+            )
+            assert.equal("~", record("cd; python3", "python3").cwd)
+            assert.equal(
+                "/abs",
+                record("cd $D; cd /abs; python3", "python3").cwd
+            )
+            assert.equal("/x", record("echo | cd /x; python3", "python3").cwd)
+        end)
+
+        it("gives a child shell the parent's cwd", function()
+            assert.equal("/a", record("cd /a; zsh -c python3", "python3").cwd)
+            assert.equal("/a", record("cd /a; (python3)", "python3").cwd)
+        end)
+
+        it("walks a cd's own substitutions with the cwd before it", function()
+            assert.equal("/a", record("cd /a; cd $(cat f)", "cat").cwd)
+        end)
+
+        it("does not leak a child shell's cd", function()
+            for _, src in ipairs({
+                "(cd /x); python3",
+                "cd /x | cat; python3",
+                "zsh -c 'cd /x'; python3",
+                "f() { cd /x; }; python3",
+                "echo $(cd /x); python3",
+                "cat <(cd /x); python3",
+                "cd /x & python3",
+                "cd /x &! python3",
+                "cd /x &| python3",
+                "cd /x && b & python3",
+                "timeout 5 cd /x; python3",
+            }) do
+                assert.equal(nil, record(src, "python3").cwd)
+            end
+        end)
+
+        it("marks the cwd unknown after an unresolvable cd", function()
+            for _, src in ipairs({
+                "cd -; python3",
+                "cd $D; python3",
+                "cd a b; python3",
+                "cd ''; python3",
+                "pushd /x; python3",
+                "cd $D; cd rel; python3",
+            }) do
+                assert.equal(false, record(src, "python3").cwd)
+            end
+        end)
+
+        it("gives a cd record the cwd before it runs", function()
+            assert.equal(nil, record("cd /x", "cd").cwd)
         end)
     end)
 
@@ -202,13 +357,16 @@ describe("ShellParse.extract_commands", function()
             )
         end)
 
-        it("returns nil on a line continuation before an indented line", function()
-            -- zsh runs `find . -name x -delete`; the tree ends at the newline.
-            assert.equal(
-                nil,
-                ShellParse.extract_commands("find . -name\\\n  x -delete")
-            )
-        end)
+        it(
+            "returns nil on a line continuation before an indented line",
+            function()
+                -- zsh runs `find . -name x -delete`; the tree ends at the newline.
+                assert.equal(
+                    nil,
+                    ShellParse.extract_commands("find . -name\\\n  x -delete")
+                )
+            end
+        )
 
         it("keeps parsing backticks the tree represents", function()
             local rejected = {}

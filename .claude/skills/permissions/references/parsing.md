@@ -163,7 +163,9 @@ handling.
    shell `-c <body>` (`zsh`/`bash`/`sh`/`dash`) and the exec-wrappers `timeout`,
    `time`, `stdbuf`, `uv run`, `xargs`. `xargs` additionally appends a trailing
    dynamic stdin token, so a gated inner (`xargs sort` → `-o`) prompts while
-   read-only inners approve. Anonymous separators
+   read-only inners approve. `extract_commands` also unwraps `uv run` with its
+   code-injecting options (it reports what runs); the permission walk does
+   not. Anonymous separators
    (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
    (`for`, `while`, `until`) recurse: every body command must itself approve,
    and a `for` list item is a literal, glob, or a bare `command_substitution`
