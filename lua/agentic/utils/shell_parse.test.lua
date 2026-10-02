@@ -67,6 +67,67 @@ describe("ShellParse.extract_commands", function()
         end)
     end)
 
+    describe("argv is the delivered word", function()
+        it("removes an unquoted backslash", function()
+            assert.same(
+                { "-e", "x" },
+                ShellParse.extract_commands([[rg \-e x]])[1].argv
+            )
+        end)
+
+        it(
+            "removes double-quote escapes and keeps other backslashes",
+            function()
+                local recs = ShellParse.extract_commands(
+                    [[rg "a\$" "a\"b" "a\\b" "a\qb"]]
+                )
+                assert.same({ "a$", 'a"b', "a\\b", "a\\qb" }, recs[1].argv)
+            end
+        )
+
+        it("keeps a dollar before the closing quote", function()
+            assert.same(
+                { "a$", "$" },
+                ShellParse.extract_commands([[rg "a$" "$"]])[1].argv
+            )
+        end)
+
+        it("keeps the newline of a multi-line string", function()
+            assert.same(
+                { "a\nb" },
+                ShellParse.extract_commands('rg "a\nb"')[1].argv
+            )
+        end)
+
+        it("joins a word and an adjacent brace glob into one token", function()
+            local recs =
+                ShellParse.extract_commands("grep --include=*.{ts,tsx} foo")
+            assert.same({ "--include=*.{ts,tsx}", "foo" }, recs[1].argv)
+            assert.same({ true, false }, recs[1].argv_dynamic)
+        end)
+
+        it("names \\rm as rm", function()
+            assert.same({ "rm" }, names([[\rm x]]))
+        end)
+
+        it("unescapes a double-quoted -c body before re-parsing it", function()
+            local recs = ShellParse.extract_commands([[zsh -c "echo \"hi\""]])
+            assert.equal("echo", recs[1].name)
+            assert.same({ "hi" }, recs[1].argv)
+        end)
+
+        it("sees a backtick substitution in a double-quoted -c body", function()
+            assert.same({ "echo", "id" }, names([[zsh -c "echo \`id\`"]]))
+        end)
+
+        it("unescapes a double-quoted python -c body", function()
+            local recs = ShellParse.extract_commands(
+                [[python3 -c "open(\"/x\", \"w\")"]]
+            )
+            assert.same({ "-c", 'open("/x", "w")' }, recs[1].argv)
+        end)
+    end)
+
     describe("the headline false positive", function()
         it("does not see rm inside a quoted git commit message", function()
             -- the `rm -f` text is string content, not a command

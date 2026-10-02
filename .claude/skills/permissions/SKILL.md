@@ -130,6 +130,10 @@ it).
 
 - **Fail-closed parse.** A missing parser, or a tree that may not match what
   zsh runs → prompt (conditions: parsing.md § Pipeline, step 1).
+- **A static token is the delivered word.** Quote removal is applied
+  (`\-exec` is `-exec`, `"a\$"` is `a$`), and adjacent parts the grammar
+  splits (`--include=*.{ts,tsx}`) join into one dynamic token. Dynamic tokens
+  keep raw text (parsing.md § Arg token text).
 - **Reject-by-default walk.** Bails on dynamic command names and code-taking
   builtins (`eval`/`source`/`.`). Loops and `if`/`case` recurse into every
   branch — each body command must itself approve. A bare `command_substitution`

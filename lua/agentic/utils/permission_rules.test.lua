@@ -3496,6 +3496,49 @@ describe("PermissionRules", function()
                 end)
             end
         end)
+
+        -- Tokens are the word zsh delivers: escapes removed, so an escaped
+        -- flag meets the same gate as the plain one.
+        describe("delivered-word token text", function()
+            for _, cmd in ipairs({
+                [[find . \-exec rm {} \;]],
+                [[find . \-delete]],
+            }) do
+                it("rejects: " .. cmd, function()
+                    assert.is_true(PermissionRules.should_auto_reject(cmd))
+                end)
+            end
+
+            for _, cmd in ipairs({
+                [[sort \-o out f]],
+                [[zsh -c "echo \`rm -rf /tmp/zz\`"]],
+            }) do
+                it("does not approve: " .. cmd, function()
+                    assert.is_false(PermissionRules.should_auto_approve(cmd))
+                end)
+            end
+
+            it(
+                "approves a split brace glob as grep --include=x does",
+                function()
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "grep --include=x foo src"
+                        )
+                    )
+                    assert.is_true(
+                        PermissionRules.should_auto_approve(
+                            "grep --include=*.{ts,tsx} foo src"
+                        )
+                    )
+                end
+            )
+
+            it("approves \\cat f as cat f", function()
+                assert.is_true(PermissionRules.should_auto_approve("cat f"))
+                assert.is_true(PermissionRules.should_auto_approve([[\cat f]]))
+            end)
+        end)
     end)
 
     describe("tally_unapproved", function()

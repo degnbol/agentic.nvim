@@ -196,30 +196,111 @@ end
 
 -- ── Token extraction ─────────────────────────────────────────────────────────
 
+--- Quote removal for an unquoted word: `\<newline>` is removed and every other
+--- `\x` becomes `x`.
+--- @param text string source text of an unquoted word
+--- @return string word the word the shell delivers
+local function unescape_unquoted(text)
+    return (
+        text:gsub("\\(.)", function(c)
+            return c == "\n" and "" or c
+        end)
+    )
+end
+
+--- Quote removal for the inside of a double-quoted string: `\<newline>` is
+--- removed, `\$ \` \" \\` become the escaped character, and any other backslash
+--- is kept.
+--- @param text string source text between the double quotes
+--- @return string word the text the shell delivers
+local function unescape_double_quoted(text)
+    return (
+        text:gsub("\\(.)", function(c)
+            if c == "\n" then
+                return ""
+            end
+            if c:match('[$`"\\]') then
+                return c
+            end
+            return "\\" .. c
+        end)
+    )
+end
+
+--- Pattern for the bytes the grammar leaves outside the `string_content`
+--- children of a static double-quoted string: the `$` before a closing quote
+--- (`"a$"`) and the newline between the lines of a multi-line string.
+local STRING_GAP_BYTES = "^[$%s]*$"
+
+--- The text the shell delivers for a double-quoted `string` without
+--- expansions.
+--- @param node TSNode a `string` whose named children are all `string_content`
+--- @param src string
+--- @return string|nil text nil when the node is not `"`-delimited, or a byte
+---         outside the children is neither `$` nor whitespace (an unknown
+---         grammar gap, so fail closed)
+local function static_string_text(node, src)
+    local _, _, start_byte, _, _, end_byte = node:range(true)
+    if
+        src:sub(start_byte + 1, start_byte + 1) ~= '"'
+        or src:sub(end_byte, end_byte) ~= '"'
+    then
+        return nil
+    end
+    local gap_start = start_byte + 1
+    for c in node:iter_children() do
+        if c:named() then
+            local _, _, c_start, _, _, c_end = c:range(true)
+            if not src:sub(gap_start + 1, c_start):match(STRING_GAP_BYTES) then
+                return nil
+            end
+            gap_start = c_end
+        end
+    end
+    if not src:sub(gap_start + 1, end_byte - 1):match(STRING_GAP_BYTES) then
+        return nil
+    end
+    -- The source between the quotes, not the joined children: the grammar puts
+    -- no child over some delivered bytes (`"a$"`, `"$"`).
+    return unescape_double_quoted(src:sub(start_byte + 2, end_byte - 1))
+end
+
+--- Whether every named child of a `string` is `string_content` (true for an
+--- empty or `"$"` string, which has none).
+--- @param node TSNode a `string`
+--- @return boolean
+local function is_static_string(node)
+    for c in node:iter_children() do
+        if c:named() and c:type() ~= "string_content" then
+            return false
+        end
+    end
+    return true
+end
+
 --- Strict literal extraction: every byte of the returned string must be
 --- exactly what the shell delivers to the program. Returns nil if any subtree
---- contains a variable expansion or substitution. Used as the recursive step
+--- contains a variable expansion or substitution, or a static string's text
+--- cannot be read from its source bytes. Used as the recursive step
 --- inside `concatenation` — joining `-ex"$x"c` would otherwise launder a
---- dynamic flag past the matcher.
+--- dynamic flag past the matcher. `glob_pattern` and `brace_expression` keep
+--- their raw text: their backslashes are glob syntax, and the token is dynamic.
 --- @param node TSNode
 --- @param src string
 --- @return string|nil
 local function pure_literal_token(node, src)
     local t = node:type()
-    if t == "word" or t == "number" or t == "glob_pattern" then
+    if t == "word" then
+        return unescape_unquoted(vim.treesitter.get_node_text(node, src))
+    end
+    if t == "number" or t == "glob_pattern" then
         return vim.treesitter.get_node_text(node, src)
     end
     if t == "string" then
-        local parts = {}
-        for c in node:iter_children() do
-            if c:named() then
-                if c:type() ~= "string_content" then
-                    return nil
-                end
-                table.insert(parts, vim.treesitter.get_node_text(c, src))
-            end
+        if not is_static_string(node) then
+            return nil
         end
-        return table.concat(parts)
+        return static_string_text(node, src)
     end
     if t == "raw_string" then
         local txt = vim.treesitter.get_node_text(node, src)
@@ -275,25 +356,14 @@ local function literal_token(node, src)
     end
     if t == "string" then
         -- Substitution-bearing strings are caught at the command level. A
-        -- string composed only of `string_content` joins to its quote-stripped
-        -- literal (so `"rm"` cannot evade a deny pattern). A string that
-        -- mixes `string_content` with expansions yields the raw quoted text,
-        -- preserving Phase 1a glob matching.
-        local has_non_content = false
-        local parts = {}
-        for c in node:iter_children() do
-            if c:named() then
-                if c:type() == "string_content" then
-                    table.insert(parts, vim.treesitter.get_node_text(c, src))
-                else
-                    has_non_content = true
-                end
-            end
+        -- string composed only of `string_content` yields its delivered text
+        -- (so `"rm"` cannot evade a deny pattern), or nil to bail. A string
+        -- that mixes `string_content` with expansions yields the raw quoted
+        -- text, preserving Phase 1a glob matching.
+        if is_static_string(node) then
+            return static_string_text(node, src)
         end
-        if has_non_content then
-            return vim.treesitter.get_node_text(node, src)
-        end
-        return table.concat(parts)
+        return vim.treesitter.get_node_text(node, src)
     end
     if t == "concatenation" then
         local pure = pure_literal_token(node, src)
@@ -1319,6 +1389,46 @@ local function cwd_after_cd(cwd, args, args_dynamic)
     return cwd .. "/" .. dir
 end
 
+--- Join each run of byte-adjacent argument nodes into one shell word. The
+--- grammar splits a word such as `--include=*.{ts,tsx}` into a `word` and a
+--- `glob_pattern` with no `concatenation` over them. A joined entry is the raw
+--- source of the run, is always dynamic (the split happens only at a glob or
+--- brace part), and keeps the run's first node. A run of one is copied as is.
+--- @param args string[]
+--- @param arg_nodes TSNode[]
+--- @param args_dynamic boolean[] all three parallel
+--- @param src string
+--- @return string[] args
+--- @return TSNode[] arg_nodes
+--- @return boolean[] args_dynamic new tables, the inputs are not changed
+function M.join_adjacent_args(args, arg_nodes, args_dynamic, src)
+    local joined_args, joined_nodes, joined_dynamic = {}, {}, {}
+    local i = 1
+    while i <= #args do
+        local _, _, run_start = arg_nodes[i]:range(true)
+        local j = i
+        while j < #args do
+            local _, _, _, _, _, end_byte = arg_nodes[j]:range(true)
+            local _, _, next_start = arg_nodes[j + 1]:range(true)
+            if end_byte ~= next_start then
+                break
+            end
+            j = j + 1
+        end
+        table.insert(joined_nodes, arg_nodes[i])
+        if j == i then
+            table.insert(joined_args, args[i])
+            table.insert(joined_dynamic, args_dynamic[i])
+        else
+            local _, _, _, _, _, run_end = arg_nodes[j]:range(true)
+            table.insert(joined_args, src:sub(run_start + 1, run_end))
+            table.insert(joined_dynamic, true)
+        end
+        i = j + 1
+    end
+    return joined_args, joined_nodes, joined_dynamic
+end
+
 --- Forward declaration — `collect` and `collect_command` are mutually recursive.
 --- @type fun(node: TSNode, src: string, out: agentic.ShellCommand[], depth: integer, shell: agentic.utils.ShellParse.Shell, stdin_of: table<string, agentic.utils.ShellParse.Heredoc>): boolean
 local collect
@@ -1398,6 +1508,8 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
     if CODE_TAKING_BUILTINS[cmd_name] then
         return false
     end
+    args, arg_nodes, args_dynamic =
+        M.join_adjacent_args(args, arg_nodes, args_dynamic, src)
 
     -- Transparent prefix: re-parse and flatten the inner instead of emitting the
     -- wrapper/shell itself, so `timeout 5 rm -f x` and `zsh -c 'rm -f x'` both

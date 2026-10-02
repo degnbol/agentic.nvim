@@ -1147,6 +1147,8 @@ local function extract_args(node, src, ctx, known, inner_check)
             end
         end
     end
+    args, arg_nodes, args_dynamic =
+        ShellParse.join_adjacent_args(args, arg_nodes, args_dynamic, src)
     return args, arg_nodes, args_dynamic, name_node
 end
 

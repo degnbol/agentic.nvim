@@ -1205,6 +1205,25 @@ describe("ToolCallRenderer", function()
             assert.same({}, texts.terms)
         end)
 
+        it("highlights the term after a split brace glob", function()
+            local texts = execute_texts(
+                'grep -rn --include=*.{ts,tsx} "foo" src',
+                { "a.ts:1:foo" }
+            )
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("keeps a dollar before the closing quote of a pattern", function()
+            local ShellParse = require("agentic.utils.shell_parse")
+            local GrepArgs = require("agentic.utils.grep_args")
+            local rec = ShellParse.extract_commands([[rg -v "^$"]])[1]
+            assert.same(
+                { "^$" },
+                GrepArgs.parse(rec.name, rec.argv, rec.argv_dynamic).patterns
+            )
+            assert.same({}, execute_texts([[rg -v "^$"]], { "", "a" }).terms)
+        end)
+
         it("does not overlap matches", function()
             local texts = execute_texts("grep aa f", { "aaaa" })
             assert.same({ "aa", "aa" }, texts.terms)
