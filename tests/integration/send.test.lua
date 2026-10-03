@@ -193,3 +193,79 @@ describe("Partial-send", function()
         assert.same({ "one-alpha", "one-beta", "one-gamma" }, input_lines())
     end)
 end)
+
+describe("Context panels across a /command head", function()
+    local child = Child.new()
+
+    before_each(function()
+        child.setup()
+        child.lua([[
+            require("agentic").toggle()
+            local tab_id = vim.api.nvim_get_current_tabpage()
+            local session = require("agentic.session_registry").bound_session(tab_id)
+            session.session_id = "sid"
+            session.agent.state = "ready"
+            session._persist_history = function() end
+            _G._dispatched = {}
+            session._dispatch_turn = function(_, prompt)
+                table.insert(_G._dispatched, prompt)
+            end
+            _G._session = session
+            _G._file = vim.fn.tempname()
+            vim.fn.writefile({ "x" }, _G._file)
+            session.file_list:add(_G._file)
+        ]])
+        child.flush()
+    end)
+
+    after_each(function()
+        child.stop()
+    end)
+
+    local function submit(text)
+        child.lua(string.format(
+            [[
+            local widget = _G._session.widget
+            vim.api.nvim_buf_set_lines(widget.buf_nrs.input, 0, -1, false, { %q })
+            widget:submit()
+        ]],
+            text
+        ))
+        child.flush()
+    end
+
+    local function files_window_open()
+        return child.lua_get([[
+            (function()
+                local winid = _G._session.widget.win_nrs.files
+                return winid ~= nil and vim.api.nvim_win_is_valid(winid)
+            end)()
+        ]])
+    end
+
+    it("keeps attached files until the next prose prompt", function()
+        -- Not a local command, so it dispatches a turn without the context.
+        submit("/compact")
+
+        assert.equal(1, child.lua_get([[#_G._dispatched]]))
+        local listed = child.lua_get([[
+            table.concat(vim.api.nvim_buf_get_lines(
+                _G._session.widget.buf_nrs.files, 0, -1, false), "\n")
+        ]])
+        assert.truthy(
+            listed:find(vim.fs.basename(child.lua_get([[_G._file]])), 1, true)
+        )
+        assert.is_true(files_window_open())
+
+        submit("go on")
+
+        assert.equal(2, child.lua_get([[#_G._dispatched]]))
+        assert.truthy(
+            child
+                .lua_get([[vim.inspect(_G._dispatched[2])]])
+                :find(child.lua_get([[_G._file]]), 1, true)
+        )
+        assert.is_true(child.lua_get([[_G._session.file_list:is_empty()]]))
+        assert.is_false(files_window_open())
+    end)
+end)

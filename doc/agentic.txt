@@ -919,7 +919,8 @@ back to ordinary draft.
 
 `/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
 the queue rather than as a submit's first block. Declining leaves every
-queued block as draft. `/delete` also drops the rest of the queue.
+queued block as draft. Once it has deleted the session, `/delete` also
+drops the rest of the queue.
 
 ------------------------------------------------------------------------------
 9.5 FILE ACTIVITY                                      *agentic-file-activity*

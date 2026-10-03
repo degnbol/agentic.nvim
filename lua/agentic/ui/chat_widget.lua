@@ -338,9 +338,8 @@ end
 --- names no command.
 ---
 --- The session decides whether the first block goes now. If it defers, the
---- lines stay put and are tagged as a queued region instead of being deleted,
---- and the context panels keep their contents — nothing has been sent yet. A
---- charwise range widens to whole lines, since a tag is line-granular.
+--- lines stay put and are tagged as a queued region instead of being deleted.
+--- A charwise range widens to whole lines, since a tag is line-granular.
 --- @param opts? agentic.ui.ChatWidget.SubmitOpts
 function ChatWidget:submit(opts)
     opts = opts or {}
@@ -414,21 +413,6 @@ function ChatWidget:submit(opts)
     end
     self:_sync_input_modified()
 
-    BufHelpers.with_modifiable(self.buf_nrs.code, function(bufnr)
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-    end)
-
-    BufHelpers.with_modifiable(self.buf_nrs.files, function(bufnr)
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-    end)
-
-    BufHelpers.with_modifiable(self.buf_nrs.diagnostics, function(bufnr)
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
-    end)
-
-    self:close_optional_window("code")
-    self:close_optional_window("files")
-    self:close_optional_window("diagnostics")
     if Config.settings.move_cursor_to_chat_on_submit then
         self:move_cursor_to(self.win_nrs.chat)
     else

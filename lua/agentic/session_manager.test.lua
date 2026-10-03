@@ -3989,13 +3989,48 @@ describe("agentic.SessionManager", function()
             assert.spy(dispatch_spy).was.called(1)
         end)
 
-        it("truncates the sequence at /delete", function()
-            submit("/delete", { "foo", "bar" })
+        describe("/delete", function()
+            local confirm_stub, delete_file_stub, notify_stub
 
-            assert.equal(1, delete_spy.call_count)
-            assert.spy(dispatch_spy).was.called(0)
-            assert.equal(0, #queued)
-            assert.is_true(errors[1]:match("^/delete: 2 queued") ~= nil)
+            before_each(function()
+                session._delete_session = SessionManager._delete_session
+                session._cancel_session = function(this)
+                    this.session_id = nil
+                end
+                session._advance_session_epoch = function() end
+                confirm_stub = spy.stub(vim.fn, "confirm")
+                delete_file_stub = spy.stub(ChatHistory, "delete_session")
+                delete_file_stub:returns(true)
+                notify_stub = spy.stub(Logger, "notify")
+            end)
+
+            after_each(function()
+                confirm_stub:revert()
+                delete_file_stub:revert()
+                notify_stub:revert()
+            end)
+
+            it("truncates the sequence once confirmed", function()
+                confirm_stub:returns(1)
+
+                submit("/delete", { "foo", "bar" })
+
+                assert.equal(1, delete_file_stub.call_count)
+                assert.spy(dispatch_spy).was.called(0)
+                assert.equal(0, #queued)
+                assert.is_true(errors[1]:match("^/delete: 2 queued") ~= nil)
+            end)
+
+            it("resumes the sequence when declined", function()
+                confirm_stub:returns(2)
+
+                submit("/delete", { "foo", "bar" })
+
+                assert.equal(0, delete_file_stub.call_count)
+                assert.spy(dispatch_spy).was.called(1)
+                assert.equal(1, #queued)
+                assert.equal(0, #errors)
+            end)
         end)
 
         -- One block per turn: a prose head takes its own turn and the drain

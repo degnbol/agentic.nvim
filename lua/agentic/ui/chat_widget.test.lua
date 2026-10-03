@@ -915,9 +915,6 @@ describe("agentic.ui.ChatWidget", function()
                 Config.settings.send_register = "a"
                 vim.fn.setreg("a", "untouched")
                 set_input({ "line1", "line2" })
-                local code_buf = widget.buf_nrs.code
-                vim.bo[code_buf].modifiable = true
-                vim.api.nvim_buf_set_lines(code_buf, 0, -1, false, { "ctx" })
                 submit_spy = spy.new(function()
                     return false
                 end)
@@ -938,12 +935,7 @@ describe("agentic.ui.ChatWidget", function()
                 assert.equal(1, #marks)
                 assert.equal(0, marks[1][2])
                 assert.equal(1, marks[1][4].end_row)
-                -- Nothing was sent, so the context panels keep their contents
-                -- and the register is not written.
-                assert.same(
-                    { "ctx" },
-                    vim.api.nvim_buf_get_lines(code_buf, 0, -1, false)
-                )
+                -- Nothing was sent, so the register is not written.
                 assert.equal("untouched", vim.fn.getreg("a"))
                 -- Unsent text is unsaved text.
                 assert.is_true(vim.bo[widget.buf_nrs.input].modified)

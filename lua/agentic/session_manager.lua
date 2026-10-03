@@ -1280,6 +1280,7 @@ function SessionManager:_delete_session()
             -- callback would write the file back, a re-auth callback would
             -- respawn what the user just removed.
             self:_advance_session_epoch()
+            self:_truncate_queue()
             Logger.notify(
                 "Session " .. session_id:sub(1, 8) .. " deleted.",
                 vim.log.levels.INFO
@@ -1298,19 +1299,14 @@ function SessionManager:_delete_session()
     end
 
     if Config.session_restore.confirm_delete ~= false then
-        -- Deferred to run after _submit_input completes its cleanup
-        -- (close_optional_window, move_cursor_to). Without the schedule,
-        -- confirm() races with the scheduled move_cursor_to(chat).
-        vim.schedule(function()
-            local choice = vim.fn.confirm( -- no nvim_* equivalent
-                "Delete session " .. session_id:sub(1, 8) .. "?",
-                "&Yes\n&No",
-                2
-            )
-            if choice == 1 then
-                do_delete()
-            end
-        end)
+        local choice = vim.fn.confirm( -- no nvim_* equivalent
+            "Delete session " .. session_id:sub(1, 8) .. "?",
+            "&Yes\n&No",
+            2
+        )
+        if choice == 1 then
+            do_delete()
+        end
     else
         do_delete()
     end
@@ -2232,8 +2228,7 @@ end
 --- `async` means the command can return with a dialog still open, so the
 --- sequencer must wait for its `on_done` before dispatching the next block
 --- rather than reading the gate — which is clear, the command needing no
---- provider round-trip. `/delete` also opens one, but truncates the sequence
---- instead of resuming it (`_truncate_queue`).
+--- provider round-trip.
 ---
 --- `session_ending` marks the commands that end the current session, so
 --- running one on text the user did not mean as a command destroys work.
@@ -2480,9 +2475,9 @@ function SessionManager:_dispatch_deferred_prompts()
     return self:_drain_queue()
 end
 
---- Drop the rest of the queue when `/delete` is dispatched: a block queued
---- against a session that is being deleted has no destination left. Warning
---- about work left undone beats inventing somewhere to send it.
+--- Drop the rest of the queue once the session is deleted: a block queued
+--- against a deleted session has no destination left. Warning about work left
+--- undone beats inventing somewhere to send it.
 function SessionManager:_truncate_queue()
     local count = self.widget:queued_block_count()
     if count == 0 then
@@ -2629,9 +2624,6 @@ end
 function SessionManager:_handle_input_submit_inner(input_text)
     local word, arg = parse_local_command(input_text)
     if word then
-        if word == "delete" then
-            self:_truncate_queue()
-        end
         -- The gate cannot hold the next block behind a local command: local
         -- commands are exempt from it, and one that answers synchronously
         -- reaches no Stop for the drain to run at. So the sequence continues
