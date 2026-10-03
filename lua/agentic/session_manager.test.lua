@@ -3654,8 +3654,8 @@ describe("agentic.SessionManager", function()
                 local session = make_session()
                 -- both agents' children stream before either kind-resolving update
                 session:_mark_task_open("task-a")
-                session:_on_tool_call(child_call("c-a", "task-a"), false)
-                session:_on_tool_call(child_call("c-b", "task-b"), false)
+                session:_on_tool_call(child_call("c-a", "task-a"))
+                session:_on_tool_call(child_call("c-b", "task-b"))
                 -- second task's kind resolves → latch flips, backfills both
                 session:_mark_task_open("task-b")
 
@@ -3671,9 +3671,9 @@ describe("agentic.SessionManager", function()
             function()
                 local session = make_session()
                 session:_mark_task_open("task-a")
-                session:_on_tool_call(child_call("c-a", "task-a"), false)
+                session:_on_tool_call(child_call("c-a", "task-a"))
                 session:_mark_task_open("task-b") -- flip, backfill c-a
-                session:_on_tool_call(child_call("c-b", "task-b"), false) -- live
+                session:_on_tool_call(child_call("c-b", "task-b")) -- live
 
                 -- full rail: both blocks' borders replaced by their own digit
                 assert.equal(0, count(decoration_signs(), "│ "))

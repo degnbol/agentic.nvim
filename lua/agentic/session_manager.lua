@@ -1329,11 +1329,8 @@ function SessionManager:_on_stdout_text(text)
 end
 
 --- Build the ACP client handlers table.
---- @param opts { skip_history?: boolean }|nil
 --- @return agentic.acp.ClientHandlers
-function SessionManager:_build_handlers(opts)
-    local skip_history = opts and opts.skip_history or false
-
+function SessionManager:_build_handlers()
     --- @type agentic.acp.ClientHandlers
     return {
         on_session_update = function(update)
@@ -1341,7 +1338,7 @@ function SessionManager:_build_handlers(opts)
         end,
 
         on_tool_call = function(tool_call)
-            self:_on_tool_call(tool_call, skip_history)
+            self:_on_tool_call(tool_call)
         end,
 
         on_tool_call_update = function(tool_call_update)
@@ -1361,8 +1358,7 @@ end
 
 --- Handle initial tool_call: write to UI, store in history, track plan exit.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
---- @param skip_history boolean|nil Skip chat history storage (e.g. during session/load replay)
-function SessionManager:_on_tool_call(tool_call, skip_history)
+function SessionManager:_on_tool_call(tool_call)
     local is_subagent = tool_call.parent_tool_use_id ~= nil
     if is_subagent then
         self._tool_call_owner[tool_call.tool_call_id] = true
@@ -1384,7 +1380,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
     end
 
     -- Persist only main-agent tool calls; subagent interim is not restored.
-    if not skip_history and not is_subagent then
+    if not is_subagent then
         --- @type agentic.ui.ChatHistory.ToolCall
         local tool_msg = {
             type = "tool_call",
@@ -3307,7 +3303,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         data = { session_id = session_id },
     })
 
-    local handlers = self:_build_handlers({ skip_history = true })
+    local handlers = self:_build_handlers()
 
     local effective_cwd = cwd or vim.fn.getcwd() --[[@as string]]
     self.agent:load_session(
