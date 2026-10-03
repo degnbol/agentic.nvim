@@ -1903,6 +1903,60 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_try_record_edit_range", function()
+        --- @type string
+        local path
+
+        before_each(function()
+            path = vim.fn.tempname()
+            vim.fn.writefile({ "a", "foo", "z" }, path)
+        end)
+
+        after_each(function()
+            vim.fs.rm(path)
+        end)
+
+        --- @return agentic.SessionManager
+        --- @return table[] recorded
+        local function make_session()
+            --- @type table[]
+            local recorded = {}
+            --- @type agentic.SessionManager
+            local session = {
+                message_writer = {
+                    tool_call_blocks = {
+                        ["tc-1"] = {
+                            kind = "edit",
+                            status = "pending",
+                            argument = path,
+                            diff = { old = { "foo" }, new = { "foo", "bar" } },
+                        },
+                    },
+                },
+                _tool_call_owner = {},
+                permission_manager = {
+                    has_edit_range = function()
+                        return false
+                    end,
+                    record_pending_edit = function(_self, id, _, start_line)
+                        table.insert(recorded, { id, start_line })
+                    end,
+                },
+                _writer_for = SessionManager._writer_for,
+                _try_record_edit_range = SessionManager._try_record_edit_range,
+            } --[[@as agentic.SessionManager]]
+            return session, recorded
+        end
+
+        it("records a live pending edit", function()
+            local session, recorded = make_session()
+
+            session:_try_record_edit_range("tc-1")
+
+            assert.same({ { "tc-1", 2 } }, recorded)
+        end)
+    end)
+
     describe("notifications.bell", function()
         --- @type TestStub
         local bell_stub

@@ -52,4 +52,37 @@ end, _G.s.chat_history.messages))
         assert.same({ "replayed", "live" }, ids)
         assert.equal(1, child.lua_get("_G.persists"))
     end)
+
+    it("records an edit range for live edits only", function()
+        -- The file already holds the replayed edit, a pure addition whose
+        -- `diff.old` would still match uniquely.
+        child.lua([[
+_G.path = vim.fn.tempname()
+vim.fn.writefile({ "a", "foo", "bar", "z" }, _G.path)
+_G.s:_do_load_acp_session("sid-x", "/tmp")
+local sub = _G.s.agent.subscribers["sid-x"]
+sub.on_tool_call({
+    tool_call_id = "replayed", kind = "edit", status = "pending", argument = _G.path,
+    diff = { old = { "foo" }, new = { "foo", "bar" } },
+})
+sub.on_tool_call_update({ tool_call_id = "replayed", status = "completed" })
+_G.load_cb({}, nil)
+]])
+        child.flush()
+
+        child.lua([[
+_G.s.agent.subscribers["sid-x"].on_tool_call({
+    tool_call_id = "live", kind = "edit", status = "pending", argument = _G.path,
+    diff = { old = { "z" }, new = { "z", "w" } },
+})
+]])
+
+        assert.is_false(
+            child.lua_get([[_G.s.permission_manager:has_edit_range("replayed")]])
+        )
+        assert.is_true(
+            child.lua_get([[_G.s.permission_manager:has_edit_range("live")]])
+        )
+        child.lua([[vim.fs.rm(_G.path)]])
+    end)
 end)
