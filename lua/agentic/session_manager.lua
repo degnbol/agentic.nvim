@@ -267,6 +267,28 @@ function SessionManager:_sync_chat_modified(history)
     end
 end
 
+--- Set the subagent buffer's `modified` flag to whether a top-level Task is
+--- open, as its output is saved nowhere. The flag has no other writer. Does
+--- nothing while the buffer is unloaded.
+function SessionManager:_sync_subagent_modified()
+    -- Nil once the widget is destroyed.
+    local subagent = self.widget.buf_nrs.subagent
+    if
+        subagent
+        and vim.api.nvim_buf_is_valid(subagent)
+        and vim.api.nvim_buf_is_loaded(subagent)
+    then
+        vim.bo[subagent].modified = next(self._open_tasks) ~= nil
+    end
+end
+
+--- Forget every open top-level Task at once. Emits no divider, and leaves the
+--- subagents indicator and split as they are.
+function SessionManager:_clear_open_tasks()
+    self._open_tasks = {}
+    self:_sync_subagent_modified()
+end
+
 --- Set the in-flight prompt count, and with it the chat's `modified` flag.
 --- @param count integer
 function SessionManager:_set_prompt_pending(count)
@@ -596,10 +618,10 @@ function SessionManager:_bind_owner_keymaps()
 end
 
 --- Tie the session to its chat buffer the way a file ties to its buffer:
---- `:w` writes the history, `:bd` ends the session, `:e` re-renders any of
---- its buffers from the session's state, and a session nobody used goes when
---- its chat is no longer shown, as a scratch buffer with `bufhidden=wipe`
---- would.
+--- `:w` writes the history, `:bd` ends the session, `:e` re-renders the chat
+--- and the panels from the session's state and clears the subagent buffer,
+--- and a session nobody used goes when its chat is no longer shown, as a
+--- scratch buffer with `bufhidden=wipe` would.
 function SessionManager:_setup_buffer_lifecycle()
     local buf_nrs = self.widget.buf_nrs
     local chat = buf_nrs.chat
@@ -623,6 +645,28 @@ function SessionManager:_setup_buffer_lifecycle()
                     vim.log.levels.WARN
                 )
             end
+        end,
+    })
+
+    -- An `acwrite` buffer without a handler fails `:w` with E676. `:wa`
+    -- reaches this while a subagent runs.
+    vim.api.nvim_create_autocmd("BufWriteCmd", {
+        buffer = buf_nrs.subagent,
+        callback = function()
+            Logger.notify("Subagent output is not saved", vim.log.levels.WARN)
+        end,
+    })
+
+    -- Covers `:e!`, `:bd!` and an idle `:e` or `:bd`.
+    vim.api.nvim_create_autocmd("BufUnload", {
+        buffer = buf_nrs.subagent,
+        callback = function()
+            if self.destroyed then
+                return
+            end
+            self.subagent_writer:clear_render()
+            -- A running agent's next activity heads its section again.
+            self._headed_tasks = {}
         end,
     })
 
@@ -657,10 +701,15 @@ function SessionManager:_setup_buffer_lifecycle()
             self:_reload_chat()
         end,
         [buf_nrs.subagent] = function()
-            -- Subagent interim is not persisted, so there is nothing to
-            -- re-render.
-            self.subagent_writer:reset()
+            -- Nothing to re-render: the output is not saved, and `BufUnload`
+            -- cleared it.
             ChatBuffer.start(buf_nrs.subagent)
+            -- `clear_render` turned numbering off with the turn state.
+            if self._numbering_latched then
+                self.subagent_writer:enable_numbering()
+            end
+            self.subagent_status_indicator:reposition()
+            self:_sync_subagent_modified()
         end,
         [buf_nrs.todos] = function()
             self.todo_list:redraw()
@@ -815,6 +864,7 @@ function SessionManager:_mark_task_open(tool_call_id)
         return
     end
     self._open_tasks[tool_call_id] = true
+    self:_sync_subagent_modified()
     self.subagent_status_indicator:start("generating")
     self:_ensure_subagent_window()
     if not self._started_tasks[tool_call_id] then
@@ -871,7 +921,7 @@ end
 --- title's count to match.
 function SessionManager:_reset_subagents()
     self._tool_call_owner = {}
-    self._open_tasks = {}
+    self:_clear_open_tasks()
     self._started_tasks = {}
     self._headed_tasks = {}
     -- Teardown resets too, and its buffers are about to be wiped.
@@ -952,6 +1002,7 @@ function SessionManager:_mark_task_closed(tool_call_id)
         return
     end
     self._open_tasks[tool_call_id] = nil
+    self:_sync_subagent_modified()
     -- Separate this finished subagent's detour from the next, during the turn
     -- (before the main agent reacts to its report). The membership guard above
     -- makes a duplicated terminal update harmless; emit_divider itself no-ops
@@ -1125,6 +1176,8 @@ function SessionManager:_refresh()
     -- submit with no way back, and unwedging that is what this function is for.
     self:_set_prompt_pending(0)
     self._loading = false
+    -- A lost prompt callback never closes its turn's Tasks.
+    self:_close_open_tasks()
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display.
     -- Cosmetic-only effect mid-turn; essential for recovering from a stuck
@@ -2560,6 +2613,8 @@ end
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self:_set_prompt_pending(0)
+    -- The stranded turn's callback would have closed its Tasks.
+    self:_clear_open_tasks()
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is

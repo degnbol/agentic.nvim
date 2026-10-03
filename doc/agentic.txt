@@ -857,9 +857,13 @@ prompts. A session lives as long as its chat buffer, which is listed.
     `:w` in the chat       Writes the history to the session file.
     `:bd` on the chat      Ends the session and wipes its buffers.
     `:e` / `:e!`           Re-renders the buffer from its session.
+    `:e` on the subagent   Clears completed subagents.
 
 The chat is 'modified' while a running turn's history is not yet written. An
 idle session writes its history as it changes.
+
+The subagent buffer is 'modified' while a subagent runs. Its output is not
+saved, and `:w` on it writes nothing.
 
 Notices, errors and the session-start line are not saved: `:e` and a
 restore do not render them again.

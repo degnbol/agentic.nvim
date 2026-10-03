@@ -93,6 +93,12 @@ local function open_win(bufnr, enter, opts, window_name, win_opts)
 
     local config = vim.tbl_deep_extend("force", default_opts, opts)
 
+    -- `noautocmd` would load an unloaded buffer (one left by `:bd`) without
+    -- its `BufReadCmd`, which renders it.
+    if not vim.api.nvim_buf_is_loaded(bufnr) then
+        vim.fn.bufload(bufnr)
+    end
+
     local winid = vim.api.nvim_open_win(bufnr, enter, config)
 
     local window_config = Config.windows[window_name] or {}

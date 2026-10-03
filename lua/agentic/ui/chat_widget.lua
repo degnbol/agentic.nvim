@@ -1333,8 +1333,11 @@ function ChatWidget:_create_buf_nrs()
         buflisted = true,
     })
 
+    -- `acwrite` so `modified` blocks `:e`, `:bd` and `:qa` while a subagent
+    -- runs.
     local subagent = self:_create_new_buf("subagent", {
         filetype = "AgenticChat",
+        buftype = "acwrite",
     })
 
     local todos = self:_create_new_buf("todos", {

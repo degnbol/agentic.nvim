@@ -683,6 +683,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
+                _clear_open_tasks = noop,
                 _sync_chat_modified = SessionManager._sync_chat_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
@@ -2205,6 +2206,7 @@ describe("agentic.SessionManager", function()
                 _mark_unresolved_tool_calls_cancelled = SessionManager._mark_unresolved_tool_calls_cancelled,
                 _close_open_tasks = SessionManager._close_open_tasks,
                 _mark_task_closed = SessionManager._mark_task_closed,
+                _sync_subagent_modified = noop,
                 _tool_call_owner = {},
                 _open_tasks = {},
                 _finalize_turn = SessionManager._finalize_turn,
@@ -3182,6 +3184,7 @@ describe("agentic.SessionManager", function()
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _sync_chat_modified = function() end,
+                _clear_open_tasks = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
 
@@ -3511,6 +3514,7 @@ describe("agentic.SessionManager", function()
                 _maybe_latch_numbering = SessionManager._maybe_latch_numbering,
                 _mark_task_open = SessionManager._mark_task_open,
                 _mark_task_closed = SessionManager._mark_task_closed,
+                _sync_subagent_modified = function() end,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -3669,6 +3673,7 @@ describe("agentic.SessionManager", function()
             end
             writer.enable_numbering = noop
             writer.finalize_turn = noop
+            writer.reset_turn_state = noop
             return writer
         end
 
@@ -3679,6 +3684,9 @@ describe("agentic.SessionManager", function()
             local sink = { opened = 0, closed = 0, history = {} }
             local fields = {
                 _loading = false,
+                _session_epoch = 0,
+                _prompt_pending = 0,
+                is_generating = false,
                 _tool_call_owner = {},
                 _open_tasks = {},
                 _started_tasks = {},
@@ -3781,6 +3789,8 @@ describe("agentic.SessionManager", function()
             orig_auto_close = Config.windows.subagent.auto_close
             Config.windows.subagent.auto_close = true
             subagent_buf = vim.api.nvim_create_buf(false, true)
+            -- As the widget's: a `nofile` buffer never holds 'modified'.
+            vim.bo[subagent_buf].buftype = "acwrite"
             vim.b[subagent_buf].agentic_window = "subagent"
         end)
 
@@ -3809,6 +3819,55 @@ describe("agentic.SessionManager", function()
             assert.same({}, session._open_tasks)
             assert.equal(2, (session.subagent_writer --[[@as table]]).dividers)
             assert.equal(1, sink.closed)
+        end)
+
+        describe("subagent buffer modified", function()
+            --- @return boolean
+            local function modified()
+                return vim.bo[subagent_buf].modified
+            end
+
+            it("is set when a Task opens", function()
+                local session = make_session()
+                spawn_task(session, "task-1", "background")
+
+                assert.is_true(modified())
+            end)
+
+            it("stays set until the last open Task closes", function()
+                local session = make_session()
+                spawn_task(session, "task-1", "blocking")
+                spawn_task(session, "task-2", "blocking")
+
+                finish(session, "task-1", "completed")
+                assert.is_true(modified())
+
+                finish(session, "task-2", "completed")
+                assert.is_false(modified())
+            end)
+
+            it("is cleared when the session epoch advances", function()
+                local session = make_session()
+                spawn_task(session, "task-1", "background")
+
+                session:_advance_session_epoch()
+
+                assert.is_false(modified())
+            end)
+
+            it("is cleared by a refresh, which closes the Task", function()
+                local session, sink = make_session()
+                spawn_task(session, "task-1", "background")
+
+                session:_refresh()
+
+                assert.is_false(modified())
+                assert.equal(1, sink.closed)
+                assert.equal(
+                    1,
+                    (session.subagent_writer --[[@as table]]).dividers
+                )
+            end)
         end)
 
         it(
@@ -4140,6 +4199,7 @@ describe("agentic.SessionManager", function()
                 _ordinal_for = SessionManager._ordinal_for,
                 _maybe_latch_numbering = SessionManager._maybe_latch_numbering,
                 _mark_task_open = SessionManager._mark_task_open,
+                _sync_subagent_modified = noop,
                 _on_tool_call = SessionManager._on_tool_call,
             } --[[@as agentic.SessionManager]]
         end
