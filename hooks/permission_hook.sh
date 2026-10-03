@@ -3,8 +3,7 @@
 #
 # Runs the plugin's deterministic permission ladder inside the live nvim,
 # ahead of auto-mode's SDK classifier, and maps the verdict onto a PreToolUse
-# permissionDecision (allow / deny / undecided). See permission_hook.lua and
-# notes/PLAN-auto-mode-integration.md.
+# permissionDecision (allow / deny / undecided). See permission_hook.lua.
 #
 # Self-scoping: only fires inside an nvim that exported AGENTIC_SOCK. A plain
 # `claude` CLI run in the same cwd never gets the var, so this no-ops for it.

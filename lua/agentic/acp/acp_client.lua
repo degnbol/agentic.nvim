@@ -16,7 +16,6 @@ local PERMISSION_HOOK = vim.fn.fnamemodify(
 --- session/load. Includes the inline PreToolUse permission hook (flag-tier
 --- settings, nothing written to disk) so the deterministic ladder gates
 --- auto-mode's classifier. Claude-only namespace — other bridges ignore it.
---- See notes/PLAN-auto-mode-integration.md § "Hook registration (no file)".
 --- @param additional_dirs string[]
 --- @return table
 local function build_claude_options(additional_dirs)

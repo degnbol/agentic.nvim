@@ -2,8 +2,8 @@ local assert = require("tests.helpers.assert")
 local R = require("agentic.utils.permission_rules")
 
 -- xargs recurses into its literal inner with an always-appended dynamic token
--- ($__xargs_stdin) modelling the runtime stdin items. See PLAN-xargs / the
--- EXEC_WRAPPERS docstring in shell_parse.lua.
+-- ($__xargs_stdin) modelling the runtime stdin items. See the EXEC_WRAPPERS
+-- docstring in shell_parse.lua.
 describe("xargs exec-wrapper", function()
     it("approves a read-only inner (dynamic token is a no-op)", function()
         assert.is_true(R.should_auto_approve("find . | xargs grep foo"))

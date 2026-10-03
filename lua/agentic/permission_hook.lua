@@ -5,8 +5,7 @@ local SessionRegistry = require("agentic.session_registry")
 --- (`PermissionManager:decide`) inside the live nvim on behalf of a
 --- claude-agent-acp PreToolUse hook, so the ladder gates the SDK's auto-mode
 --- classifier. The hook script (`hooks/permission_hook.sh`) RPCs into here via
---- `nvim --server $AGENTIC_SOCK --remote-expr`. See
---- notes/PLAN-auto-mode-integration.md.
+--- `nvim --server $AGENTIC_SOCK --remote-expr`.
 local M = {}
 
 --- Claude SDK tool name -> ACP tool kind. Only the names the hook matcher
