@@ -55,6 +55,14 @@ describe("agentic.ui.WindowDecoration", function()
         end)
     end)
 
+    describe("subagent_title", function()
+        it("counts the subagents started", function()
+            assert.equal("󰚩 Subagents", WindowDecoration.subagent_title(0))
+            assert.equal("󰚩 1 subagent", WindowDecoration.subagent_title(1))
+            assert.equal("󰚩 2 subagents", WindowDecoration.subagent_title(2))
+        end)
+    end)
+
     describe("headers", function()
         it("default to the panel's title", function()
             assert.equal(

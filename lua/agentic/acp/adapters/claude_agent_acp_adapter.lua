@@ -7,6 +7,8 @@ local SkillPath = require("agentic.utils.skill_path")
 --- @class agentic.acp.ClaudeAgentRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
 --- @field subagent_type? string For sub-agent tasks (Task tool)
+--- @field name? string Addressable name of a sub-agent
+--- @field run_in_background? boolean Whether a sub-agent runs in the background
 --- @field model? string Model used for sub-agent tasks
 --- @field skill? string Skill name
 --- @field args? string Arguments for the skill
@@ -177,23 +179,34 @@ local function set_head(message, head)
     end
 end
 
+--- A subagent's identity and predicted mode, from as much of its input as has
+--- streamed in. `run_in_background` usually arrives after `subagent_type`.
+--- @param raw_input agentic.acp.ClaudeAgentRawInput
+--- @return agentic.ui.MessageWriter.SubagentInfo
+local function subagent_info(raw_input)
+    --- @type agentic.ui.MessageWriter.SubagentInfo
+    local info = {
+        label = ClaudeUtils.subagent_label(raw_input),
+        mode = ClaudeUtils.predicted_subagent_mode(
+            raw_input,
+            Config.subagents.force_background
+        ),
+        confirmed = false,
+    }
+    return info
+end
+
 --- Establish the kind this plugin gives the tool, and the part of the head
 --- derivable from the tool name alone (`ClaudeUtils.TOOL_KINDS` /
 --- `ClaudeUtils.tool_head`).
 ---
 --- Runs ahead of `__apply_raw_input` rather than inside it, because minting
 --- needs nothing from `rawInput` — `_meta.claudeCode.toolName` is on every
---- notification built from a cached `tool_use` — and the gate would cost both
---- phases:
----
---- - `__apply_raw_input` early-returns on empty `rawInput`, which is what a
----   streamed top-level call carries on its initial `tool_call`. Minting inside
----   the gate renders a gear on the first frame and then flips it, and
----   `ListAgents`/`CronList`, whose input is empty by definition, would never
----   mint at all.
---- - `SessionManager:_on_tool_call` persists `kind` on phase 1 only. A kind
----   that first arrives on phase 2 is absent from the session JSON, so a
----   restored session renders the gear forever.
+--- notification built from a cached `tool_use` — and `__apply_raw_input`
+--- early-returns on empty `rawInput`, which is what a streamed top-level call
+--- carries on its initial `tool_call`. Minting inside that gate renders a gear
+--- on the first frame and then flips it, and `ListAgents`/`CronList`, whose
+--- input is empty by definition, would never mint at all.
 --- @protected
 --- @param message agentic.ui.MessageWriter.ToolCallBase
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
@@ -299,6 +312,7 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
         self:__resolve_fetch_fields(message, rawInput)
     elseif kind == "think" and rawInput.subagent_type then
         message.kind = "SubAgent"
+        message.subagent = subagent_info(rawInput)
         -- The bridge falsy-guards `description` but the plugin never has, so
         -- an empty one would render a dangling "### <type>: ".
         local description = rawInput.description
@@ -309,6 +323,7 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
         kind == "SubAgent" or (kind == "other" and rawInput.subagent_type)
     then
         message.kind = "SubAgent"
+        message.subagent = subagent_info(rawInput)
         message.argument = string.format(
             "%s, %s: %s",
             rawInput.model or "default",
@@ -425,15 +440,53 @@ local function hook_patch_facts(update)
     return message
 end
 
+--- Wire names the Agent tool has gone by.
+local AGENT_TOOLS = { Agent = true, Task = true }
+
+--- Reduce the Agent tool's PostToolUse `tool_call_update` to the mode its
+--- subagent ran in, or nil when `update` is not that notification.
+---
+--- The result's `status` is the one record of the mode that actually ran. The
+--- input only predicts it, and a PreToolUse hook can rewrite it. The
+--- notification carries no `status` and no `rawInput` of its own
+--- (`acp-agent.js` `onPostToolUseHook`). The subagent's progress heartbeat also
+--- carries a `toolResponse`, without a `status`, and yields nil.
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+--- @return agentic.ui.MessageWriter.ToolCallBase|nil
+local function agent_response_facts(update)
+    local meta = ClaudeUtils.claude_meta(update)
+    local response = meta.toolResponse
+    local mode = not update.status
+        and AGENT_TOOLS[meta.toolName]
+        and response
+        and response.status
+        and ClaudeUtils.subagent_mode_from_status(response.status)
+    if not mode then
+        return nil
+    end
+
+    --- @type agentic.ui.MessageWriter.ToolCallBase
+    local message = {
+        tool_call_id = update.toolCallId,
+        status = update.status,
+        subagent = {
+            mode = mode,
+            confirmed = true,
+            agent_id = response.agentId,
+        },
+    }
+    return message
+end
+
 --- Claude-agent-acp sends tool call updates without status, so we need to overload to handle it
 --- @protected
 --- @param session_id string
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate
 function ClaudeAgentACPAdapter:__handle_tool_call_update(session_id, update)
-    local patch_facts = hook_patch_facts(update)
-    if patch_facts then
+    local facts = hook_patch_facts(update) or agent_response_facts(update)
+    if facts then
         self:__with_subscriber(session_id, function(subscriber)
-            subscriber.on_tool_call_update(patch_facts)
+            subscriber.on_tool_call_update(facts)
         end)
         return
     end

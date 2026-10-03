@@ -34,7 +34,7 @@ is, never how deep in the turn the row was written:
 | Level | Rows | Written by |
 | --- | --- | --- |
 | `#` | Session header (`<timestamp> · <session-id>`) | `SessionManager._generate_welcome_header` |
-| `##` | User prompts, command notices, `## Error` | `write_user_prompt`, `write_notice`, `write_error_message` |
+| `##` | User prompts, command notices, `## Error`; in the subagents buffer, one agent's section | `write_user_prompt`, `write_notice`, `write_error_message`, `write_subagent_heading` |
 | `###` | Tool call heads, and the empty `###` that closes one | `write_tool_call_block`, `write_message_chunk` |
 
 Level 2 is the turn's own participants — what the user asked, what the user did

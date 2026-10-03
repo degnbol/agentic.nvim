@@ -975,6 +975,13 @@ Subagent (Task) work renders in the subagent split
 alongside its tool calls with claude-agent-acp 0.66.0 and later. Earlier
 bridges send only the tool calls.
 
+With claude-agent-acp, the title of each Task block in the chat names its
+subagent's mode, `(Background)` or `(Blocking)`. A `?` follows the mode until
+the tool's result confirms it. In the subagent split, each subagent opens with
+a `## <name> (<mode>)` heading, and the split's header counts the subagents
+started in the session. The split shows a background subagent as working
+until the turn that started it ends.
+
 ==============================================================================
 10. HIGHLIGHT GROUPS                                      *agentic-highlights*
 

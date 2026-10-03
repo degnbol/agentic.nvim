@@ -25,6 +25,7 @@ local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local Theme = require("agentic.theme")
+local ToolCallRenderer = require("agentic.ui.tool_call_renderer")
 local TrustSafety = require("agentic.utils.trust_safety")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -73,7 +74,9 @@ end
 --- @field status_indicator agentic.ui.StatusIndicator
 --- @field subagent_status_indicator agentic.ui.StatusIndicator Working indicator for the subagents buffer, shown while any top-level Task is open
 --- @field _tool_call_owner table<string, boolean> toolCallId -> true when the block lives in the subagents buffer (set on the initial tool_call, read by _writer_for)
---- @field _open_tasks table<string, true> toolCallId -> true for each open top-level Task this turn; subagent indicator shows while non-empty
+--- @field _open_tasks table<string, true> toolCallId -> true for each open top-level Task; subagent indicator shows while non-empty
+--- @field _started_tasks table<string, true> toolCallId -> true for each top-level Task opened in the conversation; the subagents title counts them
+--- @field _headed_tasks table<string, true> toolCallId -> true for each top-level Task whose section in the subagents buffer has its heading
 --- @field _subagent_win_opened_this_turn boolean Guards a single auto-open per turn so a manual close is not undone by later subagent activity
 --- @field _task_ordinal table<string, integer> parentToolUseId -> per-turn subagent ordinal (0-9, first-seen order); numbers agents, not calls
 --- @field _next_ordinal integer Next ordinal to hand out this turn
@@ -339,6 +342,8 @@ function SessionManager:new()
         _checktime_scheduled = false,
         _tool_call_owner = {},
         _open_tasks = {},
+        _started_tasks = {},
+        _headed_tasks = {},
         _subagent_win_opened_this_turn = false,
         _task_ordinal = {},
         _next_ordinal = 0,
@@ -723,13 +728,12 @@ function SessionManager:_indicator_for(tool_call_id)
     return self.status_indicator
 end
 
---- Whether a session update carries the subagent (Task) tag.
+--- The spawning Task's tool call id a session update is tagged with, or nil
+--- for an update that is not a subagent's.
 --- @param update agentic.acp.SessionUpdateMessage
---- @return boolean
-local function is_subagent_update(update)
-    return update._meta ~= nil
-        and update._meta.claudeCode ~= nil
-        and update._meta.claudeCode.parentToolUseId ~= nil
+--- @return string|nil
+local function subagent_parent(update)
+    return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
 end
 
 --- Run a message chunk's text through `boundary`. `update` is not modified.
@@ -803,11 +807,8 @@ function SessionManager:_maybe_latch_numbering()
 end
 
 --- Mark a top-level Task as open (idempotent): reveal the subagents split and
---- show its working indicator. Called on the Task's initial `tool_call` AND on
---- refining `tool_call_update`s — a streamed top-level Task's kind only resolves
---- to SubAgent once `rawInput` arrives on an update, not on the empty initial
---- `tool_call`, so the first surface that resolves the kind wins. Set membership
---- makes repeat calls a no-op.
+--- show its working indicator. On the Task's first open in the conversation,
+--- also count it in the title. Set membership makes repeat calls a no-op.
 --- @param tool_call_id string
 function SessionManager:_mark_task_open(tool_call_id)
     if self._open_tasks[tool_call_id] then
@@ -816,7 +817,128 @@ function SessionManager:_mark_task_open(tool_call_id)
     self._open_tasks[tool_call_id] = true
     self.subagent_status_indicator:start("generating")
     self:_ensure_subagent_window()
+    if not self._started_tasks[tool_call_id] then
+        self._started_tasks[tool_call_id] = true
+        self:_render_subagent_title()
+    end
     self:_maybe_latch_numbering()
+end
+
+--- Head a started top-level Task's section in the subagents buffer with its
+--- agent's label and mode, once. Meant for the agent's first activity: the
+--- Task starts on its first input update, while the name and
+--- `run_in_background` are still streaming, and by the time its agent writes
+--- the input is complete. Writes nothing for a Task that has not started, or
+--- has no label.
+--- @param tool_call_id string
+function SessionManager:_head_subagent(tool_call_id)
+    if
+        self._headed_tasks[tool_call_id]
+        or not self._started_tasks[tool_call_id]
+    then
+        return
+    end
+    local subagent = vim.tbl_get(
+        self.message_writer.tool_call_blocks,
+        tool_call_id,
+        "subagent"
+    ) --[[@as agentic.ui.MessageWriter.SubagentInfo|nil]]
+    if not (subagent and subagent.label) then
+        return
+    end
+    self._headed_tasks[tool_call_id] = true
+    self.subagent_writer:write_subagent_heading(
+        string.format(
+            "%s (%s)",
+            subagent.label,
+            ToolCallRenderer.subagent_mode_text(subagent)
+        )
+    )
+end
+
+--- Title the subagents panel with the number of subagents started in the
+--- conversation. A count of started rather than running agents: a background
+--- agent's end is not observable on its own.
+function SessionManager:_render_subagent_title()
+    local bufnr = self.widget.buf_nrs.subagent
+    local header = WindowDecoration.get_header(bufnr)
+    header.title =
+        WindowDecoration.subagent_title(vim.tbl_count(self._started_tasks))
+    WindowDecoration.set_header(bufnr, header)
+end
+
+--- Forget every subagent the conversation started, and reset the subagents
+--- title's count to match.
+function SessionManager:_reset_subagents()
+    self._tool_call_owner = {}
+    self._open_tasks = {}
+    self._started_tasks = {}
+    self._headed_tasks = {}
+    -- Teardown resets too, and its buffers are about to be wiped.
+    if not self.destroyed then
+        self:_render_subagent_title()
+    end
+end
+
+--- Whether a top-level Task's subagent has ended, judged from its tracker.
+--- A failure always ends it. Otherwise a confirmed mode decides: a blocking
+--- run's result arrives when the agent is done, a background one's at launch.
+--- Before confirmation a `completed` is trusted only under a blocking
+--- prediction.
+--- @param tracker agentic.ui.MessageWriter.ToolCallBlock
+--- @return boolean
+local function task_ended(tracker)
+    if tracker.status == "failed" then
+        return true
+    end
+    local subagent = tracker.subagent
+    if subagent and subagent.confirmed then
+        return subagent.mode == "blocking"
+    end
+    return tracker.status == "completed"
+        and not (subagent and subagent.mode == "background")
+end
+
+--- Open or close a top-level Task from its tracker. A Task opens once, except
+--- that one closed on a blocking prediction reopens when its result confirms
+--- it runs in the background. Does nothing while a session loads, since a
+--- replayed Task's agent is long over.
+--- @param tool_call_id string
+--- @param prior_mode agentic.ui.MessageWriter.SubagentMode|nil The Task's mode before its latest update
+function SessionManager:_track_task(tool_call_id, prior_mode)
+    if self._loading then
+        return
+    end
+    local tracker = self.message_writer.tool_call_blocks[tool_call_id]
+    local subagent = tracker.subagent
+    if task_ended(tracker) then
+        self:_mark_task_closed(tool_call_id)
+    elseif not self._started_tasks[tool_call_id] then
+        self:_mark_task_open(tool_call_id)
+    elseif
+        prior_mode == "blocking"
+        and subagent
+        and subagent.confirmed
+        and subagent.mode == "background"
+        and not self._open_tasks[tool_call_id]
+    then
+        -- Its split may have closed with it, and the once-per-turn auto-open
+        -- is already spent.
+        self._subagent_win_opened_this_turn = false
+        self:_mark_task_open(tool_call_id)
+    end
+end
+
+--- Close every open Task. Meant for a turn's end: the bridge holds a turn open
+--- until the background agents it spawned have ended, but a prompt submitted
+--- mid-turn settles it early, at that prompt's echo. So this can close a Task
+--- whose agent still runs. The bridge reports no per-agent end to wait for
+--- instead. A blocking Task still open there was cut off by a cancel or an
+--- error.
+function SessionManager:_close_open_tasks()
+    for tool_call_id in pairs(self._open_tasks) do
+        self:_mark_task_closed(tool_call_id)
+    end
 end
 
 --- Mark a top-level Task as closed (idempotent): when the last open Task closes,
@@ -853,19 +975,20 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        local is_subagent = is_subagent_update(update)
+        local parent = subagent_parent(update)
         local boundaries = self._response_boundaries
         local chunk, starts_response = filter_chunk(
-            is_subagent and boundaries.subagent or boundaries.main,
+            parent and boundaries.subagent or boundaries.main,
             update
         )
         if not chunk then
             return
         end
-        if is_subagent then
+        if parent then
             -- Subagent prose: route to the subagents buffer, not chat history
             -- (interim subagent detail is not persisted — see the feature note).
             self:_ensure_subagent_window()
+            self:_head_subagent(parent)
             self.subagent_writer:write_message_chunk(chunk, starts_response)
             self.subagent_status_indicator:reposition()
         else
@@ -882,8 +1005,10 @@ function SessionManager:_on_session_update(update)
             end
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
-        if is_subagent_update(update) then
+        local parent = subagent_parent(update)
+        if parent then
             self:_ensure_subagent_window()
+            self:_head_subagent(parent)
             self.subagent_writer:write_message_chunk(update)
             self.subagent_status_indicator:reposition()
         else
@@ -1360,6 +1485,7 @@ function SessionManager:_on_tool_call(tool_call)
         self._tool_call_owner[tool_call.tool_call_id] = true
         tool_call.ordinal = self:_ordinal_for(tool_call.parent_tool_use_id)
         self:_ensure_subagent_window()
+        self:_head_subagent(tool_call.parent_tool_use_id)
     end
 
     self:_writer_for(tool_call.tool_call_id):write_tool_call_block(tool_call)
@@ -1370,9 +1496,9 @@ function SessionManager:_on_tool_call(tool_call)
     -- own block stays in the main chat; its children populate the subagents
     -- buffer. Grandchildren keep the parent Task open, so nesting needs no
     -- special-casing. Kind usually resolves on the update, not here (see
-    -- _on_tool_call_update), but mark open here too for the case it arrives now.
+    -- _on_tool_call_update), but track it here too for the case it arrives now.
     if not is_subagent and AcpKind.normalise(tool_call.kind) == "subagent" then
-        self:_mark_task_open(tool_call.tool_call_id)
+        self:_track_task(tool_call.tool_call_id, nil)
     end
 
     -- Persist only main-agent tool calls; subagent interim is not restored.
@@ -1388,6 +1514,7 @@ function SessionManager:_on_tool_call(tool_call)
             body = tool_call.body,
             diff = tool_call.diff,
             skill_path = tool_call.skill_path,
+            subagent = tool_call.subagent,
         }
         self.chat_history:add_message(tool_msg)
         self:_history_changed(self.chat_history)
@@ -1811,6 +1938,9 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     local id = tool_call_update.tool_call_id
     local is_subagent = self._tool_call_owner[id] == true
     local writer = self:_writer_for(id)
+    --- @type agentic.ui.MessageWriter.SubagentMode|nil
+    local prior_mode =
+        vim.tbl_get(writer.tool_call_blocks, id, "subagent", "mode")
 
     writer:update_tool_call_block(tool_call_update)
     self:_try_record_edit_range(id)
@@ -1822,11 +1952,14 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         local tool_call = {
             type = "tool_call",
             tool_call_id = id,
+            kind = tool_call_update.kind,
             status = tool_call_update.status,
+            argument = tool_call_update.argument,
             description = tool_call_update.description,
             body = tool_call_update.body,
             diff = tool_call_update.diff,
             skill_path = tool_call_update.skill_path,
+            subagent = tool_call_update.subagent,
         }
         self.chat_history:update_tool_call(id, tool_call)
         self:_history_changed(self.chat_history)
@@ -1849,21 +1982,14 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- A top-level Task drives the subagents indicator over its open interval.
     -- Its kind only resolves to SubAgent once rawInput arrives on an update (the
     -- streamed initial tool_call is empty), so this update is normally where the
-    -- Task is first marked open; the terminal update releases it.
+    -- Task is first marked open.
     local task_tracker = writer.tool_call_blocks[id]
     if
         not is_subagent
         and task_tracker
         and AcpKind.normalise(task_tracker.kind) == "subagent"
     then
-        if
-            tool_call_update.status == "completed"
-            or tool_call_update.status == "failed"
-        then
-            self:_mark_task_closed(id)
-        else
-            self:_mark_task_open(id)
-        end
+        self:_track_task(id, prior_mode)
     end
 
     -- Reload buffers when file-mutating tool calls complete.
@@ -2864,16 +2990,16 @@ function SessionManager:_dispatch_turn(prompt)
 
     self.is_generating = true
 
-    -- Tool-call ownership and the subagent auto-open guard are per-turn, but a
-    -- turn dispatched while another is still outstanding inherits them rather
-    -- than wiping them: the running turn's tool calls resolve their writer
-    -- (`_writer_for`) and their Task bookkeeping (`_mark_task_closed`) through
-    -- these tables for as long as it streams, and a mid-turn submit is an
-    -- ordinary thing to do. The provider runs the two turns in sequence, so the
-    -- inheriting turn has nothing of its own in flight to confuse with them.
+    -- The subagent auto-open guard and numbering are per-turn, but a turn
+    -- dispatched while another is still outstanding inherits them rather than
+    -- wiping them: the running turn still numbers and opens its subagents
+    -- through them, and a mid-turn submit is an ordinary thing to do. The
+    -- provider runs the two turns in sequence, so the inheriting turn has
+    -- nothing of its own in flight to confuse with them. Tool-call ownership
+    -- is not per-turn at all. A background agent can outlive the turn that
+    -- spawned it, and its calls must keep resolving to the subagents writer,
+    -- so ownership resets with the conversation (`_reset_subagents`).
     if self._prompt_pending == 0 then
-        self._tool_call_owner = {}
-        self._open_tasks = {}
         self._subagent_win_opened_this_turn = false
         self._task_ordinal = {}
         self._next_ordinal = 0
@@ -2990,12 +3116,12 @@ function SessionManager:_dispatch_turn(prompt)
         self:_finalize_turn(turn_usage)
         self.message_writer:scroll_to_bottom()
 
-        -- Reset the subagents buffer's per-turn flags too (mandatory — the
-        -- cross-turn flag hazard is per writer) and clear its indicator. The
-        -- turn separator is emitted per-Task in _mark_task_closed, not here.
+        -- Close the turn's Tasks, which stops the subagents indicator, then
+        -- reset the subagents buffer's per-turn flags too (mandatory — the
+        -- cross-turn flag hazard is per writer). The turn separator is emitted
+        -- per-Task in _mark_task_closed, not here.
+        self:_close_open_tasks()
         self.subagent_writer:finalize_turn()
-        self.subagent_status_indicator:stop()
-        self._open_tasks = {}
 
         if not session_busy then
             self.status_indicator:stop()
@@ -3278,6 +3404,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
     self._plan_exit_pending = false
+    self:_reset_subagents()
     self.chat_history = ChatHistory:new()
     self:_sync_chat_modified(self.chat_history)
     -- Fresh reader: a path and offset from the outgoing session would read the
@@ -3467,6 +3594,7 @@ function SessionManager:_cancel_session()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
     self._plan_exit_pending = false
+    self:_reset_subagents()
 
     self.chat_history = ChatHistory:new()
     self:_sync_chat_modified(self.chat_history)
@@ -3752,6 +3880,7 @@ function SessionManager:restore_from_history(history, opts)
     self._restoring = true
     self._history_to_send = history.messages
     self._is_first_message = false
+    self:_reset_subagents()
 
     -- Update existing chat_history with loaded data, keeping current session_id.
     -- Assigned directly and left clean: the data is a session file's.

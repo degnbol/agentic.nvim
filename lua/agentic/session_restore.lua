@@ -358,6 +358,7 @@ function SessionRestore.replay_messages(writer, messages)
                 body = msg.body,
                 diff = msg.diff,
                 skill_path = msg.skill_path,
+                subagent = msg.subagent,
             }
             writer:write_tool_call_block(tool_block)
         end

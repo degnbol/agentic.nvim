@@ -2,10 +2,27 @@
 --- buffer naming.
 
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.ui.WindowDecoration
 local WindowDecoration = {}
+
+--- Title of the subagents panel once `count` subagents have started.
+--- @param count integer
+--- @return string
+function WindowDecoration.subagent_title(count)
+    local glyph = Glyphs.KIND.subagent
+    if count == 0 then
+        return glyph .. " Subagents"
+    end
+    return string.format(
+        "%s %d subagent%s",
+        glyph,
+        count,
+        count == 1 and "" or "s"
+    )
+end
 
 --- @type agentic.ui.ChatWidget.Headers
 local WINDOW_HEADERS = {
@@ -13,7 +30,7 @@ local WINDOW_HEADERS = {
         title = "󰻞 Agentic Chat",
     },
     subagent = {
-        title = "󰚩 Subagents",
+        title = WindowDecoration.subagent_title(0),
     },
     input = { title = "󰦨 Prompt" },
     code = {

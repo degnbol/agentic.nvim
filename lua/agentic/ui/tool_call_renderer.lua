@@ -199,6 +199,21 @@ local function collapsed_header(kind, name, wrap_width, truncate)
     return string.format("### %s%s%s%s%s", guard, pad, name, pad, guard)
 end
 
+--- @type table<agentic.ui.MessageWriter.SubagentMode, string>
+local SUBAGENT_MODE_TEXT = {
+    background = "Background",
+    blocking = "Blocking",
+}
+
+--- Display text of a subagent's execution mode: `Background` or `Blocking`,
+--- with a trailing `?` while the mode is only predicted.
+--- @param subagent agentic.ui.MessageWriter.SubagentInfo
+--- @return string
+function M.subagent_mode_text(subagent)
+    return SUBAGENT_MODE_TEXT[subagent.mode]
+        .. (subagent.confirmed and "" or "?")
+end
+
 --- Return a backtick fence string long enough to avoid clashing with any
 --- literal backtick runs inside `body_lines`.
 ---
@@ -761,6 +776,11 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local name = argument:gsub("\n", "\\n")
         if head_line then
             name = name .. ":" .. head_line
+        end
+        local subagent = tool_call_block.subagent
+        if subagent then
+            name =
+                string.format("%s (%s)", name, M.subagent_mode_text(subagent))
         end
         lines = { collapsed_header(kind, name, wrap_width, false) }
     end

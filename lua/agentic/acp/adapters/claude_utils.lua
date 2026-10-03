@@ -184,6 +184,50 @@ function M.tool_head(kind, raw_input, tool_name)
     return build(raw_input, tool_name)
 end
 
+--- Display name of an Agent-tool subagent: its `name`, else its
+--- `description`, else its `subagent_type`, else "Agent". Runs of whitespace
+--- collapse to one space, since the model writes these fields and a label is
+--- shown on a single line.
+--- @param raw_input agentic.acp.ClaudeAgentRawInput
+--- @return string
+function M.subagent_label(raw_input)
+    local label = nonempty(raw_input, "name")
+        or nonempty(raw_input, "description")
+        or nonempty(raw_input, "subagent_type")
+        or "Agent"
+    return (label:gsub("%s+", " "))
+end
+
+--- The mode an Agent-tool subagent will run in, predicted from its input. Only
+--- an explicit false predicts blocking: the tool defaults to background
+--- (`run_in_background` in the SDK's `sdk-tools.d.ts`). A PreToolUse hook can
+--- still rewrite the input before the tool runs.
+--- @param raw_input agentic.acp.ClaudeAgentRawInput
+--- @param force_background boolean Whether every subagent is rewritten to run in the background
+--- @return agentic.ui.MessageWriter.SubagentMode
+function M.predicted_subagent_mode(raw_input, force_background)
+    if raw_input.run_in_background == false and not force_background then
+        return "blocking"
+    end
+    return "background"
+end
+
+--- @type table<string, agentic.ui.MessageWriter.SubagentMode>
+local MODE_OF_STATUS = {
+    completed = "blocking",
+    async_launched = "background",
+    remote_launched = "background",
+}
+
+--- The mode an Agent-tool subagent ran in, from the `status` of the tool's
+--- result: a blocking run returns when the agent is done, a background one at
+--- launch. Nil for an unknown status.
+--- @param status string
+--- @return agentic.ui.MessageWriter.SubagentMode|nil
+function M.subagent_mode_from_status(status)
+    return MODE_OF_STATUS[status]
+end
+
 --- Rewrite a leading "grep " in a synthesised search command to "rg ".
 --- The Claude Code Grep tool is statically-linked ripgrep, but
 --- claude-agent-acp synthesises rawInput.command using "grep" as the program

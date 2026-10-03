@@ -1380,13 +1380,16 @@ return ACPClient
 --- @field newStart integer
 --- @field newLines integer
 
---- A tool's own return value, forwarded verbatim. Only the Edit/Write shape is
---- modelled, since that is the one the client reads: `type` is Write-only and
---- says whether the file was created or overwritten, Edit omits it entirely.
+--- A tool's own return value, forwarded verbatim. Only the Edit/Write and Agent
+--- shapes are modelled, since those are the ones the client reads: `type` is
+--- Write-only and says whether the file was created or overwritten, Edit omits
+--- it entirely.
 --- @class agentic.acp.ClaudeToolResponse
 --- @field filePath? string
 --- @field type? "create"|"update"
 --- @field structuredPatch? agentic.acp.ClaudePatchHunk[]
+--- @field status? string Outcome of an Agent call: `completed`, `async_launched` or `remote_launched`
+--- @field agentId? string Id of the agent an Agent call launched in the background
 
 --- claude-agent-acp per-notification metadata. `parentToolUseId` is set on
 --- subagent (Task) notifications — present ⟺ subagent content. `toolName` is

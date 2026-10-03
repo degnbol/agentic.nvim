@@ -78,6 +78,17 @@ end
 --- the provider abandoned without a final update of its own.
 --- @alias agentic.ui.ToolCallStatus agentic.acp.ToolCallStatus|"cancelled"
 
+--- How an Agent-tool subagent runs: `blocking` holds the parent's tool call
+--- open until the agent ends, `background` returns it at launch.
+--- @alias agentic.ui.MessageWriter.SubagentMode "background"|"blocking"
+
+--- Identity and execution mode of the subagent a Task tool call spawned.
+--- @class agentic.ui.MessageWriter.SubagentInfo
+--- @field label? string Display name of the agent. Absent on the update that confirms the mode, which merges onto an earlier one
+--- @field mode agentic.ui.MessageWriter.SubagentMode
+--- @field confirmed boolean `mode` comes from the tool's result rather than a prediction from its input
+--- @field agent_id? string Id addressing a background agent, once launched
+
 --- @class agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id string
 --- @field status agentic.ui.ToolCallStatus
@@ -92,6 +103,7 @@ end
 --- @field file_created? boolean Whether the call created the file rather than changing existing content. Reported after the tool runs, so absent until then — a mutation with no value here has not been told either way, which is not the same as false.
 --- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives a session restore, which re-deriving from disk cannot (the file is post-edit by then).
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
+--- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a Task tool call
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -1713,6 +1725,20 @@ function MessageWriter:emit_divider()
         self:_append_lines({ "", "---", "" })
     end)
     self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
+end
+
+--- Append a `## <text>` heading that opens one subagent's section. Touches no
+--- cross-turn state, so it is safe to call mid-turn.
+--- @param text string
+function MessageWriter:write_subagent_heading(text)
+    self:flush_thought_run()
+    -- The heading ends the prose run it interrupts, as a notice does.
+    self:_release_prose_pin()
+    self:_auto_scroll(self.bufnr)
+    self:_with_modifiable_suppressed(function(bufnr)
+        self:_end_prose_run(bufnr)
+        self:_append_lines({ "## " .. text, "" })
+    end)
 end
 
 --- The 2-cell sign to stamp on a block's body rows in place of the │ border, or
