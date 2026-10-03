@@ -18,7 +18,7 @@ LOGDIR  ?= .luals-log
 # tests/init.lua additionally strips `$XDG_CONFIG_HOME/nvim` from rtp to keep
 # the user's outer nvim config out of the test environment, while leaving
 # other tools (git's core.excludesFile, etc.) intact.
-TEST_FILES := $(shell find lua -name "*.test.lua") $(shell find tests -name "*_test.lua" -o -name "test_*.lua" 2>/dev/null)
+TEST_FILES := $(shell find lua tests -name "*.test.lua") $(shell find tests -name "*_test.lua" -o -name "test_*.lua" 2>/dev/null)
 
 test:
 	@rc=0; for f in $(TEST_FILES); do \
