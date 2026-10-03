@@ -235,6 +235,48 @@ describe("ChatHistory", function()
                 assert.equal("one.\n\nTwo", merged("one.\n\n", "Two", true))
                 assert.equal("one.\n  \nTwo", merged("one.\n  \n", "Two", true))
             end)
+
+            it("merges by parent across another parent's messages", function()
+                local history = ChatHistory:new()
+                --- @param parent string
+                --- @param text string
+                --- @param starts_response boolean|nil
+                local function append(parent, text, starts_response)
+                    history:append_agent_text({
+                        type = "agent",
+                        text = text,
+                        provider_name = "test-provider",
+                        parent_tool_use_id = parent,
+                    }, starts_response)
+                end
+
+                append("task-a", "a1")
+                append("task-b", "b1")
+                append("task-a", "a2")
+                append("task-a", "A", true)
+
+                assert.same({}, history.messages)
+                assert.equal(2, #history.subagent_messages)
+                assert.equal("a1a2\n\nA", history.subagent_messages[1].text)
+                assert.equal("b1", history.subagent_messages[2].text)
+                assert.is_true(history.dirty)
+            end)
+        end)
+
+        it("add_message puts a tagged message in subagent_messages", function()
+            local history = ChatHistory:new()
+
+            history:add_message({
+                type = "tool_call",
+                tool_call_id = "tc-sub",
+                status = "pending",
+                kind = "read",
+                parent_tool_use_id = "task-1",
+            })
+
+            assert.same({}, history.messages)
+            assert.equal(1, #history.subagent_messages)
+            assert.is_true(history.dirty)
         end)
 
         describe("update_tool_call", function()
@@ -257,6 +299,29 @@ describe("ChatHistory", function()
 
                 assert.equal("completed", history.messages[1].status)
                 assert.is_not_nil(history.messages[1].body)
+            end)
+
+            it("finds a subagent tool_call", function()
+                local history = ChatHistory:new()
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-sub",
+                    status = "pending",
+                    kind = "read",
+                    parent_tool_use_id = "task-1",
+                })
+
+                history:update_tool_call("tc-sub", {
+                    tool_call_id = "tc-sub",
+                    status = "completed",
+                    type = "tool_call",
+                })
+
+                assert.equal("completed", history.subagent_messages[1].status)
+                assert.equal(
+                    "task-1",
+                    history.subagent_messages[1].parent_tool_use_id
+                )
             end)
 
             it("does nothing if tool_call not found", function()
@@ -344,6 +409,46 @@ describe("ChatHistory", function()
             assert.equal(1, #loaded.messages)
             assert.equal("Test message", loaded.messages[1].text)
             assert.is_false(loaded.dirty)
+        end)
+
+        it("round-trips subagent_messages", function()
+            local original = ChatHistory:new()
+            original.session_id = "subagent-roundtrip"
+            original:add_message({
+                type = "agent",
+                text = "Found it",
+                provider_name = "test-provider",
+                parent_tool_use_id = "task-1",
+            })
+            assert.is_nil(original:save())
+
+            --- @type agentic.ui.ChatHistory|nil
+            local loaded
+            ChatHistory.load(original.session_id, function(history)
+                loaded = history
+            end)
+
+            --- @cast loaded agentic.ui.ChatHistory
+            assert.same(original.subagent_messages, loaded.subagent_messages)
+        end)
+
+        it("loads a file without subagent_messages as empty", function()
+            local path = ChatHistory.get_file_path("older")
+            mock_files[path] = vim.json.encode({
+                session_id = "older",
+                title = "",
+                timestamp = 0,
+                messages = {},
+            })
+
+            --- @type agentic.ui.ChatHistory|nil
+            local loaded
+            ChatHistory.load("older", function(history)
+                loaded = history
+            end)
+
+            --- @cast loaded agentic.ui.ChatHistory
+            assert.same({}, loaded.subagent_messages)
         end)
 
         it("returns error for missing or corrupted files", function()

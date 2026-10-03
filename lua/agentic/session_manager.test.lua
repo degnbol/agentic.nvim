@@ -130,7 +130,6 @@ describe("agentic.SessionManager", function()
             local keymap_stub = spy.stub(BufHelpers, "multi_keymap_set")
 
             local config_opts = AgentConfigOptions:new(
-                { chat = test_bufnr },
                 function() end,
                 function() end
             )
@@ -212,7 +211,7 @@ describe("agentic.SessionManager", function()
                 _sync_history_context = function() end,
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _on_session_update = SessionManager._on_session_update,
             } --[[@as agentic.SessionManager]]
@@ -275,7 +274,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
 
@@ -326,7 +325,7 @@ describe("agentic.SessionManager", function()
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
                     _reset_subagents = function() end,
-                    _sync_chat_modified = SessionManager._sync_chat_modified,
+                    _sync_modified = SessionManager._sync_modified,
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                 } --[[@as agentic.SessionManager]]
 
@@ -422,7 +421,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _budget_status = SessionManager._budget_status,
             } --[[@as agentic.SessionManager]]
@@ -464,7 +463,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
@@ -683,8 +682,8 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
-                _clear_open_tasks = noop,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _show_saved_subagents = noop,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
                 _apply_default_trust = noop,
@@ -1247,7 +1246,7 @@ describe("agentic.SessionManager", function()
                     _history_to_send = nil,
                     new_session = new_session_spy,
                     _adopt_history = SessionManager._adopt_history,
-                    _sync_chat_modified = SessionManager._sync_chat_modified,
+                    _sync_modified = SessionManager._sync_modified,
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                     switch_provider = SessionManager.switch_provider,
                 } --[[@as agentic.SessionManager]]
@@ -1377,7 +1376,7 @@ describe("agentic.SessionManager", function()
                     captured_on_created = opts.on_created
                 end),
                 _adopt_history = SessionManager._adopt_history,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
@@ -1564,7 +1563,7 @@ describe("agentic.SessionManager", function()
             -- Subagent hooks write to a transcript the reader does not follow.
             local session, drains =
                 make_session({ ["tc-1"] = { kind = "read" } })
-            session._tool_call_owner["tc-1"] = true
+            session._tool_call_owner["tc-1"] = "task-1"
 
             SessionManager._on_tool_call_update(
                 session,
@@ -2066,11 +2065,12 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _dispatch_turn = SessionManager._dispatch_turn,
+                _load_subagent_buffer = SessionManager._load_subagent_buffer,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
@@ -2206,7 +2206,6 @@ describe("agentic.SessionManager", function()
                 _mark_unresolved_tool_calls_cancelled = SessionManager._mark_unresolved_tool_calls_cancelled,
                 _close_open_tasks = SessionManager._close_open_tasks,
                 _mark_task_closed = SessionManager._mark_task_closed,
-                _sync_subagent_modified = noop,
                 _tool_call_owner = {},
                 _open_tasks = {},
                 _finalize_turn = SessionManager._finalize_turn,
@@ -2260,6 +2259,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _dispatch_turn = SessionManager._dispatch_turn,
+                _load_subagent_buffer = SessionManager._load_subagent_buffer,
                 _send_synthetic_prompt = function(this, text)
                     table.insert(sink.synthetic, text)
                     SessionManager._send_synthetic_prompt(this, text)
@@ -2268,7 +2268,7 @@ describe("agentic.SessionManager", function()
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
@@ -2317,11 +2317,11 @@ describe("agentic.SessionManager", function()
                 session.agent.send_prompt = function() end
 
                 session:_handle_input_submit("first")
-                session._tool_call_owner["tc-1"] = true
+                session._tool_call_owner["tc-1"] = "task-1"
                 session._open_tasks["task-1"] = true
                 session:_handle_input_submit("second")
 
-                assert.is_true(session._tool_call_owner["tc-1"])
+                assert.equal("task-1", session._tool_call_owner["tc-1"])
                 assert.is_true(session._open_tasks["task-1"])
             end)
 
@@ -2437,9 +2437,7 @@ describe("agentic.SessionManager", function()
                 }, sink.stamped.subagent)
             end)
 
-            -- Subagent interim is not restored, so only the main writer's
-            -- calls have a persisted status to correct.
-            it("persists the main writer's stamps only", function()
+            it("persists both writers' stamps", function()
                 local sink =
                     turn_over_pending_calls({ stopReason = "cancelled" })
 
@@ -2452,10 +2450,18 @@ describe("agentic.SessionManager", function()
                             status = "cancelled",
                         },
                     },
+                    {
+                        "sub-running",
+                        {
+                            type = "tool_call",
+                            tool_call_id = "sub-running",
+                            status = "cancelled",
+                        },
+                    },
                 }, sink.history_updates)
                 -- The sweep has to precede the save, or the footer comes back
                 -- from a restore still reading `pending`.
-                assert.equal(1, sink.updates_at_save)
+                assert.equal(2, sink.updates_at_save)
             end)
 
             it("leaves a normally-ended turn's calls alone", function()
@@ -3183,8 +3189,7 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
-                _sync_chat_modified = function() end,
-                _clear_open_tasks = function() end,
+                _sync_modified = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
 
@@ -3514,7 +3519,6 @@ describe("agentic.SessionManager", function()
                 _maybe_latch_numbering = SessionManager._maybe_latch_numbering,
                 _mark_task_open = SessionManager._mark_task_open,
                 _mark_task_closed = SessionManager._mark_task_closed,
-                _sync_subagent_modified = function() end,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -3674,6 +3678,7 @@ describe("agentic.SessionManager", function()
             writer.enable_numbering = noop
             writer.finalize_turn = noop
             writer.reset_turn_state = noop
+            writer.reset = noop
             return writer
         end
 
@@ -3821,53 +3826,106 @@ describe("agentic.SessionManager", function()
             assert.equal(1, sink.closed)
         end)
 
-        describe("subagent buffer modified", function()
-            --- @return boolean
-            local function modified()
-                return vim.bo[subagent_buf].modified
+        describe("subagent output in history", function()
+            local ResponseBoundary = require("agentic.acp.response_boundary")
+
+            --- `make_session` over a real ChatHistory, for an idle session.
+            --- @return agentic.SessionManager
+            local function make_recording_session()
+                local session = make_session()
+                session.chat_history = ChatHistory:new()
+                session.chat_history.session_id = "sid"
+                session.agent = {
+                    provider_config = { name = "test" },
+                } --[[@as agentic.acp.ACPClient]]
+                session._response_boundaries = {
+                    main = ResponseBoundary:new(),
+                    subagent = ResponseBoundary:new(),
+                }
+                local writer = session.subagent_writer --[[@as table]]
+                writer.write_message_chunk = noop
+                return session
             end
 
-            it("is set when a Task opens", function()
-                local session = make_session()
-                spawn_task(session, "task-1", "background")
+            --- @param session agentic.SessionManager
+            --- @param kind "agent_message_chunk"|"agent_thought_chunk"
+            --- @param text string
+            local function subagent_chunk(session, kind, text)
+                session:_on_session_update({
+                    sessionUpdate = kind,
+                    content = { type = "text", text = text },
+                    _meta = { claudeCode = { parentToolUseId = "task-1" } },
+                } --[[@as agentic.acp.SessionUpdateMessage]])
+            end
 
-                assert.is_true(modified())
-            end)
+            --- @param session agentic.SessionManager
+            local function subagent_call(session)
+                session:_on_tool_call({
+                    tool_call_id = "sub-read",
+                    kind = "read",
+                    status = "pending",
+                    argument = "a.lua",
+                    parent_tool_use_id = "task-1",
+                })
+            end
 
-            it("stays set until the last open Task closes", function()
-                local session = make_session()
-                spawn_task(session, "task-1", "blocking")
-                spawn_task(session, "task-2", "blocking")
+            it(
+                "records chunks, thoughts and tool calls with their parent",
+                function()
+                    local session = make_recording_session()
 
-                finish(session, "task-1", "completed")
-                assert.is_true(modified())
+                    subagent_chunk(session, "agent_thought_chunk", "hmm")
+                    subagent_chunk(session, "agent_message_chunk", "found")
+                    subagent_call(session)
 
-                finish(session, "task-2", "completed")
-                assert.is_false(modified())
-            end)
+                    local history = session.chat_history
+                    assert.same({}, history.messages)
+                    assert.same(
+                        { "thought", "agent", "tool_call" },
+                        vim.tbl_map(function(msg)
+                            return msg.type
+                        end, history.subagent_messages)
+                    )
+                    for _, msg in ipairs(history.subagent_messages) do
+                        assert.equal("task-1", msg.parent_tool_use_id)
+                    end
+                end
+            )
 
-            it("is cleared when the session epoch advances", function()
-                local session = make_session()
-                spawn_task(session, "task-1", "background")
+            it("drops them and their updates while a session loads", function()
+                local notify_stub = spy.stub(Logger, "notify")
+                local session = make_recording_session()
+                session._loading = true
 
-                session:_advance_session_epoch()
+                subagent_chunk(session, "agent_message_chunk", "found")
+                subagent_call(session)
+                session:_on_tool_call_update({
+                    tool_call_id = "sub-read",
+                    status = "completed",
+                })
+                notify_stub:revert()
 
-                assert.is_false(modified())
-            end)
-
-            it("is cleared by a refresh, which closes the Task", function()
-                local session, sink = make_session()
-                spawn_task(session, "task-1", "background")
-
-                session:_refresh()
-
-                assert.is_false(modified())
-                assert.equal(1, sink.closed)
-                assert.equal(
-                    1,
-                    (session.subagent_writer --[[@as table]]).dividers
+                assert.same({}, session.chat_history.subagent_messages)
+                assert.same(
+                    {},
+                    (session.subagent_writer --[[@as table]]).tool_call_blocks
                 )
+                assert.equal(0, notify_stub.call_count)
             end)
+
+            it(
+                "sets the subagent buffer's modified from the history",
+                function()
+                    local session = make_recording_session()
+
+                    subagent_chunk(session, "agent_message_chunk", "found")
+                    assert.is_true(vim.bo[subagent_buf].modified)
+
+                    session.chat_history.dirty = false
+                    session:_sync_modified(session.chat_history)
+                    assert.is_false(vim.bo[subagent_buf].modified)
+                end
+            )
         end)
 
         it(
@@ -3996,7 +4054,7 @@ describe("agentic.SessionManager", function()
                 session._session_epoch = 0
                 session._prompt_pending = 0
                 session.chat_history.save = noop
-                session._sync_chat_modified = noop
+                session._sync_modified = noop
                 session:_on_tool_call({
                     tool_call_id = "child-1",
                     parent_tool_use_id = "task-1",
@@ -4096,7 +4154,7 @@ describe("agentic.SessionManager", function()
                 local session = make_session()
                 spawn_task(session, "task-1", "blocking")
                 session.session_id = "s-1"
-                session._sync_chat_modified = noop
+                session._sync_modified = noop
                 session.file_activity = { clear = noop, load = noop }
                 session.message_writer.flush_thought_run = noop
 
@@ -4199,7 +4257,7 @@ describe("agentic.SessionManager", function()
                 _ordinal_for = SessionManager._ordinal_for,
                 _maybe_latch_numbering = SessionManager._maybe_latch_numbering,
                 _mark_task_open = SessionManager._mark_task_open,
-                _sync_subagent_modified = noop,
+                _sync_modified = noop,
                 _on_tool_call = SessionManager._on_tool_call,
             } --[[@as agentic.SessionManager]]
         end
@@ -4782,7 +4840,7 @@ describe("agentic.SessionManager", function()
                 widget = { buf_nrs = {} },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
         end
@@ -4828,7 +4886,7 @@ describe("agentic.SessionManager", function()
                 },
                 widget = { buf_nrs = {} },
                 _adopt_history = SessionManager._adopt_history,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
 
@@ -4872,7 +4930,7 @@ describe("agentic.SessionManager", function()
                 _head_subagent = function() end,
                 _on_session_update = SessionManager._on_session_update,
                 _history_changed = SessionManager._history_changed,
-                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
         end)

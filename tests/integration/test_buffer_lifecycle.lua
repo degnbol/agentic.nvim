@@ -37,6 +37,8 @@ _G.s.session_id = "sid-1"
 _G.s.chat_history.session_id = "sid-1"
 _G.chat = _G.s.widget.buf_nrs.chat
 _G.sub = _G.s.widget.buf_nrs.subagent
+-- What ACP notifications reach.
+_G.h = _G.s:_build_handlers()
 _G.user_msg = function(text)
     return { type = "user", text = text, timestamp = 0, provider_name = "p" }
 end
@@ -98,7 +100,7 @@ _G.s.message_writer:write_message(
                 open_session()
                 child.lua([[
 _G.s.chat_history:add_message(_G.user_msg("hello"))
-_G.s:_sync_chat_modified(_G.s.chat_history)
+_G.s:_sync_modified(_G.s.chat_history)
 vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)
 ]])
                 assert.is_true(chat_modified())
@@ -134,7 +136,7 @@ vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)
             open_session()
             child.lua([[
 _G.s.chat_history:add_message(_G.user_msg("unsaved"))
-_G.s:_sync_chat_modified(_G.s.chat_history)
+_G.s:_sync_modified(_G.s.chat_history)
 ]])
             assert.is_true(chat_modified())
             child.lua([[
@@ -471,7 +473,7 @@ vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)
         local function open_task(id)
             child.lua(
                 [[
-_G.s:_on_tool_call({
+_G.h.on_tool_call({
     tool_call_id = ...,
     kind = "SubAgent",
     status = "in_progress",
@@ -490,7 +492,7 @@ _G.s:_on_tool_call({
             child.lua(
                 [[
 local id, parent = ...
-_G.s:_on_tool_call({
+_G.h.on_tool_call({
     tool_call_id = id,
     parent_tool_use_id = parent,
     kind = "execute",
@@ -503,10 +505,27 @@ _G.s:_on_tool_call({
             )
         end
 
+        --- Stream subagent prose under Task `parent` in `_G.s`.
+        --- @param text string
+        --- @param parent string
+        local function subagent_chunk(text, parent)
+            child.lua(
+                [[
+local text, parent = ...
+_G.h.on_session_update({
+    sessionUpdate = "agent_message_chunk",
+    content = { type = "text", text = text },
+    _meta = { claudeCode = { parentToolUseId = parent } },
+})
+]],
+                { text, parent }
+            )
+        end
+
         --- @param id string
         local function complete(id)
             child.lua(
-                [[_G.s:_on_tool_call_update({ tool_call_id = ..., status = "completed" })]],
+                [[_G.h.on_tool_call_update({ tool_call_id = ..., status = "completed" })]],
                 { id }
             )
         end
@@ -559,8 +578,16 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             return table.concat(sub_lines(), "\n"):find(text, 1, true) ~= nil
         end
 
-        it("refuses :e and :bd while a Task is open", function()
+        --- @return string
+        local function session_file()
+            return child.lua_get([[table.concat(vim.fn.readfile(
+    require("agentic.ui.chat_history").get_file_path("sid-1")
+), "\n")]])
+        end
+
+        it("refuses :e and :bd mid-turn", function()
             open_session()
+            child.lua([[_G.s:_set_prompt_pending(1)]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
             local lines = sub_lines()
@@ -575,82 +602,86 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             assert.same(lines, sub_lines())
         end)
 
-        it(":e! while a Task is open clears it and keeps it modified", function()
+        it(":e! mid-turn re-renders the same content", function()
             open_session()
+            child.lua([[_G.s:_set_prompt_pending(1)]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
+            local lines = sub_lines()
+            assert.is_true(sub_text_has("ls c-1"))
+            assert.is_true(sub_text_has("map ("))
             capture_notify()
 
             in_subagent("edit!")
 
-            assert.same({ "" }, sub_lines())
+            assert.same(lines, sub_lines())
             assert.is_true(sub_modified())
-            assert.is_true(child.lua_get([[#vim.api.nvim_buf_get_extmarks(
-    _G.sub, vim.api.nvim_create_namespace("agentic_status"), 0, -1, {}
-) > 0]]))
 
             complete("c-1")
             assert.same({}, child.lua_get("_G.notes"))
-
-            subagent_call("c-2", "task-1")
-            assert.is_true(sub_text_has("ls c-2"))
-            assert.is_true(sub_text_has("map ("))
+            assert.is_true(sub_text_has("completed"))
         end)
 
-        it(":bd! while a Task is open reloads on the next write", function()
+        it(":bd! mid-turn reloads the buffer on a later update", function()
             open_session()
+            child.lua([[_G.s:_set_prompt_pending(1)]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
             capture_notify()
 
             in_subagent("bdelete!")
+            assert.is_false(child.lua_get("vim.api.nvim_buf_is_loaded(_G.sub)"))
             complete("c-1")
-            assert.same({}, child.lua_get("_G.notes"))
 
-            subagent_call("c-2", "task-1")
             assert.is_true(child.lua_get("vim.api.nvim_buf_is_loaded(_G.sub)"))
-            assert.is_true(sub_text_has("ls c-2"))
-            assert.is_true(sub_modified())
+            assert.is_true(sub_text_has("ls c-1"))
+            assert.is_true(sub_text_has("completed"))
+            assert.is_false(child.lua_get("vim.bo[_G.sub].buflisted"))
+            assert.same({}, child.lua_get("_G.notes"))
+            assert.equal("acwrite", child.lua_get("vim.bo[_G.sub].buftype"))
+            assert.equal(
+                child.lua_get("_G.s.id"),
+                child.lua_get("vim.b[_G.sub].agentic_session_id")
+            )
+            assert.is_true(child.lua_get([[(function()
+    for _, map in ipairs(vim.api.nvim_buf_get_keymap(_G.sub, "n")) do
+        if map.desc == "Agentic: Stop generation" then
+            return true
+        end
+    end
+    return false
+end)()]]))
         end)
 
-        for _, display in ipairs({ true, false }) do
-            it(
-                "is modified after an idle :bd and a subagent's write, display "
-                    .. tostring(display),
-                function()
-                    open_session()
-                    child.lua(
-                        [[require("agentic.config").windows.subagent.display = ...]],
-                        { display }
-                    )
-                    child.cmd("bdelete " .. child.lua_get("_G.sub"))
-                    assert.is_false(
-                        child.lua_get("vim.api.nvim_buf_is_loaded(_G.sub)")
-                    )
-
-                    open_task("task-1")
-                    subagent_call("c-1", "task-1")
-
-                    assert.is_true(sub_modified())
-                    local delete = in_subagent("bdelete")
-                    assert.is_false(delete[1])
-                    assert.truthy(tostring(delete[2]):find("E89"))
-                end
-            )
-        end
-
-        for _, cmd in ipairs({ "edit!", "bdelete!" }) do
-            it(cmd .. " leaves nothing for the Task's close to divide", function()
+        it(
+            "outside a turn, writes on a call's completion, not per chunk",
+            function()
                 open_session()
                 open_task("task-1")
+
+                subagent_chunk("first finding", "task-1")
+                assert.is_true(sub_modified())
+                assert.is_nil(session_file():find("first finding", 1, true))
+
                 subagent_call("c-1", "task-1")
-                in_subagent(cmd)
+                complete("c-1")
+                assert.is_false(sub_modified())
+                assert.truthy(session_file():find("first finding", 1, true))
+                assert.truthy(session_file():find("ls c-1", 1, true))
+            end
+        )
 
-                complete("task-1")
+        it(":w writes the session file and clears modified", function()
+            open_session()
+            open_task("task-1")
+            subagent_chunk("first finding", "task-1")
+            assert.is_true(sub_modified())
 
-                assert.equal("", table.concat(sub_lines(), "\n"))
-            end)
-        end
+            in_subagent("write")
+
+            assert.is_false(sub_modified())
+            assert.truthy(session_file():find("first finding", 1, true))
+        end)
 
         it("keeps ordinal signs after :e! with numbering latched", function()
             open_session()
@@ -700,47 +731,6 @@ return _G.s._checktime_scheduled
             assert.equal(1, child.lua_get("_G.s.file_activity:count()"))
         end)
 
-        it("is not modified after a mid-turn session load", function()
-            open_session()
-            open_task("task-1")
-            assert.is_true(sub_modified())
-
-            child.lua([[
-_G.s:_set_prompt_pending(1)
-_G.s.agent.agent_capabilities = { loadSession = true }
-_G.s:load_acp_session("sid-2")
-]])
-
-            assert.is_false(sub_modified())
-        end)
-
-        it(":e with no Task open clears it", function()
-            open_session()
-            open_task("task-1")
-            subagent_call("c-1", "task-1")
-            complete("task-1")
-            assert.is_false(sub_modified())
-
-            local edit = in_subagent("edit")
-
-            assert.is_true(edit[1])
-            assert.same({ "" }, sub_lines())
-        end)
-
-        it(":w notifies and leaves it modified", function()
-            open_session()
-            open_task("task-1")
-            capture_notify()
-
-            in_subagent("write")
-
-            assert.same(
-                { "Subagent output is not saved" },
-                child.lua_get("_G.notes")
-            )
-            assert.is_true(sub_modified())
-        end)
-
         it(":e! leaves another tabpage's subagent buffer alone", function()
             open_session()
             open_task("task-1")
@@ -749,18 +739,25 @@ _G.s:load_acp_session("sid-2")
             child.cmd("tabnew")
             open_session()
             open_task("task-1")
-            subagent_call("c-1", "task-1")
+            subagent_call("c-2", "task-1")
+            local lines = sub_lines()
+            child.lua(
+                [=[_G.second_tracker = _G.s.subagent_writer.tool_call_blocks["c-2"]]=]
+            )
 
             in_subagent("edit!", "_G.first_sub")
 
-            assert.is_true(sub_modified())
-            assert.is_true(sub_text_has("ls c-1"))
-            assert.is_true(child.lua_get(
-                [[_G.s.subagent_writer.tool_call_blocks["c-1"].extmark_id ~= nil]]
-            ))
-            assert.is_true(child.lua_get(
-                [[_G.first.subagent_writer.tool_call_blocks["c-1"].extmark_id == nil]]
-            ))
+            assert.same(lines, sub_lines())
+            assert.is_true(
+                child.lua_get(
+                    [[_G.s.subagent_writer.tool_call_blocks["c-2"] == _G.second_tracker]]
+                )
+            )
+            assert.is_true(
+                child.lua_get(
+                    [[_G.first.subagent_writer.tool_call_blocks["c-1"] ~= nil]]
+                )
+            )
         end)
     end)
 end)

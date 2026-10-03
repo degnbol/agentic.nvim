@@ -13,6 +13,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field type "agent"
 --- @field provider_name string
 --- @field text string Agent response text (concatenated chunks)
+--- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's message
 
 --- @class agentic.ui.ChatHistory.ThoughtMessage : agentic.ui.ChatHistory.AgentMessage
 --- @field type "thought"
@@ -20,12 +21,18 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @class agentic.ui.ChatHistory.ToolCall : agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id? string
 --- @field type "tool_call"
+--- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's call
+--- @field ordinal? integer The subagent's ordinal in its turn (see `agentic.ui.MessageWriter.ToolCallBlock`)
 
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
 --- | agentic.ui.ChatHistory.AgentMessage
 --- | agentic.ui.ChatHistory.ThoughtMessage
 --- | agentic.ui.ChatHistory.ToolCall
+
+--- A message with `parent_tool_use_id` set, of type `agent`, `thought` or
+--- `tool_call`.
+--- @alias agentic.ui.ChatHistory.SubagentMessage agentic.ui.ChatHistory.Message
 
 --- @class agentic.ui.ChatHistory.SessionMeta
 --- @field session_id string
@@ -41,12 +48,14 @@ local TextWrap = require("agentic.utils.text_wrap")
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
+--- @field subagent_messages? agentic.ui.ChatHistory.SubagentMessage[] Absent from files written before subagent output was saved
 --- @field file_activity? agentic.ui.FileActivity.Data
 
 --- @class agentic.ui.ChatHistory
 --- @field session_id? string
 --- @field timestamp integer Unix timestamp when session was created
 --- @field messages agentic.ui.ChatHistory.Message[]
+--- @field subagent_messages agentic.ui.ChatHistory.SubagentMessage[] Kept apart from `messages`, which are what a restore sends to the provider, what the picker previews and what the chat replays
 --- @field title string
 --- @field provider? agentic.UserConfig.ProviderName config key
 --- @field model? string model id
@@ -63,6 +72,7 @@ function ChatHistory:new()
         session_id = nil,
         timestamp = os.time(),
         messages = {},
+        subagent_messages = {},
         title = "",
         provider = nil,
         model = nil,
@@ -106,9 +116,17 @@ function ChatHistory.get_file_path(session_id)
     )
 end
 
+--- The list a message belongs in: `subagent_messages` for one with
+--- `parent_tool_use_id`, else `messages`.
+--- @param msg { parent_tool_use_id?: string }
+--- @return agentic.ui.ChatHistory.Message[]
+function ChatHistory:_list_for(msg)
+    return msg.parent_tool_use_id and self.subagent_messages or self.messages
+end
+
 --- @param msg agentic.ui.ChatHistory.Message
 function ChatHistory:add_message(msg)
-    table.insert(self.messages, msg)
+    table.insert(self:_list_for(msg), msg)
     self.dirty = true
 end
 
@@ -118,11 +136,20 @@ function ChatHistory:set_title(title)
     self.dirty = true
 end
 
---- Append text to the last agent or thought message, or create a new one
---- @param msg { type: "agent"|"thought", text: string, provider_name: string  }
+--- Append text to the same agent's last message (same `parent_tool_use_id`)
+--- when it has the same type, or add a new message.
+--- @param msg { type: "agent"|"thought", text: string, provider_name: string, parent_tool_use_id?: string }
 --- @param starts_response boolean|nil `msg.text` starts a new model response, so a merge into the last message puts a blank line before it
 function ChatHistory:append_agent_text(msg, starts_response)
-    local last = self.messages[#self.messages]
+    local list = self:_list_for(msg)
+    --- @type agentic.ui.ChatHistory.Message|nil
+    local last
+    for i = #list, 1, -1 do
+        if list[i].parent_tool_use_id == msg.parent_tool_use_id then
+            last = list[i]
+            break
+        end
+    end
     if last and last.type == msg.type then
         local text = msg.text
         if starts_response then
@@ -131,21 +158,23 @@ function ChatHistory:append_agent_text(msg, starts_response)
         end
         last.text = last.text .. text
     else
-        table.insert(self.messages, msg)
+        table.insert(list, msg)
     end
     self.dirty = true
 end
 
---- Update an existing tool_call by merging update data
+--- Update an existing tool_call, main or subagent, by merging update data
 --- @param tool_call_id string
 --- @param update agentic.ui.ChatHistory.ToolCall
 function ChatHistory:update_tool_call(tool_call_id, update)
-    for i = #self.messages, 1, -1 do
-        local msg = self.messages[i]
-        if msg.type == "tool_call" and msg.tool_call_id == tool_call_id then
-            self.messages[i] = vim.tbl_deep_extend("force", msg, update)
-            self.dirty = true
-            return
+    for _, list in ipairs({ self.messages, self.subagent_messages }) do
+        for i = #list, 1, -1 do
+            local msg = list[i]
+            if msg.type == "tool_call" and msg.tool_call_id == tool_call_id then
+                list[i] = vim.tbl_deep_extend("force", msg, update)
+                self.dirty = true
+                return
+            end
         end
     end
 end
@@ -212,6 +241,7 @@ function ChatHistory:save()
         provider_version = self.provider_version,
         model = self.model,
         messages = self.messages,
+        subagent_messages = self.subagent_messages,
         file_activity = self.file_activity,
     }
 
@@ -231,46 +261,54 @@ function ChatHistory:save()
     return err
 end
 
+--- Read a session file, synchronously.
+--- @param session_id string
+--- @param file_path string|nil Override path (for cross-project sessions)
+--- @return agentic.ui.ChatHistory|nil history
+--- @return string|nil err Why nothing was read
+function ChatHistory.read(session_id, file_path)
+    local path = file_path or ChatHistory.get_file_path(session_id)
+
+    --- @type string|nil
+    local content
+    FileSystem.read_file(path, nil, nil, function(read)
+        content = read
+    end)
+    if not content then
+        return nil, "Failed to read file"
+    end
+
+    local ok, parsed = pcall(vim.json.decode, content)
+    if not ok then
+        Logger.debug("JSON decode failed:", parsed)
+        return nil, "JSON decode error"
+    end
+
+    --- @cast parsed agentic.ui.ChatHistory.StorageData
+
+    -- Assigned directly: a loaded history mirrors the file, so it is not
+    -- dirty.
+    local instance = ChatHistory:new()
+    instance.session_id = parsed.session_id
+    instance.timestamp = parsed.timestamp
+    instance.messages = parsed.messages
+    instance.subagent_messages = parsed.subagent_messages or {}
+    instance.title = parsed.title or ""
+    instance.provider = parsed.provider
+    instance.provider_version = parsed.provider_version
+    instance.model = parsed.model
+    instance.file_activity = parsed.file_activity
+    return instance, nil
+end
+
+--- `read`, delivering its result on the next event-loop tick.
 --- @param session_id string
 --- @param callback fun(history: agentic.ui.ChatHistory|nil, err: string|nil)
 --- @param file_path? string Override path (for cross-project sessions)
 function ChatHistory.load(session_id, callback, file_path)
-    local path = file_path or ChatHistory.get_file_path(session_id)
-
-    FileSystem.read_file(path, nil, nil, function(content)
-        if not content then
-            vim.schedule(function()
-                callback(nil, "Failed to read file")
-            end)
-            return
-        end
-
-        local ok, parsed = pcall(vim.json.decode, content)
-        if not ok then
-            Logger.debug("JSON decode failed:", parsed)
-            vim.schedule(function()
-                callback(nil, "JSON decode error")
-            end)
-            return
-        end
-
-        --- @cast parsed agentic.ui.ChatHistory.StorageData
-
-        -- Assigned directly: a loaded history mirrors the file, so it is not
-        -- dirty.
-        local instance = ChatHistory:new()
-        instance.session_id = parsed.session_id
-        instance.timestamp = parsed.timestamp
-        instance.messages = parsed.messages
-        instance.title = parsed.title
-        instance.provider = parsed.provider
-        instance.provider_version = parsed.provider_version
-        instance.model = parsed.model
-        instance.file_activity = parsed.file_activity
-
-        vim.schedule(function()
-            callback(instance, nil)
-        end)
+    local history, err = ChatHistory.read(session_id, file_path)
+    vim.schedule(function()
+        callback(history, err)
     end)
 end
 

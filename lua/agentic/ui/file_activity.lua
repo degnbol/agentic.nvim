@@ -368,11 +368,10 @@ end
 
 --- Adopt a persisted log, keeping any ops already recorded in this instance.
 ---
---- Both orders happen: on `session/load` the provider's replay can re-enter the
---- tool-call handlers before the stored log has been read off disk. Stored ops
---- keep their original seq so `last_viewed_seq` still means what it did when it
---- was written; ops recorded before the load are re-numbered above them, and
---- dropped when the stored log already has their tool call.
+--- Stored ops keep their original seq so `last_viewed_seq` still means what it
+--- did when it was written; ops recorded before the load are re-numbered above
+--- them, and dropped when the stored log already has their tool call. Ops
+--- recorded after it are dropped the same way (see `record`).
 --- @param data agentic.ui.FileActivity.Data|nil
 function FileActivity:load(data)
     if not data then

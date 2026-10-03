@@ -16,18 +16,17 @@ local Logger = require("agentic.utils.logger")
 --- @field legacy_agent_models agentic.acp.AgentModels
 --- @field _pending_model_select boolean
 --- @field _pending_initial_model? string model id to apply once options arrive (session restore)
+--- @field _set_mode_callback fun(mode_id: string, is_legacy: boolean)
 --- @field _set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ModelChangeOpts|nil)
 --- @field _is_agent_ready? fun(): boolean Returns true if an agent is attached and ready
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
 
---- @param buffers agentic.ui.ChatWidget.BufNrs Same buffers as ChatWidget instance
 --- @param set_mode_callback fun(mode_id: string, is_legacy: boolean)
 --- @param set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ModelChangeOpts|nil)
 --- @param is_agent_ready fun(): boolean Returns true if an agent is attached and ready
 --- @return agentic.acp.AgentConfigOptions
 function AgentConfigOptions:new(
-    buffers,
     set_mode_callback,
     set_model_callback,
     is_agent_ready
@@ -43,31 +42,34 @@ function AgentConfigOptions:new(
         legacy_agent_models = AgentModels:new(),
         _pending_model_select = false,
         _pending_initial_model = nil,
+        _set_mode_callback = set_mode_callback,
         _set_model_callback = set_model_callback,
         _is_agent_ready = is_agent_ready,
     }, self)
 
-    for _, bufnr in pairs(buffers) do
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.change_mode,
-            bufnr,
-            function()
-                self:show_mode_selector(set_mode_callback)
-            end,
-            { desc = "Agentic: Select Agent Mode" }
-        )
-
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.switch_model,
-            bufnr,
-            function()
-                self:show_model_selector(set_model_callback)
-            end,
-            { desc = "Agentic: Select Model" }
-        )
-    end
-
     return self
+end
+
+--- Bind the mode and model selector maps on a buffer.
+--- @param bufnr integer
+function AgentConfigOptions:bind_keymaps(bufnr)
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.change_mode,
+        bufnr,
+        function()
+            self:show_mode_selector(self._set_mode_callback)
+        end,
+        { desc = "Agentic: Select Agent Mode" }
+    )
+
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.switch_model,
+        bufnr,
+        function()
+            self:show_model_selector(self._set_model_callback)
+        end,
+        { desc = "Agentic: Select Model" }
+    )
 end
 
 function AgentConfigOptions:clear()

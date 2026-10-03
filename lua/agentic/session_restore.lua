@@ -3,6 +3,7 @@ local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
+local ToolCallRenderer = require("agentic.ui.tool_call_renderer")
 
 --- @class agentic.SessionRestore.PickerItem
 --- @field display string
@@ -359,6 +360,7 @@ function SessionRestore.replay_messages(writer, messages)
                 diff = msg.diff,
                 skill_path = msg.skill_path,
                 subagent = msg.subagent,
+                ordinal = msg.ordinal,
             }
             writer:write_tool_call_block(tool_block)
         end
@@ -367,6 +369,67 @@ function SessionRestore.replay_messages(writer, messages)
     -- leave the run buffered until the next turn's first write and render the
     -- restored session's thinking under the new prompt.
     writer:flush_thought_run()
+end
+
+--- Group stored subagent messages into one section per top-level Task, in
+--- first-seen order. A nested agent's messages go in the section of the
+--- top-level Task above it, which the stored subagent tool calls lead to.
+--- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
+--- @return string[] task_ids The top-level Tasks, in order
+--- @return table<string, agentic.ui.ChatHistory.SubagentMessage[]> messages_by_task Each top-level Task's messages, in order
+function SessionRestore.subagent_sections(subagent_messages)
+    --- @type table<string, string> tool call id -> spawning Task id
+    local parent_of = {}
+    for _, msg in ipairs(subagent_messages) do
+        if msg.type == "tool_call" and msg.tool_call_id then
+            parent_of[msg.tool_call_id] = msg.parent_tool_use_id
+        end
+    end
+
+    --- @type string[]
+    local task_ids = {}
+    --- @type table<string, agentic.ui.ChatHistory.SubagentMessage[]>
+    local messages_by_task = {}
+    for _, msg in ipairs(subagent_messages) do
+        local task_id = msg.parent_tool_use_id --[[@as string]]
+        while parent_of[task_id] do
+            task_id = parent_of[task_id]
+        end
+        if not messages_by_task[task_id] then
+            messages_by_task[task_id] = {}
+            table.insert(task_ids, task_id)
+        end
+        table.insert(messages_by_task[task_id], msg)
+    end
+    return task_ids, messages_by_task
+end
+
+--- Replay stored subagent messages, one section per top-level Task (see
+--- `subagent_sections`): a heading, the Task's messages, and a divider unless
+--- the Task is still open.
+--- @param writer agentic.ui.MessageWriter
+--- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
+--- @param info_by_task table<string, agentic.ui.MessageWriter.SubagentInfo> Task tool call id -> its subagent's identity and mode; a Task missing here is headed `Agent`
+--- @param open_tasks table<string, true> Task tool call ids still running
+--- @return string[] task_ids The Tasks replayed, in order
+function SessionRestore.replay_subagent_messages(
+    writer,
+    subagent_messages,
+    info_by_task,
+    open_tasks
+)
+    local task_ids, messages_by_task =
+        SessionRestore.subagent_sections(subagent_messages)
+    for _, task_id in ipairs(task_ids) do
+        writer:write_subagent_heading(
+            ToolCallRenderer.subagent_heading(info_by_task[task_id])
+        )
+        SessionRestore.replay_messages(writer, messages_by_task[task_id])
+        if not open_tasks[task_id] then
+            writer:emit_divider()
+        end
+    end
+    return task_ids
 end
 
 --- Resolve a session reference to a cached session. Tries session_id prefix

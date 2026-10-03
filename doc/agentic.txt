@@ -857,13 +857,15 @@ prompts. A session lives as long as its chat buffer, which is listed.
     `:w` in the chat       Writes the history to the session file.
     `:bd` on the chat      Ends the session and wipes its buffers.
     `:e` / `:e!`           Re-renders the buffer from its session.
-    `:e` on the subagent   Clears completed subagents.
+    `:bd` on the subagent  Unloads and unlists it; subagent output reloads it.
 
 The chat is 'modified' while a running turn's history is not yet written. An
-idle session writes its history as it changes.
+idle session writes its history as it changes, except a subagent's text,
+which is written when one of its tool calls ends, at the next turn's end, or
+on `:w`.
 
-The subagent buffer is 'modified' while a subagent runs. Its output is not
-saved, and `:w` on it writes nothing.
+The subagent buffer is saved with the session. It is 'modified' while the
+session's history is not yet written, and `:w` on it writes the session file.
 
 Notices, errors and the session-start line are not saved: `:e` and a
 restore do not render them again.
@@ -985,6 +987,9 @@ the tool's result confirms it. In the subagent split, each subagent opens with
 a `## <name> (<mode>)` heading, and the split's header counts the subagents
 started in the session. The split shows a background subagent as working
 until the turn that started it ends.
+
+Subagent output is saved with the session (|agentic-buffers|), and a restore
+shows it again, one section per subagent.
 
 ==============================================================================
 10. HIGHLIGHT GROUPS                                      *agentic-highlights*

@@ -214,6 +214,21 @@ function M.subagent_mode_text(subagent)
         .. (subagent.confirmed and "" or "?")
 end
 
+--- Heading text of a subagent's section: its label and mode text, with the
+--- label `Agent` when it has none, and `Agent` alone when nothing is known.
+--- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
+--- @return string
+function M.subagent_heading(subagent)
+    if not subagent then
+        return "Agent"
+    end
+    return string.format(
+        "%s (%s)",
+        subagent.label or "Agent",
+        M.subagent_mode_text(subagent)
+    )
+end
+
 --- Return a backtick fence string long enough to avoid clashing with any
 --- literal backtick runs inside `body_lines`.
 ---

@@ -71,7 +71,6 @@ describe("agentic.acp.AgentConfigOptions", function()
         AgentConfigOptions = require("agentic.acp.agent_config_options")
         test_bufnr = vim.api.nvim_create_buf(false, true)
         config_options = AgentConfigOptions:new(
-            { chat = test_bufnr },
             function() end,
             function() end,
             function()
@@ -85,12 +84,13 @@ describe("agentic.acp.AgentConfigOptions", function()
         vim.api.nvim_buf_delete(test_bufnr, { force = true })
     end)
 
-    describe("constructor", function()
-        it("registers keymaps for mode and model on all buffers", function()
-            -- multi_keymap_set is stubbed in before_each; constructor called there
-            -- Each buffer gets 2 keymaps (change_mode + switch_model),
-            -- we pass 1 buffer so expect 2 calls
+    describe("bind_keymaps", function()
+        it("binds the mode and model selectors on the buffer", function()
+            config_options:bind_keymaps(test_bufnr)
+
             assert.stub(multi_keymap_stub).was.called(2)
+            assert.equal(test_bufnr, multi_keymap_stub.calls[1][2])
+            assert.equal(test_bufnr, multi_keymap_stub.calls[2][2])
 
             local mode_call = multi_keymap_stub.calls[1]
             assert.equal("function", type(mode_call[3]))
@@ -313,7 +313,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             "does not crash when no config options and no legacy modes exist",
             function()
                 local fresh = AgentConfigOptions:new(
-                    { chat = test_bufnr },
                     function() end,
                     function() end,
                     function()
@@ -401,7 +400,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             "falls back to legacy modes and wraps callback with is_legacy=true",
             function()
                 local fresh = AgentConfigOptions:new(
-                    { chat = test_bufnr },
                     function() end,
                     function() end,
                     function()
@@ -444,7 +442,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             local notify_stub = spy.stub(Logger, "notify")
 
             local fresh = AgentConfigOptions:new(
-                { chat = test_bufnr },
                 function() end,
                 function() end,
                 function()
@@ -524,7 +521,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             "falls back to legacy models and wraps callback with is_legacy=true",
             function()
                 local fresh = AgentConfigOptions:new(
-                    { chat = test_bufnr },
                     function() end,
                     function() end,
                     function()
@@ -571,7 +567,6 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local notify_stub = spy.stub(Logger, "notify")
 
                 local fresh = AgentConfigOptions:new(
-                    { chat = test_bufnr },
                     function() end,
                     function() end,
                     function()
@@ -596,7 +591,6 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local notify_stub = spy.stub(Logger, "notify")
 
                 local fresh = AgentConfigOptions:new(
-                    { chat = test_bufnr },
                     function() end,
                     function() end,
                     function()
@@ -644,7 +638,6 @@ describe("agentic.acp.AgentConfigOptions", function()
 
         it("shows model selector when set_options delivers models", function()
             local fresh = AgentConfigOptions:new(
-                { chat = test_bufnr },
                 function() end,
                 function() end,
                 function()
@@ -667,7 +660,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             "shows model selector when set_legacy_models delivers models",
             function()
                 local fresh = AgentConfigOptions:new(
-                    { chat = test_bufnr },
                     function() end,
                     function() end,
                     function()

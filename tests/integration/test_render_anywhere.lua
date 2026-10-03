@@ -230,7 +230,7 @@ _G.s:_on_request_permission({
 _G.bells = 0
 require("agentic.session_manager")._ring_bell = function() _G.bells = _G.bells + 1 end
 _G.sub = _G.s.widget.buf_nrs.subagent
-_G.s._tool_call_owner["tc-sub"] = true
+_G.s._tool_call_owner["tc-sub"] = "task-1"
 _G.s:_on_request_permission({
     sessionId = "s",
     toolCall = { toolCallId = "tc-sub", kind = "edit" },

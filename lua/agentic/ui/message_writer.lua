@@ -146,7 +146,7 @@ end
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
---- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history` on the main branch, but not for a subagent.
+--- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history`.
 --- @field _fold_retry_armed? boolean True while an InsertLeave autocmd is waiting to retry deferred fold ops (see `flush_pending_fold_ops`). Guards against arming a second one per pending batch.
 --- @field _scroll_verdicts? table<integer, boolean> The frozen scroll verdicts captured before a write, window id -> whether that window follows the write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so verdicts deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) ride along with their pending fold. The insert-mode hold is the one deferral the callback does not wait on — see the skip condition, which reads `_fold_retry_armed`.
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
@@ -195,19 +195,6 @@ function MessageWriter:reset()
     self._last_divider_line = nil
     self:reset_turn_state()
     vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
-end
-
---- As `reset`, but keep each tool call's tracker, without its extmarks. Later
---- updates to a kept tracker merge into it and render nothing.
-function MessageWriter:clear_render()
-    local trackers = self.tool_call_blocks
-    self:reset()
-    for _, tracker in pairs(trackers) do
-        tracker.extmark_id = nil
-        tracker.decoration_extmark_ids = nil
-        tracker.trailing_insert_mark_id = nil
-    end
-    self.tool_call_blocks = trackers
 end
 
 --- @param bufnr integer
@@ -420,18 +407,11 @@ end
 --- on screen at neovim's automatic pre-input redraw.
 ---
 --- Rendering loses nothing, so `modified` is left as it was before the write:
---- the flag belongs to the buffer's owner. An unloaded buffer is loaded first,
---- and a `modified` set by its load is kept.
+--- the flag belongs to the buffer's owner.
 --- @param fn fun(bufnr: integer): boolean|nil
 function MessageWriter:_with_modifiable_suppressed(fn)
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
-    if
-        vim.api.nvim_buf_is_valid(self.bufnr)
-        and not vim.api.nvim_buf_is_loaded(self.bufnr)
-    then
-        vim.fn.bufload(self.bufnr)
-    end
     local was_modified = vim.api.nvim_buf_is_valid(self.bufnr)
         and vim.bo[self.bufnr].modified
     local result = BufHelpers.with_modifiable(self.bufnr, fn)
@@ -1736,7 +1716,7 @@ function MessageWriter:emit_divider()
     end
     -- Before the no-op check, and before the separator: a run still buffered
     -- when this subagent's Task closes would otherwise surface under the next
-    -- one. Subagent thinking is not persisted, so a dropped run is gone.
+    -- one.
     self:flush_thought_run()
     if
         vim.api.nvim_buf_line_count(self.bufnr) == self._last_divider_line
@@ -2666,11 +2646,6 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     end
 
     self.tool_call_blocks[tool_call_block.tool_call_id] = tracker
-
-    -- Its render was cleared (see `clear_render`).
-    if not tracker.extmark_id then
-        return
-    end
 
     local pos = vim.api.nvim_buf_get_extmark_by_id(
         self.bufnr,

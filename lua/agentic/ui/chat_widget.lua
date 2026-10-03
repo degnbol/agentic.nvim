@@ -833,7 +833,6 @@ function ChatWidget:_initialize()
 
     self:_bind_keymaps()
     self:_setup_write_submit()
-    self:_setup_prompt_navigation()
     self:_setup_queue()
     self:_attach_input()
 
@@ -936,9 +935,8 @@ end
 --- MessageWriter:write_user_prompt and :write_notice); each row's identity sign
 --- rides on the same mark. Navigation reads the marks, so agent-authored `## `
 --- headings are never treated as prompts.
-function ChatWidget:_setup_prompt_navigation()
-    local chat_buf = self.buf_nrs.chat
-
+--- @param chat_buf integer The chat buffer
+function ChatWidget:_setup_prompt_navigation(chat_buf)
     --- Row of the nearest user-action marker relative to the cursor.
     --- @param forward boolean true = smallest row > cursor, false = greatest < cursor
     --- @return integer|nil row 0-indexed
@@ -1031,240 +1029,211 @@ function ChatWidget:_goto_transcripts_bottom()
 end
 
 function ChatWidget:_bind_keymaps()
-    if not BufHelpers.is_keymap_disabled(Config.keymaps.prompt.submit) then
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.prompt.submit,
-            self.buf_nrs.input,
-            function()
-                self:submit()
-            end,
-            { desc = "Agentic: Submit prompt" }
-        )
+    for panel, bufnr in pairs(self.buf_nrs) do
+        self:_bind_buf_keymaps(panel, bufnr)
     end
+end
 
-    self:_bind_send_keymaps()
-    self:_bind_queue_keymaps()
-
-    BufHelpers.multi_keymap_set(
-        Config.keymaps.prompt.paste_image,
-        self.buf_nrs.input,
-        function()
-            vim.schedule(function()
-                local Clipboard = require("agentic.ui.clipboard")
-                local res = Clipboard.paste_image()
-
-                if res ~= nil then
-                    -- call vim.paste directly to avoid coupling to the file list logic
-                    vim.paste({ res }, -1)
-                end
-            end)
-        end,
-        { desc = "Agentic: Paste image from clipboard" }
-    )
-
-    for _, bufnr in pairs(self.buf_nrs) do
-        for lhs, spec in pairs(Config.keymaps.prompts) do
-            local prompt
-            if type(spec) == "string" then
-                prompt = spec
-            elseif type(spec) == "table" then
-                prompt = spec.prompt
-            end
-
-            -- vim.NIL, nil, and "" all fall through to skip. is_keymap_disabled
-            -- is unusable here: it reports `#{prompt=...} == 0` as disabled,
-            -- silently dropping every table-form entry.
-            if prompt and prompt ~= "" then
-                local km = (type(spec) == "table" and spec.mode)
-                        and { { lhs, mode = spec.mode } }
-                    or lhs
-                local desc = (type(spec) == "table" and spec.desc)
-                    or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
-
-                -- Send via this widget's own session (self.on_submit_input ==
-                -- session:_handle_input_submit), not send_prompt: a buffer-local
-                -- map only fires from a focused widget window, so the session
-                -- already exists and is visible — avoids send_prompt's
-                -- get_session_for_tab_page(nil, …) auto-spawn branch.
-                BufHelpers.multi_keymap_set(km, bufnr, function()
-                    self.on_submit_input(prompt)
-                end, { desc = desc })
-            end
-        end
-
-        if not BufHelpers.is_keymap_disabled(Config.keymaps.widget.refresh) then
+--- Bind the widget's buffer-local maps on one panel's buffer.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @param bufnr integer
+function ChatWidget:_bind_buf_keymaps(panel, bufnr)
+    if panel == "input" then
+        if not BufHelpers.is_keymap_disabled(Config.keymaps.prompt.submit) then
             BufHelpers.multi_keymap_set(
-                Config.keymaps.widget.refresh,
+                Config.keymaps.prompt.submit,
                 bufnr,
                 function()
-                    if self.on_refresh then
-                        self.on_refresh()
-                    end
+                    self:submit()
                 end,
-                { desc = "Agentic: Refresh chat (reset stale state)" }
+                { desc = "Agentic: Submit prompt" }
             )
         end
 
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.toggle_auto_scroll,
-            bufnr,
-            function()
-                Config.auto_scroll.enabled = not Config.auto_scroll.enabled
-                Logger.notify(
-                    "Auto-scroll "
-                        .. (
-                            Config.auto_scroll.enabled and "enabled"
-                            or "disabled"
-                        ),
-                    vim.log.levels.INFO,
-                    { title = "Agentic" }
-                )
-            end,
-            { desc = "Agentic: Toggle auto-scroll" }
-        )
+        self:_bind_send_keymaps(bufnr)
+        self:_bind_queue_keymaps(bufnr)
 
         BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.goto_bottom,
+            Config.keymaps.prompt.paste_image,
             bufnr,
             function()
-                self:_goto_transcripts_bottom()
-            end,
-            { desc = "Agentic: Scroll transcripts to bottom" }
-        )
-    end
+                vim.schedule(function()
+                    local Clipboard = require("agentic.ui.clipboard")
+                    local res = Clipboard.paste_image()
 
-    -- Add keybindings to chat, todos, code, and files buffers to jump back to input and start insert mode
-    for panel_name, bufnr in pairs(self.buf_nrs) do
-        if panel_name ~= "input" then
-            for _, key in ipairs({
-                "a",
-                "A",
-                "o",
-                "O",
-                "i",
-                "I",
-                "c",
-                "C",
-                "x",
-                "X",
-            }) do
-                BufHelpers.keymap_set(bufnr, "n", key, function()
-                    self:focus_input_for_insert()
-                end)
-            end
-
-            -- Paste in chat/panel → focus input window and paste there
-            for _, key in ipairs({ "p", "P" }) do
-                BufHelpers.keymap_set(bufnr, "n", key, function()
-                    local input_win = self.win_nrs.input
-                    if input_win and vim.api.nvim_win_is_valid(input_win) then
-                        vim.api.nvim_set_current_win(input_win)
-                        vim.cmd("normal! " .. key)
+                    if res ~= nil then
+                        -- call vim.paste directly to avoid coupling to the file list logic
+                        vim.paste({ res }, -1)
                     end
                 end)
-            end
+            end,
+            { desc = "Agentic: Paste image from clipboard" }
+        )
+    elseif panel == "chat" then
+        self:_setup_prompt_navigation(bufnr)
+    end
+
+    for lhs, spec in pairs(Config.keymaps.prompts) do
+        local prompt
+        if type(spec) == "string" then
+            prompt = spec
+        elseif type(spec) == "table" then
+            prompt = spec.prompt
+        end
+
+        -- vim.NIL, nil, and "" all fall through to skip. is_keymap_disabled
+        -- is unusable here: it reports `#{prompt=...} == 0` as disabled,
+        -- silently dropping every table-form entry.
+        if prompt and prompt ~= "" then
+            local km = (type(spec) == "table" and spec.mode)
+                    and { { lhs, mode = spec.mode } }
+                or lhs
+            local desc = (type(spec) == "table" and spec.desc)
+                or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
+
+            -- Send via this widget's own session (self.on_submit_input ==
+            -- session:_handle_input_submit), not send_prompt: a buffer-local
+            -- map only fires from a focused widget window, so the session
+            -- already exists and is visible — avoids send_prompt's
+            -- get_session_for_tab_page(nil, …) auto-spawn branch.
+            BufHelpers.multi_keymap_set(km, bufnr, function()
+                self.on_submit_input(prompt)
+            end, { desc = desc })
         end
     end
 
-    DiffPreview.setup_diff_navigation_keymaps(self.buf_nrs)
+    if not BufHelpers.is_keymap_disabled(Config.keymaps.widget.refresh) then
+        BufHelpers.multi_keymap_set(
+            Config.keymaps.widget.refresh,
+            bufnr,
+            function()
+                if self.on_refresh then
+                    self.on_refresh()
+                end
+            end,
+            { desc = "Agentic: Refresh chat (reset stale state)" }
+        )
+    end
+
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.toggle_auto_scroll,
+        bufnr,
+        function()
+            Config.auto_scroll.enabled = not Config.auto_scroll.enabled
+            Logger.notify(
+                "Auto-scroll "
+                    .. (Config.auto_scroll.enabled and "enabled" or "disabled"),
+                vim.log.levels.INFO,
+                { title = "Agentic" }
+            )
+        end,
+        { desc = "Agentic: Toggle auto-scroll" }
+    )
+
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.goto_bottom,
+        bufnr,
+        function()
+            self:_goto_transcripts_bottom()
+        end,
+        { desc = "Agentic: Scroll transcripts to bottom" }
+    )
+
+    -- Add keybindings to chat, todos, code, and files buffers to jump back to input and start insert mode
+    if panel ~= "input" then
+        for _, key in ipairs({
+            "a",
+            "A",
+            "o",
+            "O",
+            "i",
+            "I",
+            "c",
+            "C",
+            "x",
+            "X",
+        }) do
+            BufHelpers.keymap_set(bufnr, "n", key, function()
+                self:focus_input_for_insert()
+            end)
+        end
+
+        -- Paste in chat/panel → focus input window and paste there
+        for _, key in ipairs({ "p", "P" }) do
+            BufHelpers.keymap_set(bufnr, "n", key, function()
+                local input_win = self.win_nrs.input
+                if input_win and vim.api.nvim_win_is_valid(input_win) then
+                    vim.api.nvim_set_current_win(input_win)
+                    vim.cmd("normal! " .. key)
+                end
+            end)
+        end
+    end
+
+    DiffPreview.setup_diff_navigation_keymaps({ bufnr })
 end
 
-function ChatWidget:_bind_send_keymaps()
+--- @param bufnr integer The input buffer
+function ChatWidget:_bind_send_keymaps(bufnr)
     local keymaps = Config.keymaps.prompt
 
     if not BufHelpers.is_keymap_disabled(keymaps.send_line) then
-        BufHelpers.multi_keymap_set(
-            keymaps.send_line,
-            self.buf_nrs.input,
-            function()
-                self:_send_line()
-            end,
-            { desc = "Agentic: Send line" }
-        )
+        BufHelpers.multi_keymap_set(keymaps.send_line, bufnr, function()
+            self:_send_line()
+        end, { desc = "Agentic: Send line" })
     end
 
     if not BufHelpers.is_keymap_disabled(keymaps.send_operator) then
-        BufHelpers.multi_keymap_set(
-            keymaps.send_operator,
-            self.buf_nrs.input,
-            function()
-                vim.o.operatorfunc =
-                    "v:lua.require'agentic.ui.chat_widget'._send_operator_dispatch"
-                return "g@"
-            end,
-            {
-                desc = "Agentic: Send motion",
-                expr = true,
-                silent = true,
-            }
-        )
+        BufHelpers.multi_keymap_set(keymaps.send_operator, bufnr, function()
+            vim.o.operatorfunc =
+                "v:lua.require'agentic.ui.chat_widget'._send_operator_dispatch"
+            return "g@"
+        end, {
+            desc = "Agentic: Send motion",
+            expr = true,
+            silent = true,
+        })
     end
 
     if not BufHelpers.is_keymap_disabled(keymaps.send_visual) then
-        BufHelpers.multi_keymap_set(
-            keymaps.send_visual,
-            self.buf_nrs.input,
-            function()
-                self:_send_visual()
-            end,
-            { desc = "Agentic: Send visual" },
-            "x"
-        )
+        BufHelpers.multi_keymap_set(keymaps.send_visual, bufnr, function()
+            self:_send_visual()
+        end, { desc = "Agentic: Send visual" }, "x")
     end
 end
 
-function ChatWidget:_bind_queue_keymaps()
+--- @param bufnr integer The input buffer
+function ChatWidget:_bind_queue_keymaps(bufnr)
     local keymaps = Config.keymaps.prompt
 
     if not BufHelpers.is_keymap_disabled(keymaps.queue_line) then
-        BufHelpers.multi_keymap_set(
-            keymaps.queue_line,
-            self.buf_nrs.input,
-            function()
-                self:_queue_line()
-            end,
-            { desc = "Agentic: Queue line" }
-        )
+        BufHelpers.multi_keymap_set(keymaps.queue_line, bufnr, function()
+            self:_queue_line()
+        end, { desc = "Agentic: Queue line" })
     end
 
     if not BufHelpers.is_keymap_disabled(keymaps.queue_operator) then
-        BufHelpers.multi_keymap_set(
-            keymaps.queue_operator,
-            self.buf_nrs.input,
-            function()
-                vim.o.operatorfunc =
-                    "v:lua.require'agentic.ui.chat_widget'._queue_operator_dispatch"
-                return "g@"
-            end,
-            {
-                desc = "Agentic: Queue motion",
-                expr = true,
-                silent = true,
-            }
-        )
+        BufHelpers.multi_keymap_set(keymaps.queue_operator, bufnr, function()
+            vim.o.operatorfunc =
+                "v:lua.require'agentic.ui.chat_widget'._queue_operator_dispatch"
+            return "g@"
+        end, {
+            desc = "Agentic: Queue motion",
+            expr = true,
+            silent = true,
+        })
     end
 
     if not BufHelpers.is_keymap_disabled(keymaps.queue_visual) then
-        BufHelpers.multi_keymap_set(
-            keymaps.queue_visual,
-            self.buf_nrs.input,
-            function()
-                self:_queue_visual()
-            end,
-            { desc = "Agentic: Queue visual" },
-            "x"
-        )
+        BufHelpers.multi_keymap_set(keymaps.queue_visual, bufnr, function()
+            self:_queue_visual()
+        end, { desc = "Agentic: Queue visual" }, "x")
     end
 
     if not BufHelpers.is_keymap_disabled(keymaps.cancel_queue) then
-        BufHelpers.multi_keymap_set(
-            keymaps.cancel_queue,
-            self.buf_nrs.input,
-            function()
-                self:cancel_queue()
-            end,
-            { desc = "Agentic: Cancel queue" }
-        )
+        BufHelpers.multi_keymap_set(keymaps.cancel_queue, bufnr, function()
+            self:cancel_queue()
+        end, { desc = "Agentic: Cancel queue" })
     end
 end
 
@@ -1322,50 +1291,48 @@ function ChatWidget:_attach_input()
     end)
 end
 
+--- A panel's buffer options, except `buflisted`, which only creation sets.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @return table<string, any>
+local function panel_buf_opts(panel)
+    --- @type table<agentic.ui.ChatWidget.PanelNames, table<string, any>>
+    local panel_opts = {
+        -- `acwrite` so `modified` blocks `:qa` while the history is unsaved.
+        chat = { filetype = "AgenticChat", buftype = "acwrite" },
+        subagent = { filetype = "AgenticChat", buftype = "acwrite" },
+        todos = { filetype = "AgenticTodos" },
+        code = { filetype = "AgenticCode" },
+        files = { filetype = "AgenticFiles" },
+        diagnostics = { filetype = "AgenticDiagnostics" },
+        activity = { filetype = "AgenticActivity" },
+        -- `acwrite` makes `:w` submit, and an unsent prompt block `:qa`.
+        input = {
+            filetype = "AgenticInput",
+            buftype = Config.settings.write_submit and "acwrite" or "nofile",
+            modifiable = true,
+        },
+    }
+    return vim.tbl_extend("force", {
+        swapfile = false,
+        buftype = "nofile",
+        bufhidden = "hide",
+        modifiable = false,
+    }, panel_opts[panel])
+end
+
 --- @return agentic.ui.ChatWidget.BufNrs
 function ChatWidget:_create_buf_nrs()
-    -- The chat stands for the session: listed so `:ls`, `:bd` and buffer
-    -- pickers reach it (`:bd` on an unlisted buffer only unloads it), and
-    -- `acwrite` so `modified` blocks `:qa` while the history is unsaved.
-    local chat = self:_create_new_buf("chat", {
-        filetype = "AgenticChat",
-        buftype = "acwrite",
-        buflisted = true,
-    })
-
-    -- `acwrite` so `modified` blocks `:e`, `:bd` and `:qa` while a subagent
-    -- runs.
-    local subagent = self:_create_new_buf("subagent", {
-        filetype = "AgenticChat",
-        buftype = "acwrite",
-    })
-
-    local todos = self:_create_new_buf("todos", {
-        filetype = "AgenticTodos",
-    })
-
-    local code = self:_create_new_buf("code", {
-        filetype = "AgenticCode",
-    })
-
-    local files = self:_create_new_buf("files", {
-        filetype = "AgenticFiles",
-    })
-
-    local diagnostics = self:_create_new_buf("diagnostics", {
-        filetype = "AgenticDiagnostics",
-    })
-
-    local activity = self:_create_new_buf("activity", {
-        filetype = "AgenticActivity",
-    })
-
-    -- `acwrite` makes `:w` submit, and an unsent prompt block `:qa`.
-    local input = self:_create_new_buf("input", {
-        filetype = "AgenticInput",
-        buftype = Config.settings.write_submit and "acwrite" or "nofile",
-        modifiable = true,
-    })
+    -- The chat stands for the session, and the subagent buffer holds part of
+    -- its history: listed so `:ls`, `:bd` and buffer pickers reach them (`:bd`
+    -- on an unlisted buffer only unloads it).
+    local chat = self:_create_new_buf("chat", true)
+    local subagent = self:_create_new_buf("subagent", true)
+    local todos = self:_create_new_buf("todos", false)
+    local code = self:_create_new_buf("code", false)
+    local files = self:_create_new_buf("files", false)
+    local diagnostics = self:_create_new_buf("diagnostics", false)
+    local activity = self:_create_new_buf("activity", false)
+    local input = self:_create_new_buf("input", false)
 
     ChatBuffer.setup(chat)
     ChatBuffer.setup(subagent)
@@ -1391,14 +1358,11 @@ function ChatWidget:_create_buf_nrs()
 end
 
 --- @param panel agentic.ui.ChatWidget.PanelNames
---- @param opts table<string, any>
+--- @param listed boolean
 --- @return integer bufnr
-function ChatWidget:_create_new_buf(panel, opts)
-    local bufnr = vim.api.nvim_create_buf(false, true)
-    vim.b[bufnr].agentic_session_id = self._owner_id
-    -- The panel the buffer is, so a buffer alone names its header; `chat` and
-    -- `subagent` share a filetype.
-    vim.b[bufnr].agentic_window = panel
+function ChatWidget:_create_new_buf(panel, listed)
+    local bufnr = vim.api.nvim_create_buf(listed, true)
+    self:_apply_buf_opts(bufnr, panel)
     -- A `scheme://` name passes through `vim.uri_from_bufnr` unchanged, so the
     -- input's name is also its document URI for the completion LSP.
     BufHelpers.rename(bufnr, WindowDecoration.buffer_name(bufnr))
@@ -1410,20 +1374,30 @@ function ChatWidget:_create_new_buf(panel, opts)
             WindowDecoration.render_header(bufnr)
         end,
     })
+    return bufnr
+end
 
-    local config = vim.tbl_deep_extend("force", {
-        swapfile = false,
-        buftype = "nofile",
-        bufhidden = "hide",
-        buflisted = false,
-        modifiable = false,
-    }, opts)
-
-    for key, value in pairs(config) do
+--- Set a panel's buffer options, except `buflisted`, and its b-vars.
+--- @param bufnr integer
+--- @param panel agentic.ui.ChatWidget.PanelNames
+function ChatWidget:_apply_buf_opts(bufnr, panel)
+    vim.b[bufnr].agentic_session_id = self._owner_id
+    -- The panel the buffer is, so a buffer alone names its header; `chat` and
+    -- `subagent` share a filetype.
+    vim.b[bufnr].agentic_window = panel
+    for key, value in pairs(panel_buf_opts(panel)) do
         vim.api.nvim_set_option_value(key, value, { buf = bufnr })
     end
+end
 
-    return bufnr
+--- Re-apply a panel buffer's options (except `buflisted`), b-vars and the
+--- widget's buffer-local maps, all of which an unload by `:bd` resets. The
+--- owning session's maps are its own to re-apply.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+function ChatWidget:apply_buf_state(panel)
+    local bufnr = self.buf_nrs[panel]
+    self:_apply_buf_opts(bufnr, panel)
+    self:_bind_buf_keymaps(panel, bufnr)
 end
 
 --- Set a panel's header context and render it.

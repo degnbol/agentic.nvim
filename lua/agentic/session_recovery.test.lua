@@ -268,7 +268,7 @@ describe("agentic.session_recovery", function()
                     todo_list = { clear = function() end },
                     widget = { buf_nrs = {} },
                     _adopt_history = SessionManager._adopt_history,
-                    _sync_chat_modified = SessionManager._sync_chat_modified,
+                    _sync_modified = SessionManager._sync_modified,
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                     new_session = function(this, opts)
                         this.chat_history = {
