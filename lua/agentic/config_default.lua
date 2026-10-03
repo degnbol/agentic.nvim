@@ -82,6 +82,12 @@ local ConfigDefault = {
     --- `plan` updates rather than tool calls, and nothing else writes there.
     todo_tools = true,
 
+    --- @class agentic.UserConfig.Subagents
+    --- @field force_background boolean Run every Agent (Task) spawn in the background, whatever the model passes for `run_in_background`. claude-agent-acp only.
+    subagents = {
+        force_background = false,
+    },
+
     --- Auto-continue after usage limit errors.
     --- When the provider reports "out of extra usage · resets Xpm", schedules
     --- a timer to send "continue" once the reset time arrives.

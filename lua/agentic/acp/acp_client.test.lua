@@ -11,6 +11,49 @@ describe("agentic.acp.ACPClient", function()
         ACPClient = require("agentic.acp.acp_client")
     end)
 
+    describe("_build_claude_options", function()
+        --- Matcher of each PreToolUse entry in the built options.
+        --- @param force_background boolean
+        --- @return string[] matchers
+        local function pre_tool_use_matchers(force_background)
+            local options =
+                ACPClient._build_claude_options({}, force_background)
+            return vim.tbl_map(function(entry)
+                return entry.matcher
+            end, options.settings.hooks.PreToolUse)
+        end
+
+        it("registers the Agent hook only with force_background", function()
+            assert.is_true(
+                vim.list_contains(pre_tool_use_matchers(true), "Agent")
+            )
+            assert.is_false(
+                vim.list_contains(pre_tool_use_matchers(false), "Agent")
+            )
+        end)
+
+        it("registers hook commands that run in sh", function()
+            local entries =
+                ACPClient._build_claude_options({}, true).settings.hooks.PreToolUse
+            local event = vim.json.encode({ tool_input = { prompt = "p" } })
+
+            for _, entry in ipairs(entries) do
+                local result = vim.system(
+                    { "sh", "-c", entry.hooks[1].command },
+                    { stdin = event, text = true, env = { AGENTIC_SOCK = "" } }
+                ):wait()
+
+                assert.equal(0, result.code)
+                if entry.matcher == "Agent" then
+                    local output = vim.json.decode(result.stdout)
+                    assert.is_true(
+                        output.hookSpecificOutput.updatedInput.run_in_background
+                    )
+                end
+            end
+        end)
+    end)
+
     describe("_fail_pending_callbacks", function()
         it("invokes all pending callbacks with transport error", function()
             local cb1 = spy.new(function() end)

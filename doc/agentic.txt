@@ -144,6 +144,13 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     fill the todos split. An `env` entry for that variable in
     |agentic-config-acp_providers| takes precedence.
 
+                                                   *agentic-config-subagents*
+`subagents` table (default: `{ force_background = false }`)
+    `force_background` runs every `claude-agent-acp` subagent (Task) in the
+    background, whatever the model passes for `run_in_background`.
+    Background subagents have no Agent or LSP tool. An `Agent` PreToolUse
+    hook of your own that rewrites the tool input can undo this.
+
 ------------------------------------------------------------------------------
 4.2 WINDOWS                                           *agentic-config-windows*
 

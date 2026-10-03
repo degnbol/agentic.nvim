@@ -1,38 +1,48 @@
 local AcpKind = require("agentic.utils.acp_kind")
+local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
 local SkillPath = require("agentic.utils.skill_path")
 local transport_module = require("agentic.acp.acp_transport")
 
--- Absolute path to the PreToolUse hook script (plugin_root/hooks/...). This
--- file is lua/agentic/acp/acp_client.lua, so :h:h:h:h is the plugin root.
-local PERMISSION_HOOK = vim.fn.fnamemodify(
+-- Absolute path to plugin_root/hooks. This file is
+-- lua/agentic/acp/acp_client.lua, so :h:h:h:h is the plugin root.
+local HOOKS_DIR = vim.fn.fnamemodify(
     debug.getinfo(1, "S").source:sub(2),
     ":h:h:h:h"
-) .. "/hooks/permission_hook.sh"
+) .. "/hooks"
+local PERMISSION_HOOK = vim.fn.shellescape(HOOKS_DIR .. "/permission_hook.sh")
+-- `--clean`: `-l` alone still sources the user's init.lua. `nvim` from PATH,
+-- not `vim.v.progpath`: a package upgrade can remove that versioned path while
+-- the editor still runs.
+local SUBAGENT_HOOK = "nvim --clean -l "
+    .. vim.fn.shellescape(HOOKS_DIR .. "/subagent_hook.lua")
 
 --- Build the `_meta.claudeCode.options` blob shared by session/new and
 --- session/load. Includes the inline PreToolUse permission hook (flag-tier
 --- settings, nothing written to disk) so the deterministic ladder gates
 --- auto-mode's classifier. Claude-only namespace — other bridges ignore it.
 --- @param additional_dirs string[]
+--- @param force_background boolean Add an Agent hook that runs every subagent in the background
 --- @return table
-local function build_claude_options(additional_dirs)
+local function build_claude_options(additional_dirs, force_background)
+    local pre_tool_use = {
+        {
+            matcher = "Bash|Write|Edit",
+            hooks = { { type = "command", command = PERMISSION_HOOK } },
+        },
+    }
+    if force_background then
+        table.insert(pre_tool_use, {
+            matcher = "Agent",
+            hooks = { { type = "command", command = SUBAGENT_HOOK } },
+        })
+    end
+
     return {
         additionalDirectories = additional_dirs,
-        settings = {
-            hooks = {
-                PreToolUse = {
-                    {
-                        matcher = "Bash|Write|Edit",
-                        hooks = {
-                            { type = "command", command = PERMISSION_HOOK },
-                        },
-                    },
-                },
-            },
-        },
+        settings = { hooks = { PreToolUse = pre_tool_use } },
     }
 end
 
@@ -77,6 +87,9 @@ ACPClient.ERROR_CODES = {
     PERMISSION_DENIED = -32005,
     INVALID_REQUEST = -32006,
 }
+
+--- @private Exposed for tests.
+ACPClient._build_claude_options = build_claude_options
 
 --- Set up a child adapter class with proper ACPClient inheritance chain.
 --- Returns a new class table with __index set for method lookup.
@@ -973,7 +986,10 @@ function ACPClient:create_session(handlers, callback)
         mcpServers = {},
         _meta = {
             claudeCode = {
-                options = build_claude_options(additional_dirs),
+                options = build_claude_options(
+                    additional_dirs,
+                    Config.subagents.force_background
+                ),
             },
         },
     }, function(result, err)
@@ -1046,7 +1062,10 @@ function ACPClient:load_session(
         mcpServers = mcp_servers or {},
         _meta = {
             claudeCode = {
-                options = build_claude_options(additional_dirs),
+                options = build_claude_options(
+                    additional_dirs,
+                    Config.subagents.force_background
+                ),
             },
         },
     }, function(result, err)
