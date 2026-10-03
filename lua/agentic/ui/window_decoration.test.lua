@@ -1,6 +1,5 @@
 --- @diagnostic disable: invisible
 local assert = require("tests.helpers.assert")
-local spy = require("tests.helpers.spy")
 local Config = require("agentic.config")
 
 describe("agentic.ui.WindowDecoration", function()
@@ -22,13 +21,9 @@ describe("agentic.ui.WindowDecoration", function()
         WindowDecoration = require("agentic.ui.window_decoration")
 
         bufnr = vim.api.nvim_create_buf(false, true)
-        winid = vim.api.nvim_open_win(bufnr, true, {
-            relative = "editor",
-            width = 80,
-            height = 20,
-            row = 0,
-            col = 0,
-        })
+        vim.b[bufnr].agentic_session_id = 7
+        vim.b[bufnr].agentic_window = "chat"
+        winid = vim.api.nvim_open_win(bufnr, true, { split = "right", win = 0 })
     end)
 
     after_each(function()
@@ -41,57 +36,82 @@ describe("agentic.ui.WindowDecoration", function()
         end
     end)
 
-    describe("render_header", function()
-        --- @type TestStub
-        local schedule_stub
-
-        before_each(function()
-            schedule_stub = spy.stub(vim, "schedule")
-            schedule_stub:invokes(function(fn)
-                fn()
-            end)
+    describe("buffer_name", function()
+        it("keeps a `/` in the title out of the name's tail", function()
+            local name = WindowDecoration.buffer_name(bufnr, "fix a/b")
+            assert.equal("agentic://7/chat/fix a-b", name)
+            assert.equal("fix a-b", vim.fn.fnamemodify(name, ":t"))
         end)
 
-        after_each(function()
-            schedule_stub:revert()
+        it("keeps a title apart from a panel's name", function()
+            assert.equal(
+                "agentic://7/chat",
+                WindowDecoration.buffer_name(bufnr)
+            )
+            assert.equal(
+                "agentic://7/chat/input",
+                WindowDecoration.buffer_name(bufnr, "input")
+            )
+        end)
+    end)
+
+    describe("headers", function()
+        it("default to the panel's title", function()
+            assert.equal(
+                "󰻞 Agentic Chat",
+                WindowDecoration.get_header(bufnr).title
+            )
         end)
 
-        it("sets buffer name from header title", function()
-            local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
-            WindowDecoration.set_headers_state(tab_page_id, {
-                chat = { title = "󰻞 Agentic Chat" },
+        it("render title, badge and context in every showing window", function()
+            local second = vim.api.nvim_open_win(bufnr, false, {
+                split = "below",
+                win = winid,
             })
 
-            WindowDecoration.render_header(bufnr, "chat")
+            WindowDecoration.set_header(
+                bufnr,
+                { title = "Chat", badge = "[done]", context = "Mode: plan" }
+            )
 
-            local name = vim.api.nvim_buf_get_name(bufnr)
-            assert.is_true(name:find("Agentic Chat") ~= nil)
+            assert.equal("Chat [done] | Mode: plan", vim.wo[winid].winbar)
+            assert.equal("Chat [done] | Mode: plan", vim.wo[second].winbar)
+            vim.api.nvim_win_close(second, true)
         end)
 
-        it("sets winbar to full header text", function()
-            local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
-            WindowDecoration.set_headers_state(tab_page_id, {
-                chat = { title = "Chat" },
+        it("set the winbar with local scope", function()
+            WindowDecoration.set_header(bufnr, { title = "Chat" })
+
+            local other = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_win_set_buf(winid, other)
+
+            assert.equal("", vim.wo[winid].winbar)
+            vim.api.nvim_buf_delete(other, { force = true })
+        end)
+
+        it("announce the buffer with AgenticHeadersChanged", function()
+            local seen
+            local id = vim.api.nvim_create_autocmd("User", {
+                pattern = "AgenticHeadersChanged",
+                callback = function(ev)
+                    seen = ev.data.buf
+                end,
             })
 
-            WindowDecoration.render_header(bufnr, "chat", "Mode: plan")
+            WindowDecoration.set_header(bufnr, { title = "Chat" })
 
-            assert.equal("Chat | Mode: plan", vim.wo[winid].winbar)
+            vim.api.nvim_del_autocmd(id)
+            assert.equal(bufnr, seen)
+            assert.equal("Chat", vim.b[bufnr].agentic_header.title)
         end)
 
-        it("does not set winbar when Config.winbar is false", function()
+        it("do not set a winbar when Config.winbar is false", function()
             local original_winbar = Config.winbar
             Config.winbar = false
 
-            local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
-            WindowDecoration.set_headers_state(tab_page_id, {
-                chat = { title = "Chat" },
-            })
-
-            WindowDecoration.render_header(bufnr, "chat", "Mode: plan")
+            WindowDecoration.set_header(bufnr, { title = "Chat" })
 
             assert.equal("", vim.wo[winid].winbar)
-
             Config.winbar = original_winbar
         end)
     end)

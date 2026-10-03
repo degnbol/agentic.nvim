@@ -52,6 +52,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field model? string model id
 --- @field provider_version? string provider binary version
 --- @field file_activity? agentic.ui.FileActivity.Data Tally of files the agent changed. Cannot be rebuilt from `messages`: the restore path that replays them writes tool-call blocks straight to the chat buffer, bypassing the handlers that record ops.
+--- @field dirty boolean Mutated since the last `save` or `load`, so the session file is behind. Set by every mutating method; assign `messages` or `title` only through them.
 local ChatHistory = {}
 ChatHistory.__index = ChatHistory
 
@@ -67,6 +68,7 @@ function ChatHistory:new()
         model = nil,
         provider_version = nil,
         file_activity = nil,
+        dirty = false,
     }
 
     setmetatable(instance, self)
@@ -107,6 +109,13 @@ end
 --- @param msg agentic.ui.ChatHistory.Message
 function ChatHistory:add_message(msg)
     table.insert(self.messages, msg)
+    self.dirty = true
+end
+
+--- @param title string
+function ChatHistory:set_title(title)
+    self.title = title
+    self.dirty = true
 end
 
 --- Append text to the last agent or thought message, or create a new one
@@ -124,6 +133,7 @@ function ChatHistory:append_agent_text(msg, starts_response)
     else
         table.insert(self.messages, msg)
     end
+    self.dirty = true
 end
 
 --- Update an existing tool_call by merging update data
@@ -134,6 +144,7 @@ function ChatHistory:update_tool_call(tool_call_id, update)
         local msg = self.messages[i]
         if msg.type == "tool_call" and msg.tool_call_id == tool_call_id then
             self.messages[i] = vim.tbl_deep_extend("force", msg, update)
+            self.dirty = true
             return
         end
     end
@@ -174,14 +185,12 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
     end
 end
 
---- @param callback fun(err: string|nil)|nil
-function ChatHistory:save(callback)
+--- Write the history to its session file, synchronously. Clears `dirty` on
+--- success.
+--- @return string|nil err Why nothing was written
+function ChatHistory:save()
     if not self.session_id then
-        Logger.notify("ChatHistory:save() skipped: no session_id")
-        if callback then
-            callback("No session_id set")
-        end
-        return
+        return "No session_id set"
     end
 
     local path = ChatHistory.get_file_path(self.session_id)
@@ -189,13 +198,7 @@ function ChatHistory:save(callback)
 
     local dir_ok, dir_err = FileSystem.mkdirp(dir)
     if not dir_ok then
-        Logger.debug("Failed to create directory:", dir, dir_err)
-        if callback then
-            callback(
-                "Failed to create directory: " .. (dir_err or "unknown error")
-            )
-        end
-        return
+        return "Failed to create directory: " .. (dir_err or "unknown error")
     end
 
     --- @type agentic.ui.ChatHistory.StorageData
@@ -214,20 +217,18 @@ function ChatHistory:save(callback)
 
     local encode_ok, json = pcall(vim.json.encode, data)
     if not encode_ok then
-        Logger.debug("JSON encoding failed:", json)
-        if callback then
-            callback("JSON encoding error")
-        end
-        return
+        return "JSON encoding error: " .. tostring(json)
     end
 
+    --- @type string|nil
+    local err
     FileSystem.write_file(path, json, function(write_err)
-        if callback then
-            vim.schedule(function()
-                callback(write_err)
-            end)
-        end
+        err = write_err
     end)
+    if not err then
+        self.dirty = false
+    end
+    return err
 end
 
 --- @param session_id string
@@ -255,6 +256,8 @@ function ChatHistory.load(session_id, callback, file_path)
 
         --- @cast parsed agentic.ui.ChatHistory.StorageData
 
+        -- Assigned directly: a loaded history mirrors the file, so it is not
+        -- dirty.
         local instance = ChatHistory:new()
         instance.session_id = parsed.session_id
         instance.timestamp = parsed.timestamp

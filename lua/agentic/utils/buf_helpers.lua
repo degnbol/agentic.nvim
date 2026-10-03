@@ -38,6 +38,29 @@ function BufHelpers.with_modifiable(bufnr, callback)
     return response
 end
 
+--- Rename a buffer without leaking a buffer under its old name.
+--- `nvim_buf_set_name` keeps the old name alive as an unlisted, unloaded
+--- alternate-file buffer; this wipes it. Raises E95 when a loaded buffer
+--- already has `name`.
+--- @param bufnr integer
+--- @param name string
+function BufHelpers.rename(bufnr, name)
+    local old_name = vim.api.nvim_buf_get_name(bufnr)
+    vim.api.nvim_buf_set_name(bufnr, name)
+    if old_name == "" then
+        return
+    end
+    for _, other in ipairs(vim.api.nvim_list_bufs()) do
+        if
+            other ~= bufnr
+            and not vim.api.nvim_buf_is_loaded(other)
+            and vim.api.nvim_buf_get_name(other) == old_name
+        then
+            vim.api.nvim_buf_delete(other, { force = true })
+        end
+    end
+end
+
 function BufHelpers.start_insert_on_last_char()
     vim.cmd("normal! G$")
     vim.cmd("startinsert!")

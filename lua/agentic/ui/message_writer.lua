@@ -136,7 +136,7 @@ end
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
 --- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history` on the main branch, but not for a subagent.
 --- @field _fold_retry_armed? boolean True while an InsertLeave autocmd is waiting to retry deferred fold ops (see `flush_pending_fold_ops`). Guards against arming a second one per pending batch.
---- @field _should_auto_scroll? boolean The frozen scroll verdict captured before a write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so a verdict deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold. The insert-mode hold is the one deferral the callback does not wait on — see the skip condition, which reads `_fold_retry_armed`.
+--- @field _scroll_verdicts? table<integer, boolean> The frozen scroll verdicts captured before a write, window id -> whether that window follows the write. Consumed (and cleared) by whichever site executes the scroll: `_auto_scroll`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. Never cleared on the callback's skip branch, so verdicts deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) ride along with their pending fold. The insert-mode hold is the one deferral the callback does not wait on — see the skip condition, which reads `_fold_retry_armed`.
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
 --- @field _status_indicator? agentic.ui.StatusIndicator Reference for auto-scroll virt_lines awareness
 --- @field _chunk_start_line? integer 0-indexed buffer line the unreflowed tail of the current prose run starts at; advanced past each paragraph a streaming reflow wraps, and cleared by the flushing one. Read by `_reflow_chunks` to bound its rewrite.
@@ -144,8 +144,10 @@ end
 --- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
 --- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
 --- @field _suppress_pin_release? boolean True only while we are synchronously executing our own scroll commands or buffer writes; the WinScrolled autocmd checks this to distinguish our viewport changes from user-initiated ones
---- @field _auto_scroll_paused? boolean True after the user scrolled away from the bottom; gates pin-setting and auto-scroll until the user returns to the bottom (G or scroll-to-bottom) or submits a prompt (`resume_auto_scroll`). Survives turn boundaries — the user has to opt back in explicitly.
---- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter autocmd when the chat window reappears. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
+--- @field _paused_windows table<integer, true> Windows the user scrolled away from the bottom; each stops following until the user returns it to the bottom (G or scroll-to-bottom) or submits a prompt (`resume_auto_scroll`). Survives turn boundaries — the user has to opt back in explicitly.
+--- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed when a window shows the buffer again: its BufWinEnter, or for widget windows (opened without autocmds) `ChatWidget.on_window_opened`. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
+--- @field _home_window? fun(): integer|nil The window hard wrap measures while it shows the buffer
+--- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
 --- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
 --- @field _numbering_active? boolean When true (set by `enable_numbering` once ≥2 subagents run concurrently in the turn), blocks carrying an `ordinal` render it as the sign on every body row (the whole left rail), replacing the │ border. Reset per turn.
@@ -162,53 +164,43 @@ MessageWriter.__index = MessageWriter
 MessageWriter.NS_USER_ACTIONS =
     vim.api.nvim_create_namespace("agentic_user_actions")
 
---- Drop every mark the writer placed in `bufnr` that no tracker frees: the
---- region identity marks, the rails under them, and the error highlights.
+--- Forget everything written to the buffer, for a buffer whose text is gone
+--- or about to be rewritten whole: the tool call trackers, any error region
+--- left open, the pending fold ops, the per-turn state, and every extmark in
+--- the buffer.
 ---
---- Emptying a buffer with `nvim_buf_set_lines` collapses extmarks onto (0,0)
---- instead of deleting them, so without this a reset leaves `[[`/`]]` jumping to
---- a phantom prompt and a heap of rail signs on row 0. Tool blocks free their
---- own decorations by id; a prompt or notice rail has no tracker to free it,
---- which is why the namespace is cleared wholesale.
---- @param bufnr integer
-function MessageWriter.clear_regions(bufnr)
-    for _, ns in ipairs({
-        MessageWriter.NS_USER_ACTIONS,
-        Renderer.NS_DECORATIONS,
-        NS_ERROR,
-    }) do
-        vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-    end
-end
-
---- Forget every block written to this buffer: the tool call trackers, the
---- extmarks they address rows through, and any error region left open.
----
---- Emptying a buffer with `nvim_buf_set_lines` collapses extmarks onto row 0
---- rather than deleting them, so a tracker surviving its conversation resolves
---- to the top of the next one — where anything anchored to it would be
---- inserted. `MessageWriter.clear_regions` frees the marks this leaves behind
---- (the error block's live in NS_ERROR); the two are called together.
-function MessageWriter:clear_blocks()
+--- Emptying or reloading a buffer collapses extmarks onto row 0 rather than
+--- deleting them, so a tracker or mark surviving its text resolves to the top
+--- of what replaces it — `[[`/`]]` jump to a phantom prompt, rail signs pile
+--- on row 0, and anything anchored to a stale tracker is inserted there. Every
+--- namespace is cleared, the status indicator's and the fold anchors'
+--- included: none of them outlives the text it marks.
+function MessageWriter:reset()
     self.tool_call_blocks = {}
     self._error_block = nil
-    vim.api.nvim_buf_clear_namespace(self.bufnr, Renderer.NS_TOOL_BLOCKS, 0, -1)
+    self._pending_fold_ops = {}
+    self._fold_states = {}
+    self._last_divider_line = nil
+    self:reset_turn_state()
+    vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
 end
 
 --- @param bufnr integer
 --- @param status_indicator? agentic.ui.StatusIndicator
+--- @param home_window (fun(): integer|nil)|nil The window hard wrap measures whenever it shows the buffer (see `_wrap_window`)
 --- @return agentic.ui.MessageWriter
-function MessageWriter:new(bufnr, status_indicator)
+function MessageWriter:new(bufnr, status_indicator, home_window)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         error("Invalid buffer number: " .. tostring(bufnr))
     end
 
     local instance = setmetatable({
         bufnr = bufnr,
+        _home_window = home_window,
         tool_call_blocks = {},
         _thought_run = nil,
         _fold_retry_armed = false,
-        _should_auto_scroll = nil,
+        _scroll_verdicts = nil,
         _scroll_callback_queued = false,
         _chunk_start_line = nil,
         _prose_run_start_line = nil,
@@ -217,8 +209,9 @@ function MessageWriter:new(bufnr, status_indicator)
         _status_indicator = status_indicator,
         _prose_anchor_line = nil,
         _suppress_pin_release = false,
-        _auto_scroll_paused = false,
+        _paused_windows = {},
         _pending_fold_ops = {},
+        _fold_states = {},
         _last_divider_line = nil,
         _numbering_active = false,
     }, self)
@@ -228,22 +221,52 @@ function MessageWriter:new(bufnr, status_indicator)
     -- `_suppress_pin_release` window so we ignore those. Vim is
     -- single-threaded — user input cannot interleave during a synchronous
     -- Lua chain — so the flag set/cleared around the writes/scrolls is
-    -- race-free for distinguishing the two. The autocmd is buffer-scoped
-    -- so it auto-cleans when the chat buffer is wiped.
+    -- race-free for distinguishing the two. Not buffer-scoped: that matches
+    -- only the first scrolled window's buffer, and every scrolled window is
+    -- a key of `v:event`. The group goes with the buffer.
+    local group = vim.api.nvim_create_augroup(
+        "agentic_message_writer_" .. bufnr,
+        { clear = true }
+    )
     vim.api.nvim_create_autocmd("WinScrolled", {
-        buffer = bufnr,
+        group = group,
         callback = function()
-            instance:on_user_scroll()
+            local winids = {}
+            for key in pairs(vim.v.event) do
+                local winid = tonumber(key)
+                if
+                    winid
+                    and vim.api.nvim_win_is_valid(winid)
+                    and vim.api.nvim_win_get_buf(winid) == bufnr
+                then
+                    table.insert(winids, winid)
+                end
+            end
+            if #winids > 0 then
+                instance:on_user_scroll(winids)
+            end
+        end,
+    })
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = bufnr,
+        once = true,
+        callback = function()
+            vim.api.nvim_del_augroup_by_id(group)
         end,
     })
 
-    -- A fold rendered while the chat window was hidden never got its initial
-    -- open/close (fold state is window-local). Apply those pending ops when
-    -- the chat window reappears.
+    -- Fold state is window-local. A fold rendered while no window showed the
+    -- buffer never got its initial open/close, and a window opened later has
+    -- none of the applied ones: apply the pending ops, then give this window
+    -- every recorded state.
     vim.api.nvim_create_autocmd("BufWinEnter", {
         buffer = bufnr,
         callback = function()
             instance:flush_pending_fold_ops()
+            local winid = vim.api.nvim_get_current_win()
+            if vim.api.nvim_win_get_buf(winid) == bufnr then
+                instance:replay_folds(winid)
+            end
         end,
     })
 
@@ -269,37 +292,47 @@ function MessageWriter:_is_at_bottom(winid)
     return info ~= nil and info.botline >= total_lines
 end
 
---- WinScrolled hook. Pauses or resumes auto-scroll based on whether the
---- cursor is at the bottom of the buffer. Public so the autocmd closure
---- can reach it without tripping LuaLS's invisible-field check.
+--- WinScrolled hook. Pauses or resumes auto-scroll in each scrolled window
+--- based on whether it is at the bottom of the buffer. Public so the autocmd
+--- closure can reach it without tripping LuaLS's invisible-field check.
 ---
---- - User scrolled away from bottom → pause auto-scroll, release any pin.
---- - User reached bottom (G or scroll-to-bottom) → resume.
+--- - User scrolled a window away from bottom → pause it, release any pin.
+--- - User brought it to the bottom (G or scroll-to-bottom) → resume it.
 ---
 --- Programmatic scrolls/writes are filtered out via `_suppress_pin_release`.
-function MessageWriter:on_user_scroll()
+--- @param winids integer[] Scrolled windows showing the buffer
+function MessageWriter:on_user_scroll(winids)
     if self._suppress_pin_release then
         return
     end
-    local wins = vim.fn.win_findbuf(self.bufnr)
-    if #wins == 0 then
-        return
-    end
-
-    if self:_is_at_bottom(wins[1]) then
-        self._auto_scroll_paused = false
-    else
-        self._auto_scroll_paused = true
-        self:_release_prose_pin()
+    for _, winid in ipairs(winids) do
+        if self:_is_at_bottom(winid) then
+            self._paused_windows[winid] = nil
+        else
+            self._paused_windows[winid] = true
+            self:_release_prose_pin()
+        end
     end
 end
 
---- Lift a manual-scroll pause and scroll the chat to the bottom now. The
---- scroll is not left to the next write, whose at-bottom check would still
---- see the paused viewport.
+--- Lift every manual-scroll pause and scroll each window to the bottom now.
+--- The scroll is not left to the next write, whose at-bottom check would
+--- still see the paused viewport.
 function MessageWriter:resume_auto_scroll()
-    self._auto_scroll_paused = false
-    self:_scroll_now(self.bufnr)
+    self._paused_windows = {}
+    self:_scroll_now(vim.fn.win_findbuf(self.bufnr))
+end
+
+--- Whether any window showing the buffer follows writes, or none shows it.
+--- @return boolean
+function MessageWriter:_any_following()
+    local winids = vim.fn.win_findbuf(self.bufnr)
+    for _, winid in ipairs(winids) do
+        if not self._paused_windows[winid] then
+            return true
+        end
+    end
+    return #winids == 0
 end
 
 --- Drop the prose-pin anchor so the next auto-scroll falls back to the
@@ -360,18 +393,45 @@ end
 --- is open (see `BufHelpers.redraw_if_cmdline`), keeping streamed updates live
 --- behind `:`. In every other mode that repaint is a no-op — the write lands
 --- on screen at neovim's automatic pre-input redraw.
+---
+--- Rendering loses nothing, so `modified` is left as it was before the write:
+--- the flag states whether the history is unsaved, and its owner sets it.
 --- @param fn fun(bufnr: integer): boolean|nil
 function MessageWriter:_with_modifiable_suppressed(fn)
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
+    local was_modified = vim.api.nvim_buf_is_valid(self.bufnr)
+        and vim.bo[self.bufnr].modified
     local result = BufHelpers.with_modifiable(self.bufnr, fn)
+    if vim.api.nvim_buf_is_valid(self.bufnr) then
+        vim.bo[self.bufnr].modified = was_modified
+    end
     self._suppress_pin_release = prev_suppress
     BufHelpers.redraw_if_cmdline()
     return result
 end
 
---- Returns the text area width of the chat window (excluding sign column), or 80.
---- The chat window always has signcolumn=yes:1 (2 columns).
+--- The window hard wrap measures, the one width the buffer's text can have:
+--- the home window while it shows the buffer, else the first window showing
+--- it in the current tabpage. A narrow window opened elsewhere then does not
+--- narrow the wrap for good.
+--- @return integer|nil winid
+function MessageWriter:_wrap_window()
+    local home = self._home_window and self._home_window()
+    if
+        home
+        and vim.api.nvim_win_is_valid(home)
+        and vim.api.nvim_win_get_buf(home) == self.bufnr
+    then
+        return home
+    end
+    local winid = vim.fn.bufwinid(self.bufnr)
+    return winid ~= -1 and winid or nil
+end
+
+--- Returns the text area width of the wrap window (excluding sign column),
+--- or 80 when there is none (see `_wrap_window`). The chat window
+--- always has signcolumn=yes:1 (2 columns).
 --- Clamped to `Config.windows.{min,max}_wrap_width` (either 0 disables that
 --- bound). The floor wins against a narrow *window* — prose keeps wrapping at
 --- `min_wrap_width` and is clipped at the window edge (the chat window is
@@ -380,12 +440,12 @@ end
 --- Returns 0 when the chat window has soft wrap enabled (no hard wrapping needed).
 --- @return integer
 function MessageWriter:_get_wrap_width()
-    local winid = vim.fn.bufwinid(self.bufnr)
-    if winid ~= -1 and vim.wo[winid].wrap then
+    local winid = self:_wrap_window()
+    if winid and vim.wo[winid].wrap then
         return 0
     end
     local width
-    if winid ~= -1 then
+    if winid then
         width = vim.api.nvim_win_get_width(winid) - 2
     else
         width = 80
@@ -651,8 +711,8 @@ function MessageWriter:_extend_prose_region(bufnr)
             {}
         )[1]
     if not ids or not closer_id or not closer_row then
-        -- No region yet, or its marks went with a namespace-wide clear
-        -- (`clear_regions`) — a dead id deletes as a no-op either way.
+        -- No region yet, or its marks went with a buffer-wide clear
+        -- (`reset`) — a dead id deletes as a no-op either way.
         self:_rebuild_prose_region(bufnr)
         return
     end
@@ -1976,9 +2036,10 @@ function MessageWriter:write_message_chunk(update, starts_response)
         -- once its first text lands. The scan stops a few lines in: the run's
         -- opening rows are the only ones that can still be blank, and a pin set
         -- far below the run start would jump the viewport past prose the reader
-        -- has not seen. Skip while the user has paused auto-scroll — pinning
-        -- means scrolling the view, which is what they opted out of.
-        if self._prose_anchor_line == nil and not self._auto_scroll_paused then
+        -- has not seen. Skip while the user has paused auto-scroll in every
+        -- window — pinning means scrolling the view, which is what they opted
+        -- out of.
+        if self._prose_anchor_line == nil and self:_any_following() then
             local total = vim.api.nvim_buf_line_count(bufnr)
             self._prose_anchor_line = first_prose_row(
                 bufnr,
@@ -2048,27 +2109,22 @@ function MessageWriter:_append_lines(lines)
     end
 end
 
---- @param bufnr integer
+--- Whether a write should scroll `winid`.
+--- @param winid integer A window showing the buffer
 --- @return boolean
-function MessageWriter:_check_auto_scroll(bufnr)
-    -- The user explicitly disabled auto-scroll by scrolling away from the
-    -- bottom. They re-enable it by going back to the bottom (G or
-    -- scroll-to-bottom), which `on_user_scroll` detects and clears.
-    if self._auto_scroll_paused then
+function MessageWriter:_check_auto_scroll(winid)
+    -- The user explicitly disabled auto-scroll in this window by scrolling it
+    -- away from the bottom. They re-enable it by going back to the bottom (G
+    -- or scroll-to-bottom), which `on_user_scroll` detects and clears.
+    if self._paused_windows[winid] then
         return false
     end
-
-    local wins = vim.fn.win_findbuf(bufnr)
-    if #wins == 0 then
-        return true
-    end
-    local winid = wins[1]
 
     -- During an active prose pin the cursor is parked inside the clamped
     -- viewport, far from the buffer end, so the at-bottom check below
     -- would always fail and stop auto-scroll. Override while the pin is
-    -- set — a user scroll would have cleared `_auto_scroll_paused` and
-    -- released the pin already, so reaching here means the pin is ours.
+    -- set — a user scroll would have paused the window and released the
+    -- pin already, so reaching here means the pin is ours.
     if self._prose_anchor_line then
         return true
     end
@@ -2076,41 +2132,37 @@ function MessageWriter:_check_auto_scroll(bufnr)
     return self:_is_at_bottom(winid)
 end
 
---- Whether the cursor is at the bottom of the chat buffer.
+--- Whether some window showing the chat is at its bottom, or none shows it.
 --- @return boolean
 function MessageWriter:is_near_bottom()
-    return self:_check_auto_scroll(self.bufnr)
+    local winids = vim.fn.win_findbuf(self.bufnr)
+    for _, winid in ipairs(winids) do
+        if self:_check_auto_scroll(winid) then
+            return true
+        end
+    end
+    return #winids == 0
 end
 
---- Scroll the chat window to the bottom if the cursor is at the end.
---- Same gate as streaming auto-scroll so users reading earlier content
---- are not interrupted.
+--- Scroll each window that is at the end of the chat to the bottom. Same
+--- gate as streaming auto-scroll so a window being read earlier on is not
+--- interrupted.
 function MessageWriter:scroll_to_bottom()
-    if not self:_check_auto_scroll(self.bufnr) then
-        return
+    for _, winid in ipairs(vim.fn.win_findbuf(self.bufnr)) do
+        if self:_check_auto_scroll(winid) then
+            BufHelpers.scroll_down(winid)
+        end
     end
-
-    local wins = vim.fn.win_findbuf(self.bufnr)
-    if #wins == 0 then
-        return
-    end
-
-    BufHelpers.scroll_down(wins[1])
 end
 
---- Execute a scroll-to-bottom now: compute the prose-pin cap and scroll,
---- wrapped in `_suppress_pin_release` so the synchronous WinScrolled from
---- winrestview isn't mistaken for a user scroll. The flag is saved and
+--- Execute a scroll-to-bottom of `winids` now: compute the prose-pin cap and
+--- scroll, wrapped in `_suppress_pin_release` so the synchronous WinScrolled
+--- from winrestview isn't mistaken for a user scroll. The flag is saved and
 --- restored (not hardcoded back to false) so this nests inside
 --- `flush_pending_fold_ops`'s own suppress wrap. Pure mechanics — callers
---- own the gating (the captured verdict + the live `_auto_scroll_paused`).
---- @param bufnr integer Buffer number to scroll
-function MessageWriter:_scroll_now(bufnr)
-    local wins = vim.fn.win_findbuf(bufnr)
-    if #wins == 0 then
-        return
-    end
-
+--- own the gating (the captured verdicts + the live `_paused_windows`).
+--- @param winids integer[]
+function MessageWriter:_scroll_now(winids)
     -- topline is 1-indexed; _prose_anchor_line is 0-indexed.
     local pause = Config.auto_scroll
         and Config.auto_scroll.pause_on_prose ~= false
@@ -2120,8 +2172,27 @@ function MessageWriter:_scroll_now(bufnr)
 
     local prev_suppress = self._suppress_pin_release
     self._suppress_pin_release = true
-    BufHelpers.scroll_down(wins[1], max_topline)
+    for _, winid in ipairs(winids) do
+        if
+            vim.api.nvim_win_is_valid(winid)
+            and vim.api.nvim_win_get_buf(winid) == self.bufnr
+        then
+            BufHelpers.scroll_down(winid, max_topline)
+        end
+    end
     self._suppress_pin_release = prev_suppress
+end
+
+--- Scroll the windows whose captured verdict says they follow the write and
+--- that the user has not paused since.
+function MessageWriter:_scroll_followers()
+    local winids = {}
+    for winid, follows in pairs(self._scroll_verdicts or {}) do
+        if follows and not self._paused_windows[winid] then
+            table.insert(winids, winid)
+        end
+    end
+    self:_scroll_now(winids)
 end
 
 --- Capture at-bottom / pin state, then schedule a scroll-to-bottom after
@@ -2139,9 +2210,12 @@ end
 --- insert mode, a wait no write can afford to sit out.
 --- @param bufnr integer Buffer number to scroll
 function MessageWriter:_auto_scroll(bufnr)
-    if self._should_auto_scroll ~= true then
-        self._should_auto_scroll = self:_check_auto_scroll(bufnr)
+    -- Sticky per window: a verdict that said follow stays until consumed.
+    local verdicts = self._scroll_verdicts or {}
+    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+        verdicts[winid] = verdicts[winid] or self:_check_auto_scroll(winid)
     end
+    self._scroll_verdicts = verdicts
 
     if self._scroll_callback_queued then
         return
@@ -2159,28 +2233,12 @@ function MessageWriter:_auto_scroll(bufnr)
             return
         end
 
-        if
-            vim.api.nvim_buf_is_valid(bufnr)
-            and self._should_auto_scroll
-            and not self._auto_scroll_paused
-        then
-            self:_scroll_now(bufnr)
+        if vim.api.nvim_buf_is_valid(bufnr) then
+            self:_scroll_followers()
         end
 
-        self._should_auto_scroll = nil
+        self._scroll_verdicts = nil
     end)
-end
-
---- Find the first valid window currently displaying the chat buffer. Fold
---- state is window-local, so closing a fold requires a window.
---- @return integer|nil winid
-function MessageWriter:_chat_window()
-    for _, win in ipairs(vim.fn.win_findbuf(self.bufnr)) do
-        if vim.api.nvim_win_is_valid(win) then
-            return win
-        end
-    end
-    return nil
 end
 
 --- Queue an open/close of the treesitter fold containing `anchor_row`.
@@ -2208,6 +2266,20 @@ function MessageWriter:_queue_fold(anchor_row, open)
     table.insert(self._pending_fold_ops, { id = id, open = open })
     vim.schedule(function()
         self:flush_pending_fold_ops()
+    end)
+end
+
+--- Open or close the fold containing `row` in `winid`.
+--- @param winid integer
+--- @param row integer 0-indexed
+--- @param open boolean
+local function apply_fold(winid, row, open)
+    -- A missing fold (E490) is non-fatal: the body just stays visible, so it
+    -- is swallowed deliberately.
+    pcall(vim.api.nvim_win_call, winid, function()
+        vim.cmd(
+            string.format("%d%s", row + 1, open and "foldopen" or "foldclose")
+        )
     end)
 end
 
@@ -2254,6 +2326,29 @@ function MessageWriter:_retry_folds_on_insert_leave()
     })
 end
 
+--- Give every applied fold its recorded state in `winid`. Fold state is
+--- window-local, so a window opened later would otherwise show every block
+--- open. Forgets the states whose anchor extmark is gone.
+--- @param winid integer
+function MessageWriter:replay_folds(winid)
+    local prev_suppress = self._suppress_pin_release
+    self._suppress_pin_release = true
+    for id, open in pairs(self._fold_states) do
+        local pos = vim.api.nvim_buf_get_extmark_by_id(
+            self.bufnr,
+            NS_FOLD_ANCHORS,
+            id,
+            {}
+        )
+        if pos[1] then
+            apply_fold(winid, pos[1], open)
+        else
+            self._fold_states[id] = nil
+        end
+    end
+    self._suppress_pin_release = prev_suppress
+end
+
 --- Apply every pending fold op (see _queue_fold). Resolves each anchor
 --- extmark's current row so edits since the render are accounted for. No-op
 --- when nothing is pending. When no chat window exists yet, or the user is in
@@ -2271,8 +2366,8 @@ function MessageWriter:flush_pending_fold_ops()
         self._pending_fold_ops = {}
         return
     end
-    local win = self:_chat_window()
-    if not win then
+    local winids = vim.fn.win_findbuf(self.bufnr)
+    if #winids == 0 then
         return
     end
     if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then
@@ -2282,10 +2377,8 @@ function MessageWriter:flush_pending_fold_ops()
         -- flush follows within the tick; holding for a whole insert session
         -- would instead freeze the viewport for every write until the user
         -- leaves insert. Scroll against the still-open fold and keep the
-        -- verdict, so the InsertLeave retry re-measures the collapsed height.
-        if self._should_auto_scroll and not self._auto_scroll_paused then
-            self:_scroll_now(self.bufnr)
-        end
+        -- verdicts, so the InsertLeave retry re-measures the collapsed height.
+        self:_scroll_followers()
         return
     end
 
@@ -2299,20 +2392,11 @@ function MessageWriter:flush_pending_fold_ops()
             {}
         )
         if pos[1] then
-            -- A missing fold (E490) is non-fatal — the body just stays
-            -- visible — so it is swallowed deliberately. Insert mode, the
-            -- cause that used to reach here, is now held above instead.
-            pcall(vim.api.nvim_win_call, win, function()
-                vim.cmd(
-                    string.format(
-                        "%d%s",
-                        pos[1] + 1,
-                        op.open and "foldopen" or "foldclose"
-                    )
-                )
-            end)
+            for _, winid in ipairs(winids) do
+                apply_fold(winid, pos[1], op.open)
+            end
+            self._fold_states[op.id] = op.open
         end
-        pcall(vim.api.nvim_buf_del_extmark, self.bufnr, NS_FOLD_ANCHORS, op.id)
     end
     self._suppress_pin_release = prev_suppress
     self._pending_fold_ops = {}
@@ -2320,14 +2404,12 @@ function MessageWriter:flush_pending_fold_ops()
     -- The fold path's single scroll. The folds are now closed, so the
     -- fold-aware scroll_down measures the collapsed height — `_auto_scroll`'s
     -- callback skipped while these ops were pending and deferred to here.
-    -- Gate on the captured verdict and the live pause toggle (the verdict
+    -- Gate on each window's captured verdict and its live pause (a verdict
     -- could have deferred as far as the BufWinEnter retry — a wide gap for the
     -- user to scroll away). Both are needed: the verdict freezes the pre-write
-    -- at-bottom snapshot, the toggle catches a scroll-away during the gap.
-    if self._should_auto_scroll and not self._auto_scroll_paused then
-        self:_scroll_now(self.bufnr)
-    end
-    self._should_auto_scroll = nil
+    -- at-bottom snapshot, the pause catches a scroll-away during the gap.
+    self:_scroll_followers()
+    self._scroll_verdicts = nil
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock

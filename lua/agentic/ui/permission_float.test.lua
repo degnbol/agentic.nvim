@@ -1,5 +1,6 @@
 --- @diagnostic disable: invisible, missing-fields
 local assert = require("tests.helpers.assert")
+local SessionRegistry = require("agentic.session_registry")
 
 describe("agentic.ui.PermissionFloat", function()
     --- @type agentic.ui.PermissionFloat
@@ -84,14 +85,16 @@ describe("agentic.ui.PermissionFloat", function()
             })
 
             writer = MessageWriter:new(chat_bufnr)
-            float =
-                PermissionFloat:new(writer, { chat = chat_bufnr }, tab_page_id)
+            local owner_id = 4242
+            SessionRegistry.bind(tab_page_id, { id = owner_id })
+            float = PermissionFloat:new(writer, { chat = chat_bufnr }, owner_id)
         end)
 
         after_each(function()
             pcall(function()
                 float:close()
             end)
+            SessionRegistry.tab_bindings[tab_page_id] = nil
             if chat_winid and vim.api.nvim_win_is_valid(chat_winid) then
                 vim.api.nvim_win_close(chat_winid, true)
             end
@@ -119,34 +122,110 @@ describe("agentic.ui.PermissionFloat", function()
             assert.is_false(cfg.focusable)
         end)
 
+        it("open() maps each option's kind key to its id", function()
+            assert.same({
+                ["<localLeader>y"] = "allow-once",
+                ["<localLeader>n"] = "reject-once",
+                ["<localLeader>x"] = "__reject_all__",
+            }, float:open(make_options()))
+        end)
+
+        it("open() labels each option with its key", function()
+            float:open(make_options())
+            local first = vim.api.nvim_buf_get_lines(float._bufnr, 0, 1, false)[1]
+            local label = vim.fn.keytrans(vim.keycode("<localLeader>y"))
+            assert.equal(1, first:find(label .. ".", 1, true))
+        end)
+
         it(
-            "open() returns option_mapping including a synthetic reject_all entry",
+            "open() gives an option whose kind key is taken a positional key",
             function()
-                local mapping = float:open(make_options())
-                assert.is_not_nil(mapping)
-                --- @cast mapping table<integer, string>
+                local options = make_options()
+                table.insert(options, 2, {
+                    optionId = "allow-once-2",
+                    name = "Allow once too",
+                    kind = "allow_once",
+                })
 
-                -- two real options + one synthetic reject_all
-                assert.equal(3, vim.tbl_count(mapping))
+                local mapping = float:open(options)
 
-                local found_reject_all = false
-                for _, opt_id in pairs(mapping) do
-                    if opt_id == "__reject_all__" then
-                        found_reject_all = true
-                    end
-                end
-                assert.is_true(found_reject_all)
+                assert.equal("allow-once", mapping["<localLeader>y"])
+                assert.equal("allow-once-2", mapping["<localLeader>2"])
             end
         )
 
-        it("open() returns nil when chat window is hidden", function()
-            -- Close the chat window so the float cannot resolve a target
+        it("is visible in the current tab only while there", function()
+            float:open(make_options())
+            assert.is_true(float:is_visible_in_current_tab())
+
+            vim.cmd("tabnew")
+            assert.is_false(float:is_visible_in_current_tab())
+            vim.cmd("tabclose")
+        end)
+
+        it("with no window showing the chat, is not shown", function()
             vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
 
             local mapping = float:open(make_options())
 
-            assert.is_nil(mapping)
-            assert.is_nil(float._winid)
+            assert.equal("allow-once", mapping["<localLeader>y"])
+            assert.is_false(float:is_shown())
+        end)
+
+        it("place() shows the float once the chat is shown", function()
+            vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
+            float:open(make_options())
+            vim.api.nvim_win_set_buf(0, chat_bufnr)
+
+            float:place()
+
+            local cfg = vim.api.nvim_win_get_config(float._winid)
+            assert.equal("win", cfg.relative)
+            assert.equal(vim.api.nvim_get_current_win(), cfg.win)
+        end)
+
+        it("anchors to the chat in the current tab first", function()
+            vim.cmd("tabnew")
+            local current_win = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_set_buf(current_win, chat_bufnr)
+
+            float:open(make_options())
+
+            assert.equal(
+                current_win,
+                vim.api.nvim_win_get_config(float._winid).win
+            )
+            float:close()
+            vim.cmd("tabclose")
+        end)
+
+        it("anchors to the chat in any tab", function()
+            SessionRegistry.tab_bindings[tab_page_id] = nil
+            vim.cmd("tabnew")
+
+            float:open(make_options())
+
+            assert.equal(chat_winid, vim.api.nvim_win_get_config(float._winid).win)
+            float:close()
+            vim.cmd("tabclose")
+        end)
+
+        it("place() reopens a float its user closed", function()
+            float:open(make_options())
+            vim.api.nvim_win_close(float._winid, true)
+
+            float:place()
+
+            assert.is_true(vim.api.nvim_win_is_valid(float._winid))
+        end)
+
+        it("place() leaves a float already in place alone", function()
+            float:open(make_options())
+            local winid = float._winid
+
+            float:place()
+
+            assert.equal(winid, float._winid)
         end)
 
         it("close() closes window and defers buffer deletion", function()
@@ -179,15 +258,13 @@ describe("agentic.ui.PermissionFloat", function()
             end)
         end)
 
-        it("WinClosed on chat window auto-closes the float", function()
+        it("place() hides the float once its chat window closes", function()
             float:open(make_options())
-            assert.is_true(vim.api.nvim_win_is_valid(float._winid))
 
             vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
+            float:place()
 
-            -- WinClosed fires synchronously, but the float's close runs
-            -- under it without scheduling — verify state immediately.
-            assert.is_nil(float._winid)
+            assert.is_false(float:is_shown())
         end)
 
         it("reopen replaces the previous float", function()

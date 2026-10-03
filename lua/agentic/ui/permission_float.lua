@@ -2,13 +2,16 @@ local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
+local SessionRegistry = require("agentic.session_registry")
 
 --- @class agentic.ui.PermissionFloat
 --- @field message_writer agentic.ui.MessageWriter
 --- @field _buf_nrs agentic.ui.ChatWidget.BufNrs
---- @field _tab_page_id integer
+--- @field _owner_id integer `SessionManager.id` of the owning session
 --- @field _winid? integer
 --- @field _bufnr? integer
+--- @field _anchor_bufnr? integer Buffer the float anchors to while open
+--- @field _anchor_winid? integer Window the float is placed against while shown
 --- @field _autocmd_ids integer[]
 --- @field _anchor "NE"|"NW"|"SE"|"SW" Cached anchor used for the open window
 --- @field _width integer Cached width used for the open window
@@ -20,13 +23,13 @@ PermissionFloat.__index = PermissionFloat
 
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
---- @param tab_page_id integer
+--- @param owner_id integer `SessionManager.id` of the owning session
 --- @return agentic.ui.PermissionFloat
-function PermissionFloat:new(message_writer, buf_nrs, tab_page_id)
+function PermissionFloat:new(message_writer, buf_nrs, owner_id)
     local instance = setmetatable({
         message_writer = message_writer,
         _buf_nrs = buf_nrs,
-        _tab_page_id = tab_page_id,
+        _owner_id = owner_id,
         _winid = nil,
         _bufnr = nil,
         _autocmd_ids = {},
@@ -49,8 +52,8 @@ end
 --- For SW: row = win_h + row_offset, col = col_offset (use negative row_offset to inset).
 --- For SE: row = win_h + row_offset, col = win_w + col_offset.
 --- @param anchor "NE"|"NW"|"SE"|"SW"
---- @param win_w integer Chat window width (column count)
---- @param win_h integer Chat window height (row count)
+--- @param win_w integer Parent width (column count)
+--- @param win_h integer Parent height (row count)
 --- @param row_offset integer
 --- @param col_offset integer
 --- @return integer row
@@ -79,18 +82,24 @@ function PermissionFloat._anchor_position(
     return row, col
 end
 
---- Find the window showing `bufnr` on this float's tab page. Returns nil if
---- that buffer is not visible on this tab (e.g. the widget or subagents split
---- is hidden).
+--- Find a window showing `bufnr`: on the current tab page, else on the
+--- owning session's, else on any. Nil when no window shows it.
 --- @param bufnr integer
 --- @return integer|nil
-function PermissionFloat:_find_chat_winid(bufnr)
-    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
-        if vim.api.nvim_win_get_tabpage(winid) == self._tab_page_id then
-            return winid
+function PermissionFloat:_find_anchor_winid(bufnr)
+    local winids = vim.fn.win_findbuf(bufnr)
+    local function in_tab(tab)
+        for _, winid in ipairs(winids) do
+            if vim.api.nvim_win_get_tabpage(winid) == tab then
+                return winid
+            end
         end
+        return nil
     end
-    return nil
+    local owner_tab = SessionRegistry.tab_of(self._owner_id)
+    return in_tab(vim.api.nvim_get_current_tabpage())
+        or (owner_tab and in_tab(owner_tab))
+        or winids[1]
 end
 
 --- Build the lines and option_mapping for the prompt body. Mirrors the
@@ -98,9 +107,9 @@ end
 --- from options to display lines.
 --- @param options agentic.acp.PermissionOption[]
 --- @return string[] lines
---- @return table<integer, string> option_mapping
+--- @return table<string, string> option_mapping Option id by the key that selects it (see `Config.keymaps.permission`)
 local function build_lines(options)
-    --- @type table<integer, string>
+    --- @type table<string, string>
     local option_mapping = {}
     local lines = {}
 
@@ -131,20 +140,23 @@ local function build_lines(options)
         })
     end
 
-    local permission_keys = Config.keymaps.permission or {}
+    local kind_keys = Config.keymaps.permission or {}
 
     for i, option in ipairs(merged_options) do
-        local key_label = permission_keys[i] or tostring(i)
+        local lhs = kind_keys[AcpKind.normalise(option.kind)]
+        if not lhs or option_mapping[lhs] then
+            lhs = "<localLeader>" .. i
+        end
         table.insert(
             lines,
             string.format(
                 "%s. %s %s",
-                key_label,
+                vim.fn.keytrans(vim.keycode(lhs)),
                 Config.permission_icons[option.kind] or "",
                 option.name
             )
         )
-        option_mapping[i] = option.optionId
+        option_mapping[lhs] = option.optionId
     end
 
     return lines, option_mapping
@@ -179,141 +191,133 @@ function PermissionFloat:_render(bufnr, lines)
     BufHelpers.redraw_if_cmdline()
 end
 
---- Register a WinClosed autocmd on the chat window so the float closes if
---- the chat window goes away mid-prompt.
---- @param chat_winid integer
-function PermissionFloat:_register_chat_close_watcher(chat_winid)
-    local id = vim.api.nvim_create_autocmd("WinClosed", {
-        pattern = tostring(chat_winid),
-        callback = function()
-            self:close()
-        end,
-    })
-    table.insert(self._autocmd_ids, id)
-end
-
---- Register a WinResized autocmd that recomputes geometry whenever the chat
---- window (or any window) is resized. Covers VimResized-induced changes via
---- the same event.
---- @param chat_winid integer
-function PermissionFloat:_register_resize_watcher(chat_winid)
+--- Reapply the float's placement whenever any window is resized, including
+--- by a resize of the editor.
+--- @param anchor_winid integer Window the float is placed against
+function PermissionFloat:_register_resize_watcher(anchor_winid)
     local id = vim.api.nvim_create_autocmd("WinResized", {
         callback = function()
             if
-                not self._winid or not vim.api.nvim_win_is_valid(self._winid)
+                not self._winid
+                or not vim.api.nvim_win_is_valid(self._winid)
+                or not vim.api.nvim_win_is_valid(anchor_winid)
             then
                 return
             end
-            if not vim.api.nvim_win_is_valid(chat_winid) then
-                return
-            end
-            self:_reposition(chat_winid)
+            pcall(
+                vim.api.nvim_win_set_config,
+                self._winid,
+                self:_placement(anchor_winid)
+            )
         end,
     })
     table.insert(self._autocmd_ids, id)
 end
 
---- Apply geometry to the open float window. Called on open and on resize.
---- @param chat_winid integer
-function PermissionFloat:_reposition(chat_winid)
-    if not self._winid or not vim.api.nvim_win_is_valid(self._winid) then
-        return
-    end
-    local win_w = vim.api.nvim_win_get_width(chat_winid)
-    local win_h = vim.api.nvim_win_get_height(chat_winid)
+--- The float's position and size: at the configured corner of
+--- `anchor_winid`.
+--- @param anchor_winid integer
+--- @return vim.api.keyset.win_config
+function PermissionFloat:_placement(anchor_winid)
     local row, col = PermissionFloat._anchor_position(
         self._anchor,
-        win_w,
-        win_h,
+        vim.api.nvim_win_get_width(anchor_winid),
+        vim.api.nvim_win_get_height(anchor_winid),
         self._row_offset,
         self._col_offset
     )
-    pcall(vim.api.nvim_win_set_config, self._winid, {
+    --- @type vim.api.keyset.win_config
+    local placement = {
         relative = "win",
-        win = chat_winid,
+        win = anchor_winid,
         anchor = self._anchor,
         row = row,
         col = col,
         width = self._width,
         height = self._height,
-    })
+    }
+    return placement
 end
 
---- Open the permission float with the given sorted options. Returns the
---- option mapping (key index -> option id) used by PermissionManager to bind
---- widget keymaps.
----
---- No-op (returns nil) when the anchor buffer is hidden on this tab. The
---- caller still records `current_request` so widget reopen can re-trigger
---- the prompt.
+--- Open the permission float listing `options` in order, replacing any open
+--- float, and `place` it.
 --- @param options agentic.acp.PermissionOption[]
 --- @param anchor_bufnr? integer Buffer whose window the float anchors to (defaults to the main chat buffer)
---- @return table<integer, string>|nil option_mapping
+--- @return table<string, string> option_mapping Option id by the key that selects it
 function PermissionFloat:open(options, anchor_bufnr)
-    local chat_winid =
-        self:_find_chat_winid(anchor_bufnr or self.message_writer.bufnr)
-    if not chat_winid then
-        return nil
-    end
-
     self:close()
 
     local lines, option_mapping = build_lines(options)
-
     local cfg = Config.permission_float
-    local bufnr = self:_resolve_buffer()
-    self:_render(bufnr, lines)
-
+    self:_render(self:_resolve_buffer(), lines)
     self._anchor = cfg.anchor
     self._width = cfg.width
     self._height = #lines
     self._row_offset = cfg.row_offset
     self._col_offset = cfg.col_offset
+    self._anchor_bufnr = anchor_bufnr or self.message_writer.bufnr
 
-    local win_w = vim.api.nvim_win_get_width(chat_winid)
-    local win_h = vim.api.nvim_win_get_height(chat_winid)
-    local row, col = PermissionFloat._anchor_position(
-        self._anchor,
-        win_w,
-        win_h,
-        self._row_offset,
-        self._col_offset
-    )
+    self:place()
 
-    local ok, winid_or_err = pcall(vim.api.nvim_open_win, bufnr, false, {
-        relative = "win",
-        win = chat_winid,
-        anchor = self._anchor,
-        width = self._width,
-        height = self._height,
-        row = row,
-        col = col,
+    return option_mapping
+end
+
+--- Show the open float on a window showing its anchor buffer (see
+--- `_find_anchor_winid`), or hide it while no window shows that buffer.
+--- Never focusable. A no-op when no float is open or it is already where it
+--- belongs.
+function PermissionFloat:place()
+    if not self._bufnr or not vim.api.nvim_buf_is_valid(self._bufnr) then
+        return
+    end
+    local anchor_winid = self:_find_anchor_winid(self._anchor_bufnr)
+    if self:is_shown() and self._anchor_winid == anchor_winid then
+        return
+    end
+    self:_close_window()
+    if not anchor_winid then
+        return
+    end
+
+    local cfg = Config.permission_float
+    local win_config = vim.tbl_extend("force", self:_placement(anchor_winid), {
         border = cfg.border,
         style = "minimal",
         focusable = false,
         noautocmd = true,
     })
+    local ok, winid_or_err =
+        pcall(vim.api.nvim_open_win, self._bufnr, false, win_config)
     if not ok then
         Logger.notify(
             "PermissionFloat: failed to open window: " .. tostring(winid_or_err),
             vim.log.levels.ERROR
         )
-        return nil
+        return
     end
 
     self._winid = winid_or_err --[[@as integer]]
+    self._anchor_winid = anchor_winid
     vim.wo[self._winid].winblend = cfg.winblend
-
-    self:_register_chat_close_watcher(chat_winid)
-    self:_register_resize_watcher(chat_winid)
-
-    return option_mapping
+    self:_register_resize_watcher(anchor_winid)
 end
 
---- Close the float window and tear down associated state. Buffer deletion
---- is deferred via vim.schedule per the neovim skill's bufhidden=wipe
---- warning. Safe to call when already closed.
-function PermissionFloat:close()
+--- Whether the float's window is open, in any tab page.
+--- @return boolean
+function PermissionFloat:is_shown()
+    return self._winid ~= nil and vim.api.nvim_win_is_valid(self._winid)
+end
+
+--- Whether the float is open in the current tabpage.
+--- @return boolean
+function PermissionFloat:is_visible_in_current_tab()
+    return self:is_shown()
+        and vim.api.nvim_win_get_tabpage(self._winid --[[@as integer]])
+            == vim.api.nvim_get_current_tabpage()
+end
+
+--- Close the float's window and its watchers, keeping the buffer.
+function PermissionFloat:_close_window()
     for _, id in ipairs(self._autocmd_ids) do
         pcall(vim.api.nvim_del_autocmd, id)
     end
@@ -323,6 +327,15 @@ function PermissionFloat:close()
         pcall(vim.api.nvim_win_close, self._winid, true)
     end
     self._winid = nil
+    self._anchor_winid = nil
+end
+
+--- Close the float window and tear down associated state. Buffer deletion
+--- is deferred via vim.schedule per the neovim skill's bufhidden=wipe
+--- warning. Safe to call when already closed.
+function PermissionFloat:close()
+    self:_close_window()
+    self._anchor_bufnr = nil
 
     local bufnr = self._bufnr
     self._bufnr = nil

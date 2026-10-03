@@ -85,7 +85,7 @@ describe("Open and Close Chat Widget", function()
         assert.same({ "", "AgenticChat", "AgenticInput" }, tab2_filetypes)
 
         local session_count = child.lua_get([[
-            vim.tbl_count(require("agentic.session_registry").sessions)
+            vim.tbl_count(require("agentic.session_registry").by_id)
         ]])
         assert.equal(2, session_count)
 
@@ -94,9 +94,84 @@ describe("Open and Close Chat Widget", function()
         end)
 
         local session_count_after = child.lua_get([[
-            vim.tbl_count(require("agentic.session_registry").sessions)
+            vim.tbl_count(require("agentic.session_registry").by_id)
         ]])
         assert.equal(1, session_count_after)
+    end)
+
+    it(
+        "tabclose destroys the closed tab's session, not the one at its number",
+        function()
+            local tabs = {}
+            for i = 1, 3 do
+                if i > 1 then
+                    child.cmd("tabnew")
+                end
+                child.lua([[ require("agentic").toggle() ]])
+                tabs[i] = child.api.nvim_get_current_tabpage()
+            end
+            child.flush()
+
+            -- Handles 1, 2, 3 at numbers 1, 2, 3. Closing handle 1 moves handle 3
+            -- to number 2; closing it must not destroy handle 2's session.
+            child.cmd("1tabclose")
+            child.cmd("2tabclose")
+            child.flush()
+
+            local live = child.lua_get([[
+vim.tbl_keys(require("agentic.session_registry").tab_bindings)
+]])
+            assert.same({ tabs[2] }, live)
+        end
+    )
+
+    it("close from another tab closes the session's tab only", function()
+        -- The first tab is fresh, so the "tab" position takes it over whole.
+        child.lua([[ require("agentic").toggle({ position = "tab" }) ]])
+        child.flush()
+        local widget_tab = child.api.nvim_get_current_tabpage()
+
+        child.cmd("tabnew")
+        local other_tab = child.api.nvim_get_current_tabpage()
+
+        child.lua(string.format([[ require("agentic").close(%d) ]], widget_tab))
+        child.flush()
+
+        assert.same({ other_tab }, child.api.nvim_list_tabpages())
+        assert.equal(other_tab, child.api.nvim_get_current_tabpage())
+    end)
+
+    it("show from another tab opens the widget in the session's tab", function()
+        child.lua([[ require("agentic").toggle() ]])
+        child.flush()
+        local widget_tab = child.api.nvim_get_current_tabpage()
+        -- A used session survives having no window.
+        child.lua(string.format(
+            [[
+local session = require("agentic.session_registry").bound_session(%d)
+table.insert(session.chat_history.messages, { type = "user", text = "hi" })
+session.widget:hide()
+]],
+            widget_tab
+        ))
+        child.flush()
+
+        child.cmd("tabnew")
+        local other_tab = child.api.nvim_get_current_tabpage()
+        child.lua(
+            string.format(
+                [[require("agentic.session_registry").bound_session(%d).widget:show()]],
+                widget_tab
+            )
+        )
+        child.flush()
+
+        assert.same({ "" }, get_tabpage_filetypes(other_tab))
+        assert.same(
+            { "", "AgenticChat", "AgenticInput" },
+            get_tabpage_filetypes(widget_tab)
+        )
+        assert.equal(other_tab, child.api.nvim_get_current_tabpage())
     end)
 
     it("handles tabclose while in insert mode without errors", function()
@@ -135,7 +210,7 @@ describe("Open and Close Chat Widget", function()
         local expected_input_bufnr = child.lua_get([[
 (function()
     local tab_id = vim.api.nvim_get_current_tabpage()
-    local session = require("agentic.session_registry").sessions[tab_id]
+    local session = require("agentic.session_registry").bound_session(tab_id)
     return session.widget.buf_nrs.input
 end)()
 ]])

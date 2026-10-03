@@ -527,7 +527,7 @@ function M.setup_diff_navigation_keymaps(buf_nrs)
 
         BufHelpers.keymap_set(bufnr, "n", diff_keymaps.open_in_tab, function()
             local SessionRegistry = require("agentic.session_registry")
-            local session = SessionRegistry.get_session_for_tab_page()
+            local session = SessionRegistry.owner_of_buf(bufnr)
             if session then
                 session:open_diff_in_tab()
             end

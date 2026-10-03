@@ -17,19 +17,19 @@
 --- @class agentic.UserConfig.PromptSubmitData
 --- @field prompt string The user's prompt text
 --- @field session_id string The ACP session ID
---- @field tab_page_id number The tabpage ID
+--- @field tab_page_id? number The tabpage the session is bound to, if any
 
 --- Data passed to the on_response_complete hook
 --- @class agentic.UserConfig.ResponseCompleteData
 --- @field session_id string The ACP session ID
---- @field tab_page_id number The tabpage ID
+--- @field tab_page_id? number The tabpage the session is bound to, if any
 --- @field success boolean Whether response completed without error
 --- @field error? table Error details if failed
 
 --- Data passed to the on_permission_request hook
 --- @class agentic.UserConfig.PermissionRequestData
 --- @field session_id string The ACP session ID
---- @field tab_page_id number The tabpage ID
+--- @field tab_page_id? number The tabpage the session is bound to, if any
 --- @field tool_call_id string The tool call ID requesting permission
 
 --- @class agentic.UserConfig.Hooks
@@ -51,7 +51,7 @@
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
 --- @field chat table<string, agentic.UserConfig.KeymapValue>
 --- @field diff_preview table<string, string>
---- @field permission string[] Keys for permission responses (position maps to option index)
+--- @field permission table<string, string> Key for permission responses by option kind
 
 --- Window options passed to nvim_set_option_value
 --- Overrides default options (wrap, linebreak, winfixbuf, winfixheight)
@@ -275,8 +275,8 @@ local ConfigDefault = {
         --- Keys bindings for the prompt buffer
         prompt = {
             --- Whole-buffer submit binding. Default empty because partial-send
-            --- owns normal-mode <CR>. `:w` / `:Wq` / `:X` always submit the
-            --- whole buffer regardless of this binding.
+            --- owns normal-mode <CR>. `:w` always submits the whole buffer
+            --- regardless of this binding.
             submit = {},
 
             --- Send N lines (vim.v.count1) from cursor, then delete them.
@@ -344,10 +344,18 @@ local ConfigDefault = {
             open_in_tab = "<localLeader>d",
         },
 
-        --- Keys for permission responses (Allow once, Allow always, etc.)
-        --- Position maps to option index: permission[1] selects option 1, etc.
+        --- Keys for permission responses by option kind. An option with no key
+        --- here, or whose kind's key an earlier option took, gets
+        --- `<localLeader>` and its position in the prompt.
         --- Applied to all widget buffers while a permission prompt is active.
-        permission = { "1", "2", "3", "4", "5" },
+        permission = {
+            allow_once = "<localLeader>y",
+            allow_always = "<localLeader>Y",
+            reject_once = "<localLeader>n",
+            reject_always = "<localLeader>N",
+            __reject_all__ = "<localLeader>x",
+            plan_implement = "<localLeader>i",
+        },
     },
 
     --- Icons used to identify tool call states
@@ -495,7 +503,7 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.Notifications
     --- @field bell boolean Ring vim bell on response complete and permission request
     notifications = {
-        bell = false,
+        bell = true,
     },
 
     --- Auto-approve read-only tool calls (Read, Grep, Glob — ACP kinds "read"
@@ -555,10 +563,9 @@ local ConfigDefault = {
         --- partial-send. Nil writes no register.
         send_register = nil,
 
-        --- When true, `:w` in the input buffer submits the prompt. `:wq` and
-        --- `:x` submit and close the input window; `:wq!` and `:x!` submit and
-        --- close the whole widget. When false, none of these are registered
-        --- and the input buffer remains a plain `nofile` buffer.
+        --- When true, `:w` in the input buffer submits the prompt, so `:wq`
+        --- and `:x` submit and close the input window. When false, the input
+        --- buffer is a plain `nofile` buffer.
         write_submit = true,
     },
 

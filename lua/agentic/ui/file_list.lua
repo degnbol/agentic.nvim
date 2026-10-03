@@ -37,7 +37,7 @@ function FileList:add(file_path)
 
     if stat and stat.type == "file" then
         table.insert(self._files, file_path)
-        self:_render()
+        self:render()
         return true
     end
 
@@ -51,7 +51,7 @@ function FileList:remove_file_at(index)
     end
 
     table.remove(self._files, index)
-    self:_render()
+    self:render()
 end
 
 --- @return string[]
@@ -61,7 +61,7 @@ end
 
 function FileList:clear()
     self._files = {}
-    self:_render()
+    self:render()
 end
 
 --- @return boolean
@@ -69,8 +69,8 @@ function FileList:is_empty()
     return #self._files == 0
 end
 
---- @private
-function FileList:_render()
+--- Write the files into the buffer and report the change.
+function FileList:render()
     local lines = {}
 
     for _, file in ipairs(self._files) do

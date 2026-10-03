@@ -75,10 +75,12 @@ end)
 
 ## Multi-tabpage tests
 
-The plugin keeps one session instance per tabpage. Any test that touches
-session/widget/registry state must verify cross-tabpage isolation and
-cleanup on tabpage close — open `tabnew`, instantiate, assert independence,
-close, assert no leaks.
+A tabpage binds to at most one session (`SessionRegistry.tab_bindings`). Any
+test that touches session/widget/registry state must verify cross-tabpage
+isolation — open `tabnew`, instantiate, assert independence, close, assert no
+leaks. A unit test building a `ChatWidget` or `PermissionFloat` without a
+registry must bind its owner id to the tab itself (`SessionRegistry.bind`),
+or the widget has no tab to open in.
 
 ## Integration tests: mock transport
 

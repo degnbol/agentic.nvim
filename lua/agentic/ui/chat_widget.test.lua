@@ -10,6 +10,19 @@ describe("agentic.ui.ChatWidget", function()
     local ChatWidget
 
     ChatWidget = require("agentic.ui.chat_widget")
+    local SessionRegistry = require("agentic.session_registry")
+
+    local last_owner_id = 1000
+
+    --- A widget whose owner id is bound to the current tabpage.
+    --- @param on_submit function
+    --- @return agentic.ui.ChatWidget
+    local function new_widget(on_submit)
+        last_owner_id = last_owner_id + 1
+        SessionRegistry.tab_bindings[vim.api.nvim_get_current_tabpage()] =
+            last_owner_id
+        return ChatWidget:new(last_owner_id, on_submit)
+    end
 
     --- Helper to populate a dynamic buffer with content
     --- @param widget agentic.ui.ChatWidget
@@ -45,10 +58,7 @@ describe("agentic.ui.ChatWidget", function()
                 tab_page_id = vim.api.nvim_get_current_tabpage()
 
                 local on_submit_spy = spy.new(function() end)
-                widget = ChatWidget:new(
-                    tab_page_id,
-                    on_submit_spy --[[@as function]]
-                )
+                widget = new_widget(on_submit_spy --[[@as function]])
             end)
 
             after_each(function()
@@ -361,10 +371,7 @@ describe("agentic.ui.ChatWidget", function()
                 vim.cmd("tabnew")
 
                 local on_submit_spy = spy.new(function() end)
-                widget = ChatWidget:new(
-                    vim.api.nvim_get_current_tabpage(),
-                    on_submit_spy --[[@as function]]
-                )
+                widget = new_widget(on_submit_spy --[[@as function]])
             end)
 
             after_each(function()
@@ -415,10 +422,7 @@ describe("agentic.ui.ChatWidget", function()
             vim.cmd("tabnew")
 
             local on_submit_spy = spy.new(function() end)
-            widget = ChatWidget:new(
-                vim.api.nvim_get_current_tabpage(),
-                on_submit_spy --[[@as function]]
-            )
+            widget = new_widget(on_submit_spy --[[@as function]])
         end)
 
         after_each(function()
@@ -477,10 +481,7 @@ describe("agentic.ui.ChatWidget", function()
             Config.windows.position = "right"
 
             local on_submit_spy = spy.new(function() end)
-            widget = ChatWidget:new(
-                vim.api.nvim_get_current_tabpage(),
-                on_submit_spy --[[@as function]]
-            )
+            widget = new_widget(on_submit_spy --[[@as function]])
 
             show_stub = spy.stub(widget, "show")
             notify_stub = spy.stub(Logger, "notify")
@@ -561,26 +562,24 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
-    describe(":wq / :x and :q behaviour", function()
+    describe(":q, :w and the modified flag", function()
         local widget
         local submit_spy
-        local hide_spy
+        --- @type boolean
+        local dispatched
 
         before_each(function()
             vim.cmd("tabnew")
-            local on_submit_spy = spy.new(function() end)
-            widget = ChatWidget:new(
-                vim.api.nvim_get_current_tabpage(),
-                on_submit_spy --[[@as function]]
-            )
+            dispatched = true
+            widget = new_widget(function()
+                return dispatched
+            end)
             widget:show()
             submit_spy = spy.on(widget, "submit")
-            hide_spy = spy.on(widget, "hide")
         end)
 
         after_each(function()
             submit_spy:revert()
-            hide_spy:revert()
             pcall(function()
                 widget:destroy()
             end)
@@ -589,43 +588,23 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
 
-        --- Type an ex-command through the interactive cmdline so the
-        --- CmdlineLeave quit-guard fires (`vim.cmd` bypasses it).
-        --- @param cmd string
-        local function feed_cmdline(cmd)
-            vim.api.nvim_feedkeys(
-                vim.api.nvim_replace_termcodes(
-                    ":" .. cmd .. "<CR>",
-                    true,
-                    false,
-                    true
-                ),
-                "x",
-                false
-            )
+        for _, panel in ipairs({ "input", "chat" }) do
+            it(":q in the " .. panel .. " closes only its window", function()
+                local winid = widget.win_nrs[panel]
+                local other =
+                    widget.win_nrs[panel == "chat" and "input" or "chat"]
+                vim.api.nvim_set_current_win(winid)
+
+                vim.cmd("quit")
+
+                assert.is_false(vim.api.nvim_win_is_valid(winid))
+                assert.is_nil(widget.win_nrs[panel])
+                assert.is_true(vim.api.nvim_win_is_valid(other))
+                assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs[panel]))
+            end)
         end
 
-        it(":Wq submits and closes only the input window", function()
-            vim.api.nvim_buf_set_lines(
-                widget.buf_nrs.input,
-                0,
-                -1,
-                false,
-                { "hello" }
-            )
-            local chat_win = widget.win_nrs.chat
-            local input_win = widget.win_nrs.input
-            vim.api.nvim_set_current_win(input_win)
-            vim.cmd("Wq")
-
-            assert.spy(submit_spy).was.called(1)
-            assert.spy(hide_spy).was.called(0)
-            assert.is_false(vim.api.nvim_win_is_valid(input_win))
-            assert.is_nil(widget.win_nrs.input)
-            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
-        end)
-
-        it(":Wq! submits and hides the whole widget", function()
+        it(":w in the input submits", function()
             vim.api.nvim_buf_set_lines(
                 widget.buf_nrs.input,
                 0,
@@ -634,97 +613,30 @@ describe("agentic.ui.ChatWidget", function()
                 { "hello" }
             )
             vim.api.nvim_set_current_win(widget.win_nrs.input)
-            vim.cmd("Wq!")
+
+            vim.cmd("write")
 
             assert.spy(submit_spy).was.called(1)
-            assert.is_true(hide_spy.call_count >= 1)
+            assert.is_false(vim.bo[widget.buf_nrs.input].modified)
         end)
 
-        it(":X submits and closes only the input window", function()
-            local chat_win = widget.win_nrs.chat
-            local input_win = widget.win_nrs.input
-            vim.api.nvim_set_current_win(input_win)
-            vim.cmd("X")
-
-            assert.spy(submit_spy).was.called(1)
-            assert.spy(hide_spy).was.called(0)
-            assert.is_false(vim.api.nvim_win_is_valid(input_win))
-            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
-        end)
-
-        it(":X! submits and hides the whole widget", function()
-            vim.api.nvim_set_current_win(widget.win_nrs.input)
-            vim.cmd("X!")
-
-            assert.spy(submit_spy).was.called(1)
-            assert.is_true(hide_spy.call_count >= 1)
-        end)
-
-        it(":q on an empty input closes only the input window", function()
-            local chat_win = widget.win_nrs.chat
-            local input_win = widget.win_nrs.input
-            vim.api.nvim_set_current_win(input_win)
-
-            feed_cmdline("q")
-            vim.wait(200, function()
-                return not vim.api.nvim_win_is_valid(input_win)
-            end)
-
-            assert.is_false(vim.api.nvim_win_is_valid(input_win))
-            assert.is_nil(widget.win_nrs.input)
-            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
-        end)
-
-        it(":q abandoned with <C-c> closes nothing", function()
-            local input_win = widget.win_nrs.input
-            vim.api.nvim_set_current_win(input_win)
-
-            -- <C-c> abandons the cmdline: CmdlineLeave fires with
-            -- v:event.abort = true and no quit runs, so the guard must leave
-            -- the (empty) input window open.
-            vim.api.nvim_feedkeys(
-                vim.api.nvim_replace_termcodes(":q<C-c>", true, false, true),
-                "nx",
-                false
-            )
-            vim.wait(50)
-
-            assert.is_true(vim.api.nvim_win_is_valid(input_win))
-            assert.is_not_nil(widget.win_nrs.input)
-        end)
-
-        it(":q on a non-empty input warns and closes nothing", function()
+        it("the input stays modified while a submit is deferred", function()
+            dispatched = false
             vim.api.nvim_buf_set_lines(
                 widget.buf_nrs.input,
                 0,
                 -1,
                 false,
-                { "draft" }
+                { "held" }
             )
-            local chat_win = widget.win_nrs.chat
-            local input_win = widget.win_nrs.input
-            vim.api.nvim_set_current_win(input_win)
 
-            feed_cmdline("q")
+            widget:submit()
 
-            assert.is_true(vim.api.nvim_win_is_valid(input_win))
-            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
-        end)
-
-        it(":q in the chat warns and closes nothing", function()
-            local chat_win = widget.win_nrs.chat
-            local input_win = widget.win_nrs.input
-            vim.api.nvim_set_current_win(chat_win)
-
-            feed_cmdline("q")
-
-            assert.is_true(vim.api.nvim_win_is_valid(chat_win))
-            assert.is_true(vim.api.nvim_win_is_valid(input_win))
-            assert.spy(hide_spy).was.called(0)
+            assert.is_true(vim.bo[widget.buf_nrs.input].modified)
         end)
 
         it("an insert key in the chat reopens a closed input window", function()
-            widget:close_input_window()
+            vim.api.nvim_win_close(widget.win_nrs.input, true)
             assert.is_nil(widget.win_nrs.input)
 
             vim.api.nvim_set_current_win(widget.win_nrs.chat)
@@ -741,10 +653,7 @@ describe("agentic.ui.ChatWidget", function()
 
         before_each(function()
             vim.cmd("tabnew")
-            widget = ChatWidget:new(
-                vim.api.nvim_get_current_tabpage(),
-                spy.new(function() end) --[[@as function]]
-            )
+            widget = new_widget(spy.new(function() end) --[[@as function]])
             widget:show()
             vim.api.nvim_set_current_win(widget.win_nrs.chat)
             writer = MessageWriter:new(widget.buf_nrs.chat)
@@ -824,16 +733,17 @@ describe("agentic.ui.ChatWidget", function()
             assert.equal(rows[2], cursor_row())
         end)
 
-        it("clear() removes user-action markers", function()
+        it("reset() removes user-action markers", function()
             writer:write_user_prompt("A prompt")
             assert.equal(1, #marker_rows())
 
             widget:clear()
+            writer:reset()
 
             assert.same({}, marker_rows())
         end)
 
-        it("clear() removes region rails", function()
+        it("reset() removes region rails", function()
             local function decoration_marks()
                 return vim.api.nvim_buf_get_extmarks(
                     widget.buf_nrs.chat,
@@ -848,6 +758,7 @@ describe("agentic.ui.ChatWidget", function()
             assert.is_true(#decoration_marks() > 0)
 
             widget:clear()
+            writer:reset()
 
             assert.same({}, decoration_marks())
         end)
@@ -881,10 +792,7 @@ describe("agentic.ui.ChatWidget", function()
             submit_spy = spy.new(function()
                 return true
             end)
-            widget = ChatWidget:new(
-                vim.api.nvim_get_current_tabpage(),
-                submit_spy --[[@as function]]
-            )
+            widget = new_widget(submit_spy --[[@as function]])
             widget:show()
             vim.api.nvim_set_current_win(widget.win_nrs.input)
             debug_spy = spy.on(Logger, "debug")
@@ -1037,7 +945,8 @@ describe("agentic.ui.ChatWidget", function()
                     vim.api.nvim_buf_get_lines(code_buf, 0, -1, false)
                 )
                 assert.equal("untouched", vim.fn.getreg("a"))
-                assert.is_false(vim.bo[widget.buf_nrs.input].modified)
+                -- Unsent text is unsaved text.
+                assert.is_true(vim.bo[widget.buf_nrs.input].modified)
             end)
 
             it("dispatches the first block and tags the rest", function()
@@ -1085,12 +994,14 @@ describe("agentic.ui.ChatWidget", function()
             it("passes force through from the write commands", function()
                 set_input({ "line1" })
 
-                -- Fire the BufWriteCmd rather than `:write`: the `acwrite`
-                -- buftype that lets `:write` reach it is set in a vim.schedule
-                -- that has not run yet under the test harness.
+                local schedule_stub = spy.stub(vim, "schedule")
+                schedule_stub:invokes(function(fn)
+                    fn()
+                end)
                 vim.api.nvim_exec_autocmds("BufWriteCmd", {
                     buffer = widget.buf_nrs.input,
                 })
+                schedule_stub:revert()
 
                 assert.spy(submit_spy).was.called(1)
                 assert.is_true(submit_spy.calls[1][2].force)
@@ -1145,10 +1056,7 @@ describe("agentic.ui.ChatWidget", function()
             submit_spy = spy.new(function()
                 return true
             end)
-            widget = ChatWidget:new(
-                vim.api.nvim_get_current_tabpage(),
-                submit_spy --[[@as function]]
-            )
+            widget = new_widget(submit_spy --[[@as function]])
             widget:show()
             vim.api.nvim_set_current_win(widget.win_nrs.input)
         end)

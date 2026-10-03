@@ -90,7 +90,7 @@ function DiagnosticsList:add(diagnostic)
         return false
     end
 
-    self:_render()
+    self:render()
     return true
 end
 
@@ -106,7 +106,7 @@ function DiagnosticsList:add_many(diagnostics)
     end
 
     if count > 0 then
-        self:_render()
+        self:render()
     end
 
     return count
@@ -119,7 +119,7 @@ function DiagnosticsList:remove_at(index)
     end
 
     table.remove(self._diagnostics, index)
-    self:_render()
+    self:render()
 end
 
 --- @return agentic.ui.DiagnosticsList.Diagnostic[]
@@ -129,7 +129,7 @@ end
 
 function DiagnosticsList:clear()
     self._diagnostics = {}
-    self:_render()
+    self:render()
 end
 
 --- @return boolean
@@ -201,8 +201,8 @@ function DiagnosticsList.get_diagnostics_at_cursor(bufnr, opts)
     return diagnostics
 end
 
---- @private
-function DiagnosticsList:_render()
+--- Write the diagnostics into the buffer and report the change.
+function DiagnosticsList:render()
     local lines = {}
     local icons = get_diagnostic_icons()
 
@@ -309,7 +309,7 @@ function DiagnosticsList:_setup_keybindings()
         end
 
         if #sorted_indices > 0 then
-            self:_render()
+            self:render()
         end
 
         -- Exit visual mode

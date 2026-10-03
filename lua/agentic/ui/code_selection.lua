@@ -30,7 +30,7 @@ end
 function CodeSelection:add(selection)
     if selection and #selection.lines > 0 then
         table.insert(self._selections, selection)
-        self:_render()
+        self:render()
     end
 end
 
@@ -60,7 +60,7 @@ function CodeSelection:remove_at_cursor(line)
 
     if fence_index and fence_index <= #self._selections then
         table.remove(self._selections, fence_index)
-        self:_render()
+        self:render()
     end
 end
 
@@ -101,7 +101,7 @@ function CodeSelection:remove_range(start_line, end_line)
     end
 
     if #indices_to_remove > 0 then
-        self:_render()
+        self:render()
     end
 end
 
@@ -112,7 +112,7 @@ end
 
 function CodeSelection:clear()
     self._selections = {}
-    self:_render()
+    self:render()
 end
 
 --- @return boolean
@@ -136,8 +136,8 @@ function CodeSelection:_get_tree_root()
     return tree:root()
 end
 
---- @private
-function CodeSelection:_render()
+--- Write the selections into the buffer and report the change.
+function CodeSelection:render()
     if #self._selections == 0 then
         BufHelpers.with_modifiable(self._bufnr, function(bufnr)
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})

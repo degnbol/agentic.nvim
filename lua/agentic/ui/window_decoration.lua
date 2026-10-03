@@ -1,4 +1,5 @@
---- Window decoration module for managing window titles and buffer naming.
+--- Window decoration: per-buffer header state, the winbars it renders, and
+--- buffer naming.
 
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
@@ -32,38 +33,43 @@ local WINDOW_HEADERS = {
     },
 }
 
---- Concatenates header parts (title, context) into a single string
+--- Concatenates header parts (title, badge, context) into a single string
 --- @param parts agentic.ui.ChatWidget.HeaderParts
 --- @return string header_text
 local function concat_header_parts(parts)
-    local pieces = { parts.title }
+    local title = parts.title
+    if parts.badge then
+        title = title .. " " .. parts.badge
+    end
+    local pieces = { title }
     if parts.context ~= nil then
         table.insert(pieces, parts.context)
     end
     return table.concat(pieces, " | ")
 end
 
---- Gets or initializes headers for a tabpage
---- @param tab_page_id integer
---- @return agentic.ui.ChatWidget.Headers
-function WindowDecoration.get_headers_state(tab_page_id)
-    if vim.t[tab_page_id].agentic_headers == nil then
-        vim.t[tab_page_id].agentic_headers = WINDOW_HEADERS
-    end
-    return vim.t[tab_page_id].agentic_headers
+--- The header state of an Agentic buffer, `vim.b[bufnr].agentic_header`, or
+--- its panel's default when none is set. A copy: write it back with
+--- `set_header`.
+--- @param bufnr integer
+--- @return agentic.ui.ChatWidget.HeaderParts
+function WindowDecoration.get_header(bufnr)
+    return vim.b[bufnr].agentic_header
+        or vim.deepcopy(WINDOW_HEADERS[vim.b[bufnr].agentic_window])
+        or { title = "" }
 end
 
---- Sets headers for a tabpage
---- @param tab_page_id integer
---- @param headers agentic.ui.ChatWidget.Headers
-function WindowDecoration.set_headers_state(tab_page_id, headers)
-    if vim.api.nvim_tabpage_is_valid(tab_page_id) then
-        vim.t[tab_page_id].agentic_headers = headers
-        vim.api.nvim_exec_autocmds("User", {
-            pattern = "AgenticHeadersChanged",
-            data = { tab_page_id = tab_page_id },
-        })
-    end
+--- Store an Agentic buffer's header state, announce it with the
+--- `AgenticHeadersChanged` User autocmd, and render it.
+--- @param bufnr integer
+--- @param header agentic.ui.ChatWidget.HeaderParts
+function WindowDecoration.set_header(bufnr, header)
+    vim.b[bufnr].agentic_header = header
+    vim.api.nvim_exec_autocmds("User", {
+        pattern = "AgenticHeadersChanged",
+        data = { buf = bufnr },
+    })
+    WindowDecoration.render_header(bufnr)
 end
 
 --- Resolves the final header text applying user customization
@@ -119,93 +125,52 @@ local function resolve_header_text(dynamic_header, window_name)
         )
 end
 
---- Sets the buffer name based on header text and tab count.
---- Appends "(Tab N)" only when multiple tabs exist AND the title is the
---- default (no custom session name). Custom names are already unique.
---- @param bufnr integer Buffer number
---- @param header_text string|nil Resolved header text
---- @param tab_page_id integer Tab page ID for suffix
---- @param has_session_name boolean Whether a custom session name is set
-local function set_buffer_name(
-    bufnr,
-    header_text,
-    tab_page_id,
-    has_session_name
-)
-    if not header_text or header_text == "" then
+--- Name for an Agentic buffer: `agentic://<id>/<panel>`, or with a title
+--- `agentic://<id>/<panel>/<title>`, from the buffer's `agentic_session_id`
+--- and `agentic_window`. The id keeps names unique across sessions, the panel
+--- keeps a title from taking another panel's name, and the tail is the title
+--- when there is one.
+--- @param bufnr integer
+--- @param title string|nil
+--- @return string name
+function WindowDecoration.buffer_name(bufnr, title)
+    local name = string.format(
+        "agentic://%d/%s",
+        vim.b[bufnr].agentic_session_id,
+        vim.b[bufnr].agentic_window
+    )
+    if not title then
+        return name
+    end
+    -- A `/` would make only the text after it the tail.
+    return name .. "/" .. (title:gsub("/", "-"))
+end
+
+--- Render an Agentic buffer's header as the winbar of every window showing
+--- it, set with local scope so it leaves with the buffer.
+--- @param bufnr integer
+function WindowDecoration.render_header(bufnr)
+    if not Config.winbar then
         return
     end
 
-    local total_tabs = #vim.api.nvim_list_tabpages()
-
-    --- @type string|nil
-    local buf_name
-    if total_tabs > 1 and not has_session_name then
-        buf_name = string.format("%s (Tab %d)", header_text, tab_page_id)
-    else
-        buf_name = header_text
+    local header_text, err = resolve_header_text(
+        WindowDecoration.get_header(bufnr),
+        vim.b[bufnr].agentic_window
+    )
+    if err then
+        Logger.notify(err)
     end
+    -- Escape % to %% for statusline format.
+    local winbar = header_text and header_text:gsub("%%", "%%%%") or ""
 
-    vim.api.nvim_buf_set_name(bufnr, buf_name)
-end
-
---- Renders a header for a window, handling user customization and buffer naming.
---- Derives all context from bufnr: winid, tab_page_id, and dynamic header from vim.t
---- @param bufnr integer Buffer number - stable reference to derive window and tab context
---- @param window_name string Name of the window (for Config.headers lookup and error messages)
---- @param context string|nil Optional context to set in header (e.g., "Mode: chat", "3 files")
-function WindowDecoration.render_header(bufnr, window_name, context)
-    vim.schedule(function()
-        local winid = vim.fn.bufwinid(bufnr)
-        if winid == -1 then
-            return
-        end
-
-        local tab_page_id = vim.api.nvim_win_get_tabpage(winid)
-
-        local headers = WindowDecoration.get_headers_state(tab_page_id)
-        local dynamic_header = headers[window_name]
-
-        if not dynamic_header then
-            Logger.debug(
-                string.format(
-                    "No header configuration found for window name '%s'",
-                    window_name
-                )
-            )
-            return
-        end
-
-        -- Set context if provided (must reassign to vim.t due to copy semantics)
-        if context ~= nil then
-            dynamic_header.context = context
-            headers[window_name] = dynamic_header
-            WindowDecoration.set_headers_state(tab_page_id, headers)
-        end
-
-        local header_text, err =
-            resolve_header_text(dynamic_header, window_name)
-        if err then
-            Logger.notify(err)
-        end
-
-        -- Winbar: full header (title + context) for native per-window display.
-        -- Escape % to %% for statusline format.
-        if Config.winbar and header_text then
-            vim.wo[winid].winbar = header_text:gsub("%%", "%%%%")
-        end
-
-        -- Buffer name uses the base title only (no context or suffix) so
-        -- tabline/bufferline plugins show a clean, short name.
-        --- @type boolean
-        local has_session_name = dynamic_header.session_name ~= nil
-        set_buffer_name(
-            bufnr,
-            dynamic_header.title,
-            tab_page_id,
-            has_session_name
+    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+        vim.api.nvim_set_option_value(
+            "winbar",
+            winbar,
+            { win = winid, scope = "local" }
         )
-    end)
+    end
 end
 
 return WindowDecoration

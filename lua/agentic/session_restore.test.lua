@@ -549,17 +549,20 @@ describe("SessionRestore", function()
                     })
                 end)
                 setup_registry_stub(mock_session)
-                local destroy_stub =
-                    spy.stub(SessionRegistry, "destroy_session")
+                local bound_stub = spy.stub(SessionRegistry, "bound_session")
+                bound_stub:returns(mock_session)
+                local destroy_stub = spy.stub(SessionRegistry, "destroy")
                 local original_provider = Config.provider
 
                 SessionRestore.show_picker(1, nil)
 
                 assert.equal("opencode-acp", Config.provider)
                 assert.spy(destroy_stub).was.called(1)
+                assert.equal(mock_session, destroy_stub.calls[1][1])
 
                 Config.provider = original_provider
                 destroy_stub:revert()
+                bound_stub:revert()
             end
         )
 

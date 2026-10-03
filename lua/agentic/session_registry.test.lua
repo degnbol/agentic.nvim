@@ -20,19 +20,21 @@ describe("agentic.SessionRegistry", function()
     --- @type TestStub|nil
     local ui_select_stub
 
-    --- @param tab_page_id integer
+    local next_id = 0
+
     --- @return table mock_session
-    local function create_mock_session(tab_page_id)
-        return {
-            tab_page_id = tab_page_id,
-            destroy = function() end,
-            is_mock = true,
-        }
+    local function create_mock_session()
+        next_id = next_id + 1
+        local session = { id = next_id, is_mock = true }
+        function session:destroy()
+            self.destroyed = true
+        end
+        return session
     end
 
     session_manager_mock = {
-        new = function(_, tab_page_id)
-            return create_mock_session(tab_page_id)
+        new = function()
+            return create_mock_session()
         end,
     }
 
@@ -107,17 +109,14 @@ describe("agentic.SessionRegistry", function()
         }
         default_config_mock.provider = "claude-agent-acp"
 
-        session_manager_mock.new = function(_, tab_page_id)
-            return create_mock_session(tab_page_id)
+        session_manager_mock.new = function()
+            return create_mock_session()
         end
     end)
 
     after_each(function()
-        if SessionRegistry and SessionRegistry.sessions then
-            for k in pairs(SessionRegistry.sessions) do
-                SessionRegistry.sessions[k] = nil
-            end
-        end
+        SessionRegistry.by_id = {}
+        SessionRegistry.tab_bindings = {}
 
         package.loaded["agentic.session_manager"] =
             original_loaded["agentic.session_manager"]
@@ -142,7 +141,8 @@ describe("agentic.SessionRegistry", function()
 
             assert.is_not_nil(session)
             assert.is_true(session.is_mock)
-            assert.equal(tab_id, session.tab_page_id)
+            assert.equal(tab_id, SessionRegistry.tab_of(session.id))
+            assert.equal(session, SessionRegistry.by_id[session.id])
         end)
 
         it("returns existing session for tabpage", function()
@@ -163,8 +163,8 @@ describe("agentic.SessionRegistry", function()
             assert.is_not_nil(session1)
             assert.is_not_nil(session2)
             assert.are_not.equal(session1, session2)
-            assert.equal(tab1_id, session1.tab_page_id)
-            assert.equal(tab2_id, session2.tab_page_id)
+            assert.equal(tab1_id, SessionRegistry.tab_of(session1.id))
+            assert.equal(tab2_id, SessionRegistry.tab_of(session2.id))
         end)
 
         it("uses current tabpage when tab_page_id is nil", function()
@@ -172,7 +172,7 @@ describe("agentic.SessionRegistry", function()
             local session = SessionRegistry.get_session_for_tab_page(nil)
 
             assert.is_not_nil(session)
-            assert.equal(current_tab_id, session.tab_page_id)
+            assert.equal(current_tab_id, SessionRegistry.tab_of(session.id))
         end)
 
         it("calls callback with session when provided", function()
@@ -189,7 +189,10 @@ describe("agentic.SessionRegistry", function()
             assert.is_true(callback_called)
             assert.is_not_nil(callback_session)
             if callback_session then
-                assert.equal(tab_id, callback_session.tab_page_id)
+                assert.equal(
+                    tab_id,
+                    SessionRegistry.tab_of(callback_session.id)
+                )
             end
         end)
 
@@ -247,10 +250,18 @@ describe("agentic.SessionRegistry", function()
                 local session = SessionRegistry.get_session_for_tab_page(1)
 
                 assert.is_nil(session)
-                assert.is_nil(SessionRegistry.sessions[1])
+                assert.is_nil(SessionRegistry.bound_session(1))
             end
         )
     end)
+
+    --- Register `session` and bind it to `tab_id`.
+    --- @param session table
+    --- @param tab_id integer
+    local function install(session, tab_id)
+        SessionRegistry.by_id[session.id] = session
+        SessionRegistry.bind(tab_id, session)
+    end
 
     describe("new_session", function()
         it("creates new session when none exists", function()
@@ -258,148 +269,118 @@ describe("agentic.SessionRegistry", function()
             local session = SessionRegistry.new_session(tab_id)
 
             assert.is_not_nil(session)
-            assert.equal(tab_id, session.tab_page_id)
+            assert.equal(tab_id, SessionRegistry.tab_of(session.id))
         end)
 
         it("destroys existing session before creating new one", function()
             local tab_id = 1
 
-            local first_session = create_mock_session(tab_id)
+            local first_session = create_mock_session()
             local destroy_spy = spy.new(function() end)
             first_session.destroy = destroy_spy
-            SessionRegistry.sessions[tab_id] = first_session
+            install(first_session, tab_id)
 
             local new_session = SessionRegistry.new_session(tab_id)
 
             assert.spy(destroy_spy).was.called(1)
-
             assert.are_not.equal(first_session, new_session)
-            assert.equal(tab_id, new_session.tab_page_id)
+            assert.is_nil(SessionRegistry.by_id[first_session.id])
+            assert.equal(new_session, SessionRegistry.bound_session(tab_id))
         end)
 
-        it("handles destroy errors gracefully", function()
+        it("still replaces a session whose destroy errors", function()
             local tab_id = 1
 
-            -- Create session with destroy that throws error
-            local error_session = create_mock_session(tab_id)
+            local error_session = create_mock_session()
             error_session.destroy = function()
                 error("destroy failed")
             end
-            SessionRegistry.sessions[tab_id] = error_session
+            install(error_session, tab_id)
 
             local new_session = SessionRegistry.new_session(tab_id)
 
             assert.is_not_nil(new_session)
-            assert.equal(tab_id, new_session.tab_page_id)
-        end)
-
-        it("uses current tabpage when tab_page_id is nil", function()
-            local current_tab_id = vim.api.nvim_get_current_tabpage()
-            local session = SessionRegistry.new_session(nil)
-
-            assert.is_not_nil(session)
-            assert.equal(current_tab_id, session.tab_page_id)
-        end)
-
-        it("replaces session in registry", function()
-            local tab_id = 1
-
-            local first_session =
-                SessionRegistry.get_session_for_tab_page(tab_id)
-
-            local new_session = SessionRegistry.new_session(tab_id)
-
-            assert.equal(new_session, SessionRegistry.sessions[tab_id])
-            assert.are_not.equal(first_session, new_session)
+            assert.equal(tab_id, SessionRegistry.tab_of(new_session.id))
+            assert.is_nil(SessionRegistry.by_id[error_session.id])
         end)
 
         it("recreates session only for specified tabpage", function()
-            local tab1_id = 1
-            local tab2_id = 2
+            local session1_v1 = SessionRegistry.get_session_for_tab_page(1)
+            local session2_v1 = SessionRegistry.get_session_for_tab_page(2)
 
-            local session1_v1 =
-                SessionRegistry.get_session_for_tab_page(tab1_id)
-            local session2_v1 =
-                SessionRegistry.get_session_for_tab_page(tab2_id)
-
-            local session1_v2 = SessionRegistry.new_session(tab1_id)
+            local session1_v2 = SessionRegistry.new_session(1)
 
             assert.are_not.equal(session1_v1, session1_v2)
-            assert.equal(session2_v1, SessionRegistry.sessions[tab2_id])
+            assert.equal(session2_v1, SessionRegistry.bound_session(2))
         end)
     end)
 
-    describe("destroy_session", function()
-        it("destroys existing session and removes from registry", function()
-            local tab_id = 1
+    describe("destroy", function()
+        it("destroys the session and drops it and its binding", function()
+            local session = SessionRegistry.get_session_for_tab_page(1)
 
-            local session = create_mock_session(tab_id)
-            local destroy_spy = spy.new(function() end)
-            session.destroy = destroy_spy
-            SessionRegistry.sessions[tab_id] = session
+            SessionRegistry.destroy(session)
 
-            SessionRegistry.destroy_session(tab_id)
+            assert.is_true(session.destroyed)
+            assert.is_nil(SessionRegistry.by_id[session.id])
+            assert.is_nil(SessionRegistry.bound_session(1))
+        end)
+
+        it("is a no-op on a session already destroyed", function()
+            local session = SessionRegistry.get_session_for_tab_page(1)
+            local destroy_spy = spy.on(session, "destroy")
+
+            SessionRegistry.destroy(session)
+            SessionRegistry.destroy(session)
 
             assert.spy(destroy_spy).was.called(1)
-            assert.is_nil(SessionRegistry.sessions[tab_id])
+            destroy_spy:revert()
         end)
 
-        it("does nothing when no session exists for tabpage", function()
-            local tab_id = 1
+        it("leaves other sessions alone", function()
+            local session1 = SessionRegistry.get_session_for_tab_page(1)
+            local session2 = SessionRegistry.get_session_for_tab_page(2)
 
-            SessionRegistry.destroy_session(tab_id)
+            SessionRegistry.destroy(session1)
 
-            assert.is_nil(SessionRegistry.sessions[tab_id])
-        end)
-
-        it("uses current tabpage when tab_page_id is nil", function()
-            local current_tab_id = vim.api.nvim_get_current_tabpage()
-
-            local session = create_mock_session(current_tab_id)
-            local destroy_spy = spy.new(function() end)
-            session.destroy = destroy_spy
-            SessionRegistry.sessions[current_tab_id] = session
-
-            SessionRegistry.destroy_session(nil)
-
-            assert.spy(destroy_spy).was.called(1)
-            assert.is_nil(SessionRegistry.sessions[current_tab_id])
-        end)
-
-        it("handles destroy errors gracefully", function()
-            local tab_id = 1
-
-            local error_session = create_mock_session(tab_id)
-            error_session.destroy = function()
-                error("destroy failed")
-            end
-            SessionRegistry.sessions[tab_id] = error_session
-
-            SessionRegistry.destroy_session(tab_id)
-
-            assert.is_nil(SessionRegistry.sessions[tab_id])
-        end)
-
-        it("only affects specified tabpage", function()
-            local tab1_id = 1
-            local tab2_id = 2
-
-            SessionRegistry.sessions[tab1_id] = create_mock_session(tab1_id)
-            SessionRegistry.sessions[tab2_id] = create_mock_session(tab2_id)
-
-            SessionRegistry.destroy_session(tab1_id)
-
-            assert.is_nil(SessionRegistry.sessions[tab1_id])
-            assert.is_not_nil(SessionRegistry.sessions[tab2_id])
+            assert.equal(session2, SessionRegistry.bound_session(2))
         end)
     end)
 
-    describe("sessions weak table", function()
-        it("uses weak value metatable", function()
-            local metatable = getmetatable(SessionRegistry.sessions)
+    describe("bind", function()
+        it("moves a session's binding to the new tab", function()
+            local session = SessionRegistry.get_session_for_tab_page(1)
 
-            assert.is_not_nil(metatable)
-            assert.equal("v", metatable.__mode)
+            SessionRegistry.bind(2, session)
+
+            assert.is_nil(SessionRegistry.bound_session(1))
+            assert.equal(session, SessionRegistry.bound_session(2))
+            assert.equal(2, SessionRegistry.tab_of(session.id))
+        end)
+
+        it("unbinds the tab's previous session", function()
+            local session1 = SessionRegistry.get_session_for_tab_page(1)
+            local session2 = SessionRegistry.get_session_for_tab_page(2)
+
+            SessionRegistry.bind(1, session2)
+
+            assert.is_nil(SessionRegistry.tab_of(session1.id))
+            assert.equal(session1, SessionRegistry.by_id[session1.id])
+        end)
+    end)
+
+    describe("owner_of_buf", function()
+        it("resolves a buffer by its agentic_session_id", function()
+            local session = SessionRegistry.get_session_for_tab_page(1)
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            vim.b[bufnr].agentic_session_id = session.id
+
+            assert.equal(session, SessionRegistry.owner_of_buf(bufnr))
+
+            SessionRegistry.destroy(session)
+            assert.is_nil(SessionRegistry.owner_of_buf(bufnr))
+
+            vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
     end)
 

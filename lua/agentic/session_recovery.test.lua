@@ -16,7 +16,7 @@ describe("agentic.session_recovery", function()
             submit_spy = spy.new(function() end)
             return {
                 session_id = "s1",
-                _destroyed = false,
+                destroyed = false,
                 _retry_attempt = 1,
                 _usage_reset_epoch = os.time() + 600,
                 _handle_input_submit = submit_spy,
@@ -74,7 +74,7 @@ describe("agentic.session_recovery", function()
 
         it("sends nothing for a destroyed session", function()
             local session = session_with(false)
-            session._destroyed = true
+            session.destroyed = true
 
             Recovery._fire_auto_continue(session)
 
@@ -135,8 +135,7 @@ describe("agentic.session_recovery", function()
 
             before_each(function()
                 notices = {}
-                respawn_stub =
-                    spy.stub(Recovery, "respawn_preserving_history")
+                respawn_stub = spy.stub(Recovery, "respawn_preserving_history")
                 respawn_stub:invokes(function(_sm, on_created)
                     on_created()
                 end)
@@ -150,7 +149,7 @@ describe("agentic.session_recovery", function()
             local function make_session()
                 return {
                     session_id = "s-1",
-                    _destroyed = false,
+                    destroyed = false,
                     _session_epoch = 0,
                     _reauth_live_retry = false,
                     is_generating = false,
@@ -259,7 +258,7 @@ describe("agentic.session_recovery", function()
             local function make_session()
                 return {
                     session_id = "old",
-                    _destroyed = false,
+                    destroyed = false,
                     chat_history = {
                         session_id = "old",
                         timestamp = 1,
@@ -267,7 +266,10 @@ describe("agentic.session_recovery", function()
                     },
                     permission_manager = { clear = function() end },
                     todo_list = { clear = function() end },
+                    widget = { buf_nrs = {} },
                     _adopt_history = SessionManager._adopt_history,
+                    _sync_chat_modified = SessionManager._sync_chat_modified,
+                    _set_prompt_pending = SessionManager._set_prompt_pending,
                     new_session = function(this, opts)
                         this.chat_history = {
                             session_id = "new",
@@ -298,7 +300,7 @@ describe("agentic.session_recovery", function()
                 local session = make_session()
 
                 Recovery.respawn_preserving_history(session)
-                session._destroyed = true
+                session.destroyed = true
                 fire_ready({ state = "ready" })
 
                 assert.equal("old", session.chat_history.session_id)

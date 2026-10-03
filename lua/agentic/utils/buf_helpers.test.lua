@@ -184,4 +184,41 @@ describe("BufHelpers", function()
             assert.equal(1, BufHelpers.trailing_blank_rows(bufnr, 2))
         end)
     end)
+
+    describe("rename", function()
+        --- @param name string
+        --- @return integer[]
+        local function bufs_named(name)
+            return vim.tbl_filter(function(b)
+                return vim.api.nvim_buf_get_name(b) == name
+            end, vim.api.nvim_list_bufs())
+        end
+
+        it("leaves no buffer holding the old name", function()
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            BufHelpers.rename(bufnr, "test://rename/old")
+            BufHelpers.rename(bufnr, "test://rename/new")
+
+            assert.same({}, bufs_named("test://rename/old"))
+            assert.same({ bufnr }, bufs_named("test://rename/new"))
+
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("raises E95 when a loaded buffer holds the name", function()
+            local holder = vim.api.nvim_create_buf(false, true)
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            BufHelpers.rename(holder, "test://rename/taken")
+
+            local ok, err =
+                pcall(BufHelpers.rename, bufnr, "test://rename/taken")
+
+            assert.is_false(ok)
+            assert.truthy(tostring(err):find("E95"))
+            assert.is_true(vim.api.nvim_buf_is_valid(holder))
+
+            vim.api.nvim_buf_delete(holder, { force = true })
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+    end)
 end)

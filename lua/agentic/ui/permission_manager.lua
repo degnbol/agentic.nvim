@@ -32,7 +32,10 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field queue table[] Queue of pending requests {toolCallId, request, callback}
 --- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
 --- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
+--- @field _layout_autocmd? integer Autocmd re-placing the float and its option keys on layout changes while a request is shown
 --- @field permission_float agentic.ui.PermissionFloat
+--- @field on_hidden_change? fun(hidden: boolean, bufnr: integer) Called when a request starts or stops waiting with its float hidden, because no window shows `bufnr`, the buffer of its tool call
+--- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _execute_leaf_allow table<string, boolean> Session-remembered execute leaves vouched for via allow_always
 --- @field _trust_scope? agentic.utils.TrustSafety.Scope Active trust scope (set by /trust)
@@ -43,10 +46,10 @@ PermissionManager.__index = PermissionManager
 
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
---- @param tab_page_id integer
+--- @param owner_id integer `SessionManager.id` of the owning session
 --- @param writer_for? fun(tool_call_id: string): agentic.ui.MessageWriter Resolver for the writer owning a tool call (main vs subagent)
 --- @return agentic.ui.PermissionManager
-function PermissionManager:new(message_writer, buf_nrs, tab_page_id, writer_for)
+function PermissionManager:new(message_writer, buf_nrs, owner_id, writer_for)
     local instance = setmetatable({
         message_writer = message_writer,
         _writer_for = writer_for,
@@ -54,11 +57,12 @@ function PermissionManager:new(message_writer, buf_nrs, tab_page_id, writer_for)
         permission_float = PermissionFloat:new(
             message_writer,
             buf_nrs,
-            tab_page_id
+            owner_id
         ),
         queue = {},
         current_request = nil,
         keymap_info = {},
+        _hidden = false,
         _always_cache = {},
         _execute_leaf_allow = {},
         _trust_scope = nil,
@@ -820,7 +824,25 @@ function PermissionManager:_process_next()
         option_mapping = option_mapping,
     }
 
-    self:_setup_keymaps(option_mapping)
+    self:_watch_layout()
+    self:_sync_keymaps()
+    self:_set_hidden(not self.permission_float:is_shown())
+end
+
+--- Record whether the current request waits with its float hidden, and run
+--- `on_hidden_change` when that changes.
+--- @param hidden boolean
+function PermissionManager:_set_hidden(hidden)
+    if self._hidden == hidden then
+        return
+    end
+    self._hidden = hidden
+    if self.on_hidden_change and self.current_request then
+        self.on_hidden_change(
+            hidden,
+            self:_writer(self.current_request.toolCallId).bufnr
+        )
+    end
 end
 
 --- Highlight the non-known-safe parts of an execute permission prompt while it
@@ -937,7 +959,7 @@ function PermissionManager:_complete_request(option_id)
     self.permission_float:close()
     self:_clear_unapproved_highlight()
 
-    self:_remove_keymaps()
+    self:_release_request()
     current.callback(option_id)
 
     self.current_request = nil
@@ -950,7 +972,7 @@ function PermissionManager:clear()
     if self.current_request then
         self.permission_float:close()
         self:_clear_unapproved_highlight()
-        self:_remove_keymaps()
+        self:_release_request()
 
         local ok, err = pcall(self.current_request.callback, nil)
         if not ok then
@@ -995,7 +1017,7 @@ function PermissionManager:reject_and_cancel_remaining()
     -- Remove UI and keymaps for current request
     self.permission_float:close()
     self:_clear_unapproved_highlight()
-    self:_remove_keymaps()
+    self:_release_request()
 
     -- Send reject_once for current, cancelled for the rest
     local ok, err = pcall(self.current_request.callback, reject_option_id)
@@ -1033,18 +1055,23 @@ function PermissionManager:remove_request_by_tool_call_id(toolCallId)
     end
 end
 
---- @param option_mapping table<integer, string>|nil Mapping from number (1-N) to option_id, or nil when float couldn't open
-function PermissionManager:_setup_keymaps(option_mapping)
+--- Bind the current request's option keys on the session's buffers while its
+--- float is visible in the current tabpage, and unbind them otherwise: the
+--- keys are buffer-local, and the buffers can be shown in a tabpage the float
+--- is not in.
+function PermissionManager:_sync_keymaps()
     self:_remove_keymaps()
 
-    if not option_mapping then
+    local option_mapping = self.current_request
+        and self.current_request.option_mapping
+    if
+        not option_mapping
+        or not self.permission_float:is_visible_in_current_tab()
+    then
         return
     end
 
-    local permission_keys = Config.keymaps.permission or {}
-
-    for number, option_id in pairs(option_mapping) do
-        local lhs = permission_keys[number] or tostring(number)
+    for lhs, option_id in pairs(option_mapping) do
         local callback
         if option_id == "__reject_all__" then
             callback = function()
@@ -1059,7 +1086,7 @@ function PermissionManager:_setup_keymaps(option_mapping)
         for _, bufnr in pairs(self._buf_nrs) do
             if vim.api.nvim_buf_is_valid(bufnr) then
                 BufHelpers.keymap_set(bufnr, "n", lhs, callback, {
-                    desc = "Select permission option " .. tostring(number),
+                    desc = "Select permission option " .. option_id,
                 })
                 table.insert(
                     self.keymap_info,
@@ -1077,6 +1104,49 @@ function PermissionManager:_remove_keymaps()
         end
     end
     self.keymap_info = {}
+end
+
+--- Place the current request's float for the current layout and bind its
+--- option keys to match. A no-op with no request shown.
+function PermissionManager:refresh_float()
+    if not self.current_request then
+        return
+    end
+    self.permission_float:place()
+    self:_sync_keymaps()
+    self:_set_hidden(not self.permission_float:is_shown())
+end
+
+--- Keep the float and its option keys in step with the layout for as long as
+--- a request is shown: across tabpage switches, a window closing (the
+--- float's anchor, or the float itself), and the anchor buffer entering a
+--- window.
+function PermissionManager:_watch_layout()
+    if self._layout_autocmd then
+        return
+    end
+    self._layout_autocmd = vim.api.nvim_create_autocmd(
+        { "TabEnter", "WinClosed", "BufWinEnter" },
+        {
+            callback = function()
+                -- WinClosed runs while the window is still open.
+                vim.schedule(function()
+                    self:refresh_float()
+                end)
+            end,
+        }
+    )
+end
+
+--- Unbind the option keys, stop following the layout, and end the hidden
+--- state of the request being resolved.
+function PermissionManager:_release_request()
+    self:_remove_keymaps()
+    if self._layout_autocmd then
+        pcall(vim.api.nvim_del_autocmd, self._layout_autocmd)
+        self._layout_autocmd = nil
+    end
+    self:_set_hidden(false)
 end
 
 return PermissionManager

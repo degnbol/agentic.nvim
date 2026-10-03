@@ -20,7 +20,7 @@ describe("Buffer Naming", function()
             [[
 (function()
     local tab_id = vim.api.nvim_get_current_tabpage()
-    local session = require("agentic.session_registry").sessions[tab_id]
+    local session = require("agentic.session_registry").bound_session(tab_id)
     return vim.api.nvim_buf_get_name(session.widget.buf_nrs.%s)
 end)()
 ]],
@@ -31,43 +31,73 @@ end)()
         )
     end
 
-    it("buffer names mirror header titles", function()
+    it("the chat name's tail is the session title", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
-        vim.uv.sleep(50)
-        child.flush()
+        assert.equal("chat", get_panel_basename("chat"))
 
-        local basename = get_panel_basename("chat")
+        child.lua([[
+local tab = vim.api.nvim_get_current_tabpage()
+require("agentic.session_registry").bound_session(tab).widget:set_chat_title("fix a/b")
+]])
 
-        assert.is_true(vim.startswith(basename, "󰻞 Agentic Chat"))
+        assert.equal("fix a-b", get_panel_basename("chat"))
     end)
 
-    it("adds tab suffix for multiple instances", function()
+    it("the unread badge stays out of the name", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
-        vim.uv.sleep(50)
+        child.lua([[
+local tab = vim.api.nvim_get_current_tabpage()
+require("agentic.session_registry").bound_session(tab).widget:set_unread_badge("[done]")
+]])
+
+        assert.equal("chat", get_panel_basename("chat"))
+    end)
+
+    it("names are unique across instances", function()
+        child.lua([[ require("agentic").toggle() ]])
         child.flush()
-
-        local tab1_basename = get_panel_basename("input")
-
         child.cmd("tabnew")
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
         vim.uv.sleep(50)
         child.flush()
 
-        local tab2_basename = get_panel_basename("input")
+        local names = child.lua_get([[
+(function()
+    local names = {}
+    for _, session in pairs(require("agentic.session_registry").by_id) do
+        for _, bufnr in pairs(session.widget.buf_nrs) do
+            table.insert(names, vim.api.nvim_buf_get_name(bufnr))
+        end
+    end
+    return names
+end)()
+]])
 
-        -- First instance starts with title (no tab suffix)
-        assert.is_true(vim.startswith(tab1_basename, "󰦨 Prompt"))
-        assert.is_nil(tab1_basename:match("%(Tab %d+%)"))
+        local seen = {}
+        for _, name in ipairs(names) do
+            assert.is_true(vim.startswith(name, "agentic://"))
+            assert.is_nil(seen[name])
+            seen[name] = true
+        end
+        assert.equal(16, #names)
+        assert.equal("", child.lua_get("vim.v.errmsg"))
+    end)
 
-        -- Second instance has visible "(Tab N)" suffix
-        assert.is_true(vim.startswith(tab2_basename, "󰦨 Prompt"))
-        assert.is_not_nil(tab2_basename:match("%(Tab %d+%)"))
+    it("renames leave no buffer behind", function()
+        child.lua([[ require("agentic").toggle() ]])
+        child.flush()
+        vim.uv.sleep(50)
+        child.flush()
 
-        -- Names are unique
-        assert.is_not.equal(tab1_basename, tab2_basename)
+        local unloaded = child.lua_get([[
+#vim.tbl_filter(function(b)
+    return not vim.api.nvim_buf_is_loaded(b)
+end, vim.api.nvim_list_bufs())
+]])
+        assert.equal(0, unloaded)
     end)
 
     it("prevents buffer name collision errors", function()
@@ -78,28 +108,18 @@ end)()
         end
 
         local session_count = child.lua_get([[
-            vim.tbl_count(require("agentic.session_registry").sessions)
+            vim.tbl_count(require("agentic.session_registry").by_id)
         ]])
 
         assert.equal(5, session_count)
     end)
 
-    it("each panel has distinct buffer name prefix", function()
+    it("panel names keep their panel as the tail", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
-        vim.uv.sleep(50)
-        child.flush()
 
-        local expected_prefixes = {
-            chat = "󰻞 Agentic Chat",
-            input = "󰦨 Prompt",
-        }
-
-        for panel, expected_prefix in pairs(expected_prefixes) do
-            local basename = get_panel_basename(panel)
-
-            assert.is_not.equal("", basename)
-            assert.is_true(basename:find(expected_prefix, 1, true) ~= nil)
+        for _, panel in ipairs({ "input", "code", "files", "todos" }) do
+            assert.equal(panel, get_panel_basename(panel))
         end
     end)
 end)

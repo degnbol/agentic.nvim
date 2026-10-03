@@ -1,7 +1,10 @@
 local Config = require("agentic.config")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local ChatBuffer = require("agentic.ui.chat_buffer")
+local SessionRegistry = require("agentic.session_registry")
 local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
+local LspServer = require("agentic.completion.lsp_server")
 local MessageWriter = require("agentic.ui.message_writer")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -21,6 +24,7 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field context? string Dynamic info (managed internally)
 --- @field session_name? string Custom session name (set by /rename or first message)
 --- @field trust? string Active /trust scope display (set by /trust)
+--- @field badge? string Unread badge (e.g. "[done]", "[?]")
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
 --- @alias agentic.ui.ChatWidget.WinNrs table<agentic.ui.ChatWidget.PanelNames, integer|nil>
@@ -39,15 +43,14 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- A sidebar-style chat widget with multiple windows stacked vertically
 --- The main chat window is the first, and contains the width, the below ones adapt to its size
 --- @class agentic.ui.ChatWidget
---- @field tab_page_id integer
+--- @field _owner_id integer `SessionManager.id` of the owning session
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field on_submit_input fun(prompt: string, opts?: agentic.SessionManager.SubmitOpts): boolean external callback for a submitted prompt; false means it was deferred and the range should be tagged
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
+--- @field on_window_opened? fun(panel: "chat"|"subagent", winid: integer) external callback after the widget opens a chat or subagent window
 --- @field on_hide? fun() external callback called after the widget is hidden
---- @field _hiding boolean re-entrancy guard for hide()
 --- @field _draining? boolean guard so drain's own buffer edits don't self-untag
---- @field _unread_badge? string Badge appended to chat buffer name (e.g. "[done]", "[?]")
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -78,103 +81,15 @@ function ChatWidget._queue_operator_dispatch(type)
     end
 end
 
---- Whether the global `:q` guard has been installed. The guard is registered
---- once for the whole plugin, not per-widget.
-local _quit_guard_installed = false
-
---- Install a global `:q` (no-bang) guard for Agentic chat/input buffers so a
---- reflex `:q` never tears down a live widget the way a stray window-close
---- would:
----   • chat buffer  → refuse; the widget closes via its close keymap or `:q!`.
----   • input buffer → close only the input window when empty, else refuse with
----     an unwritten-buffer-style warning (the draft is unsent).
----
---- `CmdlineLeave` + `v:event.abort` is the documented veto point for an
---- ex-command; a buffer-local user command / abbreviation can't intercept the
---- built-in `:q`. CmdlineLeave is not a buffer event and the handler is pure
---- filetype/emptiness logic with no per-tabpage state, so a single global
---- autocmd is correct here (see multi-tabpage rules).
-function ChatWidget._install_quit_guard()
-    if _quit_guard_installed then
-        return
-    end
-    _quit_guard_installed = true
-
-    vim.api.nvim_create_autocmd("CmdlineLeave", {
-        callback = function()
-            -- CmdlineLeave also fires when the cmdline is abandoned
-            -- (`<Esc>`/`<C-c>`); `v:event.abort` is true then and no command
-            -- runs, so the guard must do nothing (else `:q<Esc>` would still
-            -- close the window). `abort` only flips false→true, so the veto
-            -- below is unaffected.
-            if vim.v.event.cmdtype ~= ":" or vim.v.event.abort then
-                return
-            end
-
-            -- Resolve the buffer first and bail unless it is one this guard
-            -- acts on, so the per-command `nvim_parse_cmd` runs only for `:`
-            -- commands typed in the chat or input — not every `:` command in
-            -- the editor. The other Agentic buffers (subagent split, the
-            -- todos/code/files/diagnostics panels) get native `:q`, which
-            -- closes just that window (they have no teardown autocmd).
-            local buf = vim.api.nvim_get_current_buf()
-            local ft = vim.bo[buf].filetype
-            local is_chat = ft == "AgenticChat"
-                and vim.b[buf].agentic_window == "chat"
-            local is_input = ft == "AgenticInput"
-            if not is_chat and not is_input then
-                return
-            end
-
-            local ok, parsed =
-                pcall(vim.api.nvim_parse_cmd, vim.fn.getcmdline(), {})
-            -- Only plain `:q` / `:quit`; `:q!` (bang) and `:qa`/`:qall`
-            -- (cmd "qall") are intentional and pass through unguarded.
-            if not ok or parsed.cmd ~= "quit" or parsed.bang then
-                return
-            end
-
-            if is_chat then
-                vim.cmd.let("v:event.abort = v:true")
-                Logger.notify(
-                    "Use :q! or the close keymap to close Agentic",
-                    vim.log.levels.WARN
-                )
-            else
-                local widget = _send_widgets[buf]
-                if not widget then
-                    -- No widget to act on; let native `:q` close the window
-                    -- (its BufWinLeave just drops the stale handle).
-                    return
-                end
-                vim.cmd.let("v:event.abort = v:true")
-                if BufHelpers.is_buffer_empty(buf) then
-                    vim.schedule(function()
-                        widget:close_input_window()
-                    end)
-                else
-                    local discard = Config.settings.write_submit
-                            and ":w to send, :q! to discard"
-                        or ":q! to discard"
-                    Logger.notify(
-                        "No write since last change (" .. discard .. ")",
-                        vim.log.levels.WARN
-                    )
-                end
-            end
-        end,
-    })
-end
-
---- @param tab_page_id integer
+--- @param owner_id integer `SessionManager.id` of the session owning the widget
 --- @param on_submit_input fun(prompt: string, opts: agentic.SessionManager.SubmitOpts|nil): boolean
-function ChatWidget:new(tab_page_id, on_submit_input)
+function ChatWidget:new(owner_id, on_submit_input)
     self = setmetatable({}, self)
 
     self.win_nrs = {}
 
     self.on_submit_input = on_submit_input
-    self.tab_page_id = tab_page_id
+    self._owner_id = owner_id
 
     self:_initialize()
 
@@ -186,27 +101,38 @@ function ChatWidget:is_open()
     return (win_id and vim.api.nvim_win_is_valid(win_id)) or false
 end
 
---- Check if the cursor is currently in one of the widget's buffers
+--- Whether any widget window is open, the chat's or a panel's.
 --- @return boolean
-function ChatWidget:is_cursor_in_widget()
-    if not self:is_open() then
-        return false
-    end
-
-    return self:_is_widget_buffer(vim.api.nvim_get_current_buf())
+function ChatWidget:has_windows()
+    return next(self.win_nrs) ~= nil
 end
 
+--- The tabpage the owning session is bound to.
+--- @return integer|nil
+function ChatWidget:_tab()
+    return SessionRegistry.tab_of(self._owner_id)
+end
+
+--- Open the widget in the owning session's tabpage. No-op when the session
+--- is bound to none.
 --- @param opts agentic.ui.ChatWidget.ShowOpts|agentic.ui.ChatWidget.AddToContextOpts|nil
 function ChatWidget:show(opts)
     opts = opts or {}
+    local tab = self:_tab()
+    if not tab then
+        return
+    end
 
+    local before =
+        { chat = self.win_nrs.chat, subagent = self.win_nrs.subagent }
     WidgetLayout.open({
-        tab_page_id = self.tab_page_id,
+        tab_page_id = tab,
         buf_nrs = self.buf_nrs,
         win_nrs = self.win_nrs,
         focus_prompt = opts.focus_prompt,
         position = opts.position,
     })
+    self:_report_opened(before)
 end
 
 --- @param layouts agentic.UserConfig.Windows.Position[]|nil
@@ -242,10 +168,7 @@ function ChatWidget:rotate_layout(layouts)
     local previous_mode = vim.fn.mode()
     local previous_buf = vim.api.nvim_get_current_buf()
 
-    local saved_on_hide = self.on_hide
-    self.on_hide = nil
-    self:hide()
-    self.on_hide = saved_on_hide
+    self:close_windows()
     self:show({
         focus_prompt = false,
     })
@@ -261,66 +184,39 @@ function ChatWidget:rotate_layout(layouts)
     end)
 end
 
---- Closes all windows but keeps buffers in memory
+--- Closes all windows but keeps buffers in memory, then runs `on_hide` if
+--- the widget was open.
 function ChatWidget:hide()
-    if self._hiding then
-        return
-    end
-    self._hiding = true
-
-    vim.cmd("stopinsert")
-
-    -- Check if we're on the correct tabpage before trying to find/create fallback window
-    local current_tabpage = vim.api.nvim_get_current_tabpage()
-    local should_create_fallback = current_tabpage == self.tab_page_id
-
-    if should_create_fallback then
-        local fallback_winid = self:find_first_non_widget_window()
-
-        if not fallback_winid then
-            -- Fallback: create a new left window to avoid closing the last window error
-            fallback_winid = self:open_left_window()
-            if not fallback_winid then
-                Logger.notify(
-                    "Failed to create fallback window; cannot hide widget safely, run `:tabclose` to close the tab instead.",
-                    vim.log.levels.ERROR
-                )
-                self._hiding = false
-                return
-            end
-        end
-
-        -- Focus fallback so closing widget windows doesn't trigger E444
-        vim.api.nvim_set_current_win(fallback_winid)
-    end
-
     local was_open = self:is_open()
-
-    -- Clear modified flag on input buffer so hidden buffer doesn't block :q
-    if self.buf_nrs.input and vim.api.nvim_buf_is_valid(self.buf_nrs.input) then
-        vim.bo[self.buf_nrs.input].modified = false
-    end
-
-    WidgetLayout.close(self.win_nrs)
-
-    self._hiding = false
-
+    self:close_windows()
     if was_open and self.on_hide then
         self.on_hide()
     end
+end
+
+--- Closes all widget windows, keeping the buffers. Closing the last windows
+--- of a tabpage closes the tabpage; the editor's last window is left open.
+function ChatWidget:close_windows()
+    vim.cmd("stopinsert")
+    WidgetLayout.close(self.win_nrs)
 end
 
 --- Clears every panel buffer's content without destroying them, except
 --- `input` — it holds the user's unsent draft, which is not conversation
 --- state and must survive session resets/swaps.
 ---
---- Drops the region signs over the text with it, but not a MessageWriter's tool
---- call trackers — those are instance state, out of reach from here. Clear the
---- chat through `SessionManager:clear_chat`, which owns both halves; a tracker
---- outliving its text resolves to row 0 of whatever replaces it.
+--- Leaves the extmarks over the chat and subagent text, and a MessageWriter's
+--- tool call trackers — those are the writer's, out of reach from here. Clear
+--- the chat through `SessionManager:clear_chat`, which resets the writers too;
+--- a tracker or mark outliving its text resolves to row 0 of whatever
+--- replaces it.
+---
+--- Leaves each buffer's `modified` as it was: clearing the render loses
+--- nothing that its owner has not accounted for.
 function ChatWidget:clear()
     for name, bufnr in pairs(self.buf_nrs) do
         if name ~= "input" then
+            local was_modified = vim.bo[bufnr].modified
             BufHelpers.with_modifiable(bufnr, function()
                 local ok = pcall(
                     vim.api.nvim_buf_set_lines,
@@ -340,36 +236,34 @@ function ChatWidget:clear()
                     )
                 end
             end)
+            vim.bo[bufnr].modified = was_modified
         end
-    end
-
-    -- Both buffers a MessageWriter writes to: the subagent split carries tool
-    -- call blocks of its own (SessionManager routes Task content there).
-    -- Everything cleared here is rebuilt when the conversation is re-written on
-    -- restore.
-    for _, panel in ipairs({ "chat", "subagent" }) do
-        MessageWriter.clear_regions(self.buf_nrs[panel])
     end
 end
 
---- Deletes all buffers and removes them from memory
---- This instance is no longer usable after calling this method
+--- Wipes every buffer. This instance is no longer usable after calling this
+--- method.
+---
+--- The chat is wiped on the next tick, so this can run from the chat's own
+--- `BufDelete`, where wiping the chat raises E937.
 function ChatWidget:destroy()
-    self:hide()
-
+    -- Not `close_windows`: wiping a buffer closes its windows anyway, except
+    -- a tab's last one, which shows another buffer instead. Closing them
+    -- first would close a tab the widget fills, before a replacement session
+    -- can open there.
+    local chat = self.buf_nrs.chat
     for name, bufnr in pairs(self.buf_nrs) do
         self.buf_nrs[name] = nil
-        local ok = pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
-        if not ok then
-            Logger.debug(
-                string.format(
-                    "Failed to delete buffer '%s' with id: %d",
-                    name,
-                    bufnr
-                )
-            )
+        if bufnr ~= chat and vim.api.nvim_buf_is_valid(bufnr) then
+            vim.api.nvim_buf_delete(bufnr, { force = true })
         end
     end
+
+    vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(chat) then
+            vim.api.nvim_buf_delete(chat, { force = true })
+        end
+    end)
 end
 
 --- @class agentic.ui.ChatWidget.SendDeleteRange
@@ -434,8 +328,8 @@ end
 
 --- Submit a prompt. With no `text`, submits the whole input buffer; with it,
 --- submits that slice and saves it to the send register. Single submit
---- entrypoint — the submit keymap, `:w` (BufWriteCmd) and the `:Wq` / `:X`
---- safeguards all funnel through here.
+--- entrypoint — the submit keymap and `:w` (BufWriteCmd) both funnel through
+--- here.
 ---
 --- The submitted lines split into blocks (`utils/prompt_blocks.lua`) and only
 --- the first one dispatches now; the rest stay in the buffer as a queued
@@ -498,9 +392,8 @@ function ChatWidget:submit(opts)
     )
     if not dispatched then
         self:_queue_line_range(range.sr, head.er)
-        -- The text is held, not unsaved: `:w` deferring would otherwise leave
-        -- the buffer modified and re-prompt on close.
-        vim.bo[self.buf_nrs.input].modified = false
+        -- The text is held, not sent: it stays modified.
+        self:_sync_input_modified()
         return
     end
 
@@ -519,7 +412,7 @@ function ChatWidget:submit(opts)
     else
         delete_sent_chars(self.buf_nrs.input, range)
     end
-    vim.bo[self.buf_nrs.input].modified = false
+    self:_sync_input_modified()
 
     BufHelpers.with_modifiable(self.buf_nrs.code, function(bufnr)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
@@ -804,6 +697,8 @@ function ChatWidget:_delete_dispatched_lines(sr, er)
     self._draining = true
     vim.api.nvim_buf_set_lines(self.buf_nrs.input, sr, er + 1, false, {})
     self._draining = false
+    -- TextChanged waits for the input to be the current buffer.
+    self:_sync_input_modified()
 end
 
 --- The blocks a region's lines hold, with rows in buffer coordinates.
@@ -924,24 +819,21 @@ function ChatWidget:move_cursor_to(winid, callback)
     end)
 end
 
---- Close the input window without tearing down the widget, moving focus to the
---- chat window so the cursor stays inside Agentic. The input buffer's
---- BufWinLeave nulls `win_nrs.input`.
-function ChatWidget:close_input_window()
-    local input_win = self.win_nrs.input
-    if not input_win or not vim.api.nvim_win_is_valid(input_win) then
-        return
-    end
-    local chat_win = self.win_nrs.chat
-    if chat_win and vim.api.nvim_win_is_valid(chat_win) then
-        vim.api.nvim_set_current_win(chat_win)
-    end
-    pcall(vim.api.nvim_win_close, input_win, true)
-end
-
 --- Focus the input window for insert, reopening it first if it was closed.
 --- Bound to the insert keys (i, a, o, …) in the chat and panel buffers.
+--- Outside the owning session's tabpage, opens the input below the current
+--- window instead, leaving the widget where it is.
 function ChatWidget:focus_input_for_insert()
+    if vim.api.nvim_get_current_tabpage() ~= self:_tab() then
+        local winid = vim.fn.bufwinid(self.buf_nrs.input)
+        if winid == -1 then
+            winid = WidgetLayout.open_input_below(self.buf_nrs.input)
+        end
+        vim.api.nvim_set_current_win(winid)
+        BufHelpers.start_insert_on_last_char()
+        return
+    end
+
     local input_win = self.win_nrs.input
     if not input_win or not vim.api.nvim_win_is_valid(input_win) then
         self:show({ focus_prompt = false })
@@ -959,109 +851,99 @@ function ChatWidget:_initialize()
     self:_setup_write_submit()
     self:_setup_prompt_navigation()
     self:_setup_queue()
+    self:_attach_input()
 
-    ChatWidget._install_quit_guard()
-
-    -- Closing the chat window tears down the whole widget (the auxiliary
-    -- panels have no meaning without it).
-    vim.api.nvim_create_autocmd("BufWinLeave", {
-        buffer = self.buf_nrs.chat,
+    local input = self.buf_nrs.input
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+        buffer = input,
         callback = function()
-            self:hide()
+            self:_sync_input_modified()
         end,
     })
 
-    -- The input window is a satellite that can be closed and reopened
-    -- independently (`:q`, `:wq`, or an insert key from the chat reopens it),
-    -- so closing it only drops the stale window handle — it never hides the
-    -- widget.
-    vim.api.nvim_create_autocmd("BufWinLeave", {
-        buffer = self.buf_nrs.input,
+    -- `:e!` discards the draft, which is what the bang means; the unload
+    -- detached what `_attach_input` attached.
+    vim.api.nvim_create_autocmd("BufReadCmd", {
+        buffer = input,
         callback = function()
-            self.win_nrs.input = nil
+            self:_attach_input()
         end,
     })
 
-    -- Clear unread badge when the user reaches the bottom of the chat.
-    -- If the chat window is focused, "at bottom" means cursor on the
-    -- last line. If focus is elsewhere (e.g. input panel), the user can
-    -- still scroll the chat with the OS pointer; in that case "at
-    -- bottom" means the viewport reaches the last line.
+    -- Clear unread badge when the user reaches the bottom of the chat in any
+    -- window showing it. If that window is focused, "at bottom" means cursor
+    -- on the last line. If focus is elsewhere (e.g. input panel), the user can
+    -- still scroll the chat with the OS pointer; in that case "at bottom"
+    -- means the viewport reaches the last line. Not buffer-scoped: that
+    -- matches only the first scrolled window's buffer, and every scrolled
+    -- window is a key of `v:event`. The group goes with the buffer.
+    local chat = self.buf_nrs.chat
+    local group = vim.api.nvim_create_augroup(
+        "agentic_unread_badge_" .. chat,
+        { clear = true }
+    )
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = chat,
+        once = true,
+        callback = function()
+            vim.api.nvim_del_augroup_by_id(group)
+        end,
+    })
     vim.api.nvim_create_autocmd("WinScrolled", {
-        buffer = self.buf_nrs.chat,
+        group = group,
         callback = function()
-            if not self._unread_badge then
+            if not WindowDecoration.get_header(chat).badge then
                 return
             end
-            local chat_win = self.win_nrs.chat
-            if not chat_win or not vim.api.nvim_win_is_valid(chat_win) then
-                return
-            end
-            local total_lines = vim.api.nvim_buf_line_count(self.buf_nrs.chat)
-            local at_bottom
-            if vim.api.nvim_get_current_win() == chat_win then
-                at_bottom = vim.api.nvim_win_get_cursor(chat_win)[1]
-                    >= total_lines
-            else
-                local info = vim.fn.getwininfo(chat_win)[1]
-                at_bottom = info ~= nil and info.botline >= total_lines
-            end
-            if at_bottom then
-                self:clear_unread_badge()
+            local total_lines = vim.api.nvim_buf_line_count(chat)
+            for key in pairs(vim.v.event) do
+                local winid = tonumber(key)
+                if
+                    winid
+                    and vim.api.nvim_win_is_valid(winid)
+                    and vim.api.nvim_win_get_buf(winid) == chat
+                then
+                    local at_bottom
+                    if vim.api.nvim_get_current_win() == winid then
+                        at_bottom = vim.api.nvim_win_get_cursor(winid)[1]
+                            >= total_lines
+                    else
+                        local info = vim.fn.getwininfo(winid)[1]
+                        at_bottom = info ~= nil and info.botline >= total_lines
+                    end
+                    if at_bottom then
+                        self:clear_unread_badge()
+                        return
+                    end
+                end
             end
         end,
     })
 end
 
---- Make :w submit the prompt in the input buffer, and install muscle-memory
---- safeguards for :wq / :x so they don't silently close an active session.
+--- Make :w submit the prompt in the input buffer.
 function ChatWidget:_setup_write_submit()
-    local input_buf = self.buf_nrs.input
-    -- Schedule: _create_new_buf sets options in unordered loop,
-    -- so buftype=nofile may be set after filetype triggers this.
-    -- The buffer name ("agentic://prompt") is set unconditionally — it is also
-    -- used as the LSP root for slash/mention completion (see completion/lsp_server.lua).
-    vim.schedule(function()
-        vim.api.nvim_buf_set_name(input_buf, "agentic://prompt")
-        if Config.settings.write_submit then
-            vim.bo[input_buf].buftype = "acwrite"
-        end
-    end)
-
     if not Config.settings.write_submit then
         return
     end
 
     -- The write commands are the deliberate escape hatch: send now regardless
-    -- of what the session would otherwise defer for.
+    -- of what the session would otherwise defer for. Submitted during the
+    -- write: vim fails a write whose BufWriteCmd leaves the buffer modified,
+    -- and `:wq`/`:x` then stop short of closing the window.
     vim.api.nvim_create_autocmd("BufWriteCmd", {
-        buffer = input_buf,
+        buffer = self.buf_nrs.input,
         callback = function()
             self:submit({ force = true })
         end,
     })
+end
 
-    -- `:wq` / `:x` submit the prompt (via our BufWriteCmd) and then close only
-    -- the input window, leaving the chat and the session intact — the input is
-    -- a satellite window (reopened by an insert key from the chat). The `!`
-    -- form (`:wq!` / `:x!`) is an explicit opt-in to close the whole widget.
-    -- User commands require uppercase, so lowercase forms are mapped via
-    -- buffer-local `cnoreabbrev`.
-    for _, pair in ipairs({ { "Wq", "wq" }, { "X", "x" } }) do
-        vim.api.nvim_buf_create_user_command(input_buf, pair[1], function(opts)
-            self:submit({ force = true })
-            if opts.bang then
-                self:hide()
-            else
-                self:close_input_window()
-            end
-        end, { bang = true })
-        vim.api.nvim_buf_call(input_buf, function()
-            vim.cmd(
-                string.format("cnoreabbrev <buffer> %s %s", pair[2], pair[1])
-            )
-        end)
-    end
+--- Set the input's `modified` to whether it holds text: any text in it is an
+--- unsent prompt, whatever was written.
+function ChatWidget:_sync_input_modified()
+    local input = self.buf_nrs.input
+    vim.bo[input].modified = not BufHelpers.is_buffer_empty(input)
 end
 
 --- Wire up [[ / ]] navigation between the rows recording a user action in the
@@ -1197,33 +1079,6 @@ function ChatWidget:_bind_keymaps()
     )
 
     for _, bufnr in pairs(self.buf_nrs) do
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.close,
-            bufnr,
-            function()
-                require("agentic").close(self.tab_page_id)
-            end,
-            { desc = "Agentic: Close Chat widget" }
-        )
-
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.switch_provider,
-            bufnr,
-            function()
-                require("agentic").switch_provider()
-            end,
-            { desc = "Agentic: Switch provider" }
-        )
-
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.stop_generation,
-            bufnr,
-            function()
-                require("agentic").stop_generation()
-            end,
-            { desc = "Agentic: Stop generation" }
-        )
-
         for lhs, spec in pairs(Config.keymaps.prompts) do
             local prompt
             if type(spec) == "string" then
@@ -1252,33 +1107,6 @@ function ChatWidget:_bind_keymaps()
                 end, { desc = desc })
             end
         end
-
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.toggle_activity,
-            bufnr,
-            function()
-                require("agentic").toggle_file_activity()
-            end,
-            { desc = "Agentic: Toggle changed-files panel" }
-        )
-
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.restart_session,
-            bufnr,
-            function()
-                require("agentic").restart_session()
-            end,
-            { desc = "Agentic: Restart session (cancel and restore)" }
-        )
-
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.restore_session,
-            bufnr,
-            function()
-                require("agentic").restore_session()
-            end,
-            { desc = "Agentic: Restore previous session" }
-        )
 
         if not BufHelpers.is_keymap_disabled(Config.keymaps.widget.refresh) then
             BufHelpers.multi_keymap_set(
@@ -1460,7 +1288,8 @@ end
 --- queue operators) and wire auto-unqueue: any edit intersecting a queued
 --- region drops its tag, so a region can never be dispatched mid-edit and a
 --- surviving tag's range is always pristine. Two triggers:
----   • on_bytes — catch-all for buffer changes in any mode.
+---   • on_bytes — catch-all for buffer changes in any mode, attached by
+---     `_attach_input`.
 ---   • InsertEnter with cursor in a region — entering insert changes no bytes
 ---     yet, but the user is poised to edit, so the region is no longer committed.
 function ChatWidget:_setup_queue()
@@ -1475,6 +1304,22 @@ function ChatWidget:_setup_queue()
         end,
     })
 
+    vim.api.nvim_create_autocmd("InsertEnter", {
+        buffer = buf,
+        callback = function()
+            local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+            self:_clear_queued_in_range(row, row)
+        end,
+    })
+end
+
+--- Attach what a buffer load provides and an unload detaches: the markdown
+--- parser, the queue's `on_bytes` tracker, and the completion LSP.
+function ChatWidget:_attach_input()
+    local buf = self.buf_nrs.input
+
+    pcall(vim.treesitter.start, buf, "markdown")
+
     vim.api.nvim_buf_attach(buf, false, {
         on_bytes = function(_, _, _, start_row, _, _, old_end_row)
             if self._draining then
@@ -1486,86 +1331,62 @@ function ChatWidget:_setup_queue()
         end,
     })
 
-    vim.api.nvim_create_autocmd("InsertEnter", {
-        buffer = buf,
-        callback = function()
-            local row = vim.api.nvim_win_get_cursor(0)[1] - 1
-            self:_clear_queued_in_range(row, row)
-        end,
-    })
-end
-
---- Apply the chat-buffer rendering setup (agentic treesitter parser + snacks
---- image attach) so a buffer renders tool-call blocks and prose like the main
---- chat. Shared by the `chat` and `subagent` buffers.
---- @param bufnr integer
-local function setup_chat_buffer(bufnr)
-    -- Chat parses as the private `agentic` language so its folds query is
-    -- isolated from real markdown buffers (see init.lua). Fall back to markdown
-    -- if the agentic language could not be registered.
-    if not pcall(vim.treesitter.start, bufnr, "agentic") then
-        pcall(vim.treesitter.start, bufnr, "markdown")
-    end
-
-    -- Render LaTeX math as images via snacks.image. The chat is a scratch buffer
-    -- (no BufReadPre) opened at startup before any file is read, so snacks' own
-    -- BufReadPre-triggered doc-attach autocmd never fires for it. Attach
-    -- explicitly. Guarded so agentic.nvim runs standalone without snacks; a no-op
-    -- when image rendering is disabled (doc.attach self-gates on config.enabled).
-    local has_image, image = pcall(require, "snacks.image")
-    if has_image then
-        image.doc.attach(bufnr)
-    end
+    vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(buf) then
+            LspServer.attach(buf)
+        end
+    end)
 end
 
 --- @return agentic.ui.ChatWidget.BufNrs
 function ChatWidget:_create_buf_nrs()
-    local chat = self:_create_new_buf({
+    -- The chat stands for the session: listed so `:ls`, `:bd` and buffer
+    -- pickers reach it (`:bd` on an unlisted buffer only unloads it), and
+    -- `acwrite` so `modified` blocks `:qa` while the history is unsaved.
+    local chat = self:_create_new_buf("chat", {
+        filetype = "AgenticChat",
+        buftype = "acwrite",
+        buflisted = true,
+    })
+
+    local subagent = self:_create_new_buf("subagent", {
         filetype = "AgenticChat",
     })
 
-    local subagent = self:_create_new_buf({
-        filetype = "AgenticChat",
-    })
-
-    local todos = self:_create_new_buf({
+    local todos = self:_create_new_buf("todos", {
         filetype = "AgenticTodos",
     })
 
-    local code = self:_create_new_buf({
+    local code = self:_create_new_buf("code", {
         filetype = "AgenticCode",
     })
 
-    local files = self:_create_new_buf({
+    local files = self:_create_new_buf("files", {
         filetype = "AgenticFiles",
     })
 
-    local diagnostics = self:_create_new_buf({
+    local diagnostics = self:_create_new_buf("diagnostics", {
         filetype = "AgenticDiagnostics",
     })
 
-    local activity = self:_create_new_buf({
+    local activity = self:_create_new_buf("activity", {
         filetype = "AgenticActivity",
     })
 
-    local input = self:_create_new_buf({
+    -- `acwrite` makes `:w` submit, and an unsent prompt block `:qa`.
+    local input = self:_create_new_buf("input", {
         filetype = "AgenticInput",
+        buftype = Config.settings.write_submit and "acwrite" or "nofile",
         modifiable = true,
     })
 
-    setup_chat_buffer(chat)
-    setup_chat_buffer(subagent)
-
-    -- Both are AgenticChat-filetype buffers; a buffer-local marker lets external
-    -- UI (e.g. incline) pick the right headers entry to title each window.
-    vim.b[chat].agentic_window = "chat"
-    vim.b[subagent].agentic_window = "subagent"
+    ChatBuffer.setup(chat)
+    ChatBuffer.setup(subagent)
 
     pcall(vim.treesitter.start, todos, "markdown")
     pcall(vim.treesitter.start, code, "markdown")
     pcall(vim.treesitter.start, files, "markdown")
     pcall(vim.treesitter.start, diagnostics, "markdown")
-    pcall(vim.treesitter.start, input, "markdown")
 
     --- @type agentic.ui.ChatWidget.BufNrs
     local buf_nrs = {
@@ -1582,10 +1403,26 @@ function ChatWidget:_create_buf_nrs()
     return buf_nrs
 end
 
+--- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param opts table<string, any>
 --- @return integer bufnr
-function ChatWidget:_create_new_buf(opts)
+function ChatWidget:_create_new_buf(panel, opts)
     local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.b[bufnr].agentic_session_id = self._owner_id
+    -- The panel the buffer is, so a buffer alone names its header; `chat` and
+    -- `subagent` share a filetype.
+    vim.b[bufnr].agentic_window = panel
+    -- A `scheme://` name passes through `vim.uri_from_bufnr` unchanged, so the
+    -- input's name is also its document URI for the completion LSP.
+    BufHelpers.rename(bufnr, WindowDecoration.buffer_name(bufnr))
+    -- The header renders into the windows showing the buffer when it changes;
+    -- a window that starts showing it later needs it too.
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+        buffer = bufnr,
+        callback = function()
+            WindowDecoration.render_header(bufnr)
+        end,
+    })
 
     local config = vim.tbl_deep_extend("force", {
         swapfile = false,
@@ -1602,88 +1439,69 @@ function ChatWidget:_create_new_buf(opts)
     return bufnr
 end
 
+--- Set a panel's header context and render it.
 --- @param window_name agentic.ui.ChatWidget.PanelNames
---- @param context string|nil
+--- @param context string|nil Shown after the title; nil for none
 function ChatWidget:render_header(window_name, context)
     local bufnr = self.buf_nrs[window_name]
     if not bufnr then
         return
     end
-
-    WindowDecoration.render_header(bufnr, window_name, context)
-
-    -- Re-apply unread badge to buffer name after header render resets it
-    if window_name == "chat" and self._unread_badge then
-        vim.schedule(function()
-            self:_apply_badge_to_buf_name()
-        end)
-    end
+    local header = WindowDecoration.get_header(bufnr)
+    header.context = context
+    WindowDecoration.set_header(bufnr, header)
 end
 
---- Set an unread badge on the chat buffer name (e.g. "[done]", "[?]").
---- Cleared when the user scrolls to the bottom.
---- @param badge string
-function ChatWidget:set_unread_badge(badge)
-    if self._unread_badge == badge then
+--- A buffer's unread badge (e.g. "[done]", "[?]"), shown in its header. The
+--- chat's is cleared when the user scrolls it to the bottom.
+--- @param badge string|nil Nil clears it
+--- @param bufnr integer|nil The buffer to badge; nil = the chat
+function ChatWidget:set_unread_badge(badge, bufnr)
+    bufnr = bufnr or self.buf_nrs.chat
+    -- Nil once the widget is destroyed.
+    if not bufnr then
         return
     end
-    self._unread_badge = badge
-    self:_apply_badge_to_buf_name()
+    local header = WindowDecoration.get_header(bufnr)
+    if header.badge == badge then
+        return
+    end
+    header.badge = badge
+    WindowDecoration.set_header(bufnr, header)
 end
 
---- Clear the unread badge from the chat buffer name.
 function ChatWidget:clear_unread_badge()
-    if not self._unread_badge then
-        return
-    end
-    self._unread_badge = nil
-    self:_apply_badge_to_buf_name()
+    self:set_unread_badge(nil)
 end
 
---- Apply or remove the badge suffix on the chat buffer name.
-function ChatWidget:_apply_badge_to_buf_name()
-    local bufnr = self.buf_nrs.chat
-    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
-        return
-    end
-
-    local name = vim.api.nvim_buf_get_name(bufnr)
-    -- Strip any existing badge suffix
-    name = name:gsub(" %[.-%]$", "")
-
-    if self._unread_badge then
-        name = name .. " " .. self._unread_badge
-    end
-
-    pcall(vim.api.nvim_buf_set_name, bufnr, name)
-    vim.cmd.redrawstatus()
-end
-
---- Update the chat panel's base title (shown in buffer name and winbar).
---- Truncates to keep the buffer name short.
+--- Set the chat's title, shown in its header and as the tail of its buffer
+--- name.
 --- @param title string|nil New title, or nil to reset to default
 function ChatWidget:set_chat_title(title)
-    local headers = WindowDecoration.get_headers_state(self.tab_page_id)
-    if not headers.chat then
+    local chat = self.buf_nrs.chat
+    -- Nil once the widget is destroyed.
+    if not chat then
         return
     end
+    local header = WindowDecoration.get_header(chat)
 
     if title and title ~= "" then
         -- Keep the buffer name short. Cut by display width, not bytes: a
         -- byte-slice can halve a codepoint and put invalid UTF-8 into the
         -- buffer name and winbar.
         local display = TextWrap.truncate_to_width(title, 31)
-        headers.chat.title = "󰻞 " .. display
-        headers.chat.session_name = display
+        header.title = "󰻞 " .. display
+        header.session_name = display
     else
-        headers.chat.title = "󰻞 Agentic Chat"
-        headers.chat.session_name = nil
+        header.title = "󰻞 Agentic Chat"
+        header.session_name = nil
     end
 
-    WindowDecoration.set_headers_state(self.tab_page_id, headers)
-
-    -- Re-render to apply the new title to buffer name and winbar
-    self:render_header("chat")
+    WindowDecoration.set_header(chat, header)
+    BufHelpers.rename(
+        chat,
+        WindowDecoration.buffer_name(chat, header.session_name)
+    )
 end
 
 --- @param panel_name agentic.ui.ChatWidget.PanelNames
@@ -1694,7 +1512,26 @@ end
 --- Open the subagent split beside the chat (no-op if already open or the chat
 --- window is hidden). Used to reveal subagent work on demand.
 function ChatWidget:open_subagent_window()
+    local before =
+        { chat = self.win_nrs.chat, subagent = self.win_nrs.subagent }
     WidgetLayout.open_subagent(self.win_nrs, self.buf_nrs)
+    self:_report_opened(before)
+end
+
+--- Run `on_window_opened` for each of the `chat` and `subagent` windows that
+--- differs from its handle in `before`. Widget windows open without
+--- autocmds, so their buffers' BufWinEnter does not run for them.
+--- @param before table<"chat"|"subagent", integer|nil> Handles before the open
+function ChatWidget:_report_opened(before)
+    if not self.on_window_opened then
+        return
+    end
+    for _, panel in ipairs({ "chat", "subagent" }) do
+        local winid = self.win_nrs[panel]
+        if winid and winid ~= before[panel] then
+            self.on_window_opened(panel, winid)
+        end
+    end
 end
 
 --- Close the subagent split if open, keeping the buffer.
@@ -1734,40 +1571,14 @@ function ChatWidget:resize_activity_window()
     WidgetLayout.resize_activity(self.win_nrs, self.buf_nrs)
 end
 
---- Filetypes that should be excluded when finding fallback windows
-local EXCLUDED_FILETYPES = {
-    -- File explorers
-    ["neo-tree"] = true,
-    ["NvimTree"] = true,
-    ["oil"] = true,
-    -- Neovim special buffers
-    ["qf"] = true, -- Quickfix
-    ["help"] = true, -- Help buffers
-    ["man"] = true, -- Man pages
-    ["terminal"] = true, -- Terminal buffers
-    -- Plugin special windows
-    ["TelescopePrompt"] = true,
-    ["DiffviewFiles"] = true,
-    ["DiffviewFileHistory"] = true,
-    ["fugitive"] = true,
-    ["gitcommit"] = true,
-    ["dashboard"] = true,
-    ["alpha"] = true, -- Alpha dashboard
-    ["starter"] = true, -- Mini.starter
-    ["notify"] = true, -- nvim-notify
-    ["noice"] = true, -- Noice popup
-    ["aerial"] = true, -- Aerial outline
-    ["Outline"] = true, -- symbols-outline
-    ["trouble"] = true, -- Trouble diagnostics
-    ["spectre_panel"] = true, -- nvim-spectre
-    ["lazy"] = true, -- Lazy plugin manager
-    ["mason"] = true, -- Mason installer
-}
-
 --- Close non-widget windows on the tabpage that hold empty unnamed buffers.
 --- Mirrors the cleanup in Agentic.toggle_tab so the widget fills the tab
 --- when restoring a session on a dedicated tab.
 function ChatWidget:close_empty_non_widget_windows()
+    local tab = self:_tab()
+    if not tab then
+        return
+    end
     local widget_win_ids = {}
     for _, winid in pairs(self.win_nrs) do
         if winid then
@@ -1775,7 +1586,7 @@ function ChatWidget:close_empty_non_widget_windows()
         end
     end
 
-    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(self.tab_page_id)) do
+    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
         if not widget_win_ids[winid] then
             local bufnr = vim.api.nvim_win_get_buf(winid)
             local ft = vim.bo[bufnr].filetype
@@ -1787,106 +1598,6 @@ function ChatWidget:close_empty_non_widget_windows()
             end
         end
     end
-end
-
---- Finds the first window on the current tabpage that is NOT part of the chat widget
---- @return number|nil winid The first non-widget window ID, or nil if none found
-function ChatWidget:find_first_non_widget_window()
-    local all_windows = vim.api.nvim_tabpage_list_wins(self.tab_page_id)
-
-    -- Build a set of widget window IDs for fast lookup
-    local widget_win_ids = {}
-    for _, winid in pairs(self.win_nrs) do
-        if winid then
-            widget_win_ids[winid] = true
-        end
-    end
-
-    for _, winid in ipairs(all_windows) do
-        if not widget_win_ids[winid] then
-            local bufnr = vim.api.nvim_win_get_buf(winid)
-            local ft = vim.bo[bufnr].filetype
-            if not EXCLUDED_FILETYPES[ft] then
-                return winid
-            end
-        end
-    end
-
-    return nil
-end
-
---- Checks if a buffer belongs to this widget
---- @param bufnr number
---- @return boolean
-function ChatWidget:_is_widget_buffer(bufnr)
-    for _, widget_bufnr in pairs(self.buf_nrs) do
-        if widget_bufnr == bufnr then
-            return true
-        end
-    end
-    return false
-end
-
---- Opens a new window on the left side with full height
---- @param bufnr number|nil The buffer to display in the new window
---- @return number|nil winid The newly created window ID or nil on failure
-function ChatWidget:open_left_window(bufnr)
-    if bufnr == nil then
-        -- Try alternate buffer first, but skip if it's a widget buffer or excluded filetype
-        local alt_bufnr = vim.fn.bufnr("#")
-        if
-            alt_bufnr ~= -1
-            and vim.api.nvim_buf_is_valid(alt_bufnr)
-            and not self:_is_widget_buffer(alt_bufnr)
-        then
-            local ft = vim.bo[alt_bufnr].filetype
-            if not EXCLUDED_FILETYPES[ft] then
-                bufnr = alt_bufnr
-            end
-        end
-    end
-
-    if bufnr == nil then
-        -- Fall back to first oldfile that exists in current directory
-        local oldfiles = vim.v.oldfiles
-        local cwd = vim.fn.getcwd()
-        if oldfiles and #oldfiles > 0 then
-            for _, filepath in ipairs(oldfiles) do
-                -- Check if file exists and is under current working directory
-                if
-                    vim.startswith(filepath, cwd)
-                    and vim.fn.filereadable(filepath) == 1
-                then
-                    local file_bufnr = vim.fn.bufnr(filepath)
-                    if file_bufnr == -1 then
-                        file_bufnr = vim.fn.bufadd(filepath)
-                    end
-                    bufnr = file_bufnr
-                    break
-                end
-            end
-        end
-    end
-
-    -- Last resort: create new scratch buffer
-    if bufnr == nil then
-        bufnr = vim.api.nvim_create_buf(false, true)
-    end
-
-    local ok, winid = pcall(vim.api.nvim_open_win, bufnr, true, {
-        split = "left",
-        win = -1,
-    })
-
-    if not ok then
-        Logger.notify(
-            "Failed to open window: " .. tostring(winid),
-            vim.log.levels.WARN
-        )
-        return nil
-    end
-
-    return winid
 end
 
 return ChatWidget

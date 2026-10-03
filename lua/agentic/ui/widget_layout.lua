@@ -1,27 +1,9 @@
 local Config = require("agentic.config")
 local DefaultConfig = require("agentic.config_default")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local ChatBuffer = require("agentic.ui.chat_buffer")
 local WindowDecoration = require("agentic.ui.window_decoration")
 local Logger = require("agentic.utils.logger")
-local Theme = require("agentic.theme")
-
--- Tone down markdown heading highlights in the chat window only. The markdown
--- highlighter captures `@markup.heading.N` over the whole heading line (the
--- only capture covering the `##`/`###` marker) and `@text.titleN` over just
--- the text after the marker — and `@text.titleN` wins on the overlap. So dim
--- the marker (→ AgenticHeading) while leaving the heading text neutral
--- (→ Normal). The tool-call name is a markdown_inline code span (`@markup.raw`)
--- that wins over both and keeps its own colour. Levels 2 and 3 are the writer's
--- structural levels (see the `rendering` skill § "Heading levels"); the `#`
--- session header is left at the colourscheme's heading-1 colour. Scoping this to
--- the chat window (rather than nvim_set_hl globally) leaves real markdown
--- buffers untouched.
-local CHAT_WINHIGHLIGHT = table.concat({
-    "@markup.heading.2.agentic:" .. Theme.HL_GROUPS.HEADING,
-    "@markup.heading.3.agentic:" .. Theme.HL_GROUPS.HEADING,
-    "@text.title2.agentic:Normal",
-    "@text.title3.agentic:Normal",
-}, ",")
 
 --- @class agentic.ui.WidgetLayout.Params
 --- @field tab_page_id integer
@@ -122,15 +104,39 @@ local function open_win(bufnr, enter, opts, window_name, win_opts)
         winfixheight = true,
     }, win_opts or {}, config_win_opts)
 
+    -- Local scope: a window split off this one inherits its global values, and
+    -- passes them to every buffer it shows that set nothing of its own.
     for name, value in pairs(merged_win_opts) do
-        vim.api.nvim_set_option_value(name, value, { win = winid })
+        vim.api.nvim_set_option_value(
+            name,
+            value,
+            { win = winid, scope = "local" }
+        )
     end
 
     return winid
 end
 
+--- Record `winid` as the widget's `name` window, and drop the handle when
+--- that window closes, however it closes.
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs
---- @param panel_name string
+--- @param name agentic.ui.ChatWidget.PanelNames
+--- @param winid integer
+local function track_window(win_nrs, name, winid)
+    win_nrs[name] = winid
+    vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = tostring(winid),
+        once = true,
+        callback = function()
+            if win_nrs[name] == winid then
+                win_nrs[name] = nil
+            end
+        end,
+    })
+end
+
+--- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param panel_name agentic.ui.ChatWidget.PanelNames
 --- @param bufnr integer
 --- @param open_opts vim.api.keyset.win_config
 --- @param win_opts table<string, any>
@@ -149,8 +155,8 @@ local function get_or_create_window(
 
     local new_winid =
         open_win(bufnr, false, open_opts, panel_name, win_opts or {})
-    win_nrs[panel_name] = new_winid
-    WindowDecoration.render_header(bufnr, panel_name)
+    track_window(win_nrs, panel_name, new_winid)
+    WindowDecoration.render_header(bufnr)
     return new_winid
 end
 
@@ -183,57 +189,49 @@ local function open_or_resize_dynamic_window(
 
     if not winid or not vim.api.nvim_win_is_valid(winid) then
         open_win_opts.height = height
-        win_nrs[window_name] =
+        track_window(
+            win_nrs,
+            window_name,
             open_win(bufnr, false, open_win_opts, window_name, {})
+        )
     else
         vim.api.nvim_win_set_config(winid, { height = height })
     end
 
-    WindowDecoration.render_header(bufnr, window_name)
+    WindowDecoration.render_header(bufnr)
 end
 
---- Window-local options for a chat-style scrolling buffer (folds, conceal,
---- signcolumn). Shared by the main `chat` window and the `subagent` split so
---- both render tool-call blocks and folds identically.
+--- Window-local options for the widget's `chat` and `subagent` windows: the
+--- chat window options plus the widget's fixed size.
 --- @param is_bottom boolean
 --- @return table<string, any>
 local function chat_win_opts(is_bottom)
-    return {
-        scrolloff = 4,
+    return vim.tbl_extend("force", ChatBuffer.win_opts(), {
         winfixheight = is_bottom,
         winfixwidth = not is_bottom,
-        signcolumn = "yes:1",
-        foldmethod = "expr",
-        foldexpr = 'v:lua.require("agentic.ui.folds").foldexpr()',
-        foldenable = true,
-        -- Set foldlevel high so nothing auto-closes: `*-fold` blocks default
-        -- open and the writer closes them imperatively via :foldclose. This
-        -- must be set explicitly — a new window inherits window-local foldlevel
-        -- from the window it splits off, NOT the global default, so opening
-        -- Agentic from a window with a low foldlevel would otherwise collapse
-        -- every block.
-        foldlevel = 99,
-        -- Same inheritance hazard as foldlevel: `agentic.ui.folds` drops
-        -- one-line bodies on the assumption vim could not close them anyway,
-        -- which only holds at 1.
-        foldminlines = 1,
-        foldcolumn = "0",
-        conceallevel = 2,
-        concealcursor = "n",
-        foldtext = 'v:lua.require("agentic.ui.folds").foldtext()',
-        winhighlight = CHAT_WINHIGHLIGHT,
+    })
+end
+
+--- Window-local options for the input window.
+--- @param is_bottom boolean
+--- @return table<string, any>
+local function input_win_opts(is_bottom)
+    return {
+        winfixheight = not is_bottom,
+        wrap = true,
+        linebreak = true,
+        conceallevel = 0,
     }
 end
 
+--- Open or resize the widget windows in the current tabpage.
 --- @param params agentic.ui.WidgetLayout.Params
 --- @param position agentic.UserConfig.Windows.Position
-local function show_layout(params, position)
+--- @param should_focus boolean Move the cursor to the input window
+local function show_layout(params, position, should_focus)
     local is_bottom = position == "bottom"
     local win_nrs = params.win_nrs
     local buf_nrs = params.buf_nrs
-    local should_focus = (
-        params.focus_prompt == nil and true or params.focus_prompt
-    ) == true
 
     local split_direction = is_bottom and "below"
         or (position == "left" and "left" or "right")
@@ -273,12 +271,13 @@ local function show_layout(params, position)
         input_opts.height = Config.windows.input.height
     end
 
-    get_or_create_window(win_nrs, "input", buf_nrs.input, input_opts, {
-        winfixheight = not is_bottom,
-        wrap = true,
-        linebreak = true,
-        conceallevel = 0,
-    })
+    get_or_create_window(
+        win_nrs,
+        "input",
+        buf_nrs.input,
+        input_opts,
+        input_win_opts(is_bottom)
+    )
 
     local padding = is_bottom and 2 or 1
 
@@ -325,6 +324,20 @@ local function show_layout(params, position)
     end
 end
 
+--- Open an input buffer in a split below the current window, apart from any
+--- widget layout.
+--- @param input_buf integer
+--- @return integer winid
+function WidgetLayout.open_input_below(input_buf)
+    local winid = open_win(input_buf, false, {
+        win = 0,
+        split = "below",
+        height = Config.windows.input.height,
+    }, "input", input_win_opts(false))
+    WindowDecoration.render_header(input_buf)
+    return winid
+end
+
 --- @param params agentic.ui.WidgetLayout.Params
 function WidgetLayout.open(params)
     if
@@ -358,7 +371,22 @@ function WidgetLayout.open(params)
         position = "right"
     end
 
-    local ok, err = pcall(show_layout, params, position)
+    local tab = params.tab_page_id
+    local ok, err
+    if tab == vim.api.nvim_get_current_tabpage() then
+        ok, err =
+            pcall(show_layout, params, position, params.focus_prompt ~= false)
+    else
+        -- `win = -1` splits the current tabpage, so lay out from inside the
+        -- widget's own; never pull focus across tabpages.
+        ok, err = pcall(
+            vim.api.nvim_win_call,
+            vim.api.nvim_tabpage_get_win(tab),
+            function()
+                show_layout(params, position, false)
+            end
+        )
+    end
     if not ok then
         Logger.notify(
             string.format(
@@ -420,14 +448,18 @@ function WidgetLayout.open_subagent(win_nrs, buf_nrs)
     local win_opts = chat_win_opts(is_bottom)
     win_opts.winfixwidth = true
 
-    win_nrs.subagent = open_win(
-        buf_nrs.subagent,
-        false,
-        { win = chat_winid, split = "right", width = width },
+    track_window(
+        win_nrs,
         "subagent",
-        win_opts
+        open_win(
+            buf_nrs.subagent,
+            false,
+            { win = chat_winid, split = "right", width = width },
+            "subagent",
+            win_opts
+        )
     )
-    WindowDecoration.render_header(buf_nrs.subagent, "subagent")
+    WindowDecoration.render_header(buf_nrs.subagent)
 end
 
 --- Open the file activity panel next to the prompt, sized to its content.
@@ -462,12 +494,16 @@ function WidgetLayout.open_activity(win_nrs, buf_nrs)
 
     -- The sign column carries the changed-since-last-viewed marks, and
     -- `style = "minimal"` in `open_win` would otherwise force it off.
-    win_nrs.activity = open_win(bufnr, false, {
-        win = anchor,
-        split = is_bottom and "below" or "above",
-        height = height,
-    }, "activity", { signcolumn = "yes:1" })
-    WindowDecoration.render_header(buf_nrs.activity, "activity")
+    track_window(
+        win_nrs,
+        "activity",
+        open_win(bufnr, false, {
+            win = anchor,
+            split = is_bottom and "below" or "above",
+            height = height,
+        }, "activity", { signcolumn = "yes:1" })
+    )
+    WindowDecoration.render_header(buf_nrs.activity)
 end
 
 --- Resize the activity panel to its current content. No-op when closed.

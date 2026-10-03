@@ -1545,18 +1545,18 @@ describe("agentic.ui.MessageWriter", function()
     describe("_check_auto_scroll", function()
         it("returns true when cursor is on the last line", function()
             setup_buffer(50, 50)
-            assert.is_true(writer:_check_auto_scroll(bufnr))
+            assert.is_true(writer:_check_auto_scroll(winid))
         end)
 
         it("returns false when cursor is not on the last line", function()
             setup_buffer(50, 1)
-            assert.is_false(writer:_check_auto_scroll(bufnr))
+            assert.is_false(writer:_check_auto_scroll(winid))
         end)
 
         it("returns false when paused regardless of cursor", function()
             setup_buffer(50, 50)
-            writer._auto_scroll_paused = true
-            assert.is_false(writer:_check_auto_scroll(bufnr))
+            writer._paused_windows[winid] = true
+            assert.is_false(writer:_check_auto_scroll(winid))
         end)
 
         it(
@@ -1583,7 +1583,7 @@ describe("agentic.ui.MessageWriter", function()
                     col = 0,
                 })
 
-                assert.is_true(writer:_check_auto_scroll(bufnr))
+                assert.is_true(writer:_check_auto_scroll(winid))
 
                 vim.api.nvim_win_close(other_win, true)
                 vim.api.nvim_buf_delete(other_buf, { force = true })
@@ -1600,28 +1600,46 @@ describe("agentic.ui.MessageWriter", function()
                 vim.api.nvim_set_current_win(winid)
                 local info = vim.fn.getwininfo(winid)[1]
                 assert.is_true(info.botline >= 10) -- viewport shows last line
-                assert.is_false(writer:_check_auto_scroll(bufnr))
+                assert.is_false(writer:_check_auto_scroll(winid))
             end
         )
 
         it("returns true when window is not visible", function()
             local hidden_buf = vim.api.nvim_create_buf(false, true)
             local hidden_writer = MessageWriter:new(hidden_buf)
-            assert.is_true(hidden_writer:_check_auto_scroll(hidden_buf))
+            assert.is_true(hidden_writer:is_near_bottom())
             vim.api.nvim_buf_delete(hidden_buf, { force = true })
         end)
 
-        it("uses win_findbuf to check cursor across tabpages", function()
+        it("checks the home window from another tabpage", function()
             setup_buffer(50, 1)
+            writer._home_window = function()
+                return winid
+            end
 
             vim.cmd("tabnew")
             local tab2 = vim.api.nvim_get_current_tabpage()
 
-            assert.is_false(writer:_check_auto_scroll(bufnr))
+            assert.is_false(writer:_check_auto_scroll(winid))
 
             vim.api.nvim_set_current_tabpage(tab2)
             vim.cmd("tabclose")
         end)
+
+        it(
+            "measures no window outside the current tabpage but its home",
+            function()
+                setup_buffer(50, 1)
+
+                vim.cmd("tabnew")
+                local tab2 = vim.api.nvim_get_current_tabpage()
+
+                assert.is_nil(writer:_wrap_window())
+
+                vim.api.nvim_set_current_tabpage(tab2)
+                vim.cmd("tabclose")
+            end
+        )
     end)
 
     describe("_auto_scroll", function()
@@ -1648,13 +1666,13 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("_should_auto_scroll sticky field", function()
+    describe("_scroll_verdicts sticky field", function()
         it(
             "remains true after buffer growth despite cursor leaving the bottom band",
             function()
                 setup_buffer(20, 20)
                 writer:_auto_scroll(bufnr)
-                assert.is_true(writer._should_auto_scroll)
+                assert.is_true(writer._scroll_verdicts[winid])
 
                 local lines = {}
                 for i = 1, 30 do
@@ -1664,7 +1682,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local check_spy = spy.on(writer, "_check_auto_scroll")
                 writer:_auto_scroll(bufnr)
-                assert.is_true(writer._should_auto_scroll)
+                assert.is_true(writer._scroll_verdicts[winid])
                 assert.equal(0, check_spy.call_count)
                 check_spy:revert()
             end
@@ -1679,10 +1697,10 @@ describe("agentic.ui.MessageWriter", function()
                 end)
 
                 setup_buffer(50, 1)
-                writer._should_auto_scroll = true
+                writer._scroll_verdicts = { [winid] = true }
                 writer:_auto_scroll(bufnr)
 
-                assert.is_nil(writer._should_auto_scroll)
+                assert.is_nil(writer._scroll_verdicts)
                 assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
 
                 schedule_stub:revert()
@@ -1690,7 +1708,7 @@ describe("agentic.ui.MessageWriter", function()
         )
 
         it(
-            "scheduled callback scrolls when user is on a different tabpage",
+            "scheduled callback scrolls the home window from another tabpage",
             function()
                 local schedule_stub = spy.stub(vim, "schedule")
                 schedule_stub:invokes(function(fn)
@@ -1698,6 +1716,9 @@ describe("agentic.ui.MessageWriter", function()
                 end)
 
                 setup_buffer(20, 20)
+                writer._home_window = function()
+                    return winid
+                end
 
                 local new_lines = {}
                 for i = 1, 30 do
@@ -1708,7 +1729,7 @@ describe("agentic.ui.MessageWriter", function()
                 vim.cmd("tabnew")
                 local tab2 = vim.api.nvim_get_current_tabpage()
 
-                writer._should_auto_scroll = true
+                writer._scroll_verdicts = { [winid] = true }
                 writer:_auto_scroll(bufnr)
 
                 assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
@@ -1730,7 +1751,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 setup_buffer(50, 50)
                 writer:_auto_scroll(bufnr)
-                assert.is_nil(writer._should_auto_scroll)
+                assert.is_nil(writer._scroll_verdicts)
                 assert.is_false(writer._scroll_callback_queued)
 
                 schedule_stub:revert()
@@ -1740,7 +1761,7 @@ describe("agentic.ui.MessageWriter", function()
                 vim.api.nvim_win_set_cursor(winid, { 1, 0 })
 
                 writer:_auto_scroll(bufnr)
-                assert.is_false(writer._should_auto_scroll)
+                assert.is_false(writer._scroll_verdicts[winid])
 
                 schedule_stub:revert()
             end
@@ -1768,14 +1789,14 @@ describe("agentic.ui.MessageWriter", function()
                 setup_buffer(50, 1)
                 -- A pending fold op stands in for a queued :foldclose.
                 writer._pending_fold_ops = { { id = 1, open = false } }
-                writer._should_auto_scroll = true
+                writer._scroll_verdicts = { [winid] = true }
 
                 local scroll_spy = spy.on(writer, "_scroll_now")
                 writer:_auto_scroll(bufnr)
 
                 assert.equal(0, scroll_spy.call_count)
                 -- Verdict survives for flush_pending_fold_ops to consume.
-                assert.is_true(writer._should_auto_scroll)
+                assert.is_true(writer._scroll_verdicts[winid])
                 scroll_spy:revert()
             end
         )
@@ -1788,7 +1809,7 @@ describe("agentic.ui.MessageWriter", function()
             setup_buffer(50, 1)
             writer._pending_fold_ops = { { id = 1, open = false } }
             writer._fold_retry_armed = true
-            writer._should_auto_scroll = true
+            writer._scroll_verdicts = { [winid] = true }
 
             local scroll_spy = spy.on(writer, "_scroll_now")
             writer:_auto_scroll(bufnr)
@@ -1802,7 +1823,7 @@ describe("agentic.ui.MessageWriter", function()
             -- flush discovers insert mode, so the hold owes that one a scroll.
             setup_buffer(50, 1)
             writer._pending_fold_ops = { { id = 1, open = false } }
-            writer._should_auto_scroll = true
+            writer._scroll_verdicts = { [winid] = true }
             local mode = spy.stub(vim.api, "nvim_get_mode")
             mode:returns({ mode = "i", blocking = false })
 
@@ -1824,7 +1845,7 @@ describe("agentic.ui.MessageWriter", function()
             "flush scrolls once the folds are closed, then clears the verdict",
             function()
                 setup_buffer(50, 1)
-                writer._should_auto_scroll = true
+                writer._scroll_verdicts = { [winid] = true }
 
                 local scroll_spy = spy.on(writer, "_scroll_now")
                 -- A real fold anchor isn't needed — flush scrolls after draining
@@ -1840,17 +1861,18 @@ describe("agentic.ui.MessageWriter", function()
                 writer:flush_pending_fold_ops()
 
                 assert.equal(1, scroll_spy.call_count)
-                assert.is_nil(writer._should_auto_scroll)
+                assert.is_nil(writer._scroll_verdicts)
                 scroll_spy:revert()
             end
         )
 
         it("flush does not scroll a scrolled-away user", function()
             setup_buffer(50, 1)
-            writer._should_auto_scroll = true
-            writer._auto_scroll_paused = true
+            writer._scroll_verdicts = { [winid] = true }
+            writer._paused_windows[winid] = true
 
-            local scroll_spy = spy.on(writer, "_scroll_now")
+            local scroll_spy =
+                spy.on(require("agentic.utils.buf_helpers"), "scroll_down")
             local id = vim.api.nvim_buf_set_extmark(
                 bufnr,
                 vim.api.nvim_create_namespace("agentic_fold_anchors"),
@@ -1892,7 +1914,7 @@ describe("agentic.ui.MessageWriter", function()
                     make_message_update(table.concat(long_text, "\n"))
                 )
 
-                assert.is_true(writer._should_auto_scroll)
+                assert.is_true(writer._scroll_verdicts[winid])
             end
         )
 
@@ -1916,7 +1938,7 @@ describe("agentic.ui.MessageWriter", function()
                 }
                 writer:write_tool_call_block(block)
 
-                assert.is_true(writer._should_auto_scroll)
+                assert.is_true(writer._scroll_verdicts[winid])
                 assert.is_true(vim.api.nvim_buf_line_count(bufnr) > 20)
             end
         )
@@ -1928,7 +1950,7 @@ describe("agentic.ui.MessageWriter", function()
                 make_message_update("new content\nmore content")
             )
 
-            assert.is_false(writer._should_auto_scroll)
+            assert.is_false(writer._scroll_verdicts[winid])
         end)
     end)
 
@@ -2053,15 +2075,15 @@ describe("agentic.ui.MessageWriter", function()
             vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
             vim.api.nvim_win_set_cursor(winid, { 1, 0 })
 
-            writer:on_user_scroll()
+            writer:on_user_scroll({ winid })
 
             assert.is_nil(writer._prose_anchor_line)
-            assert.is_true(writer._auto_scroll_paused)
+            assert.is_true(writer._paused_windows[winid])
         end)
 
         it("user scrolls to bottom: resumes auto-scroll", function()
             -- User had previously paused; now G or scroll-to-bottom.
-            writer._auto_scroll_paused = true
+            writer._paused_windows[winid] = true
             local lines = {}
             for i = 1, 50 do
                 lines[i] = "line " .. i
@@ -2069,9 +2091,9 @@ describe("agentic.ui.MessageWriter", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
             vim.api.nvim_win_set_cursor(winid, { 50, 0 })
 
-            writer:on_user_scroll()
+            writer:on_user_scroll({ winid })
 
-            assert.is_false(writer._auto_scroll_paused)
+            assert.is_nil(writer._paused_windows[winid])
         end)
 
         it("resume_auto_scroll unpauses and scrolls to the bottom", function()
@@ -2081,12 +2103,12 @@ describe("agentic.ui.MessageWriter", function()
             end
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
             vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-            writer:on_user_scroll()
-            assert.is_true(writer._auto_scroll_paused)
+            writer:on_user_scroll({ winid })
+            assert.is_true(writer._paused_windows[winid])
 
             writer:resume_auto_scroll()
 
-            assert.is_false(writer._auto_scroll_paused)
+            assert.is_nil(writer._paused_windows[winid])
             assert.equal(vim.fn.getwininfo(winid)[1].botline, 50)
         end)
 
@@ -2105,16 +2127,16 @@ describe("agentic.ui.MessageWriter", function()
                 -- Our own programmatic scrolls/writes fire WinScrolled with
                 -- the suppression flag set; pause/pin must survive those.
                 writer._suppress_pin_release = true
-                writer:on_user_scroll()
+                writer:on_user_scroll({ winid })
                 writer._suppress_pin_release = false
 
                 assert.is_not_nil(writer._prose_anchor_line)
-                assert.is_false(writer._auto_scroll_paused)
+                assert.is_nil(writer._paused_windows[winid])
             end
         )
 
         it("does not set the pin while paused", function()
-            writer._auto_scroll_paused = true
+            writer._paused_windows[winid] = true
 
             writer:write_message_chunk(make_message_update("more prose"))
 
@@ -2333,7 +2355,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- with it; neither field is a reliable user-intent signal,
                 -- so the pin stays armed until cleared by a turn boundary
                 -- (tool call, separator, error, /new).
-                assert.is_true(writer:_check_auto_scroll(bufnr))
+                assert.is_true(writer:_check_auto_scroll(winid))
                 assert.is_not_nil(writer._prose_anchor_line)
             end
         )

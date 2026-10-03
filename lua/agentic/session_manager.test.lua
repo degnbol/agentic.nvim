@@ -3,6 +3,7 @@ local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
 local AgentModes = require("agentic.acp.agent_modes")
+local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
@@ -13,6 +14,17 @@ local Theme = require("agentic.theme")
 --- @return agentic.acp.CurrentModeUpdate
 local function mode_update(mode_id)
     return { sessionUpdate = "current_mode_update", currentModeId = mode_id }
+end
+
+local last_bound_id = 0
+
+--- A fresh `SessionManager.id` bound to the current tabpage.
+--- @return integer
+local function bound_id()
+    last_bound_id = last_bound_id + 1
+    require("agentic.session_registry").tab_bindings[vim.api.nvim_get_current_tabpage()] =
+        last_bound_id
+    return last_bound_id
 end
 
 describe("agentic.SessionManager", function()
@@ -43,6 +55,7 @@ describe("agentic.SessionManager", function()
             local AgentModels = require("agentic.acp.agent_models")
 
             session = {
+                id = bound_id(),
                 config_options = {
                     legacy_agent_modes = legacy_modes,
                     legacy_agent_models = AgentModels:new(),
@@ -57,7 +70,6 @@ describe("agentic.SessionManager", function()
                 widget = {
                     render_header = render_header_spy,
                     buf_nrs = { chat = test_bufnr },
-                    tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 _on_session_update = SessionManager._on_session_update,
                 _update_chat_header = SessionManager._update_chat_header,
@@ -67,7 +79,6 @@ describe("agentic.SessionManager", function()
         after_each(function()
             notify_stub:revert()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
-            vim.t.agentic_headers = nil
         end)
 
         it("updates state, re-renders header, notifies user", function()
@@ -80,10 +91,7 @@ describe("agentic.SessionManager", function()
 
             assert.spy(render_header_spy).was.called(1)
             assert.equal("chat", render_header_spy.calls[1][2])
-
-            -- Context is set in vim.t.agentic_headers, not passed to render_header
-            local headers = vim.t.agentic_headers
-            assert.equal("Code", headers.chat.context)
+            assert.equal("Code", render_header_spy.calls[1][3])
 
             assert.spy(notify_stub).was.called(1)
             assert.equal("Mode changed to: code", notify_stub.calls[1][1])
@@ -130,11 +138,11 @@ describe("agentic.SessionManager", function()
             keymap_stub:revert()
 
             session = {
+                id = bound_id(),
                 config_options = config_opts,
                 widget = {
                     render_header = render_header_spy,
                     buf_nrs = { chat = test_bufnr },
-                    tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 _on_session_update = SessionManager._on_session_update,
                 _update_chat_header = SessionManager._update_chat_header,
@@ -144,7 +152,6 @@ describe("agentic.SessionManager", function()
 
         after_each(function()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
-            vim.t.agentic_headers = nil
         end)
 
         it("sets config options and updates header on mode", function()
@@ -174,10 +181,7 @@ describe("agentic.SessionManager", function()
             assert.is_not_nil(session.config_options.mode)
             assert.equal("plan", session.config_options.mode.currentValue)
             assert.spy(render_header_spy).was.called(1)
-
-            -- Context is set in vim.t.agentic_headers, not passed to render_header
-            local headers = vim.t.agentic_headers
-            assert.equal("Plan", headers.chat.context)
+            assert.equal("Plan", render_header_spy.calls[1][3])
         end)
     end)
 
@@ -193,18 +197,23 @@ describe("agentic.SessionManager", function()
         local function make_session(current_title, user_renamed)
             local set_title_spy = spy.new(function() end)
             local save_spy = spy.new(function() end)
+            local chat_history = ChatHistory:new()
+            chat_history.session_id = "s-1"
+            chat_history.title = current_title
+            chat_history.save = save_spy
             local session = {
                 _title_user_set = user_renamed,
-                chat_history = {
-                    session_id = "s-1",
-                    title = current_title,
-                    save = save_spy,
-                },
+                _prompt_pending = 0,
+                chat_history = chat_history,
                 widget = {
+                    buf_nrs = {},
                     set_chat_title = set_title_spy,
                 },
                 _sync_history_context = function() end,
                 _persist_history = SessionManager._persist_history,
+                _history_changed = SessionManager._history_changed,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 _on_session_update = SessionManager._on_session_update,
             } --[[@as agentic.SessionManager]]
             return session, set_title_spy, save_spy
@@ -265,6 +274,8 @@ describe("agentic.SessionManager", function()
                     set_chat_title = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
 
             session:_cancel_session()
@@ -309,10 +320,12 @@ describe("agentic.SessionManager", function()
                         clear = noop,
                         set_chat_title = noop,
                     },
-                    message_writer = { clear_blocks = noop },
-                    subagent_writer = { clear_blocks = noop },
+                    message_writer = { reset = noop },
+                    subagent_writer = { reset = noop },
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
+                    _sync_chat_modified = SessionManager._sync_chat_modified,
+                    _set_prompt_pending = SessionManager._set_prompt_pending,
                 } --[[@as agentic.SessionManager]]
 
                 session:_cancel_session()
@@ -406,6 +419,8 @@ describe("agentic.SessionManager", function()
                     set_chat_title = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 _budget_status = SessionManager._budget_status,
             } --[[@as agentic.SessionManager]]
 
@@ -445,6 +460,8 @@ describe("agentic.SessionManager", function()
                     set_chat_title = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
 
@@ -658,8 +675,11 @@ describe("agentic.SessionManager", function()
                 _remove_reauth_keymap = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
+                _prompt_pending = 0,
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
                 _apply_default_trust = noop,
                 _on_session_update = noop,
@@ -1215,11 +1235,14 @@ describe("agentic.SessionManager", function()
                     permission_manager = { clear = function() end },
                     todo_list = { clear = function() end },
                     message_writer = { write_notice = spy.new(function() end) },
+                    widget = { buf_nrs = {} },
                     chat_history = saved_history,
                     _is_first_message = false,
                     _history_to_send = nil,
                     new_session = new_session_spy,
                     _adopt_history = SessionManager._adopt_history,
+                    _sync_chat_modified = SessionManager._sync_chat_modified,
+                    _set_prompt_pending = SessionManager._set_prompt_pending,
                     switch_provider = SessionManager.switch_provider,
                 } --[[@as agentic.SessionManager]]
 
@@ -1342,11 +1365,14 @@ describe("agentic.SessionManager", function()
                 permission_manager = { clear = function() end },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = notice_spy },
+                widget = { buf_nrs = {} },
                 chat_history = { messages = {}, session_id = "old" },
                 new_session = spy.new(function(_self, opts)
                     captured_on_created = opts.on_created
                 end),
                 _adopt_history = SessionManager._adopt_history,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
@@ -1417,6 +1443,7 @@ describe("agentic.SessionManager", function()
                 status_indicator = { start = function() end },
                 _show_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
+                _history_changed = function() end,
                 _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
                 _drain_hook_records = function()
@@ -1603,7 +1630,7 @@ describe("agentic.SessionManager", function()
             local written = {}
             --- @type agentic.SessionManager
             local session = {
-                _destroyed = false,
+                destroyed = false,
                 _drain_hook_records = SessionManager._drain_hook_records,
                 _hook_records = {
                     drain = function()
@@ -1678,7 +1705,7 @@ describe("agentic.SessionManager", function()
         it("writes nothing once the session is destroyed", function()
             local session, written =
                 make_session({ { group = "context", body = { "ctx" } } })
-            session._destroyed = true
+            session.destroyed = true
 
             session:_drain_hook_records()
 
@@ -1908,10 +1935,10 @@ describe("agentic.SessionManager", function()
             end
             return {
                 session_id = "s-1",
-                tab_page_id = 1,
+                id = 1,
                 is_generating = false,
                 _is_first_message = false,
-                _destroyed = false,
+                destroyed = false,
                 _transient_attempt = 0,
                 agent = {
                     state = "ready",
@@ -1945,9 +1972,13 @@ describe("agentic.SessionManager", function()
                 chat_history = {
                     session_id = "s-1",
                     add_message = noop,
-                    save = noop,
+                    set_title = ChatHistory.set_title,
+                    save = function(this)
+                        this.dirty = false
+                    end,
                     messages = {},
                     title = "",
+                    dirty = false,
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
@@ -1977,6 +2008,9 @@ describe("agentic.SessionManager", function()
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
+                _history_changed = SessionManager._history_changed,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -2065,10 +2099,10 @@ describe("agentic.SessionManager", function()
 
             return {
                 session_id = "s-1",
-                tab_page_id = 1,
+                id = 1,
                 is_generating = false,
                 _is_first_message = false,
-                _destroyed = false,
+                destroyed = false,
                 _retry_attempt = 0,
                 _transient_attempt = 0,
                 _session_epoch = 0,
@@ -2076,6 +2110,8 @@ describe("agentic.SessionManager", function()
                     state = "ready",
                     provider_config = { name = "Test" },
                     send_prompt = function(_self, _sid, prompt, cb)
+                        sink.saves_at_send = sink.saves_at_send
+                            or (sink.saves or 0)
                         table.insert(sink.prompts, prompt)
                         cb(nil, send_err or { message = "boom" })
                     end,
@@ -2124,12 +2160,15 @@ describe("agentic.SessionManager", function()
                     update_tool_call = function(_self, id, update)
                         table.insert(sink.history_updates, { id, update })
                     end,
-                    save = function()
+                    set_title = ChatHistory.set_title,
+                    save = function(this)
                         sink.saves = (sink.saves or 0) + 1
                         sink.updates_at_save = #sink.history_updates
+                        this.dirty = false
                     end,
                     messages = {},
                     title = "",
+                    dirty = false,
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
@@ -2162,6 +2201,9 @@ describe("agentic.SessionManager", function()
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
+                _history_changed = SessionManager._history_changed,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -2217,19 +2259,22 @@ describe("agentic.SessionManager", function()
                 assert.is_true(session._open_tasks["task-1"])
             end)
 
-            it("keeps a turn outstanding when a submit lands mid-turn", function()
-                local sink = {}
-                local session = make_session(nil, nil, sink)
-                session.agent.send_prompt = function(_self, _sid, prompt)
-                    table.insert(sink.prompts, prompt)
+            it(
+                "keeps a turn outstanding when a submit lands mid-turn",
+                function()
+                    local sink = {}
+                    local session = make_session(nil, nil, sink)
+                    session.agent.send_prompt = function(_self, _sid, prompt)
+                        table.insert(sink.prompts, prompt)
+                    end
+
+                    assert.is_true(session:_handle_input_submit("first"))
+                    assert.is_true(session:_handle_input_submit("second"))
+
+                    assert.equal(2, #sink.prompts)
+                    assert.equal(2, session._prompt_pending)
                 end
-
-                assert.is_true(session:_handle_input_submit("first"))
-                assert.is_true(session:_handle_input_submit("second"))
-
-                assert.equal(2, #sink.prompts)
-                assert.equal(2, session._prompt_pending)
-            end)
+            )
 
             -- A turn ending with the mid-turn submit's turn still outstanding
             -- owes the reader its own boundary — the footer, the separator and
@@ -2428,7 +2473,9 @@ describe("agentic.SessionManager", function()
 
                 session:_handle_input_submit("hello")
 
-                assert.equal(1, sink.saves)
+                -- Saves made by the turn itself, not by the submit's
+                -- idle-session save of the user prompt.
+                assert.equal(1, sink.saves - sink.saves_at_send)
             end)
 
             it("saves once when the failed turn is resent", function()
@@ -2436,6 +2483,7 @@ describe("agentic.SessionManager", function()
                 local session = make_session(nil, TRANSIENT, sink)
                 local sent = 0
                 session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                    sink.saves_at_send = sink.saves_at_send or (sink.saves or 0)
                     sent = sent + 1
                     table.insert(sink.prompts, prompt)
                     cb(
@@ -2447,7 +2495,7 @@ describe("agentic.SessionManager", function()
                 session:_handle_input_submit("hello")
 
                 assert.equal(2, #sink.prompts)
-                assert.equal(1, sink.saves)
+                assert.equal(1, sink.saves - sink.saves_at_send)
             end)
         end)
 
@@ -2703,7 +2751,7 @@ describe("agentic.SessionManager", function()
             vim.schedule(function()
                 hook({
                     session_id = "s-1",
-                    tab_page_id = 1,
+                    id = 1,
                     tool_call_id = "tc-1",
                 })
             end)
@@ -2751,8 +2799,8 @@ describe("agentic.SessionManager", function()
             }
             local session = {
                 session_id = "s-1",
-                tab_page_id = 1,
-                _destroyed = false,
+                id = 1,
+                destroyed = false,
                 status_indicator = { start = noop, stop = noop },
                 message_writer = { tool_call_blocks = {} },
                 _tool_call_owner = {},
@@ -2763,6 +2811,11 @@ describe("agentic.SessionManager", function()
                     add_request = function()
                         return prompted
                     end,
+                    permission_float = {
+                        is_shown = function()
+                            return true
+                        end,
+                    },
                 },
                 _notify_attention = SessionManager._notify_attention,
                 _on_request_permission = SessionManager._on_request_permission,
@@ -2848,7 +2901,7 @@ describe("agentic.SessionManager", function()
 
             session = {
                 session_id = "s-1",
-                tab_page_id = 1,
+                id = 1,
                 _is_first_message = false,
                 _prompt_pending = 0,
                 agent = { state = "ready", provider_config = { name = "Test" } },
@@ -2857,6 +2910,7 @@ describe("agentic.SessionManager", function()
                     write_error_action = noop,
                 },
                 chat_history = { title = "existing", add_message = noop },
+                _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
                     clear_unread_badge = noop,
@@ -3043,6 +3097,8 @@ describe("agentic.SessionManager", function()
                 agent = { state = "ready" },
                 session_id = "s-1",
                 _advance_session_epoch = SessionManager._advance_session_epoch,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _sync_chat_modified = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
 
@@ -3217,11 +3273,10 @@ describe("agentic.SessionManager", function()
             }
 
             session = {
-                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                id = bound_id(),
                 permission_manager = pm,
                 widget = {
                     buf_nrs = { chat = test_bufnr },
-                    tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 message_writer = {
                     write_notice = spy.new(function(_, notice)
@@ -3245,7 +3300,6 @@ describe("agentic.SessionManager", function()
             notify_stub:revert()
             git_root_stub:revert()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
-            vim.t.agentic_headers = nil
             Config.auto_approve_trust_scope = true
         end)
 
@@ -3653,11 +3707,10 @@ describe("agentic.SessionManager", function()
                 set_trust_scope = spy.new(function() end),
             }
             session = {
-                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                id = bound_id(),
                 permission_manager = pm,
                 widget = {
                     buf_nrs = { chat = test_bufnr },
-                    tab_page_id = vim.api.nvim_get_current_tabpage(),
                 },
                 _push_trust_to_headers = SessionManagerModule._push_trust_to_headers,
                 _apply_default_trust = SessionManagerModule._apply_default_trust,
@@ -3666,7 +3719,6 @@ describe("agentic.SessionManager", function()
 
         after_each(function()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
-            vim.t.agentic_headers = nil
             Config.auto_approve_trust_scope = orig_auto
             Config.permissions.trust_tmp = orig_trust_tmp
         end)
@@ -3744,7 +3796,7 @@ describe("agentic.SessionManager", function()
 
             session = {
                 session_id = "s-1",
-                tab_page_id = 1,
+                id = 1,
                 _is_first_message = false,
                 _prompt_pending = 0,
                 agent = { state = "ready", provider_config = { name = "Test" } },
@@ -3755,6 +3807,7 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 chat_history = { title = "existing", add_message = noop },
+                _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
                     clear_unread_badge = noop,
@@ -4126,8 +4179,11 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 agent = { agent_info = { name = "acp", version = "0.66.0" } },
+                widget = { buf_nrs = {} },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -4170,7 +4226,10 @@ describe("agentic.SessionManager", function()
                     timestamp = 200,
                     messages = {},
                 },
+                widget = { buf_nrs = {} },
                 _adopt_history = SessionManager._adopt_history,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
 
             session:_adopt_history(saved_history)
@@ -4184,7 +4243,6 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("_on_session_update: agent_message_chunk", function()
-        local ChatHistory = require("agentic.ui.chat_history")
         local ResponseBoundary = require("agentic.acp.response_boundary")
 
         --- @type agentic.SessionManager
@@ -4208,8 +4266,13 @@ describe("agentic.SessionManager", function()
                 subagent_status_indicator = { reposition = function() end },
                 chat_history = ChatHistory:new(),
                 agent = { provider_config = { name = "test-provider" } },
+                widget = { buf_nrs = {} },
+                _prompt_pending = 1,
                 _ensure_subagent_window = function() end,
                 _on_session_update = SessionManager._on_session_update,
+                _history_changed = SessionManager._history_changed,
+                _sync_chat_modified = SessionManager._sync_chat_modified,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
         end)
 
@@ -4222,9 +4285,13 @@ describe("agentic.SessionManager", function()
                 sessionUpdate = "agent_message_chunk",
                 content = { type = "text", text = text },
                 messageId = message_id,
-                _meta = parent_tool_use_id and {
-                    claudeCode = { parentToolUseId = parent_tool_use_id },
-                } or nil,
+                _meta = parent_tool_use_id
+                        and {
+                            claudeCode = {
+                                parentToolUseId = parent_tool_use_id,
+                            },
+                        }
+                    or nil,
             }
         end
 

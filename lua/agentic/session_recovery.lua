@@ -8,7 +8,7 @@
 --   - Surfacing of "successful but empty" prompt responses.
 -- All functions take the SessionManager (`sm`) as the first argument and
 -- read/write its fields (`_reauth_keymap`, `_health_check_timer`,
--- `_retry_*`, `_reauth_job`, `_destroyed`, ...). LuaLS treats those
+-- `_retry_*`, `_reauth_job`, `destroyed`, ...). LuaLS treats those
 -- underscore-prefixed fields as private to SessionManager; this module is
 -- a tightly-coupled helper that legitimately reaches in.
 --- @diagnostic disable: invisible
@@ -123,7 +123,7 @@ function M._check_server_then_offer_reauth(sm, attempt)
         HEALTH_CHECK_URL,
     }, {}, function(result)
         vim.schedule(function()
-            if sm._destroyed then
+            if sm.destroyed then
                 return
             end
 
@@ -153,7 +153,7 @@ function M._check_server_then_offer_reauth(sm, attempt)
                     timer:stop()
                     timer:close()
                     vim.schedule(function()
-                        if sm._destroyed then
+                        if sm.destroyed then
                             return
                         end
                         M._check_server_then_offer_reauth(sm, attempt + 1)
@@ -214,7 +214,7 @@ function M.run_reauth(sm)
         function(result)
             vim.schedule(function()
                 sm._reauth_job = nil
-                if sm._destroyed or epoch ~= sm._session_epoch then
+                if sm.destroyed or epoch ~= sm._session_epoch then
                     return
                 end
 
@@ -333,7 +333,7 @@ function M.respawn_preserving_history(sm, on_created)
 
     sm.agent = AgentInstance.get_instance(provider_name, function(client)
         vim.schedule(function()
-            if sm._destroyed then
+            if sm.destroyed then
                 return
             end
             sm.agent = client
@@ -457,7 +457,7 @@ function M._fire_auto_continue(sm)
     -- branches below and the pause would never end.
     sm._usage_reset_epoch = nil
 
-    if sm._destroyed then
+    if sm.destroyed then
         return
     end
 
@@ -517,7 +517,7 @@ function M.should_retry_transient(sm, err, turn_session_id)
     if type(err.data) ~= "table" or err.data.errorKind ~= "server_error" then
         return false
     end
-    if sm._destroyed or sm._transient_attempt >= MAX_TRANSIENT_RETRIES then
+    if sm.destroyed or sm._transient_attempt >= MAX_TRANSIENT_RETRIES then
         return false
     end
     -- A pending session/prompt callback outlives cancel_session, which drops

@@ -233,10 +233,7 @@ describe("ChatHistory", function()
 
             it("adds nothing after a blank line", function()
                 assert.equal("one.\n\nTwo", merged("one.\n\n", "Two", true))
-                assert.equal(
-                    "one.\n  \nTwo",
-                    merged("one.\n  \n", "Two", true)
-                )
+                assert.equal("one.\n  \nTwo", merged("one.\n  \n", "Two", true))
             end)
         end)
 
@@ -283,8 +280,21 @@ describe("ChatHistory", function()
     end)
 
     describe("save and load", function()
+        --- @type TestStub
+        local schedule_stub
+
         before_each(function()
             stub_cwd()
+            -- `load` delivers through vim.schedule; run it inline, as a
+            -- vim.wait for it would let mini.test re-enter sibling cases.
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
         end)
 
         it("persists and restores ChatHistory instance", function()
@@ -298,18 +308,11 @@ describe("ChatHistory", function()
                 timestamp = os.time(),
                 provider_name = "test-provider",
             })
+            original:set_title("Test message")
+            assert.is_true(original.dirty)
 
-            local save_done = false
-            local save_err = nil
-            original:save(function(err)
-                save_err = err
-                save_done = true
-            end)
-
-            vim.wait(1000, function()
-                return save_done
-            end)
-            assert.is_nil(save_err)
+            assert.is_nil(original:save())
+            assert.is_false(original.dirty)
 
             local path = ChatHistory.get_file_path(original.session_id)
             assert.equal(1, mkdirp_stub.call_count)
@@ -327,15 +330,9 @@ describe("ChatHistory", function()
 
             local loaded = nil
             local load_err = nil
-            local load_done = false
             ChatHistory.load(original.session_id, function(history, err)
                 loaded = history
                 load_err = err
-                load_done = true
-            end)
-
-            vim.wait(1000, function()
-                return load_done
             end)
 
             assert.is_nil(load_err)
@@ -346,6 +343,7 @@ describe("ChatHistory", function()
             assert.equal(original.provider_version, loaded.provider_version)
             assert.equal(1, #loaded.messages)
             assert.equal("Test message", loaded.messages[1].text)
+            assert.is_false(loaded.dirty)
         end)
 
         it("returns error for missing or corrupted files", function()
@@ -365,16 +363,10 @@ describe("ChatHistory", function()
 
                 local loaded = nil
                 local load_err = nil
-                local done = false
 
                 ChatHistory.load(tc.session_id, function(history, err)
                     loaded = history
                     load_err = err
-                    done = true
-                end)
-
-                vim.wait(1000, function()
-                    return done
                 end)
 
                 assert.is_nil(loaded)
@@ -390,21 +382,23 @@ describe("ChatHistory", function()
 
         it("returns empty array when no sessions exist", function()
             local sessions = nil
-            local done = false
 
             ChatHistory.list_sessions(function(result)
                 sessions = result
-                done = true
-            end)
-
-            vim.wait(1000, function()
-                return done
             end)
 
             assert.equal(0, #sessions)
         end)
 
         it("returns all saved sessions in project folder", function()
+            -- Listing reads the folder from disk, so the writes must land.
+            require("agentic.config").session_restore.storage_path =
+                vim.fn.tempname()
+            write_file_stub:invokes(function(path, content, callback)
+                vim.fn.mkdir(vim.fs.dirname(path), "p")
+                vim.fn.writefile(vim.split(content, "\n"), path)
+                callback(nil)
+            end)
             local session_ids = { "session-1", "session-2" }
 
             for _, id in ipairs(session_ids) do
@@ -417,25 +411,13 @@ describe("ChatHistory", function()
                     provider_name = "test-provider",
                 })
 
-                local saved = false
-                s:save(function()
-                    saved = true
-                end)
-                vim.wait(1000, function()
-                    return saved
-                end)
+                assert.is_nil(s:save())
             end
 
             local sessions = nil
-            local done = false
 
             ChatHistory.list_sessions(function(result)
                 sessions = result
-                done = true
-            end)
-
-            vim.wait(1000, function()
-                return done
             end)
 
             assert.equal(2, #sessions)

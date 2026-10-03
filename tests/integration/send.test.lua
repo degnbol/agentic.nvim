@@ -9,10 +9,11 @@ describe("Partial-send", function()
         child.lua([[
             require("agentic").toggle()
             local tab_id = vim.api.nvim_get_current_tabpage()
-            local session = require("agentic.session_registry").sessions[tab_id]
+            local session = require("agentic.session_registry").bound_session(tab_id)
             _G._sent_prompts = {}
             session.widget.on_submit_input = function(prompt)
                 table.insert(_G._sent_prompts, prompt)
+                return true
             end
             _G._widget = session.widget
         ]])
@@ -151,12 +152,18 @@ describe("Partial-send", function()
         child.lua([[
             vim.cmd("tabnew")
             require("agentic").toggle()
+        ]])
+        -- Let the open's scheduled focus (`G$`) land before placing the
+        -- cursor, or it moves the cursor to the last line.
+        child.flush()
+        child.lua([[
             local tab_id_2 = vim.api.nvim_get_current_tabpage()
             local session_2 =
-                require("agentic.session_registry").sessions[tab_id_2]
+                require("agentic.session_registry").bound_session(tab_id_2)
             _G._sent_prompts_2 = {}
             session_2.widget.on_submit_input = function(prompt)
                 table.insert(_G._sent_prompts_2, prompt)
+                return true
             end
             _G._widget_2 = session_2.widget
             vim.api.nvim_buf_set_lines(

@@ -234,8 +234,7 @@ function M.handle()
     local chat_col = cursor[2]
     local screen_row = vim.fn.winline()
 
-    local tab_page_id = vim.api.nvim_get_current_tabpage()
-    local session = SessionRegistry.sessions[tab_page_id]
+    local session = SessionRegistry.owner_of_buf(bufnr)
     if not session or not session.message_writer then
         return "no_session"
     end

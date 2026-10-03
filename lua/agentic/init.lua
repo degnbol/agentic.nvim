@@ -16,12 +16,26 @@ local function effective_position(opts)
     return (opts and opts.position) or Config.windows.position
 end
 
+--- When the current window shows a session's chat, bind that session to the
+--- current tabpage (see `SessionManager:bind_to_tab`).
+local function bind_shown_chat()
+    local buf = vim.api.nvim_get_current_buf()
+    if vim.b[buf].agentic_window ~= "chat" then
+        return
+    end
+    local owner = SessionRegistry.owner_of_buf(buf)
+    if owner then
+        owner:bind_to_tab(vim.api.nvim_get_current_tabpage())
+    end
+end
+
 --- Opens the widget inside a dedicated tab, creating/reusing a tab as needed.
 --- Never closes. Used by the `"tab"` position dispatch.
 --- @param opts agentic.ui.ChatWidget.ShowOpts|nil
 local function open_in_tab(opts)
+    bind_shown_chat()
     local tab = vim.api.nvim_get_current_tabpage()
-    local existing = SessionRegistry.sessions[tab]
+    local existing = SessionRegistry.bound_session(tab)
     if existing and existing.widget:is_open() then
         SessionRegistry.get_session_for_tab_page(nil, function(session)
             session.widget:show(opts)
@@ -60,19 +74,6 @@ local function open_in_tab(opts)
     end)
 end
 
---- Hides the widget on the current tab and closes the tab if no other
---- windows remain.
-local function close_tab()
-    local tab = vim.api.nvim_get_current_tabpage()
-    local session = SessionRegistry.sessions[tab]
-    if session and session.widget:is_open() then
-        session.widget:hide()
-        if #vim.api.nvim_tabpage_list_wins(tab) <= 1 then
-            vim.cmd("tabclose")
-        end
-    end
-end
-
 --- Opens the chat widget for the current tab page
 --- Safe to call multiple times
 --- @param opts agentic.ui.ChatWidget.ShowOpts|nil
@@ -81,6 +82,7 @@ function Agentic.open(opts)
         return open_in_tab(opts)
     end
 
+    bind_shown_chat()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         if not opts or opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()
@@ -90,40 +92,47 @@ function Agentic.open(opts)
     end)
 end
 
---- Closes any open chat widget and cleans up the dedicated tab if applicable.
---- Safe to call multiple times or when no session exists.
---- @param tab_page_id? integer Tabpage to close. Nil = current tabpage.
-function Agentic.close(tab_page_id)
-    local tab = tab_page_id or vim.api.nvim_get_current_tabpage()
-    local session = SessionRegistry.sessions[tab]
-    if not session or not session.widget:is_open() then
-        return
-    end
-
-    -- Check if this is a dedicated tab (no non-widget, non-floating windows).
-    -- If so, destroy session + tabclose — avoids E444 from trying to close
-    -- widget windows one-by-one when there's no real fallback window.
-    local has_user_window = false
-    local widget_win_set = {}
-    for _, winid in pairs(session.widget.win_nrs) do
-        widget_win_set[winid] = true
+--- Whether a tabpage has a non-floating window outside `win_nrs`.
+--- @param tab integer
+--- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @return boolean
+local function has_other_window(tab, win_nrs)
+    local own = {}
+    for _, winid in pairs(win_nrs) do
+        own[winid] = true
     end
     for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
         if
-            not widget_win_set[winid]
+            not own[winid]
             and vim.api.nvim_win_get_config(winid).relative == ""
         then
-            has_user_window = true
-            break
+            return true
         end
     end
+    return false
+end
 
-    if has_user_window then
+--- Closes the widget windows of the tab's session; the session lives on in
+--- its buffers. A tab the widget fills is closed with it, and when that is
+--- the last tab, vim quits by its own rules: unsaved history or an unsent
+--- prompt refuses.
+--- Safe to call multiple times or when no session exists.
+--- @param tab_page_id integer|nil Tabpage to close. Nil = current tabpage.
+function Agentic.close(tab_page_id)
+    local tab = tab_page_id or vim.api.nvim_get_current_tabpage()
+    local session = SessionRegistry.bound_session(tab)
+    if not session or not session.widget:has_windows() then
+        return
+    end
+
+    if has_other_window(tab, session.widget.win_nrs) then
         session.widget:hide()
+    elseif #vim.api.nvim_list_tabpages() > 1 then
+        vim.cmd.tabclose(vim.api.nvim_tabpage_get_number(tab))
     else
-        SessionRegistry.destroy_session(tab)
-        if vim.api.nvim_tabpage_is_valid(tab) then
-            pcall(vim.cmd.tabclose)
+        local ok, err = pcall(vim.cmd.qall)
+        if not ok then
+            Logger.notify(tostring(err), vim.log.levels.ERROR)
         end
     end
 end
@@ -136,9 +145,10 @@ function Agentic.toggle(opts)
         return Agentic.toggle_tab(opts)
     end
 
+    bind_shown_chat()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
-        if session.widget:is_open() then
-            session.widget:hide()
+        if session.widget:has_windows() then
+            Agentic.close()
         else
             if not opts or opts.auto_add_to_context ~= false then
                 session:add_selection_or_file_to_session()
@@ -154,9 +164,9 @@ end
 --- @param opts agentic.ui.ChatWidget.ShowOpts|nil
 function Agentic.toggle_tab(opts)
     local tab = vim.api.nvim_get_current_tabpage()
-    local session = SessionRegistry.sessions[tab]
-    if session and session.widget:is_open() then
-        close_tab()
+    local session = SessionRegistry.bound_session(tab)
+    if session and session.widget:has_windows() then
+        Agentic.close(tab)
     else
         open_in_tab(opts)
     end
@@ -306,7 +316,8 @@ end
 --- prompt window, and `get_session_for_tab_page` would spawn a whole provider
 --- for a session with nowhere to put it.
 function Agentic.toggle_file_activity()
-    local session = SessionRegistry.sessions[vim.api.nvim_get_current_tabpage()]
+    local session =
+        SessionRegistry.bound_session(vim.api.nvim_get_current_tabpage())
     if not session or not session.widget:is_open() then
         Logger.notify(
             "No Agentic widget open in this tabpage.",
@@ -329,7 +340,7 @@ end
 --- show a selector to restore a previous session
 function Agentic.restore_session()
     local tab_page_id = vim.api.nvim_get_current_tabpage()
-    local current_session = SessionRegistry.sessions[tab_page_id]
+    local current_session = SessionRegistry.bound_session(tab_page_id)
     SessionRestore.show_picker(tab_page_id, current_session)
 end
 
@@ -498,63 +509,31 @@ function Agentic.setup(opts)
         desc = "Cleanup Agentic processes on exit",
     })
 
-    -- Cleanup specific tab instance when tab is closed
+    -- A session outlives its tab, as a buffer outlives its windows; only the
+    -- binding goes. `<amatch>` is the closed tab's number, not its handle, so
+    -- find the bindings whose tab is gone instead.
     vim.api.nvim_create_autocmd("TabClosed", {
         group = cleanup_group,
-        callback = function(ev)
-            local tab_id = tonumber(ev.match)
-            SessionRegistry.destroy_session(tab_id)
-        end,
-        desc = "Cleanup Agentic processes on tab close",
-    })
-
-    -- Block in-place reloads (`:e` / `:edit` / `:e!`) of Agentic widget
-    -- buffers. Reloading empties a `nofile` buffer *before* any autocmd can
-    -- refill it, and the render's extmarks (tool-call signs, fold anchors,
-    -- prompt markers) survive the wipe but collapse onto row 0 — desyncing the
-    -- whole chat. The unload itself can't be cancelled (BufUnload is a
-    -- notification, not a veto), so we cancel the command before it runs, via
-    -- CmdlineLeave's mutable `abort`. Only a bare reload (no file argument) is
-    -- blocked; `:e {file}` still switches away as normal. Global rather than
-    -- buffer-local because cmdline autocmds are not buffer-scoped; it gates on
-    -- the current buffer's filetype instead.
-    vim.api.nvim_create_autocmd("CmdlineLeave", {
-        group = cleanup_group,
         callback = function()
-            if vim.v.event.cmdtype ~= ":" then
-                return
+            for tab in pairs(SessionRegistry.tab_bindings) do
+                if not vim.api.nvim_tabpage_is_valid(tab) then
+                    SessionRegistry.tab_bindings[tab] = nil
+                end
             end
-            if not tostring(vim.bo.filetype):match("^Agentic") then
-                return
-            end
-            local args = vim.split(vim.trim(vim.fn.getcmdline()), "%s+")
-            local command = (args[1] or ""):gsub("!$", "")
-            if #args ~= 1 or vim.fn.fullcommand(command) ~= "edit" then
-                return
-            end
-            -- v:event.abort is mutable, but `vim.v.event` returns a Lua copy —
-            -- assigning to it from Lua is a no-op, so set it via Vimscript.
-            vim.cmd.let("v:event.abort = v:true")
-            Logger.notify(
-                "Reloading is disabled in Agentic buffers (it would wipe the render)",
-                vim.log.levels.WARN
-            )
         end,
-        desc = "Block :edit reload of Agentic buffers",
+        desc = "Unbind Agentic sessions from closed tabs",
     })
 
     if Config.image_paste.enabled then
         local function get_current_session()
-            local tab_page_id = vim.api.nvim_get_current_tabpage()
-            return SessionRegistry.sessions[tab_page_id]
+            return SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
         end
 
         local Clipboard = require("agentic.ui.clipboard")
 
         Clipboard.setup({
             is_cursor_in_widget = function()
-                local session = get_current_session()
-                return session and session.widget:is_cursor_in_widget() or false
+                return get_current_session() ~= nil
             end,
             on_paste = function(file_path)
                 local session = get_current_session()

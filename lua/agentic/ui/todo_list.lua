@@ -6,6 +6,7 @@ local NS_CHECKBOX = vim.api.nvim_create_namespace("agentic_todo_checkbox")
 --- @field _bufnr integer
 --- @field _on_change fun(todoList: agentic.ui.TodoList)
 --- @field _on_close fun()
+--- @field _entries agentic.acp.PlanEntry[] Last rendered entries
 --- @field completed_count integer
 --- @field total_count integer
 local TodoList = {}
@@ -18,6 +19,7 @@ TodoList.__index = TodoList
 function TodoList:new(bufnr, on_change, on_close)
     return setmetatable({
         _bufnr = bufnr,
+        _entries = {},
         _on_change = on_change,
         _on_close = on_close,
         completed_count = 0,
@@ -47,6 +49,7 @@ local STATUS_CHECKBOX = {
 --- Render plan entries as markdown todo list
 --- @param entries agentic.acp.PlanEntry[]
 function TodoList:render(entries)
+    self._entries = entries
     local lines = {}
     local completed = 0
 
@@ -143,7 +146,13 @@ function TodoList:_scroll_to_non_completed(entries)
     end)
 end
 
+--- Render the last entries again.
+function TodoList:redraw()
+    self:render(self._entries)
+end
+
 function TodoList:clear()
+    self._entries = {}
     self.completed_count = 0
     self.total_count = 0
 

@@ -1,6 +1,6 @@
 ---
 name: session-lifecycle
-description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation or session restore paths, the _restoring/_session_epoch/_destroyed guards, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.t[tab].agentic_headers. Covers "session restore", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
+description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation or session restore paths, the _restoring/_session_epoch/destroyed guards, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session restore", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
 ---
 
 # Session lifecycle
@@ -30,11 +30,11 @@ Three race conditions can overwrite `self.session_id` during ACP
    `session/new` response then arrives — `_restoring` is false, so the callback
    overwrites `session_id` with the stale new-session ID.
 
-3. **Cross-provider restore, three linked hazards.** Picking a saved session
+3. **Cross-provider restore, two linked hazards.** Picking a saved session
    whose provider differs from `Config.provider` requires destroying the
-   current tab's SessionManager, flipping `Config.provider`, and letting
+   tab's bound SessionManager, flipping `Config.provider`, and letting
    `get_session_for_tab_page` spawn a replacement bound to the new agent.
-   This sequence surfaces three races that don't affect same-provider restore:
+   This sequence surfaces two races that don't affect same-provider restore:
 
    a. **Capability check during agent init.** `agent_supports_load` is called
       synchronously inside the picker callback. A freshly-spawned agent has
@@ -43,28 +43,12 @@ Three race conditions can overwrite `self.session_id` during ACP
       Treat nil as "support-assumed" — `load_acp_session` already queues via
       `_pending_load_session_id` until on_ready fires.
 
-   b. **Tab-id-based deferred destroy.** `ChatWidget.on_hide` schedules
-      `SessionRegistry.destroy_session(tab_page_id)` via `vim.schedule` when
-      `chat_history.messages` is empty. If a replacement session has been
-      installed on the same tab before that callback runs, a naive
-      destroy-by-tab-id would wipe the replacement. The scheduled closure
-      captures the session instance (`this`) and only destroys when
-      `SessionRegistry.sessions[this.tab_page_id] == this` — so the replacement
-      survives. `SessionManager:destroy` also disarms `on_hide` before
-      `widget:destroy()` as belt-and-braces.
-
-   c. **Stale `session/new` callback from the outgoing provider.** The
+   b. **Stale `session/new` callback from the outgoing provider.** The
       original SessionManager's `create_session` RPC may still be in flight
       when it's destroyed. The callback closure holds a reference to the
-      destroyed `self`. When the response arrives, the callback runs
-      `_handle_new_config_options` → `_update_chat_header` →
-      `WindowDecoration.set_headers_state(self.widget.tab_page_id, ...)`,
-      stomping the replacement session's headers with the outgoing
-      provider's model. Bail out at the top of the create_session callback
-      when `self._destroyed` is true. Also clear
-      `vim.t[tab_page_id].agentic_headers` in `SessionManager:destroy` so
-      the replacement starts from a clean slate — per-tab header state
-      outlives the session that wrote it.
+      destroyed `self`; when the response arrives it would run
+      `_handle_new_config_options` against wiped buffers. Bail out at the top
+      of the create_session callback when `self.destroyed` is true.
 
 **Guards:**
 
@@ -77,19 +61,19 @@ Three race conditions can overwrite `self.session_id` during ACP
   This catches stale responses even after `_restoring` is cleared. Long-running
   side flows capture it too: `run_reauth` holds the epoch across the browser
   OAuth round-trip so its callback cannot recover into a replaced conversation.
-- `_destroyed` flag — set in `SessionManager:destroy`. Checked at the top of
-  the `create_session` callback for race 3c (epoch/restoring can't catch it
-  because they track the replacement's state, not the destroyed sender's).
+- `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
+  is a no-op once it is set. Checked at the top of the `create_session`
+  callback for race 3b (epoch/restoring can't catch it because they track the
+  replacement's state, not the destroyed sender's).
 
 **Rules:**
 
 - Any code path that initiates a session transition must increment
   `_session_epoch`. Any async callback that sets `self.session_id` must check
   that its captured epoch matches `self._session_epoch`.
-- Any async callback on a SessionManager that writes to tab-scoped state
-  (`vim.t[tab].agentic_headers`, `SessionRegistry.sessions[tab]`, etc.) must
-  check `self._destroyed` — the instance may have been replaced on the same
-  tab while the RPC was in flight.
+- Any async callback on a SessionManager that writes to its buffers or the
+  registry must check `self.destroyed` — the instance may have been
+  replaced while the RPC was in flight.
 - `_do_load_acp_session` must feed `result.configOptions` through
   `_handle_new_config_options` on success (mirrors the `new_session` path) —
   otherwise the header stays on the previous provider's model after a
@@ -131,16 +115,15 @@ plugins (incline.nvim, tabline plugins) through the **headers state pipeline**,
 not through buffer names.
 
 **Pipeline:** `SessionManager` → `ChatWidget:render_header()` /
-`ChatWidget:set_chat_title()` → `WindowDecoration.set_headers_state()` →
-`vim.t[tab].agentic_headers` → `AgenticHeadersChanged` User autocmd → external
-plugin refresh.
+`set_chat_title()` / `set_unread_badge()` → `WindowDecoration.set_header()` →
+`vim.b[buf].agentic_header` → `AgenticHeadersChanged` User autocmd (`data.buf`)
+→ external plugin refresh. `set_header` also renders the winbar, local-scope,
+in every window showing the buffer.
 
-`vim.t.agentic_headers` is the single source of truth for header display data.
-Each panel has a `HeaderParts` table with `title`, `context`, and optional extra
-fields (e.g. `session_name`). External plugins read these fields in their render
-functions and refresh via the `AgenticHeadersChanged` autocmd.
+`vim.b[buf].agentic_header` (a `HeaderParts`: `title`, `context`, `badge`,
+`session_name`, `trust`) is the single source of truth for header display
+data; `vim.b[buf].agentic_window` names the buffer's panel.
 
-**Do not rely on buffer names for UI display.** `nvim_buf_set_name` sets neovim's
-internal buffer path (visible in `:ls`) but does not fire events that floating
-window plugins respond to. The buffer name is a secondary artifact — the headers
-state is the primary mechanism.
+**Do not rely on buffer names for UI display.** `nvim_buf_set_name` fires no
+event floating-window plugins respond to. Names are `agentic://<id>/<panel>`;
+only the chat's tail follows the session title.

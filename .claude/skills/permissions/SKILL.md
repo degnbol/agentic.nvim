@@ -44,7 +44,7 @@ Provider sends "session/request_permission"
         -> otherwise: fall through to interactive prompt
      -> Queue request (sequential — one prompt at a time)
      -> PermissionFloat.open renders prompt anchored to the chat window
-     -> Bind buffer-local keymaps 1..N on all widget buffers
+     -> Bind buffer-local option keys on all widget buffers
   -> User optionally opens diff preview in a new tabpage
   -> User presses permission key
      -> Send result back to provider via callback
@@ -347,30 +347,30 @@ cleared, correlated to a write/create earlier in the **same** command
 worktree checkouts, plain `.git/index` otherwise) and uses that for
 mtime-based cache invalidation of the tracked-files set.
 
-Scope display string is also pushed into `vim.t[tab].agentic_headers` so
+Scope display string is also pushed into the chat's `vim.b.agentic_header` so
 external UI plugins surface it via `AgenticHeadersChanged`.
 
 ## Permission response keys
 
 Bound buffer-locally on all widget buffers (chat, input, todos, code,
-files, diagnostics). Numbers match escalating severity:
+files, diagnostics), never globally. Keyed by option kind
+(`Config.keymaps.permission`; `L` = `<localLeader>`):
 
 | Key | Action | ACP outcome |
 | --- | --- | --- |
-| `1` | Allow once | `selected` + `allow_once` |
-| `2` | Allow always | `selected` + `allow_always` |
-| `3` | Reject once (show next) | `selected` + `reject_once` |
-| `4` | Reject all | `reject_once` current + `cancelled` remaining |
-| `5` | Reject always | `selected` + `reject_always` |
+| `Ly` | Allow once | `selected` + `allow_once` |
+| `LY` | Allow always | `selected` + `allow_always` |
+| `Ln` | Reject once (show next) | `selected` + `reject_once` |
+| `Lx` | Reject all | `reject_once` current + `cancelled` remaining |
+| `LN` | Reject always | `selected` + `reject_always` |
 | `<C-c>` | Hard abort | `cancelled` for all + `session/cancel` |
 
-Numbers adapt if the provider sends fewer options.
+A kind with no key, or a repeat of a kind, gets `L<position>`.
 
-**`4` vs `<C-c>`.** Both stop permission processing. `4` sends
+**`Lx` vs `<C-c>`.** Both stop permission processing. `Lx` sends
 `reject_once` for the current call, so the provider sees an active
-rejection and can adapt (explain, suggest alternatives) on the next turn.
-`<C-c>` kills the turn immediately via `session/cancel` — provider gets
-no chance to react. Use `4` when you want to reject *and* steer.
+rejection and can adapt on the next turn. `<C-c>` kills the turn via
+`session/cancel` — no chance to react.
 
 **`optionId` is opaque.** `request.options[].optionId` is a
 provider-assigned string (`"reject-once"`); it is NOT the same as
@@ -381,25 +381,19 @@ compare `optionId` against kind strings.
 ## Permission float positioning
 
 Owned by `PermissionFloat` (`lua/agentic/ui/permission_float.lua`) — one
-instance per tab, paired with the tab's `PermissionManager`. Separate
+instance per session, paired with its `PermissionManager`. Separate
 buffer from the chat, so chat updates never displace the prompt.
 
-- **Anchor.** `relative = "win"` against the chat window of the owning
-  tab, resolved from `message_writer.bufnr` via `vim.fn.win_findbuf`
-  filtered by tab id. Corner and offsets come from
-  `Config.permission_float` (default `NE`). `WinResized` reapplies
-  geometry; a `WinClosed` autocmd on the chat winid closes the float if
-  the chat window goes away.
-- **Focus.** `focusable = false` blocks `<C-w>w`, mouse, and
-  programmatic focus. The float never holds the cursor. The number-key
-  bindings live on the widget buffers (not the float buffer), so the
-  user must have focus on one of those to answer.
-- **Hidden chat edge case.** If `_find_chat_winid` returns nil
-  (widget toggled away), the open call is a no-op. `_process_next`
-  records `current_request` but `_setup_keymaps` short-circuits on nil
-  mapping — the prompt cannot be answered until the widget reopens, and
-  the float does not auto-render on reopen. Niche — supported flow is
-  to keep the chat visible while a prompt is pending.
+- **Anchor.** `relative = "win"` against a window showing the requesting
+  buffer: current tab, else bound tab, else any. Corner and offsets from
+  `Config.permission_float`. `WinResized` reapplies geometry.
+- **Focus.** Never focusable; the keys live on the session's buffers.
+- **Hidden.** No anchor window → no float (`on_hidden_change`).
+- **Follows the layout.** While a request is shown,
+  `PermissionManager:refresh_float` re-runs `PermissionFloat:place` on
+  `TabEnter`, `WinClosed` and `BufWinEnter`, and when the widget opens a
+  chat window (widget windows open without autocmds). So the float
+  re-anchors, hides, or reopens after the user closes it.
 
 ## Known ACP limitation
 

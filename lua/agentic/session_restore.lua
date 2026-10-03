@@ -69,7 +69,10 @@ local function align_provider_for_restore(tab_page_id, provider)
         return false
     end
 
-    SessionRegistry.destroy_session(tab_page_id)
+    local bound = SessionRegistry.bound_session(tab_page_id)
+    if bound then
+        SessionRegistry.destroy(bound)
+    end
     Config.provider = provider
     return true
 end

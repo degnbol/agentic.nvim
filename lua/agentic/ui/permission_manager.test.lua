@@ -38,17 +38,13 @@ describe("agentic.ui.PermissionManager", function()
         })
 
         writer = MessageWriter:new(bufnr)
-        pm = PermissionManager:new(
-            writer,
-            { chat = bufnr },
-            vim.api.nvim_get_current_tabpage()
-        )
+        pm = PermissionManager:new(writer, { chat = bufnr }, 1)
 
         open_stub = spy.stub(pm.permission_float, "open")
         open_stub:invokes(function(_, options)
             local mapping = {}
             for i, opt in ipairs(options) do
-                mapping[i] = opt.optionId
+                mapping["<localLeader>" .. i] = opt.optionId
             end
             return mapping
         end)
@@ -203,6 +199,82 @@ describe("agentic.ui.PermissionManager", function()
                 function() end --[[@as function]]
             )
             assert.is_false(prompted)
+        end)
+    end)
+
+    describe("option keys", function()
+        --- @type TestStub
+        local visible_stub
+
+        --- @return boolean
+        local function key_mapped()
+            return vim.fn.maparg("<localLeader>1", "n", false, true).buffer
+                == 1
+        end
+
+        before_each(function()
+            visible_stub =
+                spy.stub(pm.permission_float, "is_visible_in_current_tab")
+            visible_stub:returns(true)
+            pm:add_request({
+                sessionId = "test-session",
+                toolCall = { toolCallId = "tc-keys", kind = "edit" },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
+                },
+            }, function() end)
+        end)
+
+        after_each(function()
+            pm:clear()
+            visible_stub:revert()
+        end)
+
+        it("bind while the float is visible in the current tab", function()
+            assert.is_true(key_mapped())
+        end)
+
+        it("follow the float across tab switches", function()
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+            visible_stub:returns(false)
+            vim.api.nvim_exec_autocmds("TabEnter", {})
+            assert.is_false(key_mapped())
+
+            visible_stub:returns(true)
+            vim.api.nvim_exec_autocmds("TabEnter", {})
+            assert.is_true(key_mapped())
+        end)
+
+        it("report a request with no float shown, once", function()
+            pm:clear()
+            local reports = {}
+            pm.on_hidden_change = function(hidden)
+                table.insert(reports, hidden)
+            end
+            pm:add_request({
+                sessionId = "test-session",
+                toolCall = { toolCallId = "tc-hidden", kind = "edit" },
+                options = {
+                    { optionId = "allow-once", name = "Allow", kind = "allow_once" },
+                },
+            }, function() end)
+            pm:refresh_float()
+
+            pm:_complete_request("allow-once")
+
+            assert.same({ true, false }, reports)
+        end)
+
+        it("unbind and stop following on resolve", function()
+            pm:_complete_request("allow-once")
+            assert.is_false(key_mapped())
+            assert.is_nil(pm._layout_autocmd)
         end)
     end)
 

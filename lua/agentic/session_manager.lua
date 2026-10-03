@@ -6,6 +6,8 @@
 
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
+local BufHelpers = require("agentic.utils.buf_helpers")
+local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local DiffPreview = require("agentic.ui.diff_preview")
@@ -17,6 +19,8 @@ local HookRecordReader = require("agentic.hook_record_reader")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
+local SessionRegistry = require("agentic.session_registry")
+local SessionRestore = require("agentic.session_restore")
 local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
@@ -57,8 +61,8 @@ function P.invoke_hook(hook_name, data)
 end
 
 --- @class agentic.SessionManager
+--- @field id integer Monotonic identity, unique for the editor's lifetime. Names the session's buffers
 --- @field session_id? string
---- @field tab_page_id integer
 --- @field _is_first_message boolean Whether this is the first message in the session, used to add system info only once
 --- @field is_generating boolean
 --- @field widget agentic.ui.ChatWidget
@@ -93,7 +97,7 @@ end
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _budget? agentic.acp.RateLimitInfo Last known subscription rate-limit budget (claude.ai auth only)
 --- @field _last_prompt? string
---- @field _destroyed boolean Flag set on destroy() to guard async callbacks
+--- @field destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
 --- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
 --- @field _health_check_timer? uv.uv_timer_t Exponential backoff timer for server health checks
@@ -121,8 +125,8 @@ end
 
 --- Notify the user that the agent needs attention.
 --- Bell for unfocused windows, buffer-name badge when scrolled up in a focused window.
---- When `skip_badge` is true (permission events), only bell when unfocused —
---- the float is always visible so the scrolled-up badge is irrelevant.
+--- When `skip_badge` is true (a shown permission float), only bell when
+--- unfocused — the float is in view, so the scrolled-up badge is irrelevant.
 --- @param badge string Badge text (e.g. "[done]", "[?]")
 --- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
 function SessionManager:_notify_attention(badge, skip_badge)
@@ -152,6 +156,33 @@ function SessionManager:_notify_attention(badge, skip_badge)
             self.widget:set_unread_badge(badge)
         end
     end
+end
+
+--- Signal a permission request waiting with its float hidden, because no
+--- window shows `bufnr`, the buffer it belongs to: bell, a `[?]` badge in
+--- that buffer's header, and a notification naming the session and buffer.
+--- The badge clears when the float shows or the request ends.
+--- @param hidden boolean
+--- @param bufnr integer
+function SessionManager:_on_permission_hidden(hidden, bufnr)
+    if not hidden then
+        if WindowDecoration.get_header(bufnr).badge == "[?]" then
+            self.widget:set_unread_badge(nil, bufnr)
+        end
+        return
+    end
+    SessionManager._ring_bell()
+    self.widget:set_unread_badge("[?]", bufnr)
+    local title = self.chat_history.title
+    Logger.notify(
+        string.format(
+            "%s is waiting for a permission in its %s buffer",
+            title ~= "" and title or "An Agentic session",
+            vim.b[bufnr].agentic_window
+        ),
+        vim.log.levels.INFO,
+        { title = "Agentic" }
+    )
 end
 
 --- Generate the welcome header for a new session
@@ -195,24 +226,62 @@ end
 --- with no session id has no file to write and is left alone.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_persist_history(history)
-    -- Not delegated to `ChatHistory:save`, which notifies the user about the
-    -- missing id. Reaching here before a session exists is expected.
+    -- Not delegated to `ChatHistory:save`, which reports the missing id as an
+    -- error. Reaching here before a session exists is expected.
     if not history.session_id then
         return
     end
 
     self:_sync_history_context(history)
-    history:save(function(save_err)
-        if save_err then
-            -- Not a debug-only line: this is the write that makes a
-            -- conversation survive a crash, so a failure has to reach whoever
-            -- would otherwise assume it is on disk.
-            Logger.notify(
-                "Chat history save failed: " .. save_err,
-                vim.log.levels.WARN
-            )
-        end
-    end)
+    local save_err = history:save()
+    if save_err then
+        -- Not a debug-only line: this is the write that makes a conversation
+        -- survive a crash, so a failure has to reach whoever would otherwise
+        -- assume it is on disk.
+        Logger.notify(
+            "Chat history save failed: " .. save_err,
+            vim.log.levels.WARN
+        )
+    end
+    self:_sync_chat_modified(history)
+end
+
+--- Set the chat buffer's `modified` flag, its only owner: true while
+--- `history` is unsaved or a turn is in flight. A running turn counts even
+--- once written: quitting would cut it off, so `:qa`, `:wqa` and `:bd` refuse
+--- until it ends. A no-op for any history but the current one, so a callback
+--- holding a replaced history cannot touch the flag.
+--- @param history agentic.ui.ChatHistory
+function SessionManager:_sync_chat_modified(history)
+    -- Nil once the widget is destroyed.
+    local chat = self.widget.buf_nrs.chat
+    if
+        history == self.chat_history
+        and chat
+        and vim.api.nvim_buf_is_valid(chat)
+    then
+        vim.bo[chat].modified = history.dirty or self._prompt_pending > 0
+    end
+end
+
+--- Set the in-flight prompt count, and with it the chat's `modified` flag.
+--- @param count integer
+function SessionManager:_set_prompt_pending(count)
+    self._prompt_pending = count
+    self:_sync_chat_modified(self.chat_history)
+end
+
+--- Handle a mutation of `history`. With no turn in flight the change is
+--- written at once, so an idle session is never left modified. Mid-turn only
+--- the chat's `modified` flag follows it, and the turn-end save writes it.
+--- @param history agentic.ui.ChatHistory
+function SessionManager:_history_changed(history)
+    -- A session/load replay mirrors the file; its end marks the history clean.
+    if self._prompt_pending == 0 and not self._loading then
+        self:_persist_history(history)
+    else
+        self:_sync_chat_modified(history)
+    end
 end
 
 --- Carry `saved_history` into the current session, keeping that session's own
@@ -227,13 +296,18 @@ function SessionManager:_adopt_history(saved_history)
     self.chat_history = saved_history
     self.chat_history.session_id = new_session_id
     self.chat_history.timestamp = new_timestamp
+    -- Its `dirty` stands: the new id has no file yet, but nothing is lost
+    -- unless the history is unsaved under the id it was saved by.
+    self:_sync_chat_modified(self.chat_history)
 
     self._history_to_send = saved_history.messages
     self._is_first_message = true
 end
 
---- @param tab_page_id integer
-function SessionManager:new(tab_page_id)
+--- Last `SessionManager.id` handed out.
+local last_id = 0
+
+function SessionManager:new()
     local AgentInstance = require("agentic.acp.agent_instance")
     local ChatWidget = require("agentic.ui.chat_widget")
     local CodeSelection = require("agentic.ui.code_selection")
@@ -245,14 +319,15 @@ function SessionManager:new(tab_page_id)
     local TodoList = require("agentic.ui.todo_list")
     local AgentConfigOptions = require("agentic.acp.agent_config_options")
 
+    last_id = last_id + 1
     self = setmetatable({
+        id = last_id,
         session_id = nil,
-        tab_page_id = tab_page_id,
         _is_first_message = true,
         is_generating = false,
         _restoring = false,
         _session_epoch = 0,
-        _destroyed = false,
+        destroyed = false,
         --- @type string|nil Smart path of the most recently edited .md file (plan candidate)
         _last_edited_md = nil,
         --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
@@ -275,7 +350,7 @@ function SessionManager:new(tab_page_id)
 
     local agent = AgentInstance.get_instance(Config.provider, function(_client)
         vim.schedule(function()
-            if self._destroyed then
+            if self.destroyed then
                 return
             end
 
@@ -308,7 +383,7 @@ function SessionManager:new(tab_page_id)
     self._response_boundaries =
         { main = ResponseBoundary:new(), subagent = ResponseBoundary:new() }
 
-    self.widget = ChatWidget:new(tab_page_id, function(input_text, opts)
+    self.widget = ChatWidget:new(self.id, function(input_text, opts)
         self:on_user_submit()
         return self:_handle_input_submit(input_text, opts)
     end)
@@ -317,53 +392,60 @@ function SessionManager:new(tab_page_id)
         self:_refresh()
     end
 
+    -- What the writer's BufWinEnter does for any other window. A tick later:
+    -- a window opened in the same layout pass has no fold levels yet.
+    self.widget.on_window_opened = function(panel, winid)
+        vim.schedule(function()
+            if self.destroyed or not vim.api.nvim_win_is_valid(winid) then
+                return
+            end
+            local writer = panel == "chat" and self.message_writer
+                or self.subagent_writer
+            writer:flush_pending_fold_ops()
+            writer:replay_folds(winid)
+            self.permission_manager:refresh_float()
+        end)
+    end
+
     self.widget.on_hide = function()
-        if #self.chat_history.messages == 0 then
-            -- Trivial session (no prompts sent) — destroy without a trace.
-            -- Schedule to avoid re-entering widget:destroy() from inside hide().
-            -- Capture self so a replacement session installed on the same tab
-            -- during the schedule delay isn't wiped by destroy-by-tab-id.
-            local this = self
-            vim.schedule(function()
-                local SessionRegistry = require("agentic.session_registry")
-                if SessionRegistry.sessions[this.tab_page_id] == this then
-                    SessionRegistry.destroy_session(this.tab_page_id)
-                end
-            end)
-            return
-        end
-        if self.session_id then
+        if #self.chat_history.messages > 0 and self.session_id then
             local short_id = self.session_id:sub(1, 8)
             Logger.notify("Session " .. short_id)
         end
     end
 
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.chat)
-    self.message_writer =
-        MessageWriter:new(self.widget.buf_nrs.chat, self.status_indicator)
+    self.message_writer = MessageWriter:new(
+        self.widget.buf_nrs.chat,
+        self.status_indicator,
+        function()
+            return self.widget.win_nrs.chat
+        end
+    )
 
     self.subagent_status_indicator =
         StatusIndicator:new(self.widget.buf_nrs.subagent)
     self.subagent_writer = MessageWriter:new(
         self.widget.buf_nrs.subagent,
-        self.subagent_status_indicator
+        self.subagent_status_indicator,
+        function()
+            return self.widget.win_nrs.subagent
+        end
     )
 
     self.permission_manager = PermissionManager:new(
         self.message_writer,
         self.widget.buf_nrs,
-        tab_page_id,
+        self.id,
         function(tool_call_id)
             return self:_writer_for(tool_call_id)
         end
     )
+    self.permission_manager.on_hidden_change = function(hidden, bufnr)
+        self:_on_permission_hidden(hidden, bufnr)
+    end
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
-
-    local LspServer = require("agentic.completion.lsp_server")
-    vim.schedule(function()
-        LspServer.attach(self.widget.buf_nrs.input)
-    end)
 
     self.config_options = AgentConfigOptions:new(
         self.widget.buf_nrs,
@@ -377,6 +459,8 @@ function SessionManager:new(tab_page_id)
             return self.agent ~= nil and self.agent.state == "ready"
         end
     )
+
+    self:_bind_owner_keymaps()
 
     self.file_list = FileList:new(self.widget.buf_nrs.files, function(file_list)
         if file_list:is_empty() then
@@ -440,7 +524,180 @@ function SessionManager:new(tab_page_id)
         self.widget:close_optional_window("todos")
     end)
 
+    self:_setup_buffer_lifecycle()
+
     return self
+end
+
+--- Bind this session to `tab`, which shows one widget: the tab's previous
+--- session hides its widget, and this session's widget windows elsewhere
+--- close.
+--- @param tab integer
+function SessionManager:bind_to_tab(tab)
+    if SessionRegistry.tab_of(self.id) == tab then
+        return
+    end
+    local previous = SessionRegistry.bound_session(tab)
+    if previous then
+        previous.widget:hide()
+    end
+    self.widget:close_windows()
+    SessionRegistry.bind(tab, self)
+end
+
+--- Bind the widget keymaps that act on a whole session to every buffer of
+--- this one, as closures over it: they act on the buffer's owner wherever the
+--- buffer is shown, never on whichever session the current tab is bound to.
+function SessionManager:_bind_owner_keymaps()
+    local keymaps = Config.keymaps.widget
+    for _, bufnr in pairs(self.widget.buf_nrs) do
+        BufHelpers.multi_keymap_set(keymaps.close, bufnr, function()
+            local tab = SessionRegistry.tab_of(self.id)
+            if tab then
+                require("agentic").close(tab)
+            end
+        end, { desc = "Agentic: Close Chat widget" })
+
+        BufHelpers.multi_keymap_set(keymaps.switch_provider, bufnr, function()
+            SessionRegistry.select_provider(function(provider_name)
+                if provider_name then
+                    Config.provider = provider_name
+                    self:switch_provider()
+                end
+            end)
+        end, { desc = "Agentic: Switch provider" })
+
+        BufHelpers.multi_keymap_set(keymaps.stop_generation, bufnr, function()
+            self:stop_generation()
+        end, { desc = "Agentic: Stop generation" })
+
+        BufHelpers.multi_keymap_set(keymaps.toggle_activity, bufnr, function()
+            self:toggle_file_activity()
+        end, { desc = "Agentic: Toggle changed-files panel" })
+
+        BufHelpers.multi_keymap_set(keymaps.restart_session, bufnr, function()
+            self:restart_session()
+        end, { desc = "Agentic: Restart session (cancel and restore)" })
+
+        BufHelpers.multi_keymap_set(keymaps.restore_session, bufnr, function()
+            local tab = SessionRegistry.tab_of(self.id)
+            if not tab then
+                tab = vim.api.nvim_get_current_tabpage()
+                self:bind_to_tab(tab)
+            end
+            SessionRestore.show_picker(tab, self)
+        end, { desc = "Agentic: Restore previous session" })
+    end
+end
+
+--- Tie the session to its chat buffer the way a file ties to its buffer:
+--- `:w` writes the history, `:bd` ends the session, `:e` re-renders any of
+--- its buffers from the session's state, and a session nobody used goes when
+--- its chat is no longer shown, as a scratch buffer with `bufhidden=wipe`
+--- would.
+function SessionManager:_setup_buffer_lifecycle()
+    local buf_nrs = self.widget.buf_nrs
+    local chat = buf_nrs.chat
+
+    vim.api.nvim_create_autocmd("BufWriteCmd", {
+        buffer = chat,
+        callback = function()
+            if not self.chat_history.session_id then
+                Logger.notify(
+                    "No session yet, so no session file to write",
+                    vim.log.levels.WARN
+                )
+                return
+            end
+            self:_persist_history(self.chat_history)
+            -- Vim gives no reason when `:wqa` stops on a buffer its write
+            -- left modified.
+            if self._prompt_pending > 0 then
+                Logger.notify(
+                    "History written; the chat stays modified until the running turn ends",
+                    vim.log.levels.WARN
+                )
+            end
+        end,
+    })
+
+    vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+        buffer = chat,
+        callback = function()
+            SessionRegistry.destroy(self)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+        buffer = chat,
+        callback = function()
+            -- Deferred: the leaving window still shows the buffer here, and a
+            -- re-layout reopens the chat straight after.
+            vim.schedule(function()
+                if
+                    not self.destroyed
+                    and #self.chat_history.messages == 0
+                    and not vim.bo[buf_nrs.input].modified
+                    and #vim.fn.win_findbuf(chat) == 0
+                then
+                    SessionRegistry.destroy(self)
+                end
+            end)
+        end,
+    })
+
+    --- @type table<integer, fun()>
+    local reloads = {
+        [chat] = function()
+            self:_reload_chat()
+        end,
+        [buf_nrs.subagent] = function()
+            -- Subagent interim is not persisted, so there is nothing to
+            -- re-render.
+            self.subagent_writer:reset()
+            ChatBuffer.start(buf_nrs.subagent)
+        end,
+        [buf_nrs.todos] = function()
+            self.todo_list:redraw()
+        end,
+        [buf_nrs.code] = function()
+            self.code_selection:render()
+        end,
+        [buf_nrs.files] = function()
+            self.file_list:render()
+        end,
+        [buf_nrs.diagnostics] = function()
+            self.diagnostics_list:render()
+        end,
+        [buf_nrs.activity] = function()
+            self.file_activity:render()
+        end,
+    }
+    for bufnr, reload in pairs(reloads) do
+        vim.api.nvim_create_autocmd("BufReadCmd", {
+            buffer = bufnr,
+            callback = function()
+                if not self.destroyed then
+                    reload()
+                end
+            end,
+        })
+    end
+end
+
+--- Re-render the chat from the in-memory history, which is the session file
+--- plus the running turn. What the history does not hold is not rendered
+--- again: notices, errors and the session-start marker.
+function SessionManager:_reload_chat()
+    local chat = self.widget.buf_nrs.chat
+    self.message_writer:reset()
+    ChatBuffer.start(chat)
+    SessionRestore.replay_messages(
+        self.message_writer,
+        self.chat_history.messages
+    )
+    self.status_indicator:reposition()
+    self:_sync_chat_modified(self.chat_history)
 end
 
 --- Resolve which MessageWriter owns a tool call. Ownership is recorded on the
@@ -621,6 +878,7 @@ function SessionManager:_on_session_update(update)
                     text = chunk.content.text,
                     provider_name = self.agent.provider_config.name,
                 }, starts_response)
+                self:_history_changed(self.chat_history)
             end
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
@@ -638,6 +896,7 @@ function SessionManager:_on_session_update(update)
                     text = update.content.text,
                     provider_name = self.agent.provider_config.name,
                 })
+                self:_history_changed(self.chat_history)
             end
         end
     elseif update.sessionUpdate == "user_message_chunk" then
@@ -667,6 +926,7 @@ function SessionManager:_on_session_update(update)
                     timestamp = os.time(),
                     provider_name = self.agent.provider_config.name,
                 })
+                self:_history_changed(self.chat_history)
             end
         end
     elseif update.sessionUpdate == "available_commands_update" then
@@ -704,9 +964,9 @@ function SessionManager:_on_session_update(update)
         -- Provider pushes the SDK's background-generated title at turn-end.
         -- Adopt it unless the user has chosen a title via /rename.
         if update.title and update.title ~= "" and not self._title_user_set then
-            self.chat_history.title = update.title
+            self.chat_history:set_title(update.title)
             self.widget:set_chat_title(update.title)
-            self:_persist_history(self.chat_history)
+            self:_history_changed(self.chat_history)
         end
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
@@ -738,7 +998,7 @@ function SessionManager:_refresh()
     -- Release the gate states a lost callback can wedge. A prompt callback or
     -- a session/load that never completes would otherwise defer every later
     -- submit with no way back, and unwedging that is what this function is for.
-    self._prompt_pending = 0
+    self:_set_prompt_pending(0)
     self._loading = false
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display.
@@ -797,7 +1057,7 @@ function SessionManager:_rename_session(new_title)
         return
     end
 
-    self.chat_history.title = trimmed
+    self.chat_history:set_title(trimmed)
     self._title_user_set = true
     self.widget:set_chat_title(trimmed)
 
@@ -815,12 +1075,14 @@ end
 --- external UI plugins (incline, tabline) can surface it.
 --- @param display? string Trust scope display string, or nil to clear
 function SessionManager:_push_trust_to_headers(display)
-    local headers = WindowDecoration.get_headers_state(self.tab_page_id)
-    if not headers.chat then
+    local chat = self.widget.buf_nrs.chat
+    -- Nil once the widget is destroyed.
+    if not chat then
         return
     end
-    headers.chat.trust = display
-    WindowDecoration.set_headers_state(self.tab_page_id, headers)
+    local header = WindowDecoration.get_header(chat)
+    header.trust = display
+    WindowDecoration.set_header(chat, header)
 end
 
 --- Apply a compiled trust scope: store on PermissionManager, write a chat
@@ -1136,6 +1398,7 @@ function SessionManager:_on_tool_call(tool_call, skip_history)
             skill_path = tool_call.skill_path,
         }
         self.chat_history:add_message(tool_msg)
+        self:_history_changed(self.chat_history)
     end
 
     self:_try_record_edit_range(tool_call.tool_call_id)
@@ -1397,7 +1660,7 @@ function SessionManager:_on_request_permission(request, callback)
 
         callback(option_id)
 
-        if self._destroyed then
+        if self.destroyed then
             return
         end
 
@@ -1436,11 +1699,14 @@ function SessionManager:_on_request_permission(request, callback)
         -- Notifications and hooks are non-essential UI; a throw here must not
         -- escape (add_request has already run, so the callback is safe).
         local ok, err = pcall(function()
-            self:_notify_attention("[?]", true)
+            -- A hidden float is signalled by `_on_permission_hidden`.
+            if self.permission_manager.permission_float:is_shown() then
+                self:_notify_attention("[?]", true)
+            end
 
             P.invoke_hook("on_permission_request", {
                 session_id = self.session_id,
-                tab_page_id = self.tab_page_id,
+                tab_page_id = SessionRegistry.tab_of(self.id),
                 tool_call_id = tool_call_id,
             })
         end)
@@ -1476,7 +1742,7 @@ local RENDERED_HOOK_GROUPS = {
 --- Write the hook activity recorded since the last drain to the chat buffer,
 --- each record under the tool call it names.
 function SessionManager:_drain_hook_records()
-    if self._destroyed then
+    if self.destroyed then
         return
     end
     for _, record in ipairs(self._hook_records:drain()) do
@@ -1569,6 +1835,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
             skill_path = tool_call_update.skill_path,
         }
         self.chat_history:update_tool_call(id, tool_call)
+        self:_history_changed(self.chat_history)
     end
 
     -- pre-emptively clear diff preview when tool call update is received, as it's either done or failed
@@ -1621,7 +1888,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
                 self._checktime_scheduled = true
                 vim.schedule(function()
                     self._checktime_scheduled = false
-                    if not self._destroyed then
+                    if not self.destroyed then
                         vim.cmd.checktime()
                     end
                 end)
@@ -1870,21 +2137,7 @@ function SessionManager:_update_chat_header()
     end
 
     local context = #parts > 0 and table.concat(parts, " · ") or nil
-
-    -- Update headers state synchronously so external plugins (incline, tabline)
-    -- always see current data. render_header's vim.schedule callback also sets
-    -- this, but bails out when winid == -1 (widget hidden), losing the update.
-    local tab = self.widget.tab_page_id
-    if vim.api.nvim_tabpage_is_valid(tab) then
-        local headers = WindowDecoration.get_headers_state(tab)
-        if headers.chat then
-            headers.chat.context = context
-            WindowDecoration.set_headers_state(tab, headers)
-        end
-    end
-
-    -- Render winbar and buffer name (context is already in headers state)
-    self.widget:render_header("chat")
+    self.widget:render_header("chat", context)
 end
 
 --- How a model id reads to a human: its display name and description. Falls
@@ -2187,7 +2440,7 @@ end
 --- bring the counter back down. A restore leaves `_cancel_session` unrun.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
-    self._prompt_pending = 0
+    self:_set_prompt_pending(0)
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -2323,7 +2576,7 @@ function SessionManager:_drain_queue()
     --- @type agentic.utils.PromptBlocks.Block|nil
     local block
     -- A destroy can also have run while the dialog was open.
-    if run and not self._destroyed then
+    if run and not self.destroyed then
         block = self.widget:consume_queued_block()
     end
     self._draining_queue = false
@@ -2349,8 +2602,7 @@ function SessionManager:_warn_unadvertised_command(text)
     if not word then
         return
     end
-    local commands =
-        States.getSlashCommandsForBuffer(self.widget.buf_nrs.input)
+    local commands = States.getSlashCommandsForBuffer(self.widget.buf_nrs.input)
     if #commands == 0 then
         return
     end
@@ -2393,7 +2645,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
         -- next block edits the rows it is about to delete by number.
         local function dispatch_next()
             vim.schedule(function()
-                if self._destroyed then
+                if self.destroyed then
                     return
                 end
                 self:_drain_queue()
@@ -2424,7 +2676,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
             ChatHistory.prepend_restored_messages(self._history_to_send, prompt)
             self._history_to_send = nil
         elseif self.chat_history.title == "" then
-            self.chat_history.title = input_text -- Set title for new session
+            self.chat_history:set_title(input_text) -- Set title for new session
             self.widget:set_chat_title(input_text)
         end
     end
@@ -2575,11 +2827,12 @@ function SessionManager:_handle_input_submit_inner(input_text)
         provider_name = self.agent.provider_config.name,
     }
     self.chat_history:add_message(user_msg)
+    self:_history_changed(self.chat_history)
 
     P.invoke_hook("on_prompt_submit", {
         prompt = input_text,
         session_id = self.session_id,
-        tab_page_id = self.tab_page_id,
+        tab_page_id = SessionRegistry.tab_of(self.id),
     })
 
     self:_dispatch_turn(prompt)
@@ -2605,7 +2858,7 @@ function SessionManager:_dispatch_turn(prompt)
     self.status_indicator:start("thinking")
 
     local session_id = self.session_id
-    local tab_page_id = self.tab_page_id
+    local tab_page_id = SessionRegistry.tab_of(self.id)
     local epoch = self._session_epoch
     -- Capture chat_history before send to avoid race with _cancel_session
     -- replacing self.chat_history while the callback is pending
@@ -2637,7 +2890,7 @@ function SessionManager:_dispatch_turn(prompt)
         self._numbering_latched = false
     end
 
-    self._prompt_pending = self._prompt_pending + 1
+    self:_set_prompt_pending(self._prompt_pending + 1)
 
     self.agent:send_prompt(self.session_id, prompt, function(response, err)
         -- This callback already runs inside vim.schedule (from _handle_message).
@@ -2652,7 +2905,12 @@ function SessionManager:_dispatch_turn(prompt)
         -- still running. The floor covers _refresh, which zeroes the counter to
         -- unwedge a lost callback without advancing the epoch.
         if epoch == self._session_epoch then
-            self._prompt_pending = math.max(0, self._prompt_pending - 1)
+            self:_set_prompt_pending(math.max(0, self._prompt_pending - 1))
+        end
+
+        -- `:bd!` mid-turn ends the session under a running turn.
+        if self.destroyed then
+            return
         end
 
         -- Everything below ends *a* turn: the indicator, the footer and
@@ -2843,12 +3101,10 @@ function SessionManager:new_session(opts)
     self.agent:create_session(handlers, function(response, err)
         -- Provider-switch restore: this SessionManager may have been destroyed
         -- (by align_provider_for_restore) while session/new was in flight on
-        -- the outgoing provider. Its agent/widget/tabpage state are gone but
-        -- the callback closure still holds a reference to self. Continuing
-        -- would stamp the destroyed session's config onto vim.t.agentic_headers
-        -- (or fall through to _handle_new_config_options etc.), stomping the
-        -- replacement session's UI on the same tab.
-        if self._destroyed then
+        -- the outgoing provider. Its agent and widget are gone but the
+        -- callback closure still holds a reference to self. Continuing would
+        -- fall through to _handle_new_config_options etc. on wiped buffers.
+        if self.destroyed then
             if response and response.sessionId and self.agent then
                 self.agent:unsubscribe(response.sessionId)
             end
@@ -3033,6 +3289,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self._last_edited_md = nil
     self._plan_exit_pending = false
     self.chat_history = ChatHistory:new()
+    self:_sync_chat_modified(self.chat_history)
     -- Fresh reader: a path and offset from the outgoing session would read the
     -- wrong file at the wrong position.
     self._hook_records = HookRecordReader:new()
@@ -3080,6 +3337,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 self._restoring = false
                 self._loading = false
                 self.status_indicator:stop()
+                -- The replay mirrors what the session file already holds.
+                self.chat_history.dirty = false
+                self:_sync_chat_modified(self.chat_history)
 
                 -- Restore title and file tally from local history — the ACP
                 -- replay carries neither. The replayed tool calls re-enter the
@@ -3090,6 +3350,8 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                     if not history then
                         return
                     end
+                    -- Assigned directly: values read from the file leave the
+                    -- history clean.
                     if history.title and history.title ~= "" then
                         self.chat_history.title = history.title
                         self._title_user_set = true
@@ -3176,8 +3438,8 @@ end
 --- of the next conversation.
 function SessionManager:clear_chat()
     self.widget:clear()
-    self.message_writer:clear_blocks()
-    self.subagent_writer:clear_blocks()
+    self.message_writer:reset()
+    self.subagent_writer:reset()
 end
 
 function SessionManager:_cancel_session()
@@ -3217,6 +3479,7 @@ function SessionManager:_cancel_session()
     self._plan_exit_pending = false
 
     self.chat_history = ChatHistory:new()
+    self:_sync_chat_modified(self.chat_history)
     -- Fresh reader: a path and offset from the outgoing session would read the
     -- wrong file at the wrong position.
     self._hook_records = HookRecordReader:new()
@@ -3367,7 +3630,8 @@ function SessionManager:_show_diff_in_buffer(tool_call_id, is_rejection)
     -- and cursor is in the same tabpage as this session to avoid disruption
     if
         not Config.diff_preview.enabled
-        or vim.api.nvim_get_current_tabpage() ~= self.tab_page_id
+        or vim.api.nvim_get_current_tabpage()
+            ~= SessionRegistry.tab_of(self.id)
     then
         return
     end
@@ -3391,8 +3655,9 @@ function SessionManager:_show_diff_in_buffer(tool_call_id, is_rejection)
     local diff_tab = tracker.diff_tab
     if diff_tab and vim.api.nvim_tabpage_is_valid(diff_tab) then
         -- Ensure we're not on the diff tab before closing it
-        if vim.api.nvim_get_current_tabpage() == diff_tab then
-            vim.api.nvim_set_current_tabpage(self.tab_page_id)
+        local own_tab = SessionRegistry.tab_of(self.id)
+        if vim.api.nvim_get_current_tabpage() == diff_tab and own_tab then
+            vim.api.nvim_set_current_tabpage(own_tab)
         end
         -- Close all windows in the diff tab, which closes the tab
         for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(diff_tab)) do
@@ -3477,25 +3742,12 @@ function SessionManager:_get_system_info()
 end
 
 function SessionManager:destroy()
-    self._destroyed = true
+    self.destroyed = true
 
     Recovery.kill_reauth_job(self)
 
-    -- widget:destroy() calls hide() which fires on_hide. The scheduled destroy
-    -- inside on_hide already guards against wiping a replacement session (it
-    -- checks the registry still points at `this`), but disarming is belt and
-    -- braces: avoids the schedule entirely once we know we're already
-    -- destroying, and keeps the call graph one step simpler to reason about.
-    self.widget.on_hide = nil
-
     self:_cancel_session()
     self.widget:destroy()
-
-    -- Reset the per-tab headers state so a replacement session on the same
-    -- tab doesn't inherit the destroyed session's model/mode context.
-    if vim.api.nvim_tabpage_is_valid(self.tab_page_id) then
-        vim.t[self.tab_page_id].agentic_headers = nil
-    end
 end
 
 --- Restore session from loaded chat history
@@ -3511,7 +3763,8 @@ function SessionManager:restore_from_history(history, opts)
     self._history_to_send = history.messages
     self._is_first_message = false
 
-    -- Update existing chat_history with loaded data, keeping current session_id
+    -- Update existing chat_history with loaded data, keeping current session_id.
+    -- Assigned directly and left clean: the data is a session file's.
     if opts.reuse_session then
         self.chat_history.messages = vim.deepcopy(history.messages)
         self.chat_history.title = history.title or ""
@@ -3519,6 +3772,8 @@ function SessionManager:restore_from_history(history, opts)
     else
         self.chat_history = history
     end
+    self.chat_history.dirty = false
+    self:_sync_chat_modified(self.chat_history)
 
     -- Replaying the saved messages writes tool-call blocks straight to the
     -- chat buffer, bypassing the handlers that record ops, so the tally has to
@@ -3535,8 +3790,6 @@ function SessionManager:restore_from_history(history, opts)
         self._title_user_set = true
         self.widget:set_chat_title(restored_title)
     end
-
-    local SessionRestore = require("agentic.session_restore")
 
     if opts.reuse_session and self.session_id then
         -- Reuse existing ACP session, replay messages to UI
