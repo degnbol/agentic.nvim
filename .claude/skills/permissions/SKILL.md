@@ -45,10 +45,11 @@ Provider sends "session/request_permission"
      -> Queue request (sequential — one prompt at a time)
      -> PermissionFloat.open renders prompt anchored to the chat window
      -> Bind buffer-local option keys on all widget buffers
-  -> User optionally opens diff preview in a new tabpage
-  -> User presses permission key
+  -> User presses permission key (PermissionManager:_complete_request)
+     -> Cache an allow/reject-always decision
+     -> Close float
      -> Send result back to provider via callback
-     -> Close float, clear diff preview, dequeue next
+     -> Dequeue next
 ```
 
 ## Four auto-approval mechanisms

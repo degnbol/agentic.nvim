@@ -274,22 +274,20 @@ directly (or `.claude/settings.json` for project-local rules).
 
 ### Buffer/disk divergence in diff matching
 
-`diff_split_view.lua` and `tool_call_diff.lua` match `rawInput.old_string`
-against file content to locate edit positions. If that fails, they fall
-back to reverse matching (locate `new_string` and invert the diff).
+`ToolCallDiff.extract_diff_blocks` matches the edit's old text against the
+file content to locate edit positions. `read_from_buffer_or_disk` returns
+the loaded buffer when there is one, but the provider operates on disk, so
+unsaved user edits or autoread lag make the two diverge. When the buffer
+match fails, `extract_diff_blocks` retries against
+`FileSystem.read_from_disk()` (bypasses loaded buffers). New diff code must
+include this disk fallback.
 
-Earlier docs attributed the reverse-match fallback to providers writing
-edits to disk before sending `request_permission`. This is not what
-happens — verified 2026-04-17 by inspecting disk contents while an Edit
-permission prompt was pending. Do not plan new features around a pre-apply
-race.
+`diff_jump.lua` adds a reverse match (locate the new text) for an edit that
+has already been applied, where the old text is gone from the file.
 
-The legitimate divergence `read_from_buffer_or_disk` and the reverse-match
-fallback actually guard against is buffer/disk skew: the buffer returns
-content when loaded, but the provider operates on disk. Unsaved user edits
-or autoread lag make both sides diverge. Both diff modules fall back to
-`FileSystem.read_from_disk()` (bypasses loaded buffers) when buffer-based
-matching fails. New diff code must include this disk fallback.
+Providers do not write edits to disk before sending `request_permission`
+(verified 2026-04-17 by inspecting disk contents while an Edit permission
+prompt was pending). Do not plan new features around a pre-apply race.
 
 ### Slash commands intercepted locally
 

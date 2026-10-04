@@ -264,8 +264,7 @@ end
 --- chat buffer injects that label as the tree-sitter-zsh parser (zsh is aliased
 --- to bash), which hangs the editor forever on the `${…/…[…)` shape (see
 --- ZshParseGuard). Fall back to a non-injecting "text" label on that shape so
---- the command still renders — it loses syntax colouring, matching the
---- fail-open guards on the diff-highlight paths.
+--- the command still renders, without syntax colouring.
 --- @param argument string Shell command text
 --- @param lang string Shell label to use when the command is safe to inject
 --- @return string

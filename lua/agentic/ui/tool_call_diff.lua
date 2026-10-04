@@ -310,8 +310,7 @@ end
 ---
 --- Single-strip contract: only removes one trailing "" (e.g. {"a", ""} → {"a"}).
 --- Does NOT collapse multiple trailing empties ({"a", "", ""} → {"a", ""}).
---- Callers (is_empty_lines, extract_diff_blocks, diff_split_view) are expected
---- to provide adapter-split input with at most one trailing "".
+--- Input is expected to be adapter-split, with at most one trailing "".
 ---
 --- When no modification is needed the original table reference is returned.
 --- Callers must not mutate the result; clone it first if mutation is required.

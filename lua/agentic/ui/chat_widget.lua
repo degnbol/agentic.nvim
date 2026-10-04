@@ -2,7 +2,6 @@ local Config = require("agentic.config")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local SessionRegistry = require("agentic.session_registry")
-local DiffPreview = require("agentic.ui.diff_preview")
 local Logger = require("agentic.utils.logger")
 local LspServer = require("agentic.completion.lsp_server")
 local MessageWriter = require("agentic.ui.message_writer")
@@ -1169,8 +1168,6 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
             end)
         end
     end
-
-    DiffPreview.setup_diff_navigation_keymaps({ bufnr })
 end
 
 --- @param bufnr integer The input buffer

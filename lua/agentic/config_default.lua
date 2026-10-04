@@ -50,7 +50,6 @@
 --- @field prompts table<string, agentic.UserConfig.PromptSpec>
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
 --- @field chat table<string, agentic.UserConfig.KeymapValue>
---- @field diff_preview table<string, string>
 --- @field permission table<string, string> Key for permission responses by option kind
 
 --- Window options passed to nvim_set_option_value
@@ -343,13 +342,6 @@ local ConfigDefault = {
             open_diff_file = "gf",
         },
 
-        --- Keys bindings for diff preview navigation
-        diff_preview = {
-            next_hunk = "]c",
-            prev_hunk = "[c",
-            open_in_tab = "<localLeader>d",
-        },
-
         --- Keys for permission responses by option kind. An option with no key
         --- here, or whose kind's key an earlier option took, gets
         --- `<localLeader>` and its position in the prompt.
@@ -419,17 +411,6 @@ local ConfigDefault = {
         enabled = true,
         pause_on_prose = true,
         bottom_padding = 1,
-    },
-
-    --- Show diff preview for edit tool calls in the buffer
-    --- @class agentic.UserConfig.DiffPreview
-    --- @field enabled boolean
-    --- @field layout "inline" | "split"
-    --- @field center_on_navigate_hunks boolean
-    diff_preview = {
-        enabled = true,
-        layout = "split",
-        center_on_navigate_hunks = true,
     },
 
     --- Floating window that renders permission prompts. Anchored to a corner

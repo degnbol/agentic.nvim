@@ -14,20 +14,18 @@ CONTENTS                                                    *agentic-contents*
        4.2  Windows ................................. |agentic-config-windows|
        4.3  Keymaps ................................. |agentic-config-keymaps|
        4.4  Tool call display .................. |agentic-config-tool-display|
-       4.5  Diff preview ....................... |agentic-config-diff-preview|
-       4.6  Permissions ......................... |agentic-config-permissions|
-       4.7  Session restore ................. |agentic-config-session-restore|
-       4.8  Hooks ..................................... |agentic-config-hooks|
-       4.9  Settings ............................... |agentic-config-settings|
-       4.10 Miscellaneous .............................. |agentic-config-misc|
+       4.5  Permissions ......................... |agentic-config-permissions|
+       4.6  Session restore ................. |agentic-config-session-restore|
+       4.7  Hooks ..................................... |agentic-config-hooks|
+       4.8  Settings ............................... |agentic-config-settings|
+       4.9  Miscellaneous .............................. |agentic-config-misc|
     5. Lua API ................................................. |agentic-api|
     6. Keymaps ............................................. |agentic-keymaps|
        6.1 Widget keymaps ........................... |agentic-keymaps-widget|
        6.2 Prompt keymaps ........................... |agentic-keymaps-prompt|
        6.3 Chat keymaps ............................... |agentic-keymaps-chat|
-       6.4 Diff keymaps ............................... |agentic-keymaps-diff|
-       6.5 Permission keymaps ................... |agentic-keymaps-permission|
-       6.6 Plug mappings ............................. |agentic-plug-mappings|
+       6.4 Permission keymaps ................... |agentic-keymaps-permission|
+       6.5 Plug mappings ............................. |agentic-plug-mappings|
     7. Commands ........................................... |agentic-commands|
        7.1 Local commands ........................... |agentic-commands-local|
        7.2 Forwarded commands ................... |agentic-commands-forwarded|
@@ -55,8 +53,7 @@ CONTENTS                                                    *agentic-contents*
 
 agentic.nvim is a Claude-focused AI chat interface for Neovim, communicating
 via the Agent Client Protocol (ACP). It provides a sidebar chat widget with
-tool call rendering, diff previews, permission management, and session
-persistence.
+tool call rendering, permission management, and session persistence.
 
 This is a fork of carlos-algms/agentic.nvim.
 
@@ -201,9 +198,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                                   *agentic-config-keymaps-tbl*
 `keymaps` table
-    Keybindings for the `widget`, `prompts`, `prompt`, `chat`,
-    `diff_preview` and `permission` scopes. See |agentic-keymaps| for
-    defaults. Each value can be:
+    Keybindings for the `widget`, `prompts`, `prompt`, `chat` and
+    `permission` scopes. See |agentic-keymaps| for defaults.
+    Each value can be:
       - A string (`"<CR>"`)
       - A list of strings
       - A list of `{ key, mode = ... }` entries
@@ -244,16 +241,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         (0 = always open). Edits are never auto-collapsed.
 
 ------------------------------------------------------------------------------
-4.5 DIFF PREVIEW                                 *agentic-config-diff-preview*
-
-                                                *agentic-config-diff_preview*
-`diff_preview` table
-    `enabled`                    boolean (default: true)
-    `layout`                     `"inline"` | `"split"` (default: `"split"`)
-    `center_on_navigate_hunks`   boolean (default: true)
-
-------------------------------------------------------------------------------
-4.6 PERMISSIONS                                   *agentic-config-permissions*
+4.5 PERMISSIONS                                   *agentic-config-permissions*
 
                                 *agentic-config-auto_approve_read_only_tools*
 `auto_approve_read_only_tools` boolean (default: true)
@@ -324,7 +312,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `allow_always`, `reject_once`, `__reject_all__`, `reject_always`.
 
 ------------------------------------------------------------------------------
-4.7 SESSION RESTORE                           *agentic-config-session-restore*
+4.6 SESSION RESTORE                           *agentic-config-session-restore*
 
                                              *agentic-config-session_restore*
 `session_restore` table
@@ -344,7 +332,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         |agentic.load_acp_session()|.
 
 ------------------------------------------------------------------------------
-4.8 HOOKS                                               *agentic-config-hooks*
+4.7 HOOKS                                               *agentic-config-hooks*
 
                                                    *agentic-config-hooks-tbl*
 `hooks` table
@@ -362,7 +350,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     event-specific fields. See type annotations in `config_default.lua`.
 
 ------------------------------------------------------------------------------
-4.9 SETTINGS                                         *agentic-config-settings*
+4.8 SETTINGS                                         *agentic-config-settings*
 
                                                  *agentic-config-settings-tbl*
 `settings` table
@@ -378,7 +366,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         false the input is a plain buffer.
 
 ------------------------------------------------------------------------------
-4.10 MISCELLANEOUS                                       *agentic-config-misc*
+4.9 MISCELLANEOUS                                        *agentic-config-misc*
 
                                 *agentic-config-auto_continue_on_usage_limit*
 `auto_continue_on_usage_limit` boolean (default: true)
@@ -625,15 +613,7 @@ window first if it was closed. In a tabpage other than the session's own, it
 opens the session's input below the current window instead.
 
 ------------------------------------------------------------------------------
-6.4 DIFF KEYMAPS                                        *agentic-keymaps-diff*
-
-    Key              Mode    Description ~
-    `]c`               n       Next diff hunk
-    `[c`               n       Previous diff hunk
-    `<localLeader>d`   n       Open diff in tab
-
-------------------------------------------------------------------------------
-6.5 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
+6.4 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
 
 Mapped in every widget buffer of a session while its permission float is
 shown in the current tabpage. Set with `keymaps.permission`, keyed by
@@ -651,7 +631,7 @@ An option whose kind has no key, or whose kind's key an earlier option
 took, gets `<localLeader>` and its position, for example `<localLeader>3`.
 
 ------------------------------------------------------------------------------
-6.6 PLUG MAPPINGS                                      *agentic-plug-mappings*
+6.5 PLUG MAPPINGS                                      *agentic-plug-mappings*
 
 Global `<Plug>` mappings for binding from any buffer:
 
@@ -998,7 +978,7 @@ overwrites definitions it made itself, and re-derives them on |ColorScheme|.
 Backticked defaults are groups with no help tag of their own: syntax groups
 (|group-name|) and treesitter captures (|treesitter-highlight-groups|).
 
-Diff preview ~
+Diffs ~
     AgenticDiffAdd            |hl-DiffAdd|      Added lines
     AgenticDiffDelete         |hl-DiffDelete|   Deleted lines
     AgenticDiffAddWord        |hl-DiffText|     Word-level additions

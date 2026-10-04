@@ -44,13 +44,14 @@ of 2026-07-08); watch it for a grammar fix that would let the guards be removed.
 
 ## Entry points and current guards
 
-Three paths feed untrusted content to the zsh grammar; all now bail before the
+Three paths feed untrusted content to the zsh grammar. Each bails before the
 hanging `parse()` (see `notes/bug-zsh-parser-hang.md` § 4):
 
 - Permission walk / walk-into-scripts (`shell_parse.parse_zsh`, and
   `parse_zsh_untrusted` for sourced-file bodies).
-- Diff syntax highlight (`ui/diff_preview.lua`).
 - Context-aware highlight reconstruct (`utils/treesitter.lua`).
+- Chat command-fence injection (`shell_fence_lang` in
+  `ui/tool_call_renderer.lua` labels a trigger-shaped command `text`).
 
 `utils/zsh_parse_guard.lua` (`contains_hang_trigger`) is the cheap in-process
 tripwire for the known shape; `parse_zsh_untrusted` adds a killable-subprocess

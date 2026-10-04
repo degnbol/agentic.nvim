@@ -39,9 +39,9 @@ unaffected.
 ## Why not fix it in `extract_diff_blocks`
 
 `ExtractOpts.strict` (`tool_call_diff.lua:24`) is documented as "don't return
-fallback blocks if match fails" and passed by `diff_preview.lua:265`, but is
-never read — dead precisely because the fallback lives in the renderer. Moving
-the synthesis there would make `strict` live and put the block ahead of every
+fallback blocks if match fails", but no caller passes it and it is never
+read: dead precisely because the fallback lives in the renderer. Moving the
+synthesis there would make `strict` live and put the block ahead of every
 consumer rather than one more of them. It also drags in two changes this fix
 doesn't need: a `not blocks[1].unmatched` guard at the `cached_diff_blocks`
 capture, and `minimize_diff_blocks` running over a fabricated block. Keep the

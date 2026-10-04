@@ -1446,7 +1446,6 @@ describe("agentic.SessionManager", function()
                 _try_record_edit_range = function() end,
                 _record_file_op = function() end,
                 status_indicator = { start = function() end },
-                _show_diff_in_buffer = function() end,
                 chat_history = { update_tool_call = function() end },
                 _history_changed = function() end,
                 _tool_call_owner = {},
@@ -3677,7 +3676,6 @@ describe("agentic.SessionManager", function()
                 _try_record_edit_range = noop,
                 _record_file_op = noop,
                 _track_plan_exit = noop,
-                _show_diff_in_buffer = noop,
                 _drain_hook_records = noop,
             }
             --- @type agentic.SessionManager

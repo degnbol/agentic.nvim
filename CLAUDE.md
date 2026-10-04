@@ -95,7 +95,7 @@ in `AgenticChat.vim`.
 
 All user-configurable options live in `config_default.lua`. Keymaps are grouped
 by scope: `keymaps.widget` and `keymaps.prompts` (all Agentic buffers),
-`keymaps.prompt` (input only), `keymaps.chat` (chat only), `keymaps.diff_preview`.
+`keymaps.prompt` (input only), `keymaps.chat` (chat only).
 
 Keymap values use `BufHelpers.multi_keymap_set` which accepts a string, a list
 of strings, or a list of `{ key, mode = ... }` tables for multi-mode bindings.

@@ -10,7 +10,6 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
-local DiffPreview = require("agentic.ui.diff_preview")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
@@ -1769,7 +1768,9 @@ end
 
 local PLAN_IMPLEMENT_ID = "__plan_implement__"
 
---- Handle permission request: show diff preview, set up keymaps, queue request.
+--- Queue a permission request with the permission manager. When the request
+--- waits for the user (not auto-approved), signal attention and fire the
+--- `on_permission_request` hook.
 --- For ExitPlanMode permissions, injects a "Clear context & implement plan"
 --- option that accepts the plan, cancels the session, and starts a fresh
 --- session with the plan file as the initial prompt.
@@ -1833,21 +1834,6 @@ function SessionManager:_on_request_permission(request, callback)
         if self.destroyed then
             return
         end
-
-        -- Look up the option kind from the request options.
-        -- option_id is an opaque ACP identifier (e.g. "reject-once"),
-        -- not the kind string ("reject_once").
-        local option_kind
-        for _, opt in ipairs(request.options) do
-            if opt.optionId == option_id then
-                option_kind = opt.kind
-                break
-            end
-        end
-
-        local is_rejection = option_kind == "reject_once"
-            or option_kind == "reject_always"
-        self:_show_diff_in_buffer(tool_call_id, is_rejection)
 
         if
             not self.permission_manager.current_request
@@ -1979,7 +1965,9 @@ function SessionManager:_finalize_turn(usage)
     self:_drain_hook_records()
 end
 
---- Handle tool call update: update UI, history, diff preview, permissions, and reload buffers
+--- Apply a tool call update to its chat block, the chat history and the
+--- pending permission requests. When a file-mutating call completes, reload
+--- changed buffers (debounced).
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
     local id = tool_call_update.tool_call_id
@@ -2024,10 +2012,6 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     else
         self:_history_changed(self.chat_history)
     end
-
-    -- pre-emptively clear diff preview when tool call update is received, as it's either done or failed
-    local is_rejection = tool_call_update.status == "failed"
-    self:_show_diff_in_buffer(id, is_rejection)
 
     -- Remove the permission request if the tool call failed before user granted it
     if tool_call_update.status == "failed" then
@@ -3785,61 +3769,6 @@ function SessionManager:add_buffer_diagnostics_to_context(bufnr)
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local diagnostics = DiagnosticsList.get_buffer_diagnostics(bufnr)
     return self.diagnostics_list:add_many(diagnostics)
-end
-
---- Open the diff for the current permission request's tool call in a new tab.
---- No-op if there is no active permission request or it's not an edit tool call.
-function SessionManager:open_diff_in_tab()
-    local request = self.permission_manager.current_request
-    if not request then
-        Logger.notify("No active permission request", vim.log.levels.INFO)
-        return
-    end
-    self:_show_diff_in_buffer(request.toolCallId)
-end
-
---- @param tool_call_id string
---- @param is_rejection boolean|nil Whether this is clearing on rejection (true) or showing on approval (false)
-function SessionManager:_show_diff_in_buffer(tool_call_id, is_rejection)
-    -- Only show diff if enabled by user config,
-    -- and cursor is in the same tabpage as this session to avoid disruption
-    if
-        not Config.diff_preview.enabled
-        or vim.api.nvim_get_current_tabpage()
-            ~= SessionRegistry.tab_of(self.id)
-    then
-        return
-    end
-
-    local tracker = tool_call_id
-        and self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
-
-    -- Strip debounced diffs: when the user approves an edit, the provider
-    -- re-sends it instantly — the diff frame is identical.
-    if
-        not tracker
-        or AcpKind.normalise(tracker.kind) ~= "edit"
-        or tracker.diff == nil
-    then
-        return
-    end
-
-    DiffPreview.clear_diff(tracker.argument, is_rejection)
-
-    -- Close the diff tabpage created for this tool call
-    local diff_tab = tracker.diff_tab
-    if diff_tab and vim.api.nvim_tabpage_is_valid(diff_tab) then
-        -- Ensure we're not on the diff tab before closing it
-        local own_tab = SessionRegistry.tab_of(self.id)
-        if vim.api.nvim_get_current_tabpage() == diff_tab and own_tab then
-            vim.api.nvim_set_current_tabpage(own_tab)
-        end
-        -- Close all windows in the diff tab, which closes the tab
-        for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(diff_tab)) do
-            pcall(vim.api.nvim_win_close, winid, true)
-        end
-    end
-    tracker.diff_tab = nil
 end
 
 --- @param new_config_options agentic.acp.ConfigOption[]
