@@ -118,33 +118,33 @@ obliged to report back on a call it abandoned. `cancelled` is client-side only;
 the wire enum stays at four values. The sweep selects by current status, not by
 turn, so it assumes sequential turns (claude-agent-acp's `session.turnQueue`).
 
-### rawInput on tool_call vs update (claude-agent-acp)
+### What each update carries
 
-Subagent (Task) calls carry `rawInput` on the initial `tool_call`; top-level
-calls carry it on the refining `tool_call_update`. The claude adapter enriches
-both build paths (`__apply_raw_input`) — else subagent edits render without a
-path or body. The edit diff is the one field not taken from `rawInput`; see
-"Edit diffs come from `content[]`".
+A provider may leave unchanged fields out of an update; claude-agent-acp does
+(global `acp` skill → `references/claude-agent.md` § Updates carry only
+changed fields). `ACPClient` fills `kind` from the call's earlier
+notifications (`ToolCallKinds`) until the call reports `completed` or
+`failed`. Other fields stay absent, so an adapter must read an absent `title`
+as unchanged, not as empty.
+
+claude-agent-acp: subagent (Task) calls carry `rawInput` on the initial
+`tool_call`; top-level calls carry it on refining `tool_call_update`s. The
+claude adapter enriches both build paths (`__apply_raw_input`) — else subagent
+edits render without a path or body. The edit diff is the one field not taken
+from `rawInput`; see "Edit diffs come from `content[]`".
 
 ## Key design rules for adapters
 
-- **Updates are partial:** Only send what changed. MessageWriter merges onto the
-  existing tracker via `tbl_deep_extend`. **Consumer-side implication:** fields
-  like `argument` (file path) arrive in an early update but are absent from the
-  `completed` status update. Code that inspects completed tool calls must read
-  from the accumulated `tracker` (`message_writer.tool_call_blocks[id]`), not
-  from the individual `tool_call_update` message.
+- **Read completed calls from the tracker:** fields like `argument` (file path)
+  arrive in an early update but are absent from the `completed` status update.
+  Code that inspects completed tool calls must read from the accumulated
+  `tracker` (`message_writer.tool_call_blocks[id]`), not from the individual
+  `tool_call_update` message.
 - **Diffs are immutable after first render:** Once a diff is written to the
   buffer, content is frozen. Only status/decorations refresh on subsequent
   updates.
 - **Body accumulates:** Multiple updates with different body content get
   concatenated with `---` dividers, not replaced.
-- **Status is always real buffer text:** Footer line content is written via
-  `nvim_buf_set_text` (not `set_lines`, which displaces extmarks), then
-  highlighted with an extmark in the `NS_STATUS` namespace. No deferred
-  freezing. Blocks stay tracked after terminal status. An adapter neither
-  receives nor emits `cancelled` — the client stamps that one itself (see
-  "Tool call lifecycle").
 - **Sign column for borders:** Block decorations (╭─ │ ╰─) use `sign_text`
   extmarks in the sign column rather than inline virtual text. This is more
   stable during buffer edits — signs survive line content replacement without
@@ -173,7 +173,7 @@ commands at top-level shell operators (&&, ||, ;, |).
 
 The bridge sends a Bash call's `input.description` as the **initial tool_call
 content**, and wraps the command output in a ` ```console ` fence on completion
-(`tools.js` `toolInfoFromToolUse` / `toolUpdateFromToolResult` — the fence is a
+(`tool-calls/renderer.js` — the fence is a
 template literal `` `\`\`\`console\n${output}\n\`\`\`` ``, so it does not show up
 in a literal-backtick grep). Two consequences the adapter fixes
 (`lift_execute_description` in `claude_agent_acp_adapter.lua`):
@@ -266,10 +266,8 @@ The protocol spec says only: "Clients MAY automatically allow or reject
 permission requests according to user settings" — delegating the mechanism
 entirely to the client.
 
-This is why agentic.nvim implements three independent client-side layers (see
-"Client-side auto-approval" above): read-only tool approval, compound Bash
-command matching against `settings.json`, and the per-session allow/reject
-always cache. For persistent rule management, users edit `~/.claude/settings.json`
+This is why agentic.nvim implements its own auto-approval (`permissions`
+project skill). For persistent rule management, users edit `~/.claude/settings.json`
 directly (or `.claude/settings.json` for project-local rules).
 
 ### Buffer/disk divergence in diff matching
@@ -333,11 +331,10 @@ interception claim for them.
 
 ### `thought_level` (effort) ConfigOption — claude-agent-acp
 
-As of `claude-agent-acp` 0.39.0 the bridge emits a `thought_level` ConfigOption
-(`id = "effort"`), **conditional on the current model supporting effort**.
-It is runtime-mutable via the ACP `session/set_config_option` method and rebuilt
-on model switch — mirroring the TUI's `/effort`. Versions through 0.29.0 emitted
-only `mode` and `model`; the old `maxThinkingTokens` passthrough is obsolete.
+The bridge emits a `thought_level` ConfigOption (`id = "effort"`),
+**conditional on the current model supporting effort**. It is runtime-mutable
+via the ACP `session/set_config_option` method and rebuilt on model switch —
+mirroring the TUI's `/effort`.
 
 The plugin's `AgentConfigOptions:set_options` already dispatches on
 `category == "thought_level"` (`agent_config_options.lua:88-89`), so the option
@@ -348,14 +345,13 @@ emit it.
 
 ### Tool identity is `_meta.claudeCode.toolName`, not `title` (claude-agent-acp)
 
-`title` is a display string `tools.js` rewords between releases (0.75.1 turned
-`Skill` into `Load skill: <name>` and `ExitPlanMode` into `Approve Plan`), so a
-branch keyed on it dies silently at the next bump. Every notification built from
-a cached `tool_use` — initial `tool_call`, refining `tool_call_update`,
-`streamedInputRefinement` — carries the tool's own name on
-`_meta.claudeCode.toolName` (`claudeCodeMetaFromToolUse` in `acp-agent.js`);
-dispatch on that. The untracked-tool fallback and permission-denial updates
-carry no `_meta` at all — hence the guard in `ClaudeUtils.claude_meta`.
+`title` is a display string the bridge rewords between releases (`Skill` is
+titled `Load skill: <name>`, `ExitPlanMode` `Approve Plan`), so a branch keyed
+on it dies silently at the next bump. Every notification built from a cached
+`tool_use` — initial `tool_call`, `refinement`, `partialRefinement` — carries
+the tool's own name on `_meta.claudeCode.toolName` (`toolUseMeta` in
+`tool-calls/renderer.js`); dispatch on that. The untracked-tool fallback
+carries no `_meta` at all — hence the guard in `ClaudeUtils.claude_meta`.
 
 `kind` identifies a tool no better: the provider sends `"other"` for
 EnterPlanMode but `"switch_mode"` for ExitPlanMode, so any kind-keyed branch
@@ -395,6 +391,13 @@ tool-call ownership on the initial `tool_call` via `_writer_for`; the Task spawn
 block itself stays in the main chat. The subagents split auto-opens on first
 subagent activity of a turn. claude-agent-acp only — untagged providers never
 populate the second buffer.
+
+agentic.nvim does not advertise native subagent sessions, so no per-agent end
+arrives, and a turn's end is not a background agent's end. A user submit goes
+out mid-turn (`_handle_input_submit` ignores `in_flight`) and settles a held
+turn early while its agents run. See global `acp` skill →
+`references/claude-agent.md` § Background subagents hold the prompt turn and
+§ Native subagent sessions.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)
 
@@ -475,8 +478,8 @@ text. This includes system metadata (`<environment_info>`, `<command-name>`,
 Focus and respect the line numbers…"). Only one chunk per turn contains actual
 user prose.
 
-`ACPClient` normally drops all `user_message_chunk` events (line 379) because the
-plugin writes user messages locally on prompt submit. During `session/load`, it
+`ACPClient:__handle_session_update` normally drops all `user_message_chunk`
+events because the plugin writes user messages locally on prompt submit. During `session/load`, it
 forwards them instead (gated by `_loading_sessions[session_id]`). The
 `SessionManager` handler filters out system metadata by checking if the trimmed
 text starts with `<` or known instruction prefixes.
