@@ -4,6 +4,7 @@ local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
 local SkillPath = require("agentic.utils.skill_path")
+local ToolCallKinds = require("agentic.acp.tool_call_kinds")
 local transport_module = require("agentic.acp.acp_transport")
 
 -- Absolute path to plugin_root/hooks. This file is
@@ -74,6 +75,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field _broadcast_stdout_text fun(self: agentic.acp.ACPClient, text: string)
 --- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
 --- @field _session_roots table<string, string[]> Skill-search roots per session, from the cwd and additional directories that session was opened with
+--- @field _tool_call_kinds agentic.acp.ToolCallKinds
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -138,6 +140,7 @@ function ACPClient:new(config, on_ready)
     client._on_ready = on_ready
     client._loading_sessions = {}
     client._session_roots = {}
+    client._tool_call_kinds = ToolCallKinds:new()
 
     client:_setup_transport()
     client:_connect()
@@ -157,6 +160,7 @@ end
 function ACPClient:unsubscribe(session_id)
     self.subscribers[session_id] = nil
     self._session_roots[session_id] = nil
+    self._tool_call_kinds:forget_session(session_id)
 end
 
 --- @protected
@@ -469,6 +473,18 @@ function ACPClient:_handle_notification(message_id, method, params)
     end
 end
 
+--- `ToolCallKinds:apply` for a subscribed session. A provider keeps sending
+--- updates after `unsubscribe` (the tail of a cancelled turn, background
+--- subagents); they are dropped, and recording their kinds would rebuild the
+--- map `unsubscribe` freed.
+--- @param session_id string
+--- @param update agentic.acp.ToolCallMessage|agentic.acp.ToolCallUpdate
+function ACPClient:_apply_tool_call_kind(session_id, update)
+    if self.subscribers[session_id] then
+        self._tool_call_kinds:apply(session_id, update)
+    end
+end
+
 --- @protected
 --- @param params table
 function ACPClient:__handle_session_update(params)
@@ -514,8 +530,10 @@ function ACPClient:__handle_session_update(params)
             )
         end
 
+        self:_apply_tool_call_kind(session_id, update)
         self:__handle_tool_call(session_id, update)
     elseif session_update_type == "tool_call_update" then
+        self:_apply_tool_call_kind(session_id, update)
         self:__handle_tool_call_update(session_id, update)
     else
         self:__with_subscriber(session_id, function(subscriber)
@@ -1418,6 +1436,7 @@ return ACPClient
 --- @class agentic.acp.ToolCallUpdate
 --- @field sessionUpdate "tool_call_update"
 --- @field toolCallId string
+--- @field kind? agentic.acp.ToolKind
 --- @field status? agentic.acp.ToolCallStatus
 --- @field content? agentic.acp.ACPToolCallContent[]
 --- @field locations? agentic.acp.ToolCallLocation[]

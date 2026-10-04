@@ -24,7 +24,6 @@ local SkillPath = require("agentic.utils.skill_path")
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
 --- @field rawInput? agentic.acp.ClaudeAgentRawInput
 --- @field title? string
---- @field kind? agentic.acp.ToolKind
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 local ClaudeAgentACPAdapter = ACPClient.extend()
@@ -335,9 +334,14 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
             message.body = self:safe_split(rawInput.prompt)
         end
     else
-        message.argument = self:__ensure_command_string(rawInput.command)
-            or ClaudeUtils.suppress_placeholder_title(update.title)
-            or ""
+        -- An absent title means "unchanged": the bridge leaves out fields
+        -- that repeat what an earlier notification sent.
+        local command = self:__ensure_command_string(rawInput.command)
+        if command or update.title then
+            message.argument = command
+                or ClaudeUtils.suppress_placeholder_title(update.title)
+                or ""
+        end
 
         if not message.body then
             message.body = self:extract_content_body(update)

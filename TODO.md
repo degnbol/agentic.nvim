@@ -32,6 +32,12 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
 
 - opencode full write of file shows no in-chat view of all the new text added to the file.
 
+- **Content-only claude updates may be dropped**:
+  `ClaudeAgentACPAdapter:__handle_tool_call_update` returns early on an update
+  with no `status` and empty `rawInput`. The bridge now leaves out fields that
+  did not change, so an update carrying only new `content` would never render.
+  Unverified whether the bridge sends such updates.
+
 - **Cancel sweep misses errored turns**: it keys on `stopReason == "cancelled"`,
   so an errored turn strands the same footers. A provider that never answers at
   all needs a sweep in `SessionManager:_refresh`.

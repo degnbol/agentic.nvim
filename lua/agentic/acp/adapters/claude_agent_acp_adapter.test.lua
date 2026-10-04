@@ -1233,4 +1233,164 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.equal("0", config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
         end)
     end)
+
+    -- The bridge leaves out every update field that repeats what the client
+    -- already holds, `kind` and `title` included.
+    describe("updates that leave out unchanged fields", function()
+        local ToolCallKinds = require("agentic.acp.tool_call_kinds")
+
+        --- Adapter that merges every notification into one tracker, the way
+        --- `MessageWriter:update_tool_call_block` does.
+        --- @return agentic.acp.ACPClient adapter
+        --- @return agentic.ui.MessageWriter.ToolCallBase tracker
+        --- @return agentic.ui.MessageWriter.ToolCallBase[] updates
+        local function make_tracking_adapter()
+            local tracker = {}
+            local updates = {}
+            local function merge(message)
+                local merged = vim.tbl_deep_extend("force", tracker, message)
+                for key, value in pairs(merged) do
+                    tracker[key] = value
+                end
+            end
+            local adapter = setmetatable({
+                _session_roots = {},
+                _tool_call_kinds = ToolCallKinds:new(),
+                subscribers = { ["s-1"] = {} },
+                __with_subscriber = function(_self, _session_id, fn)
+                    fn({
+                        on_tool_call = merge,
+                        on_tool_call_update = function(message)
+                            table.insert(updates, message)
+                            merge(message)
+                        end,
+                    })
+                end,
+            }, { __index = ClaudeAgentACPAdapter })
+            return adapter, tracker, updates
+        end
+
+        --- @param adapter agentic.acp.ACPClient
+        --- @param update table
+        local function send(adapter, update)
+            update.toolCallId = "tc-1"
+            adapter:__handle_session_update({
+                sessionId = "s-1",
+                update = update,
+            })
+        end
+
+        --- @param tool_name string
+        --- @return agentic.acp.ClaudeMeta
+        local function meta(tool_name)
+            return { claudeCode = { toolName = tool_name } }
+        end
+
+        it("keeps an Edit's path when the title is left out", function()
+            local adapter, tracker = make_tracking_adapter()
+            send(adapter, {
+                sessionUpdate = "tool_call",
+                kind = "edit",
+                title = "Edit",
+                status = "pending",
+                rawInput = {},
+                _meta = meta("Edit"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                title = "Edit /tmp/a.lua",
+                rawInput = { file_path = "/tmp/a.lua" },
+                _meta = meta("Edit"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                rawInput = { file_path = "/tmp/a.lua", old_string = "x" },
+                _meta = meta("Edit"),
+            })
+
+            assert.equal("/tmp/a.lua", tracker.argument)
+        end)
+
+        it("lifts a Bash description and heads with the command", function()
+            local adapter, tracker = make_tracking_adapter()
+            send(adapter, {
+                sessionUpdate = "tool_call",
+                kind = "execute",
+                title = "Terminal",
+                status = "pending",
+                rawInput = {},
+                _meta = meta("Bash"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                rawInput = { command = "ls", description = "List files" },
+                _meta = meta("Bash"),
+            })
+
+            assert.equal("ls", tracker.argument)
+            assert.equal("List files", tracker.description)
+        end)
+
+        it("mints Mcp on updates of an MCP tool", function()
+            local adapter, _, updates = make_tracking_adapter()
+            send(adapter, {
+                sessionUpdate = "tool_call",
+                kind = "other",
+                title = "mcp__srv__do",
+                status = "pending",
+                rawInput = {},
+                _meta = meta("mcp__srv__do"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                rawInput = { x = 1 },
+                _meta = meta("mcp__srv__do"),
+            })
+
+            assert.equal("Mcp", updates[1].kind)
+            assert.equal("srv: do", updates[1].argument)
+        end)
+
+        it("turns an Agent call into a SubAgent", function()
+            local adapter, tracker = make_tracking_adapter()
+            send(adapter, {
+                sessionUpdate = "tool_call",
+                kind = "think",
+                title = "Task",
+                status = "pending",
+                rawInput = {},
+                _meta = meta("Agent"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                rawInput = {
+                    subagent_type = "Explore",
+                    description = "Find it",
+                },
+                _meta = meta("Agent"),
+            })
+
+            assert.equal("SubAgent", tracker.kind)
+            assert.equal("Explore: Find it", tracker.argument)
+        end)
+
+        it("writes no head when neither title nor command came", function()
+            local adapter, _, updates = make_tracking_adapter()
+            send(adapter, {
+                sessionUpdate = "tool_call",
+                kind = "other",
+                title = "Frobnicate thing",
+                status = "pending",
+                rawInput = {},
+                _meta = meta("Frobnicate"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                rawInput = { x = 1 },
+                _meta = meta("Frobnicate"),
+            })
+
+            assert.is_nil(updates[1].argument)
+        end)
+    end)
 end)

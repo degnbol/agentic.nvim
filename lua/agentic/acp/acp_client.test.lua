@@ -2,6 +2,7 @@
 local Logger = require("agentic.utils.logger")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local ToolCallKinds = require("agentic.acp.tool_call_kinds")
 
 describe("agentic.acp.ACPClient", function()
     --- @type agentic.acp.ACPClient
@@ -288,6 +289,7 @@ describe("agentic.acp.ACPClient", function()
                 state = "ready",
                 transport = { send = send_stub },
                 _loading_sessions = {},
+                _tool_call_kinds = ToolCallKinds:new(),
                 provider_config = { name = "test-provider" },
             }, { __index = ACPClient })
             return client, send_stub
@@ -711,6 +713,7 @@ describe("agentic.acp.ACPClient", function()
                     subscribers = {},
                     _loading_sessions = {},
                     _session_roots = {},
+                    _tool_call_kinds = ToolCallKinds:new(),
                 }, overrides),
                 { __index = ACPClient }
             )
@@ -765,6 +768,37 @@ describe("agentic.acp.ACPClient", function()
 
             assert.same({}, client:__session_roots("s-1"))
             assert.is_nil(client.subscribers["s-1"])
+        end)
+
+        it("forgets the session's tool-call kinds with the subscriber", function()
+            local client = make_client({ subscribers = { ["s-1"] = {} } })
+            client._tool_call_kinds:apply(
+                "s-1",
+                { sessionUpdate = "tool_call", toolCallId = "t", kind = "edit" }
+            )
+
+            client:unsubscribe("s-1")
+
+            local update = { sessionUpdate = "tool_call_update", toolCallId = "t" }
+            client._tool_call_kinds:apply("s-1", update)
+            assert.is_nil(update.kind)
+        end)
+
+        it("records no kinds for an unsubscribed session", function()
+            local client = make_client({
+                __handle_tool_call = function() end,
+            })
+
+            client:__handle_session_update({
+                sessionId = "s-1",
+                update = {
+                    sessionUpdate = "tool_call",
+                    toolCallId = "t",
+                    kind = "edit",
+                },
+            })
+
+            assert.same({}, client._tool_call_kinds._kinds)
         end)
     end)
 end)

@@ -99,7 +99,6 @@ end
 --- @field include? string File pattern filter for grep
 
 --- @class agentic.acp.OpenCodeToolCallUpdate : agentic.acp.ToolCallUpdate
---- @field kind? agentic.acp.ToolKind
 --- @field title? string
 --- @field rawInput? agentic.acp.OpenCodeToolCallRawInput
 
