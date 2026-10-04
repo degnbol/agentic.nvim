@@ -23,7 +23,7 @@ a run therefore cannot span a tool call by construction:
 | `write_notice` | a command notice follows |
 | `write_error_message` | an error follows |
 | `finalize_turn` | the turn ended |
-| `emit_divider` | a subagent's Task closed |
+| `end_runs` | a subagent's Task closed |
 | `write_tool_call_block` | a tool call follows |
 
 `reset_turn_state` is an eighth site that drops `_prose_run_start_line` without
@@ -225,17 +225,13 @@ render through the branch.
 
 ## The subagent pane
 
-This fixes it. A prose run in the subagents buffer ends at `emit_divider`, fired
+This fixes it. A prose run in the subagents buffer ends at `end_runs`, fired
 per-Task from `SessionManager:_mark_task_closed`, or at `write_tool_call_block`
 for the subagent's own calls. Either way the flush drops the run start, and
 `subagent_writer:finalize_turn()` does not run until the turn ends, by which
 point there is nothing left to bracket — so the pane has never drawn one.
-Reproduced: prose → `finalize_turn` yields the full rail; prose → `emit_divider`
+Reproduced: prose → `finalize_turn` yields the full rail; prose → `end_runs`
 → `finalize_turn` yields no signs at all.
-
-`emit_divider`'s no-op guard precedes its flush, so a run whose last chunk
-carried no newline (no line-count change) reaches `finalize_turn` with its start
-intact. Under the blank-row gate such a run never brackets anyway.
 
 Not a deliberate exclusion. Commit `8f01a8b` touched only `message_writer.lua`,
 its test and the notes, and records the gaps it accepted; the subagents buffer is
@@ -297,7 +293,7 @@ constraint dissolved.
 ## Phasing
 
 1. Render at every run end, gated on a paragraph break, via `_end_prose_run`.
-   Covers all seven ends including the subagent divider, and deletes the
+   Covers all seven ends including `end_runs` at a Task close, and deletes the
    read-before-flush in `finalize_turn`.
 2. Track and release the region ids; re-stamp on row growth for the live rail.
 

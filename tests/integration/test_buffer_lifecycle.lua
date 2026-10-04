@@ -683,27 +683,18 @@ end)()]]))
             assert.truthy(session_file():find("first finding", 1, true))
         end)
 
-        it("keeps ordinal signs after :e! with numbering latched", function()
+        it("heads a running agent once across :e!", function()
             open_session()
             open_task("task-1")
-            open_task("task-2")
+            subagent_chunk("first", "task-1")
 
             in_subagent("edit!")
-            subagent_call("c-1", "task-2")
+            subagent_chunk("\n\nsecond", "task-1")
 
-            assert.is_true(child.lua_get([[(function()
-    local marks = vim.api.nvim_buf_get_extmarks(
-        _G.sub,
-        require("agentic.ui.tool_call_renderer").NS_DECORATIONS,
-        0, -1, { details = true }
-    )
-    for _, mark in ipairs(marks) do
-        if (mark[4].sign_text or ""):match("%d") then
-            return true
-        end
-    end
-    return false
-end)()]]))
+            local headings = vim.tbl_filter(function(line)
+                return vim.startswith(line, "## ")
+            end, sub_lines())
+            assert.same({ "## map (Blocking?)" }, headings)
         end)
 
         it("records a subagent edit that completes after :e!", function()

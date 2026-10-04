@@ -190,14 +190,6 @@ sub.on_tool_call_update({ tool_call_id = "replayed-sub", status = "completed" })
         )
         assert.is_nil(chat:find("replayed subagent prompt", 1, true))
         assert.equal(1, child.lua_get("#_G.s.chat_history.messages"))
-        assert.equal(
-            child.lua_get(
-                [[require("agentic.ui.window_decoration").subagent_title(2)]]
-            ),
-            child.lua_get(
-                [[require("agentic.ui.window_decoration").get_header(_G.sub).title]]
-            )
-        )
         assert.is_false(child.lua_get("_G.s.chat_history.dirty"))
     end)
 
@@ -245,20 +237,12 @@ _G.s:restore_from_history(vim.deepcopy(_G.saved), { reuse_session = ... })
     end
 
     it("a restore into an unloaded subagent buffer shows it on load", function()
-        --- @return boolean
-        local function title_counts_two()
-            return child.lua_get([[
-require("agentic.ui.window_decoration").get_header(_G.sub).title
-    == require("agentic.ui.window_decoration").subagent_title(2)
-]])
-        end
         child.lua([[
 vim.cmd("bdelete! " .. _G.sub)
 _G.s.session_id = "sid-live"
 _G.s:restore_from_history(vim.deepcopy(_G.saved), { reuse_session = true })
 ]])
         assert.is_false(child.lua_get("vim.api.nvim_buf_is_loaded(_G.sub)"))
-        assert.is_true(title_counts_two())
 
         -- What every ACP handler does before it writes.
         child.lua([[_G.s:_load_subagent_buffer()]])
@@ -267,6 +251,5 @@ _G.s:restore_from_history(vim.deepcopy(_G.saved), { reuse_session = true })
             1,
             child.lua_get([[_G.count(_G.sub_text(), "saved finding")]])
         )
-        assert.is_true(title_counts_two())
     end)
 end)

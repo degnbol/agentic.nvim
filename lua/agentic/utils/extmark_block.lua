@@ -25,7 +25,6 @@ ExtmarkBlock.SIGNS = SIGNS
 --- @field body_end? integer 0-indexed last continuation line, inclusive (optional)
 --- @field footer_line? integer 0-indexed line number for footer (optional)
 --- @field hl_group string Highlight group name
---- @field ordinal? string 2-cell sign stamped in place of the │ border on every continuation row (subagent ordinal); nil leaves the plain border. The identity and ╰─ rows keep their signs regardless. Concealed fence-delimiter rows receive it too but stay zero-height at conceallevel=2, so it does not show there
 
 --- @class agentic.utils.ExtmarkBlock.RenderBlockOpts : agentic.utils.ExtmarkBlock.RenderRailOpts
 --- @field header_line integer 0-indexed line number for the identity row
@@ -46,7 +45,7 @@ function ExtmarkBlock.render_rail(bufnr, ns_id, opts)
             table.insert(
                 decoration_ids,
                 vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_num, 0, {
-                    sign_text = opts.ordinal or SIGNS.BODY,
+                    sign_text = SIGNS.BODY,
                     sign_hl_group = opts.hl_group,
                 })
             )
@@ -66,8 +65,7 @@ function ExtmarkBlock.render_rail(bufnr, ns_id, opts)
 end
 
 --- Renders a complete region: identity sign on the header row, then the rail.
---- Ids come back front-indexed by buffer offset (header first), which
---- `MessageWriter:_stamp_ordinal` relies on to address a single row.
+--- Ids come back front-indexed by buffer offset (header first).
 --- @param bufnr integer
 --- @param ns_id integer
 --- @param opts agentic.utils.ExtmarkBlock.RenderBlockOpts

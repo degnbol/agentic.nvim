@@ -75,12 +75,9 @@ end
 --- @field subagent_status_indicator agentic.ui.StatusIndicator Working indicator for the subagents buffer, shown while any top-level Task is open
 --- @field _tool_call_owner table<string, string> toolCallId -> the spawning Task's id, for a block that lives in the subagents buffer
 --- @field _open_tasks table<string, true> toolCallId -> true for each open top-level Task; subagent indicator shows while non-empty
---- @field _started_tasks table<string, true> toolCallId -> true for each top-level Task opened in the conversation; the subagents title counts them
+--- @field _started_tasks table<string, true> toolCallId -> true for each top-level Task opened in the conversation
 --- @field _headed_tasks table<string, true> toolCallId -> true for each top-level Task whose section in the subagents buffer has its heading
 --- @field _subagent_win_opened_this_turn boolean Guards a single auto-open per turn so a manual close is not undone by later subagent activity
---- @field _task_ordinal table<string, integer> parentToolUseId -> per-turn subagent ordinal (0-9, first-seen order); numbers agents, not calls
---- @field _next_ordinal integer Next ordinal to hand out this turn
---- @field _numbering_latched boolean Set the first time ≥2 top-level Tasks run concurrently this turn; keeps numbering on for the rest of the turn
 --- @field file_list agentic.ui.FileList
 --- @field file_activity agentic.ui.FileActivity
 --- @field code_selection agentic.ui.CodeSelection
@@ -357,9 +354,6 @@ function SessionManager:new()
         _started_tasks = {},
         _headed_tasks = {},
         _subagent_win_opened_this_turn = false,
-        _task_ordinal = {},
-        _next_ordinal = 0,
-        _numbering_latched = false,
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
         _announced_model_id = nil,
@@ -738,59 +732,42 @@ function SessionManager:_reload_subagents()
 end
 
 --- Render the history's subagent output into the subagent buffer, which holds
---- nothing yet, and count its Tasks as started and headed.
+--- nothing yet, and mark its Tasks headed.
 function SessionManager:_replay_subagents()
     local writer = self.subagent_writer
     writer:reset()
+    local subagent_messages = self.chat_history.subagent_messages
     --- @type table<string, agentic.ui.MessageWriter.SubagentInfo>
     local info_by_task = {}
     for id, block in pairs(self.message_writer.tool_call_blocks) do
         info_by_task[id] = block.subagent
     end
-    local task_ids = SessionRestore.replay_subagent_messages(
+    SessionRestore.replay_subagent_messages(
         writer,
-        self.chat_history.subagent_messages,
-        info_by_task,
-        self._open_tasks
+        subagent_messages,
+        info_by_task
     )
     self._headed_tasks = {}
-    for _, task_id in ipairs(task_ids) do
+    for _, task_id in pairs(SessionRestore.top_level_tasks(subagent_messages)) do
         self._headed_tasks[task_id] = true
-    end
-    self:_count_started_tasks(task_ids)
-    if self._numbering_latched then
-        writer:enable_numbering()
     end
     self.subagent_status_indicator:reposition()
     self:_sync_modified(self.chat_history)
 end
 
---- Count Tasks as started, and title the subagents panel to match.
---- @param task_ids string[]
-function SessionManager:_count_started_tasks(task_ids)
-    for _, task_id in ipairs(task_ids) do
-        self._started_tasks[task_id] = true
-    end
-    self:_render_subagent_title()
-end
-
---- Show the history's subagent output: `_replay_subagents` for a loaded
---- subagent buffer. An unloaded one replays on its next load, from its
---- `BufReadCmd`, as replaying it now would load it and so replay twice; only
---- its Tasks are counted now.
+--- Render the history's subagent output into the subagent buffer if it is
+--- loaded. An unloaded one renders on its next load, from its `BufReadCmd`,
+--- as rendering it now would load it and so render twice.
 function SessionManager:_show_saved_subagents()
     -- Nil once the widget is destroyed.
     local subagent = self.widget.buf_nrs.subagent
-    if not (subagent and vim.api.nvim_buf_is_valid(subagent)) then
-        return
-    end
-    if vim.api.nvim_buf_is_loaded(subagent) then
+    if
+        subagent
+        and vim.api.nvim_buf_is_valid(subagent)
+        and vim.api.nvim_buf_is_loaded(subagent)
+    then
         self:_replay_subagents()
-        return
     end
-    self:_count_started_tasks(
-        (SessionRestore.subagent_sections(self.chat_history.subagent_messages))
-    )
 end
 
 --- Load the subagent buffer if `:bd` unloaded it, so its `BufReadCmd`
@@ -877,41 +854,8 @@ function SessionManager:_ensure_subagent_window()
     self.widget:open_subagent_window()
 end
 
---- Per-turn ordinal for a subagent, keyed on its spawning Task id so every tool
---- call of one agent shares a number. Assigned in first-seen order (0-based);
---- idempotent per parent id. Grandchildren key on their immediate parent, so
---- each nesting level gets its own ordinal.
---- @param parent_tool_use_id string
---- @return integer
-function SessionManager:_ordinal_for(parent_tool_use_id)
-    local existing = self._task_ordinal[parent_tool_use_id]
-    if existing then
-        return existing
-    end
-    local ordinal = self._next_ordinal
-    self._task_ordinal[parent_tool_use_id] = ordinal
-    self._next_ordinal = ordinal + 1
-    return ordinal
-end
-
---- Flip on subagent numbering the first time two top-level Tasks run
---- concurrently this turn, backfilling numbers onto already-rendered blocks.
---- Latched for the rest of the turn so numbers don't flicker if the concurrent
---- count drops back to one.
-function SessionManager:_maybe_latch_numbering()
-    if self._numbering_latched then
-        return
-    end
-    if vim.tbl_count(self._open_tasks) < 2 then
-        return
-    end
-    self._numbering_latched = true
-    self.subagent_writer:enable_numbering()
-end
-
---- Mark a top-level Task as open (idempotent): reveal the subagents split and
---- show its working indicator. On the Task's first open in the conversation,
---- also count it in the title. Set membership makes repeat calls a no-op.
+--- Mark a top-level Task as open (idempotent): reveal the subagents split,
+--- show its working indicator and mark it started.
 --- @param tool_call_id string
 function SessionManager:_mark_task_open(tool_call_id)
     if self._open_tasks[tool_call_id] then
@@ -920,11 +864,7 @@ function SessionManager:_mark_task_open(tool_call_id)
     self._open_tasks[tool_call_id] = true
     self.subagent_status_indicator:start("generating")
     self:_ensure_subagent_window()
-    if not self._started_tasks[tool_call_id] then
-        self._started_tasks[tool_call_id] = true
-        self:_render_subagent_title()
-    end
-    self:_maybe_latch_numbering()
+    self._started_tasks[tool_call_id] = true
 end
 
 --- Head a started top-level Task's section in the subagents buffer with its
@@ -955,28 +895,12 @@ function SessionManager:_head_subagent(tool_call_id)
     )
 end
 
---- Title the subagents panel with the number of subagents started in the
---- conversation. A count of started rather than running agents: a background
---- agent's end is not observable on its own.
-function SessionManager:_render_subagent_title()
-    local bufnr = self.widget.buf_nrs.subagent
-    local header = WindowDecoration.get_header(bufnr)
-    header.title =
-        WindowDecoration.subagent_title(vim.tbl_count(self._started_tasks))
-    WindowDecoration.set_header(bufnr, header)
-end
-
---- Forget every subagent the conversation started, and reset the subagents
---- title's count to match.
+--- Forget every subagent the conversation started.
 function SessionManager:_reset_subagents()
     self._tool_call_owner = {}
     self._open_tasks = {}
     self._started_tasks = {}
     self._headed_tasks = {}
-    -- Teardown resets too, and its buffers are about to be wiped.
-    if not self.destroyed then
-        self:_render_subagent_title()
-    end
 end
 
 --- Whether a top-level Task's subagent has ended, judged from its tracker.
@@ -1051,11 +975,10 @@ function SessionManager:_mark_task_closed(tool_call_id)
         return
     end
     self._open_tasks[tool_call_id] = nil
-    -- Separate this finished subagent's detour from the next, during the turn
-    -- (before the main agent reacts to its report). The membership guard above
-    -- makes a duplicated terminal update harmless; emit_divider itself no-ops
-    -- when nothing was written since the last separator.
-    self.subagent_writer:emit_divider()
+    -- Now rather than at the next write or the turn's end, so its last
+    -- thinking shows as it finishes. The writer is shared, so this ends
+    -- whichever agent's runs are open, which may be a sibling's.
+    self.subagent_writer:end_runs()
     if next(self._open_tasks) ~= nil then
         return
     end
@@ -1608,7 +1531,6 @@ function SessionManager:_on_tool_call(tool_call)
         if self._loading then
             return
         end
-        tool_call.ordinal = self:_ordinal_for(parent)
         self:_ensure_subagent_window()
         self:_head_subagent(parent)
     end
@@ -1639,7 +1561,6 @@ function SessionManager:_on_tool_call(tool_call)
         skill_path = tool_call.skill_path,
         subagent = tool_call.subagent,
         parent_tool_use_id = parent,
-        ordinal = tool_call.ordinal,
     }
     self.chat_history:add_message(tool_msg)
     if parent then
@@ -3131,20 +3052,17 @@ function SessionManager:_dispatch_turn(prompt)
 
     self.is_generating = true
 
-    -- The subagent auto-open guard and numbering are per-turn, but a turn
-    -- dispatched while another is still outstanding inherits them rather than
-    -- wiping them: the running turn still numbers and opens its subagents
-    -- through them, and a mid-turn submit is an ordinary thing to do. The
-    -- provider runs the two turns in sequence, so the inheriting turn has
-    -- nothing of its own in flight to confuse with them. Tool-call ownership
-    -- is not per-turn at all. A background agent can outlive the turn that
-    -- spawned it, and its calls must keep resolving to the subagents writer,
-    -- so ownership resets with the conversation (`_reset_subagents`).
+    -- The subagent auto-open guard is per-turn, but a turn dispatched while
+    -- another is still outstanding inherits it rather than wiping it: the
+    -- running turn still opens its subagents through it, and a mid-turn submit
+    -- is an ordinary thing to do. The provider runs the two turns in sequence,
+    -- so the inheriting turn has nothing of its own in flight to confuse with
+    -- it. Tool-call ownership is not per-turn at all. A background agent can
+    -- outlive the turn that spawned it, and its calls must keep resolving to
+    -- the subagents writer, so ownership resets with the conversation
+    -- (`_reset_subagents`).
     if self._prompt_pending == 0 then
         self._subagent_win_opened_this_turn = false
-        self._task_ordinal = {}
-        self._next_ordinal = 0
-        self._numbering_latched = false
     end
 
     self:_set_prompt_pending(self._prompt_pending + 1)
@@ -3260,11 +3178,9 @@ function SessionManager:_dispatch_turn(prompt)
         self:_finalize_turn(turn_usage)
         self.message_writer:scroll_to_bottom()
 
-        -- Close the turn's Tasks, which stops the subagents indicator, then
-        -- reset the subagents buffer's per-turn flags too (mandatory — the
-        -- cross-turn flag hazard is per writer). The turn separator is emitted
-        -- per-Task in _mark_task_closed, not here.
         self:_close_open_tasks()
+        -- Each writer holds its own per-turn flags, so the subagents writer
+        -- needs its own reset (mandatory: the cross-turn flag hazard).
         self.subagent_writer:finalize_turn()
 
         if not session_busy then

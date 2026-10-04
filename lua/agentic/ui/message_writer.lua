@@ -115,7 +115,6 @@ end
 --- @field diff_tab? integer Tabpage ID of the diff preview tab (set by SessionManager)
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
---- @field ordinal? integer Per-turn subagent ordinal (0-9, in spawn order); rendered as a sign only while numbering is active (see MessageWriter._numbering_active)
 --- @field trailing_insert_mark_id? integer Zero-width NS_TOOL_BLOCKS mark riding just below the block, marking where the next region anchored to it goes (see `MessageWriter:_anchor_insert_row`). Absent until the first such region.
 --- @field highlight_pass? integer Sequence number of the latest scheduled highlight pass. A pass that is no longer the latest skips.
 
@@ -160,9 +159,7 @@ end
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed when a window shows the buffer again: its BufWinEnter, or for widget windows (opened without autocmds) `ChatWidget.on_window_opened`. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _home_window? fun(): integer|nil The window hard wrap measures while it shows the buffer
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
---- @field _last_divider_line? integer Buffer line count as of the last `emit_divider`/`finalize_turn` write; `emit_divider` skips when the count is unchanged (nothing written since), so a no-content subagent gets no separator.
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
---- @field _numbering_active? boolean When true (set by `enable_numbering` once ≥2 subagents run concurrently in the turn), blocks carrying an `ordinal` render it as the sign on every body row (the whole left rail), replacing the │ border. Reset per turn.
 --- @field _error_block? agentic.ui.MessageWriter.ErrorBlock The `## Error` region still open at the end of the buffer, which `write_error_action` extends. Not per-turn state: the line-count check on `ErrorBlock` is what closes it, and it closes a block against a mid-turn write too, which a turn-boundary reset would miss.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
@@ -192,7 +189,6 @@ function MessageWriter:reset()
     self._error_block = nil
     self._pending_fold_ops = {}
     self._fold_states = {}
-    self._last_divider_line = nil
     self:reset_turn_state()
     vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
 end
@@ -224,8 +220,6 @@ function MessageWriter:new(bufnr, status_indicator, home_window)
         _paused_windows = {},
         _pending_fold_ops = {},
         _fold_states = {},
-        _last_divider_line = nil,
-        _numbering_active = false,
     }, self)
 
     -- Listen for user scrolls. Our own programmatic scrolls and buffer
@@ -386,7 +380,6 @@ function MessageWriter:reset_turn_state()
     self._pending_section_break = false
     self:_abandon_prose_run(self.bufnr)
     self._thought_run = nil
-    self._numbering_active = false
     self:_release_prose_pin()
 end
 
@@ -887,8 +880,6 @@ end
 --- every row at or after `row` moves by `delta` and the prose pin never has to
 --- be released. Region signs, fold anchors and block extmarks need no help —
 --- they move with their lines.
---- Named for prose alone because that is all it covers: `_last_divider_line` is
---- a line *count*, not a row, and no other absolute-row state survives a write.
 --- @param row integer 0-indexed first row the insertion displaces
 --- @param delta integer number of lines inserted
 function MessageWriter:_shift_prose_rows_below(row, delta)
@@ -1692,7 +1683,6 @@ function MessageWriter:finalize_turn()
     -- during the turn must be cleared here, otherwise it silently corrupts
     -- subsequent turns (the "stuck 1 message behind" family of bugs).
     self._pending_section_break = false
-    self._numbering_active = false
     self:_release_prose_pin()
 
     self:_with_modifiable_suppressed(function(bufnr)
@@ -1701,34 +1691,20 @@ function MessageWriter:finalize_turn()
         self:_end_prose_run(bufnr)
         self:_append_lines({ "" })
     end)
-    self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
 end
 
---- Append a `---` separator to mark the end of one subagent's detour in the
---- subagents buffer. No-op if nothing was written since the last separator (a
---- Task that streamed no interim content gets none), or the buffer is empty or
---- unloaded. Unlike `finalize_turn`
---- this touches no cross-turn state, so it is safe to call mid-turn — the
---- subagent lifecycle fires it per Task as each one closes.
-function MessageWriter:emit_divider()
+--- Flush the buffered thought run and end the open prose run. Touches no
+--- cross-turn state, so it is safe to call mid-turn.
+function MessageWriter:end_runs()
     if not vim.api.nvim_buf_is_valid(self.bufnr) then
         return
     end
-    -- Before the no-op check, and before the separator: a run still buffered
-    -- when this subagent's Task closes would otherwise surface under the next
-    -- one.
     self:flush_thought_run()
-    if
-        vim.api.nvim_buf_line_count(self.bufnr) == self._last_divider_line
-        or BufHelpers.is_buffer_empty(self.bufnr)
-    then
-        return
-    end
+    self:_release_prose_pin()
+    self:_auto_scroll(self.bufnr)
     self:_with_modifiable_suppressed(function(bufnr)
         self:_end_prose_run(bufnr)
-        self:_append_lines({ "", "---", "" })
     end)
-    self._last_divider_line = vim.api.nvim_buf_line_count(self.bufnr)
 end
 
 --- Append a `## <text>` heading that opens one subagent's section. Touches no
@@ -1743,63 +1719,6 @@ function MessageWriter:write_subagent_heading(text)
         self:_end_prose_run(bufnr)
         self:_append_lines({ "## " .. text, "" })
     end)
-end
-
---- The 2-cell sign to stamp on a block's body rows in place of the │ border, or
---- nil to leave the plain border. A number shows only while numbering is active on
---- this writer (`enable_numbering`, once ≥2 subagents run concurrently) and the
---- block carries an ordinal in the single-digit range the sign column holds.
---- @param block agentic.ui.MessageWriter.ToolCallBlock
---- @return string|nil
-function MessageWriter:_ordinal_sign(block)
-    local n = block.ordinal
-    if not self._numbering_active or not n or n > 9 then
-        return nil
-    end
-    return tostring(n) .. " "
-end
-
---- Activate subagent ordinal numbering and backfill the number onto every
---- already-rendered block that carries an ordinal. Called when a second
---- subagent begins running concurrently in the turn (see SessionManager's
---- latch); before that a lone subagent's blocks show no number. Idempotent.
-function MessageWriter:enable_numbering()
-    if self._numbering_active then
-        return
-    end
-    self._numbering_active = true
-    for _, block in pairs(self.tool_call_blocks) do
-        self:_stamp_ordinal(block)
-    end
-end
-
---- @private
---- Restamp a block's whole body rail to its ordinal, in place (reusing the
---- decoration extmark ids). No-op for a block with no ordinal or a dropped range
---- extmark. The range extmark spans header (start_row) to footer (end_row); body
---- rows are the rows between. The decoration ids run
---- `[header, body_1 .. body_n, footer, (dim?)]`, front-indexed by buffer offset,
---- so the id for buffer row `r` is `ids[r - start_row + 1]`; the header
---- (start_row) keeps its identity glyph and the footer (end_row) its `╰─`, every
---- body row in between takes the digit. Concealed fence-delimiter rows get it
---- too but stay zero-height at conceallevel=2, so it does not show there.
---- @param block agentic.ui.MessageWriter.ToolCallBlock
-function MessageWriter:_stamp_ordinal(block)
-    local sign = self:_ordinal_sign(block)
-    local ids = block.decoration_extmark_ids
-    if not sign or not ids then
-        return
-    end
-    local start_row, end_row = self:_block_rows(block)
-    if not start_row then
-        return
-    end
-    for row = start_row + 1, end_row - 1 do
-        local id = ids[row - start_row + 1]
-        if id then
-            Renderer.restamp_border(self.bufnr, id, row, sign)
-        end
-    end
 end
 
 --- Current rows of a tool call block, read from its range extmark.
@@ -1986,12 +1905,22 @@ function MessageWriter:write_message_chunk(update, starts_response)
 
     self:_auto_scroll(self.bufnr)
 
-    -- Read before the write, which opens a run at its first chunk. A response
-    -- that opens a run needs no break: whatever ended the previous run (a tool
-    -- call's section close, a thought region, a user prompt) separates it.
+    -- Read before the write, which opens a run at its first chunk. A run that
+    -- opens on a blank row needs no break: the writer that ended the previous
+    -- run (a tool call's section close, a thought region, a user prompt) left
+    -- it. `end_runs` leaves the previous run's last row of text instead.
     local run_open = self._prose_run_start_line ~= nil
 
     self:_with_modifiable_suppressed(function(bufnr)
+        -- Rows rather than leading newlines, so the run starts on its text.
+        if
+            not run_open
+            and not BufHelpers.is_buffer_empty(bufnr)
+            and BufHelpers.trailing_blank_rows(bufnr, 1) == 0
+        then
+            self:_append_lines({ "", "" })
+        end
+
         local last_line = vim.api.nvim_buf_line_count(bufnr) - 1
 
         if starts_response and run_open then
@@ -2502,8 +2431,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             bufnr,
             start_row,
             end_row,
-            kind,
-            self:_ordinal_sign(tool_call_block)
+            kind
         )
 
         -- Gated to final render (unlike materialize_injections below, which is
@@ -2875,8 +2803,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             bufnr,
             start_row,
             new_end_row,
-            tracker.kind,
-            self:_ordinal_sign(tracker)
+            tracker.kind
         )
 
         -- Gated to final render — see the matching block in write_tool_call_block.

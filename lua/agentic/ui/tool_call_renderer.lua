@@ -1734,9 +1734,8 @@ end
 --- @param start_row integer
 --- @param end_row integer
 --- @param kind string ACP tool kind, supplying the header row's identity glyph
---- @param ordinal? string 2-cell sign stamped on every body row in place of the │ border (subagent ordinal); nil leaves the plain border. The glyph and ╰─ rows keep their signs
 --- @return integer[] decoration_extmark_ids
-function M.render_decorations(bufnr, start_row, end_row, kind, ordinal)
+function M.render_decorations(bufnr, start_row, end_row, kind)
     return ExtmarkBlock.render_block(bufnr, NS_DECORATIONS, {
         header_line = start_row,
         header_sign = kind_glyph(kind) .. " ",
@@ -1745,7 +1744,6 @@ function M.render_decorations(bufnr, start_row, end_row, kind, ordinal)
         body_end = end_row - 1,
         footer_line = end_row,
         hl_group = Theme.HL_GROUPS.CODE_BLOCK_FENCE,
-        ordinal = ordinal,
     })
 end
 

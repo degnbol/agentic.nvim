@@ -103,7 +103,7 @@ treats each argument:
 
 - `write_tool_call_block` stores *the block it was given* as the tracker
   (`message_writer.lua:1371`), then stamps `extmark_id` (`:1360`),
-  `decoration_extmark_ids` (`:1325`), `ordinal` (`:976`) and — via
+  `decoration_extmark_ids` (`:1325`) and — via
   `Renderer.prepare_block_lines` — `search_matches`, `search_ansi`,
   `cached_diff_blocks` (`tool_call_renderer.lua:675-715`) onto it. All of that
   lands before the add-site literal runs, so spreading there would write extmark
@@ -135,8 +135,8 @@ Assert the properties, not just the two symptoms:
    leaves `argument` and `kind` intact. This is the non-clobber property the
    pass-through depends on.
 3. A persisted record contains none of `extmark_id`, `decoration_extmark_ids`,
-   `search_matches`, `search_ansi`, `cached_diff_blocks`, `parent_tool_use_id`,
-   `ordinal`. This is what breaks if the spread is ever migrated to the add site.
+   `search_matches`, `search_ansi`, `cached_diff_blocks`, `parent_tool_use_id`.
+   This is what breaks if the spread is ever migrated to the add site.
 
 Beware asserting that a persisted `body` equals the rendered body: `tbl_deep_extend`
 replaces a list-valued key wholesale, whereas `update_tool_call_block` appends

@@ -22,8 +22,6 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field tool_call_id? string
 --- @field type "tool_call"
 --- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's call
---- @field ordinal? integer The subagent's ordinal in its turn (see `agentic.ui.MessageWriter.ToolCallBlock`)
-
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
 --- | agentic.ui.ChatHistory.AgentMessage

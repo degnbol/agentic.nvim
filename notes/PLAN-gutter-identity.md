@@ -79,7 +79,7 @@ no rendering work and left for the note that owns the submit paths.
    `╭─` region, opening on its first row of text and re-stamped as the run
    streams. The seven writers that interrupt prose end a run through
    `MessageWriter:_end_prose_run`, which is also what fixed the subagents pane
-   (its runs end at a Task divider, never at `finalize_turn`). See
+   (its runs end at `end_runs` at a Task close, never at `finalize_turn`). See
    `render_prose_region`, `has_paragraph_break`, and
    `_{rebuild,extend}_prose_region`.
 

@@ -360,7 +360,6 @@ function SessionRestore.replay_messages(writer, messages)
                 diff = msg.diff,
                 skill_path = msg.skill_path,
                 subagent = msg.subagent,
-                ordinal = msg.ordinal,
             }
             writer:write_tool_call_block(tool_block)
         end
@@ -371,13 +370,12 @@ function SessionRestore.replay_messages(writer, messages)
     writer:flush_thought_run()
 end
 
---- Group stored subagent messages into one section per top-level Task, in
---- first-seen order. A nested agent's messages go in the section of the
---- top-level Task above it, which the stored subagent tool calls lead to.
+--- Map each Task whose agent wrote stored subagent messages to the top-level
+--- Task above it. A top-level Task maps to itself, and so does a nested one
+--- whose own tool call is not among the messages.
 --- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
---- @return string[] task_ids The top-level Tasks, in order
---- @return table<string, agentic.ui.ChatHistory.SubagentMessage[]> messages_by_task Each top-level Task's messages, in order
-function SessionRestore.subagent_sections(subagent_messages)
+--- @return table<string, string> top_level_of Each message's `parent_tool_use_id` -> its top-level Task id
+function SessionRestore.top_level_tasks(subagent_messages)
     --- @type table<string, string> tool call id -> spawning Task id
     local parent_of = {}
     for _, msg in ipairs(subagent_messages) do
@@ -386,50 +384,46 @@ function SessionRestore.subagent_sections(subagent_messages)
         end
     end
 
-    --- @type string[]
-    local task_ids = {}
-    --- @type table<string, agentic.ui.ChatHistory.SubagentMessage[]>
-    local messages_by_task = {}
+    --- @type table<string, string>
+    local top_level_of = {}
     for _, msg in ipairs(subagent_messages) do
         local task_id = msg.parent_tool_use_id --[[@as string]]
         while parent_of[task_id] do
             task_id = parent_of[task_id]
         end
-        if not messages_by_task[task_id] then
-            messages_by_task[task_id] = {}
-            table.insert(task_ids, task_id)
-        end
-        table.insert(messages_by_task[task_id], msg)
+        top_level_of[msg.parent_tool_use_id] = task_id
     end
-    return task_ids, messages_by_task
+    return top_level_of
 end
 
---- Replay stored subagent messages, one section per top-level Task (see
---- `subagent_sections`): a heading, the Task's messages, and a divider unless
---- the Task is still open.
+--- Replay stored subagent messages in stored order, with one heading per
+--- top-level Task at its first message. A nested agent's messages get none.
 --- @param writer agentic.ui.MessageWriter
 --- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
 --- @param info_by_task table<string, agentic.ui.MessageWriter.SubagentInfo> Task tool call id -> its subagent's identity and mode; a Task missing here is headed `Agent`
---- @param open_tasks table<string, true> Task tool call ids still running
---- @return string[] task_ids The Tasks replayed, in order
 function SessionRestore.replay_subagent_messages(
     writer,
     subagent_messages,
-    info_by_task,
-    open_tasks
+    info_by_task
 )
-    local task_ids, messages_by_task =
-        SessionRestore.subagent_sections(subagent_messages)
-    for _, task_id in ipairs(task_ids) do
-        writer:write_subagent_heading(
-            ToolCallRenderer.subagent_heading(info_by_task[task_id])
-        )
-        SessionRestore.replay_messages(writer, messages_by_task[task_id])
-        if not open_tasks[task_id] then
-            writer:emit_divider()
+    local top_level_of = SessionRestore.top_level_tasks(subagent_messages)
+    --- @type table<string, true>
+    local headed = {}
+    --- @type agentic.ui.ChatHistory.SubagentMessage[]
+    local run = {}
+    for _, msg in ipairs(subagent_messages) do
+        local task_id = top_level_of[msg.parent_tool_use_id]
+        if not headed[task_id] then
+            SessionRestore.replay_messages(writer, run)
+            run = {}
+            headed[task_id] = true
+            writer:write_subagent_heading(
+                ToolCallRenderer.subagent_heading(info_by_task[task_id])
+            )
         end
+        table.insert(run, msg)
     end
-    return task_ids
+    SessionRestore.replay_messages(writer, run)
 end
 
 --- Resolve a session reference to a cached session. Tries session_id prefix

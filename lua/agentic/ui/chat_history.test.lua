@@ -261,6 +261,37 @@ describe("ChatHistory", function()
                 assert.equal("b1", history.subagent_messages[2].text)
                 assert.is_true(history.dirty)
             end)
+
+            it("merges across another parent's tool call", function()
+                local history = ChatHistory:new()
+                --- @param text string
+                local function append_a(text)
+                    history:append_agent_text({
+                        type = "agent",
+                        text = text,
+                        provider_name = "test-provider",
+                        parent_tool_use_id = "task-a",
+                    })
+                end
+
+                append_a("a1")
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-b",
+                    status = "pending",
+                    kind = "read",
+                    parent_tool_use_id = "task-b",
+                })
+                append_a("a2")
+
+                assert.same(
+                    { "agent", "tool_call" },
+                    vim.tbl_map(function(msg)
+                        return msg.type
+                    end, history.subagent_messages)
+                )
+                assert.equal("a1a2", history.subagent_messages[1].text)
+            end)
         end)
 
         it("add_message puts a tagged message in subagent_messages", function()

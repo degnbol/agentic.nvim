@@ -776,31 +776,6 @@ describe("SessionRestore", function()
             )
         end)
 
-        it("replays a subagent call's ordinal", function()
-            local write_tool_spy = spy.new(function() end)
-
-            local writer = {
-                write_tool_call_block = write_tool_spy,
-                flush_thought_run = spy.new(function() end),
-            }
-
-            SessionRestore.replay_messages(
-                writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    {
-                        type = "tool_call",
-                        tool_call_id = "t-sub",
-                        kind = "read",
-                        argument = "a.lua",
-                        status = "completed",
-                        ordinal = 1,
-                    },
-                }
-            )
-
-            assert.equal(1, write_tool_spy.calls[1][2].ordinal)
-        end)
-
         it(
             "replays a foldable search tool call without emitting marker lines",
             function()
@@ -859,9 +834,34 @@ describe("SessionRestore", function()
         )
     end)
 
+    describe("top_level_tasks", function()
+        it("maps a nested Task's id to its top-level Task", function()
+            assert.same(
+                { top = "top", nested = "top", other = "other" },
+                SessionRestore.top_level_tasks({
+                    {
+                        type = "tool_call",
+                        tool_call_id = "nested",
+                        kind = "SubAgent",
+                        status = "completed",
+                        parent_tool_use_id = "top",
+                    },
+                    { type = "agent", text = "x", parent_tool_use_id = "other" },
+                    {
+                        type = "tool_call",
+                        tool_call_id = "deep-tool",
+                        kind = "read",
+                        status = "completed",
+                        parent_tool_use_id = "nested",
+                    },
+                })
+            )
+        end)
+    end)
+
     describe("replay_subagent_messages", function()
-        --- A writer that logs headings, messages, tool calls and dividers, in
-        --- order, one string each.
+        --- A writer that logs headings, messages and tool calls, in order, one
+        --- string each.
         --- @return table writer
         --- @return string[] log
         local function recording_writer()
@@ -879,56 +879,58 @@ describe("SessionRestore", function()
                     table.insert(log, "tool " .. block.tool_call_id)
                 end,
                 flush_thought_run = function() end,
-                emit_divider = function()
-                    table.insert(log, "divider")
-                end,
             }
             return writer, log
         end
 
-        it("groups by parent in first-seen order", function()
-            local writer, log = recording_writer()
+        it(
+            "replays in stored order, heading each Task before its first message",
+            function()
+                local writer, log = recording_writer()
 
-            local parents = SessionRestore.replay_subagent_messages(
-                writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    { type = "agent", text = "b1", parent_tool_use_id = "b" },
-                    { type = "agent", text = "a1", parent_tool_use_id = "a" },
+                SessionRestore.replay_subagent_messages(
+                    writer --[[@as agentic.ui.MessageWriter]],
                     {
-                        type = "tool_call",
-                        tool_call_id = "b-tool",
-                        kind = "read",
-                        status = "completed",
-                        parent_tool_use_id = "b",
+                        { type = "agent", text = "b1", parent_tool_use_id = "b" },
+                        { type = "agent", text = "a1", parent_tool_use_id = "a" },
+                        {
+                            type = "tool_call",
+                            tool_call_id = "b-tool",
+                            kind = "read",
+                            status = "completed",
+                            parent_tool_use_id = "b",
+                        },
+                        { type = "agent", text = "a2", parent_tool_use_id = "a" },
                     },
-                },
-                {
-                    a = { label = "Alpha", mode = "blocking", confirmed = true },
-                    b = {
-                        label = "Beta",
-                        mode = "background",
-                        confirmed = true,
-                    },
-                },
-                {}
-            )
+                    {
+                        a = {
+                            label = "Alpha",
+                            mode = "blocking",
+                            confirmed = true,
+                        },
+                        b = {
+                            label = "Beta",
+                            mode = "background",
+                            confirmed = true,
+                        },
+                    }
+                )
 
-            assert.same({ "b", "a" }, parents)
-            assert.same({
-                "heading Beta (Background)",
-                "agent b1",
-                "tool b-tool",
-                "divider",
-                "heading Alpha (Blocking)",
-                "agent a1",
-                "divider",
-            }, log)
-        end)
+                assert.same({
+                    "heading Beta (Background)",
+                    "agent b1",
+                    "heading Alpha (Blocking)",
+                    "agent a1",
+                    "tool b-tool",
+                    "agent a2",
+                }, log)
+            end
+        )
 
-        it("puts a nested agent's output in its top-level section", function()
+        it("gives a nested agent's messages no heading of their own", function()
             local writer, log = recording_writer()
 
-            local task_ids = SessionRestore.replay_subagent_messages(
+            SessionRestore.replay_subagent_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -946,20 +948,17 @@ describe("SessionRestore", function()
                         parent_tool_use_id = "nested",
                     },
                 },
-                { top = { label = "Top", mode = "blocking", confirmed = true } },
-                {}
+                { top = { label = "Top", mode = "blocking", confirmed = true } }
             )
 
-            assert.same({ "top" }, task_ids)
             assert.same({
                 "heading Top (Blocking)",
                 "tool nested",
                 "tool deep-tool",
-                "divider",
             }, log)
         end)
 
-        it("heads a group with no label as Agent", function()
+        it("heads a Task with no label as Agent", function()
             local writer, log = recording_writer()
 
             SessionRestore.replay_subagent_messages(
@@ -968,33 +967,11 @@ describe("SessionRestore", function()
                     { type = "agent", text = "x", parent_tool_use_id = "a" },
                     { type = "agent", text = "y", parent_tool_use_id = "b" },
                 },
-                { b = { mode = "blocking", confirmed = false } },
-                {}
+                { b = { mode = "blocking", confirmed = false } }
             )
 
             assert.equal("heading Agent", log[1])
-            assert.equal("heading Agent (Blocking?)", log[4])
-        end)
-
-        it("writes no divider after an open Task's group", function()
-            local writer, log = recording_writer()
-
-            SessionRestore.replay_subagent_messages(
-                writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    { type = "agent", text = "x", parent_tool_use_id = "a" },
-                },
-                {
-                    a = {
-                        label = "Alpha",
-                        mode = "background",
-                        confirmed = true,
-                    },
-                },
-                { a = true }
-            )
-
-            assert.same({ "heading Alpha (Background)", "agent x" }, log)
+            assert.equal("heading Agent (Blocking?)", log[3])
         end)
     end)
 end)

@@ -396,7 +396,7 @@ chunks to a dedicated `subagent_writer` (bound to `buf_nrs.subagent`) and record
 tool-call ownership on the initial `tool_call` via `_writer_for`; the Task spawn
 block itself stays in the main chat. The subagents split auto-opens on first
 subagent activity of a turn. claude-agent-acp only — untagged providers never
-populate the second buffer. See `notes/feature-subagent-separation.md`.
+populate the second buffer.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)
 
