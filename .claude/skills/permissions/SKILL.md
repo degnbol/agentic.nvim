@@ -389,7 +389,8 @@ buffer from the chat, so chat updates never displace the prompt.
   buffer: current tab, else bound tab, else any. Corner and offsets from
   `Config.permission_float`. `WinResized` reapplies geometry.
 - **Focus.** Never focusable; the keys live on the session's buffers and
-  the anchor's `companion_bufs` (a subagent's message input).
+  the anchor's `companion_bufs` (a subagent's message input). Keys shadow
+  same-lhs buffer maps and put them back on release.
 - **Hidden.** No float in the current tabpage: `on_hidden` once per
   request, `on_hidden_resolved` when it ends.
 - **Follows the layout.** While a request is shown,

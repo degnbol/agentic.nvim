@@ -78,6 +78,38 @@ function BufHelpers.keymap_set(bufnr, mode, lhs, rhs, opts)
     vim.keymap.set(mode, lhs, rhs, opts)
 end
 
+--- Set a buffer-local keymap over any buffer-local map of the same lhs.
+--- @param bufnr integer
+--- @param mode string
+--- @param lhs string
+--- @param rhs fun():any
+--- @param opts vim.keymap.set.Opts|nil
+--- @return fun() restore Deletes the map and puts back the one it replaced,
+---   if any. Does nothing once the buffer is invalid or the map on `lhs` is
+---   no longer this one (unloaded by `:bdelete`, or rebound).
+function BufHelpers.shadow_keymap(bufnr, mode, lhs, rhs, opts)
+    local replaced = vim.api.nvim_buf_call(bufnr, function()
+        return vim.fn.maparg(lhs, mode, false, true)
+    end)
+    BufHelpers.keymap_set(bufnr, mode, lhs, rhs, opts)
+
+    return function()
+        if not vim.api.nvim_buf_is_valid(bufnr) then
+            return
+        end
+        vim.api.nvim_buf_call(bufnr, function()
+            local current = vim.fn.maparg(lhs, mode, false, true)
+            if current.buffer ~= 1 or current.callback ~= rhs then
+                return
+            end
+            vim.keymap.del(mode, lhs, { buf = bufnr })
+            if replaced.buffer == 1 then
+                vim.fn.mapset(replaced)
+            end
+        end)
+    end
+end
+
 --- @param keymaps agentic.UserConfig.KeymapValue|nil
 --- @return boolean
 function BufHelpers.is_keymap_disabled(keymaps)
@@ -92,8 +124,9 @@ end
 
 --- Sets multiple keymaps from a KeymapValue config entry for a specific buffer.
 --- Normalizes the config value (string, string[], or array of string/KeymapEntry)
---- and calls keymap_set for each binding.
---- @param keymaps agentic.UserConfig.KeymapValue
+--- and calls keymap_set for each binding. Binds nothing for a disabled value
+--- (`is_keymap_disabled`).
+--- @param keymaps agentic.UserConfig.KeymapValue|nil
 --- @param bufnr integer
 --- @param callback fun():any
 --- @param opts vim.keymap.set.Opts|nil
@@ -105,6 +138,10 @@ function BufHelpers.multi_keymap_set(
     opts,
     default_mode
 )
+    if BufHelpers.is_keymap_disabled(keymaps) then
+        return
+    end
+    --- @cast keymaps -nil
     if type(keymaps) == "string" then
         keymaps = { keymaps }
     end

@@ -1075,18 +1075,16 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
         self:_bind_canned_prompt_keymaps(bufnr)
     end
 
-    if not BufHelpers.is_keymap_disabled(Config.keymaps.widget.refresh) then
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.widget.refresh,
-            bufnr,
-            function()
-                if self.on_refresh then
-                    self.on_refresh()
-                end
-            end,
-            { desc = "Agentic: Refresh chat (reset stale state)" }
-        )
-    end
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.refresh,
+        bufnr,
+        function()
+            if self.on_refresh then
+                self.on_refresh()
+            end
+        end,
+        { desc = "Agentic: Refresh chat (reset stale state)" }
+    )
 
     BufHelpers.multi_keymap_set(
         Config.keymaps.widget.toggle_auto_scroll,
@@ -1181,64 +1179,50 @@ end
 function ChatWidget:_bind_send_keymaps(bufnr)
     local keymaps = Config.keymaps.prompt
 
-    if not BufHelpers.is_keymap_disabled(keymaps.send_line) then
-        BufHelpers.multi_keymap_set(keymaps.send_line, bufnr, function()
-            self:_send_line()
-        end, { desc = "Agentic: Send line" })
-    end
+    BufHelpers.multi_keymap_set(keymaps.send_line, bufnr, function()
+        self:_send_line()
+    end, { desc = "Agentic: Send line" })
 
-    if not BufHelpers.is_keymap_disabled(keymaps.send_operator) then
-        BufHelpers.multi_keymap_set(keymaps.send_operator, bufnr, function()
-            vim.o.operatorfunc =
-                "v:lua.require'agentic.ui.chat_widget'._send_operator_dispatch"
-            return "g@"
-        end, {
-            desc = "Agentic: Send motion",
-            expr = true,
-            silent = true,
-        })
-    end
+    BufHelpers.multi_keymap_set(keymaps.send_operator, bufnr, function()
+        vim.o.operatorfunc =
+            "v:lua.require'agentic.ui.chat_widget'._send_operator_dispatch"
+        return "g@"
+    end, {
+        desc = "Agentic: Send motion",
+        expr = true,
+        silent = true,
+    })
 
-    if not BufHelpers.is_keymap_disabled(keymaps.send_visual) then
-        BufHelpers.multi_keymap_set(keymaps.send_visual, bufnr, function()
-            self:_send_visual()
-        end, { desc = "Agentic: Send visual" }, "x")
-    end
+    BufHelpers.multi_keymap_set(keymaps.send_visual, bufnr, function()
+        self:_send_visual()
+    end, { desc = "Agentic: Send visual" }, "x")
 end
 
 --- @param bufnr integer The input buffer
 function ChatWidget:_bind_queue_keymaps(bufnr)
     local keymaps = Config.keymaps.prompt
 
-    if not BufHelpers.is_keymap_disabled(keymaps.queue_line) then
-        BufHelpers.multi_keymap_set(keymaps.queue_line, bufnr, function()
-            self:_queue_line()
-        end, { desc = "Agentic: Queue line" })
-    end
+    BufHelpers.multi_keymap_set(keymaps.queue_line, bufnr, function()
+        self:_queue_line()
+    end, { desc = "Agentic: Queue line" })
 
-    if not BufHelpers.is_keymap_disabled(keymaps.queue_operator) then
-        BufHelpers.multi_keymap_set(keymaps.queue_operator, bufnr, function()
-            vim.o.operatorfunc =
-                "v:lua.require'agentic.ui.chat_widget'._queue_operator_dispatch"
-            return "g@"
-        end, {
-            desc = "Agentic: Queue motion",
-            expr = true,
-            silent = true,
-        })
-    end
+    BufHelpers.multi_keymap_set(keymaps.queue_operator, bufnr, function()
+        vim.o.operatorfunc =
+            "v:lua.require'agentic.ui.chat_widget'._queue_operator_dispatch"
+        return "g@"
+    end, {
+        desc = "Agentic: Queue motion",
+        expr = true,
+        silent = true,
+    })
 
-    if not BufHelpers.is_keymap_disabled(keymaps.queue_visual) then
-        BufHelpers.multi_keymap_set(keymaps.queue_visual, bufnr, function()
-            self:_queue_visual()
-        end, { desc = "Agentic: Queue visual" }, "x")
-    end
+    BufHelpers.multi_keymap_set(keymaps.queue_visual, bufnr, function()
+        self:_queue_visual()
+    end, { desc = "Agentic: Queue visual" }, "x")
 
-    if not BufHelpers.is_keymap_disabled(keymaps.cancel_queue) then
-        BufHelpers.multi_keymap_set(keymaps.cancel_queue, bufnr, function()
-            self:cancel_queue()
-        end, { desc = "Agentic: Cancel queue" })
-    end
+    BufHelpers.multi_keymap_set(keymaps.cancel_queue, bufnr, function()
+        self:cancel_queue()
+    end, { desc = "Agentic: Cancel queue" })
 end
 
 --- Register the input buffer for operatorfunc dispatch (shared by send and

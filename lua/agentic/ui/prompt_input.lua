@@ -16,16 +16,14 @@ local GROUP = vim.api.nvim_create_augroup("agentic_prompt_submit", {})
 --- @param bufnr integer
 --- @param submit fun(opts: agentic.ui.PromptInput.SubmitOpts)
 function PromptInput.bind_submit(bufnr, submit)
-    if not BufHelpers.is_keymap_disabled(Config.keymaps.prompt.submit) then
-        BufHelpers.multi_keymap_set(
-            Config.keymaps.prompt.submit,
-            bufnr,
-            function()
-                submit({ force = false })
-            end,
-            { desc = "Agentic: Submit prompt" }
-        )
-    end
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.prompt.submit,
+        bufnr,
+        function()
+            submit({ force = false })
+        end,
+        { desc = "Agentic: Submit prompt" }
+    )
 
     vim.api.nvim_clear_autocmds({ group = GROUP, buffer = bufnr })
     if not Config.settings.write_submit then

@@ -221,4 +221,151 @@ describe("BufHelpers", function()
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
     end)
+
+    describe("multi_keymap_set", function()
+        it("binds nothing for a disabled value", function()
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            local before = #vim.api.nvim_buf_get_keymap(bufnr, "n")
+            for _, disabled in ipairs({ "", false, {} }) do
+                BufHelpers.multi_keymap_set(disabled, bufnr, function() end)
+            end
+            BufHelpers.multi_keymap_set(nil, bufnr, function() end)
+            assert.equal(before, #vim.api.nvim_buf_get_keymap(bufnr, "n"))
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+    end)
+
+    describe("shadow_keymap", function()
+        --- @type integer
+        local bufnr
+
+        --- @return table map The buffer-local `n` map on `<localLeader>y`,
+        ---   `{}` with none
+        local function local_map()
+            local map = vim.api.nvim_buf_call(bufnr, function()
+                return vim.fn.maparg("<localLeader>y", "n", false, true)
+            end)
+            return map.buffer == 1 and map or {}
+        end
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("puts back a Lua-callback map with its callback and desc", function()
+            local original = spy.new(function() end)
+            BufHelpers.keymap_set(bufnr, "n", "<localLeader>y", function()
+                original()
+            end, { desc = "original" })
+
+            local restore = BufHelpers.shadow_keymap(
+                bufnr,
+                "n",
+                "<localLeader>y",
+                function() end,
+                { desc = "shadow" }
+            )
+            assert.equal("shadow", local_map().desc)
+
+            restore()
+            assert.equal("original", local_map().desc)
+            local_map().callback()
+            assert.spy(original).was.called(1)
+        end)
+
+        it("leaves no map when there was none", function()
+            local restore = BufHelpers.shadow_keymap(
+                bufnr,
+                "n",
+                "<localLeader>y",
+                function() end
+            )
+            restore()
+            assert.same({}, local_map())
+        end)
+
+        it(
+            "gives back the original after two shadows restored in reverse",
+            function()
+                BufHelpers.keymap_set(
+                    bufnr,
+                    "n",
+                    "<localLeader>y",
+                    function() end,
+                    { desc = "original" }
+                )
+                local restore_first = BufHelpers.shadow_keymap(
+                    bufnr,
+                    "n",
+                    "<localLeader>y",
+                    function() end,
+                    { desc = "first" }
+                )
+                local restore_second = BufHelpers.shadow_keymap(
+                    bufnr,
+                    "n",
+                    "<localLeader>y",
+                    function() end,
+                    { desc = "second" }
+                )
+
+                restore_second()
+                restore_first()
+                assert.equal("original", local_map().desc)
+            end
+        )
+
+        it("does nothing on restore once the buffer is gone", function()
+            local other = vim.api.nvim_create_buf(false, true)
+            local restore = BufHelpers.shadow_keymap(
+                other,
+                "n",
+                "x",
+                function() end
+            )
+            vim.api.nvim_buf_delete(other, { force = true })
+            restore()
+        end)
+
+        it("does nothing on restore once :bdelete freed the map", function()
+            local restore = BufHelpers.shadow_keymap(
+                bufnr,
+                "n",
+                "<localLeader>y",
+                function() end
+            )
+            vim.cmd.bdelete({ bufnr, bang = true })
+            restore()
+            assert.is_true(vim.api.nvim_buf_is_valid(bufnr))
+        end)
+
+        it("leaves a map bound over the shadow in place", function()
+            BufHelpers.keymap_set(
+                bufnr,
+                "n",
+                "<localLeader>y",
+                function() end,
+                { desc = "original" }
+            )
+            local restore = BufHelpers.shadow_keymap(
+                bufnr,
+                "n",
+                "<localLeader>y",
+                function() end
+            )
+            BufHelpers.keymap_set(
+                bufnr,
+                "n",
+                "<localLeader>y",
+                function() end,
+                { desc = "newer" }
+            )
+            restore()
+            assert.equal("newer", local_map().desc)
+        end)
+    end)
 end)

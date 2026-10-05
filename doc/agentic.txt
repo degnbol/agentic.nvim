@@ -561,7 +561,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<C-c>`            n/i     Stop generation
     `<localLeader>c`   n       Send "Continue" (canned prompt)
     `<localLeader>R`   n       Restore session
-    `<localLeader>s`   n       Switch provider
+    `<localLeader>p`   n       Switch provider
     `<localLeader>M`   n       Switch model
     `<localLeader>q`   n       Close widget (|agentic-buffers|)
     `<localLeader>!`   n       Restart session
@@ -583,10 +583,10 @@ Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
     `<S-CR>`           x       Queue the selected line(s) for dispatch
     `<S-C-c>`          n       Drop every queued region (text stays as draft)
     `:w`               c       Submit (|agentic-config-settings-tbl|)
-    `<localLeader>p`   n       Paste image
-    `<C-v>`            i       Paste image
 
 `<S-CR>` and `<S-C-c>` require a terminal with the kitty keyboard protocol.
+
+`paste_image` (default off) pastes a clipboard image through img-clip.nvim.
 
 What the queue bindings dispatch, and when, is in |agentic-queue|.
 
@@ -617,7 +617,8 @@ chat paste there.
 
 Mapped in every widget buffer of a session while its permission float is
 shown in the current tabpage. Set with `keymaps.permission`, keyed by
-option kind. What each option does is in |agentic-permissions-prompt|.
+option kind. A permission key shadows a key with the same lhs while the
+prompt is active. What each option does is in |agentic-permissions-prompt|.
 
     Key              Kind             Option ~
     `<localLeader>y`   `allow_once`       Allow once

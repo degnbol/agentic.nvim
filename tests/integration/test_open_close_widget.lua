@@ -46,6 +46,28 @@ describe("Open and Close Chat Widget", function()
         assert.equal(39, original_width)
     end)
 
+    it("binds <localLeader>p to switch provider and leaves i_CTRL-V", function()
+        child.lua([[ require("agentic").toggle() ]])
+        child.flush()
+
+        local input = child.lua_get([[require("agentic.session_registry")
+            .bound_session(vim.api.nvim_get_current_tabpage()).widget.buf_nrs.input]])
+        --- @param lhs string
+        --- @param mode string
+        --- @return string|vim.NIL desc The desc of the input buffer's map,
+        ---   `vim.NIL` with no map
+        local function map_desc(lhs, mode)
+            return child.lua_get(string.format(
+                [[vim.api.nvim_buf_call(%d, function() return vim.fn.maparg(%q, %q, false, true).desc end)]],
+                input,
+                lhs,
+                mode
+            ))
+        end
+        assert.equal("Agentic: Switch provider", map_desc("<localLeader>p", "n"))
+        assert.equal(vim.NIL, map_desc("<C-v>", "i"))
+    end)
+
     it("toggles the widget to show and hide it", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()

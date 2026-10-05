@@ -561,10 +561,11 @@ _G.request()
         child.lua([[vim.cmd("tabnext 2")]])
         child.flush()
         assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
-        assert.is_true(
-            child.lua_get([[vim.tbl_contains(vim.tbl_map(function(info)
-    return info.bufnr
-end, _G.s.permission_manager.keymap_info), _G.input("c1").bufnr)]])
+        assert.equal(
+            "Select permission option allow",
+            child.lua_get([[vim.api.nvim_buf_call(_G.input("c1").bufnr, function()
+    return vim.fn.maparg("<localLeader>y", "n", false, true).desc
+end)]])
         )
 
         child.lua([[vim.cmd("tabnext 1")]])

@@ -31,7 +31,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field _buf_nrs agentic.ui.ChatWidget.BufNrs All widget buffer numbers for keymap application
 --- @field queue table[] Queue of pending requests {toolCallId, request, callback}
 --- @field current_request? agentic.ui.PermissionManager.PermissionRequest Currently displayed request
---- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
+--- @field _keymap_restores fun()[] One per option key bound on a buffer, in binding order. Each unbinds its key and puts back the map it shadowed
 --- @field _layout_autocmd? integer Autocmd re-placing the float and its option keys on layout changes while a request is shown
 --- @field permission_float agentic.ui.PermissionFloat
 --- @field on_present? fun(bufnr: integer) Called when a request reaches the front of the queue, before its float opens on a window showing `bufnr`, the buffer of its tool call
@@ -64,7 +64,7 @@ function PermissionManager:new(message_writer, buf_nrs, owner_id, writer_for)
         ),
         queue = {},
         current_request = nil,
-        keymap_info = {},
+        _keymap_restores = {},
         _hidden = false,
         _always_cache = {},
         _execute_leaf_allow = {},
@@ -1062,7 +1062,8 @@ end
 --- buffer owning the request's tool call and on its `companion_bufs`, while
 --- its float is visible in the current tabpage, and unbind them otherwise:
 --- the keys are buffer-local, and the buffers can be shown in a tabpage the
---- float is not in.
+--- float is not in. A key shadows any buffer-local map of the same lhs until
+--- unbound.
 function PermissionManager:_sync_keymaps()
     self:_remove_keymaps()
 
@@ -1101,25 +1102,24 @@ function PermissionManager:_sync_keymaps()
 
         for _, bufnr in ipairs(bufnrs) do
             if vim.api.nvim_buf_is_valid(bufnr) then
-                BufHelpers.keymap_set(bufnr, "n", lhs, callback, {
-                    desc = "Select permission option " .. option_id,
-                })
                 table.insert(
-                    self.keymap_info,
-                    { mode = "n", lhs = lhs, bufnr = bufnr }
+                    self._keymap_restores,
+                    BufHelpers.shadow_keymap(bufnr, "n", lhs, callback, {
+                        desc = "Select permission option " .. option_id,
+                    })
                 )
             end
         end
     end
 end
 
+--- Unbind the option keys and put back the maps they shadowed.
 function PermissionManager:_remove_keymaps()
-    for _, info in ipairs(self.keymap_info) do
-        if vim.api.nvim_buf_is_valid(info.bufnr) then
-            pcall(vim.keymap.del, info.mode, info.lhs, { buffer = info.bufnr })
-        end
+    -- LIFO, so overlapping shadows unwind correctly.
+    for i = #self._keymap_restores, 1, -1 do
+        self._keymap_restores[i]()
     end
-    self.keymap_info = {}
+    self._keymap_restores = {}
 end
 
 --- Place the current request's float for the current layout and bind its

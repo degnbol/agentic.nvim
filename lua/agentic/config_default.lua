@@ -254,7 +254,7 @@ local ConfigDefault = {
             refresh = "",
             toggle_auto_scroll = "<localLeader>a",
             goto_bottom = "<localLeader>G",
-            switch_provider = "<localLeader>s",
+            switch_provider = "<localLeader>p",
             switch_model = "<localLeader>M",
         },
 
@@ -309,16 +309,9 @@ local ConfigDefault = {
             --- as ordinary draft in place.
             cancel_queue = "<S-C-c>",
 
-            paste_image = {
-                {
-                    "<localLeader>p",
-                    mode = { "n" },
-                },
-                {
-                    "<C-v>", -- Same as Claude-code in insert mode
-                    mode = { "i" },
-                },
-            },
+            --- Opt-in. Needs img-clip.nvim.
+            --- Example: `{ { "<C-v>", mode = { "i" } } }`
+            paste_image = "",
         },
 
         --- Key bindings for the chat buffer

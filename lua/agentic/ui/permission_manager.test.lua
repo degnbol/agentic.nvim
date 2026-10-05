@@ -1,6 +1,7 @@
 --- @diagnostic disable: invisible, missing-fields
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local BufHelpers = require("agentic.utils.buf_helpers")
 
 describe("agentic.ui.PermissionManager", function()
     --- @type agentic.ui.MessageWriter
@@ -297,6 +298,56 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("allow-once")
             assert.is_false(key_mapped())
             assert.is_nil(pm._layout_autocmd)
+        end)
+
+        describe("shadowing a buffer map of the same lhs", function()
+            --- @type TestSpy
+            local own_map
+
+            --- @param n_refreshes integer
+            local function prompt_and_resolve(n_refreshes)
+                local cb = spy.new(function() end)
+                pm:add_request({
+                    sessionId = "test-session",
+                    toolCall = { toolCallId = "tc-shadow", kind = "edit" },
+                    options = {
+                        {
+                            optionId = "allow-once",
+                            name = "Allow",
+                            kind = "allow_once",
+                        },
+                    },
+                }, cb --[[@as function]])
+                for _ = 1, n_refreshes do
+                    pm:refresh_float()
+                end
+                vim.fn.maparg("<localLeader>1", "n", false, true).callback()
+                assert.is_true(cb:called_with("allow-once"))
+            end
+
+            before_each(function()
+                pm:clear()
+                own_map = spy.new(function() end)
+                BufHelpers.keymap_set(bufnr, "n", "<localLeader>1", function()
+                    own_map()
+                end, { desc = "own" })
+            end)
+
+            it("puts the map back after the prompt", function()
+                prompt_and_resolve(0)
+                local map = vim.fn.maparg("<localLeader>1", "n", false, true)
+                assert.equal("own", map.desc)
+                map.callback()
+                assert.spy(own_map).was.called(1)
+            end)
+
+            it("puts the map back across refreshes", function()
+                prompt_and_resolve(2)
+                assert.equal(
+                    "own",
+                    vim.fn.maparg("<localLeader>1", "n", false, true).desc
+                )
+            end)
         end)
     end)
 
