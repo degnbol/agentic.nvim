@@ -107,9 +107,16 @@ _G.tab_bufs = function(tab)
     end
     return bufs
 end
+-- Opens `bufnr` in a new last tabpage, as a user would, and keeps the current
+-- tabpage current.
+_G.show = function(bufnr)
+    local tab = vim.api.nvim_get_current_tabpage()
+    vim.cmd("$tab sbuffer " .. bufnr)
+    vim.api.nvim_set_current_tabpage(tab)
+end
 ]]
 
-describe("subagent tabs", function()
+describe("subagents", function()
     local child = Child.new()
 
     before_each(function()
@@ -123,24 +130,17 @@ describe("subagent tabs", function()
     end)
 
     for mode, background in pairs({ background = true, blocking = false }) do
-        it("a " .. mode .. " spawn opens a last tab holding only its transcript", function()
+        it("a " .. mode .. " spawn opens no window", function()
             child.lua(string.format(
                 [[
 require("agentic.config").subagents.force_background = %s
-_G.tab = vim.api.nvim_get_current_tabpage()
 _G.spawn("c1")
 ]],
                 tostring(background)
             ))
 
-            assert.equal(2, child.lua_get("#vim.api.nvim_list_tabpages()"))
-            assert.is_true(
-                child.lua_get("vim.api.nvim_get_current_tabpage() == _G.tab")
-            )
-            assert.same(
-                { child.lua_get([[_G.transcript("c1").bufnr]]) },
-                child.lua_get("_G.tab_bufs(vim.api.nvim_list_tabpages()[2])")
-            )
+            assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
+            assert.equal(0, child.lua_get([[_G.wins_of(_G.transcript("c1").bufnr)]]))
             assert.equal(background, child.lua_get([[_G.input("c1") ~= nil]]))
         end)
     end
@@ -159,7 +159,6 @@ _G.write_meta("c1", "background")
 _G.read_record("c1")
 ]])
 
-        assert.equal(2, child.lua_get("#vim.api.nvim_list_tabpages()"))
         assert.is_true(child.lua_get([[_G.input("c1") ~= nil]]))
     end)
 
@@ -175,7 +174,7 @@ _G.read_record("c1")
         assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
     end)
 
-    it("a record confirming blocking destroys the input and keeps the tab", function()
+    it("a record confirming blocking destroys the input", function()
         child.lua([[
 _G.spawn("c1")
 _G.bufnr = _G.input("c1").bufnr
@@ -185,16 +184,14 @@ _G.read_record("c1")
 
         assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
         assert.is_false(child.lua_get("vim.api.nvim_buf_is_valid(_G.bufnr)"))
-        assert.equal(2, child.lua_get("#vim.api.nvim_list_tabpages()"))
     end)
 
-    it("no tab or input while loading", function()
+    it("no input while loading", function()
         child.lua([[
 _G.s._loading = true
 _G.spawn("c1")
 ]])
 
-        assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
         assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
     end)
 
@@ -209,9 +206,9 @@ _G.spawn("c1")
 
     it("a later generation reuses the input and takes over the windows", function()
         child.lua([[
-require("agentic.config").windows.subagent.auto_close = false
 _G.spawn("c1")
 _G.old = _G.transcript("c1").bufnr
+_G.show(_G.old)
 vim.cmd("vsplit")
 vim.api.nvim_win_set_buf(0, _G.old)
 _G.first_input = _G.input("c1")
@@ -230,24 +227,9 @@ _G.read_record("c1")
         assert.equal(2, child.lua_get("_G.wins_of(_G.new)"))
     end)
 
-    it("a later generation whose predecessor's tab closed opens one", function()
+    it("with no window, output lands and <C-c> stops that agent", function()
         child.lua([[
 _G.spawn("c1")
-vim.cmd("tabclose 2")
-_G.state("c1", "completed")
-_G.spawn("c1:generation:2")
-]])
-
-        assert.same(
-            { child.lua_get([[_G.transcript("c1:generation:2").bufnr]]) },
-            child.lua_get("_G.tab_bufs(vim.api.nvim_list_tabpages()[2])")
-        )
-    end)
-
-    it("after the tab closes, output lands and <C-c> stops that agent", function()
-        child.lua([[
-_G.spawn("c1")
-vim.cmd("tabclose 2")
 _G.chunk("c1", "still going")
 _G.press(_G.transcript("c1").bufnr, "<C-c>")
 _G.press(_G.input("c1").bufnr, "<C-c>")
@@ -422,9 +404,10 @@ _G.s:_reset_subagents()
         assert.truthy(child.lua_get("_G.notices[1]"):find("unsent words", 1, true))
     end)
 
-    it("the last tab closes cleanly when its transcript and input go", function()
+    it("a current tab holding only a transcript and its input closes when they go", function()
         child.lua([[
 _G.spawn("c1")
+_G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
 _G.press(_G.transcript("c1").bufnr, "i")
 vim.cmd("stopinsert")
@@ -432,49 +415,6 @@ _G.s:_reset_subagents()
 ]])
 
         assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
-    end)
-end)
-
-describe("subagent auto-close", function()
-    local child = Child.new()
-
-    before_each(function()
-        child.setup()
-        child.lua(SETUP)
-        child.lua([[
-_G.spawn("c1")
-_G.spawn("c2")
-]])
-        child.flush()
-    end)
-
-    after_each(function()
-        child.stop()
-    end)
-
-    it("closes an ended subagent's windows in other tabpages, its input's too", function()
-        child.lua([[
-vim.cmd("tabnext 3")
-_G.press(_G.transcript("c2").bufnr, "i")
-vim.cmd("stopinsert")
-vim.cmd("tabnext 1")
-_G.state("c2", "completed")
-]])
-
-        assert.equal(2, child.lua_get("#vim.api.nvim_list_tabpages()"))
-        assert.equal(0, child.lua_get([[_G.wins_of(_G.transcript("c2").bufnr)]]))
-        assert.equal(0, child.lua_get([[_G.wins_of(_G.input("c2").bufnr)]]))
-        assert.equal(1, child.lua_get([[_G.wins_of(_G.transcript("c1").bufnr)]]))
-    end)
-
-    it("leaves its window in the current tabpage", function()
-        child.lua([[
-vim.cmd("tabnext 3")
-_G.state("c2", "completed")
-]])
-
-        assert.equal(3, child.lua_get("#vim.api.nvim_list_tabpages()"))
-        assert.equal(1, child.lua_get([[_G.wins_of(_G.transcript("c2").bufnr)]]))
     end)
 end)
 
@@ -494,6 +434,7 @@ describe("insert keys", function()
     it("in a transcript with an input open the input below, then focus it", function()
         child.lua([[
 _G.spawn("c1")
+_G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
 _G.tr = vim.api.nvim_get_current_win()
 _G.press(_G.transcript("c1").bufnr, "i")
@@ -514,6 +455,7 @@ _G.press(_G.transcript("c1").bufnr, "a")
         child.lua([[
 require("agentic.config").subagents.force_background = false
 _G.spawn("c1")
+_G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
 _G.press(_G.transcript("c1").bufnr, "i")
 ]])
@@ -529,6 +471,7 @@ _G.press(_G.transcript("c1").bufnr, "i")
         child.lua([[
 vim.fn.setreg('"', "pasted")
 _G.spawn("c1")
+_G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
 _G.press(_G.transcript("c1").bufnr, "p")
 ]])
@@ -607,7 +550,10 @@ end
     end)
 
     it("a prompt not in the current tab is hidden until its tab is entered, and rings once", function()
-        child.lua([[_G.request()]])
+        child.lua([[
+_G.show(_G.transcript("c1").bufnr)
+_G.request()
+]])
         child.flush()
         assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
         assert.equal(1, child.lua_get("_G.bells"))
@@ -633,6 +579,7 @@ end, _G.s.permission_manager.keymap_info), _G.input("c1").bufnr)]])
 _G.badge = function()
     return require("agentic.ui.window_decoration").get_header(_G.transcript("c1").bufnr).badge
 end
+_G.show(_G.transcript("c1").bufnr)
 _G.request()
 ]])
         child.flush()
@@ -645,10 +592,7 @@ _G.request()
     end)
 
     it("a prompt whose transcript has no window opens its tab", function()
-        child.lua([[
-vim.cmd("tabclose 2")
-_G.request()
-]])
+        child.lua([[_G.request()]])
 
         assert.same(
             { child.lua_get([[_G.transcript("c1").bufnr]]) },

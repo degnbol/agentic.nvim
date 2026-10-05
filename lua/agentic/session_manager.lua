@@ -1016,10 +1016,9 @@ local BLOCK_STATUS_OF_STATE = {
 --- Start a subagent the provider announced: its block in the main chat, then
 --- its transcript and working indicator, and a background one's message
 --- input. The transcript of a later generation shows in the windows showing
---- an earlier one; with none, or for a first generation, it opens in a
---- tabpage of its own when `windows.subagent.display` is set. While a session
---- loads, only the block and an unloaded transcript for it to name: the
---- session file holds the agent's output, and its agent is long over.
+--- an earlier one. While a session loads, only the block and an unloaded
+--- transcript for it to name: the session file holds the agent's output, and
+--- its agent is long over.
 --- @param child_id string
 --- @param name string
 --- @param task string The prompt
@@ -1074,12 +1073,7 @@ function SessionManager:_open_agent(child_id, name, task)
         transcript:unload()
     else
         transcript.status_indicator:start("generating")
-        if
-            not self:_show_generation(child_id)
-            and Config.windows.subagent.display
-        then
-            WidgetLayout.open_tab(transcript.bufnr)
-        end
+        self:_show_generation(child_id)
         self:_open_input(child_id)
     end
     self:_read_agent_record(child_id)
@@ -1088,11 +1082,9 @@ end
 --- Show a subagent's transcript in every window showing a transcript of an
 --- earlier generation of the same agent.
 --- @param child_id string
---- @return boolean shown Some window shows it
 function SessionManager:_show_generation(child_id)
     local agent_id, generation = self.agent:subagent_id(child_id)
     local bufnr = self._agents[child_id].transcript.bufnr
-    local shown = false
     for other_id, agent in pairs(self._agents) do
         local other_agent_id, other_generation = self.agent:subagent_id(other_id)
         if
@@ -1102,18 +1094,14 @@ function SessionManager:_show_generation(child_id)
         then
             for _, winid in ipairs(vim.fn.win_findbuf(agent.transcript.bufnr)) do
                 vim.api.nvim_win_set_buf(winid, bufnr)
-                shown = true
             end
         end
     end
-    return shown
 end
 
 --- End a running subagent: stop its indicator, stamp its unresolved calls
 --- `cancelled` unless it completed, end its writer's runs, set its block's
---- status. With `windows.subagent.auto_close` set, close the windows showing
---- its transcript or message input outside the current tabpage, where the
---- user is not reading them. A no-op for an unknown or ended one.
+--- status. A no-op for an unknown or ended one.
 --- @param child_id string
 --- @param state agentic.acp.SubagentState
 function SessionManager:_close_agent(child_id, state)
@@ -1138,20 +1126,6 @@ function SessionManager:_close_agent(child_id, state)
     if transcript then
         local block = self:_agent_block(child_id)
         transcript:set_header(block and block.subagent, state)
-    end
-
-    if Config.windows.subagent.auto_close and transcript then
-        local input = self._inputs[(self.agent:subagent_id(child_id))]
-        local winids = vim.fn.win_findbuf(transcript.bufnr)
-        if input then
-            vim.list_extend(winids, vim.fn.win_findbuf(input.bufnr))
-        end
-        local tab = vim.api.nvim_get_current_tabpage()
-        for _, winid in ipairs(winids) do
-            if vim.api.nvim_win_get_tabpage(winid) ~= tab then
-                vim.api.nvim_win_close(winid, true)
-            end
-        end
     end
 end
 

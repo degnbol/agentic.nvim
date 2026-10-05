@@ -96,12 +96,6 @@ describe("native subagent sessions", function()
                 .lua_get([[_G.text(_G.transcript("aa11bb22cc33dd44").bufnr)]])
                 :find("## find it (Blocking?)", 1, true)
         )
-        assert.equal(
-            1,
-            child.lua_get(
-                [[#vim.fn.win_findbuf(_G.transcript("aa11bb22cc33dd44").bufnr)]]
-            )
-        )
     end)
 
     it("a child's chunks and tool calls land in its transcript", function()
@@ -295,7 +289,6 @@ _G.state("c1", "cancelled")
         function()
             child.lua([[
 _G.spawn("c1")
-vim.cmd("tabclose 2")
 _G.s:_on_request_permission({
     sessionId = "c1",
     toolCall = { toolCallId = "t9" },
@@ -521,7 +514,6 @@ h.on_tool_call_update({ tool_call_id = "t1", status = "completed" }, "c1")
     it("an auto-approved request opens no tab", function()
         child.lua([[
 _G.spawn("c1")
-vim.cmd("tabclose 2")
 _G.s.permission_manager.add_request = function() return false end
 _G.s:_on_request_permission({ sessionId = "c1", toolCall = { toolCallId = "t9" },
   options = { { optionId = "allow", name = "Allow", kind = "allow_once" } } }, function() end)
@@ -591,6 +583,7 @@ _G.chunk("c1", "back", "toolu_1")
     it("two tabpages' sessions keep their transcripts apart", function()
         child.lua([[
 _G.spawn("c1")
+vim.cmd("$tab sbuffer " .. _G.transcript("c1").bufnr)
 vim.cmd("tabnew")
 require("agentic").toggle()
 _G.s2 = require("agentic.session_registry").bound_session(
@@ -629,24 +622,6 @@ describe("transcript windows", function()
 
     after_each(function()
         child.stop()
-    end)
-
-    it("each subagent gets a tab of its own", function()
-        child.lua([[
-_G.spawn("c1")
-_G.spawn("c2")
-]])
-
-        assert.equal(3, child.lua_get("#vim.api.nvim_list_tabpages()"))
-        for i, id in ipairs({ "c1", "c2" }) do
-            assert.equal(
-                child.lua_get(string.format([[_G.transcript(%q).bufnr]], id)),
-                child.lua_get(string.format(
-                    [[vim.api.nvim_win_get_buf(vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[%d])[1])]],
-                    i + 1
-                ))
-            )
-        end
     end)
 
     for keys, check in pairs({

@@ -187,8 +187,6 @@ local ConfigDefault = {
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- @class agentic.UserConfig.Windows.Subagent
-    --- @field display boolean Open each new subagent's transcript in a tabpage of its own
-    --- @field auto_close boolean Close a subagent's windows outside the current tabpage when it ends
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- `"tab"` opens the widget in a dedicated tabpage (no file window),
@@ -230,7 +228,7 @@ local ConfigDefault = {
             win_opts = {},
         },
         todos = { display = true, max_height = 10, win_opts = {} },
-        subagent = { display = true, auto_close = true, win_opts = {} },
+        subagent = { win_opts = {} },
     },
 
     --- @type agentic.UserConfig.Keymaps

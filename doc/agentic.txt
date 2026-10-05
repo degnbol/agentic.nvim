@@ -180,14 +180,10 @@ All options with defaults are in `lua/agentic/config_default.lua`.
       `activity`      `{ display = true, max_height = 10,`
                       ` hide_reverted = true, win_opts = {} }`
       `todos`         `{ display = true, max_height = 10, win_opts = {} }`
-      `subagent`      `{ display = true, auto_close = true, win_opts = {} }`
+      `subagent`      `{ win_opts = {} }`
 
     `activity.display` turns off both the panel and its count in the chat
     header. `activity.hide_reverted`: see |agentic-file-activity|.
-
-    `subagent.display` opens each new subagent's transcript in a tabpage of
-    its own. `subagent.auto_close` closes a subagent's windows outside the
-    current tabpage when it ends. See |agentic-subagents|.
 
     `win_opts` is passed to |nvim_set_option_value()| for each window.
 
@@ -712,8 +708,8 @@ notices as well as prompts (|agentic-keymaps-chat|).
 
 A tool call the agent is not cleared to make raises a prompt in a float
 (|agentic-config-permission_float|) on the window showing that tool call's
-buffer: the chat, or the subagent's transcript, whose tabpage the request
-opens if no window shows it. A float outside the current tabpage counts as
+buffer: the chat, or the subagent's transcript, which the request opens in a
+new last tabpage if no window shows it. A float outside the current tabpage counts as
 hidden (|agentic-attention|). The options come
 from the provider; the plugin inserts "Reject all" ahead of the provider's
 "Reject always", or appends it when there is none. When the agent leaves
@@ -968,13 +964,10 @@ not listed.
 ------------------------------------------------------------------------------
 9.6 SUBAGENTS                                              *agentic-subagents*
 
-With claude-agent-acp, each subagent has its own transcript: a buffer named
-`agentic://<id>/subagent/<agent id tail>-<name>` holding its prose, thinking
-and tool calls under a `##` heading like its block's. A transcript shows its
-subagent as working until the subagent ends.
-
-Each transcript opens alone in a new last tabpage, which does not become
-current (|agentic-config-windows|).
+With claude-agent-acp, each subagent has its own transcript: a listed buffer
+named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
+thinking and tool calls under a `##` heading like its block's. A transcript
+shows its subagent as working until the subagent ends.
 
 Each subagent also has a block in the chat:
 
@@ -996,7 +989,7 @@ prompt in the chat; `@path` stays text. `<C-c>` in either buffer asks the
 main agent to stop the subagent. A message to a finished subagent resumes it
 in the same windows and input. A blocking subagent has no message input: in
 its transcript, insert keys go to the session's input and `<C-c>` stops the
-turn. Restored subagents have no input or tabpage.
+turn. Restored subagents have no input.
 
 Transcripts are saved with the session (|agentic-buffers|) and come back on
 load and restore.

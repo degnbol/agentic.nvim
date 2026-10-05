@@ -628,6 +628,9 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             open_task("task-1")
             subagent_call("c-1", "task-1")
             capture_notify()
+            -- :bdelete through nvim_buf_call on a buffer in no window runs
+            -- in the autocmd window, which fails with E813.
+            child.lua([[vim.cmd("$tab sbuffer " .. _G.sub)]])
 
             in_subagent("bdelete!")
             assert.is_false(child.lua_get("vim.api.nvim_buf_is_loaded(_G.sub)"))

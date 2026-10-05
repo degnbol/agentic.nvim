@@ -235,7 +235,6 @@ _G.s:_on_session_update({
     task = "t",
 }, "root")
 _G.sub = _G.s._agents.c1.transcript.bufnr
-vim.cmd("tabclose 2")
 _G.s:_on_request_permission({
     sessionId = "c1",
     toolCall = { toolCallId = "tc-sub", kind = "edit" },
