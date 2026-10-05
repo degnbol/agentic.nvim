@@ -77,6 +77,6 @@ path only; the tail wrap defeats it independently. Keep the two claims distinct.
 
 - `48820e8` "never hard-wrap inside inline code spans" — that protects a
   backtick span *within* one line, and does not look at fenced blocks.
-- `notes/bug-unclosed-prose-fence-runaway-fold.md` — an unbalanced fence
+- `1b3fabc` "close fences the model leaves open" — an unbalanced fence
   running the parse away. Different defect; this one needs the fence to be
   perfectly well-formed.

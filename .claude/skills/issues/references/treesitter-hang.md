@@ -30,7 +30,7 @@ Two misdiagnoses that keep recurring — both falsified for the known case:
 - **Render / conceal stall** (`nvim_win_text_height → decor_conceal_line →
   ts_query_cursor`). The confirmed frozen stack is in `ts_parser_parse_string`
   (the parse), not the query cursor. There is a *separate* real render perf bug
-  (`notes/bug-autoscroll-conceal-perf.md`) — do not conflate.
+  (fixed in `70c19eb`, `scroll_down` height caps) — do not conflate.
 
 ## Known trigger
 

@@ -6,6 +6,11 @@ minor").
 
 ## Bugs
 
+### File viewer listener
+
+The panel that shows edited files in the current session needs to be toggled off and on again to reveal that some files have been deleted.
+Can we get it to listen for the files it lists to see if they get deleted, and then remove them from the panel?
+
 ### `<Plug>(agentic-send)` in visual mode adds to context instead of sending
 
 `plugin/agentic.lua:52` maps the visual-mode form to `add_selection`,
@@ -14,23 +19,9 @@ names for one action, one of them called "send". `:help
 agentic-plug-mappings` documents the intended behaviour (send the selection
 as a prompt) and is correct as written; fix the mapping, not the help.
 
-### vale-typst
-
-An agent said
-> The lint notice is just vale-typst being absent (markdown, not typst)
-
-vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/bin/)?
-
 ### Rendering
 
-- Edit injection for no filetype: planned in
-  [`notes/feature-edit-fence-filetype.md`](notes/feature-edit-fence-filetype.md).
-  Replace the hand-rolled `lang_map` with `vim.filetype.match` + `get_lang`;
-  covers `justfile`/`Dockerfile` and (via `contents`) shebangs.
-
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
-
-- opencode full write of file shows no in-chat view of all the new text added to the file.
 
 - **Content-only claude updates may be dropped**:
   `ClaudeAgentACPAdapter:__handle_tool_call_update` returns early on an update
@@ -52,9 +43,9 @@ vale-typst is in ~/dotfiles/config/vale/, should we hook it up better (~/.local/
   `~/dotfiles/config/nvim/lua/plugins/ui.lua` read `vim.t.agentic_headers`
   (current tab) instead of the tab owning `props.win`, so the AgenticChat
   float in a backgrounded tab could pick up another tab's headers state at
-  debounce-fire time. Fix applied: read from
-  `vim.t[nvim_win_get_tabpage(props.win)].agentic_headers`. Verify the
-  symptom is gone over normal multi-tab use before closing.
+  debounce-fire time. Fix applied: incline now reads the header from the
+  buffer it renders, `vim.b[props.buf].agentic_header`. Verify the symptom is
+  gone over normal multi-tab use before closing.
 
 - Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
 ```markdown
@@ -125,12 +116,6 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   history from before compacting, just the compacting summary. Both would be
   ideal.
 
-- **Selections outlive the panel that showed them**: `code_selection` is only
-  cleared on the branch that attaches it, so a command-only submit leaves the
-  selections pending while `ChatWidget:submit` has already wiped the display
-  buffer. The next prose submit then attaches selections the user can no longer
-  see.
-
 - **A `/command` line inside a fenced block splits**: block dispatch and the
   `syntax/AgenticChat.vim` highlight both read line shape, so a `/word` line
   inside a prompt's own code fence becomes its own prompt (and highlights as a
@@ -144,45 +129,14 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
 Several issues cluster here; suggests work done for claude wasn't generalised
 to all ACPs.
 
-- **Write is empty**: it seems the chat block is empty on a new write and I 
-suspect it's because the diff is null for the "before" state and the code can't 
-find a match since there's no file yet. We don't have this problem for claude.
-
-- **Search command doesn't show the term**:
-  ```
-  ### Search
-  ```bash
-  grep
-  ```
-  ```
-  No search pattern visible in the argument.
-
-- **Ctrl-c adds an error block**: interrupting shows this in chat:
-  ```markdown
-  ### Error
-
-  stopReason: end_turn
-  usage: input=0 output=0 total=0
-  ```
-  Shouldn't appear after a manual interrupt.
+- **Write is empty**: a full write of a new file shows just `### Edit` with
+  the file path, not the written content. Suspected cause: the diff is null
+  for the "before" state and the code can't find a match since there's no
+  file yet. Claude does not have this problem.
 
 - **Parallel tasks not showing in chat**: previously fixed for claude, now
   reappearing for opencode. Audit claude-specific fixes for ones that should
   have been general across adapters.
-
-- Asked for permission from Read tool and basic `ls`. We should consider 
-increasing the auto-allow system here to allow all read tools, and either reuse 
-the settings.json list from claude or have a local copy of all the basic 
-commands like `ls` that are read-only. The plugin opt-out setting should be 
-whether to allow all read-only commands and then have a config list of 
-read-only commands that we can populate from my claude settings.json.
-
-- **Write tool shows minimal header**: opencode Write tool shows just
-  `### Edit` with the file path, not the file contents. Should show the
-  written content (folded) like other providers.
-
-- **Fetch tool output not folded**: Fetch/WebFetch output dumps full text
-  into chat without folding, causing clutter.
 
 - **Capitalised kinds may warn on every tool call**: the unknown-kind notify
   (`acp_client.lua:492`) tests the raw `update.kind` against
@@ -202,8 +156,7 @@ read-only commands that we can populate from my claude settings.json.
 
 ### Queue
 
-When the usage limits are reached momentarily there are two issues.
-1. It shows the following in chat:
+When the usage limits are reached momentarily, chat shows:
 
 ```markdown
 You've hit your org's monthly spend limit · run /usage-credits to ask your
@@ -214,8 +167,6 @@ Internal error: You've hit your org's monthly spend limit · run /usage-credits 
 ```
 
 It is a wrong message. It is not the monthly limit, I don't understand why it says that.
-
-2. Sending a message shouldn't work. There's no agent to send to. `<CR>` should probably queue, and `<S-CR>` should definitely queue, yet doesn't.
 
 ### `_plan_exit_pending` is write-only
 
@@ -241,8 +192,29 @@ spelled CamelCase — `WebSearch`, `SlashCommand`, `SubAgent`, `Skill` — so th
 never match. Those four fall to the hybrid path instead, keying on the whole
 `rawInput` minus `CACHE_NOISE_FIELDS`. Safe but under-caching, never over: the
 key is narrower than intended, so "always allow this subagent type" behaves as
-"always allow this exact prompt" and the next call prompts again. Lowercase the
-four keys, or look the table up under the raw kind as well.
+"always allow this exact prompt" and the next call prompts again. Lowercasing
+them is not a typo fix: it moves those kinds to a field-scoped key, which
+changes what one allow-always or reject-always decision covers. Decide the
+scoping, then fix.
+
+## Refactors
+
+### Claude-specific code behind the adapter
+
+General modules still hold claude-agent-acp knowledge. Each plan moves one part
+behind a neutral `ACPClient` default that `ClaudeAgentACPAdapter` overrides. No
+plan needs another to land first. The order below only avoids conflicts:
+plans 2 and 3 both change `create_session`/`load_session`, and plan 3 wraps
+the result of plan 2.
+
+1. [`PLAN-subagent-seam-fixes.md`](notes/PLAN-subagent-seam-fixes.md)
+2. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
+3. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
+4. [`PLAN-adapter-plan-exit.md`](notes/PLAN-adapter-plan-exit.md). Also
+   resolves `_plan_exit_pending` above.
+5. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
+6. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md)
+7. [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md)
 
 ## Feature ideas
 
@@ -330,10 +302,6 @@ could stop scrolling when the model is writing a stop even block of text? Could
 be useful to auto-scroll as the model goes through reading/exploration/etc but 
 have the scroll stop with the first line of a stop paragraph at the top of 
 screen so we can read it.
-
-- **Shebang/modeline detection for Edit tool previews**: scripts without a
-  file extension but with a shebang (or vim modeline) should infer filetype
-  for code injection preview in chat. Not a common case.
 
 - **Nested fence treesitter injection**: tool output that contains its own
   triple-backtick fences (e.g. `cat README.md`, edits to files with embedded
@@ -430,6 +398,21 @@ screen so we can read it.
   marker field inside the JSON. Related to the "Resume after
   compacting" bug above (showing full history alongside the summary).
 
+- **Show the agent's peer address in chat**: other Claude sessions address
+  this one by its agent name and ref (e.g. `agentic-nvim-fc` / `7ef7d7` in
+  `ListAgents`), not by the ACP session ID. Neither appears in the chat, so
+  the user cannot tell which peer is which window. Write the name and ref into
+  the chat when the agent starts. Open question: does the bridge expose them
+  over ACP (`session/new` result, `_meta`), or must they be derived?
+
+- **Session retention**: session files are never deleted. Add a config
+  option, e.g. `sessions.max_age_days` (default 60), that deletes session
+  files older than that when the sessions are listed. On 2026-10-03, 1774 of
+  2176 files (198 of 271 MB) were older than 60 days. Compression (gzip
+  about 3.8× smaller) was rejected for now: Neovim has no zlib, and every
+  reader (`list_sessions`, the fzf preview, grepping by title) would have to
+  decompress.
+
 - **Session completion heuristic**: some sessions are more clearly completed
   than others. If the user prompt is last, the session is not completed.
   If it ends in a commit etc., it probably is. Detection is heuristic;
@@ -446,6 +429,17 @@ screen so we can read it.
 
 ### Permissions
 
+- **Arithmetic on number-bound variables**: arithmetic that reads a value (a
+  letter, or a `$` other than `$#`/`$?`/`$$`/`$!`) prompts, because zsh
+  evaluates the value as arithmetic and runs a subscript's `$(…)`. Approve a
+  name bound to a number literal in the same sequence (`i=3; echo $((i+1))`,
+  `for i in {1..3}; do echo $((i*2)); done`) using the walker's `known`
+  bindings.
+
+- **Hex, base and exponent literals prompt**: `$((0x1F))`, `$((16#ff))` and
+  `$((1e3))` contain letters, so `reads_value` treats them as variable reads.
+  They are numbers only and should approve.
+
 - **Stale-read warning on Edit/Write**: see
   `notes/feature-stale-read-warning.md`.
 
@@ -461,16 +455,6 @@ screen so we can read it.
   source but unobserved — zero occurrences across 7.9 M lines of debug
   log against 1331 inbound permission requests, so confirm it arrives
   before building the handler.
-
-- **Four `CACHE_KEY_FIELDS` rows are unreachable**: `Skill`,
-  `SlashCommand`, `SubAgent` and `WebSearch` are spelled CamelCase while
-  `_build_cache_key` lowercases before indexing
-  (`permission_manager.lua:169,193`) — an instance of the casing defect
-  the `provider-system` skill documents under "Tool kind casing varies by
-  provider". Lowercasing them is not a typo fix: it moves those kinds
-  from the hybrid whole-`rawInput` cache key to a field-scoped key, which
-  changes what one allow-always or reject-always decision covers. Decide
-  the scoping, then fix.
 
 - **`/trust` glob coverage**: verify the `/trust` system works with glob
   patterns using `~/`, relative paths, and absolute folders.
@@ -585,11 +569,12 @@ It seems it always says "Launching skill: " which is redundant. Could we simply 
 Hide `pending...` from opencode when it's about to make an edit.
 Similarly, the execute block shows `bash` while the command is being generated. This should also be hidden, but also makes me concerned about the claim that opencode is using zsh.
 
-### Parallel work
+### Subagent ID in its buffer
 
-Subagent (Task) work renders inline and interleaved with the main agent's,
-and parallel subagents mix together. Plumbing + UI plan in
-[`notes/feature-subagent-separation.md`](notes/feature-subagent-separation.md).
+A subagent's heading shows its name and mode, not its ID. The ID
+(`SubagentInfo.agent_id`) arrives with the Agent tool's result, about 2 s after
+launch, which is usually after the heading. When it arrives, append a line with
+the ID to the agent's buffer. Do not edit the heading line.
 
 ## Folded Read block
 For reading parts of a file, e.g. a small number of lines, it could be nice to have a pre-folded block in the tool block to expand and see exactly the context claude read.
@@ -629,9 +614,8 @@ If that would make the config explode, then a better option might be to consider
 A useful Claude CLI feature is /rewind where a menu allows for selecting a previous prompt and rewinds the agent to that point in the conversation.
 If this feature is available through the ACP. If so, we can make a UI version, where we have a keymap that rewinds to where the cursor is placed in chat.
 
-The glyph 󰋚 (nf-md-history) is reserved for this — see
-[`feature-command-notices.md`](notes/feature-command-notices.md) § "Glyph options
-considered".
+The glyph 󰋚 (nf-md-history) is reserved for this as `Glyphs.COMMAND.rewind`
+(`lua/agentic/glyphs.lua`).
 
 ### Queue message: the overlooked-question risk
 
@@ -667,6 +651,17 @@ Concrete need: a gate field matching a pattern against any argument
 any index (`tmux capture-pane -p \; run-shell …` runs the shell command),
 so a read-only tmux entry is unsound until `ask` can catch them.
 
+### bacground running
+
+A long-running execution will be put in the background and in Chat I see
+
+```
+Command running in background with ID: bn0pwm7hm. Output is being written to: /private/tmp/claude-502/-Users-cmadsen-dotfiles-config-nvim-modules-agentic-nvim/fda66270-4ac0-425b-9234-eec2d2c51d68/tasks/bn0pwm7hm.output. You will be notified when it completes. To check interim output, use Read on that file path.
+```
+We should brainstorm how to show background jobs nicer in the UI.
+E.g. a new spinner mode, since it currently shows as if the agent stopped its turn (which I suppose it did, so we also don't want to lie.)
+Maybe some way of streaming the run. We can of course do the native `<C-w>gf` on the path.
+
 ## Auto-allow non-zsh
 
 Consider if it would be a huge unrealistic endevour to extend the auto-allow system from zsh to other languages.
@@ -687,6 +682,11 @@ which is why `authMethods` is empty in every observed `initialize` result.
 Advertising it would move re-authentication from shelling out to the CLI into
 the session the error arrived on. Worth weighing against the shell-out, which
 already works.
+
+## Shortcuts queue
+
+<localleader>C etc. should queue-send, instead of interrupt send.
+
 
 ## trust git rm
 

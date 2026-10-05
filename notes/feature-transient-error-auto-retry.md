@@ -307,8 +307,7 @@ Resolved:
 - **Mid-fence resumption.** If the stream died inside a ` ``` ` block,
   `finalize_turn`'s `_reflow_chunks(bufnr, true)` closes the fence
   (`message_writer.lua:793-798`, `:855`) and the model may not re-open one — the
-  failure mode in
-  [`bug-unclosed-prose-fence-runaway-fold.md`](bug-unclosed-prose-fence-runaway-fold.md).
+  failure mode fixed in `1b3fabc`.
   Not a regression: this happens identically when the user types `continue` by
   hand, and the provider's own `API Error: …` line still marks the seam.
 - **The retry's prompt echo does not render a phantom `## continue`.**
