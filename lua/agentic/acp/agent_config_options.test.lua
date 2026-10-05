@@ -372,7 +372,9 @@ describe("agentic.acp.AgentConfigOptions", function()
                     handler --[[@as fun(mode: string, is_legacy: boolean): any]]
                 )
 
-                assert.spy(handler).was.called_with("plan", false)
+                assert
+                    .spy(handler).was
+                    .called_with("plan", false, { as_notice = true })
             end
         )
 
@@ -433,7 +435,9 @@ describe("agentic.acp.AgentConfigOptions", function()
 
                 assert.is_true(shown)
                 assert.stub(select_stub).was.called(1)
-                assert.spy(handler).was.called_with("legacy-2", true)
+                assert
+                    .spy(handler).was
+                    .called_with("legacy-2", true, { as_notice = true })
             end
         )
 

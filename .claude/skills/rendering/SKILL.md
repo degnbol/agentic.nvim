@@ -38,7 +38,7 @@ is, never how deep in the turn the row was written:
 | `###` | Tool call heads, and the empty `###` that closes one | `write_tool_call_block`, `write_message_chunk` |
 
 Level 2 is the turn's own participants — what the user asked, what the user did
-mid-turn (`/trust`, `/rename`, a model switch), what the provider reported back.
+mid-turn (`/trust`, `/rename`, a mode or model switch), what the provider reported back.
 Level 3 is one step inside such a turn: its tool calls. A row that is not a tool
 call never takes `###`, even when it lands in the middle of one turn's tool
 calls; the cost is a breadcrumb (see `write_notice`), not a level.

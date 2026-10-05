@@ -461,13 +461,17 @@ function SessionManager:new()
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
 
-    self.config_options = AgentConfigOptions:new(function(mode_id, is_legacy)
-        self:_handle_mode_change(mode_id, is_legacy)
-    end, function(model_id, is_legacy, opts)
-        self:_handle_model_change(model_id, is_legacy, opts)
-    end, function()
-        return self.agent ~= nil and self.agent.state == "ready"
-    end)
+    self.config_options = AgentConfigOptions:new(
+        function(mode_id, is_legacy, opts)
+            self:_handle_mode_change(mode_id, is_legacy, opts)
+        end,
+        function(model_id, is_legacy, opts)
+            self:_handle_model_change(model_id, is_legacy, opts)
+        end,
+        function()
+            return self.agent ~= nil and self.agent.state == "ready"
+        end
+    )
 
     for panel, bufnr in pairs(self.widget.buf_nrs) do
         self:_bind_session_keymaps(
@@ -2545,7 +2549,11 @@ end
 --- Send the newly selected mode to the agent and handle the response
 --- @param mode_id string
 --- @param is_legacy boolean|nil
-function SessionManager:_handle_mode_change(mode_id, is_legacy)
+--- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil `as_notice` is
+---   set by the mode picker. Without it the change is silent apart from the
+---   header, since the configured `default_mode` at session start arrives
+---   through this same callback and is not a user switch.
+function SessionManager:_handle_mode_change(mode_id, is_legacy, opts)
     if not self.session_id then
         return
     end
@@ -2571,14 +2579,9 @@ function SessionManager:_handle_mode_change(mode_id, is_legacy)
 
             self:_update_chat_header()
 
-            local mode_name = self.config_options:get_mode_name(mode_id)
-            Logger.notify(
-                "Mode changed to: " .. mode_name,
-                vim.log.levels.INFO,
-                {
-                    title = "Agentic Mode changed",
-                }
-            )
+            if opts and opts.as_notice then
+                self:_notice_mode_switched(mode_id)
+            end
         end
     end
 
@@ -2592,7 +2595,7 @@ end
 --- Send the newly selected model to the agent
 --- @param model_id string
 --- @param is_legacy boolean|nil
---- @param opts { as_notice?: boolean }|nil `as_notice` renders the announce as
+--- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil `as_notice` renders the announce as
 ---   a command notice instead of prose. Set by the model picker; the render
 ---   style cannot be inferred from the call site, since the queued-initial-model
 ---   flush (restore, `/new`, `/clear`) arrives through this same callback and is
@@ -2824,6 +2827,28 @@ function SessionManager:_notice_model_switched(model_id)
     self.message_writer:write_notice({
         glyph = Glyphs.COMMAND.model,
         title = string.format("%s · %s", name, model_id),
+        body = body,
+        mid_turn = self.is_generating,
+    })
+end
+
+--- Announce a mode the user just switched to, as a command notice. Signed
+--- with the `switch_mode` tool glyph: the agent leaving plan mode is the same
+--- act, and the sign colour already tells whose row it is.
+--- @param mode_id string
+function SessionManager:_notice_mode_switched(mode_id)
+    local mode = self.config_options:get_mode(mode_id)
+        or self.config_options.legacy_agent_modes:get_mode(mode_id)
+
+    --- @type string[]|nil
+    local body
+    if mode and mode.description and mode.description ~= "" then
+        body = { mode.description }
+    end
+
+    self.message_writer:write_notice({
+        glyph = Glyphs.KIND.switch_mode,
+        title = mode and mode.name or mode_id,
         body = body,
         mid_turn = self.is_generating,
     })

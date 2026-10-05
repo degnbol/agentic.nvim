@@ -2,9 +2,9 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 
---- How a model change should be reported to the user.
---- @class agentic.acp.AgentConfigOptions.ModelChangeOpts
---- @field as_notice? boolean The user picked this model, so announce it as a command notice rather than session-start prose
+--- How a mode or model change should be reported to the user.
+--- @class agentic.acp.AgentConfigOptions.ChangeOpts
+--- @field as_notice? boolean The user picked this value, so announce it as a command notice
 
 --- @class agentic.acp.AgentConfigOptions
 --- @field mode? agentic.acp.ConfigOption
@@ -16,14 +16,14 @@ local Logger = require("agentic.utils.logger")
 --- @field legacy_agent_models agentic.acp.AgentModels
 --- @field _pending_model_select boolean
 --- @field _pending_initial_model? string model id to apply once options arrive (session restore)
---- @field _set_mode_callback fun(mode_id: string, is_legacy: boolean)
---- @field _set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ModelChangeOpts|nil)
+--- @field _set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+--- @field _set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @field _is_agent_ready? fun(): boolean Returns true if an agent is attached and ready
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
 
---- @param set_mode_callback fun(mode_id: string, is_legacy: boolean)
---- @param set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ModelChangeOpts|nil)
+--- @param set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+--- @param set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @param is_agent_ready fun(): boolean Returns true if an agent is attached and ready
 --- @return agentic.acp.AgentConfigOptions
 function AgentConfigOptions:new(
@@ -279,14 +279,18 @@ function AgentConfigOptions:get_model_name(model_value)
     return nil
 end
 
---- @param handle_mode_change fun(mode: string, is_legacy: boolean): any
+--- Pick a mode interactively. Like `show_model_selector`, every selection is
+--- a user switch and is flagged as such; `set_initial_mode` calls the same
+--- callback without the flag.
+--- @param handle_mode_change fun(mode: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any
 --- @return boolean shown
 function AgentConfigOptions:show_mode_selector(handle_mode_change)
-    local shown = self:_show_selector(
-        self.mode,
-        "Select agent mode config:",
-        handle_mode_change
-    )
+    local on_pick = function(mode, is_legacy)
+        handle_mode_change(mode, is_legacy, { as_notice = true })
+    end
+
+    local shown =
+        self:_show_selector(self.mode, "Select agent mode config:", on_pick)
 
     if shown then
         return true
@@ -294,7 +298,7 @@ function AgentConfigOptions:show_mode_selector(handle_mode_change)
 
     local legacy_shown = self.legacy_agent_modes:show_mode_selector(
         function(mode)
-            handle_mode_change(mode, true)
+            on_pick(mode, true)
         end
     )
 
@@ -312,7 +316,7 @@ end
 --- Pick a model interactively. Every selection made here is a user switch, so
 --- the callback is told to render it as such — the queued-initial-model path
 --- calls the same callback without that flag.
---- @param handle_model_change fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ModelChangeOpts|nil): any
+--- @param handle_model_change fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any
 --- @return boolean shown
 function AgentConfigOptions:show_model_selector(handle_model_change)
     if self._is_agent_ready and not self._is_agent_ready() then

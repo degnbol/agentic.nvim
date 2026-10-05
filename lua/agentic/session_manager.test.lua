@@ -1038,6 +1038,85 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_handle_mode_change", function()
+        --- @type TestStub
+        local notify_stub
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        --- @param err table|nil Error the provider answers `session/set_mode` with
+        local function make_session(err)
+            local legacy_modes = AgentModes:new()
+            legacy_modes:set_modes({
+                availableModes = {
+                    { id = "plan", name = "Plan", description = "Planning" },
+                    { id = "auto", name = "Auto", description = "No prompts" },
+                },
+                currentModeId = "plan",
+            })
+            local notice_spy = spy.new(function() end)
+            local session = {
+                session_id = "s",
+                agent = {
+                    set_mode = function(_, _session_id, _mode_id, callback)
+                        callback({}, err)
+                    end,
+                },
+                config_options = {
+                    legacy_agent_modes = legacy_modes,
+                    get_mode = function() end,
+                },
+                message_writer = { write_notice = notice_spy },
+                _update_chat_header = function() end,
+                _handle_mode_change = SessionManager._handle_mode_change,
+                _notice_mode_switched = SessionManager._notice_mode_switched,
+            } --[[@as agentic.SessionManager]]
+            return session, notice_spy
+        end
+
+        it("renders a picked mode as a notice", function()
+            local session, notice_spy = make_session(nil)
+
+            session:_handle_mode_change("auto", true, { as_notice = true })
+
+            assert.spy(notice_spy).was.called(1)
+            local notice = notice_spy.calls[1][2]
+            assert.equal(Glyphs.KIND.switch_mode, notice.glyph)
+            assert.equal("Auto", notice.title)
+            assert.same({ "No prompts" }, notice.body)
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("stays silent for a change the user did not pick", function()
+            local session, notice_spy = make_session(nil)
+
+            session:_handle_mode_change("auto", true)
+
+            assert.equal(
+                "auto",
+                session.config_options.legacy_agent_modes.current_mode_id
+            )
+            assert.spy(notice_spy).was.called(0)
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("reports a failed change as an error, not a notice", function()
+            local session, notice_spy = make_session({ message = "nope" })
+
+            session:_handle_mode_change("auto", true, { as_notice = true })
+
+            assert.spy(notice_spy).was.called(0)
+            assert.spy(notify_stub).was.called(1)
+            assert.equal(vim.log.levels.ERROR, notify_stub.calls[1][2])
+        end)
+    end)
+
     describe("_display_context_usage", function()
         --- @param usage table|nil
         --- @return agentic.ui.MessageWriter.Notice
