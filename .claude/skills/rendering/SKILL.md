@@ -100,9 +100,10 @@ A tool head with no name renders as a bare `###`, byte-identical to the
 section-close boundary `write_message_chunk` emits; both must stay uncaptured
 by `queries/agentic/context.scm`.
 
-`collapsed_header` backtick-guards the name when the kind is in `CODE_KINDS`
-or the text holds a `MARKDOWN_INLINE_SPECIALS` character; prose heads are
-otherwise bare. Both docstrings carry the rationale.
+`collapsed_header` backtick-guards the whole name when the kind is in
+`CODE_KINDS`. A prose head guards only the words around each construct that
+`markdown_inline` finds (`guard_constructs`). The docstrings carry the
+rationale.
 
 ## Fence info-strings — cross-kind reference
 

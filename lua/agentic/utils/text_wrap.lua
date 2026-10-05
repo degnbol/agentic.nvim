@@ -1,6 +1,7 @@
 --- Fitting text to a display width: hard-wrapping prose (code blocks left
---- untouched), truncating to a column budget, abbreviating a count, and the
---- fence bookkeeping wrapping needs to know where prose stops.
+--- untouched), truncating to a column budget, abbreviating a count, widening
+--- byte ranges to whole words, and the fence bookkeeping wrapping needs to know
+--- where prose stops.
 --- @class agentic.utils.TextWrap
 local M = {}
 
@@ -369,6 +370,38 @@ function M.truncate_to_width(s, width)
         out = vim.fn.strcharpart(out, 0, vim.fn.strchars(out) - 1)
     end
     return out .. "…"
+end
+
+--- Widen each byte range to the whitespace-delimited words it touches, and
+--- merge the ranges that then overlap.
+--- @param text string
+--- @param ranges { start: integer, stop: integer }[] 0-based `[start, stop)`
+--- @return { start: integer, stop: integer }[] words Sorted, disjoint
+function M.word_aligned(text, ranges)
+    --- @type { start: integer, stop: integer }[]
+    local widened = {}
+    for _, range in ipairs(ranges) do
+        local after_space = text:sub(1, range.start):match("^.*%s()")
+        local next_space = text:find("%s", range.stop + 1)
+        table.insert(widened, {
+            start = after_space and after_space - 1 or 0,
+            stop = next_space and next_space - 1 or #text,
+        })
+    end
+    table.sort(widened, function(a, b)
+        return a.start < b.start
+    end)
+    --- @type { start: integer, stop: integer }[]
+    local words = {}
+    for _, range in ipairs(widened) do
+        local last = words[#words]
+        if last and range.start <= last.stop then
+            last.stop = math.max(last.stop, range.stop)
+        else
+            table.insert(words, range)
+        end
+    end
+    return words
 end
 
 --- Abbreviate a count for a display where the digits compete for width: a plain

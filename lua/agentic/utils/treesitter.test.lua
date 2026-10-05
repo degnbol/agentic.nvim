@@ -122,4 +122,33 @@ describe("Treesitter", function()
             end
         )
     end)
+
+    describe("top_level_nodes", function()
+        it("lists the root's named children with byte ranges", function()
+            assert.same(
+                {
+                    { type = "emphasis", start = 5, stop = 10 },
+                    { type = "html_tag", start = 11, stop = 16 },
+                },
+                Treesitter.top_level_nodes(
+                    "kill _the_ <pid>",
+                    "markdown_inline"
+                )
+            )
+        end)
+
+        it("returns nothing for text with no construct", function()
+            assert.same(
+                {},
+                Treesitter.top_level_nodes("foo_bar", "markdown_inline")
+            )
+        end)
+
+        it("measures ranges in bytes from the start of the text", function()
+            assert.same(
+                { { type = "emphasis", start = 4, stop = 7 } },
+                Treesitter.top_level_nodes("a\nb\n_c_", "markdown_inline")
+            )
+        end)
+    end)
 end)

@@ -1,6 +1,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local Logger = require("agentic.utils.logger")
+local Treesitter = require("agentic.utils.treesitter")
 
 --- Check whether a parser for `lang` is installed.
 --- @param lang string
@@ -466,10 +467,7 @@ describe("ToolCallRenderer", function()
             it("renders without a subagent as before", function()
                 local lines = subagent_lines(nil, { "Find the files." })
 
-                assert.equal(
-                    "### agentic://1/subagent/map-UI-c3d4e5",
-                    lines[1]
-                )
+                assert.equal("### agentic://1/subagent/map-UI-c3d4e5", lines[1])
                 assert.equal("```markdown", lines[2])
             end)
         end)
@@ -491,38 +489,120 @@ describe("ToolCallRenderer", function()
             )
         end)
 
-        it("guards a name carrying markdown inline syntax", function()
+        --- Top-level `markdown_inline` nodes of `text`.
+        --- @param text string
+        --- @return agentic.utils.Treesitter.Node[]
+        local function inline_nodes(text)
+            return Treesitter.top_level_nodes(text, "markdown_inline")
+        end
+
+        --- Assert that `head` shows `name` literally: its only markdown is
+        --- code spans, and removing the guard spans — every span not already
+        --- in `name` — leaves `name`, or a prefix of it cut with `…`.
+        --- @param name string
+        --- @param head string
+        local function assert_literal(name, head)
+            local text = head:sub(#"### " + 1)
+            --- @type table<string, boolean>
+            local own_spans = {}
+            for _, node in ipairs(inline_nodes(name)) do
+                own_spans[name:sub(node.start + 1, node.stop)] = true
+            end
+            local parts, cursor = {}, 0
+            for _, node in ipairs(inline_nodes(text)) do
+                assert.equal("code_span", node.type)
+                local span = text:sub(node.start + 1, node.stop)
+                local run = #span:match("^`+")
+                local content = own_spans[span] and span
+                    or span:sub(run + 1, -run - 1):gsub("^ (.*) $", "%1")
+                table.insert(parts, text:sub(cursor + 1, node.start))
+                table.insert(parts, content)
+                cursor = node.stop
+            end
+            table.insert(parts, text:sub(cursor + 1))
+            local shown = table.concat(parts)
+            if shown ~= name then
+                assert.equal("…", shown:sub(-#"…"))
+                local kept = shown:sub(1, -#"…" - 1)
+                assert.equal(kept, name:sub(1, #kept))
+            end
+        end
+
+        --- `execute_heading`, asserting the result shows `description`
+        --- literally.
+        --- @param description string
+        --- @param wrap_width? integer
+        --- @return string heading
+        local function literal_heading(description, wrap_width)
+            local head = execute_heading(description, wrap_width)
+            assert_literal(description, head)
+            return head
+        end
+
+        it("leaves markdown characters the parser ignores bare", function()
+            for _, name in ipairs({
+                "run build_and_test",
+                "a * b",
+                "fix #12",
+                "cost $5",
+                "C:\\path",
+            }) do
+                assert.equal("### " .. name, literal_heading(name))
+            end
+        end)
+
+        it("guards only the words a construct touches", function()
             -- Bare, the emphasis markers would be parsed away and `<pid>`
             -- swallowed as an HTML tag.
             assert.equal(
-                "### `kill _the_ <pid>`",
-                execute_heading("kill _the_ <pid>")
+                "### kill `_the_` `<pid>`",
+                literal_heading("kill _the_ <pid>")
             )
+            assert.equal("### `foo*bar*baz`", literal_heading("foo*bar*baz"))
         end)
 
-        it("guards a name carrying inline math", function()
-            -- `$` is the one member of the set that is not vanilla
-            -- markdown-inline: the chat buffer inherits markdown's latex_block
-            -- injection, so a bare `$5 and $6` parses as math.
+        it("guards inline math across the words it spans", function()
+            -- The chat buffer inherits markdown's latex_block injection, so
+            -- a bare `$5 to $6` parses as math.
             assert.equal(
-                "### `raise $5 to $6`",
-                execute_heading("raise $5 to $6")
+                "### raise `$5 to $6`",
+                literal_heading("raise $5 to $6")
             )
         end)
 
-        it("widens the guard past a backtick run in the name", function()
-            -- A one-tick guard is the delimiter a backtick-bearing name
-            -- defeats: `Run `make x` now` parses as two spans with "make x"
-            -- left unguarded between them.
+        it("leaves a code span the name already holds", function()
             assert.equal(
-                "### ``Run `make x` now``",
-                execute_heading("Run `make x` now")
+                "### Run `make x` now",
+                literal_heading("Run `make x` now")
+            )
+            assert.equal("### `x`", literal_heading("`x`"))
+        end)
+
+        it("widens every guard past a stray backtick in the name", function()
+            -- A one-tick guard would pair with the apostrophe-like tick and
+            -- leave the text between them as a span.
+            assert.equal("### don`t ``_x_``", literal_heading("don`t _x_"))
+        end)
+
+        it("guards a word holding a stray tick with a longer run", function()
+            assert.equal("### ``a`_x_`` b", literal_heading("a`_x_ b"))
+        end)
+
+        it("absorbs a code span the guard reaches into", function()
+            assert.equal(
+                "### `` _a_`b c` `` d `e",
+                literal_heading("_a_`b c` d `e")
+            )
+            assert.equal(
+                "### x `` `a b`_c_ `` d",
+                literal_heading("x `a b`_c_ d")
             )
         end)
 
-        it("pads a name whose own backtick abuts the guard", function()
-            -- Without the pad the name's run merges into the delimiter.
-            assert.equal("### `` `x` ``", execute_heading("`x`"))
+        it("guards the whole name when guarding words exposes more", function()
+            -- tree-sitter finds the emphasis only once the escape before it
+            -- is guarded.
+            assert.equal("### `)\\\\![ ~*x*`", literal_heading(")\\\\![ ~*x*"))
         end)
 
         it("guards a code kind's name that needs no guarding", function()
@@ -588,17 +668,40 @@ describe("ToolCallRenderer", function()
         it("pays for the guard out of the truncation budget", function()
             -- The backticks are part of the rendered width, so a guarded name
             -- has two fewer cells to spend than a bare one.
-            local head = execute_heading("_" .. string.rep("wide ", 20), 40)
+            local head =
+                literal_heading("_wide_ " .. string.rep("wide ", 20), 40)
 
             assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
-            assert.equal("…`", head:sub(-4))
+            assert.equal("### `_wide_`", head:sub(1, #"### `_wide_`"))
+            assert.equal("…", head:sub(-#"…"))
         end)
 
         it("pays for a widened guard too", function()
-            local head = execute_heading("`" .. string.rep("wide ", 20), 40)
+            local head =
+                literal_heading("don`t _x_ " .. string.rep("wide ", 20), 40)
 
             assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
-            assert.equal("… ``", head:sub(-6))
+            assert.truthy(head:find("``_x_``", 1, true))
+        end)
+
+        it("fits when the guards cost more than the cut saves", function()
+            local head = literal_heading(string.rep("_x_ ", 10), 20)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 20)
+        end)
+
+        it("fits a double-width cut beside a guard", function()
+            local head = literal_heading("_x_ " .. string.rep("世", 30), 20)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 20)
+        end)
+
+        it("truncates a code kind's name inside its whole guard", function()
+            local head = heading("search", string.rep("pattern ", 10), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("### `", head:sub(1, #"### `"))
+            assert.equal("…`", head:sub(-#"…`"))
         end)
     end)
 
@@ -828,10 +931,13 @@ describe("ToolCallRenderer", function()
             end)
 
             it("never collapses an edit, even when large", function()
-                assert.equal("open", fold_state_for({
-                    old = { "x" },
-                    new = { "a", "b", "c", "d" },
-                }))
+                assert.equal(
+                    "open",
+                    fold_state_for({
+                        old = { "x" },
+                        new = { "a", "b", "c", "d" },
+                    })
+                )
             end)
         end)
 
