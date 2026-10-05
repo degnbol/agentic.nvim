@@ -13,8 +13,8 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 - One session per tabpage
 - Auto-continue scheduled after usage-limit reset (WIP)
-- Attention bell/badge when chat is unfocused or scrolled up
-- Auto-scroll toggle (default: `<localLeader>a`)
+- Attention bell/badge when chat is unfocused or no chat window follows
+- Follow toggle (default: `<localLeader>a`)
 - Todos / code / files / diagnostics panels alongside chat
 - Changed-files panel (default: `<localLeader>f`) — one row per file the agent created or edited this session (see `:help agentic-file-activity`)
 - External UI hook (`AgenticHeadersChanged` autocmd + `vim.b.agentic_header`) for plugins like [incline.nvim](https://github.com/b0o/incline.nvim)

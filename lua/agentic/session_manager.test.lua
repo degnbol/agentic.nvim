@@ -2106,8 +2106,7 @@ describe("agentic.SessionManager", function()
                     end,
                     finalize_turn = noop,
                     set_turn_usage = noop,
-                    scroll_to_bottom = noop,
-                    is_near_bottom = empty,
+                    any_following = empty,
                     tool_call_blocks = {},
                 },
                 _finalize_turn = SessionManager._finalize_turn,
@@ -2135,8 +2134,8 @@ describe("agentic.SessionManager", function()
                     get_chat_width = function()
                         return 80
                     end,
-                    clear_unread_badge = noop,
-                    set_unread_badge = noop,
+                    clear_idle_badge = noop,
+                    set_badge = noop,
                     set_chat_title = noop,
                     next_queued_block = function()
                         return nil
@@ -2282,8 +2281,7 @@ describe("agentic.SessionManager", function()
                     end,
                     finalize_turn = noop,
                     set_turn_usage = noop,
-                    scroll_to_bottom = noop,
-                    is_near_bottom = empty,
+                    any_following = empty,
                     tool_call_blocks = {},
                     nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
                     update_tool_call_block = record_stamp("main"),
@@ -2340,8 +2338,8 @@ describe("agentic.SessionManager", function()
                     get_chat_width = function()
                         return 80
                     end,
-                    clear_unread_badge = noop,
-                    set_unread_badge = noop,
+                    clear_idle_badge = noop,
+                    set_badge = noop,
                     set_chat_title = noop,
                     next_queued_block = function()
                         sink.drains = (sink.drains or 0) + 1
@@ -3087,7 +3085,7 @@ describe("agentic.SessionManager", function()
                 _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
-                    clear_unread_badge = noop,
+                    clear_idle_badge = noop,
                     set_chat_title = noop,
                     cancel_queue = noop,
                     next_queued_block = function()
@@ -3697,7 +3695,7 @@ describe("agentic.SessionManager", function()
                 _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
-                    clear_unread_badge = noop,
+                    clear_idle_badge = noop,
                     set_chat_title = noop,
                     next_queued_block = function()
                         local text = queued[1]

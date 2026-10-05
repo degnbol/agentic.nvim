@@ -44,12 +44,12 @@ require("agentic.session_registry").bound_session(tab).widget:set_chat_title("fi
         assert.equal("fix a-b", get_panel_basename("chat"))
     end)
 
-    it("the unread badge stays out of the name", function()
+    it("the attention badge stays out of the name", function()
         child.lua([[ require("agentic").toggle() ]])
         child.flush()
         child.lua([[
 local tab = vim.api.nvim_get_current_tabpage()
-require("agentic.session_registry").bound_session(tab).widget:set_unread_badge("[done]")
+require("agentic.session_registry").bound_session(tab).widget:set_badge("[idle]")
 ]])
 
         assert.equal("chat", get_panel_basename("chat"))

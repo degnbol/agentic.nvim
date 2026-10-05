@@ -24,7 +24,7 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field context? string Dynamic info (managed internally)
 --- @field session_name? string Custom session name (set by /rename or first message)
 --- @field trust? string Active /trust scope display (set by /trust)
---- @field badge? string Unread badge (e.g. "[done]", "[?]")
+--- @field badge? string Attention badge (e.g. "[idle]", "[?]")
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
 --- @alias agentic.ui.ChatWidget.WinNrs table<agentic.ui.ChatWidget.PanelNames, integer|nil>
@@ -49,6 +49,7 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field on_submit_input fun(prompt: string, opts?: agentic.SessionManager.SubmitOpts): boolean external callback for a submitted prompt; false means it was deferred and the range should be tagged
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
 --- @field on_window_opened? fun(winid: integer) external callback after the widget opens a chat window
+--- @field on_goto_bottom? fun(winid: integer) external callback that moves a window showing the chat or a transcript to its last line
 --- @field on_hide? fun() external callback called after the widget is hidden
 --- @field _draining? boolean guard so drain's own buffer edits don't self-untag
 local ChatWidget = {}
@@ -821,8 +822,7 @@ function ChatWidget:move_cursor_to(panel, callback)
         if winid then
             vim.api.nvim_set_current_win(winid)
 
-            -- Scroll to bottom so the user can see the new message and
-            -- auto-scroll will engage again.
+            -- Scroll to bottom so the user can see the new message.
             BufHelpers.scroll_down(winid)
 
             if callback then
@@ -900,56 +900,6 @@ function ChatWidget:_initialize()
             self:_attach_input()
         end,
     })
-
-    -- Clear unread badge when the user reaches the bottom of the chat in any
-    -- window showing it. If that window is focused, "at bottom" means cursor
-    -- on the last line. If focus is elsewhere (e.g. input panel), the user can
-    -- still scroll the chat with the OS pointer; in that case "at bottom"
-    -- means the viewport reaches the last line. Not buffer-scoped: that
-    -- matches only the first scrolled window's buffer, and every scrolled
-    -- window is a key of `v:event`. The group goes with the buffer.
-    local chat = self.buf_nrs.chat
-    local group = vim.api.nvim_create_augroup(
-        "agentic_unread_badge_" .. chat,
-        { clear = true }
-    )
-    vim.api.nvim_create_autocmd("BufWipeout", {
-        buffer = chat,
-        once = true,
-        callback = function()
-            vim.api.nvim_del_augroup_by_id(group)
-        end,
-    })
-    vim.api.nvim_create_autocmd("WinScrolled", {
-        group = group,
-        callback = function()
-            if not WindowDecoration.get_header(chat).badge then
-                return
-            end
-            local total_lines = vim.api.nvim_buf_line_count(chat)
-            for key in pairs(vim.v.event) do
-                local winid = tonumber(key)
-                if
-                    winid
-                    and vim.api.nvim_win_is_valid(winid)
-                    and vim.api.nvim_win_get_buf(winid) == chat
-                then
-                    local at_bottom
-                    if vim.api.nvim_get_current_win() == winid then
-                        at_bottom = vim.api.nvim_win_get_cursor(winid)[1]
-                            >= total_lines
-                    else
-                        local info = vim.fn.getwininfo(winid)[1]
-                        at_bottom = info ~= nil and info.botline >= total_lines
-                    end
-                    if at_bottom then
-                        self:clear_unread_badge()
-                        return
-                    end
-                end
-            end
-        end,
-    })
 end
 
 --- Wire up [[ / ]] navigation between the rows recording a user action in the
@@ -1015,10 +965,13 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
 end
 
 --- Jump the windows in the current tabpage showing the session's chat or a
---- transcript to their last line without moving focus. The resulting
---- WinScrolled lets each buffer's MessageWriter resume auto-scroll.
+--- transcript to their last line, through `on_goto_bottom`, without moving
+--- focus.
 --- @private
 function ChatWidget:_goto_transcripts_bottom()
+    if not self.on_goto_bottom then
+        return
+    end
     for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
         local bufnr = vim.api.nvim_win_get_buf(winid)
         local panel = vim.b[bufnr].agentic_window
@@ -1026,9 +979,7 @@ function ChatWidget:_goto_transcripts_bottom()
             vim.b[bufnr].agentic_session_id == self._owner_id
             and (panel == "chat" or panel == "subagent")
         then
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd("normal! G")
-            end)
+            self.on_goto_bottom(winid)
         end
     end
 end
@@ -1087,18 +1038,17 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
     )
 
     BufHelpers.multi_keymap_set(
-        Config.keymaps.widget.toggle_auto_scroll,
+        Config.keymaps.widget.toggle_follow,
         bufnr,
         function()
-            Config.auto_scroll.enabled = not Config.auto_scroll.enabled
+            Config.follow.enabled = not Config.follow.enabled
             Logger.notify(
-                "Auto-scroll "
-                    .. (Config.auto_scroll.enabled and "enabled" or "disabled"),
+                "Follow " .. (Config.follow.enabled and "enabled" or "disabled"),
                 vim.log.levels.INFO,
                 { title = "Agentic" }
             )
         end,
-        { desc = "Agentic: Toggle auto-scroll" }
+        { desc = "Agentic: Toggle follow" }
     )
 
     BufHelpers.multi_keymap_set(
@@ -1405,11 +1355,10 @@ function ChatWidget:render_header(window_name, context)
     WindowDecoration.set_header(bufnr, header)
 end
 
---- A buffer's unread badge (e.g. "[done]", "[?]"), shown in its header. The
---- chat's is cleared when the user scrolls it to the bottom.
+--- Set a buffer's attention badge (e.g. "[idle]", "[?]"), shown in its header.
 --- @param badge string|nil Nil clears it
 --- @param bufnr integer|nil The buffer to badge; nil = the chat
-function ChatWidget:set_unread_badge(badge, bufnr)
+function ChatWidget:set_badge(badge, bufnr)
     bufnr = bufnr or self.buf_nrs.chat
     -- Nil once the widget is destroyed.
     if not bufnr then
@@ -1423,8 +1372,12 @@ function ChatWidget:set_unread_badge(badge, bufnr)
     WindowDecoration.set_header(bufnr, header)
 end
 
-function ChatWidget:clear_unread_badge()
-    self:set_unread_badge(nil)
+--- Clear the chat's `[idle]` badge. A `[?]` stays until its prompt is answered.
+function ChatWidget:clear_idle_badge()
+    local chat = self.buf_nrs.chat
+    if chat and WindowDecoration.get_header(chat).badge == "[idle]" then
+        self:set_badge(nil)
+    end
 end
 
 --- Set the chat's title, shown in its header and as the tail of its buffer

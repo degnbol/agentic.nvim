@@ -252,7 +252,7 @@ local ConfigDefault = {
             restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
             refresh = "",
-            toggle_auto_scroll = "<localLeader>a",
+            toggle_follow = "<localLeader>a",
             goto_bottom = "<localLeader>G",
             switch_provider = "<localLeader>p",
             switch_model = "<localLeader>M",
@@ -381,11 +381,11 @@ local ConfigDefault = {
         enabled = true,
     },
 
-    --- @class agentic.UserConfig.AutoScroll
-    --- @field enabled boolean Whether auto-scroll is active (toggle at runtime with keymap)
-    --- @field pause_on_prose boolean Pin the start of a prose run to the top of the viewport so the model's narrative stays readable; auto-scroll resumes when the next tool call begins
+    --- @class agentic.UserConfig.Follow
+    --- @field enabled boolean Whether the chat view follows new output (toggle at runtime with keymap)
+    --- @field pause_on_prose boolean Pin the start of a prose run to the top of the viewport so the model's narrative stays readable. The pin releases at the next non-prose write to chat; a run taller than the window then leaves the window in user control
     --- @field bottom_padding integer Rows to reserve below the last buffer line so the thinking/generating indicator stays visible when it appears
-    auto_scroll = {
+    follow = {
         enabled = true,
         pause_on_prose = true,
         bottom_padding = 1,

@@ -66,7 +66,7 @@ function SubagentTranscript:new(agent_id, generation, subagent, widget, handlers
     BufHelpers.rename(bufnr, name)
 
     local status_indicator = StatusIndicator:new(bufnr)
-    local writer = MessageWriter:new(bufnr, status_indicator)
+    local writer = MessageWriter:new(bufnr)
 
     self = setmetatable({
         bufnr = bufnr,

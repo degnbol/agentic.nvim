@@ -57,7 +57,7 @@ _G.chat = _G.s.widget.buf_nrs.chat
     it("a window opened later gets the folds already closed", function()
         child.lua([[
 local writer = _G.s.message_writer
-writer:_with_modifiable_suppressed(function(bufnr)
+writer:_own_edit(function(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
         "intro", "```text-fold", "one", "two", "three", "```", "outro",
     })
@@ -81,7 +81,7 @@ writer:_close_fold(2)
         show_chat_in_new_tab()
         child.lua([[
 local writer = _G.s.message_writer
-writer:_with_modifiable_suppressed(function(bufnr)
+writer:_own_edit(function(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
         "intro", "```text-fold", "one", "two", "three", "```", "outro",
     })
@@ -106,7 +106,7 @@ end, vim.fn.win_findbuf(_G.chat))
         child.lua([[
 _G.s.chat_history:add_message({ type = "user", text = "x", timestamp = 0, provider_name = "p" })
 local writer = _G.s.message_writer
-writer:_with_modifiable_suppressed(function(bufnr)
+writer:_own_edit(function(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
         "intro", "```text-fold", "one", "two", "three", "```", "outro",
     })
@@ -141,23 +141,24 @@ end)
 local writer = _G.s.message_writer
 local lines = {}
 for i = 1, 200 do lines[i] = "line " .. i end
-writer:_with_modifiable_suppressed(function(bufnr)
+writer:_own_edit(function(bufnr)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 end)
--- Both at the bottom, then the foreign window scrolls up.
 for _, winid in ipairs({ ... }) do
     vim.api.nvim_win_call(winid, function() vim.cmd("normal! G") end)
 end
-vim.api.nvim_win_call(select(1, ...), function() vim.cmd("normal! gg") end)
-writer:on_user_scroll({ select(1, ...) })
 ]],
             { foreign, widget }
         )
+        child.flush()
+        -- The user moves the foreign window, the current one, up.
+        child.type_keys("gg")
+        child.flush()
 
         child.lua([[
 local writer = _G.s.message_writer
-writer:_auto_scroll(_G.chat)
-writer:_with_modifiable_suppressed(function(bufnr)
+writer:_schedule_follow()
+writer:_own_edit(function(bufnr)
     local more = {}
     for i = 1, 50 do more[i] = "more " .. i end
     vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, more)

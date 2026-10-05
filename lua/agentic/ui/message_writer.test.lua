@@ -21,8 +21,8 @@ describe("agentic.ui.MessageWriter", function()
     --- @type agentic.ui.MessageWriter
     local writer
 
-    --- @type agentic.UserConfig.AutoScroll|nil
-    local original_auto_scroll
+    --- @type agentic.UserConfig.Follow|nil
+    local original_follow
     local original_tool_call_display
     local original_shell
     local original_code_shell
@@ -30,7 +30,7 @@ describe("agentic.ui.MessageWriter", function()
     before_each(function()
         -- Re-acquire in case a prior test replaced the module in package.loaded
         Config = require("agentic.config")
-        original_auto_scroll = Config.auto_scroll
+        original_follow = Config.follow
         original_tool_call_display = vim.deepcopy(Config.tool_call_display)
         -- Disable external formatter for deterministic fallback tests
         Config.tool_call_display.execute_formatter = false
@@ -58,7 +58,7 @@ describe("agentic.ui.MessageWriter", function()
     end)
 
     after_each(function()
-        Config.auto_scroll = original_auto_scroll --- @diagnostic disable-line: assign-type-mismatch
+        Config.follow = original_follow --- @diagnostic disable-line: assign-type-mismatch
         Config.tool_call_display = original_tool_call_display
         vim.env.SHELL = original_shell
         vim.env.CLAUDE_CODE_SHELL = original_code_shell
@@ -1360,90 +1360,27 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("_check_auto_scroll", function()
-        it("returns true when cursor is on the last line", function()
-            setup_buffer(50, 50)
-            assert.is_true(writer:_check_auto_scroll(winid))
-        end)
-
-        it("returns false when cursor is not on the last line", function()
+    describe("any_following", function()
+        it("is true while a window is not in user control", function()
             setup_buffer(50, 1)
-            assert.is_false(writer:_check_auto_scroll(winid))
+            assert.is_true(writer:any_following())
         end)
 
-        it("returns false when paused regardless of cursor", function()
+        it("is false when every window is in user control", function()
             setup_buffer(50, 50)
-            writer._paused_windows[winid] = true
-            assert.is_false(writer:_check_auto_scroll(winid))
+            writer._user_controlled[winid] = true
+            assert.is_false(writer:any_following())
         end)
 
-        it(
-            "returns true when viewport reaches end without cursor on last line, focus elsewhere",
-            function()
-                -- Cursor mid-buffer in chat, viewport scrolled so the
-                -- last line is visible, but focus is in another window.
-                -- The user can't move the chat cursor — the viewport is
-                -- the only signal. Mimics OS-scroll-wheel-hovering-on-chat
-                -- while focused in the input panel.
-                setup_buffer(30, 15)
-                vim.api.nvim_win_call(winid, function()
-                    vim.fn.winrestview({ topline = 11 })
-                end)
-                vim.cmd("redraw")
-
-                -- Switch focus away from the chat window.
-                local other_buf = vim.api.nvim_create_buf(false, true)
-                local other_win = vim.api.nvim_open_win(other_buf, true, {
-                    relative = "editor",
-                    width = 20,
-                    height = 5,
-                    row = 25,
-                    col = 0,
-                })
-
-                assert.is_true(writer:_check_auto_scroll(winid))
-
-                vim.api.nvim_win_close(other_win, true)
-                vim.api.nvim_buf_delete(other_buf, { force = true })
-            end
-        )
-
-        it(
-            "returns false when chat is focused but cursor is not on last line, even if last line is visible",
-            function()
-                -- Short buffer that fits in winheight=20: botline reaches
-                -- end without any scrolling. Chat is focused. User is
-                -- reading mid-buffer with the cursor up — not "at bottom".
-                setup_buffer(10, 3)
-                vim.api.nvim_set_current_win(winid)
-                local info = vim.fn.getwininfo(winid)[1]
-                assert.is_true(info.botline >= 10) -- viewport shows last line
-                assert.is_false(writer:_check_auto_scroll(winid))
-            end
-        )
-
-        it("returns true when window is not visible", function()
+        it("is true when no window shows the buffer", function()
             local hidden_buf = vim.api.nvim_create_buf(false, true)
             local hidden_writer = MessageWriter:new(hidden_buf)
-            assert.is_true(hidden_writer:is_near_bottom())
+            assert.is_true(hidden_writer:any_following())
             vim.api.nvim_buf_delete(hidden_buf, { force = true })
         end)
+    end)
 
-        it("checks the home window from another tabpage", function()
-            setup_buffer(50, 1)
-            writer._home_window = function()
-                return winid
-            end
-
-            vim.cmd("tabnew")
-            local tab2 = vim.api.nvim_get_current_tabpage()
-
-            assert.is_false(writer:_check_auto_scroll(winid))
-
-            vim.api.nvim_set_current_tabpage(tab2)
-            vim.cmd("tabclose")
-        end)
-
+    describe("_wrap_window", function()
         it(
             "measures no window outside the current tabpage but its home",
             function()
@@ -1460,54 +1397,29 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
-    describe("_auto_scroll", function()
-        it("evaluates _check_auto_scroll eagerly on first call", function()
-            local check_scroll_spy = spy.on(writer, "_check_auto_scroll")
-            writer:_auto_scroll(bufnr)
+    describe("_schedule_follow", function()
+        it("owes a scroll", function()
+            local schedule_stub = spy.stub(vim, "schedule")
+            writer:_schedule_follow()
 
-            assert.equal(1, check_scroll_spy.call_count)
-            check_scroll_spy:revert()
+            assert.is_true(writer._scroll_owed)
+            schedule_stub:revert()
         end)
 
         it("coalesces multiple calls into a single scheduled scroll", function()
-            setup_buffer(20, 20)
+            local schedule_stub = spy.stub(vim, "schedule")
+            writer:_schedule_follow()
+            writer:_schedule_follow()
+            writer:_schedule_follow()
 
-            writer:_auto_scroll(bufnr)
-            assert.is_true(writer._scroll_callback_queued)
-
-            local check_spy = spy.on(writer, "_check_auto_scroll")
-            writer:_auto_scroll(bufnr)
-            writer:_auto_scroll(bufnr)
-
-            assert.equal(0, check_spy.call_count)
-            check_spy:revert()
+            assert.equal(1, schedule_stub.call_count)
+            schedule_stub:revert()
         end)
     end)
 
-    describe("_scroll_verdicts sticky field", function()
+    describe("_scroll_owed", function()
         it(
-            "remains true after buffer growth despite cursor leaving the bottom band",
-            function()
-                setup_buffer(20, 20)
-                writer:_auto_scroll(bufnr)
-                assert.is_true(writer._scroll_verdicts[winid])
-
-                local lines = {}
-                for i = 1, 30 do
-                    lines[i] = "tool output " .. i
-                end
-                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
-
-                local check_spy = spy.on(writer, "_check_auto_scroll")
-                writer:_auto_scroll(bufnr)
-                assert.is_true(writer._scroll_verdicts[winid])
-                assert.equal(0, check_spy.call_count)
-                check_spy:revert()
-            end
-        )
-
-        it(
-            "scheduled callback resets field and moves cursor to last line",
+            "scheduled callback discharges it and moves cursor to last line",
             function()
                 local schedule_stub = spy.stub(vim, "schedule")
                 schedule_stub:invokes(function(fn)
@@ -1515,15 +1427,29 @@ describe("agentic.ui.MessageWriter", function()
                 end)
 
                 setup_buffer(50, 1)
-                writer._scroll_verdicts = { [winid] = true }
-                writer:_auto_scroll(bufnr)
+                writer:_schedule_follow()
 
-                assert.is_nil(writer._scroll_verdicts)
+                assert.is_false(writer._scroll_owed)
                 assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
 
                 schedule_stub:revert()
             end
         )
+
+        it("scheduled callback leaves a window in user control", function()
+            local schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+
+            setup_buffer(50, 1)
+            writer._user_controlled[winid] = true
+            writer:_schedule_follow()
+
+            assert.equal(1, vim.api.nvim_win_get_cursor(winid)[1])
+
+            schedule_stub:revert()
+        end)
 
         it(
             "scheduled callback scrolls the home window from another tabpage",
@@ -1547,39 +1473,12 @@ describe("agentic.ui.MessageWriter", function()
                 vim.cmd("tabnew")
                 local tab2 = vim.api.nvim_get_current_tabpage()
 
-                writer._scroll_verdicts = { [winid] = true }
-                writer:_auto_scroll(bufnr)
+                writer:_schedule_follow()
 
                 assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
 
                 vim.api.nvim_set_current_tabpage(tab2)
                 vim.cmd("tabclose")
-
-                schedule_stub:revert()
-            end
-        )
-
-        it(
-            "after reset, re-evaluates and returns false when user scrolled up",
-            function()
-                local schedule_stub = spy.stub(vim, "schedule")
-                schedule_stub:invokes(function(fn)
-                    fn()
-                end)
-
-                setup_buffer(50, 50)
-                writer:_auto_scroll(bufnr)
-                assert.is_nil(writer._scroll_verdicts)
-                assert.is_false(writer._scroll_callback_queued)
-
-                schedule_stub:revert()
-
-                schedule_stub = spy.stub(vim, "schedule")
-
-                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-
-                writer:_auto_scroll(bufnr)
-                assert.is_false(writer._scroll_verdicts[winid])
 
                 schedule_stub:revert()
             end
@@ -1602,19 +1501,18 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "callback skips the scroll and keeps the verdict when a fold op is pending",
+            "callback skips the scroll and keeps it owed when a fold op is pending",
             function()
                 setup_buffer(50, 1)
                 -- A pending fold op stands in for a queued :foldclose.
                 writer._pending_fold_ops = { { id = 1, open = false } }
-                writer._scroll_verdicts = { [winid] = true }
 
-                local scroll_spy = spy.on(writer, "_scroll_now")
-                writer:_auto_scroll(bufnr)
+                local scroll_spy = spy.on(writer, "_scroll")
+                writer:_schedule_follow()
 
                 assert.equal(0, scroll_spy.call_count)
-                -- Verdict survives for flush_pending_fold_ops to consume.
-                assert.is_true(writer._scroll_verdicts[winid])
+                -- Still owed, for flush_pending_fold_ops.
+                assert.is_true(writer._scroll_owed)
                 scroll_spy:revert()
             end
         )
@@ -1627,25 +1525,24 @@ describe("agentic.ui.MessageWriter", function()
             setup_buffer(50, 1)
             writer._pending_fold_ops = { { id = 1, open = false } }
             writer._fold_retry_armed = true
-            writer._scroll_verdicts = { [winid] = true }
 
-            local scroll_spy = spy.on(writer, "_scroll_now")
-            writer:_auto_scroll(bufnr)
+            local scroll_spy = spy.on(writer, "_scroll")
+            writer:_schedule_follow()
 
             assert.equal(1, scroll_spy.call_count)
             scroll_spy:revert()
         end)
 
-        it("insert-mode hold discharges the verdict it inherited", function()
+        it("insert-mode hold scrolls for the write it inherited", function()
             -- The first write's callback has already skipped by the time the
             -- flush discovers insert mode, so the hold owes that one a scroll.
             setup_buffer(50, 1)
             writer._pending_fold_ops = { { id = 1, open = false } }
-            writer._scroll_verdicts = { [winid] = true }
+            writer._scroll_owed = true
             local mode = spy.stub(vim.api, "nvim_get_mode")
             mode:returns({ mode = "i", blocking = false })
 
-            local scroll_spy = spy.on(writer, "_scroll_now")
+            local scroll_spy = spy.on(writer, "_scroll")
             writer:flush_pending_fold_ops()
 
             assert.equal(1, scroll_spy.call_count)
@@ -1660,12 +1557,12 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "flush scrolls once the folds are closed, then clears the verdict",
+            "flush scrolls once the folds are closed, then discharges the scroll",
             function()
                 setup_buffer(50, 1)
-                writer._scroll_verdicts = { [winid] = true }
+                writer._scroll_owed = true
 
-                local scroll_spy = spy.on(writer, "_scroll_now")
+                local scroll_spy = spy.on(writer, "_scroll")
                 -- A real fold anchor isn't needed — flush scrolls after draining
                 -- whatever ops are present, missing folds are swallowed.
                 local id = vim.api.nvim_buf_set_extmark(
@@ -1679,15 +1576,15 @@ describe("agentic.ui.MessageWriter", function()
                 writer:flush_pending_fold_ops()
 
                 assert.equal(1, scroll_spy.call_count)
-                assert.is_nil(writer._scroll_verdicts)
+                assert.is_false(writer._scroll_owed)
                 scroll_spy:revert()
             end
         )
 
-        it("flush does not scroll a scrolled-away user", function()
+        it("flush does not scroll a window in user control", function()
             setup_buffer(50, 1)
-            writer._scroll_verdicts = { [winid] = true }
-            writer._paused_windows[winid] = true
+            writer._scroll_owed = true
+            writer._user_controlled[winid] = true
 
             local scroll_spy =
                 spy.on(require("agentic.utils.buf_helpers"), "scroll_down")
@@ -1706,7 +1603,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("auto-scroll with public write methods", function()
+    describe("follow with public write methods", function()
         --- @type TestStub
         local schedule_stub
 
@@ -1719,7 +1616,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it(
-            "write_message captures scroll decision before buffer grows",
+            "write_message owes a scroll",
             function()
                 setup_buffer(10, 10)
 
@@ -1732,12 +1629,12 @@ describe("agentic.ui.MessageWriter", function()
                     make_message_update(table.concat(long_text, "\n"))
                 )
 
-                assert.is_true(writer._scroll_verdicts[winid])
+                assert.is_true(writer._scroll_owed)
             end
         )
 
         it(
-            "write_tool_call_block captures scroll decision before buffer grows",
+            "write_tool_call_block owes a scroll",
             function()
                 setup_buffer(10, 10)
 
@@ -1756,19 +1653,209 @@ describe("agentic.ui.MessageWriter", function()
                 }
                 writer:write_tool_call_block(block)
 
-                assert.is_true(writer._scroll_verdicts[winid])
+                assert.is_true(writer._scroll_owed)
                 assert.is_true(vim.api.nvim_buf_line_count(bufnr) > 20)
             end
         )
 
-        it("write_message does not scroll when user has scrolled up", function()
+        it(
+            "finalize_turn owes a scroll",
+            function()
+                setup_buffer(20, 20)
+
+                writer:finalize_turn()
+
+                assert.is_true(writer._scroll_owed)
+                assert.equal(21, vim.api.nvim_buf_line_count(bufnr))
+            end
+        )
+
+        it("write_message does not scroll a window in user control", function()
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
             setup_buffer(50, 1)
+            writer._user_controlled[winid] = true
 
             writer:write_message(
                 make_message_update("new content\nmore content")
             )
 
-            assert.is_false(writer._scroll_verdicts[winid])
+            assert.equal(1, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+    end)
+
+    describe("on_view_change", function()
+        --- Set `winid`'s view, as the user would.
+        --- @param view { topline: integer, lnum: integer }
+        local function move(view)
+            vim.api.nvim_win_call(winid, function()
+                vim.fn.winrestview(view)
+            end)
+        end
+
+        --- Set `winid`'s view as the writer's own change, the start of a test.
+        --- @param view { topline: integer, lnum: integer }
+        local function start_at(view)
+            writer:_own_change(function()
+                move(view)
+            end)
+        end
+
+        before_each(function()
+            setup_buffer(50, 1)
+        end)
+
+        it(
+            "a cursor move up puts the window in user control, keeping the pin",
+            function()
+                writer._prose_anchor_line = 40
+                start_at({ topline = 31, lnum = 50 })
+
+                move({ topline = 31, lnum = 49 })
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+                assert.equal(40, writer._prose_anchor_line)
+            end
+        )
+
+        it(
+            "a view move up puts the window in user control with the last line in view",
+            function()
+                start_at({ topline = 35, lnum = 45 })
+
+                move({ topline = 34, lnum = 45 })
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+            end
+        )
+
+        it("a view move down onto the last line follows again", function()
+            writer._user_controlled[winid] = true
+            start_at({ topline = 1, lnum = 1 })
+
+            move({ topline = 31, lnum = 31 })
+            writer:on_view_change(winid, false)
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("closing a fold that ends on the last line keeps following", function()
+            vim.api.nvim_win_call(winid, function()
+                vim.wo.foldmethod = "manual"
+                vim.cmd("40,50fold")
+                vim.cmd("40foldopen")
+            end)
+            start_at({ topline = 31, lnum = 50 })
+
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("normal! zc")
+                -- As vim's main loop does after zc: the cursor goes to the
+                -- fold start, and lines from above fill the rows it freed.
+                vim.fn.winrestview({ topline = 21, lnum = 40 })
+            end)
+            writer:on_view_change(winid, false)
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it(
+            "closing a fold that brings the end into view keeps user control",
+            function()
+                writer._user_controlled[winid] = true
+                start_at({ topline = 1, lnum = 1 })
+
+                vim.api.nvim_win_call(winid, function()
+                    vim.wo.foldmethod = "manual"
+                    vim.cmd("5,40fold")
+                end)
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+            end
+        )
+
+        it("a view move down short of the last line keeps user control", function()
+            writer._user_controlled[winid] = true
+            start_at({ topline = 1, lnum = 1 })
+
+            move({ topline = 10, lnum = 10 })
+            writer:on_view_change(winid, false)
+
+            assert.is_true(writer._user_controlled[winid])
+        end)
+
+        it("a cursor move onto the last line follows again", function()
+            writer._user_controlled[winid] = true
+            start_at({ topline = 31, lnum = 40 })
+
+            move({ topline = 31, lnum = 50 })
+            writer:on_view_change(winid, false)
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("a cursor move down short of the last line keeps user control", function()
+            writer._user_controlled[winid] = true
+            start_at({ topline = 31, lnum = 40 })
+
+            move({ topline = 31, lnum = 45 })
+            writer:on_view_change(winid, false)
+
+            assert.is_true(writer._user_controlled[winid])
+        end)
+
+        it("the view our own change leaves is not a motion", function()
+            start_at({ topline = 31, lnum = 50 })
+            start_at({ topline = 1, lnum = 1 })
+
+            writer:on_view_change(winid, false)
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("a resize is not a motion", function()
+            start_at({ topline = 31, lnum = 50 })
+
+            move({ topline = 20, lnum = 39 })
+            writer:on_view_change(winid, true)
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("a window entry is not a motion, the next change is", function()
+            start_at({ topline = 31, lnum = 50 })
+
+            writer:on_window_enter(winid)
+            move({ topline = 31, lnum = 40 })
+            writer:on_view_change(winid, false)
+            assert.is_nil(writer._user_controlled[winid])
+
+            move({ topline = 31, lnum = 39 })
+            writer:on_view_change(winid, false)
+            assert.is_true(writer._user_controlled[winid])
+        end)
+
+        it("an entry left without a view change skips no later motion", function()
+            start_at({ topline = 31, lnum = 50 })
+
+            writer:on_window_enter(winid)
+            writer:on_window_leave(winid)
+            move({ topline = 31, lnum = 40 })
+            writer:on_view_change(winid, false)
+
+            assert.is_true(writer._user_controlled[winid])
+        end)
+
+        it("go_to_bottom puts the window in following on the last line", function()
+            writer._user_controlled[winid] = true
+
+            writer:go_to_bottom(winid)
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
         end)
     end)
 
@@ -1881,80 +1968,18 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(writer._prose_anchor_line)
         end)
 
-        it("user scrolls away from bottom: pauses and releases pin", function()
-            writer:write_message_chunk(make_message_update("some prose"))
-            assert.is_not_nil(writer._prose_anchor_line)
-            -- Grow the buffer and park cursor far from the end so the
-            -- threshold check sees a "scrolled away" state.
-            local lines = {}
-            for i = 1, 50 do
-                lines[i] = "filler " .. i
-            end
-            vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
-            vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+        it("resume_follow ends user control and scrolls to the bottom", function()
+            setup_buffer(50, 1)
+            writer._user_controlled[winid] = true
 
-            writer:on_user_scroll({ winid })
+            writer:resume_follow()
 
-            assert.is_nil(writer._prose_anchor_line)
-            assert.is_true(writer._paused_windows[winid])
-        end)
-
-        it("user scrolls to bottom: resumes auto-scroll", function()
-            -- User had previously paused; now G or scroll-to-bottom.
-            writer._paused_windows[winid] = true
-            local lines = {}
-            for i = 1, 50 do
-                lines[i] = "line " .. i
-            end
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-            vim.api.nvim_win_set_cursor(winid, { 50, 0 })
-
-            writer:on_user_scroll({ winid })
-
-            assert.is_nil(writer._paused_windows[winid])
-        end)
-
-        it("resume_auto_scroll unpauses and scrolls to the bottom", function()
-            local lines = {}
-            for i = 1, 50 do
-                lines[i] = "line " .. i
-            end
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-            vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-            writer:on_user_scroll({ winid })
-            assert.is_true(writer._paused_windows[winid])
-
-            writer:resume_auto_scroll()
-
-            assert.is_nil(writer._paused_windows[winid])
+            assert.is_nil(writer._user_controlled[winid])
             assert.equal(vim.fn.getwininfo(winid)[1].botline, 50)
         end)
 
-        it(
-            "ignores on_user_scroll while _suppress_pin_release is set",
-            function()
-                writer:write_message_chunk(make_message_update("some prose"))
-                assert.is_not_nil(writer._prose_anchor_line)
-                local lines = {}
-                for i = 1, 50 do
-                    lines[i] = "filler " .. i
-                end
-                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
-                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-
-                -- Our own programmatic scrolls/writes fire WinScrolled with
-                -- the suppression flag set; pause/pin must survive those.
-                writer._suppress_pin_release = true
-                writer:on_user_scroll({ winid })
-                writer._suppress_pin_release = false
-
-                assert.is_not_nil(writer._prose_anchor_line)
-                assert.is_nil(writer._paused_windows[winid])
-            end
-        )
-
-        it("does not set the pin while paused", function()
-            writer._paused_windows[winid] = true
+        it("does not set the pin in user control", function()
+            writer._user_controlled[winid] = true
 
             writer:write_message_chunk(make_message_update("more prose"))
 
@@ -1996,8 +2021,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- Regression: nvim_buf_set_text moves the chat cursor to
                 -- the end of inserted text; vim then auto-corrects topline
                 -- to keep the cursor visible. That happens between
-                -- _check_auto_scroll (pre-write) and scroll_down (scheduled,
-                -- post-write). Cannot run scheduled callbacks inline here:
+                -- the write and scroll_down (scheduled, post-write). Cannot run scheduled callbacks inline here:
                 -- doing so runs scroll_down *before* the write, which
                 -- bypasses the bug entirely. Drain after each write instead.
                 local deferred = Deferred.capture()
@@ -2071,26 +2095,33 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(25, info.topline)
         end)
 
-        it("parks the cursor above the last line under a cap", function()
-            -- A write at the end of the buffer moves a cursor on the last
-            -- line along with the new text, and the redraw then scrolls
-            -- past the cap to keep it visible.
+        it("holds the view at a cap that binds, cursor inside it", function()
+            -- A cursor below the view would make the redraw scroll past the
+            -- cap to show it.
             local lines = {}
-            for i = 1, 10 do
+            for i = 1, 20 do
                 lines[i] = "line " .. i
             end
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-            vim.api.nvim_win_set_cursor(winid, { 10, 0 })
+            vim.api.nvim_win_set_cursor(winid, { 20, 0 })
+            -- Grow the last line into many, as a streamed chunk does: the
+            -- cursor stays on its row, now below the view's last screen row.
+            local more = { "line 20" }
+            for i = 21, 50 do
+                more[#more + 1] = "line " .. i
+            end
+            vim.api.nvim_buf_set_text(bufnr, 19, 0, 19, -1, more)
 
-            BufHelpers.scroll_down(winid, 1)
+            local held = BufHelpers.scroll_down(winid, 1)
 
-            assert.equal(9, vim.api.nvim_win_get_cursor(winid)[1])
+            assert.is_true(held)
+            assert.is_true(vim.api.nvim_win_get_cursor(winid)[1] <= 20)
             assert.equal(1, vim.fn.getwininfo(winid)[1].topline)
         end)
 
         it("leaves a cursor inside the capped viewport in place", function()
             local lines = {}
-            for i = 1, 10 do
+            for i = 1, 50 do
                 lines[i] = "line " .. i
             end
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -2099,6 +2130,20 @@ describe("agentic.ui.MessageWriter", function()
             BufHelpers.scroll_down(winid, 1)
 
             assert.same({ 3, 2 }, vim.api.nvim_win_get_cursor(winid))
+        end)
+
+        it("puts the cursor on the last line under a cap that does not bind", function()
+            local lines = {}
+            for i = 1, 10 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 3, 0 })
+
+            local held = BufHelpers.scroll_down(winid, 1)
+
+            assert.is_false(held)
+            assert.equal(10, vim.api.nvim_win_get_cursor(winid)[1])
         end)
 
         it("scrolls normally when max_topline is nil", function()
@@ -2181,30 +2226,6 @@ describe("agentic.ui.MessageWriter", function()
                 local info = vim.fn.getwininfo(winid)[1]
                 assert.equal(1, info.topline)
                 assert.equal(30, info.botline)
-            end
-        )
-    end)
-
-    describe("_check_auto_scroll prose-pin override", function()
-        it(
-            "returns true while a prose anchor is set, regardless of view",
-            function()
-                local lines = {}
-                for i = 1, 50 do
-                    lines[i] = "line " .. i
-                end
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-                -- Cursor far from buffer end — threshold would fail.
-                vim.api.nvim_win_set_cursor(winid, { 1, 0 })
-                writer._prose_anchor_line = 9
-
-                -- Pin overrides the proximity threshold. Vim is free to
-                -- drift topline (scrolloff, redraws) and drag the cursor
-                -- with it; neither field is a reliable user-intent signal,
-                -- so the pin stays armed until cleared by a turn boundary
-                -- (tool call, separator, error, /new).
-                assert.is_true(writer:_check_auto_scroll(winid))
-                assert.is_not_nil(writer._prose_anchor_line)
             end
         )
     end)

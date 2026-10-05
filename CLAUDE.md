@@ -73,14 +73,13 @@ cross-turn flag hazards (which flags exist, where each resets); and the header
 state pipeline (`WindowDecoration.set_header()` → `vim.b[buf].agentic_header`
 → `AgenticHeadersChanged` autocmd → external plugins).
 
-## Auto-scroll and attention notifications
+## Follow and attention notifications
 
-See the `autoscroll` project skill for the two-mechanism model
-(manual-scroll pause + prose pin), the per-instance state on
-`MessageWriter`, the chunk flow, and badge clearing rules. The discipline
-rule worth holding in your head: any new method that grows the chat
-buffer must call `_auto_scroll(bufnr)` *before* the write. User-facing
-behaviour summary is in `doc/agentic.txt § Auto-scroll`.
+See the `follow` project skill for the two modes (user control vs
+following), the write path, and how attention badges depend on follow.
+The discipline rule worth holding in your head: any new method that writes
+to the chat buffer must call `_schedule_follow(bufnr)` and write through
+`_own_edit`. User-facing: `:h agentic-follow`.
 
 ## Input buffer completion
 

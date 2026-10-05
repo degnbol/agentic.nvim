@@ -630,8 +630,10 @@ describe("transcript windows", function()
         ["<C-w>gf"] = "tab",
     }) do
         it(keys .. " on a block's name opens the transcript (" .. check .. ")", function()
+            child.lua([[_G.spawn("c1")]])
+            -- Let the spawn's follow scroll land before the cursor is placed.
+            child.flush()
             child.lua([[
-_G.spawn("c1")
 vim.api.nvim_set_current_win(_G.s.widget:panel_win("chat"))
 local name = _G.block("c1").argument
 for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do

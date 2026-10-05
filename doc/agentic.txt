@@ -38,7 +38,7 @@ CONTENTS                                                    *agentic-contents*
        8.4 Shell commands ........................ |agentic-permissions-shell|
     9. Chat behaviour ......................................... |agentic-chat|
        9.1 Sessions and buffers ............................ |agentic-buffers|
-       9.2 Auto-scroll ................................. |agentic-auto-scroll|
+       9.2 Follow ........................................... |agentic-follow|
        9.3 Attention ..................................... |agentic-attention|
        9.4 Message queue ..................................... |agentic-queue|
        9.5 File activity ............................. |agentic-file-activity|
@@ -373,7 +373,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     mid-response, API unreachable, overloaded), send "continue"
     immediately as a new turn, up to 3 times. The retried turns write
     nothing to the chat: no prompt heading, no error block, no bell or
-    unread badge. Once the budget runs out the error is written as
+    `[idle]` badge. Once the budget runs out the error is written as
     usual, followed by the number of attempts made. Tools already run in a
     retried turn may run again.
 
@@ -409,13 +409,13 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `enabled`    boolean (default: true)
         Enable image drag-and-drop to add images to referenced files.
 
-                                                 *agentic-config-auto_scroll*
-`auto_scroll` table
+                                                      *agentic-config-follow*
+`follow` table
     `enabled`           boolean (default: true)
         Master switch. When false, no programmatic scrolling.
     `pause_on_prose`    boolean (default: true)
         Pin the start of each prose run to the top of the viewport during
-        streaming. See |agentic-auto-scroll|.
+        streaming. See |agentic-follow|.
     `bottom_padding`    integer (default: 1)
         Rows kept below the last buffer line.
 
@@ -566,7 +566,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>q`   n       Close widget (|agentic-buffers|)
     `<localLeader>!`   n       Restart session
     `<localLeader>f`   n       Toggle changed-files panel
-    `<localLeader>a`   n       Toggle auto-scroll
+    `<localLeader>a`   n       Toggle follow (|agentic-follow|)
     `<localLeader>G`   n       Scroll chat and transcripts in the tabpage to bottom, keep focus
 
 Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
@@ -867,23 +867,31 @@ and |:e| in that window.
 closes with it; in the last tabpage, vim quits by |:qall|.
 
 ------------------------------------------------------------------------------
-9.2 AUTO-SCROLL                                          *agentic-auto-scroll*
+9.2 FOLLOW                                                    *agentic-follow*
 
-While the agent streams, each window showing the chat follows the trailing
-edge of the buffer. Scrolling a window away from the bottom stops its
-following until it reaches the bottom again or a prompt is submitted.
-Prompts sent from the queue do not resume it.
+Each window showing the chat is in one of two modes:
 
-With `auto_scroll.pause_on_prose` the start of each prose run is pinned to
-the top of the viewport, released by the next write to chat.
+- User control: new output does not scroll the window.
+- Following: the window scrolls with new output. It shows the trailing edge
+  of the buffer, or with `follow.pause_on_prose` the start of the current
+  prose run, pinned to the top of the viewport until the next non-prose write
+  to chat. A prose run taller than the window puts the window in user
+  control when its pin ends.
+
+Moving the view or the cursor up, with keys or mouse, puts the window in
+user control. It follows again when the view moves down to show the last
+line, when the cursor moves onto the last line (e.g. |G|, or a closed fold
+that ends there), on `<localLeader>G`, or when a prompt is submitted. Prompts
+sent from the queue do not. Entering the window, e.g. by a click, and
+resizing it do not change its mode.
 
 ------------------------------------------------------------------------------
 9.3 ATTENTION                                              *agentic-attention*
 
 When a turn ends, the terminal bell rings if the chat window is not the
-current window (`notifications.bell`), and the chat header shows `[done]`
-if the chat is scrolled away from the bottom. `[done]` clears when the chat
-reaches the bottom or on the next submit.
+current window (`notifications.bell`), and the chat header shows `[idle]`
+if no chat window follows (|agentic-follow|). `[idle]` stays until the next
+submit.
 
 When a permission float is shown, the bell rings if the chat window is not
 the current window.

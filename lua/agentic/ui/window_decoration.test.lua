@@ -71,11 +71,11 @@ describe("agentic.ui.WindowDecoration", function()
 
             WindowDecoration.set_header(
                 bufnr,
-                { title = "Chat", badge = "[done]", context = "Mode: plan" }
+                { title = "Chat", badge = "[idle]", context = "Mode: plan" }
             )
 
-            assert.equal("Chat [done] | Mode: plan", vim.wo[winid].winbar)
-            assert.equal("Chat [done] | Mode: plan", vim.wo[second].winbar)
+            assert.equal("Chat [idle] | Mode: plan", vim.wo[winid].winbar)
+            assert.equal("Chat [idle] | Mode: plan", vim.wo[second].winbar)
             vim.api.nvim_win_close(second, true)
         end)
 

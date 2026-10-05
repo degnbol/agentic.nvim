@@ -86,7 +86,7 @@ provider runs a mid-turn prompt as the next turn — only the automatic drains
 (`_drain_queue`, `_dispatch_deferred_prompts`), which is what advances the queue
 one block per turn. The prompt callback reads it as "a turn is still
 streaming": it runs the turn boundary below but not the idle signals
-(`is_generating`, indicator, `[done]`). An epoch mismatch runs neither.
+(`is_generating`, indicator, `[idle]`). An epoch mismatch runs neither.
 
 ## Cross-turn state hazards in MessageWriter
 
@@ -113,7 +113,7 @@ plugins (incline.nvim, tabline plugins) through the **headers state pipeline**,
 not through buffer names.
 
 **Pipeline:** `SessionManager` → `ChatWidget:render_header()` /
-`set_chat_title()` / `set_unread_badge()` → `WindowDecoration.set_header()` →
+`set_chat_title()` / `set_badge()` → `WindowDecoration.set_header()` →
 `vim.b[buf].agentic_header` → `AgenticHeadersChanged` User autocmd (`data.buf`)
 → external plugin refresh. `set_header` also renders the winbar, local-scope,
 in every window showing the buffer.

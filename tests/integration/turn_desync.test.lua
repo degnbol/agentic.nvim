@@ -73,12 +73,12 @@ describe("turn desync (stuck 1 message behind)", function()
     --- @type integer
     local winid
 
-    local original_auto_scroll
+    local original_follow
     local original_tool_call_display
 
     before_each(function()
         Config = require("agentic.config")
-        original_auto_scroll = Config.auto_scroll
+        original_follow = Config.follow
         original_tool_call_display = vim.deepcopy(Config.tool_call_display)
         Config.tool_call_display.execute_formatter = false
 
@@ -97,7 +97,7 @@ describe("turn desync (stuck 1 message behind)", function()
     end)
 
     after_each(function()
-        Config.auto_scroll = original_auto_scroll --- @diagnostic disable-line: assign-type-mismatch
+        Config.follow = original_follow --- @diagnostic disable-line: assign-type-mismatch
         Config.tool_call_display = original_tool_call_display
         if winid and vim.api.nvim_win_is_valid(winid) then
             vim.api.nvim_win_close(winid, true)

@@ -251,23 +251,25 @@ end
 --- Topline and cursor placement are fold-aware: target is the smallest
 --- line whose [target..last_line] range fits within the window's screen
 --- rows (closed folds collapse to one row), and the cursor lands inside
---- the visible viewport so vim does not auto-correct topline. Under a cap
+--- the visible viewport so vim does not auto-correct topline. The cursor
+--- goes to the last line, unless the cap holds the view short of it: then
 --- a cursor on the last line or outside the viewport moves into it, even
 --- when the viewport does not move.
 --- @param winid integer
 --- @param max_topline? integer 1-indexed buffer line; topline must not exceed it
+--- @return boolean held Whether the cap holds the view short of the last line
 function BufHelpers.scroll_down(winid, max_topline)
     if not vim.api.nvim_win_is_valid(winid) then
-        return
+        return false
     end
     local Config = require("agentic.config")
-    if Config.auto_scroll and Config.auto_scroll.enabled == false then
-        return
+    if Config.follow and Config.follow.enabled == false then
+        return false
     end
 
     local ok, info = pcall(vim.fn.getwininfo, winid)
     if not ok or not info[1] then
-        return
+        return false
     end
     local old_topline = info[1].topline
     local winheight = info[1].height
@@ -276,9 +278,7 @@ function BufHelpers.scroll_down(winid, max_topline)
 
     -- Reserve N rows below the last buffer line so virt_line indicators
     -- (thinking/generating) have breathing room when they appear.
-    local bottom_padding = (
-        Config.auto_scroll and Config.auto_scroll.bottom_padding
-    ) or 0
+    local bottom_padding = (Config.follow and Config.follow.bottom_padding) or 0
     local effective_winheight = math.max(1, winheight - bottom_padding)
 
     -- Fold-aware natural target: smallest topline t (1-indexed) such
@@ -304,9 +304,9 @@ function BufHelpers.scroll_down(winid, max_topline)
     end
 
     -- Return early where the viewport stays as-is: scroll_down never
-    -- scrolls upward, and without a cap there is no cursor to place.
+    -- scrolls upward.
     if max_topline and max_topline < old_topline then
-        return -- viewport already past the cap
+        return true -- viewport already past the cap
     end
     if old_topline >= last_line then
         -- Tail line is already at/above the top: no forward scroll is
@@ -315,12 +315,9 @@ function BufHelpers.scroll_down(winid, max_topline)
         -- last_line` below, keeping every measurement range in bounds; a
         -- buffer that shrinks below its topline never gets this far
         -- because vim clamps the reported topline back into range first.
-        return
+        return false
     end
     local tail_fits = height_to_last(old_topline) <= effective_winheight
-    if tail_fits and not max_topline then
-        return
-    end
 
     -- When the tail does not fit from old_topline, the natural target is
     -- strictly below it: search (old_topline, last_line].
@@ -338,11 +335,12 @@ function BufHelpers.scroll_down(winid, max_topline)
         natural_target = lo
     end
 
-    local target = math.min(max_topline or math.huge, natural_target)
+    local held = max_topline ~= nil and max_topline < natural_target
+    local target = held and max_topline or natural_target
 
     -- Cursor stays inside the visible viewport so vim's redraw does not
-    -- override `target`. Without a cap, last_line is at the bottom row, so
-    -- the cursor sits on it and follows the writes. Under a cap, locate the
+    -- override `target`. Unless held, last_line is in view, so the cursor
+    -- sits on it and follows the writes. Held, locate the
     -- largest line above last_line whose row from `target` stays within
     -- `winheight - scrolloff`, then snap to the start of any closed fold it
     -- falls inside (otherwise the cursor would open it). Not last_line
@@ -351,7 +349,7 @@ function BufHelpers.scroll_down(winid, max_topline)
     -- past the cap. A cursor already between `target` and that line stays.
     --- @type integer|nil
     local cursor_lnum = last_line
-    if max_topline then
+    if held then
         local scrolloff = vim.api.nvim_get_option_value("scrolloff", {
             win = winid,
         })
@@ -392,6 +390,7 @@ function BufHelpers.scroll_down(winid, max_topline)
     vim.api.nvim_win_call(winid, function()
         vim.fn.winrestview(view)
     end)
+    return held
 end
 
 return BufHelpers

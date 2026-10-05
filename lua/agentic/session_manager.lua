@@ -129,10 +129,10 @@ function SessionManager._ring_bell()
 end
 
 --- Notify the user that the agent needs attention.
---- Bell for unfocused windows, buffer-name badge when scrolled up in a focused window.
---- When `skip_badge` is true (a shown permission float), only bell when
---- unfocused — the float is in view, so the scrolled-up badge is irrelevant.
---- @param badge string Badge text (e.g. "[done]", "[?]")
+--- Bell when the chat window is unfocused, header badge when no chat window
+--- follows. When `skip_badge` is true (a shown permission float), only bell when
+--- unfocused — the float is in view, so the badge is irrelevant.
+--- @param badge string Badge text (e.g. "[idle]", "[?]")
 --- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
 function SessionManager:_notify_attention(badge, skip_badge)
     local is_chat_focused = self.widget:panel_win("chat")
@@ -145,18 +145,18 @@ function SessionManager:_notify_attention(badge, skip_badge)
         return
     end
 
-    local near_bottom = self.message_writer:is_near_bottom()
+    local following = self.message_writer:any_following()
 
     if is_chat_focused then
-        -- Focused on chat: badge if scrolled up, no bell (can't dismiss easily)
-        if not near_bottom then
-            self.widget:set_unread_badge(badge)
+        -- Focused on chat: badge if no chat window follows, no bell (can't dismiss easily)
+        if not following then
+            self.widget:set_badge(badge)
         end
     else
         -- Not focused on chat: bell + badge
         SessionManager._ring_bell()
-        if not near_bottom then
-            self.widget:set_unread_badge(badge)
+        if not following then
+            self.widget:set_badge(badge)
         end
     end
 end
@@ -168,7 +168,7 @@ end
 --- @param bufnr integer
 function SessionManager:_on_permission_hidden(bufnr)
     SessionManager._ring_bell()
-    self.widget:set_unread_badge("[?]", bufnr)
+    self.widget:set_badge("[?]", bufnr)
     local title = self.chat_history.title
     Logger.notify(
         string.format(
@@ -412,6 +412,13 @@ function SessionManager:new()
         end)
     end
 
+    self.widget.on_goto_bottom = function(winid)
+        local writer = self:_writer_of_buf(vim.api.nvim_win_get_buf(winid))
+        if writer then
+            writer:go_to_bottom(winid)
+        end
+    end
+
     self.widget.on_hide = function()
         if #self.chat_history.messages > 0 and self.session_id then
             local short_id = self.session_id:sub(1, 8)
@@ -420,13 +427,9 @@ function SessionManager:new()
     end
 
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.chat)
-    self.message_writer = MessageWriter:new(
-        self.widget.buf_nrs.chat,
-        self.status_indicator,
-        function()
-            return self.widget:panel_win("chat")
-        end
-    )
+    self.message_writer = MessageWriter:new(self.widget.buf_nrs.chat, function()
+        return self.widget:panel_win("chat")
+    end)
 
     self.permission_manager = PermissionManager:new(
         self.message_writer,
@@ -441,7 +444,7 @@ function SessionManager:new()
     end
     self.permission_manager.on_hidden_resolved = function(bufnr)
         if WindowDecoration.get_header(bufnr).badge == "[?]" then
-            self.widget:set_unread_badge(nil, bufnr)
+            self.widget:set_badge(nil, bufnr)
         end
     end
     -- A subagent's prompt anchors to its transcript; with no window showing
@@ -2993,14 +2996,15 @@ function SessionManager:_submit_defer_reason(prompt)
 end
 
 --- Answer a prompt the user submitted: their attention is back on the chat, so
---- the `[done]` badge clears, last turn's finished todo panel closes, and a
---- manual-scroll pause lifts. Call it from the user's submit, never from the
---- dispatch path: the automatic queue drains reach that too, and one of them
---- would clear the badge in the tick it was set, or jump a reader to the bottom.
+--- the `[idle]` badge clears, last turn's finished todo panel closes, and every
+--- chat window in user control follows again. Call it from the user's submit,
+--- never from the dispatch path: the automatic queue drains reach that too, and
+--- one of them would clear the badge in the tick it was set, or jump a reader to
+--- the bottom.
 function SessionManager:on_user_submit()
-    self.widget:clear_unread_badge()
+    self.widget:clear_idle_badge()
     self.todo_list:close_if_all_completed()
-    self.message_writer:resume_auto_scroll()
+    self.message_writer:resume_follow()
 end
 
 --- @class agentic.SessionManager.SubmitOpts
@@ -3060,7 +3064,7 @@ end
 --- Send a prompt to the main agent on the user's behalf, apart from their
 --- own turns. It passes the submit gate, but carries none of the pending
 --- context, title, restored history or system info of a user submit, and
---- clears no badge, todo panel or scroll pause. A held relay is not kept.
+--- clears no badge, todo panel or user control. A held relay is not kept.
 --- @param instruction string
 --- @param opts agentic.ui.PromptInput.SubmitOpts
 --- @return agentic.SubmitDeferReason|nil held Why it was not sent; nil when sent
@@ -3642,7 +3646,7 @@ function SessionManager:_dispatch_turn(prompt)
         local turn_usage
         --- Set when this failure is being resent as a fresh turn. Everything
         --- that would tell the user the turn ended is suppressed, so a
-        --- recovered failure leaves no trace: no error block, no bell or unread
+        --- recovered failure leaves no trace: no error block, no bell or `[idle]`
         --- badge, no on_response_complete, and no queue drain.
         local retrying = err ~= nil
             and Recovery.should_retry_transient(self, err, session_id)
@@ -3705,7 +3709,6 @@ function SessionManager:_dispatch_turn(prompt)
         end
 
         self:_finalize_turn(turn_usage)
-        self.message_writer:scroll_to_bottom()
 
         if not session_busy then
             self.status_indicator:stop()
@@ -3713,7 +3716,7 @@ function SessionManager:_dispatch_turn(prompt)
 
         if not retrying then
             if not session_busy then
-                self:_notify_attention("[done]")
+                self:_notify_attention("[idle]")
             end
 
             -- Fires once per user turn, not once per provider turn: the

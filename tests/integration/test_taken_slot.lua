@@ -220,7 +220,7 @@ _G.rang = false
 require("agentic.session_manager")._ring_bell = function()
     _G.rang = true
 end
-_G.s:_notify_attention("[done]", true)
+_G.s:_notify_attention("[idle]", true)
 ]])
 
         assert.is_true(child.lua_get("_G.rang"))
