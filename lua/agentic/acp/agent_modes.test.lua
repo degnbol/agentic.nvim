@@ -111,13 +111,12 @@ describe("agentic.acp.AgentModes", function()
             notify_stub:revert()
         end)
 
-        it("updates current_mode_id and notifies on valid mode", function()
+        it("updates current_mode_id silently on valid mode", function()
             local success = agent_modes:handle_agent_update_mode("code")
 
             assert.is_true(success)
             assert.equal("code", agent_modes.current_mode_id)
-            assert.stub(notify_stub).was.called(1)
-            assert.is_true(string.find(notify_stub.calls[1][1], "code") ~= nil)
+            assert.stub(notify_stub).was.called(0)
         end)
 
         it("returns false and warns for nil or invalid mode_id", function()

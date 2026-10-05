@@ -91,13 +91,6 @@ function AgentModes:handle_agent_update_mode(mode_id)
     end
 
     self.current_mode_id = mode_id
-
-    Logger.notify(
-        "Mode changed to: " .. mode_id,
-        vim.log.levels.INFO,
-        { title = "Agentic Mode changed" }
-    )
-
     return true
 end
 
