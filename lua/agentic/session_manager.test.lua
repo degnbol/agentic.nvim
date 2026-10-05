@@ -1438,7 +1438,7 @@ describe("agentic.SessionManager", function()
                         },
                     }
                 end,
-                _read_agent_meta = function() end,
+                _read_agent_record = function() end,
                 _indicator_for = function()
                     return { reposition = function() end }
                 end,
@@ -2211,7 +2211,7 @@ describe("agentic.SessionManager", function()
                 _agents = {
                     c1 = {
                         open = true,
-                        meta_read = true,
+                        record_read = true,
                         transcript = {
                             writer = {
                                 tool_call_blocks = {},
@@ -4100,11 +4100,18 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_message_chunk = main_write },
                 status_indicator = { start = function() end },
                 chat_history = ChatHistory:new(),
-                agent = { provider_config = { name = "test-provider" } },
+                agent = setmetatable(
+                    { provider_config = { name = "test-provider" } },
+                    {
+                        __index = require(
+                            "agentic.acp.adapters.claude_agent_acp_adapter"
+                        ),
+                    }
+                ),
                 widget = { buf_nrs = {} },
                 _prompt_pending = 1,
                 _agents = {
-                    c1 = { transcript = transcript, open = true, meta_read = true },
+                    c1 = { transcript = transcript, open = true, record_read = true },
                 },
                 _agent_by_task = { task = "c1" },
                 _transcript_for = function()

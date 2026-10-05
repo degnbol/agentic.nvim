@@ -9,7 +9,6 @@ local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
-local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Config = require("agentic.config")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local DiffJump = require("agentic.ui.diff_jump")
@@ -66,7 +65,7 @@ end
 --- @class agentic.SessionManager.Agent
 --- @field transcript? agentic.ui.SubagentTranscript Nil once the user wiped it
 --- @field open boolean Running, as far as this session manager knows
---- @field meta_read boolean The SDK's record of the spawn has been read
+--- @field record_read boolean The provider's record of the spawn has been read
 
 --- @class agentic.SessionManager
 --- @field id integer Monotonic identity, unique for the editor's lifetime. Names the session's buffers
@@ -81,7 +80,6 @@ end
 --- @field _agents table<string, agentic.SessionManager.Agent> Subagents of the conversation by child session id
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
---- @field _session_dir? string Claude Code's side-file directory of the session, once found
 --- @field file_list agentic.ui.FileList
 --- @field file_activity agentic.ui.FileActivity
 --- @field code_selection agentic.ui.CodeSelection
@@ -761,9 +759,10 @@ end
 --- @return agentic.ui.SubagentTranscript
 function SessionManager:_new_transcript(child_id, subagent)
     local SubagentTranscript = require("agentic.ui.subagent_transcript")
+    local agent_id, generation = self.agent:subagent_id(child_id)
     --- @type agentic.ui.SubagentTranscript
     local transcript
-    transcript = SubagentTranscript:new(child_id, subagent, self.widget, {
+    transcript = SubagentTranscript:new(agent_id, generation, subagent, self.widget, {
         setup_buf = function(bufnr, writer)
             self:_bind_session_keymaps(bufnr, writer)
         end,
@@ -858,7 +857,7 @@ function SessionManager:_restore_transcripts()
             self._agents[child_id] = {
                 transcript = transcript,
                 open = false,
-                meta_read = true,
+                record_read =true,
             }
             if block then
                 block.argument = vim.api.nvim_buf_get_name(transcript.bufnr)
@@ -908,14 +907,6 @@ function SessionManager:_indicator_for(tool_call_id)
     return self.status_indicator
 end
 
---- The spawning Task's tool call id a session update is tagged with, or nil
---- for an update that is not a subagent's.
---- @param update agentic.acp.SessionUpdateMessage
---- @return string|nil
-local function subagent_parent(update)
-    return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
-end
-
 --- The subagent an update belongs to: the one whose child session sent it,
 --- else the one its Task tag names. Nil for the main agent's.
 --- @param source_session_id string|nil
@@ -938,56 +929,31 @@ function SessionManager:_note_agent_task(child_id, task_id)
     end
 end
 
---- Claude Code's side-file directory of the session: the hook-reported
---- transcript path without `.jsonl`, else found by session id. Cached once
---- found.
---- @return string|nil path Nil before the session exists or while no directory is found
-function SessionManager:_find_session_dir()
-    if self._session_dir or not self.session_id then
-        return self._session_dir
-    end
-    local transcript = self._hook_records:transcript_path()
-    if transcript then
-        self._session_dir = (transcript:gsub("%.jsonl$", ""))
-    else
-        self._session_dir = ClaudeUtils.find_session_dir(
-            ClaudeUtils.config_dir(self.agent.provider_config.env),
-            self.session_id
-        )
-    end
-    return self._session_dir
-end
-
---- Read the SDK's record of a subagent's spawn, once, and apply it: the Task
---- id to the Task lookup and the history, the type and confirmed mode to the
---- block and the transcript header. Does nothing until the record exists.
+--- Read the provider's record of a subagent's spawn (`ACPClient:subagent_record`),
+--- once, and apply it: the Task id to the Task lookup and the history, the
+--- type and confirmed mode to the block and the transcript header. Does
+--- nothing until the record exists.
 --- @param child_id string
-function SessionManager:_read_agent_meta(child_id)
+function SessionManager:_read_agent_record(child_id)
     local agent = self._agents[child_id]
-    if not agent or agent.meta_read then
+    if not agent or agent.record_read or not self.session_id then
         return
     end
-    local session_dir = self:_find_session_dir()
-    local meta = session_dir
-        and ClaudeUtils.subagent_meta(
-            session_dir,
-            (ClaudeUtils.agent_id(child_id))
-        )
-    if not meta then
+    local record = self.agent:subagent_record(self.session_id, child_id)
+    if not record then
         return
     end
-    agent.meta_read = true
-    self._agent_by_task[meta.tool_use_id] = child_id
-    self.chat_history:set_subagent_task(child_id, meta.tool_use_id)
+    agent.record_read = true
+    self._agent_by_task[record.task_id] = child_id
+    self.chat_history:set_subagent_task(child_id, record.task_id)
 
     local block = self:_agent_block(child_id)
     if not (block and block.subagent) then
         return
     end
     local subagent = vim.tbl_extend("force", block.subagent, {
-        agent_type = meta.agent_type,
-        mode = meta.request_shape == "background" and "background"
-            or "blocking",
+        agent_type = record.agent_type,
+        mode = record.background and "background" or "blocking",
         confirmed = true,
     }) --[[@as agentic.ui.MessageWriter.SubagentInfo]]
     self:_update_agent_block(child_id, { subagent = subagent })
@@ -1048,7 +1014,7 @@ function SessionManager:_open_agent(child_id, name, task)
     --- @type agentic.ui.MessageWriter.SubagentInfo
     local subagent = {
         label = name,
-        agent_id = (ClaudeUtils.agent_id(child_id)),
+        agent_id = (self.agent:subagent_id(child_id)),
         mode = Config.subagents.force_background and "background"
             or "blocking",
         confirmed = false,
@@ -1057,7 +1023,7 @@ function SessionManager:_open_agent(child_id, name, task)
     self._agents[child_id] = {
         transcript = transcript,
         open = not self._loading,
-        meta_read = false,
+        record_read =false,
     }
 
     --- @type agentic.ui.MessageWriter.ToolCallBlock
@@ -1089,7 +1055,7 @@ function SessionManager:_open_agent(child_id, name, task)
             self.widget:show_subagent(transcript.bufnr)
         end
     end
-    self:_read_agent_meta(child_id)
+    self:_read_agent_record(child_id)
 end
 
 --- End a running subagent: stop its indicator, stamp its unresolved calls
@@ -1156,8 +1122,7 @@ function SessionManager:_forget_agents()
     end
 end
 
---- Forget every subagent the conversation started and the session's side-file
---- directory, and wipe the transcripts.
+--- Forget every subagent the conversation started, and wipe the transcripts.
 function SessionManager:_reset_subagents()
     for _, agent in pairs(self._agents) do
         if agent.transcript then
@@ -1167,7 +1132,6 @@ function SessionManager:_reset_subagents()
     self._agents = {}
     self._agent_by_task = {}
     self._tool_call_owner = {}
-    self._session_dir = nil
 end
 
 --- Run a message chunk's text through `boundary`. `update` is not modified.
@@ -1203,13 +1167,13 @@ end
 --- @return string|nil child_id
 --- @return agentic.ui.SubagentTranscript|nil transcript
 function SessionManager:_chunk_agent(update, source_session_id)
-    local task_id = subagent_parent(update)
+    local task_id = self.agent:subagent_task_id(update)
     local child_id = self:_agent_of(source_session_id, task_id)
     if not child_id then
         return nil, nil
     end
-    -- The SDK's record of the spawn is read at the agent's other events, not
-    -- per chunk: a lookup that keeps missing globs the projects directory.
+    -- The provider's record of the spawn is read at the agent's other events,
+    -- not per chunk: a lookup that keeps missing can be costly.
     self:_note_agent_task(child_id, task_id)
     return child_id, self:_transcript_for(child_id)
 end
@@ -1224,7 +1188,7 @@ function SessionManager:_on_session_update(update, source_session_id)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        if self._loading and self:_agent_of(source_session_id, subagent_parent(update)) then
+        if self._loading and self:_agent_of(source_session_id, self.agent:subagent_task_id(update)) then
             return
         end
         local child_id, transcript =
@@ -1260,7 +1224,7 @@ function SessionManager:_on_session_update(update, source_session_id)
             end
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
-        if self._loading and self:_agent_of(source_session_id, subagent_parent(update)) then
+        if self._loading and self:_agent_of(source_session_id, self.agent:subagent_task_id(update)) then
             return
         end
         local child_id, transcript =
@@ -1315,8 +1279,8 @@ function SessionManager:_on_session_update(update, source_session_id)
         if
             text
             and text ~= ""
-            and not self:_agent_of(source_session_id, subagent_parent(update))
-            and not subagent_parent(update)
+            and not (source_session_id and self._agents[source_session_id])
+            and not self.agent:subagent_task_id(update)
         then
             local trimmed = vim.trim(text)
             -- Match XML-tagged system blocks: <tag_name> ... </tag_name>
@@ -1782,7 +1746,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
             return
         end
         self:_note_agent_task(child_id, task_id)
-        self:_read_agent_meta(child_id)
+        self:_read_agent_record(child_id)
         parent = self:_task_of(child_id)
     end
 
@@ -2243,7 +2207,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         return
     end
     if child_id then
-        self:_read_agent_meta(child_id)
+        self:_read_agent_record(child_id)
     end
     local writer = self:_writer_for(id)
 
@@ -2856,7 +2820,6 @@ function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self:_set_prompt_pending(0)
     self:_forget_agents()
-    self._session_dir = nil
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is

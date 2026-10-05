@@ -390,10 +390,10 @@ session (global `acp` skill → `references/claude-agent.md` § Native subagent
 sessions). `ACPClient` maps child → root on `subagent_spawned` and passes the
 raw id to the root's subscriber as `source_session_id`. `SessionManager` keeps
 one `SubagentTranscript` per child (`_agents`), opened by `subagent_spawned`,
-ended by `subagent_state_update` or a disconnect, never by a turn's end. Type,
-mode and Task id are not on the wire; they come from the SDK's
-`subagents/agent-<id>.meta.json` (`ClaudeUtils.subagent_meta`). opencode and
-mistral-vibe `SubAgent` calls are plain chat blocks.
+ended by `subagent_state_update` or a disconnect, never by a turn's end.
+Adapters override `subagent_task_id`, `subagent_id` and `subagent_record`
+(type, mode, Task id; claude reads `agent-<id>.meta.json`). opencode and
+mistral-vibe `SubAgent` calls are plain blocks.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)
 

@@ -574,18 +574,6 @@ end, _G.s.chat_history.subagent_messages)]])
         assert.truthy(text:find("late", 1, true))
     end)
 
-    it("a session change drops the cached session directory", function()
-        child.lua([[
-_G.write_meta("x", "background", "toolu_x")
-_G.found = _G.s:_find_session_dir()
-_G.s.session_id = "other"
-_G.s:_advance_session_epoch()
-]])
-
-        assert.is_true(child.lua_get("_G.found ~= nil"))
-        assert.is_true(child.lua_get([[_G.s:_find_session_dir() == nil]]))
-    end)
-
     it("a stray buffer under a wiped transcript's name gives way", function()
         child.lua([[
 _G.spawn("c1")

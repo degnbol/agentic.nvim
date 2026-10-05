@@ -976,6 +976,120 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
+    describe("subagent records", function()
+        --- @type string
+        local config_dir
+
+        before_each(function()
+            config_dir = vim.fn.tempname()
+        end)
+
+        after_each(function()
+            if vim.uv.fs_stat(config_dir) then
+                vim.fs.rm(config_dir, { recursive = true })
+            end
+        end)
+
+        --- @param session_id string
+        --- @param agent_id string
+        --- @param shape string
+        local function write_meta(session_id, agent_id, shape)
+            local dir = vim.fs.joinpath(
+                config_dir,
+                "projects",
+                "-tmp",
+                session_id,
+                "subagents"
+            )
+            vim.fn.mkdir(dir, "p")
+            vim.fn.writefile({
+                vim.json.encode({
+                    agentType = "Explore",
+                    toolUseId = "toolu_" .. session_id,
+                    requestShape = shape,
+                }),
+            }, vim.fs.joinpath(dir, "agent-" .. agent_id .. ".meta.json"))
+        end
+
+        --- @return agentic.acp.ACPClient
+        local function adapter()
+            return setmetatable({
+                provider_config = { env = { CLAUDE_CONFIG_DIR = config_dir } },
+                _session_dirs = {},
+            }, { __index = ClaudeAgentACPAdapter })
+        end
+
+        it("reads a spawn's type, mode and Task id", function()
+            write_meta("s1", "a1", "background")
+
+            assert.same({
+                agent_type = "Explore",
+                background = true,
+                task_id = "toolu_s1",
+            }, adapter():subagent_record("s1", "a1"))
+        end)
+
+        it("reads a later generation's record from its agent's file", function()
+            write_meta("s1", "a1", "foreground")
+
+            local record = adapter():subagent_record("s1", "a1:generation:2")
+
+            assert.is_false(record.background)
+        end)
+
+        it("has no record before the file exists, and one after", function()
+            local client = adapter()
+            assert.is_nil(client:subagent_record("s1", "a1"))
+
+            write_meta("s1", "a1", "background")
+
+            assert.is_not_nil(client:subagent_record("s1", "a1"))
+        end)
+
+        it("keeps each session's records apart", function()
+            write_meta("s1", "a1", "background")
+            local client = adapter()
+            client:subagent_record("s1", "a1")
+
+            assert.is_nil(client:subagent_record("s2", "a1"))
+        end)
+
+        it("reads a subagent update's spawning Task id from its tag", function()
+            local client = adapter()
+
+            assert.equal(
+                "toolu_1",
+                client:subagent_task_id({
+                    sessionUpdate = "agent_message_chunk",
+                    _meta = { claudeCode = { parentToolUseId = "toolu_1" } },
+                })
+            )
+            assert.is_nil(client:subagent_task_id({
+                sessionUpdate = "agent_message_chunk",
+            }))
+        end)
+
+        it("tags a subagent's tool call with its spawning Task id", function()
+            local message = adapter():__build_tool_call_message({
+                sessionUpdate = "tool_call",
+                toolCallId = "t1",
+                kind = "read",
+                status = "pending",
+                title = "Read",
+                _meta = { claudeCode = { parentToolUseId = "toolu_1" } },
+            }, "s1")
+
+            assert.equal("toolu_1", message.parent_tool_use_id)
+        end)
+
+        it("splits the generation off a child id", function()
+            local agent_id, generation =
+                adapter():subagent_id("a1:generation:3")
+            assert.equal("a1", agent_id)
+            assert.equal(3, generation)
+        end)
+    end)
+
     describe("the Agent tool's leaked result", function()
         local Logger = require("agentic.utils.logger")
         local notify_stub

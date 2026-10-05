@@ -1,6 +1,5 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
-local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Glyphs = require("agentic.glyphs")
 local MessageWriter = require("agentic.ui.message_writer")
 local ResponseBoundary = require("agentic.acp.response_boundary")
@@ -29,11 +28,11 @@ SubagentTranscript.__index = SubagentTranscript
 --- The buffer-name tail of a transcript: the label with every character
 --- outside 'isfname' replaced by `-`, so `<cfile>` takes the whole name, then
 --- the agent id's last 8 characters, then `-g<N>` for a generation N ≥ 2.
---- @param child_id string
+--- @param agent_id string
+--- @param generation integer
 --- @param label string
 --- @return string
-local function name_tail(child_id, label)
-    local agent_id, generation = ClaudeUtils.agent_id(child_id)
+local function name_tail(agent_id, generation, label)
     local tail = vim.fn.substitute(label, [[\%(\f\)\@!.]], "-", "g")
         .. "-"
         .. agent_id:sub(-8)
@@ -44,19 +43,20 @@ local function name_tail(child_id, label)
 end
 
 --- A transcript buffer named after the subagent, holding its heading.
---- @param child_id string The subagent's child session id
+--- @param agent_id string Id addressing the subagent
+--- @param generation integer Which run of the subagent this is, from 1
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil Nil for output saved without a block, headed `Agent`
 --- @param widget agentic.ui.ChatWidget
 --- @param handlers agentic.ui.SubagentTranscript.Handlers
 --- @return agentic.ui.SubagentTranscript
-function SubagentTranscript:new(child_id, subagent, widget, handlers)
+function SubagentTranscript:new(agent_id, generation, subagent, widget, handlers)
     local bufnr = vim.api.nvim_create_buf(true, true)
     widget:setup_panel_buf(bufnr, "subagent")
     -- After the b-vars: its BufWinEnter reads the panel.
     ChatBuffer.setup(bufnr)
     local name = WindowDecoration.buffer_name(
         bufnr,
-        name_tail(child_id, subagent and subagent.label or "Agent")
+        name_tail(agent_id, generation, subagent and subagent.label or "Agent")
     )
     -- `:e` or `gf` on the name of a wiped transcript leaves a plain buffer
     -- holding it.

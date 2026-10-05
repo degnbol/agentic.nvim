@@ -39,12 +39,13 @@ describe("agentic.ui.SubagentTranscript", function()
         SessionRegistry.tab_bindings[vim.api.nvim_get_current_tabpage()] = nil
     end)
 
-    --- @param child_id string
+    --- @param agent_id string
+    --- @param generation integer|nil 1 when nil
     --- @return agentic.ui.SubagentTranscript
-    local function new_transcript(child_id)
+    local function new_transcript(agent_id, generation)
         --- @type agentic.ui.SubagentTranscript
         local transcript
-        transcript = SubagentTranscript:new(child_id, info, widget, {
+        transcript = SubagentTranscript:new(agent_id, generation or 1, info, widget, {
             setup_buf = function()
                 calls.setup_buf = calls.setup_buf + 1
             end,
@@ -100,7 +101,7 @@ describe("agentic.ui.SubagentTranscript", function()
 
     it("names a later generation apart", function()
         local first = new_transcript("aa11bb22cc33dd44")
-        local second = new_transcript("aa11bb22cc33dd44:generation:2")
+        local second = new_transcript("aa11bb22cc33dd44", 2)
 
         assert.equal(
             vim.api.nvim_buf_get_name(first.bufnr) .. "-g2",
@@ -109,7 +110,7 @@ describe("agentic.ui.SubagentTranscript", function()
     end)
 
     it("opens with gf from any column of its name", function()
-        local transcript = new_transcript("aa11bb22cc33dd44:generation:2")
+        local transcript = new_transcript("aa11bb22cc33dd44", 2)
         local name = vim.api.nvim_buf_get_name(transcript.bufnr)
         local scratch = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { name })

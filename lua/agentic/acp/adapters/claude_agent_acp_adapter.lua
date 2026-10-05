@@ -26,6 +26,7 @@ local SkillPath = require("agentic.utils.skill_path")
 --- @field title? string
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
+--- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
 --- Spawn the bridge with the todo/task tools enabled. The Claude Code CLI
@@ -47,7 +48,64 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
         )
     end
 
-    return ACPClient.new(self, config, on_ready)
+    local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
+    client._session_dirs = {}
+    return client
+end
+
+--- @param session_id string
+function ClaudeAgentACPAdapter:unsubscribe(session_id)
+    self._session_dirs[session_id] = nil
+    ACPClient.unsubscribe(self, session_id)
+end
+
+--- The SDK's record of a subagent's spawn: its meta file beside the session
+--- transcript. Nil until the file exists.
+--- @param session_id string The root session
+--- @param child_id string The subagent's child session id
+--- @return agentic.acp.SubagentRecord|nil
+function ClaudeAgentACPAdapter:subagent_record(session_id, child_id)
+    local session_dir = self._session_dirs[session_id]
+    if not session_dir then
+        session_dir = ClaudeUtils.find_session_dir(
+            ClaudeUtils.config_dir(self.provider_config.env),
+            session_id
+        )
+        if not session_dir then
+            return nil
+        end
+        self._session_dirs[session_id] = session_dir
+    end
+    local meta = ClaudeUtils.subagent_meta(
+        session_dir,
+        (ClaudeUtils.agent_id(child_id))
+    )
+    if not meta then
+        return nil
+    end
+    --- @type agentic.acp.SubagentRecord
+    local record = {
+        agent_type = meta.agent_type,
+        background = meta.request_shape == "background",
+        task_id = meta.tool_use_id,
+    }
+    return record
+end
+
+--- The bridge tags a subagent's updates with `_meta.claudeCode.parentToolUseId`.
+--- @param update agentic.acp.SessionUpdateMessage
+--- @return string|nil
+function ClaudeAgentACPAdapter:subagent_task_id(update)
+    return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
+end
+
+--- The bridge names a resumed agent's later sessions
+--- `<agent id>:generation:<N>`.
+--- @param child_id string
+--- @return string agent_id
+--- @return integer generation
+function ClaudeAgentACPAdapter:subagent_id(child_id)
+    return ClaudeUtils.agent_id(child_id)
 end
 
 --- Separate a Bash tool call's description from its output. claude-agent-acp

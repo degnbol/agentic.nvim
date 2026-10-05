@@ -172,6 +172,39 @@ function ACPClient:unsubscribe(session_id)
     end
 end
 
+--- What a provider recorded about a subagent's spawn.
+--- @class agentic.acp.SubagentRecord
+--- @field agent_type string Subagent type the agent was spawned as
+--- @field background boolean The agent runs in the background rather than blocking its spawner
+--- @field task_id string Id of the tool use that spawned the agent
+
+--- What the provider recorded about a subagent's spawn. Adapters for
+--- providers that keep such a record override this.
+--- @param _session_id string The root session
+--- @param _child_id string The subagent's child session id
+--- @return agentic.acp.SubagentRecord|nil record Nil while there is none
+function ACPClient:subagent_record(_session_id, _child_id)
+    return nil
+end
+
+--- The id of the tool use that spawned the subagent an update belongs to.
+--- Adapters for providers that tag subagent updates override this.
+--- @param _update agentic.acp.SessionUpdateMessage
+--- @return string|nil task_id Nil for an update that is not a subagent's
+function ACPClient:subagent_task_id(_update)
+    return nil
+end
+
+--- The id that addresses a subagent, and which run of it a child session
+--- is. Adapters for providers that number a resumed agent's sessions
+--- override this.
+--- @param child_id string The subagent's child session id
+--- @return string agent_id The child id itself
+--- @return integer generation 1
+function ACPClient:subagent_id(child_id)
+    return child_id, 1
+end
+
 --- The subscribed session a session belongs to: the root that spawned a child
 --- session, else the session itself.
 --- @param session_id string
@@ -728,12 +761,8 @@ function ACPClient:__build_tool_call_message(update, _session_id)
         status = update.status,
         argument = update.title,
         body = self:extract_content_body(update),
-        -- Present ⟺ this tool call belongs to a subagent (Task). Read only on
-        -- the initial tool_call — updates omit it, so ownership is resolved
-        -- from the block created here (see SessionManager:_writer_for).
-        parent_tool_use_id = update._meta
-            and update._meta.claudeCode
-            and update._meta.claudeCode.parentToolUseId,
+        -- Read only on the initial tool_call: updates can omit it.
+        parent_tool_use_id = self:subagent_task_id(update),
     }
 
     return message
