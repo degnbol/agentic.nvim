@@ -969,7 +969,7 @@ not listed.
 9.6 SUBAGENTS                                              *agentic-subagents*
 
 With claude-agent-acp, each subagent has its own transcript: a buffer named
-`agentic://<id>/subagent/<name>-<agent id tail>` holding its prose, thinking
+`agentic://<id>/subagent/<agent id tail>-<name>` holding its prose, thinking
 and tool calls under a `##` heading like its block's. A transcript shows its
 subagent as working until the subagent ends.
 

@@ -83,7 +83,7 @@ describe("native subagent sessions", function()
 
         local name =
             child.lua_get([[vim.api.nvim_buf_get_name(_G.transcript("aa11bb22cc33dd44").bufnr)]])
-        assert.is_true(vim.endswith(name, "/subagent/find-it-cc33dd44"))
+        assert.is_true(vim.endswith(name, "/subagent/cc33dd44-find-it"))
         assert.equal(name, child.lua_get([[_G.block("aa11bb22cc33dd44").argument]]))
         assert.equal("SubAgent", child.lua_get([[_G.block("aa11bb22cc33dd44").kind]]))
         assert.truthy(

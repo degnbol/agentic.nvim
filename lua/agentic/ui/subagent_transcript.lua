@@ -25,21 +25,20 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 local SubagentTranscript = {}
 SubagentTranscript.__index = SubagentTranscript
 
---- The buffer-name tail of a transcript: the label with every character
---- outside 'isfname' replaced by `-`, so `<cfile>` takes the whole name, then
---- the agent id's last 8 characters, then `-g<N>` for a generation N ≥ 2.
+--- The buffer-name tail of a transcript: the agent id's last 8 characters,
+--- then `-g<N>` for a generation N ≥ 2, then the label with every character
+--- outside 'isfname' replaced by `-`, so `<cfile>` takes the whole name. The
+--- fixed-width id leads so a truncated name keeps it.
 --- @param agent_id string
 --- @param generation integer
 --- @param label string
 --- @return string
 local function name_tail(agent_id, generation, label)
-    local tail = vim.fn.substitute(label, [[\%(\f\)\@!.]], "-", "g")
-        .. "-"
-        .. agent_id:sub(-8)
+    local tail = agent_id:sub(-8)
     if generation >= 2 then
         tail = tail .. "-g" .. generation
     end
-    return tail
+    return tail .. "-" .. vim.fn.substitute(label, [[\%(\f\)\@!.]], "-", "g")
 end
 
 --- A transcript buffer named after the subagent, holding its heading.

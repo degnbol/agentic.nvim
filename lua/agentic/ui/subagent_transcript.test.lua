@@ -88,23 +88,23 @@ describe("agentic.ui.SubagentTranscript", function()
         return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     end
 
-    it("is named after the label and the agent id's tail", function()
+    it("is named after the agent id's tail and the label", function()
         local transcript = new_transcript("aa11bb22cc33dd44")
         local name = vim.api.nvim_buf_get_name(transcript.bufnr)
 
         assert.equal(
-            ("agentic://%d/subagent/map-the-UI-cc33dd44"):format(owner_id),
+            ("agentic://%d/subagent/cc33dd44-map-the-UI"):format(owner_id),
             name
         )
         assert.is_nil(name:find("%s"))
     end)
 
     it("names a later generation apart", function()
-        local first = new_transcript("aa11bb22cc33dd44")
+        new_transcript("aa11bb22cc33dd44")
         local second = new_transcript("aa11bb22cc33dd44", 2)
 
         assert.equal(
-            vim.api.nvim_buf_get_name(first.bufnr) .. "-g2",
+            ("agentic://%d/subagent/cc33dd44-g2-map-the-UI"):format(owner_id),
             vim.api.nvim_buf_get_name(second.bufnr)
         )
     end)
