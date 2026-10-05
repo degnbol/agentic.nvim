@@ -117,6 +117,9 @@ end
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
 --- @field trailing_insert_mark_id? integer Zero-width NS_TOOL_BLOCKS mark riding just below the block, marking where the next region anchored to it goes (see `MessageWriter:_anchor_insert_row`). Absent until the first such region.
 --- @field highlight_pass? integer Sequence number of the latest scheduled highlight pass. A pass that is no longer the latest skips.
+--- @field fold_anchor_id? integer The block's anchor extmark in NS_FOLD_ANCHORS, on the first body row of its foldable fence.
+--- @field fold_open? boolean The fold state the renderer wants for the block's current lines.
+--- @field fold_sent? boolean The state last queued for the anchor. Nil while the op is deferred.
 
 --- Append the closing fence for `lines` when they leave one open.
 ---
@@ -2215,17 +2218,89 @@ end
 --- @param anchor_row integer 0-indexed buffer row of the block's first body line
 --- @param open boolean Desired state — true opens the fold, false closes it
 function MessageWriter:_queue_fold(anchor_row, open)
-    local id = vim.api.nvim_buf_set_extmark(
-        self.bufnr,
-        NS_FOLD_ANCHORS,
-        anchor_row,
-        0,
-        {}
-    )
+    self:_queue_fold_op(self:_place_fold_anchor(anchor_row), open)
+end
+
+--- Place a fold anchor: an extmark in NS_FOLD_ANCHORS that tracks `row`
+--- across later edits.
+--- @param row integer 0-indexed buffer row
+--- @return integer id Extmark id
+function MessageWriter:_place_fold_anchor(row)
+    return vim.api.nvim_buf_set_extmark(self.bufnr, NS_FOLD_ANCHORS, row, 0, {})
+end
+
+--- Queue an open or close of the fold at an anchor extmark, and schedule a
+--- flush of the queue.
+--- @param id integer Anchor extmark id in NS_FOLD_ANCHORS
+--- @param open boolean True opens the fold, false closes it
+function MessageWriter:_queue_fold_op(id, open)
     table.insert(self._pending_fold_ops, { id = id, open = open })
     vim.schedule(function()
         self:flush_pending_fold_ops()
     end)
+end
+
+--- Forget a tool call block's fold: delete its anchor extmark and the fold
+--- state recorded for it, and clear the block's fold fields.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+function MessageWriter:_drop_block_fold(block)
+    if block.fold_anchor_id then
+        vim.api.nvim_buf_del_extmark(
+            self.bufnr,
+            NS_FOLD_ANCHORS,
+            block.fold_anchor_id
+        )
+        self._fold_states[block.fold_anchor_id] = nil
+    end
+    block.fold_anchor_id = nil
+    block.fold_open = nil
+    block.fold_sent = nil
+end
+
+--- Place a rendered tool call block's fold anchor, and queue the fold state
+--- that is due now. Sets the block's fold fields.
+---
+--- An open is queued at once, at any status, so a diff is open while its
+--- permission prompt shows. The open must be explicit: under foldmethod=expr,
+--- a fold created after a closed one also starts closed. A diff renders once
+--- (a failed transition re-renders it closed), so the open cannot undo a
+--- fold the user closed.
+---
+--- A close is queued only at a final status, so a large new file stays open
+--- until it is approved and a sidecar body stays visible while it streams.
+--- Before that the close is deferred and `fold_sent` stays nil.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @param start_row integer 0-indexed first row of the block
+--- @param fold_anchor integer|nil Offset from `start_row` of the first body row of the block's foldable fence. Nil when it has none.
+--- @param fold_open boolean|nil True opens the fold, false or nil closes it
+function MessageWriter:_render_block_fold(
+    block,
+    start_row,
+    fold_anchor,
+    fold_open
+)
+    if not fold_anchor then
+        return
+    end
+    block.fold_anchor_id = self:_place_fold_anchor(start_row + fold_anchor)
+    block.fold_open = fold_open == true
+    if block.fold_open or is_final_status(block.status) then
+        self:_queue_fold_op(block.fold_anchor_id, block.fold_open)
+        block.fold_sent = block.fold_open
+    end
+end
+
+--- Queue `open` for a tool call block's fold and record it as sent. No-op
+--- when the block has no fold anchor or `open` is the state last sent, so a
+--- repeated call does not undo a fold the user changed by hand.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @param open boolean True opens the fold, false closes it
+function MessageWriter:_settle_block_fold(block, open)
+    if block.fold_anchor_id and open ~= block.fold_sent then
+        self:_queue_fold_op(block.fold_anchor_id, open)
+        block.fold_sent = open
+        block.fold_open = open
+    end
 end
 
 --- Open or close the fold containing `row` in `winid`.
@@ -2246,16 +2321,6 @@ end
 --- @param anchor_row integer
 function MessageWriter:_close_fold(anchor_row)
     self:_queue_fold(anchor_row, false)
-end
-
---- Open the fold containing `anchor_row`. Edit diffs are foldable but render
---- open; an explicit open is required because a fold created after a closed
---- one inherits the closed state under foldmethod=expr (the foldexpr leak), so
---- relying on the foldlevel default would leave applied edits collapsed after
---- any earlier close (a long execute body, a rejected edit). See _queue_fold.
---- @param anchor_row integer
-function MessageWriter:_open_fold(anchor_row)
-    self:_queue_fold(anchor_row, true)
 end
 
 --- Hold the pending fold ops until the user leaves insert mode, then retry.
@@ -2434,20 +2499,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             kind
         )
 
-        -- Gated to final render (unlike materialize_injections below, which is
-        -- now unconditional). The block is torn down and rebuilt on every
-        -- streaming set_lines, so an ungated fold op re-fires each render only
-        -- to be redone — pure churn. Deferring both open and close to
-        -- completion applies fold state once, when the block is stable, and
-        -- removes the mid-stream :foldclose that is the suspected seed for the
-        -- foldexpr leak (see _open_fold).
-        if fold_anchor and is_final_status(tool_call_block.status) then
-            if fold_open then
-                self:_open_fold(start_row + fold_anchor)
-            else
-                self:_close_fold(start_row + fold_anchor)
-            end
-        end
+        self:_render_block_fold(
+            tool_call_block,
+            start_row,
+            fold_anchor,
+            fold_open
+        )
         if dim_range then
             local dim_id = Renderer.set_dim_range(
                 bufnr,
@@ -2661,6 +2718,11 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             -- Decorations (kind glyph, │, ╰─) are stable — leave them in place.
             -- Only refresh status footer which changes on completion.
             Renderer.apply_status_footer(bufnr, old_end_row, tracker.status)
+            -- A non-failed diff's fold state does not depend on the status,
+            -- so the state stored at render still holds.
+            if is_final_status(tracker.status) then
+                self:_settle_block_fold(tracker, tracker.fold_open == true)
+            end
 
             return false
         end
@@ -2684,6 +2746,9 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
         if content_unchanged then
             Renderer.apply_status_footer(bufnr, old_end_row, tracker.status)
+            if is_final_status(tracker.status) then
+                self:_settle_block_fold(tracker, fold_open == true)
+            end
             return false
         end
 
@@ -2707,6 +2772,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             start_row,
             old_end_row + 1
         )
+
+        self:_drop_block_fold(tracker)
 
         vim.api.nvim_buf_set_lines(
             bufnr,
@@ -2806,14 +2873,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             tracker.kind
         )
 
-        -- Gated to final render — see the matching block in write_tool_call_block.
-        if fold_anchor and is_final_status(tracker.status) then
-            if fold_open then
-                self:_open_fold(start_row + fold_anchor)
-            else
-                self:_close_fold(start_row + fold_anchor)
-            end
-        end
+        self:_render_block_fold(tracker, start_row, fold_anchor, fold_open)
         if dim_range then
             local dim_id = Renderer.set_dim_range(
                 bufnr,

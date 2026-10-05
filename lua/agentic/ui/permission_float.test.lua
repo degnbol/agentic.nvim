@@ -1,5 +1,7 @@
 --- @diagnostic disable: invisible, missing-fields
 local assert = require("tests.helpers.assert")
+local Deferred = require("tests.helpers.deferred")
+local MiniTest = require("mini.test")
 local SessionRegistry = require("agentic.session_registry")
 
 describe("agentic.ui.PermissionFloat", function()
@@ -235,6 +237,8 @@ describe("agentic.ui.PermissionFloat", function()
             --- @type integer
             local opened_bufnr = float._bufnr
 
+            local deferred = Deferred.capture()
+            MiniTest.finally(deferred.revert)
             float:close()
 
             assert.is_nil(float._winid)
@@ -243,9 +247,7 @@ describe("agentic.ui.PermissionFloat", function()
 
             -- Buffer deletion runs on the next event-loop tick
             assert.is_true(vim.api.nvim_buf_is_valid(opened_bufnr))
-            vim.wait(50, function()
-                return not vim.api.nvim_buf_is_valid(opened_bufnr)
-            end)
+            deferred.drain()
             assert.is_false(vim.api.nvim_buf_is_valid(opened_bufnr))
         end)
 

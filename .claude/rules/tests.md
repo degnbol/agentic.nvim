@@ -17,6 +17,7 @@ surface, including LuaCATS types:
   `MiniTest.expect`.
 - `tests/helpers/spy.lua` — spy/stub helpers (mini.test ships no equivalent).
 - `tests/helpers/child.lua` — child-neovim wrapper.
+- `tests/helpers/deferred.lua` — runs `vim.schedule` callbacks on demand.
 
 ## Spy/stub API differences from luassert
 
@@ -36,12 +37,18 @@ surface, including LuaCATS types:
 
 Each test FILE runs in its own neovim process. Cross-file pollution is
 impossible. Within a file, tests share the same neovim — `require()` cache,
-globals, autocmds, and `vim.schedule` queues carry over. `vim.wait` in a
-helper can let mini.test re-enter sibling cases mid-test.
+globals, autocmds, and `vim.schedule` queues carry over.
 
-The whole current suite passes under file-level isolation. Only escalate to
-**per-test child neovim** when a `vim.wait` helper actually causes
-re-entrancy bleed:
+**Never `vim.wait` in a test.** mini.test queues every case, and the final
+quit, on the event loop up front, so a wait runs the later cases inside the
+current one and can quit mid-case. The runner fails any case that does not
+reach Pass or Fail (`Unfinished case:` on stderr). To let scheduled work
+land, capture it with `tests/helpers/deferred.lua` and `drain()` it. Revert
+in `after_each`, or with `MiniTest.finally(deferred.revert)` for a capture
+inside a case.
+
+Work that needs the real event loop (timers, subprocesses) goes in a
+**per-test child neovim**:
 
 ```lua
 local Child = require("tests.helpers.child")

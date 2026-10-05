@@ -1,6 +1,8 @@
 --- @diagnostic disable: invisible
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local Deferred = require("tests.helpers.deferred")
+local MiniTest = require("mini.test")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Renderer = require("agentic.ui.tool_call_renderer")
@@ -1967,15 +1969,15 @@ describe("agentic.ui.MessageWriter", function()
             -- lines, defeating the clamp.
             vim.wo[winid].scrolloff = 4
 
+            local deferred = Deferred.capture()
+            MiniTest.finally(deferred.revert)
             for i = 1, 30 do
                 writer:write_message_chunk(
                     make_message_update("line " .. i .. "\n")
                 )
                 vim.cmd("redraw")
+                deferred.drain()
             end
-            vim.wait(50, function()
-                return false
-            end)
             vim.cmd("redraw")
 
             local info = vim.fn.getwininfo(winid)[1]
@@ -1995,17 +1997,17 @@ describe("agentic.ui.MessageWriter", function()
                 -- the end of inserted text; vim then auto-corrects topline
                 -- to keep the cursor visible. That happens between
                 -- _check_auto_scroll (pre-write) and scroll_down (scheduled,
-                -- post-write). Cannot stub vim.schedule synchronously here:
+                -- post-write). Cannot run scheduled callbacks inline here:
                 -- doing so runs scroll_down *before* the write, which
-                -- bypasses the bug entirely. Drain via vim.wait instead.
+                -- bypasses the bug entirely. Drain after each write instead.
+                local deferred = Deferred.capture()
+                MiniTest.finally(deferred.revert)
                 for i = 1, 25 do
                     writer:write_message_chunk(
                         make_message_update("line " .. i .. "\n")
                     )
                     vim.cmd("redraw")
-                    vim.wait(20, function()
-                        return false
-                    end)
+                    deferred.drain()
                 end
 
                 local info = vim.fn.getwininfo(winid)[1]
@@ -2067,6 +2069,36 @@ describe("agentic.ui.MessageWriter", function()
 
             local info = vim.fn.getwininfo(winid)[1]
             assert.equal(25, info.topline)
+        end)
+
+        it("parks the cursor above the last line under a cap", function()
+            -- A write at the end of the buffer moves a cursor on the last
+            -- line along with the new text, and the redraw then scrolls
+            -- past the cap to keep it visible.
+            local lines = {}
+            for i = 1, 10 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 10, 0 })
+
+            BufHelpers.scroll_down(winid, 1)
+
+            assert.equal(9, vim.api.nvim_win_get_cursor(winid)[1])
+            assert.equal(1, vim.fn.getwininfo(winid)[1].topline)
+        end)
+
+        it("leaves a cursor inside the capped viewport in place", function()
+            local lines = {}
+            for i = 1, 10 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_win_set_cursor(winid, { 3, 2 })
+
+            BufHelpers.scroll_down(winid, 1)
+
+            assert.same({ 3, 2 }, vim.api.nvim_win_get_cursor(winid))
         end)
 
         it("scrolls normally when max_topline is nil", function()
@@ -4101,7 +4133,14 @@ describe("agentic.ui.MessageWriter", function()
     end)
 
     describe("tool call folding", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
         before_each(function()
+            -- Fold ops, and the fold levels they act on, land in scheduled
+            -- callbacks. Each test drains them.
+            deferred = Deferred.capture()
+
             -- The chat buffer parses as the private `agentic` language so its
             -- folds query (queries/agentic/folds.scm) drives folding. Mirror
             -- the runtime setup from init.lua / chat_widget / widget_layout.
@@ -4121,6 +4160,10 @@ describe("agentic.ui.MessageWriter", function()
             vim.wo[winid].foldenable = true
             vim.wo[winid].foldlevel = 99
             vim.wo[winid].foldminlines = 1
+        end)
+
+        after_each(function()
+            deferred.revert()
         end)
 
         --- Body long enough to exceed execute_max_lines (default 25).
@@ -4146,15 +4189,6 @@ describe("agentic.ui.MessageWriter", function()
             return fences
         end
 
-        --- Wait for the deferred :foldclose to land. _close_fold schedules the
-        --- close so it runs after treesitter's own scheduled level recompute.
-        --- @param line integer 1-indexed line known to sit inside the fold
-        local function wait_closed(line)
-            vim.wait(500, function()
-                return vim.fn.foldclosed(line) ~= -1
-            end)
-        end
-
         it("closes the fold for a long execute body", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-1",
@@ -4168,7 +4202,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(1, #fences)
             local fence = fences[1]
             local body_start = fence + 1
-            wait_closed(body_start)
+            deferred.drain()
             -- The fold spans code_fence_content only, so it starts on the
             -- first body line — not the conceal_lines-hidden delimiter. That
             -- keeps the `··· N lines ···` foldtext on a visible screen row.
@@ -4187,7 +4221,7 @@ describe("agentic.ui.MessageWriter", function()
             local fences = fold_fence_lines()
             assert.equal(1, #fences)
             local body_start = fences[1] + 1
-            wait_closed(body_start)
+            deferred.drain()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
@@ -4202,7 +4236,7 @@ describe("agentic.ui.MessageWriter", function()
                 make_thought_update("first\nsecond\nthird")
             )
             writer:finalize_turn()
-            vim.wait(100)
+            deferred.drain()
 
             local body_start = fold_fence_lines()[1] + 1
             assert.equal(-1, vim.fn.foldclosed(body_start))
@@ -4210,7 +4244,7 @@ describe("agentic.ui.MessageWriter", function()
 
             mode:revert()
             vim.api.nvim_exec_autocmds("InsertLeave", {})
-            wait_closed(body_start)
+            deferred.drain()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
@@ -4244,7 +4278,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local fences = fold_fence_lines()
             assert.equal(1, #fences)
-            wait_closed(fences[1] + 1)
+            deferred.drain()
             assert.equal(fences[1] + 1, vim.fn.foldclosed(fences[1] + 1))
         end)
 
@@ -4266,36 +4300,32 @@ describe("agentic.ui.MessageWriter", function()
 
             local fences = fold_fence_lines()
             assert.equal(2, #fences)
-            wait_closed(fences[1] + 1)
-            wait_closed(fences[2] + 1)
+            deferred.drain()
             -- Two separate folds: each body-start line reports itself as its
             -- fold start. A merged fold would make the second report the first.
             assert.equal(fences[1] + 1, vim.fn.foldclosed(fences[1] + 1))
             assert.equal(fences[2] + 1, vim.fn.foldclosed(fences[2] + 1))
         end)
 
-        it("keeps the fold closed across a status-only update", function()
-            local body = long_execute_body()
+        it("closes a long execute body on a status-only completion", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-status",
                 status = "in_progress",
                 kind = "execute",
                 argument = "ls",
-                body = body,
+                body = long_execute_body(),
             })
-            local fence = fold_fence_lines()[1]
-            assert.is_not_nil(fence)
-            wait_closed(fence + 1)
-            assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
+            local body_start = fold_fence_lines()[1] + 1
+            deferred.drain()
+            -- Visible while it streams.
+            assert.equal(-1, vim.fn.foldclosed(body_start))
 
-            -- Same body, status flips to completed → content_unchanged early
-            -- return, no rewrite. The closed fold must persist.
             writer:update_tool_call_block({
                 tool_call_id = "fold-status",
                 status = "completed",
-                body = body,
             })
-            assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
+            deferred.drain()
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
         --- An edit diff whose new content has ≥2 foldable structures: if the
@@ -4336,15 +4366,6 @@ describe("agentic.ui.MessageWriter", function()
             error("no closing fence after line " .. from)
         end
 
-        --- Wait for treesitter to recompute fold levels after the buffer edit
-        --- (scheduled, like the deferred fold close — see _close_fold).
-        --- @param line integer 1-indexed line expected inside a fold
-        local function wait_folded(line)
-            vim.wait(500, function()
-                return vim.fn.foldlevel(line) >= 1
-            end)
-        end
-
         it(
             "folds an edit diff as ONE block with no injected sub-folds",
             function()
@@ -4359,7 +4380,7 @@ describe("agentic.ui.MessageWriter", function()
                 local fence = difffold_fence_line()
                 local body_start = fence + 1
                 local body_end = closing_fence_after(fence) - 1
-                wait_folded(body_start)
+                deferred.drain()
 
                 -- No injected sub-fold: nothing inside the body exceeds level 1
                 -- (vim.fn.foldlevel forces foldexpr computation). A surviving lua
@@ -4393,7 +4414,7 @@ describe("agentic.ui.MessageWriter", function()
             })
 
             local body_start = difffold_fence_line() + 1
-            wait_folded(body_start)
+            deferred.drain()
             -- Foldable (level 1) and explicitly opened for a non-failed edit,
             -- so `zc` works but nothing is collapsed.
             assert.equal(1, vim.fn.foldlevel(body_start))
@@ -4415,7 +4436,7 @@ describe("agentic.ui.MessageWriter", function()
                 local fence = difffold_fence_line()
                 assert.is_not_nil(fence)
                 local body_start = fence + 1
-                wait_closed(body_start)
+                deferred.drain()
                 -- A failed (e.g. rejected) edit folds closed.
                 assert.equal(body_start, vim.fn.foldclosed(body_start))
 
@@ -4452,7 +4473,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local fence = difffold_fence_line()
                 assert.is_not_nil(fence)
-                wait_closed(fence + 1)
+                deferred.drain()
                 -- Folds closed after the failed transition.
                 assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
 
@@ -4504,42 +4525,149 @@ describe("agentic.ui.MessageWriter", function()
             -- the file nor folded away, as a `failed` edit's is.
             assert.is_not_nil(text:find("local function foo()", 1, true))
             assert.equal(fence, difffold_fence_line())
-            wait_closed(fence + 1)
+            deferred.drain()
             assert.equal(-1, vim.fn.foldclosed(fence + 1))
         end)
 
-        it("opens an applied edit diff appended after a closed fold", function()
-            -- A closed fold poisons foldexpr: a fold created afterwards
-            -- inherits the closed state. The applied edit must come up open
-            -- anyway (regression for the rejected-edit fold leak).
-            writer:write_tool_call_block({
-                tool_call_id = "leak-exec",
-                status = "completed",
-                kind = "execute",
-                argument = "ls",
-                body = long_execute_body(),
-            })
-            local exec_fence = fold_fence_lines()[1]
-            wait_closed(exec_fence + 1)
-            assert.equal(exec_fence + 1, vim.fn.foldclosed(exec_fence + 1))
+        for _, first_status in ipairs({ "pending", "completed" }) do
+            it(
+                "opens an applied edit diff appended after a closed fold, first written at "
+                    .. first_status,
+                function()
+                    -- A closed fold poisons foldexpr: a fold created afterwards
+                    -- inherits the closed state. The applied edit must come up
+                    -- open anyway (regression for the rejected-edit fold leak).
+                    writer:write_tool_call_block({
+                        tool_call_id = "leak-exec",
+                        status = "completed",
+                        kind = "execute",
+                        argument = "ls",
+                        body = long_execute_body(),
+                    })
+                    local exec_fence = fold_fence_lines()[1]
+                    deferred.drain()
+                    assert.equal(
+                        exec_fence + 1,
+                        vim.fn.foldclosed(exec_fence + 1)
+                    )
 
+                    writer:write_tool_call_block({
+                        tool_call_id = "leak-edit",
+                        status = first_status,
+                        kind = "create",
+                        argument = "/tmp/agentic_difffold_leak.lua",
+                        diff = { old = {}, new = diff_new },
+                    })
+                    local edit_body = difffold_fence_line() + 1
+                    deferred.drain()
+                    if first_status == "pending" then
+                        writer:update_tool_call_block({
+                            tool_call_id = "leak-edit",
+                            status = "completed",
+                        })
+                        deferred.drain()
+                    end
+                    -- Foldable but open despite the preceding closed fold.
+                    assert.equal(-1, vim.fn.foldclosed(edit_body))
+                    -- The earlier execute fold stays closed.
+                    assert.equal(
+                        exec_fence + 1,
+                        vim.fn.foldclosed(exec_fence + 1)
+                    )
+                end
+            )
+        end
+
+        it("closes a large created file only when it completes", function()
+            Config.tool_call_display.create_max_lines = 3
             writer:write_tool_call_block({
-                tool_call_id = "leak-edit",
-                status = "completed",
+                tool_call_id = "create-large",
+                status = "pending",
                 kind = "create",
-                argument = "/tmp/agentic_difffold_leak.lua",
+                argument = "/tmp/agentic_difffold_large.lua",
                 diff = { old = {}, new = diff_new },
             })
-            local edit_body = difffold_fence_line() + 1
-            wait_folded(edit_body)
-            -- Foldable but open despite the preceding closed fold. The open is
-            -- deferred (like the close), so wait for it rather than racing.
-            vim.wait(500, function()
-                return vim.fn.foldclosed(edit_body) == -1
-            end)
-            assert.equal(-1, vim.fn.foldclosed(edit_body))
-            -- The earlier execute fold stays closed.
-            assert.equal(exec_fence + 1, vim.fn.foldclosed(exec_fence + 1))
+            local body_start = difffold_fence_line() + 1
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+
+            writer:update_tool_call_block({
+                tool_call_id = "create-large",
+                status = "completed",
+            })
+            deferred.drain()
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+        end)
+
+        it("closes a failed edit that has no reason", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fail-no-reason",
+                status = "pending",
+                kind = "edit",
+                argument = "/tmp/agentic_difffold_noreason.lua",
+                diff = { old = { "stub" }, new = diff_new },
+            })
+            local body_start = difffold_fence_line() + 1
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+
+            writer:update_tool_call_block({
+                tool_call_id = "fail-no-reason",
+                status = "failed",
+            })
+            deferred.drain()
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+        end)
+
+        it(
+            "keeps a fold the user opened through a repeated completion",
+            function()
+                Config.tool_call_display.create_max_lines = 3
+                writer:write_tool_call_block({
+                    tool_call_id = "create-reopen",
+                    status = "pending",
+                    kind = "create",
+                    argument = "/tmp/agentic_difffold_reopen.lua",
+                    diff = { old = {}, new = diff_new },
+                })
+                local body_start = difffold_fence_line() + 1
+                writer:update_tool_call_block({
+                    tool_call_id = "create-reopen",
+                    status = "completed",
+                })
+                deferred.drain()
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
+
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd(body_start .. "foldopen")
+                end)
+                writer:update_tool_call_block({
+                    tool_call_id = "create-reopen",
+                    status = "completed",
+                })
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(body_start))
+            end
+        )
+
+        it("drops the stale anchor on the failed transition", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fail-stale",
+                status = "pending",
+                kind = "edit",
+                argument = "/tmp/agentic_difffold_stale.lua",
+                diff = { old = { "stub" }, new = diff_new },
+            })
+            deferred.drain()
+
+            writer:update_tool_call_block({
+                tool_call_id = "fail-stale",
+                status = "failed",
+                failure_reason = { "User refused permission to run tool" },
+            })
+            deferred.drain()
+            local states = vim.tbl_values(writer._fold_states)
+            assert.same({ false }, states)
         end)
 
         it(

@@ -5,6 +5,7 @@ local spy = require("tests.helpers.spy")
 local AgentModes = require("agentic.acp.agent_modes")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
+local Deferred = require("tests.helpers.deferred")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionManager = require("agentic.session_manager")
@@ -81,7 +82,7 @@ describe("agentic.SessionManager", function()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
         end)
 
-        it("updates state, re-renders header, notifies user", function()
+        it("updates state and re-renders header without notifying", function()
             session:_on_session_update(mode_update("code"))
 
             assert.equal(
@@ -93,9 +94,7 @@ describe("agentic.SessionManager", function()
             assert.equal("chat", render_header_spy.calls[1][2])
             assert.equal("Code", render_header_spy.calls[1][3])
 
-            assert.spy(notify_stub).was.called(1)
-            assert.equal("Mode changed to: code", notify_stub.calls[1][1])
-            assert.equal(vim.log.levels.INFO, notify_stub.calls[1][2])
+            assert.spy(notify_stub).was.called(0)
         end)
 
         it("rejects invalid mode and keeps current state", function()
@@ -3649,6 +3648,8 @@ describe("agentic.SessionManager", function()
         local session
         --- Block texts still tagged in the input buffer, in dispatch order.
         local queued
+        --- @type tests.helpers.Deferred
+        local deferred
 
         --- @param head string The block that dispatches now
         --- @param texts string[] What the queue holds after it
@@ -3657,11 +3658,13 @@ describe("agentic.SessionManager", function()
             session:_handle_input_submit_inner(head)
             -- A local command's continuation is scheduled, so the sequence
             -- advances a tick after the command answers.
-            vim.wait(20)
+            deferred.drain()
         end
 
         before_each(function()
             local noop = function() end
+
+            deferred = Deferred.capture()
             local empty = function()
                 return true
             end
@@ -3736,6 +3739,10 @@ describe("agentic.SessionManager", function()
             } --[[@as agentic.SessionManager]]
         end)
 
+        after_each(function()
+            deferred.revert()
+        end)
+
         -- A synchronously-answered command reaches no Stop, so the sequence
         -- would stall there if the drain waited for a turn to end.
         it("dispatches the next block after a synchronous command", function()
@@ -3757,7 +3764,7 @@ describe("agentic.SessionManager", function()
             assert.equal(1, #queued)
             assert.spy(dispatch_spy).was.called(0)
 
-            vim.wait(20)
+            deferred.drain()
 
             assert.equal(0, #queued)
             assert.spy(dispatch_spy).was.called(1)
@@ -3816,7 +3823,7 @@ describe("agentic.SessionManager", function()
 
             -- The scope question is settled: on_done resumes the sequence.
             trust_spy.calls[1][3]()
-            vim.wait(20)
+            deferred.drain()
 
             assert.spy(dispatch_spy).was.called(1)
         end)

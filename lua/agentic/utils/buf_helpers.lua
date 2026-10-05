@@ -214,7 +214,9 @@ end
 --- Topline and cursor placement are fold-aware: target is the smallest
 --- line whose [target..last_line] range fits within the window's screen
 --- rows (closed folds collapse to one row), and the cursor lands inside
---- the visible viewport so vim does not auto-correct topline.
+--- the visible viewport so vim does not auto-correct topline. Under a cap
+--- a cursor on the last line or outside the viewport moves into it, even
+--- when the viewport does not move.
 --- @param winid integer
 --- @param max_topline? integer 1-indexed buffer line; topline must not exceed it
 function BufHelpers.scroll_down(winid, max_topline)
@@ -264,10 +266,10 @@ function BufHelpers.scroll_down(winid, max_topline)
         }).all
     end
 
-    -- Steady states short-circuit before any measurement; scroll_down
-    -- never scrolls upward, so each of these leaves the viewport as-is.
-    if max_topline and max_topline <= old_topline then
-        return -- pinned viewport already at or past the cap
+    -- Return early where the viewport stays as-is: scroll_down never
+    -- scrolls upward, and without a cap there is no cursor to place.
+    if max_topline and max_topline < old_topline then
+        return -- viewport already past the cap
     end
     if old_topline >= last_line then
         -- Tail line is already at/above the top: no forward scroll is
@@ -278,14 +280,15 @@ function BufHelpers.scroll_down(winid, max_topline)
         -- because vim clamps the reported topline back into range first.
         return
     end
-    if height_to_last(old_topline) <= effective_winheight then
-        return -- tail already fits from the current topline
+    local tail_fits = height_to_last(old_topline) <= effective_winheight
+    if tail_fits and not max_topline then
+        return
     end
 
-    -- The tail does not fit from old_topline, so the natural target is
+    -- When the tail does not fit from old_topline, the natural target is
     -- strictly below it: search (old_topline, last_line].
-    local natural_target
-    do
+    local natural_target = old_topline
+    if not tail_fits then
         local lo, hi = old_topline + 1, last_line
         while lo < hi do
             local mid = math.floor((lo + hi) / 2)
@@ -301,20 +304,22 @@ function BufHelpers.scroll_down(winid, max_topline)
     local target = math.min(max_topline or math.huge, natural_target)
 
     -- Cursor stays inside the visible viewport so vim's redraw does not
-    -- override `target`. When the natural target is in effect, last_line
-    -- is at the bottom row, so the cursor can sit on it. When capped by
-    -- max_topline, locate the largest line whose row from `target` stays
-    -- within `winheight - scrolloff`, then snap to the start of any
-    -- closed fold it falls inside (otherwise the cursor would open it).
-    local cursor_lnum
-    if target == natural_target then
-        cursor_lnum = last_line
-    else
+    -- override `target`. Without a cap, last_line is at the bottom row, so
+    -- the cursor sits on it and follows the writes. Under a cap, locate the
+    -- largest line above last_line whose row from `target` stays within
+    -- `winheight - scrolloff`, then snap to the start of any closed fold it
+    -- falls inside (otherwise the cursor would open it). Not last_line
+    -- itself: a write at the end of the buffer moves a cursor there along
+    -- with the new text, below the viewport, and the redraw then scrolls
+    -- past the cap. A cursor already between `target` and that line stays.
+    --- @type integer|nil
+    local cursor_lnum = last_line
+    if max_topline then
         local scrolloff = vim.api.nvim_get_option_value("scrolloff", {
             win = winid,
         })
         local cursor_height = math.max(1, winheight - scrolloff)
-        local lo, hi = target, last_line
+        local lo, hi = target, math.max(target, last_line - 1)
         while lo < hi do
             local mid = math.ceil((lo + hi) / 2)
             local h = vim.api.nvim_win_text_height(winid, {
@@ -328,21 +333,27 @@ function BufHelpers.scroll_down(winid, max_topline)
                 lo = mid
             end
         end
-        cursor_lnum = lo
+        local park_lnum = lo
         vim.api.nvim_win_call(winid, function()
-            local fold_start = vim.fn.foldclosed(cursor_lnum)
+            local fold_start = vim.fn.foldclosed(park_lnum)
             if fold_start > 0 then
-                cursor_lnum = fold_start
+                park_lnum = fold_start
             end
         end)
+        local current = vim.api.nvim_win_get_cursor(winid)[1]
+        cursor_lnum = nil
+        if current < target or current > park_lnum then
+            cursor_lnum = park_lnum
+        end
     end
 
+    local view = { topline = target }
+    if cursor_lnum then
+        view.lnum = cursor_lnum
+        view.col = 0
+    end
     vim.api.nvim_win_call(winid, function()
-        vim.fn.winrestview({
-            topline = target,
-            lnum = cursor_lnum,
-            col = 0,
-        })
+        vim.fn.winrestview(view)
     end)
 end
 

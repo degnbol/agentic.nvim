@@ -1,6 +1,7 @@
 --- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch
 local Logger = require("agentic.utils.logger")
 local assert = require("tests.helpers.assert")
+local Deferred = require("tests.helpers.deferred")
 local spy = require("tests.helpers.spy")
 local ToolCallKinds = require("agentic.acp.tool_call_kinds")
 
@@ -70,6 +71,17 @@ describe("agentic.acp.ACPClient", function()
     end)
 
     describe("_fail_pending_callbacks", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
         it("invokes all pending callbacks with transport error", function()
             local cb1 = spy.new(function() end)
             local cb2 = spy.new(function() end)
@@ -82,10 +94,8 @@ describe("agentic.acp.ACPClient", function()
 
             client:_fail_pending_callbacks("disconnected")
 
-            -- Callbacks are vim.schedule'd — flush the event loop
-            vim.wait(50, function()
-                return cb1.call_count > 0 and cb2.call_count > 0
-            end)
+            -- Callbacks are vim.schedule'd
+            deferred.drain()
 
             assert.spy(cb1).was.called(1)
             assert.spy(cb2).was.called(1)
@@ -189,6 +199,17 @@ describe("agentic.acp.ACPClient", function()
     end)
 
     describe("_send_request", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
         it("invokes callback with error when transport is nil", function()
             local cb = spy.new(function() end)
 
@@ -206,9 +227,7 @@ describe("agentic.acp.ACPClient", function()
             assert.same({}, client.callbacks)
 
             -- Callback is vim.schedule'd
-            vim.wait(50, function()
-                return cb.call_count > 0
-            end)
+            deferred.drain()
 
             assert.spy(cb).was.called(1)
             local args = cb.calls[1]
@@ -241,9 +260,7 @@ describe("agentic.acp.ACPClient", function()
                 assert.spy(send_stub).was.called(1)
 
                 -- Callback is vim.schedule'd
-                vim.wait(50, function()
-                    return cb.call_count > 0
-                end)
+                deferred.drain()
 
                 assert.spy(cb).was.called(1)
                 local args = cb.calls[1]
@@ -288,6 +305,17 @@ describe("agentic.acp.ACPClient", function()
     --- cycle ends with an error, a subsequent prompt's session/update
     --- notifications must reach the subscriber.
     describe("dispatch after error response (auto-continue path)", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
         --- Build a minimal client wired to a stub transport. `id_counter`
         --- counts up as `_send_request` is called; `_handle_message` is
         --- used directly to simulate inbound traffic.
@@ -305,6 +333,8 @@ describe("agentic.acp.ACPClient", function()
                 state = "ready",
                 transport = { send = send_stub },
                 _loading_sessions = {},
+                _children = {},
+                _session_roots = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 provider_config = { name = "test-provider" },
             }, { __index = ACPClient })
@@ -365,9 +395,7 @@ describe("agentic.acp.ACPClient", function()
                     },
                 })
 
-                vim.wait(50, function()
-                    return prompt_1_cb.call_count > 0
-                end)
+                deferred.drain()
 
                 assert.spy(prompt_1_cb).was.called(1)
 
@@ -430,12 +458,7 @@ describe("agentic.acp.ACPClient", function()
                     result = { stopReason = "end_turn" },
                 })
 
-                vim.wait(50, function()
-                    return prompt_2_cb.call_count > 0
-                        and #recorded.session_updates > 0
-                        and #recorded.tool_calls > 0
-                        and #recorded.tool_call_updates > 0
-                end)
+                deferred.drain()
 
                 assert.spy(prompt_2_cb).was.called(1)
                 -- agent_message_chunk must reach subscriber
@@ -479,9 +502,7 @@ describe("agentic.acp.ACPClient", function()
                     },
                 })
 
-                vim.wait(50, function()
-                    return prompt_1_cb.call_count > 0
-                end)
+                deferred.drain()
 
                 -- Auto-continue prompt.
                 local prompt_2_cb = spy.new(function() end)
@@ -546,10 +567,7 @@ describe("agentic.acp.ACPClient", function()
                     },
                 })
 
-                vim.wait(50, function()
-                    return #recorded.session_updates >= 2
-                        and recorded.permissions > 0
-                end)
+                deferred.drain()
 
                 -- Both chunks must dispatch; permission must not swallow them
                 assert.equal(2, #recorded.session_updates)
@@ -823,6 +841,17 @@ describe("agentic.acp.ACPClient", function()
     end)
 
     describe("child sessions", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
         --- @param overrides table|nil
         --- @return agentic.acp.ACPClient
         local function make_client(overrides)
@@ -883,9 +912,7 @@ describe("agentic.acp.ACPClient", function()
                     content = { type = "text", text = "hi" },
                 },
             })
-            vim.wait(50, function()
-                return #calls == 2
-            end)
+            deferred.drain()
 
             assert.equal(2, #calls)
             assert.equal("root", calls[1][3])
@@ -918,9 +945,7 @@ describe("agentic.acp.ACPClient", function()
                     status = "pending",
                 },
             })
-            vim.wait(50, function()
-                return #calls == 2
-            end)
+            deferred.drain()
 
             assert.equal("on_tool_call", calls[2][1])
             assert.equal("child", calls[2][3])
@@ -936,9 +961,7 @@ describe("agentic.acp.ACPClient", function()
                 toolCall = { toolCallId = "t1" },
                 options = {},
             })
-            vim.wait(50, function()
-                return #calls == 2
-            end)
+            deferred.drain()
 
             assert.equal("on_request_permission", calls[2][1])
             assert.equal("child", calls[2][2].sessionId)
@@ -970,9 +993,7 @@ describe("agentic.acp.ACPClient", function()
                     content = { type = "text", text = "p" },
                 },
             })
-            vim.wait(50, function()
-                return #calls == 2
-            end)
+            deferred.drain()
 
             assert.equal(2, #calls)
         end)
@@ -1028,9 +1049,7 @@ describe("agentic.acp.ACPClient", function()
             })
 
             client:_set_state("disconnected")
-            vim.wait(50, function()
-                return #reached == 2
-            end)
+            deferred.drain()
 
             table.sort(reached)
             assert.same({ "a", "b" }, reached)

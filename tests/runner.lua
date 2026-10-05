@@ -20,17 +20,37 @@ local function run_with_exit(fn)
     end
 end
 
---- Run all tests
---- @param opts { verbose?: boolean }|nil
-function M.run(opts)
-    opts = opts or {}
-    run_with_exit(function()
-        local MiniTest = require("mini.test")
-        local run_opts = opts.verbose
-                and { execute = { reporter = MiniTest.gen_reporter.stdout({}) } }
-            or {}
-        MiniTest.run(run_opts)
-    end)
+--- Stdout reporter that quits Neovim on finish, with exit code 1 when a case
+--- failed or did not finish.
+---
+--- mini.test schedules every case, and the reporter's `finish`, up front. A
+--- case's `vim.wait` pumps that queue, so the cases after it, and `finish`,
+--- can run inside it. A stalled case would then exit with no mark and no
+--- failure.
+--- @return table reporter
+local function strict_stdout_reporter()
+    local MiniTest = require("mini.test")
+    local stdout = MiniTest.gen_reporter.stdout({ quit_on_finish = false })
+    local reporter = { start = stdout.start, update = stdout.update }
+    reporter.finish = function()
+        stdout.finish()
+        local failed = false
+        for _, case in ipairs(MiniTest.current.all_cases) do
+            local state = case.exec and case.exec.state or ""
+            if not state:match("^Pass") then
+                failed = true
+                if not state:match("^Fail") then
+                    io.stderr:write(
+                        "Unfinished case: "
+                            .. table.concat(case.desc, " | ")
+                            .. "\n"
+                    )
+                end
+            end
+        end
+        vim.cmd(string.format("silent! %dcquit", failed and 1 or 0))
+    end
+    return reporter
 end
 
 --- Run a specific test file
@@ -47,7 +67,7 @@ function M.run_file(file)
     run_with_exit(function()
         local MiniTest = require("mini.test")
         MiniTest.run_file(file, {
-            execute = { reporter = MiniTest.gen_reporter.stdout({}) },
+            execute = { reporter = strict_stdout_reporter() },
         })
     end)
 end

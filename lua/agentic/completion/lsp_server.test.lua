@@ -2,6 +2,8 @@ local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
 local Child = require("tests.helpers.child")
+local Deferred = require("tests.helpers.deferred")
+local MiniTest = require("mini.test")
 local LspServer = require("agentic.completion.lsp_server")
 
 --- Helper: call the textDocument/completion handler directly
@@ -16,15 +18,15 @@ local function complete(handlers, bufnr, line, col, trigger_char)
     vim.api.nvim_set_current_buf(bufnr)
 
     local result
+    local deferred = Deferred.capture()
+    MiniTest.finally(deferred.revert)
     handlers.request("textDocument/completion", {
         position = { line = line, character = col },
         context = trigger_char and { triggerCharacter = trigger_char } or nil,
     }, function(_err, res)
         result = res
     end)
-    vim.wait(100, function()
-        return result ~= nil
-    end)
+    deferred.drain()
     return result
 end
 

@@ -658,7 +658,7 @@ end
 --- @return agentic.utils.Ansi.Span[][]|nil ansi_highlights Per-line ANSI highlight spans (execute blocks only)
 --- @return integer|nil fold_anchor 0-indexed offset within lines of the first body line of a `*-fold`/`-difffold` fence — a line inside the fold (the fold spans `code_fence_content`, so the concealed fence delimiter is outside it). The writer applies fold state at this line via :foldopen/:foldclose. nil when the block is not foldable.
 --- @return [integer, integer]|nil dim_range Body row range to dim with AgenticDimmedBlock, 0-indexed offsets within lines
---- @return boolean|nil fold_open Desired fold state when fold_anchor is set: true opens (applied edit diffs), false/nil closes (sidecar `*-fold` bodies, rejected edit diffs). The explicit open is required to defeat the foldexpr leak — see MessageWriter:_open_fold.
+--- @return boolean|nil fold_open Desired fold state when fold_anchor is set: true opens (edit diffs that did not fail), false/nil closes (sidecar `*-fold` bodies, created files above `create_max_lines`, failed edit diffs).
 function M.prepare_block_lines(tool_call_block, wrap_width)
     local kind = tool_call_block.kind
     local argument = M.strip_kind_prefix(kind, tool_call_block.argument)
@@ -1006,11 +1006,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- injection (injections.scm excludes `difffold$`): block_col_hl
         -- extmarks already colour the diff at priority 200, so injecting the
         -- base language would only buy a second parse of the same text.
-        -- The diff is foldable; it renders open normally and closed only when
-        -- the edit failed (e.g. a rejected permission). The fold state is set
-        -- explicitly (fold_open) rather than left to the foldlevel default,
-        -- because a fold created after a closed one inherits the closed state
-        -- under foldmethod=expr — see MessageWriter:_open_fold.
+        -- The diff renders open normally and closed when the edit failed
+        -- (e.g. a rejected permission). MessageWriter:_render_block_fold
+        -- decides when each state is sent.
         table.insert(lines, fence .. lang .. "-difffold")
         -- First body line (fold spans code_fence_content), inserted below.
         fold_anchor = #lines
@@ -1179,11 +1177,11 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
 
         table.insert(lines, fence)
 
-        -- A failed edit keeps the diff (open) and appends the reason beneath
-        -- it, so the user sees both what was attempted and why it failed. The
-        -- reason (rejection, hook denial, old_string-not-found) is short and
-        -- non-execute, so it gets the red ERROR_BODY highlight; the console
-        -- fence prevents markdown parsing of `--`/`*`.
+        -- A failed edit keeps the diff, folded closed, and appends the reason
+        -- beneath it, so the user sees both what was attempted and why it
+        -- failed. The reason (rejection, hook denial, old_string-not-found) is
+        -- short and non-execute, so it gets the red ERROR_BODY highlight; the
+        -- console fence prevents markdown parsing of `--`/`*`.
         if
             tool_call_block.status == "failed"
             and failure_reason

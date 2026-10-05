@@ -1,6 +1,7 @@
 --- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local Deferred = require("tests.helpers.deferred")
 
 describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
     --- @type table
@@ -12,6 +13,17 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
     end)
 
     describe("__handle_tool_call_update", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
         it("handles completed SubAgent update", function()
             local sub_spy = spy.new(function() end)
 
@@ -45,9 +57,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
                 },
             })
 
-            vim.wait(50, function()
-                return sub_spy.call_count > 0
-            end)
+            deferred.drain()
 
             assert.spy(sub_spy).was.called(1)
 
@@ -95,9 +105,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
                     },
                 })
 
-                vim.wait(50, function()
-                    return sub_spy.call_count > 0
-                end)
+                deferred.drain()
 
                 assert.spy(sub_spy).was.called(1)
 
@@ -135,8 +143,9 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
                 },
             })
 
-            -- No vim.wait needed since it's synchronous (no vim.schedule for
-            -- the nil-status early return path)
+            -- The nil-status early return schedules no subscriber call. Drain
+            -- so that a queued call would show.
+            deferred.drain()
             assert.spy(sub_spy).was.called(0)
         end)
 
@@ -163,9 +172,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
                 },
             })
 
-            vim.wait(50, function()
-                return sub_spy.call_count > 0
-            end)
+            deferred.drain()
 
             assert.spy(sub_spy).was.called(1)
 
