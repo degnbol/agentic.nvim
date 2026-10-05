@@ -162,23 +162,56 @@ function SessionManager:_notify_attention(badge, skip_badge)
 end
 
 --- Signal a permission request waiting with its float hidden, not visible in
---- the current tabpage: bell, a `[?]` badge in the header of `bufnr`, the
---- buffer it belongs to, and a notification naming the session and buffer.
---- The badge stays until the request ends.
---- @param bufnr integer
-function SessionManager:_on_permission_hidden(bufnr)
+--- the current tabpage: bell, a `[?]` badge in the header of `badge_bufnr`,
+--- and a notification naming the session and `anchor_bufnr`, the buffer the
+--- request belongs to. The badge stays until the request ends.
+--- @param badge_bufnr integer
+--- @param anchor_bufnr integer
+function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     SessionManager._ring_bell()
-    self.widget:set_badge("[?]", bufnr)
+    self.widget:set_badge("[?]", badge_bufnr)
     local title = self.chat_history.title
+    local where = anchor_bufnr == self.widget.buf_nrs.chat
+            and string.format(
+                "its %s buffer",
+                vim.b[anchor_bufnr].agentic_window
+            )
+        or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(anchor_bufnr), ":t")
     Logger.notify(
         string.format(
-            "%s is waiting for a permission in its %s buffer",
+            "%s is waiting for a permission in %s",
             title ~= "" and title or "An Agentic session",
-            vim.b[bufnr].agentic_window
+            where
         ),
         vim.log.levels.INFO,
         { title = "Agentic" }
     )
+end
+
+--- The window an "edit" open replaces: the current one, unless it shows an
+--- input buffer or a widget panel other than the chat. Then the widget's chat
+--- window if it is in the current tabpage, else any window there showing the
+--- chat. Nil when there is none.
+--- @return integer|nil
+function SessionManager:_edit_target_win()
+    local current = vim.api.nvim_get_current_win()
+    local bufnr = vim.api.nvim_win_get_buf(current)
+    local is_panel = bufnr ~= self.widget.buf_nrs.chat
+        and vim.list_contains(vim.tbl_values(self.widget.buf_nrs), bufnr)
+    if not is_panel and vim.bo[bufnr].filetype ~= "AgenticInput" then
+        return current
+    end
+    local tab = vim.api.nvim_get_current_tabpage()
+    local chat_win = self.widget:panel_win("chat")
+    if chat_win and vim.api.nvim_win_get_tabpage(chat_win) == tab then
+        return chat_win
+    end
+    for _, winid in ipairs(vim.fn.win_findbuf(self.widget.buf_nrs.chat)) do
+        if vim.api.nvim_win_get_tabpage(winid) == tab then
+            return winid
+        end
+    end
+    return nil
 end
 
 --- Generate the welcome header for a new session
@@ -439,23 +472,28 @@ function SessionManager:new()
             return self:_writer_for(tool_call_id)
         end
     )
-    self.permission_manager.on_hidden = function(bufnr)
-        self:_on_permission_hidden(bufnr)
+    self.permission_manager.on_hidden = function(badge_bufnr, anchor_bufnr)
+        self:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     end
     self.permission_manager.on_hidden_resolved = function(bufnr)
-        if WindowDecoration.get_header(bufnr).badge == "[?]" then
+        -- A badged transcript the user wiped took its badge with it.
+        if
+            vim.api.nvim_buf_is_valid(bufnr)
+            and WindowDecoration.get_header(bufnr).badge == "[?]"
+        then
             self.widget:set_badge(nil, bufnr)
         end
     end
-    -- A subagent's prompt anchors to its transcript; with no window showing
-    -- it, the request would wait unseen and hold the queue.
-    self.permission_manager.on_present = function(bufnr)
-        if
-            bufnr ~= self.widget.buf_nrs.chat
-            and #vim.fn.win_findbuf(bufnr) == 0
-        then
-            WidgetLayout.open_tab(bufnr)
+    self.permission_manager.open_anchor = function(bufnr, how)
+        return WidgetLayout.open_buf(bufnr, how, self:_edit_target_win())
+    end
+    self.permission_manager.proxy_tool_call = function(anchor)
+        for child_id, subagent in pairs(self._agents) do
+            if subagent.transcript and subagent.transcript.bufnr == anchor then
+                return child_id
+            end
         end
+        return nil
     end
     self.permission_manager.companion_bufs = function(anchor)
         local input = self:_input_of_transcript(anchor)

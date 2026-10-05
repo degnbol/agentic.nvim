@@ -154,7 +154,9 @@ end
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
 --- @field _chunk_start_line? integer 0-indexed buffer line the unreflowed tail of the current prose run starts at; advanced past each paragraph a streaming reflow wraps, and cleared by the flushing one. Read by `_reflow_chunks` to bound its rewrite.
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared by `_release_prose_pin` and `_clear_prose_pin`
---- @field _pin_held table<integer, true> Windows whose last scroll the prose pin held short of the last line. Set by `_scroll`; `_release_prose_pin` hands them to user control.
+--- @field _pin_held table<integer, true> Windows whose last scroll the prose pin held short of the last line. Set by `_scroll`, and cleared there by a scroll to the held tool call; `_release_prose_pin` hands them to user control.
+--- @field _held_tool_call_id? string The tool call whose block following keeps in view instead of the stream (`hold_tool_call`)
+--- @field _hold_unplaced boolean The next scroll that resolves the held block's rows places it (`BufHelpers.show_rows`) instead of capping the topline at it
 --- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
 --- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
 --- @field _views table<integer, agentic.ui.MessageWriter.View> Per window, the last view seen, recorded by `_own_change` and at each view change. `on_view_change` reads the user's motion as the difference from it.
@@ -219,6 +221,7 @@ function MessageWriter:new(bufnr, home_window)
         _pending_section_break = false,
         _prose_anchor_line = nil,
         _pin_held = {},
+        _hold_unplaced = false,
         _views = {},
         _entered_window = nil,
         _user_controlled = {},
@@ -415,10 +418,42 @@ function MessageWriter:_own_change(fn)
 end
 
 --- Put every window showing the buffer in following and scroll each now, as a
---- write would, not at the next write.
+--- write would, not at the next write. A held tool call is placed again.
 function MessageWriter:resume_follow()
     self._user_controlled = {}
+    self._hold_unplaced = self._held_tool_call_id ~= nil
     self:_scroll(vim.fn.win_findbuf(self.bufnr))
+end
+
+--- Keep a tool call's block in view of the following windows, instead of
+--- the stream, until `release_hold`: place it, then cap the topline at its
+--- header line. User motion does not end the hold.
+--- @param tool_call_id string
+function MessageWriter:hold_tool_call(tool_call_id)
+    self._held_tool_call_id = tool_call_id
+    self._hold_unplaced = true
+    self:_schedule_follow()
+end
+
+--- End the hold of `hold_tool_call`: the following windows follow the stream
+--- again. A no-op when nothing is held.
+function MessageWriter:release_hold()
+    if not self._held_tool_call_id then
+        return
+    end
+    self._held_tool_call_id = nil
+    self._hold_unplaced = false
+    self:_schedule_follow()
+end
+
+--- Put `winid` in following and scroll the following windows, placing a held
+--- tool call again in each of them, `winid` or not: one the user moved down
+--- past the block moves back to it.
+--- @param winid integer A window showing the buffer
+function MessageWriter:follow_in(winid)
+    self._user_controlled[winid] = nil
+    self._hold_unplaced = self._held_tool_call_id ~= nil
+    self:_schedule_follow()
 end
 
 --- Whether any window showing the buffer follows writes, or none shows it.
@@ -439,7 +474,12 @@ end
 --- @private
 function MessageWriter:_release_prose_pin()
     for winid in pairs(self._pin_held) do
-        self._user_controlled[winid] = true
+        if
+            vim.api.nvim_win_is_valid(winid)
+            and vim.api.nvim_win_get_buf(winid) == self.bufnr
+        then
+            self._user_controlled[winid] = true
+        end
     end
     self:_clear_prose_pin()
 end
@@ -2163,31 +2203,67 @@ function MessageWriter:_append_lines(lines)
     end
 end
 
---- Scroll each of `winids` that shows the buffer to the bottom, as an
---- `_own_change`. With `follow.pause_on_prose`, the topline stops at the prose
---- pin, and each window records whether the pin held it (`_pin_held`).
---- Scrolls windows in user control too.
+--- Move each of `winids` that shows the buffer to its follow target, as an
+--- `_own_change`: the held tool call's block (`hold_tool_call`), else the
+--- prose pin (with `follow.pause_on_prose`), else the bottom. Scrolls down
+--- only, except to place the held block. Each window records whether the pin
+--- held it (`_pin_held`). Scrolls windows in user control too. A no-op with
+--- `follow.enabled` off.
+---
+--- A held block not yet written stays unplaced, and the window takes the pin
+--- or bottom.
 --- @param winids integer[]
 function MessageWriter:_scroll(winids)
+    if Config.follow and Config.follow.enabled == false then
+        -- The pin holds no window it does not scroll.
+        for _, winid in ipairs(winids) do
+            self._pin_held[winid] = nil
+        end
+        return
+    end
+    local held = self._held_tool_call_id
+        and self.tool_call_blocks[self._held_tool_call_id]
+    local held_start, held_end
+    if held then
+        held_start, held_end = self:_block_rows(held)
+    end
     -- topline is 1-indexed; _prose_anchor_line is 0-indexed.
     local pause = Config.follow and Config.follow.pause_on_prose ~= false
     local max_topline = (pause and self._prose_anchor_line)
             and (self._prose_anchor_line + 1)
         or nil
+    local padding = (Config.follow and Config.follow.bottom_padding) or 0
 
+    local placed = false
     self:_own_change(function()
         for _, winid in ipairs(winids) do
             if
                 vim.api.nvim_win_is_valid(winid)
                 and vim.api.nvim_win_get_buf(winid) == self.bufnr
             then
-                self._pin_held[winid] = BufHelpers.scroll_down(
-                    winid,
-                    max_topline
-                ) or nil
+                if not held_start then
+                    self._pin_held[winid] = BufHelpers.scroll_down(
+                        winid,
+                        padding,
+                        max_topline
+                    ) or nil
+                elseif self._hold_unplaced then
+                    BufHelpers.show_rows(winid, padding, held_start, held_end)
+                    placed = true
+                    self._pin_held[winid] = nil
+                else
+                    BufHelpers.scroll_down(winid, padding, held_start + 1)
+                    self._pin_held[winid] = nil
+                end
             end
         end
     end)
+    -- Left unplaced while no window took it, for the next one that follows,
+    -- and while fold ops wait (insert mode): placed against folds still open,
+    -- the block is placed again once they close.
+    if placed and #self._pending_fold_ops == 0 then
+        self._hold_unplaced = false
+    end
 end
 
 --- If a write owes a scroll, scroll every window showing the buffer that is

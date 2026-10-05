@@ -51,6 +51,13 @@
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
 --- @field chat table<string, agentic.UserConfig.KeymapValue>
 --- @field permission table<string, string> Key for permission responses by option kind
+--- @field permission_open agentic.UserConfig.Keymaps.PermissionOpen
+
+--- @class agentic.UserConfig.Keymaps.PermissionOpen
+--- @field edit string|false In the current window (`:edit`)
+--- @field split string|false In a split
+--- @field vsplit string|false In a vertical split
+--- @field tab string|false In a new last tabpage
 
 --- Window options passed to nvim_set_option_value
 --- Overrides the window options the widget sets
@@ -331,6 +338,15 @@ local ConfigDefault = {
             reject_always = "<localLeader>N",
             __reject_all__ = "<localLeader>x",
             plan_implement = "<localLeader>i",
+        },
+
+        --- Each key opens the prompting subagent's transcript, only while its
+        --- prompt is shown on the chat. `false` disables a key.
+        permission_open = {
+            edit = "<localLeader>e",
+            split = "<localLeader>s",
+            vsplit = "<localLeader>v",
+            tab = "<localLeader>t",
         },
     },
 

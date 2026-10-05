@@ -12,6 +12,9 @@ local SessionRegistry = require("agentic.session_registry")
 --- @field _bufnr? integer
 --- @field _anchor_bufnr? integer Buffer the float anchors to while open
 --- @field _anchor_winid? integer Window the float is placed against while shown
+--- @field _on_fallback boolean Whether no window showed the anchor buffer at the last `place`
+--- @field _title? string The anchor buffer's name tail, shown on fallback. Nil when the anchor is the chat
+--- @field _lines string[] The prompt body, without the hint
 --- @field _autocmd_ids integer[]
 --- @field _anchor "NE"|"NW"|"SE"|"SW" Cached anchor used for the open window
 --- @field _width integer Cached width used for the open window
@@ -33,6 +36,8 @@ function PermissionFloat:new(message_writer, buf_nrs, owner_id)
         _winid = nil,
         _bufnr = nil,
         _autocmd_ids = {},
+        _on_fallback = false,
+        _lines = {},
         _anchor = "NE",
         _width = 0,
         _height = 0,
@@ -162,6 +167,101 @@ local function build_lines(options)
     return lines, option_mapping
 end
 
+--- @type agentic.ui.OpenHow[]
+local OPEN_HOWS = { "edit", "split", "vsplit", "tab" }
+
+--- The enabled `Config.keymaps.permission_open` keys, in the order edit,
+--- split, vsplit, tab.
+--- @return { how: agentic.ui.OpenHow, lhs: string }[]
+function PermissionFloat.open_keys()
+    local keys = {}
+    for _, how in ipairs(OPEN_HOWS) do
+        local lhs = Config.keymaps.permission_open[how]
+        if lhs and lhs ~= "" then
+            table.insert(keys, { how = how, lhs = lhs })
+        end
+    end
+    return keys
+end
+
+--- Split a key sequence as `keytrans` writes it into its keys: each `<…>`
+--- name or single character.
+--- @param keys string
+--- @return string[]
+local function key_tokens(keys)
+    local tokens = {}
+    local i = 1
+    while i <= #keys do
+        local token = keys:match("^<[^<>]+>", i)
+            or keys:match("^[%z\1-\127\194-\244][\128-\191]*", i)
+        table.insert(tokens, token)
+        i = i + #token
+    end
+    return tokens
+end
+
+--- Write key sequences as one string: when they all share a prefix of whole
+--- keys, the prefix once and the rest in braces (`\{e,s}`), else joined with
+--- spaces.
+--- @param keys string[] Key sequences as `keytrans` writes them
+--- @return string
+local function format_keys(keys)
+    local token_lists = vim.tbl_map(key_tokens, keys)
+    local first = token_lists[1]
+    -- Each key keeps at least one key of its own after the prefix.
+    local n_shared = #keys > 1 and #first - 1 or 0
+    for _, tokens in ipairs(token_lists) do
+        n_shared = math.min(n_shared, #tokens - 1)
+        for i = 1, n_shared do
+            if tokens[i] ~= first[i] then
+                n_shared = i - 1
+                break
+            end
+        end
+    end
+    if n_shared == 0 then
+        return table.concat(keys, " ")
+    end
+    local rests = vim.tbl_map(function(tokens)
+        return table.concat(tokens, "", n_shared + 1)
+    end, token_lists)
+    return table.concat(first, "", 1, n_shared)
+        .. "{"
+        .. table.concat(rests, ",")
+        .. "}"
+end
+
+--- Whether a float border has a top and a bottom edge, where a title and a
+--- footer show.
+--- @param border string|(string|string[])[]|nil A border as `nvim_win_get_config` returns it
+--- @return boolean
+local function has_title_edges(border)
+    if type(border) ~= "table" then
+        return false
+    end
+    --- @param i integer
+    --- @return string
+    local function edge(i)
+        local char = border[(i - 1) % #border + 1]
+        return (type(char) == "table" and char[1] or char) --[[@as string]]
+    end
+    return edge(2) ~= "" and edge(6) ~= ""
+end
+
+--- The hint listing the open keys, cut to `width`
+--- characters. Nil when every key is disabled.
+--- @param width integer
+--- @return string|nil
+local function open_keys_hint(width)
+    local keys = vim.tbl_map(function(key)
+        return vim.fn.keytrans(vim.keycode(key.lhs))
+    end, PermissionFloat.open_keys())
+    if #keys == 0 then
+        return nil
+    end
+    return vim.fn.strcharpart(format_keys(keys), 0, width)
+end
+
 --- Resolve the float buffer. Reuses the existing buffer if it is still
 --- valid (e.g. reopen between requests within one session) to avoid
 --- churning buffer numbers on every prompt.
@@ -249,37 +349,62 @@ function PermissionFloat:open(options, anchor_bufnr)
 
     local lines, option_mapping = build_lines(options)
     local cfg = Config.permission_float
-    self:_render(self:_resolve_buffer(), lines)
+    self:_resolve_buffer()
+    self._lines = lines
     self._anchor = cfg.anchor
     self._width = cfg.width
-    self._height = #lines
     self._row_offset = cfg.row_offset
     self._col_offset = cfg.col_offset
-    self._anchor_bufnr = anchor_bufnr or self.message_writer.bufnr
-
-    self:place()
+    self:set_anchor(anchor_bufnr or self.message_writer.bufnr)
 
     return option_mapping
 end
 
+--- Anchor the open float to `bufnr` and `place` it again.
+--- @param bufnr integer
+function PermissionFloat:set_anchor(bufnr)
+    self._anchor_bufnr = bufnr
+    self._title = bufnr ~= self.message_writer.bufnr
+            and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":t")
+        or nil
+    -- The title may change with the window and fallback state unchanged.
+    self:_close_window()
+    self:place()
+end
+
 --- Show the open float on a window showing its anchor buffer (see
---- `_find_anchor_winid`), or hide it while no window shows that buffer.
---- Never focusable. A no-op when no float is open or it is already where it
---- belongs.
+--- `_find_anchor_winid`). While no window shows that buffer, show it on the
+--- chat's window instead, with a hint listing the open keys: on a border
+--- with top and bottom edges, the anchor's name as title and the hint as
+--- footer, else the hint as the last body line. Hidden while no window shows either. Never focusable. A no-op
+--- when no float is open or it is already where it belongs.
 function PermissionFloat:place()
     if not self._bufnr or not vim.api.nvim_buf_is_valid(self._bufnr) then
         return
     end
     local anchor_winid = self:_find_anchor_winid(self._anchor_bufnr)
-    if self:is_shown() and self._anchor_winid == anchor_winid then
+    local on_fallback = anchor_winid == nil
+    anchor_winid = anchor_winid
+        or self:_find_anchor_winid(self.message_writer.bufnr)
+    -- `:edit` of the anchor in the chat's window ends the fallback but keeps
+    -- the window.
+    if
+        self:is_shown()
+        and self._anchor_winid == anchor_winid
+        and self._on_fallback == on_fallback
+    then
         return
     end
+    self._on_fallback = on_fallback
     self:_close_window()
     if not anchor_winid then
         return
     end
 
     local cfg = Config.permission_float
+    self:_render(self._bufnr, self._lines)
+    self._height = #self._lines
+
     local win_config = vim.tbl_extend("force", self:_placement(anchor_winid), {
         border = cfg.border,
         style = "minimal",
@@ -300,6 +425,28 @@ function PermissionFloat:place()
     self._anchor_winid = anchor_winid
     vim.wo[self._winid].winblend = cfg.winblend
     self:_register_resize_watcher(anchor_winid)
+
+    local hint = on_fallback and open_keys_hint(cfg.width) or nil
+    if not hint then
+        return
+    end
+    -- The border as opened, `'winborder'` applied when `cfg.border` is unset.
+    if has_title_edges(vim.api.nvim_win_get_config(self._winid).border) then
+        vim.api.nvim_win_set_config(
+            self._winid,
+            { title = self._title, footer = hint }
+        )
+    else
+        self:_render(self._bufnr, vim.list_extend(vim.list_slice(self._lines), { hint }))
+        self._height = #self._lines + 1
+        vim.api.nvim_win_set_config(self._winid, self:_placement(anchor_winid))
+    end
+end
+
+--- Whether no window showed the anchor buffer at the last `place`.
+--- @return boolean
+function PermissionFloat:is_on_fallback()
+    return self._on_fallback
 end
 
 --- Whether the float's window is open, in any tab page.
@@ -336,6 +483,7 @@ end
 function PermissionFloat:close()
     self:_close_window()
     self._anchor_bufnr = nil
+    self._on_fallback = false
 
     local bufnr = self._bufnr
     self._bufnr = nil

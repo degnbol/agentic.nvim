@@ -284,27 +284,6 @@ _G.state("c1", "cancelled")
         assert.equal("cancelled", child.lua_get([[_G.block("c1").status]]))
     end)
 
-    it(
-        "a permission request from an agent whose transcript is hidden shows it",
-        function()
-            child.lua([[
-_G.spawn("c1")
-_G.s:_on_request_permission({
-    sessionId = "c1",
-    toolCall = { toolCallId = "t9" },
-    options = {
-        { optionId = "allow", name = "Allow", kind = "allow_once" },
-    },
-}, function() end)
-]])
-
-            assert.equal(
-                1,
-                child.lua_get([[#vim.fn.win_findbuf(_G.transcript("c1").bufnr)]])
-            )
-        end
-    )
-
     it("a wiped transcript comes back with the agent's next output", function()
         child.lua([[
 _G.spawn("c1")

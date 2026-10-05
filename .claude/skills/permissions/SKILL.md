@@ -386,13 +386,19 @@ instance per session, paired with its `PermissionManager`. Separate
 buffer from the chat, so chat updates never displace the prompt.
 
 - **Anchor.** `relative = "win"` against a window showing the requesting
-  buffer: current tab, else bound tab, else any. Corner and offsets from
+  buffer: current tab, else bound tab, else any. With none (a hidden
+  transcript), the chat's window instead (`is_on_fallback`), titled with the
+  transcript name and a hint of the open keys; the chat holds the subagent's
+  block (`proxy_tool_call`). Corner and offsets from
   `Config.permission_float`. `WinResized` reapplies geometry.
 - **Focus.** Never focusable; the keys live on the session's buffers and
-  the anchor's `companion_bufs` (a subagent's message input). Keys shadow
-  same-lhs buffer maps and put them back on release.
-- **Hidden.** No float in the current tabpage: `on_hidden` once per
-  request, `on_hidden_resolved` when it ends.
+  the anchor's `companion_bufs` (a subagent's message input). On fallback,
+  `keymaps.permission_open` keys also bind, calling `open_anchor`; the
+  request stays pending. Keys shadow same-lhs buffer maps and put them back
+  on release.
+- **Hidden.** No float in the current tabpage (neither the anchor nor the
+  chat has a window there): `on_hidden` once per request,
+  `on_hidden_resolved` when it ends.
 - **Follows the layout.** While a request is shown,
   `PermissionManager:refresh_float` re-runs `PermissionFloat:place` on
   `TabEnter`, `WinClosed` and `BufWinEnter`, and when the widget opens a

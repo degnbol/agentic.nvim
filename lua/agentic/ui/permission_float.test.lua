@@ -282,5 +282,125 @@ describe("agentic.ui.PermissionFloat", function()
             assert.is_true(vim.api.nvim_win_is_valid(second_winid))
             assert.are_not.equal(first_winid, second_winid)
         end)
+
+        describe("with no window showing the anchor", function()
+            local Config = require("agentic.config")
+            --- @type integer
+            local anchor_bufnr
+            --- @type table
+            local saved_open_keys
+            --- @type table
+            local saved_float_cfg
+
+            --- @param chunks [string, string][]|nil
+            --- @return string|nil
+            local function chunk_text(chunks)
+                return chunks and chunks[1][1] or nil
+            end
+
+            before_each(function()
+                anchor_bufnr = vim.api.nvim_create_buf(false, true)
+                vim.api.nvim_buf_set_name(anchor_bufnr, "/tmp/agentic/transcript-a")
+                saved_open_keys = vim.deepcopy(Config.keymaps.permission_open)
+                saved_float_cfg = vim.deepcopy(Config.permission_float)
+            end)
+
+            after_each(function()
+                Config.keymaps.permission_open = saved_open_keys
+                Config.permission_float = saved_float_cfg
+                vim.g.maplocalleader = nil
+                vim.api.nvim_buf_delete(anchor_bufnr, { force = true })
+            end)
+
+            it("shows on the chat, titled with the anchor's name", function()
+                float:open(make_options(), anchor_bufnr)
+
+                assert.is_true(float:is_on_fallback())
+                local cfg = vim.api.nvim_win_get_config(float._winid)
+                assert.equal(chat_winid, cfg.win)
+                assert.equal("transcript-a", chunk_text(cfg.title))
+                assert.equal("\\{e,s,v,t}", chunk_text(cfg.footer))
+            end)
+
+            it("leaves a disabled open key out of the hint", function()
+                Config.keymaps.permission_open.split = false
+
+                float:open(make_options(), anchor_bufnr)
+
+                local cfg = vim.api.nvim_win_get_config(float._winid)
+                assert.equal("\\{e,v,t}", chunk_text(cfg.footer))
+            end)
+
+            it("writes a space leader as <Space>", function()
+                vim.g.maplocalleader = " "
+
+                float:open(make_options(), anchor_bufnr)
+
+                local cfg = vim.api.nvim_win_get_config(float._winid)
+                assert.equal("<Space>{e,s,v,t}", chunk_text(cfg.footer))
+            end)
+
+            it("lists keys with no shared prefix in full", function()
+                Config.keymaps.permission_open =
+                    { edit = "<F1>", split = "<F2>", vsplit = false, tab = false }
+
+                float:open(make_options(), anchor_bufnr)
+
+                local cfg = vim.api.nvim_win_get_config(float._winid)
+                assert.equal("<F1> <F2>", chunk_text(cfg.footer))
+            end)
+
+            it("without a border, shows the hint as the last body line", function()
+                Config.permission_float.border = "none"
+
+                float:open(make_options(), anchor_bufnr)
+
+                local lines = vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                assert.equal(4, #lines)
+                assert.equal("\\{e,s,v,t}", lines[4])
+                assert.equal(4, vim.api.nvim_win_get_height(float._winid))
+            end)
+
+            it("on a border with no top edge, shows the hint as a body line", function()
+                Config.permission_float.border = "shadow"
+
+                float:open(make_options(), anchor_bufnr)
+
+                local lines = vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                assert.equal("\\{e,s,v,t}", lines[4])
+                assert.is_nil(chunk_text(vim.api.nvim_win_get_config(float._winid).footer))
+            end)
+
+            it("moves to a window showing the anchor, without title or hint", function()
+                Config.permission_float.border = "none"
+                float:open(make_options(), anchor_bufnr)
+
+                local anchor_win = vim.api.nvim_open_win(
+                    anchor_bufnr,
+                    false,
+                    { split = "below", win = -1 }
+                )
+                float:place()
+
+                assert.is_false(float:is_on_fallback())
+                local cfg = vim.api.nvim_win_get_config(float._winid)
+                assert.equal(anchor_win, cfg.win)
+                assert.is_nil(chunk_text(cfg.title))
+                assert.equal(
+                    3,
+                    #vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                )
+                vim.api.nvim_win_close(anchor_win, true)
+            end)
+
+            it("is not shown while no window shows the chat either", function()
+                vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
+
+                float:open(make_options(), anchor_bufnr)
+
+                assert.is_true(float:is_on_fallback())
+                assert.is_false(float:is_shown())
+            end)
+        end)
     end)
 end)

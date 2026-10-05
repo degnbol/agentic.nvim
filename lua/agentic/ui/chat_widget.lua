@@ -439,13 +439,6 @@ function ChatWidget:submit(opts)
 
     if Config.settings.move_cursor_to_chat_on_submit then
         self:move_cursor_to("chat")
-    else
-        vim.schedule(function()
-            local chat_win = self:panel_win("chat")
-            if chat_win then
-                BufHelpers.scroll_down(chat_win)
-            end
-        end)
     end
 end
 
@@ -812,8 +805,9 @@ function ChatWidget:cancel_queue()
     vim.api.nvim_buf_clear_namespace(self.buf_nrs.input, NS_QUEUED, 0, -1)
 end
 
---- On the next tick, focus the `panel` window and scroll it to the bottom,
---- then run `callback`. No-op when no window shows the panel then.
+--- On the next tick, focus the `panel` window and, unless it is the chat,
+--- scroll it to the bottom, then run `callback`. No-op when no window shows
+--- the panel then.
 --- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param callback fun()|nil
 function ChatWidget:move_cursor_to(panel, callback)
@@ -822,8 +816,11 @@ function ChatWidget:move_cursor_to(panel, callback)
         if winid then
             vim.api.nvim_set_current_win(winid)
 
-            -- Scroll to bottom so the user can see the new message.
-            BufHelpers.scroll_down(winid)
+            -- Follow owns the chat's view, which a held tool call may keep
+            -- short of the bottom.
+            if panel ~= "chat" then
+                BufHelpers.scroll_down(winid, 0)
+            end
 
             if callback then
                 callback()

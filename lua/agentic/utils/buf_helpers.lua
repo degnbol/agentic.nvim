@@ -240,6 +240,133 @@ function BufHelpers.redraw_if_cmdline()
     end
 end
 
+--- Screen rows of lines `first` through `last` in `winid`, fold-aware.
+--- @param winid integer
+--- @param first integer 1-indexed
+--- @param last integer 1-indexed, inclusive; 0 rows when below `first`
+--- @param max_height integer Stop counting past this many rows
+--- @return integer rows
+local function screen_rows(winid, first, last, max_height)
+    if last < first then
+        return 0
+    end
+    return vim.api.nvim_win_text_height(winid, {
+        start_row = first - 1,
+        end_row = last - 1,
+        max_height = max_height,
+    }).all
+end
+
+--- The smallest topline, at least `lower`, from which the lines through
+--- `last` fit in `rows` screen rows of `winid`. `last + 1` when even `last`
+--- alone does not fit.
+--- @param winid integer
+--- @param lower integer 1-indexed, at most `last + 1`
+--- @param last integer 1-indexed
+--- @param rows integer
+--- @return integer topline 1-indexed
+local function fitting_topline(winid, lower, last, rows)
+    -- The height to `last` is monotonically non-increasing in the topline,
+    -- so binary search.
+    local lo, hi = lower, last + 1
+    while lo < hi do
+        local mid = math.floor((lo + hi) / 2)
+        -- Capped one row past `rows`, making each measurement O(rows) rather
+        -- than O(buffer): with conceal active, height depends on a per-line
+        -- treesitter query, and an uncapped near-whole-buffer measurement on
+        -- every streamed update is O(n²) across a stream. The capped height
+        -- may overshoot (the boundary line is counted whole), but only once
+        -- it is already past `rows`, so the comparison holds.
+        if screen_rows(winid, mid, last, rows + 1) > rows then
+            lo = mid + 1
+        else
+            hi = mid
+        end
+    end
+    return lo
+end
+
+--- The smallest topline, at least `lower`, from which the lines through the
+--- last fit in `rows` screen rows of `winid`. The last line when even it
+--- alone does not fit.
+--- @param winid integer
+--- @param lower integer 1-indexed, at most the last line
+--- @param rows integer
+--- @return integer topline 1-indexed
+local function bottom_topline(winid, lower, rows)
+    local last_line =
+        vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+    return math.min(fitting_topline(winid, lower, last_line, rows), last_line)
+end
+
+--- Screen rows of `winid` left for text: its height less `padding`, at least
+--- 1.
+--- @param winid integer
+--- @param padding integer Rows to keep empty below the buffer's last line
+--- @return integer rows
+local function text_room(winid, padding)
+    return math.max(1, vim.api.nvim_win_get_height(winid) - padding)
+end
+
+--- Bring rows `start_row` through `end_row` of `winid`'s buffer into view. A
+--- span that fits is centred, moved down as far as needed to show no empty
+--- rows past the end of the buffer; a taller one starts at the top. May
+--- scroll up or down.
+---
+--- Fold-aware: closed folds count as one row. A cursor that would not stay
+--- `scrolloff` rows inside the new view moves to the first line that does
+--- (to the start of a closed fold there), so vim does not move the view to
+--- fit the cursor.
+--- @param winid integer
+--- @param padding integer Rows to keep empty below the buffer's last line
+--- @param start_row integer 0-indexed
+--- @param end_row integer 0-indexed, inclusive
+function BufHelpers.show_rows(winid, padding, start_row, end_row)
+    local height = vim.api.nvim_win_get_height(winid)
+    local room = text_room(winid, padding)
+    local first, last = start_row + 1, end_row + 1
+    local span = screen_rows(winid, first, last, room + 1)
+
+    local topline = first
+    if span <= room then
+        -- The rows above the span fill half the slack.
+        local above = math.floor((room - span) / 2)
+        local centre = fitting_topline(winid, 1, first - 1, above)
+        topline = math.min(centre, bottom_topline(winid, 1, room))
+    end
+
+    local so = math.min(
+        vim.api.nvim_get_option_value("scrolloff", { win = winid }),
+        math.floor((height - 1) / 2)
+    )
+    local last_line =
+        vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+    vim.api.nvim_win_call(winid, function()
+        local function fold_start(lnum)
+            local start = vim.fn.foldclosed(lnum)
+            return start > 0 and start or lnum
+        end
+        local cursor = fold_start(vim.api.nvim_win_get_cursor(winid)[1])
+        local inside = cursor >= topline
+            and screen_rows(winid, topline, cursor - 1, so + 1) >= so
+            and screen_rows(winid, topline, cursor, height + 1) <= height - so
+        --- @type vim.fn.winrestview.dict
+        local view = { topline = topline }
+        if not inside then
+            local lnum, rows = topline, 0
+            while rows < so and lnum < last_line do
+                local fold_end = vim.fn.foldclosedend(lnum)
+                local next_lnum = (fold_end > 0 and fold_end or lnum) + 1
+                rows = rows + screen_rows(winid, lnum, next_lnum - 1, so + 1)
+                lnum = next_lnum
+            end
+            view.lnum = fold_start(lnum)
+            view.col = 0
+        end
+        vim.fn.winrestview(view)
+    end)
+end
+
 --- Move the viewport forward to follow the buffer's last line as
 --- content streams in. Never scrolls upward.
 ---
@@ -256,14 +383,11 @@ end
 --- a cursor on the last line or outside the viewport moves into it, even
 --- when the viewport does not move.
 --- @param winid integer
---- @param max_topline? integer 1-indexed buffer line; topline must not exceed it
+--- @param padding integer Rows to keep empty below the buffer's last line
+--- @param max_topline integer|nil 1-indexed buffer line; topline must not exceed it
 --- @return boolean held Whether the cap holds the view short of the last line
-function BufHelpers.scroll_down(winid, max_topline)
+function BufHelpers.scroll_down(winid, padding, max_topline)
     if not vim.api.nvim_win_is_valid(winid) then
-        return false
-    end
-    local Config = require("agentic.config")
-    if Config.follow and Config.follow.enabled == false then
         return false
     end
 
@@ -275,33 +399,6 @@ function BufHelpers.scroll_down(winid, max_topline)
     local winheight = info[1].height
     local last_line =
         vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
-
-    -- Reserve N rows below the last buffer line so virt_line indicators
-    -- (thinking/generating) have breathing room when they appear.
-    local bottom_padding = (Config.follow and Config.follow.bottom_padding) or 0
-    local effective_winheight = math.max(1, winheight - bottom_padding)
-
-    -- Fold-aware natural target: smallest topline t (1-indexed) such
-    -- that the screen-line height of buffer lines [t..last_line] fits
-    -- in winheight. `nvim_win_text_height` accounts for closed folds,
-    -- wrap, virt_lines, and diff filler. Height is monotonically
-    -- non-increasing in t, so binary search.
-    --
-    -- `max_height` caps the line walk one screen past the comparison
-    -- threshold, making each call O(winheight) rather than O(buffer)
-    -- (with conceal active, height depends on a per-line treesitter
-    -- query, so an uncapped near-whole-buffer measurement on every
-    -- streamed update is O(n²) across a stream). The returned height
-    -- may overshoot the cap — the boundary line is counted whole — but
-    -- with cap = threshold + 1 that only happens once the height is
-    -- already > threshold, so the `> threshold` test is preserved.
-    local function height_to_last(t)
-        return vim.api.nvim_win_text_height(winid, {
-            start_row = t - 1,
-            end_row = last_line - 1,
-            max_height = effective_winheight + 1,
-        }).all
-    end
 
     -- Return early where the viewport stays as-is: scroll_down never
     -- scrolls upward.
@@ -317,23 +414,8 @@ function BufHelpers.scroll_down(winid, max_topline)
         -- because vim clamps the reported topline back into range first.
         return false
     end
-    local tail_fits = height_to_last(old_topline) <= effective_winheight
-
-    -- When the tail does not fit from old_topline, the natural target is
-    -- strictly below it: search (old_topline, last_line].
-    local natural_target = old_topline
-    if not tail_fits then
-        local lo, hi = old_topline + 1, last_line
-        while lo < hi do
-            local mid = math.floor((lo + hi) / 2)
-            if height_to_last(mid) > effective_winheight then
-                lo = mid + 1
-            else
-                hi = mid
-            end
-        end
-        natural_target = lo
-    end
+    local natural_target =
+        bottom_topline(winid, old_topline, text_room(winid, padding))
 
     local held = max_topline ~= nil and max_topline < natural_target
     local target = held and max_topline or natural_target

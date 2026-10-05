@@ -443,4 +443,68 @@ describe("WidgetLayout", function()
             pcall(vim.cmd.tabclose)
         end)
     end)
+
+    describe("open_buf", function()
+        --- @type integer
+        local bufnr
+
+        before_each(function()
+            vim.cmd("tabnew")
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.cmd("tabonly")
+            vim.cmd("silent! only")
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("edit shows the buffer in the given window and focuses it", function()
+            local other = vim.api.nvim_get_current_win()
+            vim.cmd("split")
+
+            local winid = WidgetLayout.open_buf(bufnr, "edit", other)
+
+            assert.equal(other, winid)
+            assert.equal(bufnr, vim.api.nvim_win_get_buf(other))
+            assert.equal(other, vim.api.nvim_get_current_win())
+        end)
+
+        it("edit with no window splits", function()
+            local n_wins = #vim.api.nvim_tabpage_list_wins(0)
+
+            local winid = WidgetLayout.open_buf(bufnr, "edit", nil)
+
+            assert.equal(n_wins + 1, #vim.api.nvim_tabpage_list_wins(0))
+            assert.equal(bufnr, vim.api.nvim_win_get_buf(winid))
+        end)
+
+        it("split opens a window above the current one", function()
+            local before = vim.api.nvim_get_current_win()
+
+            local winid = WidgetLayout.open_buf(bufnr, "split", nil)
+
+            assert.equal(bufnr, vim.api.nvim_win_get_buf(winid))
+            assert.equal("col", vim.fn.winlayout()[1])
+            assert.is_true(vim.api.nvim_win_is_valid(before))
+        end)
+
+        it("vsplit opens a window beside the current one", function()
+            local winid = WidgetLayout.open_buf(bufnr, "vsplit", nil)
+
+            assert.equal(bufnr, vim.api.nvim_win_get_buf(winid))
+            assert.equal("row", vim.fn.winlayout()[1])
+        end)
+
+        it("tab opens a last tabpage and enters it", function()
+            vim.cmd("1tabnew")
+
+            local winid = WidgetLayout.open_buf(bufnr, "tab", nil)
+
+            local tabs = vim.api.nvim_list_tabpages()
+            assert.equal(tabs[#tabs], vim.api.nvim_get_current_tabpage())
+            assert.equal(winid, vim.api.nvim_get_current_win())
+            assert.equal(bufnr, vim.api.nvim_win_get_buf(winid))
+        end)
+    end)
 end)

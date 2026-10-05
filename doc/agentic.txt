@@ -631,6 +631,21 @@ prompt is active. What each option does is in |agentic-permissions-prompt|.
 An option whose kind has no key, or whose kind's key an earlier option
 took, gets `<localLeader>` and its position, for example `<localLeader>3`.
 
+While a subagent's prompt shows on the chat (|agentic-permissions-prompt|),
+the `keymaps.permission_open` keys open its transcript. The prompt stays
+pending and moves to the transcript's window. `false` disables a key.
+
+    Key              Field    Opens the transcript in ~
+    `<localLeader>e`   `edit`     The current window (*)
+    `<localLeader>s`   `split`    A split
+    `<localLeader>v`   `vsplit`   A vertical split
+    `<localLeader>t`   `tab`      A new last tabpage
+
+(*) From an input or a widget panel other than the chat: the chat's window.
+
+The float's footer lists the enabled keys, with a shared prefix written once:
+`\{e,s,v,t}`. Without a border, the list is the float's last line.
+
 ------------------------------------------------------------------------------
 6.5 PLUG MAPPINGS                                      *agentic-plug-mappings*
 
@@ -709,10 +724,12 @@ notices as well as prompts (|agentic-keymaps-chat|).
 
 A tool call the agent is not cleared to make raises a prompt in a float
 (|agentic-config-permission_float|) on the window showing that tool call's
-buffer: the chat, or the subagent's transcript, which the request opens in a
-new last tabpage if no window shows it. A float outside the current tabpage counts as
-hidden (|agentic-attention|). The options come
-from the provider; the plugin inserts "Reject all" ahead of the provider's
+buffer: the chat, or the subagent's transcript. While no window shows the
+transcript, the float shows on the chat, titled with the transcript's name,
+and the open keys (|agentic-keymaps-permission|) open the transcript. A float
+outside the current tabpage counts as hidden (|agentic-attention|). The
+options come from the provider; the plugin inserts "Reject all" ahead of the
+provider's
 "Reject always", or appends it when there is none. When the agent leaves
 plan mode, the plugin adds "Clear context & implement plan" first. Keys:
 |agentic-keymaps-permission|.
@@ -885,6 +902,12 @@ that ends there), on `<localLeader>G`, or when a prompt is submitted. Prompts
 sent from the queue do not. Entering the window, e.g. by a click, and
 resizing it do not change its mode.
 
+While a permission prompt is active, a following window shows the prompting
+tool call instead: centred once, then up to its heading at the top as output
+grows. With the prompt on the chat in place of a transcript, that is the
+subagent's block. When the prompt ends, following goes back to the trailing
+edge.
+
 ------------------------------------------------------------------------------
 9.3 ATTENTION                                              *agentic-attention*
 
@@ -897,9 +920,10 @@ When a permission float is shown, the bell rings if the chat window is not
 the current window.
 
 When the float is not in the current tabpage, once per prompt, the bell
-rings, the header of the tool call's buffer (the chat, or a transcript)
-shows `[?]`, and a notification names the session and the buffer. `[?]`
-stays until the prompt is answered.
+rings, the header of the tool call's buffer (the chat, or a transcript; the
+chat while no window shows the transcript) shows `[?]`, and a notification
+names the session and the tool call's buffer. `[?]` stays until the prompt is
+answered.
 
 Auto-approved requests do none of this.
 
@@ -991,6 +1015,9 @@ of the spawn confirms it; the type shows once that record is read. |gf|,
 |CTRL-W_f| or |CTRL-W_gf| on the name line opens the transcript.
 
 A cancel, a provider crash and a session switch end every running subagent.
+
+A permission prompt from a subagent whose transcript has no window shows on
+the chat (|agentic-permissions-prompt|).
 
 An insert key in a background subagent's transcript opens its message input.
 `:w` there sends the text to the subagent through the main agent, as your

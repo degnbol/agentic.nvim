@@ -348,6 +348,41 @@ describe("agentic.ui.PermissionManager", function()
                     vim.fn.maparg("<localLeader>1", "n", false, true).desc
                 )
             end)
+
+            it("puts the map back under an open key of the same lhs", function()
+                local Config = require("agentic.config")
+                local saved = vim.deepcopy(Config.keymaps.permission_open)
+                Config.keymaps.permission_open.edit = "<localLeader>1"
+                local fallback_stub =
+                    spy.stub(pm.permission_float, "is_on_fallback")
+                fallback_stub:returns(true)
+                pm.open_anchor = function() end
+
+                pm:add_request({
+                    sessionId = "test-session",
+                    toolCall = { toolCallId = "tc-open", kind = "edit" },
+                    options = {
+                        {
+                            optionId = "allow-once",
+                            name = "Allow",
+                            kind = "allow_once",
+                        },
+                    },
+                }, function() end)
+                assert.equal(
+                    "Open the buffer asking permission: edit",
+                    vim.fn.maparg("<localLeader>1", "n", false, true).desc
+                )
+                pm:_complete_request("allow-once")
+
+                pm.open_anchor = nil
+                fallback_stub:revert()
+                Config.keymaps.permission_open = saved
+                assert.equal(
+                    "own",
+                    vim.fn.maparg("<localLeader>1", "n", false, true).desc
+                )
+            end)
         end)
     end)
 

@@ -400,16 +400,28 @@ function WidgetLayout.focus_input(input_buf)
     BufHelpers.start_insert_on_last_char()
 end
 
---- Open a buffer alone in a new last tabpage, leaving the current one
---- current. The buffer's `BufWinEnter` runs with the new window current.
+--- @alias agentic.ui.OpenHow "edit"|"split"|"vsplit"|"tab"
+
+--- Open a buffer as the commands of the same name would, and focus its
+--- window. "tab" opens a new last tabpage.
 --- @param bufnr integer
---- @return integer tab
-function WidgetLayout.open_tab(bufnr)
-    return vim.api.nvim_open_tabpage(
-        bufnr,
-        false,
-        { after = #vim.api.nvim_list_tabpages() }
-    )
+--- @param how agentic.ui.OpenHow
+--- @param edit_win integer|nil The window "edit" replaces; nil falls back to "split"
+--- @return integer winid
+function WidgetLayout.open_buf(bufnr, how, edit_win)
+    if how == "edit" and edit_win then
+        vim.api.nvim_win_set_buf(edit_win, bufnr)
+        vim.api.nvim_set_current_win(edit_win)
+        return edit_win
+    end
+    vim.cmd.sbuffer({
+        args = { bufnr },
+        mods = {
+            vertical = how == "vsplit",
+            tab = how == "tab" and #vim.api.nvim_list_tabpages() or nil,
+        },
+    })
+    return vim.api.nvim_get_current_win()
 end
 
 --- @param params agentic.ui.WidgetLayout.Params

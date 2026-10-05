@@ -263,6 +263,58 @@ _G.s.widget:_goto_transcripts_bottom()
         assert.is_false(user_controlled())
     end)
 
+    --- Hold a tool call tracked over lines 100 to 104 of the chat, and let the
+    --- scroll land.
+    local function hold_mid_block()
+        child.lua([[
+local writer = _G.s.message_writer
+local Renderer = require("agentic.ui.tool_call_renderer")
+local id = vim.api.nvim_buf_set_extmark(
+    _G.chat, Renderer.NS_TOOL_BLOCKS, 99, 0, { end_row = 103 }
+)
+writer.tool_call_blocks.h = {
+    tool_call_id = "h", status = "pending", kind = "execute",
+    argument = "ls", extmark_id = id,
+}
+writer:hold_tool_call("h")
+]])
+        settle()
+    end
+
+    --- @return boolean
+    local function shows_held_block()
+        return child.lua_get([[
+vim.fn.getwininfo(_G.win)[1].topline <= 100
+    and vim.fn.getwininfo(_G.win)[1].botline >= 104
+]])
+    end
+
+    for _, focus in ipairs({ "focused", "unfocused" }) do
+        it("an " .. focus .. " window a hold placed mid-buffer keeps following", function()
+            if focus == "unfocused" then
+                child.lua([[vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)]])
+            end
+
+            hold_mid_block()
+
+            assert.is_true(shows_held_block())
+            assert.is_false(shows_last_line())
+            assert.is_false(user_controlled())
+        end)
+    end
+
+    it("a submit during a hold keeps the held block in view", function()
+        hold_mid_block()
+        child.lua([[
+_G.s._handle_input_submit = function() return true end
+vim.api.nvim_buf_set_lines(_G.s.widget.buf_nrs.input, 0, -1, false, { "hi" })
+_G.s.widget:submit()
+]])
+        settle()
+
+        assert.is_true(shows_held_block())
+    end)
+
     it("a submit clears [idle] and leaves [?]", function()
         --- @param badge string
         --- @return string|nil

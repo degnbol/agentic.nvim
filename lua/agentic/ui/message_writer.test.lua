@@ -1859,6 +1859,282 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("tool call hold", function()
+        --- @type TestStub
+        local schedule_stub
+
+        --- @return integer
+        local function topline(win)
+            vim.cmd("redraw")
+            return vim.fn.line("w0", win or winid)
+        end
+
+        --- Track a tool call "h" over 0-indexed rows `s` through `e`.
+        --- @param s integer
+        --- @param e integer
+        local function track(s, e)
+            local id = vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Renderer.NS_TOOL_BLOCKS,
+                s,
+                0,
+                { end_row = e }
+            )
+            writer.tool_call_blocks.h = make_tool_call_block("h", "pending")
+            writer.tool_call_blocks.h.extmark_id = id
+        end
+
+        --- Set `win`'s view as the user would, and report it.
+        --- @param view { topline: integer, lnum: integer }
+        local function user_move(view, win)
+            win = win or winid
+            vim.api.nvim_win_call(win, function()
+                vim.fn.winrestview(view)
+            end)
+            writer:on_view_change(win, false)
+        end
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+            vim.wo[winid].scrolloff = 0
+            -- Room: 20 rows less the default bottom padding of 1.
+            setup_buffer(50, 1)
+            writer:_own_change(function() end)
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("centres a block that fits", function()
+            track(20, 24)
+
+            writer:hold_tool_call("h")
+
+            assert.equal(14, topline())
+        end)
+
+        it("shows no rows past the end of the buffer", function()
+            track(45, 49)
+
+            writer:hold_tool_call("h")
+
+            assert.equal(32, topline())
+        end)
+
+        it("puts a tall block's header at the top, with scrolloff", function()
+            vim.wo[winid].scrolloff = 4
+            track(10, 45)
+
+            writer:hold_tool_call("h")
+
+            assert.equal(11, topline())
+        end)
+
+        it("caps writes at the header at the top, folded body included", function()
+            track(20, 24)
+            writer:hold_tool_call("h")
+            vim.api.nvim_win_call(winid, function()
+                vim.wo.foldmethod = "manual"
+                vim.cmd("22,25fold")
+            end)
+
+            vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "a", "b", "c" })
+            for _ = 1, 30 do
+                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "more" })
+            end
+            writer:_schedule_follow()
+
+            assert.equal(21, topline())
+        end)
+
+        it("leaves a following window the user moved down past it", function()
+            track(20, 24)
+            writer:hold_tool_call("h")
+            user_move({ topline = 25, lnum = 25 })
+
+            writer:_schedule_follow()
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(25, topline())
+        end)
+
+        it("a user scroll up takes only that window, keeping the hold", function()
+            local other = vim.api.nvim_open_win(bufnr, false, {
+                relative = "editor",
+                width = 60,
+                height = 20,
+                row = 0,
+                col = 62,
+            })
+            track(20, 24)
+            writer:hold_tool_call("h")
+
+            user_move({ topline = 10, lnum = 10 })
+
+            assert.is_true(writer._user_controlled[winid])
+            assert.is_nil(writer._user_controlled[other])
+            assert.equal("h", writer._held_tool_call_id)
+            vim.api.nvim_win_close(other, true)
+        end)
+
+        it("does not move a window in user control", function()
+            writer._user_controlled[winid] = true
+            track(20, 24)
+
+            writer:hold_tool_call("h")
+
+            assert.equal(1, topline())
+        end)
+
+        it("moves no window with follow off", function()
+            Config.follow = vim.tbl_extend("force", Config.follow, {
+                enabled = false,
+            }) --[[@as agentic.UserConfig.Follow]]
+            track(20, 24)
+
+            writer:hold_tool_call("h")
+
+            assert.equal(1, topline())
+        end)
+
+        it("survives reset_turn_state", function()
+            writer:hold_tool_call("h")
+
+            writer:reset_turn_state()
+
+            assert.equal("h", writer._held_tool_call_id)
+        end)
+
+        it("waits for pending fold ops and measures the closed fold", function()
+            -- Long enough that the end of the buffer does not clamp.
+            setup_buffer(80, 1)
+            writer:_own_change(function() end)
+            track(20, 45)
+            vim.api.nvim_win_call(winid, function()
+                vim.wo.foldmethod = "manual"
+                vim.cmd("22,45fold")
+                vim.cmd("22foldopen")
+            end)
+            writer._pending_fold_ops = {
+                { id = writer:_place_fold_anchor(21), open = false },
+            }
+
+            writer:hold_tool_call("h")
+            assert.equal(1, topline())
+            writer:flush_pending_fold_ops()
+
+            -- Header, closed fold, footer: 3 rows, 8 above them.
+            assert.equal(13, topline())
+        end)
+
+        it("placed in insert mode, places again once the folds close", function()
+            setup_buffer(80, 1)
+            writer:_own_change(function() end)
+            track(20, 45)
+            vim.api.nvim_win_call(winid, function()
+                vim.wo.foldmethod = "manual"
+                vim.cmd("22,45fold")
+                vim.cmd("22foldopen")
+            end)
+            writer._pending_fold_ops = {
+                { id = writer:_place_fold_anchor(21), open = false },
+            }
+            local mode = spy.stub(vim.api, "nvim_get_mode")
+            mode:returns({ mode = "i", blocking = false })
+
+            writer:hold_tool_call("h")
+            writer:flush_pending_fold_ops()
+            -- Tall while open: header at the top.
+            assert.equal(21, topline())
+
+            mode:revert()
+            vim.api.nvim_exec_autocmds("InsertLeave", {})
+
+            -- Header, closed fold, footer: 3 rows, 8 above them.
+            assert.equal(13, topline())
+        end)
+
+        it("with follow off, the pin holds no window", function()
+            writer._pin_held[winid] = true
+            Config.follow = vim.tbl_extend("force", Config.follow, {
+                enabled = false,
+            }) --[[@as agentic.UserConfig.Follow]]
+
+            writer:_schedule_follow()
+            writer:_release_prose_pin()
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("a pin release skips a window that no longer shows the buffer", function()
+            writer._pin_held[winid] = true
+            local other = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_win_set_buf(winid, other)
+
+            writer:_release_prose_pin()
+
+            assert.is_nil(writer._user_controlled[winid])
+            vim.api.nvim_win_set_buf(winid, bufnr)
+            vim.api.nvim_buf_delete(other, { force = true })
+        end)
+
+        it("a hold scroll clears the pin's hold on the window", function()
+            writer._prose_anchor_line = 5
+            writer._pin_held[winid] = true
+            track(20, 24)
+
+            writer:hold_tool_call("h")
+            writer:_release_prose_pin()
+
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("leaves a cursor that stays in view", function()
+            vim.api.nvim_win_set_cursor(winid, { 16, 0 })
+            writer:_own_change(function() end)
+            track(20, 24)
+
+            writer:hold_tool_call("h")
+
+            assert.equal(16, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("after release_hold, follows the stream", function()
+            track(20, 24)
+            writer:hold_tool_call("h")
+
+            writer:release_hold()
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(32, topline())
+        end)
+
+        it("a hold with no rows yet follows, then places the block", function()
+            writer:hold_tool_call("h")
+            assert.equal(32, topline())
+
+            track(20, 24)
+            writer:_schedule_follow()
+
+            assert.equal(14, topline())
+        end)
+
+        it("follow_in takes a window out of user control and places it", function()
+            writer._user_controlled[winid] = true
+            track(20, 24)
+            writer:hold_tool_call("h")
+
+            writer:follow_in(winid)
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(14, topline())
+        end)
+    end)
+
     describe("prose anchor pin", function()
         it("sets anchor on first prose chunk", function()
             writer:write_message_chunk(
@@ -2064,7 +2340,7 @@ describe("agentic.ui.MessageWriter", function()
                 vim.fn.winrestview({ topline = 1 })
             end)
 
-            BufHelpers.scroll_down(winid, 10)
+            BufHelpers.scroll_down(winid, 1, 10)
             -- Force a redraw — vim re-corrects topline if cursor is off
             -- screen, which the parked cursor inside the viewport prevents.
             vim.cmd("redraw")
@@ -2089,7 +2365,7 @@ describe("agentic.ui.MessageWriter", function()
                 vim.fn.winrestview({ topline = 25 })
             end)
 
-            BufHelpers.scroll_down(winid, 10)
+            BufHelpers.scroll_down(winid, 1, 10)
 
             local info = vim.fn.getwininfo(winid)[1]
             assert.equal(25, info.topline)
@@ -2112,7 +2388,7 @@ describe("agentic.ui.MessageWriter", function()
             end
             vim.api.nvim_buf_set_text(bufnr, 19, 0, 19, -1, more)
 
-            local held = BufHelpers.scroll_down(winid, 1)
+            local held = BufHelpers.scroll_down(winid, 1, 1)
 
             assert.is_true(held)
             assert.is_true(vim.api.nvim_win_get_cursor(winid)[1] <= 20)
@@ -2127,7 +2403,7 @@ describe("agentic.ui.MessageWriter", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
             vim.api.nvim_win_set_cursor(winid, { 3, 2 })
 
-            BufHelpers.scroll_down(winid, 1)
+            BufHelpers.scroll_down(winid, 1, 1)
 
             assert.same({ 3, 2 }, vim.api.nvim_win_get_cursor(winid))
         end)
@@ -2140,7 +2416,7 @@ describe("agentic.ui.MessageWriter", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
             vim.api.nvim_win_set_cursor(winid, { 3, 0 })
 
-            local held = BufHelpers.scroll_down(winid, 1)
+            local held = BufHelpers.scroll_down(winid, 1, 1)
 
             assert.is_false(held)
             assert.equal(10, vim.api.nvim_win_get_cursor(winid)[1])
@@ -2157,7 +2433,7 @@ describe("agentic.ui.MessageWriter", function()
                 vim.fn.winrestview({ topline = 1 })
             end)
 
-            BufHelpers.scroll_down(winid, nil)
+            BufHelpers.scroll_down(winid, 1, nil)
 
             local info = vim.fn.getwininfo(winid)[1]
             -- With 50 lines and a 20-line window, natural bottom-scroll puts
@@ -2187,7 +2463,7 @@ describe("agentic.ui.MessageWriter", function()
             end)
             vim.cmd("redraw")
 
-            BufHelpers.scroll_down(winid, nil)
+            BufHelpers.scroll_down(winid, 1, nil)
 
             local info = vim.fn.getwininfo(winid)[1]
             assert.equal(6, info.topline)
@@ -2220,7 +2496,7 @@ describe("agentic.ui.MessageWriter", function()
                 end)
                 vim.cmd("redraw")
 
-                BufHelpers.scroll_down(winid, nil)
+                BufHelpers.scroll_down(winid, 1, nil)
                 vim.cmd("redraw")
 
                 local info = vim.fn.getwininfo(winid)[1]

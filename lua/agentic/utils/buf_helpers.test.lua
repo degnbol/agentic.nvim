@@ -368,4 +368,90 @@ describe("BufHelpers", function()
             assert.equal("newer", local_map().desc)
         end)
     end)
+
+    describe("show_rows", function()
+        --- @type integer
+        local bufnr
+        --- @type integer
+        local winid
+
+        --- @return integer topline
+        local function topline()
+            vim.cmd("redraw")
+            return vim.fn.line("w0", winid)
+        end
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            winid = vim.api.nvim_open_win(bufnr, true, {
+                relative = "editor",
+                width = 40,
+                height = 20,
+                row = 0,
+                col = 0,
+            })
+            vim.wo[winid].scrolloff = 0
+        end)
+
+        after_each(function()
+            vim.api.nvim_win_close(winid, true)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        -- Room = 20 rows less a padding of 1.
+
+        it("centres rows that fit", function()
+            BufHelpers.show_rows(winid, 1, 20, 24)
+
+            -- 7 rows above the 5, half of the 14 to spare.
+            assert.equal(14, topline())
+        end)
+
+        it("shows no empty rows past the end of the buffer", function()
+            BufHelpers.show_rows(winid, 1, 45, 49)
+
+            assert.equal(32, topline())
+        end)
+
+        it("starts rows taller than the window at the top", function()
+            vim.wo[winid].scrolloff = 4
+
+            BufHelpers.show_rows(winid, 1, 10, 40)
+
+            assert.equal(11, topline())
+            assert.equal(15, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("may scroll up", function()
+            vim.api.nvim_win_set_cursor(winid, { 50, 0 })
+
+            BufHelpers.show_rows(winid, 1, 0, 2)
+
+            assert.equal(1, topline())
+        end)
+
+        it("counts a closed fold as one row", function()
+            vim.wo[winid].foldmethod = "manual"
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("2,30fold")
+            end)
+
+            BufHelpers.show_rows(winid, 1, 35, 39)
+
+            assert.equal(1, topline())
+        end)
+
+        it("leaves a cursor that stays in view", function()
+            vim.api.nvim_win_set_cursor(winid, { 16, 0 })
+
+            BufHelpers.show_rows(winid, 1, 20, 24)
+
+            assert.equal(16, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+    end)
 end)

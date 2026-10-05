@@ -592,12 +592,201 @@ _G.request()
         assert.equal(vim.NIL, child.lua_get("_G.badge()"))
     end)
 
-    it("a prompt whose transcript has no window opens its tab", function()
-        child.lua([[_G.request()]])
+    describe("whose transcript has no window", function()
+        before_each(function()
+            child.lua([[
+_G.float = _G.s.permission_manager.permission_float
+_G.float_win = function()
+    return vim.api.nvim_win_get_config(_G.float._winid).win
+end
+_G.chat_win = function()
+    return _G.s.widget:panel_win("chat")
+end
+_G.transcript_win = function()
+    return vim.fn.win_findbuf(_G.transcript("c1").bufnr)[1]
+end
+_G.title = function()
+    local title = vim.api.nvim_win_get_config(_G.float._winid).title
+    return title and title[1][1]
+end
+_G.name_tail = function()
+    return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(_G.transcript("c1").bufnr), ":t")
+end
+]])
+        end)
 
-        assert.same(
-            { child.lua_get([[_G.transcript("c1").bufnr]]) },
-            child.lua_get("_G.tab_bufs(vim.api.nvim_list_tabpages()[2])")
-        )
+        --- Ask, press `lhs` on the chat from the current window, and let the
+        --- layout settle.
+        --- @param lhs string
+        local function request_and_press(lhs)
+            child.lua([[_G.request()]])
+            child.flush()
+            child.lua(
+                [[_G.press(_G.s.widget.buf_nrs.chat, ...)]],
+                { lhs }
+            )
+            child.flush()
+        end
+
+        it("shows on the chat, which holds the subagent's block", function()
+            child.lua([[_G.request()]])
+            child.flush()
+
+            assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
+            assert.equal(child.lua_get("_G.chat_win()"), child.lua_get("_G.float_win()"))
+            assert.equal(child.lua_get("_G.name_tail()"), child.lua_get("_G.title()"))
+            assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
+            assert.equal(
+                "c1",
+                child.lua_get("_G.s.message_writer._held_tool_call_id")
+            )
+        end)
+
+        it("\\v opens a vsplit and the prompt moves there, pending", function()
+            request_and_press("<localLeader>v")
+
+            assert.equal(1, child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)"))
+            assert.is_true(child.lua_get("_G.s.permission_manager.current_request ~= nil"))
+            assert.equal(
+                child.lua_get("_G.transcript_win()"),
+                child.lua_get("_G.float_win()")
+            )
+            assert.equal(vim.NIL, child.lua_get("_G.title()"))
+            assert.equal(
+                "",
+                child.lua_get([[vim.api.nvim_buf_call(_G.s.widget.buf_nrs.chat, function()
+    return vim.fn.maparg("<localLeader>v", "n")
+end)]])
+            )
+            assert.equal(vim.NIL, child.lua_get("_G.s.message_writer._held_tool_call_id"))
+        end)
+
+        it("with the transcript wiped, \\v opens the remade one", function()
+            child.lua([[
+_G.request()
+_G.old = _G.transcript("c1").bufnr
+vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
+]])
+            child.flush()
+            child.lua([[_G.press(_G.s.widget.buf_nrs.chat, "<localLeader>v")]])
+            child.flush()
+
+            assert.is_true(child.lua_get("_G.transcript('c1').bufnr ~= _G.old"))
+            assert.equal(1, child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)"))
+            assert.equal(
+                child.lua_get("_G.transcript_win()"),
+                child.lua_get("_G.float_win()")
+            )
+            assert.equal(
+                "t9",
+                child.lua_get("_G.transcript('c1').writer._held_tool_call_id")
+            )
+        end)
+
+        it("\\s opens a split in the current tab", function()
+            request_and_press("<localLeader>s")
+
+            assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
+            assert.equal(1, child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)"))
+        end)
+
+        it("\\t opens a last tab and enters it", function()
+            request_and_press("<localLeader>t")
+
+            assert.equal(2, child.lua_get("#vim.api.nvim_list_tabpages()"))
+            assert.equal(2, child.lua_get("vim.api.nvim_tabpage_get_number(0)"))
+            assert.equal(
+                child.lua_get("_G.transcript_win()"),
+                child.lua_get("vim.api.nvim_get_current_win()")
+            )
+        end)
+
+        it("\\e in the chat window replaces it", function()
+            child.lua([[vim.api.nvim_set_current_win(_G.chat_win())]])
+            local chat_win = child.lua_get("_G.chat_win()")
+
+            request_and_press("<localLeader>e")
+
+            assert.equal(chat_win, child.lua_get("_G.transcript_win()"))
+            assert.equal(chat_win, child.lua_get("_G.float_win()"))
+            assert.equal(vim.NIL, child.lua_get("_G.title()"))
+        end)
+
+        it("\\e in the input replaces the chat window and focuses it", function()
+            local chat_win = child.lua_get("_G.chat_win()")
+            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:panel_win("input"))]])
+
+            request_and_press("<localLeader>e")
+
+            assert.equal(chat_win, child.lua_get("_G.transcript_win()"))
+            assert.equal(chat_win, child.lua_get("vim.api.nvim_get_current_win()"))
+            assert.equal(vim.NIL, child.lua_get("_G.title()"))
+        end)
+
+        it("hidden with the chat in another tab, badges the chat", function()
+            child.lua([[
+_G.badge = function()
+    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.chat).badge
+end
+vim.cmd("tabnew")
+_G.request()
+]])
+            child.flush()
+
+            assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
+            assert.equal("[?]", child.lua_get("_G.badge()"))
+            assert.is_true(child.lua_get(
+                "_G.notices[#_G.notices]:find(_G.name_tail(), 1, true) ~= nil"
+            ))
+
+            child.lua([[_G.s.permission_manager:_complete_request("allow")]])
+            assert.equal(vim.NIL, child.lua_get("_G.badge()"))
+        end)
+
+        it("with the widget closed, badges the chat and shows on its reopen", function()
+            child.lua([[
+_G.badge = function()
+    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.chat).badge
+end
+require("agentic").toggle()
+_G.request()
+]])
+            child.flush()
+            assert.equal("[?]", child.lua_get("_G.badge()"))
+
+            child.lua([[require("agentic").toggle()]])
+            child.flush()
+
+            assert.equal(child.lua_get("_G.chat_win()"), child.lua_get("_G.float_win()"))
+        end)
+    end)
+
+    it("after \\v, the transcript's prompting block is placed in view", function()
+        child.lua([[
+local writer = _G.transcript("c1").writer
+for i = 1, 60 do
+    _G.chunk("c1", "line " .. i .. "\n\n")
+end
+writer:write_tool_call_block({
+    tool_call_id = "t9", status = "pending", kind = "execute",
+    argument = "ls", body = { "output" },
+})
+for i = 1, 60 do
+    _G.chunk("c1", "after " .. i .. "\n\n")
+end
+_G.request()
+]])
+        child.flush()
+        child.lua([[_G.press(_G.s.widget.buf_nrs.chat, "<localLeader>v")]])
+        child.flush()
+
+        assert.is_true(child.lua_get([[(function()
+    local transcript = _G.transcript("c1")
+    local writer = transcript.writer
+    local s = writer:_block_rows(writer.tool_call_blocks.t9)
+    local win = vim.fn.win_findbuf(transcript.bufnr)[1]
+    local info = vim.fn.getwininfo(win)[1]
+    return s ~= nil and info.topline <= s + 1 and info.botline >= s + 1
+end)()]]))
     end)
 end)
