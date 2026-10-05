@@ -388,37 +388,68 @@ describe("ToolCallRenderer", function()
             return (Renderer.prepare_block_lines(block, wrap_width or 80))[1]
         end
 
-        it("names a subagent's mode, marked until confirmed", function()
-            --- @param subagent agentic.ui.MessageWriter.SubagentInfo
-            --- @return string heading
-            local function subagent_heading(subagent)
+        describe("subagent block", function()
+            --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
+            --- @param body string[]|nil
+            --- @return string[] lines
+            local function subagent_lines(subagent, body)
                 --- @type agentic.ui.MessageWriter.ToolCallBlock
                 local block = {
-                    tool_call_id = "task-heading",
+                    tool_call_id = "a1b2c3d4e5",
                     status = "in_progress",
                     kind = "SubAgent",
-                    argument = "Explore: map subagent UI",
+                    argument = "agentic://1/subagent/map-UI-c3d4e5",
                     subagent = subagent,
+                    body = body,
                 }
-                return (Renderer.prepare_block_lines(block, 80))[1]
+                return (Renderer.prepare_block_lines(block, 80))
             end
 
-            assert.equal(
-                "### Explore: map subagent UI (Background?)",
-                subagent_heading({
-                    label = "map subagent UI",
+            it("heads with the heading, then the transcript name", function()
+                local lines = subagent_lines({
+                    label = "map UI",
                     mode = "background",
                     confirmed = false,
-                })
-            )
-            assert.equal(
-                "### Explore: map subagent UI (Blocking)",
-                subagent_heading({
-                    label = "map subagent UI",
+                }, { "Find the files." })
+
+                assert.equal("### map UI (Background?)", lines[1])
+                assert.equal("agentic://1/subagent/map-UI-c3d4e5", lines[2])
+            end)
+
+            it("folds a one-line prompt", function()
+                local lines = subagent_lines({
+                    label = "map UI",
                     mode = "blocking",
                     confirmed = true,
-                })
-            )
+                }, { "Find the files." })
+
+                assert.equal("```markdown-fold", lines[3])
+                assert.equal("Find the files.", lines[4])
+                assert.equal("```", lines[5])
+            end)
+
+            it("prefixes the heading with the agent type once known", function()
+                assert.equal(
+                    "Explore · map UI (Blocking)",
+                    Renderer.subagent_heading({
+                        label = "map UI",
+                        agent_type = "Explore",
+                        mode = "blocking",
+                        confirmed = true,
+                    })
+                )
+                assert.equal("Agent", Renderer.subagent_heading(nil))
+            end)
+
+            it("renders without a subagent as before", function()
+                local lines = subagent_lines(nil, { "Find the files." })
+
+                assert.equal(
+                    "### agentic://1/subagent/map-UI-c3d4e5",
+                    lines[1]
+                )
+                assert.equal("```markdown", lines[2])
+            end)
         end)
 
         it("leaves a name markdown cannot reinterpret unguarded", function()

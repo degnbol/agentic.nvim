@@ -36,7 +36,6 @@ _G.s = require("agentic.session_registry").bound_session(tab)
 _G.s.session_id = "sid-1"
 _G.s.chat_history.session_id = "sid-1"
 _G.chat = _G.s.widget.buf_nrs.chat
-_G.sub = _G.s.widget.buf_nrs.subagent
 -- What ACP notifications reach.
 _G.h = _G.s:_build_handlers()
 _G.user_msg = function(text)
@@ -467,25 +466,26 @@ vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)
         end)
     end)
 
-    describe("subagent buffer", function()
-        --- Open top-level Task `id` in `_G.s`.
+    describe("subagent transcript", function()
+        --- Spawn subagent `id` in `_G.s`, its transcript `_G.sub`.
         --- @param id string
         local function open_task(id)
             child.lua(
                 [[
-_G.h.on_tool_call({
-    tool_call_id = ...,
-    kind = "SubAgent",
-    status = "in_progress",
-    argument = "Explore: map",
-    subagent = { label = "map", mode = "blocking", confirmed = false },
-})
+local id = ...
+_G.h.on_session_update({
+    sessionUpdate = "subagent_spawned",
+    subagentSessionId = id,
+    name = "map",
+    task = "Map it.",
+}, "sid-1")
+_G.sub = _G.s._agents[id].transcript.bufnr
 ]],
                 { id }
             )
         end
 
-        --- Start subagent tool call `id` under Task `parent` in `_G.s`.
+        --- Start tool call `id` in subagent `parent`'s child session.
         --- @param id string
         --- @param parent string
         local function subagent_call(id, parent)
@@ -494,18 +494,18 @@ _G.h.on_tool_call({
 local id, parent = ...
 _G.h.on_tool_call({
     tool_call_id = id,
-    parent_tool_use_id = parent,
+    parent_tool_use_id = "toolu-" .. parent,
     kind = "execute",
     status = "pending",
     argument = "ls " .. id,
     body = { "a", "b" },
-})
+}, parent)
 ]],
                 { id, parent }
             )
         end
 
-        --- Stream subagent prose under Task `parent` in `_G.s`.
+        --- Stream prose in subagent `parent`'s child session.
         --- @param text string
         --- @param parent string
         local function subagent_chunk(text, parent)
@@ -515,8 +515,8 @@ local text, parent = ...
 _G.h.on_session_update({
     sessionUpdate = "agent_message_chunk",
     content = { type = "text", text = text },
-    _meta = { claudeCode = { parentToolUseId = parent } },
-})
+    _meta = { claudeCode = { parentToolUseId = "toolu-" .. parent } },
+}, parent)
 ]],
                 { text, parent }
             )
@@ -694,7 +694,9 @@ end)()]]))
             local headings = vim.tbl_filter(function(line)
                 return vim.startswith(line, "## ")
             end, sub_lines())
-            assert.same({ "## map (Blocking?)" }, headings)
+            assert.equal(1, #headings)
+            assert.truthy(headings[1]:find("## map (", 1, true))
+            assert.equal(1, select(2, table.concat(sub_lines(), "\n"):gsub("first", "")))
         end)
 
         it("records a subagent edit that completes after :e!", function()
@@ -703,12 +705,12 @@ end)()]]))
             child.lua([[
 _G.s:_on_tool_call({
     tool_call_id = "e-1",
-    parent_tool_use_id = "task-1",
+    parent_tool_use_id = "toolu-task-1",
     kind = "edit",
     status = "pending",
     argument = vim.fn.tempname(),
     diff = { old = { "a" }, new = { "b" } },
-})
+}, "task-1")
 ]])
             in_subagent("edit!")
 
@@ -722,7 +724,7 @@ return _G.s._checktime_scheduled
             assert.equal(1, child.lua_get("_G.s.file_activity:count()"))
         end)
 
-        it(":e! leaves another tabpage's subagent buffer alone", function()
+        it(":e! leaves another tabpage's transcript alone", function()
             open_session()
             open_task("task-1")
             subagent_call("c-1", "task-1")
@@ -732,21 +734,22 @@ return _G.s._checktime_scheduled
             open_task("task-1")
             subagent_call("c-2", "task-1")
             local lines = sub_lines()
-            child.lua(
-                [=[_G.second_tracker = _G.s.subagent_writer.tool_call_blocks["c-2"]]=]
-            )
+            child.lua([=[
+_G.writer_of = function(s) return s._agents["task-1"].transcript.writer end
+_G.second_tracker = _G.writer_of(_G.s).tool_call_blocks["c-2"]
+]=])
 
             in_subagent("edit!", "_G.first_sub")
 
             assert.same(lines, sub_lines())
             assert.is_true(
                 child.lua_get(
-                    [[_G.s.subagent_writer.tool_call_blocks["c-2"] == _G.second_tracker]]
+                    [[_G.writer_of(_G.s).tool_call_blocks["c-2"] == _G.second_tracker]]
                 )
             )
             assert.is_true(
                 child.lua_get(
-                    [[_G.first.subagent_writer.tool_call_blocks["c-1"] ~= nil]]
+                    [[_G.writer_of(_G.first).tool_call_blocks["c-1"] ~= nil]]
                 )
             )
         end)

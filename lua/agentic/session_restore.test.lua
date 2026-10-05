@@ -834,144 +834,26 @@ describe("SessionRestore", function()
         )
     end)
 
-    describe("top_level_tasks", function()
-        it("maps a nested Task's id to its top-level Task", function()
+    describe("messages_for_task", function()
+        it("keeps one agent's messages, in stored order", function()
+            local messages = SessionRestore.messages_for_task({
+                { type = "agent", text = "a1", parent_tool_use_id = "a" },
+                { type = "agent", text = "b1", parent_tool_use_id = "b" },
+                {
+                    type = "tool_call",
+                    tool_call_id = "a-tool",
+                    kind = "read",
+                    status = "completed",
+                    parent_tool_use_id = "a",
+                },
+            }, "a")
+
             assert.same(
-                { top = "top", nested = "top", other = "other" },
-                SessionRestore.top_level_tasks({
-                    {
-                        type = "tool_call",
-                        tool_call_id = "nested",
-                        kind = "SubAgent",
-                        status = "completed",
-                        parent_tool_use_id = "top",
-                    },
-                    { type = "agent", text = "x", parent_tool_use_id = "other" },
-                    {
-                        type = "tool_call",
-                        tool_call_id = "deep-tool",
-                        kind = "read",
-                        status = "completed",
-                        parent_tool_use_id = "nested",
-                    },
-                })
+                { "a1", "a-tool" },
+                vim.tbl_map(function(msg)
+                    return msg.text or msg.tool_call_id
+                end, messages)
             )
-        end)
-    end)
-
-    describe("replay_subagent_messages", function()
-        --- A writer that logs headings, messages and tool calls, in order, one
-        --- string each.
-        --- @return table writer
-        --- @return string[] log
-        local function recording_writer()
-            local log = {}
-            local writer = {
-                write_subagent_heading = function(_, text)
-                    table.insert(log, "heading " .. text)
-                end,
-                write_message = function(_, message)
-                    table.insert(log, "agent " .. message.content.text)
-                end,
-                write_message_chunk = function() end,
-                write_user_prompt = function() end,
-                write_tool_call_block = function(_, block)
-                    table.insert(log, "tool " .. block.tool_call_id)
-                end,
-                flush_thought_run = function() end,
-            }
-            return writer, log
-        end
-
-        it(
-            "replays in stored order, heading each Task before its first message",
-            function()
-                local writer, log = recording_writer()
-
-                SessionRestore.replay_subagent_messages(
-                    writer --[[@as agentic.ui.MessageWriter]],
-                    {
-                        { type = "agent", text = "b1", parent_tool_use_id = "b" },
-                        { type = "agent", text = "a1", parent_tool_use_id = "a" },
-                        {
-                            type = "tool_call",
-                            tool_call_id = "b-tool",
-                            kind = "read",
-                            status = "completed",
-                            parent_tool_use_id = "b",
-                        },
-                        { type = "agent", text = "a2", parent_tool_use_id = "a" },
-                    },
-                    {
-                        a = {
-                            label = "Alpha",
-                            mode = "blocking",
-                            confirmed = true,
-                        },
-                        b = {
-                            label = "Beta",
-                            mode = "background",
-                            confirmed = true,
-                        },
-                    }
-                )
-
-                assert.same({
-                    "heading Beta (Background)",
-                    "agent b1",
-                    "heading Alpha (Blocking)",
-                    "agent a1",
-                    "tool b-tool",
-                    "agent a2",
-                }, log)
-            end
-        )
-
-        it("gives a nested agent's messages no heading of their own", function()
-            local writer, log = recording_writer()
-
-            SessionRestore.replay_subagent_messages(
-                writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    {
-                        type = "tool_call",
-                        tool_call_id = "nested",
-                        kind = "SubAgent",
-                        status = "completed",
-                        parent_tool_use_id = "top",
-                    },
-                    {
-                        type = "tool_call",
-                        tool_call_id = "deep-tool",
-                        kind = "read",
-                        status = "completed",
-                        parent_tool_use_id = "nested",
-                    },
-                },
-                { top = { label = "Top", mode = "blocking", confirmed = true } }
-            )
-
-            assert.same({
-                "heading Top (Blocking)",
-                "tool nested",
-                "tool deep-tool",
-            }, log)
-        end)
-
-        it("heads a Task with no label as Agent", function()
-            local writer, log = recording_writer()
-
-            SessionRestore.replay_subagent_messages(
-                writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    { type = "agent", text = "x", parent_tool_use_id = "a" },
-                    { type = "agent", text = "y", parent_tool_use_id = "b" },
-                },
-                { b = { mode = "blocking", confirmed = false } }
-            )
-
-            assert.equal("heading Agent", log[1])
-            assert.equal("heading Agent (Blocking?)", log[3])
         end)
     end)
 end)

@@ -184,48 +184,116 @@ function M.tool_head(kind, raw_input, tool_name)
     return build(raw_input, tool_name)
 end
 
---- Display name of an Agent-tool subagent: its `name`, else its
---- `description`, else its `subagent_type`, else "Agent". Runs of whitespace
---- collapse to one space, since the model writes these fields and a label is
---- shown on a single line.
---- @param raw_input agentic.acp.ClaudeAgentRawInput
+--- Claude Code's config directory: `CLAUDE_CONFIG_DIR` from `env`, else from
+--- the environment, else `~/.claude`.
+--- @param env table<string, string|nil>|nil Environment the provider runs with
 --- @return string
-function M.subagent_label(raw_input)
-    local label = nonempty(raw_input, "name")
-        or nonempty(raw_input, "description")
-        or nonempty(raw_input, "subagent_type")
-        or "Agent"
-    return (label:gsub("%s+", " "))
+function M.config_dir(env)
+    return (env and env.CLAUDE_CONFIG_DIR)
+        or vim.env.CLAUDE_CONFIG_DIR
+        or vim.fs.normalize("~/.claude")
 end
 
---- The mode an Agent-tool subagent will run in, predicted from its input. Only
---- an explicit false predicts blocking: the tool defaults to background
---- (`run_in_background` in the SDK's `sdk-tools.d.ts`). A PreToolUse hook can
---- still rewrite the input before the tool runs.
---- @param raw_input agentic.acp.ClaudeAgentRawInput
---- @param force_background boolean Whether every subagent is rewritten to run in the background
---- @return agentic.ui.MessageWriter.SubagentMode
-function M.predicted_subagent_mode(raw_input, force_background)
-    if raw_input.run_in_background == false and not force_background then
-        return "blocking"
+--- The directory Claude Code keeps a session's side files in,
+--- `<config_dir>/projects/<project>/<session_id>`, whichever project it is
+--- under.
+--- @param config_dir string
+--- @param session_id string
+--- @return string|nil path Nil until the session has written a side file, such as a subagent's
+function M.find_session_dir(config_dir, session_id)
+    for _, path in
+        ipairs(vim.fn.glob(config_dir .. "/projects/*/" .. session_id, false, true))
+    do
+        if vim.fn.isdirectory(path) == 1 then
+            return path
+        end
     end
-    return "background"
+    return nil
 end
 
---- @type table<string, agentic.ui.MessageWriter.SubagentMode>
-local MODE_OF_STATUS = {
-    completed = "blocking",
-    async_launched = "background",
-    remote_launched = "background",
-}
+--- @class agentic.acp.SubagentMeta
+--- @field agent_type string Subagent type the agent was spawned as
+--- @field request_shape string `background` or `foreground`, as the agent ran
+--- @field tool_use_id string Id of the Agent tool use that spawned the agent
 
---- The mode an Agent-tool subagent ran in, from the `status` of the tool's
---- result: a blocking run returns when the agent is done, a background one at
---- launch. Nil for an unknown status.
---- @param status string
---- @return agentic.ui.MessageWriter.SubagentMode|nil
-function M.subagent_mode_from_status(status)
-    return MODE_OF_STATUS[status]
+--- What the SDK records about a subagent at spawn, in
+--- `<session_dir>/subagents/agent-<agent_id>.meta.json`. The format is
+--- undocumented.
+--- @param session_dir string
+--- @param agent_id string
+--- @return agentic.acp.SubagentMeta|nil meta Nil when the file is missing or malformed
+function M.subagent_meta(session_dir, agent_id)
+    local path = vim.fs.joinpath(
+        session_dir,
+        "subagents",
+        "agent-" .. agent_id .. ".meta.json"
+    )
+    local file = io.open(path, "r")
+    if not file then
+        return nil
+    end
+    local content = file:read("*a")
+    file:close()
+    local ok, decoded = pcall(vim.json.decode, content)
+    if
+        not ok
+        or type(decoded) ~= "table"
+        or type(decoded.agentType) ~= "string"
+        or type(decoded.requestShape) ~= "string"
+        or type(decoded.toolUseId) ~= "string"
+    then
+        return nil
+    end
+    --- @type agentic.acp.SubagentMeta
+    local meta = {
+        agent_type = decoded.agentType,
+        request_shape = decoded.requestShape,
+        tool_use_id = decoded.toolUseId,
+    }
+    return meta
+end
+
+--- Split a child session id into the agent id and the generation. The bridge
+--- names a resumed agent's later generations `<agent id>:generation:<N>`.
+--- @param child_id string
+--- @return string agent_id
+--- @return integer generation 1 for an id without the suffix
+function M.agent_id(child_id)
+    local id, generation = child_id:match("^(.*):generation:(%d+)$")
+    if not id then
+        return child_id, 1
+    end
+    return id, tonumber(generation) --[[@as integer]]
+end
+
+--- Instruction for the main agent to stop a background subagent with its
+--- TaskStop tool. Values are JSON-quoted, so quotes and newlines in them cannot
+--- break the sentence.
+--- @param agent_id string Id the agent was launched under
+--- @param label string Display name of the agent
+--- @return string
+function M.task_stop_instruction(agent_id, label)
+    return string.format(
+        "Call TaskStop with task_id %s to stop the background subagent %s. Do nothing else.",
+        vim.json.encode(agent_id),
+        vim.json.encode(label)
+    )
+end
+
+--- Instruction for the main agent to pass a message to a background subagent
+--- with its SendMessage tool. Values are JSON-quoted, so quotes and newlines in
+--- them cannot break the sentence.
+--- @param agent_id string Id the agent was launched under
+--- @param label string Display name of the agent
+--- @param message string Text for the agent to receive
+--- @return string
+function M.send_message_instruction(agent_id, label, message)
+    return string.format(
+        "Call SendMessage with to: %s and message: %s, to message the background subagent %s. Send the message verbatim and do nothing else.",
+        vim.json.encode(agent_id),
+        vim.json.encode(message),
+        vim.json.encode(label)
+    )
 end
 
 --- Rewrite a leading "grep " in a synthesised search command to "rg ".

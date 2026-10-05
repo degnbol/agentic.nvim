@@ -1,5 +1,6 @@
 --- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, param-type-mismatch, return-type-mismatch, need-check-nil
 local assert = require("tests.helpers.assert")
+local spy = require("tests.helpers.spy")
 
 describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     local ClaudeAgentACPAdapter
@@ -15,7 +16,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     --- @return agentic.acp.ACPClient
     local function make_adapter(session_roots)
         return setmetatable(
-            { _session_roots = session_roots or {} },
+            { _session_roots = session_roots or {}, _children = {} },
             { __index = ClaudeAgentACPAdapter }
         )
     end
@@ -252,6 +253,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local updates = {}
             local adapter = setmetatable({
                 _session_roots = {},
+                _children = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
                         on_tool_call_update = function(message)
@@ -446,6 +448,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local calls = {}
             local adapter = setmetatable({
                 _session_roots = {},
+                _children = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
                         on_tool_call = function(message)
@@ -973,205 +976,50 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
-    describe("subagent identity", function()
-        local Config
-        local original_force_background
+    describe("the Agent tool's leaked result", function()
+        local Logger = require("agentic.utils.logger")
+        local notify_stub
 
         before_each(function()
-            Config = require("agentic.config")
-            original_force_background = Config.subagents.force_background
-            Config.subagents.force_background = false
+            notify_stub = spy.stub(Logger, "notify")
         end)
 
         after_each(function()
-            Config.subagents.force_background = original_force_background
+            notify_stub:revert()
         end)
 
-        --- @param rawInput table
-        --- @return agentic.ui.MessageWriter.SubagentInfo|nil
-        local function subagent_of(rawInput)
-            return make_adapter():__build_tool_call_update({
-                toolCallId = "tc-task",
-                kind = "think",
-                status = "in_progress",
-                rawInput = rawInput,
-            }).subagent
-        end
+        -- Native subagent sessions suppress the Agent call, except its
+        -- PostToolUse update: no status, no rawInput.
+        it("drops it without a warning", function()
+            local updates = {}
+            local adapter = setmetatable({
+                _session_roots = {},
+                _children = {},
+                __with_subscriber = function(_self, _session_id, fn)
+                    fn({
+                        on_tool_call_update = function(message)
+                            table.insert(updates, message)
+                        end,
+                    })
+                end,
+            }, { __index = ClaudeAgentACPAdapter })
 
-        it("recomputes label and mode as the input streams in", function()
-            local input = { subagent_type = "Explore" }
-            assert.same(
-                { label = "Explore", mode = "background", confirmed = false },
-                subagent_of(input)
-            )
-
-            input.description = "map subagent UI"
-            assert.equal("map subagent UI", subagent_of(input).label)
-
-            input.run_in_background = false
-            assert.equal("blocking", subagent_of(input).mode)
-
-            input.name = "mapper"
-            assert.equal("mapper", subagent_of(input).label)
-        end)
-
-        it(
-            "predicts background whatever the input with force_background",
-            function()
-                Config.subagents.force_background = true
-
-                local subagent = subagent_of({
-                    subagent_type = "Explore",
-                    run_in_background = false,
-                })
-
-                assert.equal("background", subagent.mode)
-            end
-        )
-
-        it("keeps a label on one line", function()
-            assert.equal(
-                "map the subagent UI",
-                subagent_of({
-                    subagent_type = "Explore",
-                    description = "map the\n  subagent UI",
-                }).label
-            )
-        end)
-
-        it("leaves the head without the mode", function()
-            local msg = make_adapter():__build_tool_call_update({
-                toolCallId = "tc-task",
-                kind = "think",
-                status = "in_progress",
-                rawInput = {
-                    subagent_type = "Explore",
-                    description = "map subagent UI",
-                    run_in_background = true,
+            adapter:__handle_tool_call_update("s-1", {
+                sessionUpdate = "tool_call_update",
+                toolCallId = "toolu_agent",
+                _meta = {
+                    claudeCode = {
+                        toolName = "Agent",
+                        toolResponse = {
+                            status = "async_launched",
+                            agentId = "a-1",
+                        },
+                    },
                 },
             })
 
-            assert.equal("Explore: map subagent UI", msg.argument)
-        end)
-
-        describe("the Agent tool's result", function()
-            --- @return agentic.acp.ACPClient adapter
-            --- @return agentic.ui.MessageWriter.ToolCallBase[] updates
-            local function make_capturing_adapter()
-                --- @type agentic.ui.MessageWriter.ToolCallBase[]
-                local updates = {}
-                local adapter = setmetatable({
-                    _session_roots = {},
-                    __with_subscriber = function(_self, _session_id, fn)
-                        fn({
-                            on_tool_call_update = function(message)
-                                table.insert(updates, message)
-                            end,
-                        })
-                    end,
-                }, { __index = ClaudeAgentACPAdapter })
-                return adapter, updates
-            end
-
-            --- The PostToolUse notification: no status, no rawInput.
-            --- @param tool_name string
-            --- @param response table
-            --- @return agentic.acp.ClaudeAgentToolCallUpdate
-            local function response_update(tool_name, response)
-                return {
-                    sessionUpdate = "tool_call_update",
-                    toolCallId = "tc-task",
-                    _meta = {
-                        claudeCode = {
-                            toolName = tool_name,
-                            toolResponse = response,
-                        },
-                    },
-                }
-            end
-
-            it("confirms a background launch with its agent id", function()
-                local adapter, updates = make_capturing_adapter()
-
-                adapter:__handle_tool_call_update(
-                    "s-1",
-                    response_update(
-                        "Agent",
-                        { status = "async_launched", agentId = "a-1" }
-                    )
-                )
-
-                assert.equal(1, #updates)
-                assert.is_nil(updates[1].status)
-                assert.same(
-                    { mode = "background", confirmed = true, agent_id = "a-1" },
-                    updates[1].subagent
-                )
-            end)
-
-            it("confirms a blocking run from a completed result", function()
-                local adapter, updates = make_capturing_adapter()
-
-                adapter:__handle_tool_call_update(
-                    "s-1",
-                    response_update("Task", { status = "completed" })
-                )
-
-                assert.same(
-                    { mode = "blocking", confirmed = true },
-                    updates[1].subagent
-                )
-            end)
-
-            it("confirms a remote launch as background", function()
-                local adapter, updates = make_capturing_adapter()
-
-                adapter:__handle_tool_call_update(
-                    "s-1",
-                    response_update(
-                        "Agent",
-                        { status = "remote_launched", taskId = "r-1" }
-                    )
-                )
-
-                assert.equal("background", updates[1].subagent.mode)
-            end)
-
-            it("drops the status-less progress heartbeat", function()
-                local adapter, updates = make_capturing_adapter()
-
-                adapter:__handle_tool_call_update(
-                    "s-1",
-                    response_update("Agent", { agentId = "a-1" })
-                )
-
-                assert.equal(0, #updates)
-            end)
-
-            it("ignores a status on another tool's response", function()
-                local adapter, updates = make_capturing_adapter()
-
-                adapter:__handle_tool_call_update(
-                    "s-1",
-                    response_update("Bash", { status = "completed" })
-                )
-
-                assert.equal(0, #updates)
-            end)
-
-            it("leaves an update with a status of its own whole", function()
-                local adapter, updates = make_capturing_adapter()
-                local update = response_update(
-                    "Agent",
-                    { status = "async_launched", agentId = "a-1" }
-                )
-                update.status = "completed"
-
-                adapter:__handle_tool_call_update("s-1", update)
-
-                assert.equal("completed", updates[1].status)
-                assert.is_nil(updates[1].subagent)
-            end)
+            assert.equal(0, #updates)
+            assert.spy(notify_stub).was.called(0)
         end)
     end)
 
@@ -1255,6 +1103,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             end
             local adapter = setmetatable({
                 _session_roots = {},
+                _children = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 subscribers = { ["s-1"] = {} },
                 __with_subscriber = function(_self, _session_id, fn)

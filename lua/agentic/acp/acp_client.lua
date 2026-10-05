@@ -74,6 +74,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field _on_ready fun(client: agentic.acp.ACPClient)
 --- @field _broadcast_stdout_text fun(self: agentic.acp.ACPClient, text: string)
 --- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
+--- @field _children table<string, string> Child session id → the subscribed root session that spawned it, directly or through other children
 --- @field _session_roots table<string, string[]> Skill-search roots per session, from the cwd and additional directories that session was opened with
 --- @field _tool_call_kinds agentic.acp.ToolCallKinds
 local ACPClient = {}
@@ -126,9 +127,11 @@ function ACPClient:new(config, on_ready)
             terminal = false,
             -- Opt into claude-agent-acp forwarding subagent (Task) assistant
             -- text/thinking as parentToolUseId-tagged notifications (bridge
-            -- filters them out for clients that don't advertise this). Routed
-            -- to the subagents window in SessionManager:_on_session_update.
+            -- filters them out for clients that don't advertise this).
             _meta = { ["subagent-transcript"] = true },
+            -- Each subagent becomes a child session with a reported end
+            -- (`subagent_spawned`, `subagent_state_update`).
+            subagents = vim.empty_dict(),
         },
         callbacks = {},
         transport = nil,
@@ -139,6 +142,7 @@ function ACPClient:new(config, on_ready)
     local client = setmetatable(instance, self) --[[@as agentic.acp.ACPClient]]
     client._on_ready = on_ready
     client._loading_sessions = {}
+    client._children = {}
     client._session_roots = {}
     client._tool_call_kinds = ToolCallKinds:new()
 
@@ -161,21 +165,50 @@ function ACPClient:unsubscribe(session_id)
     self.subscribers[session_id] = nil
     self._session_roots[session_id] = nil
     self._tool_call_kinds:forget_session(session_id)
+    for child, root in pairs(self._children) do
+        if root == session_id then
+            self._children[child] = nil
+        end
+    end
 end
 
+--- The subscribed session a session belongs to: the root that spawned a child
+--- session, else the session itself.
+--- @param session_id string
+--- @return string root_id
+function ACPClient:_root_session(session_id)
+    return self._children[session_id] or session_id
+end
+
+--- Run `callback` on the main loop with the subscriber of `session_id`'s root
+--- session. The handlers it gets pass `session_id` on to the session-update and
+--- tool-call handlers as their second argument, so the subscriber can tell a
+--- child session's updates from its own.
 --- @protected
 --- @param session_id string
 --- @param callback fun(sub: agentic.acp.ClientHandlers): nil
 function ACPClient:__with_subscriber(session_id, callback)
-    local subscriber = self.subscribers[session_id]
+    local subscriber = self.subscribers[self:_root_session(session_id)]
 
     if not subscriber then
         Logger.debug("No subscriber found for session_id: " .. session_id)
         return
     end
 
+    local handlers = setmetatable({
+        on_session_update = function(update)
+            subscriber.on_session_update(update, session_id)
+        end,
+        on_tool_call = function(tool_call)
+            subscriber.on_tool_call(tool_call, session_id)
+        end,
+        on_tool_call_update = function(tool_call_update)
+            subscriber.on_tool_call_update(tool_call_update, session_id)
+        end,
+    }, { __index = subscriber }) --[[@as agentic.acp.ClientHandlers]]
+
     vim.schedule(function()
-        local ok, err = pcall(callback, subscriber)
+        local ok, err = pcall(callback, handlers)
         if not ok then
             Logger.notify(
                 "Subscriber callback error:\n" .. tostring(err),
@@ -258,6 +291,13 @@ function ACPClient:_set_state(state)
         -- A fresh subprocess probes its identity asynchronously, so an
         -- identity must not outlive the subprocess that reported it.
         self.auth_status = nil
+        for session_id in pairs(self.subscribers) do
+            self:__with_subscriber(session_id, function(subscriber)
+                if subscriber.on_disconnect then
+                    subscriber.on_disconnect()
+                end
+            end)
+        end
     end
 end
 
@@ -480,8 +520,9 @@ end
 --- @param session_id string
 --- @param update agentic.acp.ToolCallMessage|agentic.acp.ToolCallUpdate
 function ACPClient:_apply_tool_call_kind(session_id, update)
-    if self.subscribers[session_id] then
-        self._tool_call_kinds:apply(session_id, update)
+    local root = self:_root_session(session_id)
+    if self.subscribers[root] then
+        self._tool_call_kinds:apply(root, update)
     end
 end
 
@@ -502,9 +543,16 @@ function ACPClient:__handle_session_update(params)
     end
 
     local session_update_type = update.sessionUpdate
+    local root = self:_root_session(session_id)
+
+    -- Recorded here rather than by the subscriber: the child's own updates
+    -- follow at once, and the subscriber runs a tick later.
+    if session_update_type == "subagent_spawned" and self.subscribers[root] then
+        self._children[update.subagentSessionId] = root
+    end
 
     if session_update_type == "user_message_chunk" then
-        if self._loading_sessions[session_id] then
+        if self._loading_sessions[root] then
             -- During session/load replay, the provider sends user messages
             -- that we don't have locally — forward them to the subscriber.
             self:__with_subscriber(session_id, function(subscriber)
@@ -660,7 +708,8 @@ end
 --- @param session_id string|nil
 --- @return string[] roots Empty for a session this client neither created nor loaded
 function ACPClient:__session_roots(session_id)
-    return self._session_roots[session_id] or {}
+    return session_id and self._session_roots[self:_root_session(session_id)]
+        or {}
 end
 
 --- Build the message for a tool_call. it's usually the first update received for a tool call
@@ -855,8 +904,7 @@ function ACPClient:__handle_request_permission(message_id, request)
         return
     end
 
-    local session_id = request.sessionId
-    local subscriber = self.subscribers[session_id]
+    local subscriber = self.subscribers[self:_root_session(request.sessionId)]
 
     if not subscriber then
         -- No subscriber (session already cancelled) — send cancel immediately
@@ -1193,6 +1241,7 @@ return ACPClient
 --- @field fs agentic.acp.FileSystemCapability
 --- @field terminal boolean
 --- @field _meta? { ["subagent-transcript"]?: boolean }
+--- @field subagents? table Empty object that opts into native subagent sessions, unstable in the ACP schema
 
 --- @class agentic.acp.InitializeParams
 --- @field protocolVersion number
@@ -1488,7 +1537,25 @@ return ACPClient
 --- @field title string SDK-maintained title (`/rename`'d or auto-generated)
 --- @field updatedAt? string ISO 8601 timestamp of the session file
 
+--- A subagent started as a child session of the session it arrives on.
+--- @class agentic.acp.SubagentSpawned
+--- @field sessionUpdate "subagent_spawned"
+--- @field subagentSessionId string
+--- @field name string
+--- @field task string
+--- @field prompt? string
+
+--- @alias agentic.acp.SubagentState "completed"|"failed"|"cancelled"|"disconnected"
+
+--- A child session's subagent ended.
+--- @class agentic.acp.SubagentStateUpdate
+--- @field sessionUpdate "subagent_state_update"
+--- @field subagentSessionId string
+--- @field state agentic.acp.SubagentState
+
 --- @alias agentic.acp.SessionUpdateMessage
+--- | agentic.acp.SubagentSpawned
+--- | agentic.acp.SubagentStateUpdate
 --- | agentic.acp.UserMessageChunk
 --- | agentic.acp.AgentMessageChunk
 --- | agentic.acp.AgentThoughtChunk
@@ -1528,7 +1595,7 @@ return ACPClient
 --- @field message string
 --- @field data? any
 
---- @alias agentic.acp.ClientHandlers.on_session_update fun(update: agentic.acp.SessionUpdateMessage): nil
+--- @alias agentic.acp.ClientHandlers.on_session_update fun(update: agentic.acp.SessionUpdateMessage, source_session_id: string|nil): nil
 --- @alias agentic.acp.ClientHandlers.on_request_permission fun(request: agentic.acp.RequestPermission, callback: fun(option_id: string | nil)): nil
 
 --- @class agentic.Selection
@@ -1542,9 +1609,10 @@ return ACPClient
 --- @class agentic.acp.ClientHandlers
 --- @field on_session_update agentic.acp.ClientHandlers.on_session_update
 --- @field on_request_permission agentic.acp.ClientHandlers.on_request_permission
---- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock): nil
---- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase): nil
+--- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock, source_session_id: string|nil): nil
+--- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase, source_session_id: string|nil): nil
 --- @field on_stdout_text? fun(text: string): nil Non-JSON stdout lines (e.g. local command output)
+--- @field on_disconnect? fun(): nil The provider process died or failed
 
 --- @class agentic.acp.ACPProviderConfig
 --- @field name? string Provider name

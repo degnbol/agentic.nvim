@@ -47,13 +47,20 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
 --- @field messages agentic.ui.ChatHistory.Message[]
 --- @field subagent_messages? agentic.ui.ChatHistory.SubagentMessage[] Absent from files written before subagent output was saved
+--- @field subagents? table<string, agentic.ui.ChatHistory.Subagent> Absent from files written before subagents were sessions of their own
 --- @field file_activity? agentic.ui.FileActivity.Data
+
+--- What a session records about one of its subagents beyond its main-chat
+--- block.
+--- @class agentic.ui.ChatHistory.Subagent
+--- @field task_id? string Id of the Agent tool use that spawned it, the `parent_tool_use_id` of its messages. Absent until known
 
 --- @class agentic.ui.ChatHistory
 --- @field session_id? string
 --- @field timestamp integer Unix timestamp when session was created
 --- @field messages agentic.ui.ChatHistory.Message[]
 --- @field subagent_messages agentic.ui.ChatHistory.SubagentMessage[] Kept apart from `messages`, which are what a restore sends to the provider, what the picker previews and what the chat replays
+--- @field subagents table<string, agentic.ui.ChatHistory.Subagent> Child session id -> what the session records about that subagent
 --- @field title string
 --- @field provider? agentic.UserConfig.ProviderName config key
 --- @field model? string model id
@@ -71,6 +78,7 @@ function ChatHistory:new()
         timestamp = os.time(),
         messages = {},
         subagent_messages = {},
+        subagents = {},
         title = "",
         provider = nil,
         model = nil,
@@ -131,6 +139,24 @@ end
 --- @param title string
 function ChatHistory:set_title(title)
     self.title = title
+    self.dirty = true
+end
+
+--- Record the Agent tool use that spawned a subagent, replacing any earlier
+--- record, and mark the history dirty. Messages stored under the child id,
+--- while the Task id was unknown, move to the Task id, so one key holds all
+--- of the subagent's messages.
+--- @param child_id string The subagent's child session id
+--- @param task_id string|nil Nil while unknown
+function ChatHistory:set_subagent_task(child_id, task_id)
+    self.subagents[child_id] = { task_id = task_id }
+    if task_id then
+        for _, msg in ipairs(self.subagent_messages) do
+            if msg.parent_tool_use_id == child_id then
+                msg.parent_tool_use_id = task_id
+            end
+        end
+    end
     self.dirty = true
 end
 
@@ -195,6 +221,18 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                 type = "text",
                 text = "Assistant (thinking): " .. msg.text,
             })
+        elseif msg.type == "tool_call" and msg.subagent then
+            local subagent = msg.subagent --[[@as agentic.ui.MessageWriter.SubagentInfo]]
+            table.insert(prompt, {
+                type = "text",
+                text = string.format(
+                    "Subagent %s%q: %s",
+                    subagent.agent_type and (subagent.agent_type .. " ")
+                        or "",
+                    subagent.label or "Agent",
+                    msg.status
+                ),
+            })
         elseif msg.type == "tool_call" and msg.argument then
             local tool_text = string.format(
                 "Tool call (%s): %s",
@@ -240,6 +278,7 @@ function ChatHistory:save()
         model = self.model,
         messages = self.messages,
         subagent_messages = self.subagent_messages,
+        subagents = self.subagents,
         file_activity = self.file_activity,
     }
 
@@ -291,6 +330,7 @@ function ChatHistory.read(session_id, file_path)
     instance.timestamp = parsed.timestamp
     instance.messages = parsed.messages
     instance.subagent_messages = parsed.subagent_messages or {}
+    instance.subagents = parsed.subagents or {}
     instance.title = parsed.title or ""
     instance.provider = parsed.provider
     instance.provider_version = parsed.provider_version

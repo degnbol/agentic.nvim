@@ -119,6 +119,7 @@ describe("agentic.acp.ACPClient", function()
             --- @type agentic.acp.ACPClient
             local client = setmetatable({
                 callbacks = {},
+                subscribers = {},
                 state = "ready",
             }, { __index = ACPClient })
 
@@ -137,6 +138,7 @@ describe("agentic.acp.ACPClient", function()
             --- @type agentic.acp.ACPClient
             local client = setmetatable({
                 callbacks = {},
+                subscribers = {},
                 state = "ready",
             }, { __index = ACPClient })
 
@@ -588,7 +590,10 @@ describe("agentic.acp.ACPClient", function()
         }
 
         before_each(function()
-            client = setmetatable({ callbacks = {} }, { __index = ACPClient })
+            client = setmetatable(
+                { callbacks = {}, subscribers = {} },
+                { __index = ACPClient }
+            )
             notify_stub = spy.stub(Logger, "notify")
         end)
 
@@ -711,6 +716,7 @@ describe("agentic.acp.ACPClient", function()
             return setmetatable(
                 vim.tbl_extend("force", {
                     subscribers = {},
+                    _children = {},
                     _loading_sessions = {},
                     _session_roots = {},
                     _tool_call_kinds = ToolCallKinds:new(),
@@ -799,6 +805,208 @@ describe("agentic.acp.ACPClient", function()
             })
 
             assert.same({}, client._tool_call_kinds._kinds)
+        end)
+    end)
+
+    describe("child sessions", function()
+        --- @param overrides table|nil
+        --- @return agentic.acp.ACPClient
+        local function make_client(overrides)
+            return setmetatable(
+                vim.tbl_extend("force", {
+                    subscribers = {},
+                    _children = {},
+                    _loading_sessions = {},
+                    _session_roots = {},
+                    _tool_call_kinds = ToolCallKinds:new(),
+                }, overrides or {}),
+                { __index = ACPClient }
+            )
+        end
+
+        --- @param client agentic.acp.ACPClient
+        --- @param parent string
+        --- @param child string
+        local function spawn(client, parent, child)
+            client:__handle_session_update({
+                sessionId = parent,
+                update = {
+                    sessionUpdate = "subagent_spawned",
+                    subagentSessionId = child,
+                    name = "n",
+                    task = "t",
+                },
+            })
+        end
+
+        --- @return agentic.acp.ClientHandlers handlers
+        --- @return table[] calls `{ method, payload, source }` per call
+        local function recording_handlers()
+            local calls = {}
+            local function record(method)
+                return function(payload, source)
+                    table.insert(calls, { method, payload, source })
+                end
+            end
+            return {
+                on_session_update = record("on_session_update"),
+                on_tool_call = record("on_tool_call"),
+                on_tool_call_update = record("on_tool_call_update"),
+                on_request_permission = record("on_request_permission"),
+            },
+                calls
+        end
+
+        it("routes a child's update to the root with the raw id", function()
+            local handlers, calls = recording_handlers()
+            local client = make_client({ subscribers = { root = handlers } })
+
+            spawn(client, "root", "child")
+            client:__handle_session_update({
+                sessionId = "child",
+                update = {
+                    sessionUpdate = "agent_message_chunk",
+                    content = { type = "text", text = "hi" },
+                },
+            })
+            vim.wait(50, function()
+                return #calls == 2
+            end)
+
+            assert.equal(2, #calls)
+            assert.equal("root", calls[1][3])
+            assert.equal("subagent_spawned", calls[1][2].sessionUpdate)
+            assert.equal("child", calls[2][3])
+            assert.equal("hi", calls[2][2].content.text)
+        end)
+
+        it("routes a grandchild to the root", function()
+            local client = make_client({ subscribers = { root = {} } })
+
+            spawn(client, "root", "child")
+            spawn(client, "child", "grandchild")
+
+            assert.equal("root", client:_root_session("grandchild"))
+        end)
+
+        it("routes a child's tool calls with the raw id", function()
+            local handlers, calls = recording_handlers()
+            local client = make_client({ subscribers = { root = handlers } })
+
+            spawn(client, "root", "child")
+            client:__handle_session_update({
+                sessionId = "child",
+                update = {
+                    sessionUpdate = "tool_call",
+                    toolCallId = "t1",
+                    kind = "read",
+                    title = "Read",
+                    status = "pending",
+                },
+            })
+            vim.wait(50, function()
+                return #calls == 2
+            end)
+
+            assert.equal("on_tool_call", calls[2][1])
+            assert.equal("child", calls[2][3])
+        end)
+
+        it("hands a child's permission request to the root", function()
+            local handlers, calls = recording_handlers()
+            local client = make_client({ subscribers = { root = handlers } })
+            spawn(client, "root", "child")
+
+            client:__handle_request_permission(7, {
+                sessionId = "child",
+                toolCall = { toolCallId = "t1" },
+                options = {},
+            })
+            vim.wait(50, function()
+                return #calls == 2
+            end)
+
+            assert.equal("on_request_permission", calls[2][1])
+            assert.equal("child", calls[2][2].sessionId)
+        end)
+
+        it("resolves the root's session roots for a child", function()
+            local client = make_client({
+                subscribers = { root = {} },
+                _session_roots = { root = { "/tmp/project" } },
+            })
+
+            spawn(client, "root", "child")
+
+            assert.same({ "/tmp/project" }, client:__session_roots("child"))
+        end)
+
+        it("forwards a child's replayed user chunk while the root loads", function()
+            local handlers, calls = recording_handlers()
+            local client = make_client({
+                subscribers = { root = handlers },
+                _loading_sessions = { root = true },
+            })
+            spawn(client, "root", "child")
+
+            client:__handle_session_update({
+                sessionId = "child",
+                update = {
+                    sessionUpdate = "user_message_chunk",
+                    content = { type = "text", text = "p" },
+                },
+            })
+            vim.wait(50, function()
+                return #calls == 2
+            end)
+
+            assert.equal(2, #calls)
+        end)
+
+        it("drops a root's children with its subscriber", function()
+            local client =
+                make_client({ subscribers = { root = {}, other = {} } })
+            spawn(client, "root", "child")
+            spawn(client, "other", "other-child")
+
+            client:unsubscribe("root")
+
+            assert.same({ ["other-child"] = "other" }, client._children)
+        end)
+
+        it("records no child of an unsubscribed session", function()
+            local client = make_client()
+
+            spawn(client, "gone", "child")
+
+            assert.same({}, client._children)
+        end)
+
+        it("reports a disconnect to every subscriber", function()
+            local reached = {}
+            local client = make_client({
+                callbacks = {},
+                subscribers = {
+                    a = {
+                        on_disconnect = function()
+                            table.insert(reached, "a")
+                        end,
+                    },
+                    b = {
+                        on_disconnect = function()
+                            table.insert(reached, "b")
+                        end,
+                    },
+                },
+            })
+
+            client:_set_state("disconnected")
+            vim.wait(50, function()
+                return #reached == 2
+            end)
+
+            table.sort(reached)
+            assert.same({ "a", "b" }, reached)
         end)
     end)
 end)

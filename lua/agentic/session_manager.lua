@@ -9,8 +9,10 @@ local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
+local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Config = require("agentic.config")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
+local DiffJump = require("agentic.ui.diff_jump")
 local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
@@ -24,7 +26,6 @@ local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local Theme = require("agentic.theme")
-local ToolCallRenderer = require("agentic.ui.tool_call_renderer")
 local TrustSafety = require("agentic.utils.trust_safety")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -60,6 +61,13 @@ function P.invoke_hook(hook_name, data)
     end
 end
 
+--- A subagent, one child session of the conversation. Its name, prompt, type
+--- and mode are on its block in the main chat.
+--- @class agentic.SessionManager.Agent
+--- @field transcript? agentic.ui.SubagentTranscript Nil once the user wiped it
+--- @field open boolean Running, as far as this session manager knows
+--- @field meta_read boolean The SDK's record of the spawn has been read
+
 --- @class agentic.SessionManager
 --- @field id integer Monotonic identity, unique for the editor's lifetime. Names the session's buffers
 --- @field session_id? string
@@ -68,15 +76,12 @@ end
 --- @field widget agentic.ui.ChatWidget
 --- @field agent agentic.acp.ACPClient
 --- @field message_writer agentic.ui.MessageWriter
---- @field subagent_writer agentic.ui.MessageWriter Writer bound to the subagents buffer; receives all subagent (Task) content
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field status_indicator agentic.ui.StatusIndicator
---- @field subagent_status_indicator agentic.ui.StatusIndicator Working indicator for the subagents buffer, shown while any top-level Task is open
---- @field _tool_call_owner table<string, string> toolCallId -> the spawning Task's id, for a block that lives in the subagents buffer
---- @field _open_tasks table<string, true> toolCallId -> true for each open top-level Task; subagent indicator shows while non-empty
---- @field _started_tasks table<string, true> toolCallId -> true for each top-level Task opened in the conversation
---- @field _headed_tasks table<string, true> toolCallId -> true for each top-level Task whose section in the subagents buffer has its heading
---- @field _subagent_win_opened_this_turn boolean Guards a single auto-open per turn so a manual close is not undone by later subagent activity
+--- @field _agents table<string, agentic.SessionManager.Agent> Subagents of the conversation by child session id
+--- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
+--- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
+--- @field _session_dir? string Claude Code's side-file directory of the session, once found
 --- @field file_list agentic.ui.FileList
 --- @field file_activity agentic.ui.FileActivity
 --- @field code_selection agentic.ui.CodeSelection
@@ -84,7 +89,7 @@ end
 --- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
---- @field _response_boundaries { main: agentic.acp.ResponseBoundary, subagent: agentic.acp.ResponseBoundary } One per destination writer, so a break separates responses adjacent in one buffer, including two subagents' responses in the subagents buffer. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
+--- @field _response_boundary agentic.acp.ResponseBoundary The chat's. Each transcript has its own. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field _hook_records agentic.HookRecordReader Tail of the CLI transcript for hook activity the ACP feed drops. Replaced alongside `chat_history` wherever the ACP session is torn down, so its path and offset cannot outlive the session they belong to
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
@@ -129,10 +134,8 @@ end
 --- @param badge string Badge text (e.g. "[done]", "[?]")
 --- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
 function SessionManager:_notify_attention(badge, skip_badge)
-    local chat_win = self.widget.win_nrs.chat
-    local is_chat_focused = chat_win
-        and vim.api.nvim_win_is_valid(chat_win)
-        and vim.api.nvim_get_current_win() == chat_win
+    local is_chat_focused = self.widget:panel_win("chat")
+        == vim.api.nvim_get_current_win()
 
     if skip_badge then
         if not is_chat_focused then
@@ -247,13 +250,13 @@ function SessionManager:_persist_history(history)
     self:_sync_modified(history)
 end
 
---- Set the `modified` flag of the chat and subagent buffers, their only
---- owner. Each is true while `history` is unsaved; the chat's also while a
---- turn is in flight. A running turn counts even once written: quitting would
---- cut it off, so `:qa`, `:wqa` and `:bd` refuse until it ends. A history a
+--- Set the `modified` flag of the chat and the transcripts, their only owner.
+--- Each is true while `history` is unsaved; the chat's also while a turn is
+--- in flight. A running turn counts even once written: quitting would cut it
+--- off, so `:qa`, `:wqa` and `:bd` refuse until it ends. A history a
 --- session/load is filling is a copy of its file, so it counts as saved. A
 --- no-op for any history but the current one, so a callback holding a
---- replaced history cannot touch the flags. Skips an unloaded subagent buffer.
+--- replaced history cannot touch the flags.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_sync_modified(history)
     if history ~= self.chat_history then
@@ -265,13 +268,10 @@ function SessionManager:_sync_modified(history)
     if chat and vim.api.nvim_buf_is_valid(chat) then
         vim.bo[chat].modified = unsaved or self._prompt_pending > 0
     end
-    local subagent = self.widget.buf_nrs.subagent
-    if
-        subagent
-        and vim.api.nvim_buf_is_valid(subagent)
-        and vim.api.nvim_buf_is_loaded(subagent)
-    then
-        vim.bo[subagent].modified = unsaved
+    for _, agent in pairs(self._agents) do
+        if agent.transcript then
+            agent.transcript:set_modified(unsaved)
+        end
     end
 end
 
@@ -348,11 +348,9 @@ function SessionManager:new()
         _transient_attempt = 0,
         _prompt_pending = 0,
         _checktime_scheduled = false,
+        _agents = {},
+        _agent_by_task = {},
         _tool_call_owner = {},
-        _open_tasks = {},
-        _started_tasks = {},
-        _headed_tasks = {},
-        _subagent_win_opened_this_turn = false,
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
         _announced_model_id = nil,
@@ -390,8 +388,7 @@ function SessionManager:new()
 
     self.chat_history = ChatHistory:new()
     self._hook_records = HookRecordReader:new()
-    self._response_boundaries =
-        { main = ResponseBoundary:new(), subagent = ResponseBoundary:new() }
+    self._response_boundary = ResponseBoundary:new()
 
     self.widget = ChatWidget:new(self.id, function(input_text, opts)
         self:on_user_submit()
@@ -404,13 +401,16 @@ function SessionManager:new()
 
     -- What the writer's BufWinEnter does for any other window. A tick later:
     -- a window opened in the same layout pass has no fold levels yet.
-    self.widget.on_window_opened = function(panel, winid)
+    self.widget.on_window_opened = function(_panel, winid)
         vim.schedule(function()
             if self.destroyed or not vim.api.nvim_win_is_valid(winid) then
                 return
             end
-            local writer = panel == "chat" and self.message_writer
-                or self.subagent_writer
+            local writer =
+                self:_writer_of_buf(vim.api.nvim_win_get_buf(winid))
+            if not writer then
+                return
+            end
             writer:flush_pending_fold_ops()
             writer:replay_folds(winid)
             self.permission_manager:refresh_float()
@@ -429,17 +429,7 @@ function SessionManager:new()
         self.widget.buf_nrs.chat,
         self.status_indicator,
         function()
-            return self.widget.win_nrs.chat
-        end
-    )
-
-    self.subagent_status_indicator =
-        StatusIndicator:new(self.widget.buf_nrs.subagent)
-    self.subagent_writer = MessageWriter:new(
-        self.widget.buf_nrs.subagent,
-        self.subagent_status_indicator,
-        function()
-            return self.widget.win_nrs.subagent
+            return self.widget:panel_win("chat")
         end
     )
 
@@ -454,6 +444,16 @@ function SessionManager:new()
     self.permission_manager.on_hidden_change = function(hidden, bufnr)
         self:_on_permission_hidden(hidden, bufnr)
     end
+    -- A subagent's prompt anchors to its transcript; with no window showing
+    -- it, the request would wait unseen and hold the queue.
+    self.permission_manager.on_present = function(bufnr)
+        if
+            bufnr ~= self.widget.buf_nrs.chat
+            and #vim.fn.win_findbuf(bufnr) == 0
+        then
+            self.widget:show_subagent(bufnr)
+        end
+    end
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
 
@@ -465,14 +465,17 @@ function SessionManager:new()
         return self.agent ~= nil and self.agent.state == "ready"
     end)
 
-    for _, bufnr in pairs(self.widget.buf_nrs) do
-        self:_bind_session_keymaps(bufnr)
+    for panel, bufnr in pairs(self.widget.buf_nrs) do
+        self:_bind_session_keymaps(
+            bufnr,
+            panel == "chat" and self.message_writer or nil
+        )
     end
 
     self.file_list = FileList:new(self.widget.buf_nrs.files, function(file_list)
         if file_list:is_empty() then
             self.widget:close_optional_window("files")
-            self.widget:move_cursor_to(self.widget.win_nrs.input)
+            self.widget:move_cursor_to("input")
         else
             self.widget:render_header("files", tostring(#file_list:get_files()))
             self.widget:show({ focus_prompt = false })
@@ -495,7 +498,7 @@ function SessionManager:new()
         function(code_selection)
             if code_selection:is_empty() then
                 self.widget:close_optional_window("code")
-                self.widget:move_cursor_to(self.widget.win_nrs.input)
+                self.widget:move_cursor_to("input")
             else
                 self.widget:render_header(
                     "code",
@@ -511,7 +514,7 @@ function SessionManager:new()
         function(diagnostics_list)
             if diagnostics_list:is_empty() then
                 self.widget:close_optional_window("diagnostics")
-                self.widget:move_cursor_to(self.widget.win_nrs.input)
+                self.widget:move_cursor_to("input")
             else
                 -- show() opens layouts but does not update the diagnostics header count
                 self.widget:render_header(
@@ -555,9 +558,13 @@ end
 --- Bind the session's own buffer-local maps (the widget binds its own) to a
 --- buffer of this session.
 --- @param bufnr integer
-function SessionManager:_bind_session_keymaps(bufnr)
+--- @param writer agentic.ui.MessageWriter|nil The writer of a chat-style buffer, whose diffs `gf` jumps into
+function SessionManager:_bind_session_keymaps(bufnr, writer)
     self.config_options:bind_keymaps(bufnr)
     self:_bind_owner_keymaps(bufnr)
+    if writer then
+        DiffJump.set_goto_file_keymaps(bufnr, writer)
+    end
 end
 
 --- Bind the widget keymaps that act on a whole session to a buffer of this
@@ -604,45 +611,49 @@ function SessionManager:_bind_owner_keymaps(bufnr)
     end, { desc = "Agentic: Restore previous session" })
 end
 
+--- Write the history to the session file. Warns and writes nothing before
+--- the session exists or while it loads.
+function SessionManager:_write_session()
+    if not self.chat_history.session_id then
+        Logger.notify(
+            "No session yet, so no session file to write",
+            vim.log.levels.WARN
+        )
+        return
+    end
+    if self._loading then
+        Logger.notify(
+            "The session is still loading from its file, so there is nothing to write",
+            vim.log.levels.WARN
+        )
+        return
+    end
+    self:_persist_history(self.chat_history)
+    -- Vim gives no reason when `:wqa` stops on a buffer its write left
+    -- modified.
+    if self._prompt_pending > 0 then
+        Logger.notify(
+            "History written; the chat stays modified until the running turn ends",
+            vim.log.levels.WARN
+        )
+    end
+end
+
 --- Tie the session to its chat buffer the way a file ties to its buffer:
---- `:w` on the chat or the subagent buffer writes the history, `:bd` ends the
---- session, `:e` re-renders the chat, the subagent buffer and the panels from
---- the session's state, and a session nobody used goes when its chat is no
---- longer shown, as a scratch buffer with `bufhidden=wipe` would.
+--- `:w` writes the history, `:bd` ends the session, `:e` re-renders the chat
+--- and the panels from the session's state, and a session nobody used goes
+--- when its chat is no longer shown, as a scratch buffer with
+--- `bufhidden=wipe` would.
 function SessionManager:_setup_buffer_lifecycle()
     local buf_nrs = self.widget.buf_nrs
     local chat = buf_nrs.chat
 
-    for _, bufnr in ipairs({ chat, buf_nrs.subagent }) do
-        vim.api.nvim_create_autocmd("BufWriteCmd", {
-            buffer = bufnr,
-            callback = function()
-                if not self.chat_history.session_id then
-                    Logger.notify(
-                        "No session yet, so no session file to write",
-                        vim.log.levels.WARN
-                    )
-                    return
-                end
-                if self._loading then
-                    Logger.notify(
-                        "The session is still loading from its file, so there is nothing to write",
-                        vim.log.levels.WARN
-                    )
-                    return
-                end
-                self:_persist_history(self.chat_history)
-                -- Vim gives no reason when `:wqa` stops on a buffer its write
-                -- left modified.
-                if self._prompt_pending > 0 then
-                    Logger.notify(
-                        "History written; the chat stays modified until the running turn ends",
-                        vim.log.levels.WARN
-                    )
-                end
-            end,
-        })
-    end
+    vim.api.nvim_create_autocmd("BufWriteCmd", {
+        buffer = chat,
+        callback = function()
+            self:_write_session()
+        end,
+    })
 
     vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
         buffer = chat,
@@ -673,9 +684,6 @@ function SessionManager:_setup_buffer_lifecycle()
     local reloads = {
         [chat] = function()
             self:_reload_chat()
-        end,
-        [buf_nrs.subagent] = function()
-            self:_reload_subagents()
         end,
         [buf_nrs.todos] = function()
             self.todo_list:redraw()
@@ -720,68 +728,159 @@ function SessionManager:_reload_chat()
     self:_sync_modified(self.chat_history)
 end
 
---- Restore the subagent buffer after a load: re-apply the buffer state an
---- unload reset, then re-render it from the in-memory history.
-function SessionManager:_reload_subagents()
-    local subagent = self.widget.buf_nrs.subagent
-    self.widget:apply_buf_state("subagent")
-    self:_bind_session_keymaps(subagent)
-    ChatBuffer.start(subagent)
-    self:_replay_subagents()
+--- The block of a subagent in the main chat, as the history holds it. Nil for
+--- output saved before subagents were sessions, which no block names.
+--- @param child_id string
+--- @return agentic.ui.ChatHistory.ToolCall|nil
+function SessionManager:_agent_block(child_id)
+    if not self.chat_history.subagents[child_id] then
+        return nil
+    end
+    for _, msg in ipairs(self.chat_history.messages) do
+        if msg.type == "tool_call" and msg.tool_call_id == child_id then
+            return msg
+        end
+    end
+    return nil
 end
 
---- Render the history's subagent output into the subagent buffer, which holds
---- nothing yet, and mark its Tasks headed.
-function SessionManager:_replay_subagents()
-    local writer = self.subagent_writer
-    writer:reset()
-    local subagent_messages = self.chat_history.subagent_messages
-    --- @type table<string, agentic.ui.MessageWriter.SubagentInfo>
-    local info_by_task = {}
-    for id, block in pairs(self.message_writer.tool_call_blocks) do
-        info_by_task[id] = block.subagent
-    end
-    SessionRestore.replay_subagent_messages(
-        writer,
-        subagent_messages,
-        info_by_task
+--- The `parent_tool_use_id` of a subagent's messages: the id of the Task tool
+--- use that spawned it, else the child id itself, which is also the key of a
+--- transcript restored from a file saved before subagents were sessions.
+--- @param child_id string
+--- @return string
+function SessionManager:_task_of(child_id)
+    return vim.tbl_get(self.chat_history.subagents, child_id, "task_id")
+        or child_id
+end
+
+--- A new transcript for a subagent, tied to this session's buffers and
+--- history.
+--- @param child_id string
+--- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
+--- @return agentic.ui.SubagentTranscript
+function SessionManager:_new_transcript(child_id, subagent)
+    local SubagentTranscript = require("agentic.ui.subagent_transcript")
+    --- @type agentic.ui.SubagentTranscript
+    local transcript
+    transcript = SubagentTranscript:new(child_id, subagent, self.widget, {
+        setup_buf = function(bufnr, writer)
+            self:_bind_session_keymaps(bufnr, writer)
+        end,
+        on_reload = function()
+            if not self.destroyed then
+                self:_replay_transcript(child_id)
+            end
+        end,
+        on_write = function()
+            self:_write_session()
+        end,
+        on_wipeout = function()
+            local agent = self._agents[child_id]
+            if agent and agent.transcript == transcript then
+                agent.transcript = nil
+            end
+        end,
+    })
+    return transcript
+end
+
+--- Render a subagent's transcript again from the history: its heading, then
+--- its messages.
+--- @param child_id string
+function SessionManager:_replay_transcript(child_id)
+    local transcript = self._agents[child_id].transcript --[[@as agentic.ui.SubagentTranscript]]
+    local block = self:_agent_block(child_id)
+    transcript:restart(block and block.subagent)
+    SessionRestore.replay_messages(
+        transcript.writer,
+        SessionRestore.messages_for_task(
+            self.chat_history.subagent_messages,
+            self:_task_of(child_id)
+        )
     )
-    self._headed_tasks = {}
-    for _, task_id in pairs(SessionRestore.top_level_tasks(subagent_messages)) do
-        self._headed_tasks[task_id] = true
-    end
-    self.subagent_status_indicator:reposition()
+    transcript.status_indicator:reposition()
     self:_sync_modified(self.chat_history)
 end
 
---- Render the history's subagent output into the subagent buffer if it is
---- loaded. An unloaded one renders on its next load, from its `BufReadCmd`,
---- as rendering it now would load it and so render twice.
-function SessionManager:_show_saved_subagents()
-    -- Nil once the widget is destroyed.
-    local subagent = self.widget.buf_nrs.subagent
-    if
-        subagent
-        and vim.api.nvim_buf_is_valid(subagent)
-        and vim.api.nvim_buf_is_loaded(subagent)
-    then
-        self:_replay_subagents()
+--- A subagent's transcript, loaded and rendered: created and replayed again if
+--- the user wiped it, loaded if `:bd` unloaded it.
+--- @param child_id string
+--- @return agentic.ui.SubagentTranscript
+function SessionManager:_transcript_for(child_id)
+    local agent = self._agents[child_id]
+    local transcript = agent.transcript
+    if not transcript then
+        local block = self:_agent_block(child_id)
+        transcript = self:_new_transcript(child_id, block and block.subagent)
+        agent.transcript = transcript
+        self:_replay_transcript(child_id)
+        if agent.open then
+            transcript.status_indicator:start("generating")
+        end
+    elseif not vim.api.nvim_buf_is_loaded(transcript.bufnr) then
+        -- Its `BufReadCmd` renders it now, before a caller writes to it,
+        -- rather than as a side effect of that write.
+        vim.fn.bufload(transcript.bufnr)
+    end
+    return transcript
+end
+
+--- Give each subagent the history holds a transcript, unloaded, so it renders
+--- on its first load, and point its block at the transcript's name. Output
+--- saved without an agent record gets a transcript named after its Task id,
+--- which no block points to.
+function SessionManager:_restore_transcripts()
+    for child_id, record in pairs(self.chat_history.subagents) do
+        if record.task_id then
+            self._agent_by_task[record.task_id] = child_id
+        end
+    end
+    --- @type table<string, true>
+    local child_ids = {}
+    for child_id in pairs(self.chat_history.subagents) do
+        child_ids[child_id] = true
+    end
+    for _, msg in ipairs(self.chat_history.subagent_messages) do
+        local task_id = msg.parent_tool_use_id --[[@as string]]
+        if not self._agent_by_task[task_id] then
+            child_ids[task_id] = true
+        end
+    end
+
+    for child_id in pairs(child_ids) do
+        local agent = self._agents[child_id]
+        if not (agent and agent.transcript) then
+            local block = self:_agent_block(child_id)
+            local transcript =
+                self:_new_transcript(child_id, block and block.subagent)
+            transcript:unload()
+            self._agents[child_id] = {
+                transcript = transcript,
+                open = false,
+                meta_read = true,
+            }
+            if block then
+                block.argument = vim.api.nvim_buf_get_name(transcript.bufnr)
+            end
+        end
     end
 end
 
---- Load the subagent buffer if `:bd` unloaded it, so its `BufReadCmd`
---- re-renders it before anything writes to it: a write would load it as a side
---- effect, mid-write.
-function SessionManager:_load_subagent_buffer()
-    -- Nil once the widget is destroyed.
-    local subagent = self.widget.buf_nrs.subagent
-    if
-        subagent
-        and vim.api.nvim_buf_is_valid(subagent)
-        and not vim.api.nvim_buf_is_loaded(subagent)
-    then
-        vim.fn.bufload(subagent)
+--- The writer rendering a buffer of this session, if it is the chat or a
+--- transcript.
+--- @param bufnr integer
+--- @return agentic.ui.MessageWriter|nil
+function SessionManager:_writer_of_buf(bufnr)
+    if bufnr == self.widget.buf_nrs.chat then
+        return self.message_writer
     end
+    for _, agent in pairs(self._agents) do
+        if agent.transcript and agent.transcript.bufnr == bufnr then
+            return agent.transcript.writer
+        end
+    end
+    return nil
 end
 
 --- Resolve which MessageWriter owns a tool call. Ownership is recorded on the
@@ -791,8 +890,9 @@ end
 --- @param tool_call_id string
 --- @return agentic.ui.MessageWriter
 function SessionManager:_writer_for(tool_call_id)
-    if self._tool_call_owner[tool_call_id] then
-        return self.subagent_writer
+    local child_id = self._tool_call_owner[tool_call_id]
+    if child_id then
+        return self:_transcript_for(child_id).writer
     end
     return self.message_writer
 end
@@ -801,8 +901,9 @@ end
 --- @param tool_call_id string
 --- @return agentic.ui.StatusIndicator
 function SessionManager:_indicator_for(tool_call_id)
-    if self._tool_call_owner[tool_call_id] then
-        return self.subagent_status_indicator
+    local child_id = self._tool_call_owner[tool_call_id]
+    if child_id then
+        return self:_transcript_for(child_id).status_indicator
     end
     return self.status_indicator
 end
@@ -813,6 +914,260 @@ end
 --- @return string|nil
 local function subagent_parent(update)
     return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
+end
+
+--- The subagent an update belongs to: the one whose child session sent it,
+--- else the one its Task tag names. Nil for the main agent's.
+--- @param source_session_id string|nil
+--- @param task_id string|nil The update's `parentToolUseId`
+--- @return string|nil child_id
+function SessionManager:_agent_of(source_session_id, task_id)
+    if source_session_id and self._agents[source_session_id] then
+        return source_session_id
+    end
+    return task_id and self._agent_by_task[task_id]
+end
+
+--- Record a subagent's Task id from an update's tag, while none is known.
+--- @param child_id string
+--- @param task_id string|nil The update's `parentToolUseId`
+function SessionManager:_note_agent_task(child_id, task_id)
+    if task_id and not self._agent_by_task[task_id] then
+        self._agent_by_task[task_id] = child_id
+        self.chat_history:set_subagent_task(child_id, task_id)
+    end
+end
+
+--- Claude Code's side-file directory of the session: the hook-reported
+--- transcript path without `.jsonl`, else found by session id. Cached once
+--- found.
+--- @return string|nil path Nil before the session exists or while no directory is found
+function SessionManager:_find_session_dir()
+    if self._session_dir or not self.session_id then
+        return self._session_dir
+    end
+    local transcript = self._hook_records:transcript_path()
+    if transcript then
+        self._session_dir = (transcript:gsub("%.jsonl$", ""))
+    else
+        self._session_dir = ClaudeUtils.find_session_dir(
+            ClaudeUtils.config_dir(self.agent.provider_config.env),
+            self.session_id
+        )
+    end
+    return self._session_dir
+end
+
+--- Read the SDK's record of a subagent's spawn, once, and apply it: the Task
+--- id to the Task lookup and the history, the type and confirmed mode to the
+--- block and the transcript header. Does nothing until the record exists.
+--- @param child_id string
+function SessionManager:_read_agent_meta(child_id)
+    local agent = self._agents[child_id]
+    if not agent or agent.meta_read then
+        return
+    end
+    local session_dir = self:_find_session_dir()
+    local meta = session_dir
+        and ClaudeUtils.subagent_meta(
+            session_dir,
+            (ClaudeUtils.agent_id(child_id))
+        )
+    if not meta then
+        return
+    end
+    agent.meta_read = true
+    self._agent_by_task[meta.tool_use_id] = child_id
+    self.chat_history:set_subagent_task(child_id, meta.tool_use_id)
+
+    local block = self:_agent_block(child_id)
+    if not (block and block.subagent) then
+        return
+    end
+    local subagent = vim.tbl_extend("force", block.subagent, {
+        agent_type = meta.agent_type,
+        mode = meta.request_shape == "background" and "background"
+            or "blocking",
+        confirmed = true,
+    }) --[[@as agentic.ui.MessageWriter.SubagentInfo]]
+    self:_update_agent_block(child_id, { subagent = subagent })
+    if agent.transcript then
+        agent.transcript:set_header(subagent)
+    end
+end
+
+--- Apply a change to a subagent's block, in the chat and in the history.
+--- No-op for a subagent without a block.
+--- @param child_id string
+--- @param change { status?: agentic.ui.ToolCallStatus, subagent?: agentic.ui.MessageWriter.SubagentInfo }
+function SessionManager:_update_agent_block(child_id, change)
+    local block = self:_agent_block(child_id)
+    if not block then
+        return
+    end
+    --- @type agentic.ui.MessageWriter.ToolCallBase
+    local update = {
+        tool_call_id = child_id,
+        status = change.status or block.status,
+        subagent = change.subagent,
+    }
+    self.message_writer:update_tool_call_block(update)
+    local tool_call = vim.tbl_extend("force", update, { type = "tool_call" }) --[[@as agentic.ui.ChatHistory.ToolCall]]
+    self.chat_history:update_tool_call(child_id, tool_call)
+    self:_history_changed(self.chat_history)
+end
+
+--- @type table<agentic.acp.SubagentState, agentic.ui.ToolCallStatus>
+local BLOCK_STATUS_OF_STATE = {
+    completed = "completed",
+    failed = "failed",
+    cancelled = "cancelled",
+    disconnected = "failed",
+}
+
+--- Start a subagent the provider announced: its block in the main chat, then
+--- its transcript and working indicator, shown in the subagent window when
+--- `windows.subagent.display` is set. While a session loads, only the block
+--- and an unloaded transcript for it to name: the session file holds the
+--- agent's output, and its agent is long over.
+--- @param child_id string
+--- @param name string
+--- @param task string The prompt
+function SessionManager:_open_agent(child_id, name, task)
+    if self._agents[child_id] then
+        return
+    end
+    if not self.chat_history.subagents[child_id] then
+        self.chat_history:set_subagent_task(child_id, nil)
+    end
+    local task_id = self.chat_history.subagents[child_id].task_id
+    if task_id then
+        self._agent_by_task[task_id] = child_id
+    end
+
+    --- @type agentic.ui.MessageWriter.SubagentInfo
+    local subagent = {
+        label = name,
+        agent_id = (ClaudeUtils.agent_id(child_id)),
+        mode = Config.subagents.force_background and "background"
+            or "blocking",
+        confirmed = false,
+    }
+    local transcript = self:_new_transcript(child_id, subagent)
+    self._agents[child_id] = {
+        transcript = transcript,
+        open = not self._loading,
+        meta_read = false,
+    }
+
+    --- @type agentic.ui.MessageWriter.ToolCallBlock
+    local block = {
+        tool_call_id = child_id,
+        kind = "SubAgent",
+        status = "in_progress",
+        argument = vim.api.nvim_buf_get_name(transcript.bufnr),
+        body = vim.split(task, "\n", { plain = true }),
+        subagent = subagent,
+    }
+    self.message_writer:write_tool_call_block(block)
+    self.chat_history:add_message({
+        type = "tool_call",
+        tool_call_id = child_id,
+        kind = block.kind,
+        status = block.status,
+        argument = block.argument,
+        body = block.body,
+        subagent = subagent,
+    })
+    self:_history_changed(self.chat_history)
+
+    if self._loading then
+        transcript:unload()
+    else
+        transcript.status_indicator:start("generating")
+        if Config.windows.subagent.display then
+            self.widget:show_subagent(transcript.bufnr)
+        end
+    end
+    self:_read_agent_meta(child_id)
+end
+
+--- End a running subagent: stop its indicator, stamp its unresolved calls
+--- `cancelled` unless it completed, end its writer's runs, set its block's
+--- status, and close the subagent window after the last one when
+--- `windows.subagent.auto_close` is set. A no-op for an unknown or ended one.
+--- @param child_id string
+--- @param state agentic.acp.SubagentState
+function SessionManager:_close_agent(child_id, state)
+    local agent = self._agents[child_id]
+    if not (agent and agent.open) then
+        return
+    end
+    agent.open = false
+
+    local transcript = agent.transcript
+    if transcript then
+        transcript.status_indicator:stop()
+        if state ~= "completed" then
+            self:_stamp_cancelled(transcript.writer)
+        end
+        transcript.writer:finalize_turn()
+    end
+    self:_update_agent_block(
+        child_id,
+        { status = BLOCK_STATUS_OF_STATE[state] or "failed" }
+    )
+    if transcript then
+        local block = self:_agent_block(child_id)
+        transcript:set_header(block and block.subagent, state)
+    end
+
+    if Config.windows.subagent.auto_close and not self:_any_agent_open() then
+        self.widget:close_subagent_window()
+    end
+end
+
+--- @return boolean
+function SessionManager:_any_agent_open()
+    for _, agent in pairs(self._agents) do
+        if agent.open then
+            return true
+        end
+    end
+    return false
+end
+
+--- Close every running subagent as `state`.
+--- @param state agentic.acp.SubagentState
+function SessionManager:_close_agents(state)
+    for child_id in pairs(self._agents) do
+        self:_close_agent(child_id, state)
+    end
+end
+
+--- Mark every subagent ended and stop its indicator, leaving its block and
+--- transcript as they are.
+function SessionManager:_forget_agents()
+    for _, agent in pairs(self._agents) do
+        agent.open = false
+        if agent.transcript then
+            agent.transcript.status_indicator:stop()
+        end
+    end
+end
+
+--- Forget every subagent the conversation started and the session's side-file
+--- directory, and wipe the transcripts.
+function SessionManager:_reset_subagents()
+    for _, agent in pairs(self._agents) do
+        if agent.transcript then
+            agent.transcript:destroy()
+        end
+    end
+    self._agents = {}
+    self._agent_by_task = {}
+    self._tool_call_owner = {}
+    self._session_dir = nil
 end
 
 --- Run a message chunk's text through `boundary`. `update` is not modified.
@@ -840,155 +1195,28 @@ local function filter_chunk(boundary, update)
     return chunk, starts_response
 end
 
---- Reveal the subagents split on first subagent activity of the turn. Opens at
---- most once per turn so a manual close is not undone by later chunks.
-function SessionManager:_ensure_subagent_window()
-    if not Config.windows.subagent.display then
-        return
+--- The subagent a message or thought chunk belongs to, with what the chunk
+--- tells about it noted, and its transcript to write to. Nil for the main
+--- agent's.
+--- @param update agentic.acp.SessionUpdateMessage
+--- @param source_session_id string|nil
+--- @return string|nil child_id
+--- @return agentic.ui.SubagentTranscript|nil transcript
+function SessionManager:_chunk_agent(update, source_session_id)
+    local task_id = subagent_parent(update)
+    local child_id = self:_agent_of(source_session_id, task_id)
+    if not child_id then
+        return nil, nil
     end
-    if self._subagent_win_opened_this_turn then
-        return
-    end
-    self._subagent_win_opened_this_turn = true
-    self.widget:open_subagent_window()
-end
-
---- Mark a top-level Task as open (idempotent): reveal the subagents split,
---- show its working indicator and mark it started.
---- @param tool_call_id string
-function SessionManager:_mark_task_open(tool_call_id)
-    if self._open_tasks[tool_call_id] then
-        return
-    end
-    self._open_tasks[tool_call_id] = true
-    self.subagent_status_indicator:start("generating")
-    self:_ensure_subagent_window()
-    self._started_tasks[tool_call_id] = true
-end
-
---- Head a started top-level Task's section in the subagents buffer with its
---- agent's label and mode, once. Meant for the agent's first activity: the
---- Task starts on its first input update, while the name and
---- `run_in_background` are still streaming, and by the time its agent writes
---- the input is complete. Writes nothing for a Task that has not started, or
---- has no label.
---- @param tool_call_id string
-function SessionManager:_head_subagent(tool_call_id)
-    if
-        self._headed_tasks[tool_call_id]
-        or not self._started_tasks[tool_call_id]
-    then
-        return
-    end
-    local subagent = vim.tbl_get(
-        self.message_writer.tool_call_blocks,
-        tool_call_id,
-        "subagent"
-    ) --[[@as agentic.ui.MessageWriter.SubagentInfo|nil]]
-    if not (subagent and subagent.label) then
-        return
-    end
-    self._headed_tasks[tool_call_id] = true
-    self.subagent_writer:write_subagent_heading(
-        ToolCallRenderer.subagent_heading(subagent)
-    )
-end
-
---- Forget every subagent the conversation started.
-function SessionManager:_reset_subagents()
-    self._tool_call_owner = {}
-    self._open_tasks = {}
-    self._started_tasks = {}
-    self._headed_tasks = {}
-end
-
---- Whether a top-level Task's subagent has ended, judged from its tracker.
---- A failure always ends it. Otherwise a confirmed mode decides: a blocking
---- run's result arrives when the agent is done, a background one's at launch.
---- Before confirmation a `completed` is trusted only under a blocking
---- prediction.
---- @param tracker agentic.ui.MessageWriter.ToolCallBlock
---- @return boolean
-local function task_ended(tracker)
-    if tracker.status == "failed" then
-        return true
-    end
-    local subagent = tracker.subagent
-    if subagent and subagent.confirmed then
-        return subagent.mode == "blocking"
-    end
-    return tracker.status == "completed"
-        and not (subagent and subagent.mode == "background")
-end
-
---- Open or close a top-level Task from its tracker. A Task opens once, except
---- that one closed on a blocking prediction reopens when its result confirms
---- it runs in the background. Does nothing while a session loads, since a
---- replayed Task's agent is long over.
---- @param tool_call_id string
---- @param prior_mode agentic.ui.MessageWriter.SubagentMode|nil The Task's mode before its latest update
-function SessionManager:_track_task(tool_call_id, prior_mode)
-    if self._loading then
-        return
-    end
-    local tracker = self.message_writer.tool_call_blocks[tool_call_id]
-    local subagent = tracker.subagent
-    if task_ended(tracker) then
-        self:_mark_task_closed(tool_call_id)
-    elseif not self._started_tasks[tool_call_id] then
-        self:_mark_task_open(tool_call_id)
-    elseif
-        prior_mode == "blocking"
-        and subagent
-        and subagent.confirmed
-        and subagent.mode == "background"
-        and not self._open_tasks[tool_call_id]
-    then
-        -- Its split may have closed with it, and the once-per-turn auto-open
-        -- is already spent.
-        self._subagent_win_opened_this_turn = false
-        self:_mark_task_open(tool_call_id)
-    end
-end
-
---- Close every open Task. Meant for a turn's end: the bridge holds a turn open
---- until the background agents it spawned have ended, but a prompt submitted
---- mid-turn settles it early, at that prompt's echo. So this can close a Task
---- whose agent still runs. The bridge reports no per-agent end to wait for
---- instead. A blocking Task still open there was cut off by a cancel or an
---- error.
-function SessionManager:_close_open_tasks()
-    for tool_call_id in pairs(self._open_tasks) do
-        self:_mark_task_closed(tool_call_id)
-    end
-end
-
---- Mark a top-level Task as closed (idempotent): when the last open Task closes,
---- stop the subagents indicator and optionally auto-close the split. The
---- membership guard makes a duplicated terminal `tool_call_update` harmless —
---- without it a double close would stop the indicator while a sibling Task is
---- still running.
---- @param tool_call_id string
-function SessionManager:_mark_task_closed(tool_call_id)
-    if not self._open_tasks[tool_call_id] then
-        return
-    end
-    self._open_tasks[tool_call_id] = nil
-    -- Now rather than at the next write or the turn's end, so its last
-    -- thinking shows as it finishes. The writer is shared, so this ends
-    -- whichever agent's runs are open, which may be a sibling's.
-    self.subagent_writer:end_runs()
-    if next(self._open_tasks) ~= nil then
-        return
-    end
-    self.subagent_status_indicator:stop()
-    if Config.windows.subagent.auto_close then
-        self.widget:close_subagent_window()
-    end
+    -- The SDK's record of the spawn is read at the agent's other events, not
+    -- per chunk: a lookup that keeps missing globs the projects directory.
+    self:_note_agent_task(child_id, task_id)
+    return child_id, self:_transcript_for(child_id)
 end
 
 --- @param update agentic.acp.SessionUpdateMessage
-function SessionManager:_on_session_update(update)
+--- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
+function SessionManager:_on_session_update(update, source_session_id)
     -- order the IF blocks in order of likeliness to be called for performance
 
     if update.sessionUpdate == "plan" then
@@ -996,23 +1224,22 @@ function SessionManager:_on_session_update(update)
             self.todo_list:render(update.entries)
         end
     elseif update.sessionUpdate == "agent_message_chunk" then
-        local parent = subagent_parent(update)
-        if parent and self._loading then
+        if self._loading and self:_agent_of(source_session_id, subagent_parent(update)) then
             return
         end
-        local boundaries = self._response_boundaries
+        local child_id, transcript =
+            self:_chunk_agent(update, source_session_id)
         local chunk, starts_response = filter_chunk(
-            parent and boundaries.subagent or boundaries.main,
+            transcript and transcript.response_boundary
+                or self._response_boundary,
             update
         )
         if not chunk then
             return
         end
-        if parent then
-            self:_ensure_subagent_window()
-            self:_head_subagent(parent)
-            self.subagent_writer:write_message_chunk(chunk, starts_response)
-            self.subagent_status_indicator:reposition()
+        if transcript then
+            transcript.writer:write_message_chunk(chunk, starts_response)
+            transcript.status_indicator:reposition()
         else
             self.message_writer:write_message_chunk(chunk, starts_response)
             self.status_indicator:start("generating")
@@ -1022,26 +1249,25 @@ function SessionManager:_on_session_update(update)
                 type = "agent",
                 text = chunk.content.text,
                 provider_name = self.agent.provider_config.name,
-                parent_tool_use_id = parent,
+                parent_tool_use_id = child_id and self:_task_of(child_id),
             }, starts_response)
             -- Subagent text is never written per chunk, even outside a turn
             -- (see `_on_tool_call_update`).
-            if parent then
+            if child_id then
                 self:_sync_modified(self.chat_history)
             else
                 self:_history_changed(self.chat_history)
             end
         end
     elseif update.sessionUpdate == "agent_thought_chunk" then
-        local parent = subagent_parent(update)
-        if parent and self._loading then
+        if self._loading and self:_agent_of(source_session_id, subagent_parent(update)) then
             return
         end
-        if parent then
-            self:_ensure_subagent_window()
-            self:_head_subagent(parent)
-            self.subagent_writer:write_message_chunk(update)
-            self.subagent_status_indicator:reposition()
+        local child_id, transcript =
+            self:_chunk_agent(update, source_session_id)
+        if transcript then
+            transcript.writer:write_message_chunk(update)
+            transcript.status_indicator:reposition()
         else
             self.message_writer:write_message_chunk(update)
             self.status_indicator:start("thinking")
@@ -1051,13 +1277,31 @@ function SessionManager:_on_session_update(update)
                 type = "thought",
                 text = update.content.text,
                 provider_name = self.agent.provider_config.name,
-                parent_tool_use_id = parent,
+                parent_tool_use_id = child_id and self:_task_of(child_id),
             })
-            if parent then
+            if child_id then
                 self:_sync_modified(self.chat_history)
             else
                 self:_history_changed(self.chat_history)
             end
+        end
+    elseif update.sessionUpdate == "subagent_spawned" then
+        self:_open_agent(
+            update.subagentSessionId,
+            update.name,
+            update.task
+        )
+    elseif update.sessionUpdate == "subagent_state_update" then
+        local child_id = update.subagentSessionId
+        if self._loading then
+            -- Its agent is long over; only the block reports how it ended.
+            if self._agents[child_id] then
+                self:_update_agent_block(child_id, {
+                    status = BLOCK_STATUS_OF_STATE[update.state] or "failed",
+                })
+            end
+        else
+            self:_close_agent(child_id, update.state)
         end
     elseif update.sessionUpdate == "user_message_chunk" then
         -- Arrives during session/load replay (ACPClient filters it out in
@@ -1067,8 +1311,13 @@ function SessionManager:_on_session_update(update)
         -- slash command tags, selection instructions, etc.). Filter those
         -- out: real user text is plain prose, system blocks start with `<`.
         local text = update.content and update.content.text
-        -- A tagged one is a subagent's prompt, which its Task's call holds.
-        if text and text ~= "" and not subagent_parent(update) then
+        -- A subagent's is its prompt, which its block holds.
+        if
+            text
+            and text ~= ""
+            and not self:_agent_of(source_session_id, subagent_parent(update))
+            and not subagent_parent(update)
+        then
             local trimmed = vim.trim(text)
             -- Match XML-tagged system blocks: <tag_name> ... </tag_name>
             -- Requires both opening and closing tags to avoid false positives
@@ -1153,7 +1402,6 @@ function SessionManager:_refresh()
         -- will set is_generating = false anyway.
         self.is_generating = false
         self.status_indicator:stop()
-        self.subagent_status_indicator:stop()
     end
 
     -- Release the gate states a lost callback can wedge. A prompt callback or
@@ -1161,15 +1409,12 @@ function SessionManager:_refresh()
     -- submit with no way back, and unwedging that is what this function is for.
     self:_set_prompt_pending(0)
     self._loading = false
-    -- A lost prompt callback never closes its turn's Tasks.
-    self:_close_open_tasks()
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display.
     -- Cosmetic-only effect mid-turn; essential for recovering from a stuck
-    -- state between turns.
-    -- Both writers are reset — the cross-turn flag hazard applies per buffer.
+    -- state between turns. Subagents run outside turns, and their own ends
+    -- reset their writers.
     self.message_writer:reset_turn_state()
-    self.subagent_writer:reset_turn_state()
 end
 
 --- Display context usage info locally (intercepted /context command)
@@ -1492,60 +1737,57 @@ end
 function SessionManager:_build_handlers()
     --- @type agentic.acp.ClientHandlers
     return {
-        on_session_update = function(update)
-            self:_load_subagent_buffer()
-            self:_on_session_update(update)
+        on_session_update = function(update, source_session_id)
+            self:_on_session_update(update, source_session_id)
         end,
 
-        on_tool_call = function(tool_call)
-            self:_load_subagent_buffer()
-            self:_on_tool_call(tool_call)
+        on_tool_call = function(tool_call, source_session_id)
+            self:_on_tool_call(tool_call, source_session_id)
         end,
 
         on_tool_call_update = function(tool_call_update)
-            self:_load_subagent_buffer()
             self:_on_tool_call_update(tool_call_update)
-            self:_indicator_for(tool_call_update.tool_call_id):reposition()
         end,
 
         on_stdout_text = function(text)
-            self:_load_subagent_buffer()
             self:_on_stdout_text(text)
         end,
 
         on_request_permission = function(request, callback)
-            self:_load_subagent_buffer()
             self:_on_request_permission(request, callback)
+        end,
+
+        on_disconnect = function()
+            if not self.destroyed then
+                self:_close_agents("disconnected")
+            end
         end,
     }
 end
 
 --- Handle initial tool_call: write to UI, store in history, track plan exit.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
-function SessionManager:_on_tool_call(tool_call)
-    local parent = tool_call.parent_tool_use_id
-    if parent then
-        self._tool_call_owner[tool_call.tool_call_id] = parent
+--- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
+function SessionManager:_on_tool_call(tool_call, source_session_id)
+    local id = tool_call.tool_call_id
+    local task_id = tool_call.parent_tool_use_id
+    local child_id = self._tool_call_owner[id]
+        or self:_agent_of(source_session_id, task_id)
+    --- @type string|nil
+    local parent
+    if child_id then
+        self._tool_call_owner[id] = child_id
         -- A session/load replays the call, and the session file holds it.
         if self._loading then
             return
         end
-        self:_ensure_subagent_window()
-        self:_head_subagent(parent)
+        self:_note_agent_task(child_id, task_id)
+        self:_read_agent_meta(child_id)
+        parent = self:_task_of(child_id)
     end
 
-    self:_writer_for(tool_call.tool_call_id):write_tool_call_block(tool_call)
-    self:_indicator_for(tool_call.tool_call_id):reposition()
-
-    -- A top-level Task spawn (untagged, kind SubAgent) drives the subagents
-    -- working indicator for its whole open interval and reveals the split. Its
-    -- own block stays in the main chat; its children populate the subagents
-    -- buffer. Grandchildren keep the parent Task open, so nesting needs no
-    -- special-casing. Kind usually resolves on the update, not here (see
-    -- _on_tool_call_update), but track it here too for the case it arrives now.
-    if not parent and AcpKind.normalise(tool_call.kind) == "subagent" then
-        self:_track_task(tool_call.tool_call_id, nil)
-    end
+    self:_writer_for(id):write_tool_call_block(tool_call)
+    self:_indicator_for(id):reposition()
 
     --- @type agentic.ui.ChatHistory.ToolCall
     local tool_msg = {
@@ -1777,10 +2019,18 @@ local PLAN_IMPLEMENT_ID = "__plan_implement__"
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 function SessionManager:_on_request_permission(request, callback)
-    self.status_indicator:stop()
+    local tool_call_id = request.toolCall.toolCallId
+    -- A subagent's request can come before its call, which is then the
+    -- agent's too.
+    local child_id = self._tool_call_owner[tool_call_id]
+        or (self._agents[request.sessionId] and request.sessionId)
+    if child_id then
+        self._tool_call_owner[tool_call_id] = child_id
+    else
+        self.status_indicator:stop()
+    end
 
     -- Detect ExitPlanMode permission via the tracked tool call block
-    local tool_call_id = request.toolCall.toolCallId
     local tracker =
         self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
     local is_plan_exit = tracker
@@ -1835,8 +2085,11 @@ function SessionManager:_on_request_permission(request, callback)
             return
         end
 
+        -- A subagent's request leaves the chat's indicator alone: the agent
+        -- may run outside any turn.
         if
-            not self.permission_manager.current_request
+            not child_id
+            and not self.permission_manager.current_request
             and #self.permission_manager.queue == 0
         then
             self.status_indicator:start("generating")
@@ -1917,9 +2170,9 @@ end
 ---
 --- Goes straight to the writer rather than through
 --- `SessionManager:_on_tool_call_update`, which would also restart the status
---- indicator, re-record edit ranges and re-open the cancelled Tasks. The
---- permission cleanup that funnel does has already run, in
---- `stop_generation`'s `permission_manager:clear()`.
+--- indicator and re-record edit ranges. The permission cleanup that funnel
+--- does has already run, in `stop_generation`'s `permission_manager:clear()`,
+--- or is not owed, for a subagent that ended.
 --- @param writer agentic.ui.MessageWriter
 --- @return string[] tool_call_ids The ids that were stamped
 local function stamp_cancelled(writer)
@@ -1933,18 +2186,29 @@ local function stamp_cancelled(writer)
     return ids
 end
 
---- Give every tool call left hanging by a cancelled turn a `cancelled` footer.
+--- Stamp `cancelled` on one writer's tool call blocks that have no final
+--- status yet, in its buffer and in the history.
+--- @param writer agentic.ui.MessageWriter
+function SessionManager:_stamp_cancelled(writer)
+    for _, id in ipairs(stamp_cancelled(writer)) do
+        --- @type agentic.ui.ChatHistory.ToolCall
+        local tool_call =
+            { type = "tool_call", tool_call_id = id, status = "cancelled" }
+        self.chat_history:update_tool_call(id, tool_call)
+    end
+end
+
+--- Give every tool call left hanging by a cancelled turn a `cancelled` footer,
+--- in the chat and in the running subagents' transcripts.
 ---
 --- Whether the provider sends a late update for a call it abandoned is
 --- provider-dependent, so without this sweep a block interrupted while pending
 --- keeps that footer for the rest of the session, and after a restore too.
 function SessionManager:_mark_unresolved_tool_calls_cancelled()
-    for _, writer in ipairs({ self.message_writer, self.subagent_writer }) do
-        for _, id in ipairs(stamp_cancelled(writer)) do
-            --- @type agentic.ui.ChatHistory.ToolCall
-            local tool_call =
-                { type = "tool_call", tool_call_id = id, status = "cancelled" }
-            self.chat_history:update_tool_call(id, tool_call)
+    self:_stamp_cancelled(self.message_writer)
+    for _, agent in pairs(self._agents) do
+        if agent.open and agent.transcript then
+            self:_stamp_cancelled(agent.transcript.writer)
         end
     end
 end
@@ -1971,18 +2235,20 @@ end
 --- @param tool_call_update agentic.ui.MessageWriter.ToolCallBase
 function SessionManager:_on_tool_call_update(tool_call_update)
     local id = tool_call_update.tool_call_id
-    local is_subagent = self._tool_call_owner[id] ~= nil
+    local child_id = self._tool_call_owner[id]
+    local is_subagent = child_id ~= nil
     -- The whole session/load replay arrives before the load completes, so
     -- this is an update to a call `_on_tool_call` dropped.
     if is_subagent and self._loading then
         return
     end
+    if child_id then
+        self:_read_agent_meta(child_id)
+    end
     local writer = self:_writer_for(id)
-    --- @type agentic.ui.MessageWriter.SubagentMode|nil
-    local prior_mode =
-        vim.tbl_get(writer.tool_call_blocks, id, "subagent", "mode")
 
     writer:update_tool_call_block(tool_call_update)
+    self:_indicator_for(id):reposition()
     self:_try_record_edit_range(id)
     self:_record_file_op(id)
 
@@ -1997,12 +2263,10 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         body = tool_call_update.body,
         diff = tool_call_update.diff,
         skill_path = tool_call_update.skill_path,
-        subagent = tool_call_update.subagent,
     }
     self.chat_history:update_tool_call(id, tool_call)
-    -- A background agent can outlive its turn, and its end is not reported,
-    -- so outside a turn its output is written as each of its calls ends, not
-    -- per update.
+    -- A subagent can outlive its turn, so outside a turn its output is written
+    -- as each of its calls ends, not per update.
     if
         is_subagent
         and tool_call_update.status ~= "completed"
@@ -2021,19 +2285,6 @@ function SessionManager:_on_tool_call_update(tool_call_update)
 
     if tool_call_update.status == "completed" then
         self.permission_manager:finalize_edit_range(id)
-    end
-
-    -- A top-level Task drives the subagents indicator over its open interval.
-    -- Its kind only resolves to SubAgent once rawInput arrives on an update (the
-    -- streamed initial tool_call is empty), so this update is normally where the
-    -- Task is first marked open.
-    local task_tracker = writer.tool_call_blocks[id]
-    if
-        not is_subagent
-        and task_tracker
-        and AcpKind.normalise(task_tracker.kind) == "subagent"
-    then
-        self:_track_task(id, prior_mode)
     end
 
     -- Reload buffers when file-mutating tool calls complete.
@@ -2073,8 +2324,8 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         end
     end
 
-    -- The subagents indicator is Task-counter driven, so only refresh the main
-    -- indicator here (for main-agent tool activity).
+    -- A transcript's indicator runs from its agent's spawn to its end, so only
+    -- the main indicator follows tool activity.
     if
         not is_subagent
         and not self.permission_manager.current_request
@@ -2604,8 +2855,8 @@ end
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self:_set_prompt_pending(0)
-    -- The stranded turn's callback would have closed its Tasks.
-    self._open_tasks = {}
+    self:_forget_agents()
+    self._session_dir = nil
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -2623,6 +2874,12 @@ function SessionManager:stop_generation()
     self.permission_manager:clear()
     self.is_generating = false
     self.status_indicator:stop()
+    -- The cancel ends the subagents too, and their state updates close them.
+    for _, agent in pairs(self._agents) do
+        if agent.open and agent.transcript then
+            agent.transcript.status_indicator:stop()
+        end
+    end
 end
 
 --- Dispatch whatever the gate deferred, now that a blocking condition has
@@ -2955,8 +3212,8 @@ function SessionManager:_handle_input_submit_inner(input_text)
         local WidgetLayout = require("agentic.ui.widget_layout")
 
         local chat_width = WidgetLayout.calculate_width(Config.windows.width)
-        local chat_winid = self.widget.win_nrs.chat
-        if chat_winid and vim.api.nvim_win_is_valid(chat_winid) then
+        local chat_winid = self.widget:panel_win("chat")
+        if chat_winid then
             chat_width = vim.api.nvim_win_get_width(chat_winid)
         end
 
@@ -3036,19 +3293,6 @@ function SessionManager:_dispatch_turn(prompt)
 
     self.is_generating = true
 
-    -- The subagent auto-open guard is per-turn, but a turn dispatched while
-    -- another is still outstanding inherits it rather than wiping it: the
-    -- running turn still opens its subagents through it, and a mid-turn submit
-    -- is an ordinary thing to do. The provider runs the two turns in sequence,
-    -- so the inheriting turn has nothing of its own in flight to confuse with
-    -- it. Tool-call ownership is not per-turn at all. A background agent can
-    -- outlive the turn that spawned it, and its calls must keep resolving to
-    -- the subagents writer, so ownership resets with the conversation
-    -- (`_reset_subagents`).
-    if self._prompt_pending == 0 then
-        self._subagent_win_opened_this_turn = false
-    end
-
     self:_set_prompt_pending(self._prompt_pending + 1)
 
     self.agent:send_prompt(self.session_id, prompt, function(response, err)
@@ -3057,9 +3301,6 @@ function SessionManager:_dispatch_turn(prompt)
         -- creating a race where a fast follow-up prompt sets is_generating=true
         -- before the previous turn's cleanup sets it back to false, permanently
         -- desynchronising the generating state ("stuck 1 message behind").
-
-        -- The turn end writes to both buffers, as the handlers do.
-        self:_load_subagent_buffer()
 
         -- Only this turn's own session may release the counter. A cancelled
         -- prompt's callback outlives /new or a restore, and decrementing then
@@ -3161,11 +3402,6 @@ function SessionManager:_dispatch_turn(prompt)
 
         self:_finalize_turn(turn_usage)
         self.message_writer:scroll_to_bottom()
-
-        self:_close_open_tasks()
-        -- Each writer holds its own per-turn flags, so the subagents writer
-        -- needs its own reset (mandatory: the cross-turn flag hazard).
-        self.subagent_writer:finalize_turn()
 
         if not session_busy then
             self.status_indicator:stop()
@@ -3483,6 +3719,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.chat_history.file_activity = saved_history.file_activity
         self.file_activity:load(saved_history.file_activity)
         self.chat_history.subagent_messages = saved_history.subagent_messages
+        self.chat_history.subagents = saved_history.subagents
     end
 
     local effective_cwd = cwd or vim.fn.getcwd() --[[@as string]]
@@ -3517,8 +3754,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 self.chat_history.dirty = false
                 self:_sync_modified(self.chat_history)
 
-                -- After the replay, whose Task calls head the sections.
-                self:_show_saved_subagents()
+                -- After the replay, whose spawns made the transcripts they
+                -- had a block for.
+                self:_restore_transcripts()
 
                 -- Apply configOptions the provider returned with session/load,
                 -- so the header reflects the restored session's mode/model
@@ -3597,7 +3835,7 @@ end
 function SessionManager:clear_chat()
     self.widget:clear()
     self.message_writer:reset()
-    self.subagent_writer:reset()
+    self:_reset_subagents()
 end
 
 function SessionManager:_cancel_session()
@@ -3617,13 +3855,12 @@ function SessionManager:_cancel_session()
         self.file_activity:clear()
 
         -- Tearing down a live session ends any in-flight turn. Reset the
-        -- generating flag and stop both indicators so /clear (or
-        -- delete/restart) mid-turn doesn't leave is_generating stale-true or
-        -- a spinner running. Only reachable with a session — is_generating is
-        -- set true only after the session is ready.
+        -- generating flag and stop the indicator so /clear (or delete/restart)
+        -- mid-turn doesn't leave is_generating stale-true or a spinner
+        -- running. Only reachable with a session — is_generating is set true
+        -- only after the session is ready.
         self.is_generating = false
         self.status_indicator:stop()
-        self.subagent_status_indicator:stop()
     end
 
     self.session_id = nil
@@ -3874,6 +4111,7 @@ function SessionManager:restore_from_history(history, opts)
         self.chat_history.messages = vim.deepcopy(history.messages)
         self.chat_history.subagent_messages =
             vim.deepcopy(history.subagent_messages)
+        self.chat_history.subagents = vim.deepcopy(history.subagents)
         self.chat_history.title = history.title or ""
         self.chat_history.file_activity = history.file_activity
     else
@@ -3898,14 +4136,16 @@ function SessionManager:restore_from_history(history, opts)
         self.widget:set_chat_title(restored_title)
     end
 
+    -- Replays the history's own messages, not `_history_to_send`: restoring
+    -- the transcripts points the blocks at their new names in the history.
     if opts.reuse_session and self.session_id then
         -- Reuse existing ACP session, replay messages to UI
         self._restoring = false
+        self:_restore_transcripts()
         SessionRestore.replay_messages(
             self.message_writer,
-            self._history_to_send
+            self.chat_history.messages
         )
-        self:_show_saved_subagents()
         -- Keep _history_to_send: the ACP provider doesn't have these messages
         -- (they came from disk, not the current session). They'll be prepended
         -- to the first user prompt so the provider has conversation context.
@@ -3915,11 +4155,11 @@ function SessionManager:restore_from_history(history, opts)
             restore_mode = true,
             on_created = function()
                 self._restoring = false
+                self:_restore_transcripts()
                 SessionRestore.replay_messages(
                     self.message_writer,
-                    self._history_to_send
+                    self.chat_history.messages
                 )
-                self:_show_saved_subagents()
             end,
         })
     end

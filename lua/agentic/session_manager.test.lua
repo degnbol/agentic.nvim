@@ -212,6 +212,7 @@ describe("agentic.SessionManager", function()
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _on_session_update = SessionManager._on_session_update,
             } --[[@as agentic.SessionManager]]
@@ -275,6 +276,7 @@ describe("agentic.SessionManager", function()
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
 
@@ -301,7 +303,6 @@ describe("agentic.SessionManager", function()
 
                 local noop = function() end
                 local status_stop = spy.new(noop)
-                local subagent_stop = spy.new(noop)
                 local session = {
                     session_id = "live-session", -- exercise the teardown block
                     is_generating = true, -- as if a turn were streaming
@@ -314,18 +315,17 @@ describe("agentic.SessionManager", function()
                     config_options = { clear = noop },
                     file_activity = { clear = noop },
                     status_indicator = { stop = status_stop },
-                    subagent_status_indicator = { stop = subagent_stop },
                     widget = {
                         buf_nrs = { input = 0 },
                         clear = noop,
                         set_chat_title = noop,
                     },
                     message_writer = { reset = noop },
-                    subagent_writer = { reset = noop },
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
                     _reset_subagents = function() end,
                     _sync_modified = SessionManager._sync_modified,
+                    _agents = {},
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                 } --[[@as agentic.SessionManager]]
 
@@ -333,7 +333,6 @@ describe("agentic.SessionManager", function()
 
                 assert.is_false(session.is_generating)
                 assert.spy(status_stop).was.called(1)
-                assert.spy(subagent_stop).was.called(1)
 
                 for _, s in ipairs(stubs) do
                     s:revert()
@@ -422,6 +421,7 @@ describe("agentic.SessionManager", function()
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _budget_status = SessionManager._budget_status,
             } --[[@as agentic.SessionManager]]
@@ -464,6 +464,7 @@ describe("agentic.SessionManager", function()
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
@@ -682,8 +683,10 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_subagents = function() end,
-                _show_saved_subagents = noop,
+                _restore_transcripts = noop,
+                _forget_agents = noop,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
                 _apply_default_trust = noop,
@@ -1247,6 +1250,7 @@ describe("agentic.SessionManager", function()
                     new_session = new_session_spy,
                     _adopt_history = SessionManager._adopt_history,
                     _sync_modified = SessionManager._sync_modified,
+                    _agents = {},
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                     switch_provider = SessionManager.switch_provider,
                 } --[[@as agentic.SessionManager]]
@@ -1377,6 +1381,7 @@ describe("agentic.SessionManager", function()
                 end),
                 _adopt_history = SessionManager._adopt_history,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
@@ -1425,10 +1430,18 @@ describe("agentic.SessionManager", function()
             local drains = { n = 0 }
             --- @type agentic.SessionManager
             local session = {
-                subagent_writer = {
-                    update_tool_call_block = function() end,
-                    tool_call_blocks = tool_call_blocks,
-                },
+                _transcript_for = function()
+                    return {
+                        writer = {
+                            update_tool_call_block = function() end,
+                            tool_call_blocks = tool_call_blocks,
+                        },
+                    }
+                end,
+                _read_agent_meta = function() end,
+                _indicator_for = function()
+                    return { reposition = function() end }
+                end,
                 message_writer = {
                     update_tool_call_block = function() end,
                     tool_call_blocks = tool_call_blocks,
@@ -1587,6 +1600,7 @@ describe("agentic.SessionManager", function()
             local session = {
                 status_indicator = { stop = function() end },
                 message_writer = { tool_call_blocks = { ["tc-plan"] = block } },
+                _agents = {},
                 _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
                 permission_manager = {
@@ -2017,8 +2031,6 @@ describe("agentic.SessionManager", function()
                     is_near_bottom = empty,
                     tool_call_blocks = {},
                 },
-                subagent_writer = { finalize_turn = noop },
-                _close_open_tasks = noop,
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_hook_records = SessionManager._drain_hook_records,
                 _hook_records = {
@@ -2027,7 +2039,6 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 status_indicator = { start = noop, stop = noop },
-                subagent_status_indicator = { stop = noop },
                 chat_history = {
                     session_id = "s-1",
                     add_message = noop,
@@ -2041,7 +2052,7 @@ describe("agentic.SessionManager", function()
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
-                    win_nrs = { chat = nil },
+                    panel_win = noop,
                     get_chat_width = function()
                         return 80
                     end,
@@ -2064,12 +2075,12 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _dispatch_turn = SessionManager._dispatch_turn,
-                _load_subagent_buffer = SessionManager._load_subagent_buffer,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
@@ -2196,17 +2207,26 @@ describe("agentic.SessionManager", function()
                     nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
                     update_tool_call_block = record_stamp("main"),
                 },
-                subagent_writer = {
-                    finalize_turn = noop,
-                    tool_call_blocks = {},
-                    nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
-                    update_tool_call_block = record_stamp("subagent"),
+                -- A running subagent.
+                _agents = {
+                    c1 = {
+                        open = true,
+                        meta_read = true,
+                        transcript = {
+                            writer = {
+                                tool_call_blocks = {},
+                                nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
+                                update_tool_call_block = record_stamp(
+                                    "subagent"
+                                ),
+                            },
+                            set_modified = noop,
+                        },
+                    },
                 },
                 _mark_unresolved_tool_calls_cancelled = SessionManager._mark_unresolved_tool_calls_cancelled,
-                _close_open_tasks = SessionManager._close_open_tasks,
-                _mark_task_closed = SessionManager._mark_task_closed,
+                _stamp_cancelled = SessionManager._stamp_cancelled,
                 _tool_call_owner = {},
-                _open_tasks = {},
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_hook_records = SessionManager._drain_hook_records,
                 _hook_records = {
@@ -2215,7 +2235,6 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 status_indicator = { start = noop, stop = noop },
-                subagent_status_indicator = { stop = noop },
                 chat_history = {
                     session_id = "s-1",
                     add_message = function(_self, msg)
@@ -2236,7 +2255,7 @@ describe("agentic.SessionManager", function()
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
-                    win_nrs = { chat = nil },
+                    panel_win = noop,
                     get_chat_width = function()
                         return 80
                     end,
@@ -2258,7 +2277,6 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _dispatch_turn = SessionManager._dispatch_turn,
-                _load_subagent_buffer = SessionManager._load_subagent_buffer,
                 _send_synthetic_prompt = function(this, text)
                     table.insert(sink.synthetic, text)
                     SessionManager._send_synthetic_prompt(this, text)
@@ -2308,39 +2326,18 @@ describe("agentic.SessionManager", function()
                 assert.equal(1, session._prompt_pending)
             end)
 
-            -- The running turn's tool calls resolve their writer and their Task
-            -- bookkeeping through these tables for as long as it streams, so
-            -- the turn dispatched over it inherits them instead of wiping them.
-            it("leaves the running turn's tool state alone", function()
+            -- A subagent's tool calls resolve their writer through this table
+            -- for as long as it runs, so a turn dispatched over it leaves it.
+            it("leaves the running subagents' tool state alone", function()
                 local session = make_session(nil, nil, {})
                 session.agent.send_prompt = function() end
 
                 session:_handle_input_submit("first")
-                session._tool_call_owner["tc-1"] = "task-1"
-                session._open_tasks["task-1"] = true
+                session._tool_call_owner["tc-1"] = "c1"
                 session:_handle_input_submit("second")
 
-                assert.equal("task-1", session._tool_call_owner["tc-1"])
-                assert.is_true(session._open_tasks["task-1"])
-            end)
-
-            it("closes the turn's open Tasks when it ends", function()
-                local session = make_session(nil, nil, {})
-                local ended = 0
-                session.subagent_writer.end_runs = function()
-                    ended = ended + 1
-                end
-                session.widget.close_subagent_window = function() end
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
-                    session._open_tasks["task-1"] = true
-                    session._open_tasks["task-2"] = true
-                    cb({ stopReason = "end_turn" }, nil)
-                end
-
-                session:_handle_input_submit("hello")
-
-                assert.same({}, session._open_tasks)
-                assert.equal(2, ended)
+                assert.equal("c1", session._tool_call_owner["tc-1"])
+                assert.is_true(session._agents.c1.open)
             end)
 
             it(
@@ -2403,7 +2400,8 @@ describe("agentic.SessionManager", function()
 
         describe("cancelled tool call sweep", function()
             --- Run one turn that resolves with `response`, over a session
-            --- holding one non-final and one completed call in each writer.
+            --- holding one non-final and one completed call in the chat and in
+            --- a running subagent's transcript.
             --- @param response table
             --- @return table sink
             local function turn_over_pending_calls(response)
@@ -2413,7 +2411,7 @@ describe("agentic.SessionManager", function()
                     ["main-pending"] = { status = "pending" },
                     ["main-done"] = { status = "completed" },
                 }
-                session.subagent_writer.tool_call_blocks = {
+                session._agents.c1.transcript.writer.tool_call_blocks = {
                     ["sub-running"] = { status = "in_progress" },
                     ["sub-done"] = { status = "completed" },
                 }
@@ -2893,10 +2891,13 @@ describe("agentic.SessionManager", function()
                 destroyed = false,
                 status_indicator = { start = noop, stop = noop },
                 message_writer = { tool_call_blocks = {} },
+                _agents = {},
                 _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
                 -- nil chat window => unfocused => bell would ring if notified
-                widget = { win_nrs = { chat = nil } },
+                widget = {
+                    panel_win = function() end,
+                },
                 permission_manager = {
                     add_request = function()
                         return prompted
@@ -3189,6 +3190,7 @@ describe("agentic.SessionManager", function()
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _sync_modified = function() end,
+                _forget_agents = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
 
@@ -3474,612 +3476,6 @@ describe("agentic.SessionManager", function()
                 end
             end
             assert.equal(0, warn_count)
-        end)
-    end)
-
-    describe("subagent Task tracking", function()
-        --- @type TestSpy
-        local start_spy
-        --- @type TestSpy
-        local stop_spy
-        --- @type TestSpy
-        local close_win_spy
-        --- @type TestSpy
-        local end_runs_spy
-        local orig_auto_close
-
-        --- @return agentic.SessionManager
-        local function make_session()
-            start_spy = spy.new(function() end)
-            stop_spy = spy.new(function() end)
-            close_win_spy = spy.new(function() end)
-            end_runs_spy = spy.new(function() end)
-            return {
-                _open_tasks = {},
-                _started_tasks = {},
-                subagent_status_indicator = {
-                    start = start_spy,
-                    stop = stop_spy,
-                },
-                subagent_writer = { end_runs = end_runs_spy },
-                widget = { close_subagent_window = close_win_spy },
-                _ensure_subagent_window = function() end,
-                _mark_task_open = SessionManager._mark_task_open,
-                _mark_task_closed = SessionManager._mark_task_closed,
-            } --[[@as agentic.SessionManager]]
-        end
-
-        before_each(function()
-            orig_auto_close = Config.windows.subagent.auto_close
-        end)
-
-        after_each(function()
-            Config.windows.subagent.auto_close = orig_auto_close
-        end)
-
-        it("marks a task open, starts the indicator", function()
-            local session = make_session()
-            session:_mark_task_open("task-1")
-
-            assert.is_true(session._open_tasks["task-1"])
-            assert.spy(start_spy).was.called(1)
-        end)
-
-        it("open is idempotent (repeat calls don't restart)", function()
-            local session = make_session()
-            session:_mark_task_open("task-1")
-            session:_mark_task_open("task-1")
-
-            assert.spy(start_spy).was.called(1)
-        end)
-
-        it("stops the indicator only when the last task closes", function()
-            local session = make_session()
-            session:_mark_task_open("task-1")
-            session:_mark_task_open("task-2")
-
-            session:_mark_task_closed("task-1")
-            assert.spy(stop_spy).was.called(0)
-
-            session:_mark_task_closed("task-2")
-            assert.spy(stop_spy).was.called(1)
-        end)
-
-        it(
-            "close is idempotent — a duplicated terminal update is harmless",
-            function()
-                local session = make_session()
-                session:_mark_task_open("task-1")
-                session:_mark_task_open("task-2")
-
-                -- task-1 closes twice (e.g. consolidated + PostToolUse update)
-                session:_mark_task_closed("task-1")
-                session:_mark_task_closed("task-1")
-
-                -- sibling still open, so the indicator must not have stopped
-                assert.spy(stop_spy).was.called(0)
-                assert.is_true(session._open_tasks["task-2"])
-                -- membership guard also protects end_runs: closed once, not twice
-                assert.spy(end_runs_spy).was.called(1)
-            end
-        )
-
-        it("auto-closes the split on last close when configured", function()
-            Config.windows.subagent.auto_close = true
-            local session = make_session()
-            session:_mark_task_open("task-1")
-            session:_mark_task_closed("task-1")
-
-            assert.spy(close_win_spy).was.called(1)
-        end)
-
-        it("leaves the split open when auto_close is off", function()
-            Config.windows.subagent.auto_close = false
-            local session = make_session()
-            session:_mark_task_open("task-1")
-            session:_mark_task_closed("task-1")
-
-            assert.spy(close_win_spy).was.called(0)
-        end)
-    end)
-
-    describe("subagent execution mode", function()
-        local noop = function() end
-        local orig_auto_close
-        --- @type integer
-        local subagent_buf
-
-        --- A writer that merges updates onto its trackers the way
-        --- MessageWriter does, and records the headings written to it.
-        local function fake_writer()
-            local writer = {
-                tool_call_blocks = {},
-                headings = {},
-                ended_runs = 0,
-            }
-            function writer:write_tool_call_block(block)
-                self.tool_call_blocks[block.tool_call_id] = block
-            end
-            function writer:update_tool_call_block(block)
-                local id = block.tool_call_id
-                self.tool_call_blocks[id] = vim.tbl_deep_extend(
-                    "force",
-                    self.tool_call_blocks[id],
-                    block
-                )
-            end
-            function writer:write_subagent_heading(text)
-                table.insert(self.headings, text)
-            end
-            function writer:end_runs()
-                self.ended_runs = self.ended_runs + 1
-            end
-            writer.finalize_turn = noop
-            writer.flush_thought_run = noop
-            writer.reset_turn_state = noop
-            writer.reset = noop
-            return writer
-        end
-
-        --- A session running the real Task bookkeeping over fake writers.
-        --- @return agentic.SessionManager session
-        --- @return { opened: integer, closed: integer, history: table[] } sink
-        local function make_session()
-            local sink = { opened = 0, closed = 0, history = {} }
-            local fields = {
-                _loading = false,
-                _session_epoch = 0,
-                _prompt_pending = 0,
-                is_generating = false,
-                _tool_call_owner = {},
-                _open_tasks = {},
-                _started_tasks = {},
-                _headed_tasks = {},
-                _subagent_win_opened_this_turn = false,
-                message_writer = fake_writer(),
-                subagent_writer = fake_writer(),
-                status_indicator = {
-                    start = noop,
-                    stop = noop,
-                    reposition = noop,
-                },
-                subagent_status_indicator = {
-                    start = noop,
-                    stop = noop,
-                    reposition = noop,
-                },
-                widget = {
-                    buf_nrs = { subagent = subagent_buf },
-                    open_subagent_window = function()
-                        sink.opened = sink.opened + 1
-                    end,
-                    close_subagent_window = function()
-                        sink.closed = sink.closed + 1
-                    end,
-                },
-                permission_manager = {
-                    current_request = nil,
-                    queue = {},
-                    remove_request_by_tool_call_id = noop,
-                    drop_pending_edit = noop,
-                    finalize_edit_range = noop,
-                },
-                chat_history = {
-                    add_message = function(_self, msg)
-                        table.insert(sink.history, msg)
-                    end,
-                    update_tool_call = function(_self, _id, update)
-                        table.insert(sink.history, update)
-                    end,
-                },
-                _history_changed = noop,
-                _try_record_edit_range = noop,
-                _record_file_op = noop,
-                _track_plan_exit = noop,
-                _drain_hook_records = noop,
-            }
-            --- @type agentic.SessionManager
-            local session = setmetatable(fields, { __index = SessionManager }) --[[@as agentic.SessionManager]]
-            return session, sink
-        end
-
-        --- Spawn top-level Task `id` the way the bridge streams one: an empty
-        --- initial tool_call, then the input that resolves the kind.
-        --- @param session agentic.SessionManager
-        --- @param id string
-        --- @param mode agentic.ui.MessageWriter.SubagentMode
-        local function spawn_task(session, id, mode)
-            session:_on_tool_call({
-                tool_call_id = id,
-                kind = "think",
-                status = "pending",
-                argument = "",
-            })
-            session:_on_tool_call_update({
-                tool_call_id = id,
-                kind = "SubAgent",
-                status = "in_progress",
-                argument = "Explore: map subagent UI",
-                subagent = {
-                    label = "map subagent UI",
-                    mode = mode,
-                    confirmed = false,
-                },
-            })
-        end
-
-        --- @param session agentic.SessionManager
-        --- @param id string
-        --- @param mode agentic.ui.MessageWriter.SubagentMode
-        local function confirm(session, id, mode)
-            session:_on_tool_call_update({
-                tool_call_id = id,
-                subagent = { mode = mode, confirmed = true },
-            })
-        end
-
-        --- @param session agentic.SessionManager
-        --- @param id string
-        --- @param status agentic.ui.ToolCallStatus
-        local function finish(session, id, status)
-            session:_on_tool_call_update({ tool_call_id = id, status = status })
-        end
-
-        before_each(function()
-            orig_auto_close = Config.windows.subagent.auto_close
-            Config.windows.subagent.auto_close = true
-            subagent_buf = vim.api.nvim_create_buf(false, true)
-            -- As the widget's: a `nofile` buffer never holds 'modified'.
-            vim.bo[subagent_buf].buftype = "acwrite"
-            vim.b[subagent_buf].agentic_window = "subagent"
-        end)
-
-        after_each(function()
-            Config.windows.subagent.auto_close = orig_auto_close
-            vim.api.nvim_buf_delete(subagent_buf, { force = true })
-        end)
-
-        it("keeps a background Task open past its completed update", function()
-            local session = make_session()
-            spawn_task(session, "task-1", "background")
-            finish(session, "task-1", "completed")
-            confirm(session, "task-1", "background")
-
-            assert.is_true(session._open_tasks["task-1"])
-        end)
-
-        it("closes every open Task at the turn's end", function()
-            local session, sink = make_session()
-            spawn_task(session, "task-1", "background")
-            -- A blocking Task still open here was cut off by a cancel.
-            spawn_task(session, "task-2", "blocking")
-
-            session:_close_open_tasks()
-
-            assert.same({}, session._open_tasks)
-            assert.equal(
-                2,
-                (session.subagent_writer --[[@as table]]).ended_runs
-            )
-            assert.equal(1, sink.closed)
-        end)
-
-        describe("subagent output in history", function()
-            local ResponseBoundary = require("agentic.acp.response_boundary")
-
-            --- `make_session` over a real ChatHistory, for an idle session.
-            --- @return agentic.SessionManager
-            local function make_recording_session()
-                local session = make_session()
-                session.chat_history = ChatHistory:new()
-                session.chat_history.session_id = "sid"
-                session.agent = {
-                    provider_config = { name = "test" },
-                } --[[@as agentic.acp.ACPClient]]
-                session._response_boundaries = {
-                    main = ResponseBoundary:new(),
-                    subagent = ResponseBoundary:new(),
-                }
-                local writer = session.subagent_writer --[[@as table]]
-                writer.write_message_chunk = noop
-                return session
-            end
-
-            --- @param session agentic.SessionManager
-            --- @param kind "agent_message_chunk"|"agent_thought_chunk"
-            --- @param text string
-            local function subagent_chunk(session, kind, text)
-                session:_on_session_update({
-                    sessionUpdate = kind,
-                    content = { type = "text", text = text },
-                    _meta = { claudeCode = { parentToolUseId = "task-1" } },
-                } --[[@as agentic.acp.SessionUpdateMessage]])
-            end
-
-            --- @param session agentic.SessionManager
-            local function subagent_call(session)
-                session:_on_tool_call({
-                    tool_call_id = "sub-read",
-                    kind = "read",
-                    status = "pending",
-                    argument = "a.lua",
-                    parent_tool_use_id = "task-1",
-                })
-            end
-
-            it(
-                "records chunks, thoughts and tool calls with their parent",
-                function()
-                    local session = make_recording_session()
-
-                    subagent_chunk(session, "agent_thought_chunk", "hmm")
-                    subagent_chunk(session, "agent_message_chunk", "found")
-                    subagent_call(session)
-
-                    local history = session.chat_history
-                    assert.same({}, history.messages)
-                    assert.same(
-                        { "thought", "agent", "tool_call" },
-                        vim.tbl_map(function(msg)
-                            return msg.type
-                        end, history.subagent_messages)
-                    )
-                    for _, msg in ipairs(history.subagent_messages) do
-                        assert.equal("task-1", msg.parent_tool_use_id)
-                    end
-                end
-            )
-
-            it("drops them and their updates while a session loads", function()
-                local notify_stub = spy.stub(Logger, "notify")
-                local session = make_recording_session()
-                session._loading = true
-
-                subagent_chunk(session, "agent_message_chunk", "found")
-                subagent_call(session)
-                session:_on_tool_call_update({
-                    tool_call_id = "sub-read",
-                    status = "completed",
-                })
-                notify_stub:revert()
-
-                assert.same({}, session.chat_history.subagent_messages)
-                assert.same(
-                    {},
-                    (session.subagent_writer --[[@as table]]).tool_call_blocks
-                )
-                assert.equal(0, notify_stub.call_count)
-            end)
-
-            it(
-                "sets the subagent buffer's modified from the history",
-                function()
-                    local session = make_recording_session()
-
-                    subagent_chunk(session, "agent_message_chunk", "found")
-                    assert.is_true(vim.bo[subagent_buf].modified)
-
-                    session.chat_history.dirty = false
-                    session:_sync_modified(session.chat_history)
-                    assert.is_false(vim.bo[subagent_buf].modified)
-                end
-            )
-        end)
-
-        it(
-            "keeps a background Task open when its result comes first",
-            function()
-                local session = make_session()
-                spawn_task(session, "task-1", "background")
-                confirm(session, "task-1", "background")
-                finish(session, "task-1", "completed")
-
-                assert.is_true(session._open_tasks["task-1"])
-            end
-        )
-
-        it("closes a blocking Task on its result ahead of completed", function()
-            local session = make_session()
-            spawn_task(session, "task-1", "blocking")
-            confirm(session, "task-1", "blocking")
-
-            assert.is_nil(session._open_tasks["task-1"])
-        end)
-
-        it("closes a Task whose prediction background was wrong", function()
-            local session = make_session()
-            spawn_task(session, "task-1", "background")
-            finish(session, "task-1", "completed")
-            confirm(session, "task-1", "blocking")
-
-            assert.is_nil(session._open_tasks["task-1"])
-        end)
-
-        it("closes a blocking Task on completed", function()
-            local session, sink = make_session()
-            spawn_task(session, "task-1", "blocking")
-            finish(session, "task-1", "completed")
-
-            assert.is_nil(session._open_tasks["task-1"])
-            assert.equal(1, sink.closed)
-        end)
-
-        it("does not reopen a blocking Task on its late result", function()
-            local session = make_session()
-            spawn_task(session, "task-1", "blocking")
-            finish(session, "task-1", "completed")
-            confirm(session, "task-1", "blocking")
-
-            assert.is_nil(session._open_tasks["task-1"])
-        end)
-
-        it("closes a failed Task whatever its mode", function()
-            local session = make_session()
-            spawn_task(session, "task-1", "background")
-            finish(session, "task-1", "failed")
-
-            assert.is_nil(session._open_tasks["task-1"])
-        end)
-
-        it("reopens a blocking prediction the result overturns", function()
-            local session, sink = make_session()
-            spawn_task(session, "task-1", "blocking")
-            finish(session, "task-1", "completed")
-            confirm(session, "task-1", "background")
-
-            assert.is_true(session._open_tasks["task-1"])
-            -- Past the once-per-turn guard the first open set.
-            assert.equal(2, sink.opened)
-        end)
-
-        it("opens nothing while a session/load replays", function()
-            local session, sink = make_session()
-            session._loading = true
-            spawn_task(session, "task-1", "background")
-
-            assert.same({}, session._open_tasks)
-            assert.equal(0, sink.opened)
-        end)
-
-        it("heads a subagent at its first activity, once", function()
-            local session = make_session()
-            local headings = (session.subagent_writer --[[@as table]]).headings
-            spawn_task(session, "task-1", "background")
-            -- The rest of the input streams in after the Task starts.
-            session:_on_tool_call_update({
-                tool_call_id = "task-1",
-                subagent = {
-                    label = "mapper",
-                    mode = "blocking",
-                    confirmed = false,
-                },
-            })
-            assert.same({}, headings)
-
-            for _, id in ipairs({ "child-1", "child-2" }) do
-                session:_on_tool_call({
-                    tool_call_id = id,
-                    parent_tool_use_id = "task-1",
-                    kind = "read",
-                    status = "pending",
-                    argument = "a.lua",
-                })
-            end
-
-            assert.same({ "mapper (Blocking?)" }, headings)
-        end)
-
-        it("heads no nested agent", function()
-            local session = make_session()
-            spawn_task(session, "task-1", "background")
-
-            session:_on_tool_call({
-                tool_call_id = "grandchild-1",
-                parent_tool_use_id = "nested-task",
-                kind = "read",
-                status = "pending",
-                argument = "a.lua",
-            })
-
-            assert.same({}, (session.subagent_writer --[[@as table]]).headings)
-        end)
-
-        it(
-            "routes a background agent's calls after the next turn starts",
-            function()
-                local session = make_session()
-                session.agent = { send_prompt = noop }
-                session._session_epoch = 0
-                session._prompt_pending = 0
-                session.chat_history.save = noop
-                session._sync_modified = noop
-                session:_on_tool_call({
-                    tool_call_id = "child-1",
-                    parent_tool_use_id = "task-1",
-                    kind = "read",
-                    status = "pending",
-                    argument = "a.lua",
-                })
-
-                session:_dispatch_turn({})
-
-                assert.equal(
-                    session.subagent_writer,
-                    session:_writer_for("child-1")
-                )
-            end
-        )
-
-        it("records the mode in history", function()
-            local session, sink = make_session()
-            spawn_task(session, "task-1", "background")
-
-            assert.same({
-                label = "map subagent UI",
-                mode = "background",
-                confirmed = false,
-            }, sink.history[#sink.history].subagent)
-        end)
-
-        it("records the head and kind an update resolves in history", function()
-            local session, sink = make_session()
-            spawn_task(session, "task-1", "background")
-
-            local recorded = sink.history[#sink.history]
-            assert.equal("SubAgent", recorded.kind)
-            assert.equal("Explore: map subagent UI", recorded.argument)
-        end)
-
-        it("replays the mode from history", function()
-            local writer = fake_writer()
-            local subagent = {
-                label = "map subagent UI",
-                mode = "background",
-                confirmed = true,
-            }
-
-            require("agentic.session_restore").replay_messages(writer, {
-                {
-                    type = "tool_call",
-                    tool_call_id = "task-1",
-                    kind = "SubAgent",
-                    status = "completed",
-                    argument = "Explore: map subagent UI",
-                    subagent = subagent,
-                },
-            })
-
-            assert.same(subagent, writer.tool_call_blocks["task-1"].subagent)
-        end)
-
-        describe("subagent reset", function()
-            it("resets on /new", function()
-                local session = make_session()
-                spawn_task(session, "task-1", "blocking")
-                session.permission_manager.clear = noop
-                session.widget.buf_nrs.input = subagent_buf
-                session.widget.set_chat_title = noop
-
-                session:_cancel_session()
-
-                assert.same({}, session._started_tasks)
-                assert.same({}, session._tool_call_owner)
-            end)
-
-            it("resets on a restore from history", function()
-                local session = make_session()
-                spawn_task(session, "task-1", "blocking")
-                session.session_id = "s-1"
-                session._sync_modified = noop
-                session.file_activity = { clear = noop, load = noop }
-
-                session:restore_from_history(
-                    ChatHistory:new(),
-                    { reuse_session = true }
-                )
-
-                assert.same({}, session._started_tasks)
-            end)
         end)
     end)
 
@@ -4618,6 +4014,7 @@ describe("agentic.SessionManager", function()
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
         end
@@ -4664,6 +4061,7 @@ describe("agentic.SessionManager", function()
                 widget = { buf_nrs = {} },
                 _adopt_history = SessionManager._adopt_history,
                 _sync_modified = SessionManager._sync_modified,
+                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
 
@@ -4690,26 +4088,29 @@ describe("agentic.SessionManager", function()
         before_each(function()
             main_write = spy.new(function() end)
             subagent_write = spy.new(function() end)
-            session = {
-                _response_boundaries = {
-                    main = ResponseBoundary:new(),
-                    subagent = ResponseBoundary:new(),
-                },
+            -- A running subagent spawned by Task `task`.
+            local transcript = {
+                writer = { write_message_chunk = subagent_write },
+                status_indicator = { reposition = function() end },
+                response_boundary = ResponseBoundary:new(),
+                set_modified = function() end,
+            }
+            session = setmetatable({
+                _response_boundary = ResponseBoundary:new(),
                 message_writer = { write_message_chunk = main_write },
-                subagent_writer = { write_message_chunk = subagent_write },
                 status_indicator = { start = function() end },
-                subagent_status_indicator = { reposition = function() end },
                 chat_history = ChatHistory:new(),
                 agent = { provider_config = { name = "test-provider" } },
                 widget = { buf_nrs = {} },
                 _prompt_pending = 1,
-                _ensure_subagent_window = function() end,
-                _head_subagent = function() end,
-                _on_session_update = SessionManager._on_session_update,
-                _history_changed = SessionManager._history_changed,
-                _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
-            } --[[@as agentic.SessionManager]]
+                _agents = {
+                    c1 = { transcript = transcript, open = true, meta_read = true },
+                },
+                _agent_by_task = { task = "c1" },
+                _transcript_for = function()
+                    return transcript
+                end,
+            }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
         end)
 
         --- @param message_id string|vim.NIL

@@ -17,6 +17,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
 
             --- @type agentic.acp.ACPClient
             local adapter = setmetatable({
+                _children = {},
                 subscribers = {
                     ["sess-1"] = {
                         on_tool_call_update = sub_spy,
@@ -67,6 +68,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
 
                 --- @type agentic.acp.ACPClient
                 local adapter = setmetatable({
+                    _children = {},
                     subscribers = {
                         ["sess-1"] = {
                             on_tool_call_update = sub_spy,
@@ -117,6 +119,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
 
             --- @type agentic.acp.ACPClient
             local adapter = setmetatable({
+                _children = {},
                 subscribers = {
                     ["sess-1"] = {
                         on_tool_call_update = sub_spy,
@@ -142,6 +145,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
 
             --- @type agentic.acp.ACPClient
             local adapter = setmetatable({
+                _children = {},
                 subscribers = {
                     ["sess-1"] = {
                         on_tool_call_update = sub_spy,

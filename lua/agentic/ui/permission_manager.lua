@@ -34,6 +34,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field keymap_info table[] Keymap info for cleanup {mode, lhs, bufnr}
 --- @field _layout_autocmd? integer Autocmd re-placing the float and its option keys on layout changes while a request is shown
 --- @field permission_float agentic.ui.PermissionFloat
+--- @field on_present? fun(bufnr: integer) Called when a request reaches the front of the queue, before its float opens on a window showing `bufnr`, the buffer of its tool call
 --- @field on_hidden_change? fun(hidden: boolean, bufnr: integer) Called when a request starts or stops waiting with its float hidden, because no window shows `bufnr`, the buffer of its tool call
 --- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
@@ -73,9 +74,8 @@ function PermissionManager:new(message_writer, buf_nrs, owner_id, writer_for)
     return instance
 end
 
---- The MessageWriter owning a tool call. Subagent tool-call blocks live in the
---- subagents buffer, so tracker lookups and the float anchor must resolve
---- through here rather than assuming the main chat writer.
+--- The MessageWriter owning a tool call: the chat's, or a subagent
+--- transcript's.
 --- @param tool_call_id string
 --- @return agentic.ui.MessageWriter
 function PermissionManager:_writer(tool_call_id)
@@ -809,11 +809,12 @@ function PermissionManager:_process_next()
     local request = item[2]
     local callback = item[3]
     local sorted_options = self._sort_permission_options(request.options)
+    local bufnr = self:_writer(toolCallId).bufnr
+    if self.on_present then
+        self.on_present(bufnr)
+    end
 
-    local option_mapping = self.permission_float:open(
-        sorted_options,
-        self:_writer(toolCallId).bufnr
-    )
+    local option_mapping = self.permission_float:open(sorted_options, bufnr)
     self:_apply_unapproved_highlight(request)
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
@@ -877,9 +878,8 @@ function PermissionManager:_apply_unapproved_highlight(request)
     end
 end
 
---- Clear the unapproved-command highlight. The highlight may sit in either the
---- main or the subagents buffer, so clear the current request's owning buffer
---- (falling back to main); clearing an empty namespace is a no-op.
+--- Clear the unapproved-command highlight from the buffer owning the current
+--- request's tool call, or from the chat when there is no current request.
 function PermissionManager:_clear_unapproved_highlight()
     local id = self.current_request and self.current_request.toolCallId
     local writer = id and self:_writer(id) or self.message_writer
@@ -1055,10 +1055,10 @@ function PermissionManager:remove_request_by_tool_call_id(toolCallId)
     end
 end
 
---- Bind the current request's option keys on the session's buffers while its
---- float is visible in the current tabpage, and unbind them otherwise: the
---- keys are buffer-local, and the buffers can be shown in a tabpage the float
---- is not in.
+--- Bind the current request's option keys on the session's buffers and on the
+--- buffer owning the request's tool call, while its float is visible in the
+--- current tabpage, and unbind them otherwise: the keys are buffer-local, and
+--- the buffers can be shown in a tabpage the float is not in.
 function PermissionManager:_sync_keymaps()
     self:_remove_keymaps()
 
@@ -1069,6 +1069,12 @@ function PermissionManager:_sync_keymaps()
         or not self.permission_float:is_visible_in_current_tab()
     then
         return
+    end
+
+    local bufnrs = vim.tbl_values(self._buf_nrs)
+    local anchor = self:_writer(self.current_request.toolCallId).bufnr
+    if not vim.list_contains(bufnrs, anchor) then
+        table.insert(bufnrs, anchor)
     end
 
     for lhs, option_id in pairs(option_mapping) do
@@ -1083,7 +1089,7 @@ function PermissionManager:_sync_keymaps()
             end
         end
 
-        for _, bufnr in pairs(self._buf_nrs) do
+        for _, bufnr in ipairs(bufnrs) do
             if vim.api.nvim_buf_is_valid(bufnr) then
                 BufHelpers.keymap_set(bufnr, "n", lhs, callback, {
                     desc = "Select permission option " .. option_id,

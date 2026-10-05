@@ -53,7 +53,7 @@
 --- @field permission table<string, string> Key for permission responses by option kind
 
 --- Window options passed to nvim_set_option_value
---- Overrides default options (wrap, linebreak, winfixbuf, winfixheight)
+--- Overrides the window options the widget sets
 --- @alias agentic.UserConfig.WinOpts table<string, any>
 
 --- @class agentic.UserConfig
@@ -187,9 +187,9 @@ local ConfigDefault = {
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- @class agentic.UserConfig.Windows.Subagent
-    --- @field display boolean Route subagent (Task) work into a separate split beside the chat
+    --- @field display boolean Show each new subagent's transcript in a split beside the chat
     --- @field width string|number Split width: fraction (0-1), "N%", or column count
-    --- @field auto_close boolean Close the split when all subagents in the turn finish
+    --- @field auto_close boolean Close the split when the last running subagent ends
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- `"tab"` opens the widget in a dedicated tabpage (no file window),
@@ -333,13 +333,6 @@ local ConfigDefault = {
         chat = {
             prev_prompt = "[[",
             next_prompt = "]]",
-            --- Open the file under the cursor in a new tab and place the
-            --- cursor at the corresponding line/column of the diff. Falls
-            --- back to the hunk start when cursor is on a deleted line or
-            --- on the block header. The chat buffer's `winfixbuf` makes
-            --- the default `gf` error, so this override is the natural
-            --- mapping for that key.
-            open_diff_file = "gf",
         },
 
         --- Keys for permission responses by option kind. An option with no key

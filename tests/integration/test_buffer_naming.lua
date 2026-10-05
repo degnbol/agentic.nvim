@@ -82,7 +82,7 @@ end)()
             assert.is_nil(seen[name])
             seen[name] = true
         end
-        assert.equal(16, #names)
+        assert.equal(14, #names)
         assert.equal("", child.lua_get("vim.v.errmsg"))
     end)
 

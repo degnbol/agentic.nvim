@@ -1,13 +1,14 @@
+local BufHelpers = require("agentic.utils.buf_helpers")
 local FileSystem = require("agentic.utils.file_system")
+local Logger = require("agentic.utils.logger")
 local Renderer = require("agentic.ui.tool_call_renderer")
-local SessionRegistry = require("agentic.session_registry")
 local TextMatcher = require("agentic.utils.text_matcher")
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
 
 --- @class agentic.ui.DiffJump.Target
+--- @field path string The target file, absolute or relative to the cwd
 --- @field file_row integer 1-indexed line in target file
 --- @field file_col integer 0-indexed byte column in target file
---- @field exact boolean True when row+col map to a "new" line; false for fallback (deletion, header, fence)
 
 --- @class agentic.ui.DiffJump
 local M = {}
@@ -102,19 +103,26 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
         return nil
     end
 
+    --- @param file_row integer
+    --- @param file_col integer
+    --- @return agentic.ui.DiffJump.Target
+    local function at(file_row, file_col)
+        --- @type agentic.ui.DiffJump.Target
+        local target = {
+            path = block.argument,
+            file_row = file_row,
+            file_col = file_col,
+        }
+        return target
+    end
+
     -- Layout: collapsed header (1) + opening fence (1). The filename now
     -- lives on the header line, so there is no separate `argument` row.
     local body_offset = block_start_row + 2
     local row_in_body = chat_row - body_offset
 
-    local first_target = {
-        file_row = diff_blocks[1].start_line,
-        file_col = 0,
-        exact = false,
-    }
-
     if row_in_body < 0 then
-        return first_target
+        return at(diff_blocks[1].start_line, 0)
     end
 
     local cursor = 0
@@ -126,13 +134,7 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
         if is_new_file then
             for ni = 1, new_count do
                 if cursor == row_in_body then
-                    --- @type agentic.ui.DiffJump.Target
-                    local target = {
-                        file_row = db.start_line + ni - 1,
-                        file_col = chat_col,
-                        exact = true,
-                    }
-                    return target
+                    return at(db.start_line + ni - 1, chat_col)
                 end
                 cursor = cursor + 1
             end
@@ -147,21 +149,12 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
                             -- Paired modification: jump to the matching new
                             -- line. Column is best-effort (chat shows old
                             -- content here, file has new — same byte index).
-                            --- @type agentic.ui.DiffJump.Target
-                            local target = {
-                                file_row = db.start_line + pair.new_idx - 1,
-                                file_col = chat_col,
-                                exact = false,
-                            }
-                            return target
+                            return at(
+                                db.start_line + pair.new_idx - 1,
+                                chat_col
+                            )
                         end
-                        --- @type agentic.ui.DiffJump.Target
-                        local target = {
-                            file_row = db.start_line,
-                            file_col = 0,
-                            exact = false,
-                        }
-                        return target
+                        return at(db.start_line, 0)
                     end
                     cursor = cursor + 1
                 end
@@ -170,13 +163,7 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
             for _, pair in ipairs(filtered.pairs) do
                 if pair.new_line and pair.new_idx then
                     if cursor == row_in_body then
-                        --- @type agentic.ui.DiffJump.Target
-                        local target = {
-                            file_row = db.start_line + pair.new_idx - 1,
-                            file_col = chat_col,
-                            exact = true,
-                        }
-                        return target
+                        return at(db.start_line + pair.new_idx - 1, chat_col)
                     end
                     cursor = cursor + 1
                 end
@@ -185,24 +172,17 @@ function M.compute_target(block, block_start_row, chat_row, chat_col)
     end
 
     -- Past last hunk row (closing fence / footer). Use the last hunk start.
-    --- @type agentic.ui.DiffJump.Target
-    local last_target = {
-        file_row = diff_blocks[#diff_blocks].start_line,
-        file_col = 0,
-        exact = false,
-    }
-    return last_target
+    return at(diff_blocks[#diff_blocks].start_line, 0)
 end
 
---- Open `path` (or focus an existing tab+window already showing it) and
---- place the cursor at `target`. `:tab drop` handles both cases: focus
---- the existing window if any tab has it on screen, else open a new tab.
---- @param path string
+--- Open `target.path` with `open_cmd` and place the cursor at `target`, on
+--- screen row `screen_row` of the window it lands in.
 --- @param target agentic.ui.DiffJump.Target
---- @param chat_screen_row integer Result of vim.fn.winline() in chat window
-function M.open_in_tab(path, target, chat_screen_row)
-    local abs = FileSystem.to_absolute_path(path) or path
-    vim.cmd("tab drop " .. vim.fn.fnameescape(abs))
+--- @param open_cmd string Ex command that takes a file name, e.g. `edit`, `split`, `tab drop`
+--- @param screen_row integer 1-indexed window row, as `winline()` reports it
+function M.open(target, open_cmd, screen_row)
+    local abs = FileSystem.to_absolute_path(target.path) or target.path
+    vim.cmd(open_cmd .. " " .. vim.fn.fnameescape(abs))
 
     local file_line_count = vim.api.nvim_buf_line_count(0)
     local lnum = math.max(1, math.min(target.file_row, file_line_count))
@@ -210,56 +190,70 @@ function M.open_in_tab(path, target, chat_screen_row)
     local line = vim.api.nvim_buf_get_lines(0, lnum - 1, lnum, false)[1] or ""
     local col = math.max(0, math.min(target.file_col, #line))
 
-    -- topline so the cursor lands at the same screen row as it had in the
-    -- chat. Best effort: assumes no wrap on the target side. winrestview
-    -- clamps topline if it would push the cursor off-screen.
-    local desired_topline = math.max(1, lnum - chat_screen_row + 1)
+    -- Best effort: assumes no wrap on the target side. winrestview clamps
+    -- topline if it would push the cursor off-screen.
+    local desired_topline = math.max(1, lnum - screen_row + 1)
     vim.fn.winrestview({ topline = desired_topline, lnum = lnum, col = col })
 end
 
---- @alias agentic.ui.DiffJump.Status
----| "ok"            # jump performed
----| "no_session"    # no SessionManager for this tabpage
----| "no_block"      # cursor not inside any tool call block
----| "no_diff"       # block has no diff (e.g. Read, Search)
----| "no_target"     # extract_diff_blocks returned no hunks
-
---- Top-level handler for the chat buffer's open_diff_file keymap.
---- @return agentic.ui.DiffJump.Status status
-function M.handle()
-    local win = vim.api.nvim_get_current_win()
-    local bufnr = vim.api.nvim_win_get_buf(win)
-    local cursor = vim.api.nvim_win_get_cursor(win)
-    local chat_row = cursor[1] - 1
-    local chat_col = cursor[2]
-    local screen_row = vim.fn.winline()
-
-    local session = SessionRegistry.owner_of_buf(bufnr)
-    if not session or not session.message_writer then
-        return "no_session"
-    end
-
-    local block, block_start_row = M.find_block_at_row(
-        bufnr,
-        chat_row,
-        session.message_writer.tool_call_blocks
-    )
-
+--- The edited file and position for a buffer position inside an edit block.
+--- The header, a removed row with no replacement, and rows past the last hunk
+--- give a hunk's first line.
+--- @param bufnr integer
+--- @param row integer 0-indexed buffer row
+--- @param col integer 0-indexed byte column
+--- @param tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock> The blocks rendered in `bufnr`
+--- @return agentic.ui.DiffJump.Target|nil target Nil outside edit blocks, or when the edit's hunks are not found in the file
+function M.target_at(bufnr, row, col, tool_call_blocks)
+    local block, block_start_row =
+        M.find_block_at_row(bufnr, row, tool_call_blocks)
     if not block or not block_start_row then
-        return "no_block"
+        return nil
     end
+    return M.compute_target(block, block_start_row, row, col)
+end
 
-    if not block.diff or not block.argument or block.argument == "" then
-        return "no_diff"
+--- Native file-opening keys, each with the Ex command that opens a file the
+--- same way.
+local GOTO_FILE_KEYS = {
+    gf = "edit",
+    ["<C-w>f"] = "split",
+    ["<C-w><C-f>"] = "split",
+    ["<C-w>gf"] = "tabedit",
+}
+
+--- Make `gf`, `<C-w>f`, `<C-w><C-f>` and `<C-w>gf` in `bufnr` open the edited
+--- file at the line where the native key fails and the cursor is inside one of
+--- `writer`'s edit blocks. A count is ignored there. Elsewhere the keys act
+--- natively.
+--- @param bufnr integer
+--- @param writer agentic.ui.MessageWriter The writer rendering `bufnr`
+function M.set_goto_file_keymaps(bufnr, writer)
+    for key, open_cmd in pairs(GOTO_FILE_KEYS) do
+        BufHelpers.keymap_set(bufnr, "n", key, function()
+            local count = vim.v.count > 0 and tostring(vim.v.count) or ""
+            local ok, err = pcall(
+                vim.cmd.normal,
+                { count .. vim.keycode(key), bang = true }
+            )
+            if ok then
+                return
+            end
+            local cursor = vim.api.nvim_win_get_cursor(0)
+            local target = M.target_at(
+                bufnr,
+                cursor[1] - 1,
+                cursor[2],
+                writer.tool_call_blocks
+            )
+            if not target then
+                local native_error = tostring(err):gsub("^Vim%(normal%):", "")
+                Logger.notify(native_error, vim.log.levels.ERROR)
+                return
+            end
+            M.open(target, open_cmd, vim.fn.winline())
+        end, { desc = "Agentic: Open file under cursor" })
     end
-
-    local target = M.compute_target(block, block_start_row, chat_row, chat_col)
-    if not target then
-        return "no_target"
-    end
-
-    M.open_in_tab(block.argument, target, screen_row)
-    return "ok"
 end
 
 return M

@@ -54,6 +54,12 @@ function HookRecordReader:set_transcript_path(path, session_id)
     self._catching_up = true
 end
 
+--- The session transcript this reader follows, once a hook has reported it.
+--- @return string|nil path
+function HookRecordReader:transcript_path()
+    return self._path
+end
+
 --- Whether a record is one this reader is responsible for showing.
 ---
 --- A timestamp places the record against the marker directly. A record without

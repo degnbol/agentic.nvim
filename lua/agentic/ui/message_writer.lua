@@ -82,12 +82,13 @@ end
 --- open until the agent ends, `background` returns it at launch.
 --- @alias agentic.ui.MessageWriter.SubagentMode "background"|"blocking"
 
---- Identity and execution mode of the subagent a Task tool call spawned.
+--- Identity and execution mode of a subagent.
 --- @class agentic.ui.MessageWriter.SubagentInfo
---- @field label? string Display name of the agent. Absent on the update that confirms the mode, which merges onto an earlier one
+--- @field label? string Display name of the agent. Always set at spawn, absent only on blocks saved by earlier versions
+--- @field agent_type? string Subagent type, once the SDK's record of the spawn is read
 --- @field mode agentic.ui.MessageWriter.SubagentMode
---- @field confirmed boolean `mode` comes from the tool's result rather than a prediction from its input
---- @field agent_id? string Id addressing a background agent, once launched
+--- @field confirmed boolean `mode` comes from the SDK's record of the spawn rather than a prediction
+--- @field agent_id? string Id addressing the agent, for its tools such as SendMessage and TaskStop
 
 --- @class agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id string
@@ -103,7 +104,7 @@ end
 --- @field file_created? boolean Whether the call created the file rather than changing existing content. Reported after the tool runs, so absent until then — a mutation with no value here has not been told either way, which is not the same as false.
 --- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives a session restore, which re-deriving from disk cannot (the file is post-edit by then).
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
---- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a Task tool call
+--- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in the main chat
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -1873,7 +1874,7 @@ end
 --- @param starts_response boolean|nil The chunk starts a new model response, which is separated by a blank line from prose it follows
 function MessageWriter:write_message_chunk(update, starts_response)
     -- _on_session_update routes chunks to the writer for the agent that
-    -- produced them (main → chat, subagent → subagents window), so each window
+    -- produced them (main → chat, subagent → its transcript), so each buffer
     -- shows its own agent's prose and thinking.
     local text = update.content
         and update.content.type == "text"

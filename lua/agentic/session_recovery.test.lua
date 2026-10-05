@@ -269,6 +269,7 @@ describe("agentic.session_recovery", function()
                     widget = { buf_nrs = {} },
                     _adopt_history = SessionManager._adopt_history,
                     _sync_modified = SessionManager._sync_modified,
+                    _agents = {},
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                     new_session = function(this, opts)
                         this.chat_history = {

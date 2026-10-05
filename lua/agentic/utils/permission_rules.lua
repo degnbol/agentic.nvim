@@ -1158,8 +1158,7 @@ end
 --- a prompt (fail-closed). No re-stat against the eventual `open()`: the walk →
 --- approve callback path is synchronous, so the bytes read here are the bytes
 --- judged, and the post-callback IPC window to the shell's open is not closeable
---- client-side anyway (unlike the `/trust` path, whose re-stat guards an async
---- diff-preview gap).
+--- client-side anyway.
 --- @param path string resolved absolute path
 --- @return string|nil
 local function read_script(path)

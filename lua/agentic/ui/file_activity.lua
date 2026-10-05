@@ -476,15 +476,15 @@ function FileActivity:_open_row_under_cursor()
     end
 
     local first = row.ranges[1]
-    -- `open_in_tab` reproduces the caller's screen row in the opened window so
-    -- a chat→file jump doesn't move the eye. Reproducing this panel's row would
-    -- put the target in the top few lines of a full-height window, so ask for
-    -- the middle instead.
-    DiffJump.open_in_tab(row.path, {
+    --- @type agentic.ui.DiffJump.Target
+    local target = {
+        path = row.path,
         file_row = first and first.start_line or 1,
         file_col = 0,
-        exact = first ~= nil,
-    }, math.floor(vim.o.lines / 2))
+    }
+    -- This panel's screen row would put the target in the top few lines of a
+    -- full-height window, so ask for the middle instead.
+    DiffJump.open(target, "tab drop", math.floor(vim.o.lines / 2))
 end
 
 --- @private

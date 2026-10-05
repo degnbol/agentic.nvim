@@ -7,10 +7,14 @@ local Logger = require("agentic.utils.logger")
 describe("WidgetLayout", function()
     local original_position
     local notify_stub
+    --- The panel buffers of the test, filled by `panel_buf`.
+    --- @type agentic.ui.ChatWidget.BufNrs
+    local buf_nrs
 
     before_each(function()
         original_position = Config.windows.position
         notify_stub = spy.stub(Logger, "notify")
+        buf_nrs = {}
     end)
 
     after_each(function()
@@ -98,95 +102,192 @@ describe("WidgetLayout", function()
         end)
     end)
 
-    describe("close", function()
-        it("should close all valid windows", function()
-            local bufnr = vim.api.nvim_create_buf(false, true)
-            local winid = vim.api.nvim_open_win(bufnr, false, {
-                split = "right",
-                win = -1,
-            })
+    --- A new scratch buffer, recorded as the `panel` buffer in `buf_nrs`.
+    --- @param panel agentic.ui.ChatWidget.PanelNames
+    --- @return integer bufnr
+    local function panel_buf(panel)
+        local bufnr = vim.api.nvim_create_buf(false, true)
+        buf_nrs[panel] = bufnr
+        return bufnr
+    end
 
-            local win_nrs = { test = winid }
-            WidgetLayout.close(win_nrs)
+    --- Fill `buf_nrs` with a buffer for each panel the layout opens.
+    --- @return agentic.ui.ChatWidget.BufNrs buf_nrs
+    local function panel_bufs()
+        for _, panel in ipairs({
+            "chat",
+            "input",
+            "code",
+            "files",
+            "diagnostics",
+            "todos",
+        }) do
+            panel_buf(panel)
+        end
+        return buf_nrs
+    end
+
+    --- @param bufnr integer
+    --- @param opts vim.api.keyset.win_config|nil
+    --- @return integer winid
+    local function split(bufnr, opts)
+        return vim.api.nvim_open_win(
+            bufnr,
+            false,
+            vim.tbl_extend("force", { split = "right", win = -1 }, opts or {})
+        )
+    end
+
+    --- Show a new listed buffer in `winid`, as `:enew` there would.
+    --- @param winid integer
+    local function show_other_buffer(winid)
+        vim.api.nvim_win_set_buf(winid, vim.api.nvim_create_buf(true, false))
+    end
+
+    describe("panel_win", function()
+        it("is the slot's window while it shows the panel buffer", function()
+            local winid = split(panel_buf("chat"))
+            local win_nrs = { chat = winid }
+
+            assert.equal(
+                winid,
+                WidgetLayout.panel_win(win_nrs, buf_nrs, "chat")
+            )
+            assert.is_nil(WidgetLayout.panel_win(win_nrs, buf_nrs, "input"))
+            -- Another session's chat buffer.
+            assert.is_nil(
+                WidgetLayout.panel_win(
+                    win_nrs,
+                    { chat = vim.api.nvim_create_buf(false, true) },
+                    "chat"
+                )
+            )
+
+            vim.api.nvim_win_close(winid, true)
+        end)
+
+        it(
+            "is nil while the slot shows another buffer, and back after :b",
+            function()
+                local chat = panel_buf("chat")
+                local winid = split(chat)
+                local win_nrs = { chat = winid }
+
+                show_other_buffer(winid)
+                assert.is_nil(WidgetLayout.panel_win(win_nrs, buf_nrs, "chat"))
+                assert.same({ chat = winid }, win_nrs)
+
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd.buffer(chat)
+                end)
+                assert.equal(
+                    winid,
+                    WidgetLayout.panel_win(win_nrs, buf_nrs, "chat")
+                )
+
+                vim.api.nvim_win_close(winid, true)
+            end
+        )
+
+        it("is nil for a closed window", function()
+            panel_buf("chat")
+            assert.is_nil(
+                WidgetLayout.panel_win({ chat = 99999 }, buf_nrs, "chat")
+            )
+        end)
+    end)
+
+    describe("close", function()
+        it("should close all panel windows", function()
+            local winid = split(panel_buf("chat"))
+
+            local win_nrs = { chat = winid }
+            WidgetLayout.close(win_nrs, buf_nrs)
 
             assert.is_false(vim.api.nvim_win_is_valid(winid))
-            assert.is_nil(win_nrs.test)
+            assert.is_nil(win_nrs.chat)
+        end)
+
+        it("leaves a slot showing another buffer open", function()
+            local winid = split(panel_buf("chat"))
+            show_other_buffer(winid)
+
+            local win_nrs = { chat = winid }
+            WidgetLayout.close(win_nrs, buf_nrs)
+
+            assert.is_true(vim.api.nvim_win_is_valid(winid))
+            assert.is_nil(win_nrs.chat)
+            vim.api.nvim_win_close(winid, true)
         end)
 
         it("should handle invalid windows gracefully", function()
-            local win_nrs = { test = 99999 }
-            WidgetLayout.close(win_nrs)
-            assert.is_nil(win_nrs.test)
+            local win_nrs = { chat = 99999 }
+            WidgetLayout.close(win_nrs, buf_nrs)
+            assert.is_nil(win_nrs.chat)
         end)
 
         it("should clear all entries from win_nrs table", function()
-            local bufnr1 = vim.api.nvim_create_buf(false, true)
-            local bufnr2 = vim.api.nvim_create_buf(false, true)
-            local winid1 = vim.api.nvim_open_win(bufnr1, false, {
-                split = "right",
-                win = -1,
-            })
-            local winid2 = vim.api.nvim_open_win(bufnr2, false, {
-                split = "below",
-                win = winid1,
-            })
+            local winid1 = split(panel_buf("chat"))
+            local winid2 =
+                split(panel_buf("input"), { split = "below", win = winid1 })
 
-            local win_nrs = { win1 = winid1, win2 = winid2 }
-            WidgetLayout.close(win_nrs)
+            local win_nrs = { chat = winid1, input = winid2 }
+            WidgetLayout.close(win_nrs, buf_nrs)
 
-            assert.is_nil(win_nrs.win1)
-            assert.is_nil(win_nrs.win2)
+            assert.is_nil(win_nrs.chat)
+            assert.is_nil(win_nrs.input)
         end)
     end)
 
     describe("close_optional_window", function()
         it("should close valid window", function()
-            local bufnr = vim.api.nvim_create_buf(false, true)
-            local winid = vim.api.nvim_open_win(bufnr, false, {
-                split = "right",
-                win = -1,
-            })
+            local winid = split(panel_buf("code"))
 
             local win_nrs = { code = winid }
-            WidgetLayout.close_optional_window(win_nrs, "code")
+            WidgetLayout.close_optional_window(win_nrs, buf_nrs, "code")
 
             assert.is_false(vim.api.nvim_win_is_valid(winid))
             assert.is_nil(win_nrs.code)
         end)
 
+        it("leaves a slot showing another buffer open", function()
+            local winid = split(panel_buf("code"))
+            show_other_buffer(winid)
+
+            local win_nrs = { code = winid }
+            WidgetLayout.close_optional_window(win_nrs, buf_nrs, "code")
+
+            assert.is_true(vim.api.nvim_win_is_valid(winid))
+            assert.is_nil(win_nrs.code)
+            vim.api.nvim_win_close(winid, true)
+        end)
+
         it("should handle invalid windows gracefully", function()
             local win_nrs = { code = 99999 }
-            WidgetLayout.close_optional_window(win_nrs, "code")
+            WidgetLayout.close_optional_window(win_nrs, buf_nrs, "code")
             assert.is_nil(win_nrs.code)
         end)
 
         it("should handle nil windows", function()
             local win_nrs = { code = nil }
-            WidgetLayout.close_optional_window(win_nrs, "code")
+            WidgetLayout.close_optional_window(win_nrs, buf_nrs, "code")
             assert.is_nil(win_nrs.code)
         end)
 
         it("should restore chat height in bottom layout", function()
             Config.windows.position = "bottom"
 
-            local chat_buf = vim.api.nvim_create_buf(false, true)
-            local code_buf = vim.api.nvim_create_buf(false, true)
-
-            local chat_winid = vim.api.nvim_open_win(chat_buf, false, {
-                split = "below",
-                win = -1,
-                height = 20,
-            })
-            local code_winid = vim.api.nvim_open_win(code_buf, false, {
-                split = "below",
-                win = chat_winid,
-                height = 5,
-            })
+            local chat_winid =
+                split(panel_buf("chat"), { split = "below", height = 20 })
+            local code_winid = split(
+                panel_buf("code"),
+                { split = "below", win = chat_winid, height = 5 }
+            )
 
             local before_height = vim.api.nvim_win_get_height(chat_winid)
 
             local win_nrs = { chat = chat_winid, code = code_winid }
-            WidgetLayout.close_optional_window(win_nrs, "code")
+            WidgetLayout.close_optional_window(win_nrs, buf_nrs, "code")
 
             assert.equal(before_height, vim.api.nvim_win_get_height(chat_winid))
 
@@ -226,19 +327,11 @@ describe("WidgetLayout", function()
             local tab_page_id = vim.api.nvim_get_current_tabpage()
 
             local win_nrs = {}
-            local buf_nrs = {
-                chat = vim.api.nvim_create_buf(false, true),
-                input = vim.api.nvim_create_buf(false, true),
-                code = vim.api.nvim_create_buf(false, true),
-                files = vim.api.nvim_create_buf(false, true),
-                diagnostics = vim.api.nvim_create_buf(false, true),
-                todos = vim.api.nvim_create_buf(false, true),
-            }
 
             assert.has_no_errors(function()
                 WidgetLayout.open({
                     tab_page_id = tab_page_id,
-                    buf_nrs = buf_nrs,
+                    buf_nrs = panel_bufs(),
                     win_nrs = win_nrs,
                 })
             end)
@@ -249,10 +342,105 @@ describe("WidgetLayout", function()
             -- Should have notified about invalid position
             assert.equal(1, notify_stub.call_count)
 
-            WidgetLayout.close(win_nrs)
+            WidgetLayout.close(win_nrs, buf_nrs)
             pcall(function()
                 vim.cmd("tabclose")
             end)
+        end)
+
+        it("leaves winfixbuf off", function()
+            vim.cmd("tabnew")
+            local win_nrs = {}
+            WidgetLayout.open({
+                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                buf_nrs = panel_bufs(),
+                win_nrs = win_nrs,
+            })
+
+            assert.is_false(vim.wo[win_nrs.chat].winfixbuf)
+            assert.is_false(vim.wo[win_nrs.input].winfixbuf)
+
+            WidgetLayout.close(win_nrs, buf_nrs)
+            pcall(vim.cmd.tabclose)
+        end)
+
+        it("leaves 'fillchars' global when its eob is blank", function()
+            vim.cmd("tabnew")
+            local original = vim.go.fillchars
+            vim.go.fillchars = "eob: "
+            local win_nrs = {}
+            WidgetLayout.open({
+                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                buf_nrs = panel_bufs(),
+                win_nrs = win_nrs,
+            })
+
+            local local_fillchars = vim.api.nvim_get_option_value(
+                "fillchars",
+                { win = win_nrs.chat, scope = "local" }
+            )
+
+            vim.go.fillchars = original
+            WidgetLayout.close(win_nrs, buf_nrs)
+            pcall(vim.cmd.tabclose)
+            assert.equal("", local_fillchars)
+        end)
+
+        it("gives another buffer in a slot the global options", function()
+            vim.cmd("tabnew")
+            -- In the window the panels split off, whose values they copy.
+            vim.o.number = true
+            local win_nrs = {}
+            WidgetLayout.open({
+                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                buf_nrs = panel_bufs(),
+                win_nrs = win_nrs,
+            })
+            local chat_win = win_nrs.chat --[[@as integer]]
+            assert.is_false(vim.wo[chat_win].number)
+
+            -- `:edit` takes over an empty unnamed buffer instead of leaving it.
+            vim.api.nvim_buf_set_lines(buf_nrs.chat, 0, -1, false, { "chat" })
+            local file = vim.fn.tempname()
+            vim.fn.writefile({ "text" }, file)
+            vim.api.nvim_win_call(chat_win, function()
+                vim.cmd.edit(file)
+            end)
+
+            assert.is_true(vim.wo[chat_win].number)
+            assert.equal(
+                vim.go.fillchars,
+                vim.api.nvim_get_option_value("fillchars", { win = chat_win })
+            )
+
+            WidgetLayout.close(win_nrs, buf_nrs)
+            pcall(vim.cmd.tabclose)
+        end)
+
+        it("opens a new window for a slot showing another buffer", function()
+            vim.cmd("tabnew")
+            local win_nrs = {}
+            --- @type agentic.ui.WidgetLayout.Params
+            local params = {
+                tab_page_id = vim.api.nvim_get_current_tabpage(),
+                buf_nrs = panel_bufs(),
+                win_nrs = win_nrs,
+            }
+            WidgetLayout.open(params)
+            local taken = win_nrs.chat --[[@as integer]]
+            show_other_buffer(taken)
+
+            WidgetLayout.open(params)
+
+            assert.are_not.equal(taken, win_nrs.chat)
+            assert.equal(
+                params.buf_nrs.chat,
+                vim.api.nvim_win_get_buf(win_nrs.chat)
+            )
+            assert.is_true(vim.api.nvim_win_is_valid(taken))
+
+            WidgetLayout.close(win_nrs, buf_nrs)
+            pcall(vim.cmd.tabclose)
         end)
     end)
 end)

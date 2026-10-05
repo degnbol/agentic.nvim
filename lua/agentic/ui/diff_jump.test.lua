@@ -70,7 +70,6 @@ describe("diff_jump", function()
 
                 assert.is_not_nil(target)
                 ---@cast target -nil
-                assert.equal(true, target.exact)
                 -- File line for second new = block.start_line + 2 - 1
                 -- block.start_line = 2 (matched "beta" at row 2 in the file)
                 assert.equal(3, target.file_row)
@@ -93,7 +92,6 @@ describe("diff_jump", function()
 
             assert.is_not_nil(target)
             ---@cast target -nil
-            assert.equal(false, target.exact)
             assert.equal(2, target.file_row)
         end)
 
@@ -121,8 +119,6 @@ describe("diff_jump", function()
                 -- old1 pairs with new1 (both at index 1) → file row 2
                 assert.equal(2, target.file_row)
                 assert.equal(2, target.file_col)
-                -- exact=false because cursor was on the deleted/old side
-                assert.equal(false, target.exact)
             end
         )
 
@@ -136,7 +132,6 @@ describe("diff_jump", function()
 
             assert.is_not_nil(target)
             ---@cast target -nil
-            assert.equal(false, target.exact)
             assert.equal(2, target.file_row) -- hunk start
         end)
 
@@ -179,7 +174,6 @@ describe("diff_jump", function()
 
             assert.is_not_nil(target)
             ---@cast target -nil
-            assert.equal(true, target.exact)
             assert.equal(3, target.file_row)
             assert.equal(1, target.file_col)
         end)
@@ -204,7 +198,6 @@ describe("diff_jump", function()
 
                 assert.is_not_nil(target)
                 ---@cast target -nil
-                assert.equal(true, target.exact)
                 assert.equal(2, target.file_row)
                 assert.equal(4, target.file_col)
             end
@@ -284,6 +277,103 @@ describe("diff_jump", function()
             assert.is_nil(found)
 
             vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+    end)
+
+    describe("target_at", function()
+        local Renderer = require("agentic.ui.tool_call_renderer")
+        --- @type integer
+        local bufnr
+
+        --- Lay `block` out in `bufnr` from row 1, below one prose row,
+        --- spanning `n_rows` rows.
+        --- @param block agentic.ui.MessageWriter.ToolCallBlock
+        --- @param n_rows integer
+        --- @return table<string, agentic.ui.MessageWriter.ToolCallBlock>
+        local function lay_out(block, n_rows)
+            local lines = { "prose" }
+            for i = 1, n_rows do
+                lines[i + 1] = "row " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            block.extmark_id = vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Renderer.NS_TOOL_BLOCKS,
+                1,
+                0,
+                { end_row = n_rows }
+            )
+            return { [block.tool_call_id] = block }
+        end
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            read_stub:returns({ "x", "old1", "old2", "y" })
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        -- Layout from row 1: header, fence, old1, old2, new1, new2, fence.
+        local function modification()
+            return make_edit_block({ "old1", "old2" }, { "new1", "new2" })
+        end
+
+        it("maps an added row to its file line and column", function()
+            local blocks = lay_out(modification(), 7)
+
+            assert.same(
+                { path = "/file.lua", file_row = 3, file_col = 2 },
+                DiffJump.target_at(bufnr, 6, 2, blocks)
+            )
+        end)
+
+        it("maps a modified old row to its new line", function()
+            local blocks = lay_out(modification(), 7)
+
+            assert.same({
+                path = "/file.lua",
+                file_row = 2,
+                file_col = 1,
+            }, DiffJump.target_at(bufnr, 3, 1, blocks))
+        end)
+
+        it("falls back to the hunk start on a deleted row", function()
+            local blocks = lay_out(make_edit_block({ "old1", "old2" }, {}), 5)
+
+            assert.same({
+                path = "/file.lua",
+                file_row = 2,
+                file_col = 0,
+            }, DiffJump.target_at(bufnr, 4, 3, blocks))
+        end)
+
+        it("falls back to the hunk start on the header", function()
+            local blocks = lay_out(modification(), 7)
+
+            assert.same({
+                path = "/file.lua",
+                file_row = 2,
+                file_col = 0,
+            }, DiffJump.target_at(bufnr, 1, 0, blocks))
+        end)
+
+        it("is nil outside every block", function()
+            local blocks = lay_out(modification(), 7)
+
+            assert.is_nil(DiffJump.target_at(bufnr, 0, 0, blocks))
+        end)
+
+        it("is nil in a block that is not an edit", function()
+            local blocks = lay_out({
+                tool_call_id = "r1",
+                kind = "read",
+                argument = "/file.lua",
+                status = "completed",
+            } --[[@as agentic.ui.MessageWriter.ToolCallBlock]], 3)
+
+            assert.is_nil(DiffJump.target_at(bufnr, 2, 0, blocks))
         end)
     end)
 end)

@@ -224,35 +224,41 @@ _G.s:_on_request_permission({
     end)
 
     it(
-        "a permission for a hidden subagent buffer shows no float on the visible chat",
+        "a permission for a hidden transcript shows it, with the float on it",
         function()
             child.lua([[
-_G.bells = 0
-require("agentic.session_manager")._ring_bell = function() _G.bells = _G.bells + 1 end
-_G.sub = _G.s.widget.buf_nrs.subagent
-_G.s._tool_call_owner["tc-sub"] = "task-1"
+_G.s:_on_session_update({
+    sessionUpdate = "subagent_spawned",
+    subagentSessionId = "c1",
+    name = "n",
+    task = "t",
+}, "root")
+_G.sub = _G.s._agents.c1.transcript.bufnr
+_G.s.widget:close_subagent_window()
 _G.s:_on_request_permission({
-    sessionId = "s",
+    sessionId = "c1",
     toolCall = { toolCallId = "tc-sub", kind = "edit" },
     options = { { optionId = "allow-once", name = "Allow", kind = "allow_once" } },
 }, function() end)
 ]])
             child.flush()
 
-            local function badge(buf)
-                return child.lua_get(
-                    [[require("agentic.ui.window_decoration").get_header(...).badge]],
-                    { child.lua_get(buf) }
-                )
-            end
-            assert.equal(0, child.lua_get("#vim.fn.win_findbuf(_G.sub)"))
-            assert.is_true(child.lua_get("#vim.fn.win_findbuf(_G.chat) > 0"))
-            assert.is_false(
+            assert.is_true(child.lua_get("#vim.fn.win_findbuf(_G.sub) > 0"))
+            assert.is_true(
                 child.lua_get("_G.s.permission_manager.permission_float:is_shown()")
             )
-            assert.equal(1, child.lua_get("_G.bells"))
-            assert.equal("[?]", badge("_G.sub"))
-            assert.equal(vim.NIL, badge("_G.chat"))
+            assert.equal(
+                child.lua_get("_G.sub"),
+                child.lua_get(
+                    "vim.api.nvim_win_get_buf(_G.s.permission_manager.permission_float._anchor_winid)"
+                )
+            )
+            assert.equal(
+                vim.NIL,
+                child.lua_get(
+                    [[require("agentic.ui.window_decoration").get_header(_G.sub).badge]]
+                )
+            )
         end
     )
 

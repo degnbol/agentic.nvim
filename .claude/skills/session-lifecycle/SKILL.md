@@ -84,11 +84,9 @@ Three race conditions can overwrite `self.session_id` during ACP
 `_prompt_pending` counts outstanding prompt callbacks. It gates no submit — the
 provider runs a mid-turn prompt as the next turn — only the automatic drains
 (`_drain_queue`, `_dispatch_deferred_prompts`), which is what advances the queue
-one block per turn. Two sites read it as "a turn is still streaming":
-`_dispatch_turn` skips the per-turn subagent reset (the auto-open guard the
-running turn still uses), and the prompt callback
-runs the turn boundary below but not the idle signals (`is_generating`,
-indicator, `[done]`). An epoch mismatch runs neither.
+one block per turn. The prompt callback reads it as "a turn is still
+streaming": it runs the turn boundary below but not the idle signals
+(`is_generating`, indicator, `[done]`). An epoch mismatch runs neither.
 
 ## Cross-turn state hazards in MessageWriter
 

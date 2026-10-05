@@ -3,7 +3,6 @@ local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
-local ToolCallRenderer = require("agentic.ui.tool_call_renderer")
 
 --- @class agentic.SessionRestore.PickerItem
 --- @field display string
@@ -370,60 +369,14 @@ function SessionRestore.replay_messages(writer, messages)
     writer:flush_thought_run()
 end
 
---- Map each Task whose agent wrote stored subagent messages to the top-level
---- Task above it. A top-level Task maps to itself, and so does a nested one
---- whose own tool call is not among the messages.
+--- The stored messages of the agent one Task spawned, in stored order.
 --- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
---- @return table<string, string> top_level_of Each message's `parent_tool_use_id` -> its top-level Task id
-function SessionRestore.top_level_tasks(subagent_messages)
-    --- @type table<string, string> tool call id -> spawning Task id
-    local parent_of = {}
-    for _, msg in ipairs(subagent_messages) do
-        if msg.type == "tool_call" and msg.tool_call_id then
-            parent_of[msg.tool_call_id] = msg.parent_tool_use_id
-        end
-    end
-
-    --- @type table<string, string>
-    local top_level_of = {}
-    for _, msg in ipairs(subagent_messages) do
-        local task_id = msg.parent_tool_use_id --[[@as string]]
-        while parent_of[task_id] do
-            task_id = parent_of[task_id]
-        end
-        top_level_of[msg.parent_tool_use_id] = task_id
-    end
-    return top_level_of
-end
-
---- Replay stored subagent messages in stored order, with one heading per
---- top-level Task at its first message. A nested agent's messages get none.
---- @param writer agentic.ui.MessageWriter
---- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
---- @param info_by_task table<string, agentic.ui.MessageWriter.SubagentInfo> Task tool call id -> its subagent's identity and mode; a Task missing here is headed `Agent`
-function SessionRestore.replay_subagent_messages(
-    writer,
-    subagent_messages,
-    info_by_task
-)
-    local top_level_of = SessionRestore.top_level_tasks(subagent_messages)
-    --- @type table<string, true>
-    local headed = {}
-    --- @type agentic.ui.ChatHistory.SubagentMessage[]
-    local run = {}
-    for _, msg in ipairs(subagent_messages) do
-        local task_id = top_level_of[msg.parent_tool_use_id]
-        if not headed[task_id] then
-            SessionRestore.replay_messages(writer, run)
-            run = {}
-            headed[task_id] = true
-            writer:write_subagent_heading(
-                ToolCallRenderer.subagent_heading(info_by_task[task_id])
-            )
-        end
-        table.insert(run, msg)
-    end
-    SessionRestore.replay_messages(writer, run)
+--- @param task_id string The spawning Task's tool call id
+--- @return agentic.ui.ChatHistory.SubagentMessage[]
+function SessionRestore.messages_for_task(subagent_messages, task_id)
+    return vim.tbl_filter(function(msg)
+        return msg.parent_tool_use_id == task_id
+    end, subagent_messages)
 end
 
 --- Resolve a session reference to a cached session. Tries session_id prefix

@@ -75,10 +75,10 @@ This is a fork of carlos-algms/agentic.nvim.
 
 Install claude-agent-acp:
 >
-    pnpm add -g @agentclientprotocol/claude-agent-acp@0.75.1
+    pnpm add -g @agentclientprotocol/claude-agent-acp@0.85.1
 <
 Or download a binary from the releases page. Developed against
-claude-agent-acp 0.75.1.
+claude-agent-acp 0.85.1.
 
 TREESITTER PARSERS                              *agentic-requirements-parsers*
 
@@ -186,10 +186,10 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `activity.display` turns off both the panel and its count in the chat
     header. `activity.hide_reverted`: see |agentic-file-activity|.
 
-    `subagent.display` routes subagent work into a split beside the chat.
-    `subagent.width` takes a fraction (0-1), a percentage string, or a
-    column count. `subagent.auto_close` closes the split once every
-    subagent in the turn has finished. See |agentic-subagents|.
+    `subagent.display` shows each new subagent's transcript in a split beside
+    the chat. `subagent.width` takes a fraction (0-1), a percentage string,
+    or a column count. `subagent.auto_close` closes the split when the last
+    running subagent ends. See |agentic-subagents|.
 
     `win_opts` is passed to |nvim_set_option_value()| for each window.
 
@@ -573,7 +573,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>!`   n       Restart session
     `<localLeader>f`   n       Toggle changed-files panel
     `<localLeader>a`   n       Toggle auto-scroll
-    `<localLeader>G`   n       Scroll chat and subagents to bottom, keep focus
+    `<localLeader>G`   n       Scroll chat and subagent window to bottom, keep focus
 
 Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
 
@@ -602,7 +602,11 @@ What the queue bindings dispatch, and when, is in |agentic-queue|.
     Key    Mode    Description ~
     `[[`     n       Previous prompt or command notice
     `]]`     n       Next prompt or command notice
-    `gf`     n       Open the file under the cursor at the diff's line
+
+|gf|, |CTRL-W_f| and |CTRL-W_gf| open file and buffer names in the chat and
+the subagent transcripts. On a diff row where they find no file, they open the
+edited file at that row's line: in the window, in a split, or in a new
+tabpage. A count is ignored there.
 
 Tool output over its line threshold (|agentic-config-tool-display|) is
 folded; |zo|, |zc| and |za| toggle a fold as usual.
@@ -708,8 +712,9 @@ notices as well as prompts (|agentic-keymaps-chat|).
 
 A tool call the agent is not cleared to make raises a prompt in a float
 (|agentic-config-permission_float|) on the window showing that tool call's
-buffer: the chat, or the subagent split for a subagent tool call. With
-neither shown there is no float (|agentic-attention|). The options come
+buffer: the chat, or the subagent's transcript, which the request first shows
+in the subagent window. With neither shown there is no float
+(|agentic-attention|). The options come
 from the provider; the plugin inserts "Reject all" ahead of the provider's
 "Reject always", or appends it when there is none. When the agent leaves
 plan mode, the plugin adds "Clear context & implement plan" first. Keys:
@@ -837,21 +842,29 @@ prompts. A session lives as long as its chat buffer, which is listed.
     `:w` in the chat       Writes the history to the session file.
     `:bd` on the chat      Ends the session and wipes its buffers.
     `:e` / `:e!`           Re-renders the buffer from its session.
-    `:bd` on the subagent  Unloads and unlists it; subagent output reloads it.
+    `:bd` on a transcript  Unloads and unlists it; its agent's output reloads it.
+    `:bw` on a transcript  Wipes it; its agent's output makes it again.
 
 The chat is 'modified' while a running turn's history is not yet written. An
 idle session writes its history as it changes, except a subagent's text,
 which is written when one of its tool calls ends, at the next turn's end, or
 on `:w`.
 
-The subagent buffer is saved with the session. It is 'modified' while the
-session's history is not yet written, and `:w` on it writes the session file.
+Each subagent transcript (|agentic-subagents|) is a listed buffer saved with
+the session. It is 'modified' while the session's history is not yet
+written, and `:w` on it writes the session file.
 
 Notices, errors and the session-start line are not saved: `:e` and a
 restore do not render them again.
 
 A session with no messages and an empty input ends when no window shows its
-chat.
+chat: after |:q| on its chat window, or |:e| or |gf| there.
+
+A widget window can show any buffer. While it shows a buffer that is not its
+panel's, it is not a widget window: closing the widget leaves it open, and
+opening the widget gives a new window for that panel. It keeps the panel's
+'winfixwidth' or 'winfixheight'. A 'winfixbuf' set in `win_opts` stops |gf|
+and |:e| in that window.
 
 `<localLeader>q` closes the widget's windows. A tabpage the widget fills
 closes with it; in the last tabpage, vim quits by |:qall|.
@@ -879,7 +892,7 @@ When a permission float is shown, the bell rings if the chat window is not
 the current window.
 
 When no window shows the buffer of the tool call asking permission (the
-chat, or the subagent buffer), there is no float. Instead the bell rings,
+chat, or a transcript), there is no float. Instead the bell rings,
 that buffer's header shows `[?]`, and a notification names the session and
 the buffer. `[?]` clears when a window shows that buffer or the prompt is
 answered.
@@ -956,19 +969,29 @@ not listed.
 ------------------------------------------------------------------------------
 9.6 SUBAGENTS                                              *agentic-subagents*
 
-Subagent (Task) work renders in the subagent split
-(|agentic-config-windows|). A subagent's prose and thinking appear there
-alongside its tool calls with claude-agent-acp 0.66.0 and later. Earlier
-bridges send only the tool calls.
+With claude-agent-acp, each subagent has its own transcript: a buffer named
+`agentic://<id>/subagent/<name>-<agent id tail>` holding its prose, thinking
+and tool calls under a `##` heading like its block's. With
+`windows.subagent.display` on, the subagent window (|agentic-config-windows|)
+shows the newest one. A transcript shows its
+subagent as working until the subagent ends.
 
-With claude-agent-acp, the title of each Task block in the chat names its
-subagent's mode, `(Background)` or `(Blocking)`. A `?` follows the mode until
-the tool's result confirms it. In the subagent split, each subagent opens with
-a `## <name> (<mode>)` heading. The split shows a background subagent as
-working until the turn that started it ends.
+Each subagent also has a block in the chat:
 
-Subagent output is saved with the session (|agentic-buffers|), and a restore
-shows it again.
+    Line             Content ~
+    Heading          `<type> · <name> (<mode>)`
+    Name             The transcript's buffer name
+    Prompt           Folded
+    Footer           `in_progress`, `completed`, `failed` or `cancelled`
+
+The mode is `(Background)` or `(Blocking)`, with a `?` until the SDK's record
+of the spawn confirms it; the type shows once that record is read. |gf|,
+|CTRL-W_f| or |CTRL-W_gf| on the name line opens the transcript.
+
+A cancel, a provider crash and a session switch end every running subagent.
+
+Transcripts are saved with the session (|agentic-buffers|) and come back on
+load and restore.
 
 ==============================================================================
 10. HIGHLIGHT GROUPS                                      *agentic-highlights*

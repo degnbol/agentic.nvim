@@ -2,7 +2,6 @@
 --- buffer naming.
 
 local Config = require("agentic.config")
-local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.ui.WindowDecoration
@@ -12,9 +11,6 @@ local WindowDecoration = {}
 local WINDOW_HEADERS = {
     chat = {
         title = "󰻞 Agentic Chat",
-    },
-    subagent = {
-        title = Glyphs.KIND.subagent .. " Subagents",
     },
     input = { title = "󰦨 Prompt" },
     code = {

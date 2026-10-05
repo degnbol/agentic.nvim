@@ -95,15 +95,34 @@ function ChatWidget:new(owner_id, on_submit_input)
     return self
 end
 
-function ChatWidget:is_open()
-    local win_id = self.win_nrs.chat
-    return (win_id and vim.api.nvim_win_is_valid(win_id)) or false
+--- The widget's `panel` window, while it shows that panel's buffer.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @return integer|nil winid
+function ChatWidget:panel_win(panel)
+    return WidgetLayout.panel_win(self.win_nrs, self.buf_nrs, panel)
 end
 
---- Whether any widget window is open, the chat's or a panel's.
+--- The widget's windows that show their panel's buffer.
+--- @return integer[] winids
+function ChatWidget:panel_wins()
+    local winids = {}
+    for panel in pairs(self.win_nrs) do
+        local winid = self:panel_win(panel)
+        if winid then
+            table.insert(winids, winid)
+        end
+    end
+    return winids
+end
+
+function ChatWidget:is_open()
+    return self:panel_win("chat") ~= nil
+end
+
+--- Whether any panel window is open.
 --- @return boolean
 function ChatWidget:has_windows()
-    return next(self.win_nrs) ~= nil
+    return #self:panel_wins() > 0
 end
 
 --- The tabpage the owning session is bound to.
@@ -122,8 +141,7 @@ function ChatWidget:show(opts)
         return
     end
 
-    local before =
-        { chat = self.win_nrs.chat, subagent = self.win_nrs.subagent }
+    local before = self:_transcript_wins()
     WidgetLayout.open({
         tab_page_id = tab,
         buf_nrs = self.buf_nrs,
@@ -197,14 +215,14 @@ end
 --- of a tabpage closes the tabpage; the editor's last window is left open.
 function ChatWidget:close_windows()
     vim.cmd("stopinsert")
-    WidgetLayout.close(self.win_nrs)
+    WidgetLayout.close(self.win_nrs, self.buf_nrs)
 end
 
 --- Clears every panel buffer's content without destroying them, except
 --- `input` — it holds the user's unsent draft, which is not conversation
 --- state and must survive session resets/swaps.
 ---
---- Leaves the extmarks over the chat and subagent text, and a MessageWriter's
+--- Leaves the extmarks over the chat text, and a MessageWriter's
 --- tool call trackers — those are the writer's, out of reach from here. Clear
 --- the chat through `SessionManager:clear_chat`, which resets the writers too;
 --- a tracker or mark outliving its text resolves to row 0 of whatever
@@ -413,10 +431,13 @@ function ChatWidget:submit(opts)
     self:_sync_input_modified()
 
     if Config.settings.move_cursor_to_chat_on_submit then
-        self:move_cursor_to(self.win_nrs.chat)
+        self:move_cursor_to("chat")
     else
         vim.schedule(function()
-            BufHelpers.scroll_down(self.win_nrs.chat)
+            local chat_win = self:panel_win("chat")
+            if chat_win then
+                BufHelpers.scroll_down(chat_win)
+            end
         end)
     end
 end
@@ -784,11 +805,14 @@ function ChatWidget:cancel_queue()
     vim.api.nvim_buf_clear_namespace(self.buf_nrs.input, NS_QUEUED, 0, -1)
 end
 
---- @param winid integer|nil
+--- On the next tick, focus the `panel` window and scroll it to the bottom,
+--- then run `callback`. No-op when no window shows the panel then.
+--- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param callback fun()|nil
-function ChatWidget:move_cursor_to(winid, callback)
+function ChatWidget:move_cursor_to(panel, callback)
     vim.schedule(function()
-        if winid and vim.api.nvim_win_is_valid(winid) then
+        local winid = self:panel_win(panel)
+        if winid then
             vim.api.nvim_set_current_win(winid)
 
             -- Scroll to bottom so the user can see the new message and
@@ -817,14 +841,10 @@ function ChatWidget:focus_input_for_insert()
         return
     end
 
-    local input_win = self.win_nrs.input
-    if not input_win or not vim.api.nvim_win_is_valid(input_win) then
+    if not self:panel_win("input") then
         self:show({ focus_prompt = false })
     end
-    self:move_cursor_to(
-        self.win_nrs.input,
-        BufHelpers.start_insert_on_last_char
-    )
+    self:move_cursor_to("input", BufHelpers.start_insert_on_last_char)
 end
 
 function ChatWidget:_initialize()
@@ -988,42 +1008,17 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
         end,
         { desc = "Agentic: Next prompt" }
     )
-
-    local open_diff_file = Config.keymaps.chat
-        and Config.keymaps.chat.open_diff_file
-    if open_diff_file and not BufHelpers.is_keymap_disabled(open_diff_file) then
-        local status_messages = {
-            no_session = "No agentic session for this tab",
-            no_block = "No tool call block under cursor",
-            no_diff = "Tool call has no diff (not an Edit/Write)",
-            no_target = "Could not locate diff hunks",
-        }
-        BufHelpers.multi_keymap_set(open_diff_file, chat_buf, function()
-            local DiffJump = require("agentic.ui.diff_jump")
-            local status = DiffJump.handle()
-            if status ~= "ok" then
-                Logger.notify(
-                    status_messages[status] or status,
-                    vim.log.levels.INFO,
-                    { title = "Agentic" }
-                )
-            end
-        end, { desc = "Agentic: Open diff file in new tab" })
-    end
 end
 
---- Jump the chat and subagents windows to their last line without moving focus.
+--- Jump the chat and subagent windows to their last line without moving focus.
 --- The resulting WinScrolled lets each buffer's MessageWriter resume
 --- auto-scroll.
 --- @private
 function ChatWidget:_goto_transcripts_bottom()
-    for _, panel in ipairs({ "chat", "subagent" }) do
-        local winid = self.win_nrs[panel]
-        if winid and vim.api.nvim_win_is_valid(winid) then
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd("normal! G")
-            end)
-        end
+    for _, winid in pairs(self:_transcript_wins()) do
+        vim.api.nvim_win_call(winid, function()
+            vim.cmd("normal! G")
+        end)
     end
 end
 
@@ -1160,8 +1155,8 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
         -- Paste in chat/panel → focus input window and paste there
         for _, key in ipairs({ "p", "P" }) do
             BufHelpers.keymap_set(bufnr, "n", key, function()
-                local input_win = self.win_nrs.input
-                if input_win and vim.api.nvim_win_is_valid(input_win) then
+                local input_win = self:panel_win("input")
+                if input_win then
                     vim.api.nvim_set_current_win(input_win)
                     vim.cmd("normal! " .. key)
                 end
@@ -1319,11 +1314,9 @@ end
 
 --- @return agentic.ui.ChatWidget.BufNrs
 function ChatWidget:_create_buf_nrs()
-    -- The chat stands for the session, and the subagent buffer holds part of
-    -- its history: listed so `:ls`, `:bd` and buffer pickers reach them (`:bd`
-    -- on an unlisted buffer only unloads it).
+    -- The chat stands for the session: listed so `:ls`, `:bd` and buffer
+    -- pickers reach it (`:bd` on an unlisted buffer only unloads it).
     local chat = self:_create_new_buf("chat", true)
-    local subagent = self:_create_new_buf("subagent", true)
     local todos = self:_create_new_buf("todos", false)
     local code = self:_create_new_buf("code", false)
     local files = self:_create_new_buf("files", false)
@@ -1332,7 +1325,6 @@ function ChatWidget:_create_buf_nrs()
     local input = self:_create_new_buf("input", false)
 
     ChatBuffer.setup(chat)
-    ChatBuffer.setup(subagent)
 
     pcall(vim.treesitter.start, todos, "markdown")
     pcall(vim.treesitter.start, code, "markdown")
@@ -1342,7 +1334,6 @@ function ChatWidget:_create_buf_nrs()
     --- @type agentic.ui.ChatWidget.BufNrs
     local buf_nrs = {
         chat = chat,
-        subagent = subagent,
         todos = todos,
         code = code,
         files = files,
@@ -1387,14 +1378,20 @@ function ChatWidget:_apply_buf_opts(bufnr, panel)
     end
 end
 
---- Re-apply a panel buffer's options (except `buflisted`), b-vars and the
---- widget's buffer-local maps, all of which an unload by `:bd` resets. The
---- owning session's maps are its own to re-apply.
+--- Give a buffer a panel's options (except `buflisted`), b-vars and the
+--- widget's buffer-local maps, but not the owning session's maps. An unload by
+--- `:bd` resets all three.
+--- @param bufnr integer
 --- @param panel agentic.ui.ChatWidget.PanelNames
-function ChatWidget:apply_buf_state(panel)
-    local bufnr = self.buf_nrs[panel]
+function ChatWidget:setup_panel_buf(bufnr, panel)
     self:_apply_buf_opts(bufnr, panel)
     self:_bind_buf_keymaps(panel, bufnr)
+end
+
+--- `setup_panel_buf` for one of the widget's own panel buffers.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+function ChatWidget:apply_buf_state(panel)
+    self:setup_panel_buf(self.buf_nrs[panel], panel)
 end
 
 --- Set a panel's header context and render it.
@@ -1464,43 +1461,51 @@ end
 
 --- @param panel_name agentic.ui.ChatWidget.PanelNames
 function ChatWidget:close_optional_window(panel_name)
-    WidgetLayout.close_optional_window(self.win_nrs, panel_name)
+    WidgetLayout.close_optional_window(self.win_nrs, self.buf_nrs, panel_name)
 end
 
---- Open the subagent split beside the chat (no-op if already open or the chat
---- window is hidden). Used to reveal subagent work on demand.
-function ChatWidget:open_subagent_window()
-    local before =
-        { chat = self.win_nrs.chat, subagent = self.win_nrs.subagent }
-    WidgetLayout.open_subagent(self.win_nrs, self.buf_nrs)
+--- Show a subagent transcript in the subagent window: open the window beside
+--- the chat if it is closed (no-op while the chat window is hidden), else
+--- switch its buffer.
+--- @param bufnr integer
+function ChatWidget:show_subagent(bufnr)
+    local before = self:_transcript_wins()
+    WidgetLayout.show_subagent(self.win_nrs, self.buf_nrs, bufnr)
     self:_report_opened(before)
+end
+
+--- The `chat` and `subagent` panel windows.
+--- @return table<"chat"|"subagent", integer|nil>
+function ChatWidget:_transcript_wins()
+    return {
+        chat = self:panel_win("chat"),
+        subagent = self:panel_win("subagent"),
+    }
 end
 
 --- Run `on_window_opened` for each of the `chat` and `subagent` windows that
 --- differs from its handle in `before`. Widget windows open without
 --- autocmds, so their buffers' BufWinEnter does not run for them.
---- @param before table<"chat"|"subagent", integer|nil> Handles before the open
+--- @param before table<"chat"|"subagent", integer|nil> Panel windows before the open
 function ChatWidget:_report_opened(before)
     if not self.on_window_opened then
         return
     end
-    for _, panel in ipairs({ "chat", "subagent" }) do
-        local winid = self.win_nrs[panel]
-        if winid and winid ~= before[panel] then
+    for panel, winid in pairs(self:_transcript_wins()) do
+        if winid ~= before[panel] then
             self.on_window_opened(panel, winid)
         end
     end
 end
 
---- Close the subagent split if open, keeping the buffer.
+--- Close the subagent window if open, keeping its transcript.
 function ChatWidget:close_subagent_window()
     self:close_optional_window("subagent")
 end
 
 --- @return boolean
 function ChatWidget:is_activity_window_open()
-    local winid = self.win_nrs.activity
-    return winid ~= nil and vim.api.nvim_win_is_valid(winid)
+    return self:panel_win("activity") ~= nil
 end
 
 --- Show or hide the file activity panel. `on_open` runs before the window
@@ -1529,27 +1534,22 @@ function ChatWidget:resize_activity_window()
     WidgetLayout.resize_activity(self.win_nrs, self.buf_nrs)
 end
 
---- Close non-widget windows on the tabpage that hold empty unnamed buffers.
---- Mirrors the cleanup in Agentic.toggle_tab so the widget fills the tab
---- when restoring a session on a dedicated tab.
+--- Close non-widget windows on the tabpage that hold unmodified empty unnamed
+--- buffers. Mirrors the cleanup in Agentic.toggle_tab so the widget fills the
+--- tab when restoring a session on a dedicated tab.
 function ChatWidget:close_empty_non_widget_windows()
     local tab = self:_tab()
     if not tab then
         return
     end
-    local widget_win_ids = {}
-    for _, winid in pairs(self.win_nrs) do
-        if winid then
-            widget_win_ids[winid] = true
-        end
-    end
-
+    local panel_wins = self:panel_wins()
     for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-        if not widget_win_ids[winid] then
+        if not vim.tbl_contains(panel_wins, winid) then
             local bufnr = vim.api.nvim_win_get_buf(winid)
             local ft = vim.bo[bufnr].filetype
             local is_empty = (ft == "" or ft == "dashboard")
-                and vim.fn.bufname(bufnr) == ""
+                and vim.api.nvim_buf_get_name(bufnr) == ""
+                and not vim.bo[bufnr].modified
             if is_empty then
                 pcall(vim.api.nvim_win_close, winid, true)
                 pcall(vim.api.nvim_buf_delete, bufnr, { force = true })

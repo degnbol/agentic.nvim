@@ -214,8 +214,9 @@ function M.subagent_mode_text(subagent)
         .. (subagent.confirmed and "" or "?")
 end
 
---- Heading text of a subagent's section: its label and mode text, with the
---- label `Agent` when it has none, and `Agent` alone when nothing is known.
+--- Heading text of a subagent: `<agent type> · <label> (<mode text>)`, without
+--- the type while it is unknown, with the label `Agent` when it has none, and
+--- `Agent` alone when nothing is known.
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
 --- @return string
 function M.subagent_heading(subagent)
@@ -223,7 +224,8 @@ function M.subagent_heading(subagent)
         return "Agent"
     end
     return string.format(
-        "%s (%s)",
+        "%s%s (%s)",
+        subagent.agent_type and (subagent.agent_type .. " · ") or "",
         subagent.label or "Agent",
         M.subagent_mode_text(subagent)
     )
@@ -780,6 +782,20 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local url = argument:match("^(%S+)")
         local name = url or (argument:gsub("\n", "\\n"))
         lines = { collapsed_header(kind, name, wrap_width, false) }
+    elseif kind == "SubAgent" and tool_call_block.subagent then
+        -- The argument is the name of the agent's transcript buffer, on a line
+        -- of its own so `gf` on it opens the transcript.
+        lines = {
+            collapsed_header(
+                kind,
+                M.subagent_heading(tool_call_block.subagent),
+                wrap_width,
+                false
+            ),
+        }
+        if argument ~= "" then
+            table.insert(lines, (argument:gsub("\n", "\\n")))
+        end
     elseif argument == "" then
         -- Argument hasn't streamed in yet (placeholder suppressed in adapter);
         -- the bare head holds the layout until the next update.
@@ -790,11 +806,6 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local name = argument:gsub("\n", "\\n")
         if head_line then
             name = name .. ":" .. head_line
-        end
-        local subagent = tool_call_block.subagent
-        if subagent then
-            name =
-                string.format("%s (%s)", name, M.subagent_mode_text(subagent))
         end
         lines = { collapsed_header(kind, name, wrap_width, false) }
     end
@@ -1196,7 +1207,9 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             local wrapped =
                 TextWrap.wrap_prose(tool_call_block.body, wrap_width)
             local fence = M.safe_fence(wrapped)
-            local use_fold = #wrapped > 1
+            -- A subagent's prompt folds at any length: its transcript, a line
+            -- above, is what the block is for.
+            local use_fold = #wrapped > 1 or tool_call_block.subagent ~= nil
             table.insert(
                 lines,
                 fence .. (use_fold and "markdown-fold" or "markdown")

@@ -76,6 +76,38 @@ local function calculate_dynamic_height(bufnr, max_height, padding)
     return math.min(line_count + padding, max_height)
 end
 
+--- The window options of `nvim_open_win`'s `style = "minimal"`, except the
+--- 'winhighlight' it sets. That style sets both the global and the local
+--- value, so a buffer opened later in the window would keep them.
+--- @return table<string, any>
+local function minimal_win_opts()
+    local opts = {
+        number = false,
+        relativenumber = false,
+        cursorline = false,
+        cursorcolumn = false,
+        foldcolumn = "0",
+        spell = false,
+        list = false,
+        signcolumn = "auto",
+        colorcolumn = "",
+        statuscolumn = "",
+    }
+    -- A local 'fillchars' replaces the global one whole: an item it leaves out
+    -- takes its default, not the global value. So, as the style does, set one
+    -- only to blank a visible `eob`.
+    local fillchars = vim.opt_global.fillchars:get()
+    if fillchars.eob ~= " " then
+        fillchars.eob = " "
+        local items = {}
+        for name, char in pairs(fillchars) do
+            table.insert(items, name .. ":" .. char)
+        end
+        opts.fillchars = table.concat(items, ",")
+    end
+    return opts
+end
+
 --- @param bufnr integer
 --- @param enter boolean
 --- @param opts vim.api.keyset.win_config
@@ -88,7 +120,6 @@ local function open_win(bufnr, enter, opts, window_name, win_opts)
         split = "right",
         win = -1,
         noautocmd = true,
-        style = "minimal",
     }
 
     local config = vim.tbl_deep_extend("force", default_opts, opts)
@@ -104,11 +135,13 @@ local function open_win(bufnr, enter, opts, window_name, win_opts)
     local window_config = Config.windows[window_name] or {}
     local config_win_opts = window_config.win_opts or {}
 
-    local merged_win_opts = vim.tbl_deep_extend("force", {
-        wrap = false,
-        winfixbuf = true,
-        winfixheight = true,
-    }, win_opts or {}, config_win_opts)
+    local merged_win_opts = vim.tbl_deep_extend(
+        "force",
+        minimal_win_opts(),
+        { wrap = false, winfixheight = true },
+        win_opts or {},
+        config_win_opts
+    )
 
     -- Local scope: a window split off this one inherits its global values, and
     -- passes them to every buffer it shows that set nothing of its own.
@@ -141,24 +174,56 @@ local function track_window(win_nrs, name, winid)
     })
 end
 
---- @param win_nrs agentic.ui.ChatWidget.WinNrs
---- @param panel_name agentic.ui.ChatWidget.PanelNames
+--- Whether `bufnr` is a `panel` buffer of the widget whose buffers are
+--- `buf_nrs`: `buf_nrs[panel]` itself, or, for a panel with no buffer there,
+--- any buffer marked as that panel of the chat's session. The subagent panel
+--- is such a slot: it shows any of the session's transcripts.
 --- @param bufnr integer
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @return boolean
+local function is_panel_buf(bufnr, buf_nrs, panel)
+    if buf_nrs[panel] then
+        return bufnr == buf_nrs[panel]
+    end
+    local chat = buf_nrs.chat
+    return chat ~= nil
+        and vim.b[bufnr].agentic_window == panel
+        and vim.b[bufnr].agentic_session_id == vim.b[chat].agentic_session_id
+end
+
+--- The window in the `panel` slot of `win_nrs`, while it shows one of the
+--- widget's `panel` buffers.
+--- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @return integer|nil winid Nil while the slot is empty, closed, or shows another buffer
+function WidgetLayout.panel_win(win_nrs, buf_nrs, panel)
+    local winid = win_nrs[panel]
+    if
+        not winid
+        or not vim.api.nvim_win_is_valid(winid)
+        or not is_panel_buf(vim.api.nvim_win_get_buf(winid), buf_nrs, panel)
+    then
+        return nil
+    end
+    return winid
+end
+
+--- @param params agentic.ui.WidgetLayout.Params
+--- @param panel_name agentic.ui.ChatWidget.PanelNames
 --- @param open_opts vim.api.keyset.win_config
 --- @param win_opts table<string, any>
 --- @return integer
-local function get_or_create_window(
-    win_nrs,
-    panel_name,
-    bufnr,
-    open_opts,
-    win_opts
-)
-    local cached_winid = win_nrs[panel_name]
-    if cached_winid and vim.api.nvim_win_is_valid(cached_winid) then
+local function get_or_create_window(params, panel_name, open_opts, win_opts)
+    local win_nrs = params.win_nrs
+    local cached_winid =
+        WidgetLayout.panel_win(win_nrs, params.buf_nrs, panel_name)
+    if cached_winid then
         return cached_winid
     end
 
+    local bufnr = params.buf_nrs[panel_name]
     local new_winid =
         open_win(bufnr, false, open_opts, panel_name, win_opts or {})
     track_window(win_nrs, panel_name, new_winid)
@@ -166,25 +231,24 @@ local function get_or_create_window(
     return new_winid
 end
 
---- @param buf_nrs agentic.ui.ChatWidget.BufNrs
---- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param params agentic.ui.WidgetLayout.Params
 --- @param window_name agentic.ui.ChatWidget.PanelNames
 --- @param open_win_opts vim.api.keyset.win_config
 --- @param max_height integer
 --- @param padding? integer Override default padding for height calculation
 local function open_or_resize_dynamic_window(
-    buf_nrs,
-    win_nrs,
+    params,
     window_name,
     open_win_opts,
     max_height,
     padding
 )
-    local bufnr = buf_nrs[window_name]
-    local winid = win_nrs[window_name]
+    local win_nrs = params.win_nrs
+    local bufnr = params.buf_nrs[window_name]
+    local winid = WidgetLayout.panel_win(win_nrs, params.buf_nrs, window_name)
 
     if BufHelpers.is_buffer_empty(bufnr) then
-        if winid and vim.api.nvim_win_is_valid(winid) then
+        if winid then
             pcall(vim.api.nvim_win_close, winid, true)
         end
         win_nrs[window_name] = nil
@@ -193,7 +257,7 @@ local function open_or_resize_dynamic_window(
 
     local height = calculate_dynamic_height(bufnr, max_height, padding)
 
-    if not winid or not vim.api.nvim_win_is_valid(winid) then
+    if not winid then
         open_win_opts.height = height
         track_window(
             win_nrs,
@@ -237,7 +301,6 @@ end
 local function show_layout(params, position, should_focus)
     local is_bottom = position == "bottom"
     local win_nrs = params.win_nrs
-    local buf_nrs = params.buf_nrs
 
     local split_direction = is_bottom and "below"
         or (position == "left" and "left" or "right")
@@ -254,13 +317,7 @@ local function show_layout(params, position, should_focus)
         chat_opts.width = WidgetLayout.calculate_width(Config.windows.width)
     end
 
-    get_or_create_window(
-        win_nrs,
-        "chat",
-        buf_nrs.chat,
-        chat_opts,
-        chat_win_opts(is_bottom)
-    )
+    get_or_create_window(params, "chat", chat_opts, chat_win_opts(is_bottom))
 
     -- Input window: right splits below chat with height, bottom splits right
     -- of chat with computed stack width
@@ -277,17 +334,13 @@ local function show_layout(params, position, should_focus)
         input_opts.height = Config.windows.input.height
     end
 
-    get_or_create_window(
-        win_nrs,
-        "input",
-        buf_nrs.input,
-        input_opts,
-        input_win_opts(is_bottom)
-    )
+    get_or_create_window(params, "input", input_opts, input_win_opts(is_bottom))
 
+    -- Each slot laid out so far holds its panel's window or nil, so the
+    -- anchors below read `win_nrs` directly.
     local padding = is_bottom and 2 or 1
 
-    open_or_resize_dynamic_window(buf_nrs, win_nrs, "code", {
+    open_or_resize_dynamic_window(params, "code", {
         win = is_bottom and win_nrs.input or win_nrs.chat,
         split = "below",
     }, Config.windows.code.max_height, padding)
@@ -295,7 +348,7 @@ local function show_layout(params, position, should_focus)
     local ref_win = is_bottom and (win_nrs.code or win_nrs.input)
         or win_nrs.input
 
-    open_or_resize_dynamic_window(buf_nrs, win_nrs, "files", {
+    open_or_resize_dynamic_window(params, "files", {
         win = ref_win,
         split = is_bottom and "below" or "above",
     }, Config.windows.files.max_height, padding)
@@ -303,7 +356,7 @@ local function show_layout(params, position, should_focus)
     ref_win = is_bottom and (win_nrs.files or win_nrs.code or win_nrs.input)
         or win_nrs.input
 
-    open_or_resize_dynamic_window(buf_nrs, win_nrs, "diagnostics", {
+    open_or_resize_dynamic_window(params, "diagnostics", {
         win = ref_win,
         split = is_bottom and "below" or "above",
     }, Config.windows.diagnostics.max_height, padding)
@@ -313,7 +366,7 @@ local function show_layout(params, position, should_focus)
                 and (win_nrs.diagnostics or win_nrs.files or win_nrs.code or win_nrs.input)
             or win_nrs.chat
 
-        open_or_resize_dynamic_window(buf_nrs, win_nrs, "todos", {
+        open_or_resize_dynamic_window(params, "todos", {
             win = ref_win,
             split = "below",
         }, Config.windows.todos.max_height, 0)
@@ -321,8 +374,9 @@ local function show_layout(params, position, should_focus)
 
     if should_focus then
         vim.schedule(function()
-            local winid = win_nrs.input
-            if winid and vim.api.nvim_win_is_valid(winid) then
+            local winid =
+                WidgetLayout.panel_win(win_nrs, params.buf_nrs, "input")
+            if winid then
                 vim.api.nvim_set_current_win(winid)
                 vim.cmd("normal! G$")
             end
@@ -406,36 +460,46 @@ function WidgetLayout.open(params)
     end
 end
 
+--- Close the panel windows and empty every slot, leaving open a slot window
+--- that shows another buffer.
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs
-function WidgetLayout.close(win_nrs)
-    for name, winid in pairs(win_nrs) do
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
+function WidgetLayout.close(win_nrs, buf_nrs)
+    for name in pairs(win_nrs) do
+        local winid = WidgetLayout.panel_win(win_nrs, buf_nrs, name)
         win_nrs[name] = nil
-        local ok = pcall(vim.api.nvim_win_close, winid, true)
-        if not ok then
-            Logger.debug(
-                string.format(
-                    "Failed to close window '%s' with id: %d",
-                    name,
-                    winid
+        if winid then
+            local ok, err = pcall(vim.api.nvim_win_close, winid, true)
+            if not ok then
+                Logger.debug(
+                    string.format(
+                        "Failed to close window '%s' with id %d: %s",
+                        name,
+                        winid,
+                        tostring(err)
+                    )
                 )
-            )
+            end
         end
     end
 end
 
---- Open the subagent split beside the chat window, reusing the chat window
---- options so it renders tool-call blocks and folds identically. No-op when
---- already open or when the chat window is not visible.
+--- Show `bufnr` in the subagent window. A closed one opens as a split beside
+--- the chat window, with the chat's window options. No-op while the chat
+--- window is not visible. An open one switches buffer with autocmds, so the
+--- buffer's `BufWinEnter` runs.
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
-function WidgetLayout.open_subagent(win_nrs, buf_nrs)
-    local existing = win_nrs.subagent
-    if existing and vim.api.nvim_win_is_valid(existing) then
+--- @param bufnr integer
+function WidgetLayout.show_subagent(win_nrs, buf_nrs, bufnr)
+    local subagent_winid = WidgetLayout.panel_win(win_nrs, buf_nrs, "subagent")
+    if subagent_winid then
+        vim.api.nvim_win_set_buf(subagent_winid, bufnr)
         return
     end
 
-    local chat_winid = win_nrs.chat
-    if not chat_winid or not vim.api.nvim_win_is_valid(chat_winid) then
+    local chat_winid = WidgetLayout.panel_win(win_nrs, buf_nrs, "chat")
+    if not chat_winid then
         return
     end
 
@@ -448,6 +512,7 @@ function WidgetLayout.open_subagent(win_nrs, buf_nrs)
     )
     width = math.max(1, math.min(width, chat_width - 1))
 
+    -- The chat's options, so tool-call blocks and folds render identically.
     -- The subagent is always a vertical (`right`) split, so its width must be
     -- fixed regardless of the chat's orientation — chat_win_opts leaves
     -- winfixwidth false in bottom layout (where the chat itself fixes height).
@@ -458,14 +523,14 @@ function WidgetLayout.open_subagent(win_nrs, buf_nrs)
         win_nrs,
         "subagent",
         open_win(
-            buf_nrs.subagent,
+            bufnr,
             false,
             { win = chat_winid, split = "right", width = width },
             "subagent",
             win_opts
         )
     )
-    WindowDecoration.render_header(buf_nrs.subagent)
+    WindowDecoration.render_header(bufnr)
 end
 
 --- Open the file activity panel next to the prompt, sized to its content.
@@ -480,13 +545,12 @@ end
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
 function WidgetLayout.open_activity(win_nrs, buf_nrs)
-    local existing = win_nrs.activity
-    if existing and vim.api.nvim_win_is_valid(existing) then
+    if WidgetLayout.panel_win(win_nrs, buf_nrs, "activity") then
         return
     end
 
-    local anchor = win_nrs.input
-    if not anchor or not vim.api.nvim_win_is_valid(anchor) then
+    local anchor = WidgetLayout.panel_win(win_nrs, buf_nrs, "input")
+    if not anchor then
         return
     end
 
@@ -499,7 +563,7 @@ function WidgetLayout.open_activity(win_nrs, buf_nrs)
     )
 
     -- The sign column carries the changed-since-last-viewed marks, and
-    -- `style = "minimal"` in `open_win` would otherwise force it off.
+    -- `open_win` would otherwise set it to `auto`.
     track_window(
         win_nrs,
         "activity",
@@ -516,8 +580,8 @@ end
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
 function WidgetLayout.resize_activity(win_nrs, buf_nrs)
-    local winid = win_nrs.activity
-    if not winid or not vim.api.nvim_win_is_valid(winid) then
+    local winid = WidgetLayout.panel_win(win_nrs, buf_nrs, "activity")
+    if not winid then
         return
     end
 
@@ -530,24 +594,23 @@ function WidgetLayout.resize_activity(win_nrs, buf_nrs)
     })
 end
 
+--- Close the `window_name` panel window and empty its slot, leaving open a
+--- slot window that shows another buffer.
 --- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @param window_name agentic.ui.ChatWidget.PanelNames
-function WidgetLayout.close_optional_window(win_nrs, window_name)
-    local winid = win_nrs[window_name]
+function WidgetLayout.close_optional_window(win_nrs, buf_nrs, window_name)
+    local winid = WidgetLayout.panel_win(win_nrs, buf_nrs, window_name)
 
     -- Capture chat height before closing so we can restore it.
     -- In bottom layout, Neovim redistributes freed height to siblings.
-    local chat_winid = win_nrs.chat
+    local chat_winid = WidgetLayout.panel_win(win_nrs, buf_nrs, "chat")
     local chat_height = nil
-    if
-        Config.windows.position == "bottom"
-        and chat_winid
-        and vim.api.nvim_win_is_valid(chat_winid)
-    then
+    if Config.windows.position == "bottom" and chat_winid then
         chat_height = vim.api.nvim_win_get_height(chat_winid)
     end
 
-    if winid and vim.api.nvim_win_is_valid(winid) then
+    if winid then
         pcall(vim.api.nvim_win_close, winid, true)
     end
     win_nrs[window_name] = nil

@@ -126,7 +126,76 @@ describe("ChatHistory", function()
         )
     end)
 
+    describe("prepend_restored_messages", function()
+        --- @param subagent agentic.ui.MessageWriter.SubagentInfo
+        --- @return string text
+        local function prepended(subagent)
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "tool_call",
+                    tool_call_id = "child-1",
+                    kind = "SubAgent",
+                    status = "completed",
+                    argument = "agentic://1/subagent/map-UI-child-1",
+                    body = { "Find the files." },
+                    subagent = subagent,
+                },
+            }, prompt)
+            return prompt[1].text
+        end
+
+        it("renders a subagent block as type, name and status", function()
+            assert.equal(
+                'Subagent Explore "map UI": completed',
+                prepended({
+                    label = "map UI",
+                    agent_type = "Explore",
+                    mode = "blocking",
+                    confirmed = true,
+                })
+            )
+        end)
+
+        it("renders a subagent block without a type", function()
+            assert.equal(
+                'Subagent "map UI": completed',
+                prepended({
+                    label = "map UI",
+                    mode = "background",
+                    confirmed = false,
+                })
+            )
+        end)
+    end)
+
     describe("message operations", function()
+        it("marks the history dirty when a subagent's task is set", function()
+            local history = ChatHistory:new()
+
+            history:set_subagent_task("child-1", "toolu_1")
+
+            assert.same({ task_id = "toolu_1" }, history.subagents["child-1"])
+            assert.is_true(history.dirty)
+        end)
+
+        it("moves a subagent's messages to its Task id once known", function()
+            local history = ChatHistory:new()
+            history:add_message({
+                type = "agent",
+                text = "early",
+                provider_name = "p",
+                parent_tool_use_id = "child-1",
+            })
+
+            history:set_subagent_task("child-1", "toolu_1")
+
+            assert.equal(
+                "toolu_1",
+                history.subagent_messages[1].parent_tool_use_id
+            )
+        end)
+
         it("add_message preserves insertion order", function()
             local history = ChatHistory:new()
 
@@ -461,6 +530,44 @@ describe("ChatHistory", function()
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(original.subagent_messages, loaded.subagent_messages)
+        end)
+
+        it("round-trips subagents", function()
+            local original = ChatHistory:new()
+            original.session_id = "subagents-roundtrip"
+            original:set_subagent_task("child-1", "toolu_1")
+            assert.is_nil(original:save())
+
+            --- @type agentic.ui.ChatHistory|nil
+            local loaded
+            ChatHistory.load(original.session_id, function(history)
+                loaded = history
+            end)
+
+            --- @cast loaded agentic.ui.ChatHistory
+            assert.same(
+                { ["child-1"] = { task_id = "toolu_1" } },
+                loaded.subagents
+            )
+        end)
+
+        it("loads a file without subagents as empty", function()
+            local path = ChatHistory.get_file_path("older-agents")
+            mock_files[path] = vim.json.encode({
+                session_id = "older-agents",
+                title = "",
+                timestamp = 0,
+                messages = {},
+            })
+
+            --- @type agentic.ui.ChatHistory|nil
+            local loaded
+            ChatHistory.load("older-agents", function(history)
+                loaded = history
+            end)
+
+            --- @cast loaded agentic.ui.ChatHistory
+            assert.same({}, loaded.subagents)
         end)
 
         it("loads a file without subagent_messages as empty", function()

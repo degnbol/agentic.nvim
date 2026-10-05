@@ -604,4 +604,35 @@ describe("agentic.ui.FileActivity", function()
             assert.is_nil(activity:row_at(1))
         end)
     end)
+
+    describe("<CR>", function()
+        --- @type TestStub
+        local open_stub
+        --- @type integer
+        local winid
+
+        before_each(function()
+            open_stub = spy.stub(require("agentic.ui.diff_jump"), "open")
+            winid = vim.api.nvim_open_win(bufnr, true, {
+                split = "below",
+                win = -1,
+            })
+        end)
+
+        after_each(function()
+            open_stub:revert()
+            vim.api.nvim_win_close(winid, true)
+        end)
+
+        it("opens the row's file with tab drop", function()
+            local activity = make_activity()
+            record(activity, "tc-1", "/repo/a.lua", "edit")
+
+            vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+
+            assert.spy(open_stub).was.called(1)
+            assert.equal("/repo/a.lua", open_stub.calls[1][1].path)
+            assert.equal("tab drop", open_stub.calls[1][2])
+        end)
+    end)
 end)

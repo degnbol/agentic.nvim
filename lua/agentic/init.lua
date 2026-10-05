@@ -92,18 +92,14 @@ function Agentic.open(opts)
     end)
 end
 
---- Whether a tabpage has a non-floating window outside `win_nrs`.
+--- Whether a tabpage has a non-floating window outside `winids`.
 --- @param tab integer
---- @param win_nrs agentic.ui.ChatWidget.WinNrs
+--- @param winids integer[]
 --- @return boolean
-local function has_other_window(tab, win_nrs)
-    local own = {}
-    for _, winid in pairs(win_nrs) do
-        own[winid] = true
-    end
+local function has_other_window(tab, winids)
     for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
         if
-            not own[winid]
+            not vim.tbl_contains(winids, winid)
             and vim.api.nvim_win_get_config(winid).relative == ""
         then
             return true
@@ -125,7 +121,7 @@ function Agentic.close(tab_page_id)
         return
     end
 
-    if has_other_window(tab, session.widget.win_nrs) then
+    if has_other_window(tab, session.widget:panel_wins()) then
         session.widget:hide()
     elseif #vim.api.nvim_list_tabpages() > 1 then
         vim.cmd.tabclose(vim.api.nvim_tabpage_get_number(tab))

@@ -113,7 +113,8 @@ terminal status.
 
 One cleanup pass runs at the turn tail: on `stopReason == "cancelled"`,
 `SessionManager:_mark_unresolved_tool_calls_cancelled` stamps `cancelled` on
-every still-non-final block, in both writers and in history — no provider is
+every still-non-final block, in the chat, the running subagents' transcripts
+and history — no provider is
 obliged to report back on a call it abandoned. `cancelled` is client-side only;
 the wire enum stays at four values. The sweep selects by current status, not by
 turn, so it assumes sequential turns (claude-agent-acp's `session.turnQueue`).
@@ -382,22 +383,17 @@ before lookup, or compose a
 table that includes both casings. The chat heading is not a reliable signal
 that the right `kind` arrived — `display_kind` hides the difference.
 
-### Subagent content routed to a second buffer (parentToolUseId)
+### Subagents are child sessions (claude-agent-acp)
 
-Forwarded subagent (Task) notifications carry `_meta.claudeCode.parentToolUseId`
-(present ⟺ subagent content). `SessionManager` routes tagged message/thought
-chunks to a dedicated `subagent_writer` (bound to `buf_nrs.subagent`) and records
-tool-call ownership on the initial `tool_call` via `_writer_for`; the Task spawn
-block itself stays in the main chat. The subagents split auto-opens on first
-subagent activity of a turn. claude-agent-acp only — untagged providers never
-populate the second buffer.
-
-agentic.nvim does not advertise native subagent sessions, so no per-agent end
-arrives, and a turn's end is not a background agent's end. A user submit goes
-out mid-turn (`_handle_input_submit` ignores `in_flight`) and settles a held
-turn early while its agents run. See global `acp` skill →
-`references/claude-agent.md` § Background subagents hold the prompt turn and
-§ Native subagent sessions.
+The client advertises `clientCapabilities.subagents`: each subagent is a child
+session (global `acp` skill → `references/claude-agent.md` § Native subagent
+sessions). `ACPClient` maps child → root on `subagent_spawned` and passes the
+raw id to the root's subscriber as `source_session_id`. `SessionManager` keeps
+one `SubagentTranscript` per child (`_agents`), opened by `subagent_spawned`,
+ended by `subagent_state_update` or a disconnect, never by a turn's end. Type,
+mode and Task id are not on the wire; they come from the SDK's
+`subagents/agent-<id>.meta.json` (`ClaudeUtils.subagent_meta`). opencode and
+mistral-vibe `SubAgent` calls are plain chat blocks.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)
 
