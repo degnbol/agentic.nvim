@@ -251,11 +251,27 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_true(key_mapped())
         end)
 
-        it("report a request with no float shown, once", function()
+        it("bind on the anchor's companion buffers", function()
+            local companion = vim.api.nvim_create_buf(false, true)
+            pm.companion_bufs = function()
+                return { companion }
+            end
+            pm:refresh_float()
+            pm.companion_bufs = nil
+
+            assert.is_true(vim.api.nvim_buf_call(companion, key_mapped))
+            vim.api.nvim_buf_delete(companion, { force = true })
+        end)
+
+        it("report a request with no float in the current tab once, and its end", function()
             pm:clear()
+            visible_stub:returns(false)
             local reports = {}
-            pm.on_hidden_change = function(hidden)
-                table.insert(reports, hidden)
+            pm.on_hidden = function()
+                table.insert(reports, "hidden")
+            end
+            pm.on_hidden_resolved = function()
+                table.insert(reports, "resolved")
             end
             pm:add_request({
                 sessionId = "test-session",
@@ -265,10 +281,16 @@ describe("agentic.ui.PermissionManager", function()
                 },
             }, function() end)
             pm:refresh_float()
+            visible_stub:returns(true)
+            pm:refresh_float()
+            visible_stub:returns(false)
+            pm:refresh_float()
 
             pm:_complete_request("allow-once")
+            pm.on_hidden = nil
+            pm.on_hidden_resolved = nil
 
-            assert.same({ true, false }, reports)
+            assert.same({ "hidden", "resolved" }, reports)
         end)
 
         it("unbind and stop following on resolve", function()

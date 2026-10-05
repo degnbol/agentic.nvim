@@ -187,9 +187,8 @@ local ConfigDefault = {
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- @class agentic.UserConfig.Windows.Subagent
-    --- @field display boolean Show each new subagent's transcript in a split beside the chat
-    --- @field width string|number Split width: fraction (0-1), "N%", or column count
-    --- @field auto_close boolean Close the split when the last running subagent ends
+    --- @field display boolean Open each new subagent's transcript in a tabpage of its own
+    --- @field auto_close boolean Close a subagent's windows outside the current tabpage when it ends
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- `"tab"` opens the widget in a dedicated tabpage (no file window),
@@ -231,12 +230,7 @@ local ConfigDefault = {
             win_opts = {},
         },
         todos = { display = true, max_height = 10, win_opts = {} },
-        subagent = {
-            display = true,
-            width = "40%",
-            auto_close = false,
-            win_opts = {},
-        },
+        subagent = { display = true, auto_close = true, win_opts = {} },
     },
 
     --- @type agentic.UserConfig.Keymaps

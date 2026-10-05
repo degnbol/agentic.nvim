@@ -71,9 +71,9 @@ Without it, register mappings yourself via `vim.treesitter.language.register`.
 
 If [`snacks.nvim`](https://github.com/folke/snacks.nvim)'s `image` module is installed and enabled, chat buffers attach to it automatically and LaTeX math (`$…$`, `$$…$$`) renders inline as images. Absent or disabled, it is a no-op. See snacks' `image` docs for its own requirements (graphics-capable terminal, ImageMagick, a LaTeX toolchain).
 
-### Subagent window prose (claude-agent-acp)
+### Subagent prose (claude-agent-acp)
 
-A subagent (Task) assistant message's text and thinking render in the subagents window alongside its tool calls. The plugin advertises the `subagent-transcript` client capability, which `claude-agent-acp` (≥ 0.66.0) reads to forward subagent prose as `parentToolUseId`-tagged notifications. Older bridges omit the prose and show only tool calls.
+A subagent (Task) assistant message's text and thinking render in its transcript alongside its tool calls. The plugin advertises the `subagent-transcript` client capability, which `claude-agent-acp` (≥ 0.66.0) reads to forward subagent prose as `parentToolUseId`-tagged notifications. Older bridges omit the prose and show only tool calls.
 
 ### OpenCode permission caveat
 

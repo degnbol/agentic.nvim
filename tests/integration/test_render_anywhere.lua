@@ -217,10 +217,11 @@ _G.s:_on_request_permission({
         assert.is_true(
             child.lua_get("_G.s.permission_manager.permission_float:is_shown()")
         )
-        assert.equal(vim.NIL, badge())
+        assert.equal("[?]", badge())
         child.type_keys("\\y")
         child.flush()
         assert.equal("allow-once", child.lua_get("_G.answer"))
+        assert.equal(vim.NIL, badge())
     end)
 
     it(
@@ -234,7 +235,7 @@ _G.s:_on_session_update({
     task = "t",
 }, "root")
 _G.sub = _G.s._agents.c1.transcript.bufnr
-_G.s.widget:close_subagent_window()
+vim.cmd("tabclose 2")
 _G.s:_on_request_permission({
     sessionId = "c1",
     toolCall = { toolCallId = "tc-sub", kind = "edit" },
@@ -253,8 +254,9 @@ _G.s:_on_request_permission({
                     "vim.api.nvim_win_get_buf(_G.s.permission_manager.permission_float._anchor_winid)"
                 )
             )
+            -- The tab it opens in is not the current one.
             assert.equal(
-                vim.NIL,
+                "[?]",
                 child.lua_get(
                     [[require("agentic.ui.window_decoration").get_header(_G.sub).badge]]
                 )

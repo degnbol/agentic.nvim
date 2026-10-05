@@ -269,7 +269,7 @@ vim.cmd("stopinsert")
                 child.lua([[
 local input = _G.s.widget.buf_nrs.input
 vim.api.nvim_buf_set_lines(input, 0, -1, false, { "draft" })
-_G.s.widget:_sync_input_modified()
+require("agentic.utils.buf_helpers").sync_modified(input)
 _G.s.widget:close_windows()
 ]])
                 child.flush()
@@ -645,7 +645,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             )
             assert.is_true(child.lua_get([[(function()
     for _, map in ipairs(vim.api.nvim_buf_get_keymap(_G.sub, "n")) do
-        if map.desc == "Agentic: Stop generation" then
+        if map.desc == "Agentic: Stop subagent or generation" then
             return true
         end
     end

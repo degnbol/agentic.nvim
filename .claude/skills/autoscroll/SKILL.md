@@ -125,8 +125,8 @@ Two firing events:
 
 - **Response complete** — `_notify_attention("[done]")`
 - **Permission request** — float shown: `_notify_attention("[?]",
-  skip_badge=true)`. Float hidden (no window shows its buffer):
-  `_on_permission_hidden` — bell, `[?]` badge, notification.
+  skip_badge=true)`. Float hidden (not in the current tabpage):
+  `_on_permission_hidden` — bell, `[?]` badge until answered, notification.
   Fires only when `add_request` reports an interactive prompt was queued;
   auto-approved requests (read-only, cached, trust-scoped) stay silent.
 

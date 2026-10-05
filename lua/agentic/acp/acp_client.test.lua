@@ -12,6 +12,20 @@ describe("agentic.acp.ACPClient", function()
         ACPClient = require("agentic.acp.acp_client")
     end)
 
+    describe("subagent defaults", function()
+        it("predict blocking and give no instructions, under force_background", function()
+            local Config = require("agentic.config")
+            local original = Config.subagents.force_background
+            Config.subagents.force_background = true
+            local client = setmetatable({}, { __index = ACPClient })
+
+            assert.equal("blocking", client:subagent_predicted_mode())
+            assert.is_nil(client:subagent_stop_instruction("a1", "x"))
+            assert.is_nil(client:subagent_message_instruction("a1", "x", "m"))
+            Config.subagents.force_background = original
+        end)
+    end)
+
     describe("_build_claude_options", function()
         --- Matcher of each PreToolUse entry in the built options.
         --- @param force_background boolean

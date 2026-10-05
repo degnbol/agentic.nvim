@@ -6,6 +6,7 @@ local Logger = require("agentic.utils.logger")
 local LspServer = require("agentic.completion.lsp_server")
 local MessageWriter = require("agentic.ui.message_writer")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
+local PromptInput = require("agentic.ui.prompt_input")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local WindowDecoration = require("agentic.ui.window_decoration")
@@ -15,7 +16,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- so a module-level (global) namespace is fine (see multi-tabpage rules).
 local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
---- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"
+--- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"|"message"
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
@@ -47,7 +48,7 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs
 --- @field on_submit_input fun(prompt: string, opts?: agentic.SessionManager.SubmitOpts): boolean external callback for a submitted prompt; false means it was deferred and the range should be tagged
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
---- @field on_window_opened? fun(panel: "chat"|"subagent", winid: integer) external callback after the widget opens a chat or subagent window
+--- @field on_window_opened? fun(winid: integer) external callback after the widget opens a chat window
 --- @field on_hide? fun() external callback called after the widget is hidden
 --- @field _draining? boolean guard so drain's own buffer edits don't self-untag
 local ChatWidget = {}
@@ -141,7 +142,7 @@ function ChatWidget:show(opts)
         return
     end
 
-    local before = self:_transcript_wins()
+    local before = self:panel_win("chat")
     WidgetLayout.open({
         tab_page_id = tab,
         buf_nrs = self.buf_nrs,
@@ -149,7 +150,12 @@ function ChatWidget:show(opts)
         focus_prompt = opts.focus_prompt,
         position = opts.position,
     })
-    self:_report_opened(before)
+    -- Widget windows open without autocmds, so the chat's BufWinEnter does
+    -- not run for a new one.
+    local chat_win = self:panel_win("chat")
+    if self.on_window_opened and chat_win and chat_win ~= before then
+        self.on_window_opened(chat_win)
+    end
 end
 
 --- @param layouts agentic.UserConfig.Windows.Position[]|nil
@@ -409,7 +415,7 @@ function ChatWidget:submit(opts)
     if not dispatched then
         self:_queue_line_range(range.sr, head.er)
         -- The text is held, not sent: it stays modified.
-        self:_sync_input_modified()
+        BufHelpers.sync_modified(self.buf_nrs.input)
         return
     end
 
@@ -428,7 +434,7 @@ function ChatWidget:submit(opts)
     else
         delete_sent_chars(self.buf_nrs.input, range)
     end
-    self:_sync_input_modified()
+    BufHelpers.sync_modified(self.buf_nrs.input)
 
     if Config.settings.move_cursor_to_chat_on_submit then
         self:move_cursor_to("chat")
@@ -702,7 +708,7 @@ function ChatWidget:_delete_dispatched_lines(sr, er)
     vim.api.nvim_buf_set_lines(self.buf_nrs.input, sr, er + 1, false, {})
     self._draining = false
     -- TextChanged waits for the input to be the current buffer.
-    self:_sync_input_modified()
+    BufHelpers.sync_modified(self.buf_nrs.input)
 end
 
 --- The blocks a region's lines hold, with rows in buffer coordinates.
@@ -827,17 +833,11 @@ function ChatWidget:move_cursor_to(panel, callback)
 end
 
 --- Focus the input window for insert, reopening it first if it was closed.
---- Bound to the insert keys (i, a, o, …) in the chat and panel buffers.
---- Outside the owning session's tabpage, opens the input below the current
---- window instead, leaving the widget where it is.
+--- Outside the owning session's tabpage, focus the input's window there, or
+--- open one below the current window, leaving the widget where it is.
 function ChatWidget:focus_input_for_insert()
     if vim.api.nvim_get_current_tabpage() ~= self:_tab() then
-        local winid = vim.fn.bufwinid(self.buf_nrs.input)
-        if winid == -1 then
-            winid = WidgetLayout.open_input_below(self.buf_nrs.input)
-        end
-        vim.api.nvim_set_current_win(winid)
-        BufHelpers.start_insert_on_last_char()
+        WidgetLayout.focus_input(self.buf_nrs.input)
         return
     end
 
@@ -847,11 +847,40 @@ function ChatWidget:focus_input_for_insert()
     self:move_cursor_to("input", BufHelpers.start_insert_on_last_char)
 end
 
+--- The window to type into from a current window showing the chat: the one
+--- in the current tabpage showing the input, else the widget's input slot
+--- when the current window is the widget's chat window, else a new split
+--- below the current window. Opens the window when there is none.
+--- @return integer winid
+function ChatWidget:input_win_for_chat()
+    local input = self.buf_nrs.input
+    local shown = vim.fn.bufwinid(input)
+    if shown ~= -1 then
+        return shown
+    end
+    -- Through the widget, so `win_nrs.input` tracks the window and a later
+    -- `show` opens no second one.
+    if vim.api.nvim_get_current_win() == self:panel_win("chat") then
+        self:show({ focus_prompt = false })
+        local winid = self:panel_win("input")
+        if winid then
+            return winid
+        end
+    end
+    return WidgetLayout.open_input_below(input)
+end
+
+--- Focus `input_win_for_chat()` and start insert on the input's last
+--- character.
+function ChatWidget:focus_input_for_chat()
+    vim.api.nvim_set_current_win(self:input_win_for_chat())
+    BufHelpers.start_insert_on_last_char()
+end
+
 function ChatWidget:_initialize()
     self.buf_nrs = self:_create_buf_nrs()
 
     self:_bind_keymaps()
-    self:_setup_write_submit()
     self:_setup_queue()
     self:_attach_input()
 
@@ -859,7 +888,7 @@ function ChatWidget:_initialize()
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
         buffer = input,
         callback = function()
-            self:_sync_input_modified()
+            BufHelpers.sync_modified(self.buf_nrs.input)
         end,
     })
 
@@ -921,31 +950,6 @@ function ChatWidget:_initialize()
             end
         end,
     })
-end
-
---- Make :w submit the prompt in the input buffer.
-function ChatWidget:_setup_write_submit()
-    if not Config.settings.write_submit then
-        return
-    end
-
-    -- The write commands are the deliberate escape hatch: send now regardless
-    -- of what the session would otherwise defer for. Submitted during the
-    -- write: vim fails a write whose BufWriteCmd leaves the buffer modified,
-    -- and `:wq`/`:x` then stop short of closing the window.
-    vim.api.nvim_create_autocmd("BufWriteCmd", {
-        buffer = self.buf_nrs.input,
-        callback = function()
-            self:submit({ force = true })
-        end,
-    })
-end
-
---- Set the input's `modified` to whether it holds text: any text in it is an
---- unsent prompt, whatever was written.
-function ChatWidget:_sync_input_modified()
-    local input = self.buf_nrs.input
-    vim.bo[input].modified = not BufHelpers.is_buffer_empty(input)
 end
 
 --- Wire up [[ / ]] navigation between the rows recording a user action in the
@@ -1010,15 +1014,22 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
     )
 end
 
---- Jump the chat and subagent windows to their last line without moving focus.
---- The resulting WinScrolled lets each buffer's MessageWriter resume
---- auto-scroll.
+--- Jump the windows in the current tabpage showing the session's chat or a
+--- transcript to their last line without moving focus. The resulting
+--- WinScrolled lets each buffer's MessageWriter resume auto-scroll.
 --- @private
 function ChatWidget:_goto_transcripts_bottom()
-    for _, winid in pairs(self:_transcript_wins()) do
-        vim.api.nvim_win_call(winid, function()
-            vim.cmd("normal! G")
-        end)
+    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        local bufnr = vim.api.nvim_win_get_buf(winid)
+        local panel = vim.b[bufnr].agentic_window
+        if
+            vim.b[bufnr].agentic_session_id == self._owner_id
+            and (panel == "chat" or panel == "subagent")
+        then
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("normal! G")
+            end)
+        end
     end
 end
 
@@ -1033,16 +1044,9 @@ end
 --- @param bufnr integer
 function ChatWidget:_bind_buf_keymaps(panel, bufnr)
     if panel == "input" then
-        if not BufHelpers.is_keymap_disabled(Config.keymaps.prompt.submit) then
-            BufHelpers.multi_keymap_set(
-                Config.keymaps.prompt.submit,
-                bufnr,
-                function()
-                    self:submit()
-                end,
-                { desc = "Agentic: Submit prompt" }
-            )
-        end
+        PromptInput.bind_submit(bufnr, function(opts)
+            self:submit(opts)
+        end)
 
         self:_bind_send_keymaps(bufnr)
         self:_bind_queue_keymaps(bufnr)
@@ -1067,33 +1071,8 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
         self:_setup_prompt_navigation(bufnr)
     end
 
-    for lhs, spec in pairs(Config.keymaps.prompts) do
-        local prompt
-        if type(spec) == "string" then
-            prompt = spec
-        elseif type(spec) == "table" then
-            prompt = spec.prompt
-        end
-
-        -- vim.NIL, nil, and "" all fall through to skip. is_keymap_disabled
-        -- is unusable here: it reports `#{prompt=...} == 0` as disabled,
-        -- silently dropping every table-form entry.
-        if prompt and prompt ~= "" then
-            local km = (type(spec) == "table" and spec.mode)
-                    and { { lhs, mode = spec.mode } }
-                or lhs
-            local desc = (type(spec) == "table" and spec.desc)
-                or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
-
-            -- Send via this widget's own session (self.on_submit_input ==
-            -- session:_handle_input_submit), not send_prompt: a buffer-local
-            -- map only fires from a focused widget window, so the session
-            -- already exists and is visible — avoids send_prompt's
-            -- get_session_for_tab_page(nil, …) auto-spawn branch.
-            BufHelpers.multi_keymap_set(km, bufnr, function()
-                self.on_submit_input(prompt)
-            end, { desc = desc })
-        end
+    if panel ~= "message" then
+        self:_bind_canned_prompt_keymaps(bufnr)
     end
 
     if not BufHelpers.is_keymap_disabled(Config.keymaps.widget.refresh) then
@@ -1133,35 +1112,68 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
         { desc = "Agentic: Scroll transcripts to bottom" }
     )
 
-    -- Add keybindings to chat, todos, code, and files buffers to jump back to input and start insert mode
-    if panel ~= "input" then
-        for _, key in ipairs({
-            "a",
-            "A",
-            "o",
-            "O",
-            "i",
-            "I",
-            "c",
-            "C",
-            "x",
-            "X",
-        }) do
-            BufHelpers.keymap_set(bufnr, "n", key, function()
-                self:focus_input_for_insert()
-            end)
+    -- A transcript's keys depend on its agent; its session binds them.
+    if panel ~= "input" and panel ~= "message" and panel ~= "subagent" then
+        self:_bind_insert_keymaps(panel, bufnr)
+    end
+end
+
+--- Bind each `Config.keymaps.prompts` entry on a buffer to send its prompt.
+--- @param bufnr integer
+function ChatWidget:_bind_canned_prompt_keymaps(bufnr)
+    for lhs, spec in pairs(Config.keymaps.prompts) do
+        local prompt
+        if type(spec) == "string" then
+            prompt = spec
+        elseif type(spec) == "table" then
+            prompt = spec.prompt
         end
 
-        -- Paste in chat/panel → focus input window and paste there
-        for _, key in ipairs({ "p", "P" }) do
-            BufHelpers.keymap_set(bufnr, "n", key, function()
-                local input_win = self:panel_win("input")
-                if input_win then
-                    vim.api.nvim_set_current_win(input_win)
-                    vim.cmd("normal! " .. key)
-                end
-            end)
+        -- vim.NIL, nil, and "" all fall through to skip. is_keymap_disabled
+        -- is unusable here: it reports `#{prompt=...} == 0` as disabled,
+        -- silently dropping every table-form entry.
+        if prompt and prompt ~= "" then
+            local km = (type(spec) == "table" and spec.mode)
+                    and { { lhs, mode = spec.mode } }
+                or lhs
+            local desc = (type(spec) == "table" and spec.desc)
+                or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
+
+            -- Send via this widget's own session (self.on_submit_input ==
+            -- session:_handle_input_submit), not send_prompt: a buffer-local
+            -- map only fires from a focused widget window, so the session
+            -- already exists and is visible — avoids send_prompt's
+            -- get_session_for_tab_page(nil, …) auto-spawn branch.
+            BufHelpers.multi_keymap_set(km, bufnr, function()
+                self.on_submit_input(prompt)
+            end, { desc = desc })
         end
+    end
+end
+
+--- Bind the insert keys and `p`/`P` on a read-only panel buffer to type and
+--- paste into the input.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @param bufnr integer
+function ChatWidget:_bind_insert_keymaps(panel, bufnr)
+    local is_chat = panel == "chat"
+    local focus = is_chat and self.focus_input_for_chat
+        or self.focus_input_for_insert
+    for _, key in ipairs(BufHelpers.INSERT_KEYS) do
+        BufHelpers.keymap_set(bufnr, "n", key, function()
+            focus(self)
+        end)
+    end
+
+    for _, key in ipairs({ "p", "P" }) do
+        BufHelpers.keymap_set(bufnr, "n", key, function()
+            local input_win = is_chat and self:input_win_for_chat()
+                or self:panel_win("input")
+            if input_win then
+                vim.api.nvim_set_current_win(input_win)
+                vim.cmd("normal! " .. key)
+            end
+        end)
     end
 end
 
@@ -1304,6 +1316,8 @@ local function panel_buf_opts(panel)
             modifiable = true,
         },
     }
+    -- A subagent's message input.
+    panel_opts.message = panel_opts.input
     return vim.tbl_extend("force", {
         swapfile = false,
         buftype = "nofile",
@@ -1462,45 +1476,6 @@ end
 --- @param panel_name agentic.ui.ChatWidget.PanelNames
 function ChatWidget:close_optional_window(panel_name)
     WidgetLayout.close_optional_window(self.win_nrs, self.buf_nrs, panel_name)
-end
-
---- Show a subagent transcript in the subagent window: open the window beside
---- the chat if it is closed (no-op while the chat window is hidden), else
---- switch its buffer.
---- @param bufnr integer
-function ChatWidget:show_subagent(bufnr)
-    local before = self:_transcript_wins()
-    WidgetLayout.show_subagent(self.win_nrs, self.buf_nrs, bufnr)
-    self:_report_opened(before)
-end
-
---- The `chat` and `subagent` panel windows.
---- @return table<"chat"|"subagent", integer|nil>
-function ChatWidget:_transcript_wins()
-    return {
-        chat = self:panel_win("chat"),
-        subagent = self:panel_win("subagent"),
-    }
-end
-
---- Run `on_window_opened` for each of the `chat` and `subagent` windows that
---- differs from its handle in `before`. Widget windows open without
---- autocmds, so their buffers' BufWinEnter does not run for them.
---- @param before table<"chat"|"subagent", integer|nil> Panel windows before the open
-function ChatWidget:_report_opened(before)
-    if not self.on_window_opened then
-        return
-    end
-    for panel, winid in pairs(self:_transcript_wins()) do
-        if winid ~= before[panel] then
-            self.on_window_opened(panel, winid)
-        end
-    end
-end
-
---- Close the subagent window if open, keeping its transcript.
-function ChatWidget:close_subagent_window()
-    self:close_optional_window("subagent")
 end
 
 --- @return boolean

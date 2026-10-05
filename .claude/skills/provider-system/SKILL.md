@@ -391,8 +391,12 @@ sessions). `ACPClient` maps child → root on `subagent_spawned` and passes the
 raw id to the root's subscriber as `source_session_id`. `SessionManager` keeps
 one `SubagentTranscript` per child (`_agents`), opened by `subagent_spawned`,
 ended by `subagent_state_update` or a disconnect, never by a turn's end.
-Adapters override `subagent_task_id`, `subagent_id` and `subagent_record`
-(type, mode, Task id; claude reads `agent-<id>.meta.json`). opencode and
+Adapters override `subagent_task_id`, `subagent_id`, `subagent_record`
+(type, mode, Task id; claude reads `agent-<id>.meta.json`) and
+`subagent_predicted_mode`. A background subagent gets a message input only
+when the adapter gives `subagent_stop_instruction` and
+`subagent_message_instruction`, prompts the main agent relays (claude:
+TaskStop, SendMessage); implement both or neither. opencode and
 mistral-vibe `SubAgent` calls are plain blocks.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)

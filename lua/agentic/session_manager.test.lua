@@ -685,6 +685,7 @@ describe("agentic.SessionManager", function()
                 _reset_subagents = function() end,
                 _restore_transcripts = noop,
                 _forget_agents = noop,
+                _destroy_inputs = noop,
                 _sync_modified = SessionManager._sync_modified,
                 _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
@@ -2073,7 +2074,9 @@ describe("agentic.SessionManager", function()
                 code_selection = { is_empty = empty },
                 diagnostics_list = { is_empty = empty },
                 _handle_input_submit = SessionManager._handle_input_submit,
+                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
                 _notify_attention = SessionManager._notify_attention,
                 _sync_history_context = SessionManager._sync_history_context,
@@ -2275,7 +2278,9 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 _ring_bell = noop,
                 _handle_input_submit = SessionManager._handle_input_submit,
+                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
                 _send_synthetic_prompt = function(this, text)
                     table.insert(sink.synthetic, text)
@@ -2903,7 +2908,7 @@ describe("agentic.SessionManager", function()
                         return prompted
                     end,
                     permission_float = {
-                        is_shown = function()
+                        is_visible_in_current_tab = function()
                             return true
                         end,
                     },
@@ -3029,7 +3034,9 @@ describe("agentic.SessionManager", function()
                 _truncate_queue = SessionManager._truncate_queue,
                 _warn_unadvertised_command = SessionManager._warn_unadvertised_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
+                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _send_user_prompt = SessionManager._send_user_prompt,
             } --[[@as agentic.SessionManager]]
         end)
 
@@ -3191,6 +3198,7 @@ describe("agentic.SessionManager", function()
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _sync_modified = function() end,
                 _forget_agents = function() end,
+                _destroy_inputs = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
 
@@ -3225,6 +3233,7 @@ describe("agentic.SessionManager", function()
                 end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _handle_input_submit = SessionManager._handle_input_submit,
+                _submit_hold_reason = SessionManager._submit_hold_reason,
             }
             --- @type agentic.SessionManager
             local typed = session
@@ -3642,7 +3651,9 @@ describe("agentic.SessionManager", function()
                 _confirm_queued_command = SessionManager._confirm_queued_command,
                 _warn_unadvertised_command = SessionManager._warn_unadvertised_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
+                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
+                _send_user_prompt = SessionManager._send_user_prompt,
             } --[[@as agentic.SessionManager]]
         end)
 

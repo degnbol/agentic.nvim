@@ -21,6 +21,32 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         )
     end
 
+    describe("subagent control", function()
+        it("predicts background only under force_background", function()
+            local Config = require("agentic.config")
+            local original = Config.subagents.force_background
+            local adapter = make_adapter()
+
+            Config.subagents.force_background = true
+            assert.equal("background", adapter:subagent_predicted_mode())
+            Config.subagents.force_background = false
+            assert.equal("blocking", adapter:subagent_predicted_mode())
+            Config.subagents.force_background = original
+        end)
+
+        it("gives the TaskStop and SendMessage instructions", function()
+            local adapter = make_adapter()
+            assert.equal(
+                ClaudeUtils.task_stop_instruction("a1", "x"),
+                adapter:subagent_stop_instruction("a1", "x")
+            )
+            assert.equal(
+                ClaudeUtils.send_message_instruction("a1", "x", "m"),
+                adapter:subagent_message_instruction("a1", "x", "m")
+            )
+        end)
+    end)
+
     describe("strip_console_fence", function()
         it("strips a ```console wrapper and reports it was fenced", function()
             local inner, was_fenced = ClaudeUtils.strip_console_fence({

@@ -97,9 +97,9 @@ describe("native subagent sessions", function()
                 :find("## find it (Blocking?)", 1, true)
         )
         assert.equal(
-            child.lua_get([[_G.transcript("aa11bb22cc33dd44").bufnr]]),
+            1,
             child.lua_get(
-                [[vim.api.nvim_win_get_buf(_G.s.widget:panel_win("subagent"))]]
+                [[#vim.fn.win_findbuf(_G.transcript("aa11bb22cc33dd44").bufnr)]]
             )
         )
     end)
@@ -245,7 +245,6 @@ _G.s:_advance_session_epoch()
         "spawn and state only touch the block while loading, with the meta file's type and mode",
         function()
             child.lua([[
-_G.s.widget:close_subagent_window()
 _G.s._loading = true
 _G.write_meta("c1", "foreground", "toolu_1")
 _G.spawn("c1")
@@ -267,9 +266,7 @@ _G.state("c1", "completed")
                     [[vim.api.nvim_buf_is_loaded(_G.transcript("c1").bufnr)]]
                 )
             )
-            assert.is_true(
-                child.lua_get([[_G.s.widget:panel_win("subagent") == nil]])
-            )
+            assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
         end
     )
 
@@ -298,7 +295,7 @@ _G.state("c1", "cancelled")
         function()
             child.lua([[
 _G.spawn("c1")
-_G.spawn("c2")
+vim.cmd("tabclose 2")
 _G.s:_on_request_permission({
     sessionId = "c1",
     toolCall = { toolCallId = "t9" },
@@ -309,10 +306,8 @@ _G.s:_on_request_permission({
 ]])
 
             assert.equal(
-                child.lua_get([[_G.transcript("c1").bufnr]]),
-                child.lua_get(
-                    [[vim.api.nvim_win_get_buf(_G.s.widget:panel_win("subagent"))]]
-                )
+                1,
+                child.lua_get([[#vim.fn.win_findbuf(_G.transcript("c1").bufnr)]])
             )
         end
     )
@@ -523,19 +518,16 @@ h.on_tool_call_update({ tool_call_id = "t1", status = "completed" }, "c1")
         )
     end)
 
-    it("an auto-approved request opens no subagent window", function()
+    it("an auto-approved request opens no tab", function()
         child.lua([[
-_G.s.widget:close_subagent_window()
 _G.spawn("c1")
-_G.s.widget:close_subagent_window()
+vim.cmd("tabclose 2")
 _G.s.permission_manager.add_request = function() return false end
 _G.s:_on_request_permission({ sessionId = "c1", toolCall = { toolCallId = "t9" },
   options = { { optionId = "allow", name = "Allow", kind = "allow_once" } } }, function() end)
 ]])
 
-        assert.is_true(
-            child.lua_get([[_G.s.widget:panel_win("subagent") == nil]])
-        )
+        assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
     end)
 
     it("answering a subagent's request leaves the chat's indicator alone", function()
@@ -619,19 +611,14 @@ _G.s2:_reset_subagents()
                 [[vim.api.nvim_buf_is_valid(_G.transcript("c1").bufnr)]]
             )
         )
-        assert.is_true(
-            child.lua_get([[_G.s2.widget:panel_win("subagent") == nil]])
-        )
         assert.equal(
-            child.lua_get([[_G.transcript("c1").bufnr]]),
-            child.lua_get(
-                [[vim.api.nvim_win_get_buf(_G.s.widget:panel_win("subagent"))]]
-            )
+            1,
+            child.lua_get([[#vim.fn.win_findbuf(_G.transcript("c1").bufnr)]])
         )
     end)
 end)
 
-describe("subagent window", function()
+describe("transcript windows", function()
     local child = Child.new()
 
     before_each(function()
@@ -644,21 +631,22 @@ describe("subagent window", function()
         child.stop()
     end)
 
-    it("show_subagent switches the buffer of an open subagent window", function()
+    it("each subagent gets a tab of its own", function()
         child.lua([[
 _G.spawn("c1")
-_G.win = _G.s.widget:panel_win("subagent")
 _G.spawn("c2")
 ]])
 
-        assert.equal(
-            child.lua_get("_G.win"),
-            child.lua_get([[_G.s.widget:panel_win("subagent")]])
-        )
-        assert.equal(
-            child.lua_get([[_G.transcript("c2").bufnr]]),
-            child.lua_get([[vim.api.nvim_win_get_buf(_G.win)]])
-        )
+        assert.equal(3, child.lua_get("#vim.api.nvim_list_tabpages()"))
+        for i, id in ipairs({ "c1", "c2" }) do
+            assert.equal(
+                child.lua_get(string.format([[_G.transcript(%q).bufnr]], id)),
+                child.lua_get(string.format(
+                    [[vim.api.nvim_win_get_buf(vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[%d])[1])]],
+                    i + 1
+                ))
+            )
+        end
     end)
 
     for keys, check in pairs({

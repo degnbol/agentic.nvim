@@ -108,6 +108,31 @@ function ClaudeAgentACPAdapter:subagent_id(child_id)
     return ClaudeUtils.agent_id(child_id)
 end
 
+--- `Config.subagents.force_background` runs every spawn in the background.
+--- @return "background"|"blocking"
+function ClaudeAgentACPAdapter:subagent_predicted_mode()
+    return Config.subagents.force_background and "background" or "blocking"
+end
+
+--- @param agent_id string
+--- @param label string
+--- @return string
+function ClaudeAgentACPAdapter:subagent_stop_instruction(agent_id, label)
+    return ClaudeUtils.task_stop_instruction(agent_id, label)
+end
+
+--- @param agent_id string
+--- @param label string
+--- @param message string
+--- @return string
+function ClaudeAgentACPAdapter:subagent_message_instruction(
+    agent_id,
+    label,
+    message
+)
+    return ClaudeUtils.send_message_instruction(agent_id, label, message)
+end
+
 --- Separate a Bash tool call's description from its output. claude-agent-acp
 --- sends `input.description` as the initial tool_call content and wraps
 --- stdout/stderr in a ```console fence on completion (tools.js). Left alone,

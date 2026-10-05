@@ -24,8 +24,10 @@ local SessionRestore = require("agentic.session_restore")
 local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
+local SubagentInput = require("agentic.ui.subagent_input")
 local Theme = require("agentic.theme")
 local TrustSafety = require("agentic.utils.trust_safety")
+local WidgetLayout = require("agentic.ui.widget_layout")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic._SessionManagerPrivate
@@ -78,6 +80,7 @@ end
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field status_indicator agentic.ui.StatusIndicator
 --- @field _agents table<string, agentic.SessionManager.Agent> Subagents of the conversation by child session id
+--- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by agent id (`ACPClient:subagent_id`)
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
 --- @field file_list agentic.ui.FileList
@@ -158,19 +161,12 @@ function SessionManager:_notify_attention(badge, skip_badge)
     end
 end
 
---- Signal a permission request waiting with its float hidden, because no
---- window shows `bufnr`, the buffer it belongs to: bell, a `[?]` badge in
---- that buffer's header, and a notification naming the session and buffer.
---- The badge clears when the float shows or the request ends.
---- @param hidden boolean
+--- Signal a permission request waiting with its float hidden, not visible in
+--- the current tabpage: bell, a `[?]` badge in the header of `bufnr`, the
+--- buffer it belongs to, and a notification naming the session and buffer.
+--- The badge stays until the request ends.
 --- @param bufnr integer
-function SessionManager:_on_permission_hidden(hidden, bufnr)
-    if not hidden then
-        if WindowDecoration.get_header(bufnr).badge == "[?]" then
-            self.widget:set_unread_badge(nil, bufnr)
-        end
-        return
-    end
+function SessionManager:_on_permission_hidden(bufnr)
     SessionManager._ring_bell()
     self.widget:set_unread_badge("[?]", bufnr)
     local title = self.chat_history.title
@@ -347,6 +343,7 @@ function SessionManager:new()
         _prompt_pending = 0,
         _checktime_scheduled = false,
         _agents = {},
+        _inputs = {},
         _agent_by_task = {},
         _tool_call_owner = {},
         --- @type string|nil Last model id announced via announce_model_loaded;
@@ -399,7 +396,7 @@ function SessionManager:new()
 
     -- What the writer's BufWinEnter does for any other window. A tick later:
     -- a window opened in the same layout pass has no fold levels yet.
-    self.widget.on_window_opened = function(_panel, winid)
+    self.widget.on_window_opened = function(winid)
         vim.schedule(function()
             if self.destroyed or not vim.api.nvim_win_is_valid(winid) then
                 return
@@ -439,8 +436,13 @@ function SessionManager:new()
             return self:_writer_for(tool_call_id)
         end
     )
-    self.permission_manager.on_hidden_change = function(hidden, bufnr)
-        self:_on_permission_hidden(hidden, bufnr)
+    self.permission_manager.on_hidden = function(bufnr)
+        self:_on_permission_hidden(bufnr)
+    end
+    self.permission_manager.on_hidden_resolved = function(bufnr)
+        if WindowDecoration.get_header(bufnr).badge == "[?]" then
+            self.widget:set_unread_badge(nil, bufnr)
+        end
     end
     -- A subagent's prompt anchors to its transcript; with no window showing
     -- it, the request would wait unseen and hold the queue.
@@ -449,8 +451,12 @@ function SessionManager:new()
             bufnr ~= self.widget.buf_nrs.chat
             and #vim.fn.win_findbuf(bufnr) == 0
         then
-            self.widget:show_subagent(bufnr)
+            WidgetLayout.open_tab(bufnr)
         end
+    end
+    self.permission_manager.companion_bufs = function(anchor)
+        local input = self:_input_of_transcript(anchor)
+        return input and { input.bufnr } or {}
     end
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
@@ -765,6 +771,7 @@ function SessionManager:_new_transcript(child_id, subagent)
     transcript = SubagentTranscript:new(agent_id, generation, subagent, self.widget, {
         setup_buf = function(bufnr, writer)
             self:_bind_session_keymaps(bufnr, writer)
+            self:_bind_agent_keymaps(child_id, bufnr)
         end,
         on_reload = function()
             if not self.destroyed then
@@ -960,6 +967,17 @@ function SessionManager:_read_agent_record(child_id)
     if agent.transcript then
         agent.transcript:set_header(subagent)
     end
+
+    if record.background then
+        self:_open_input(child_id)
+        return
+    end
+    -- The agent blocks its spawner, so the main agent cannot reach it apart
+    -- from its own turn.
+    local agent_id = (self.agent:subagent_id(child_id))
+    if self._inputs[agent_id] then
+        self:_destroy_input(agent_id)
+    end
 end
 
 --- Apply a change to a subagent's block, in the chat and in the history.
@@ -992,10 +1010,12 @@ local BLOCK_STATUS_OF_STATE = {
 }
 
 --- Start a subagent the provider announced: its block in the main chat, then
---- its transcript and working indicator, shown in the subagent window when
---- `windows.subagent.display` is set. While a session loads, only the block
---- and an unloaded transcript for it to name: the session file holds the
---- agent's output, and its agent is long over.
+--- its transcript and working indicator, and a background one's message
+--- input. The transcript of a later generation shows in the windows showing
+--- an earlier one; with none, or for a first generation, it opens in a
+--- tabpage of its own when `windows.subagent.display` is set. While a session
+--- loads, only the block and an unloaded transcript for it to name: the
+--- session file holds the agent's output, and its agent is long over.
 --- @param child_id string
 --- @param name string
 --- @param task string The prompt
@@ -1015,8 +1035,7 @@ function SessionManager:_open_agent(child_id, name, task)
     local subagent = {
         label = name,
         agent_id = (self.agent:subagent_id(child_id)),
-        mode = Config.subagents.force_background and "background"
-            or "blocking",
+        mode = self.agent:subagent_predicted_mode(),
         confirmed = false,
     }
     local transcript = self:_new_transcript(child_id, subagent)
@@ -1051,17 +1070,46 @@ function SessionManager:_open_agent(child_id, name, task)
         transcript:unload()
     else
         transcript.status_indicator:start("generating")
-        if Config.windows.subagent.display then
-            self.widget:show_subagent(transcript.bufnr)
+        if
+            not self:_show_generation(child_id)
+            and Config.windows.subagent.display
+        then
+            WidgetLayout.open_tab(transcript.bufnr)
         end
+        self:_open_input(child_id)
     end
     self:_read_agent_record(child_id)
 end
 
+--- Show a subagent's transcript in every window showing a transcript of an
+--- earlier generation of the same agent.
+--- @param child_id string
+--- @return boolean shown Some window shows it
+function SessionManager:_show_generation(child_id)
+    local agent_id, generation = self.agent:subagent_id(child_id)
+    local bufnr = self._agents[child_id].transcript.bufnr
+    local shown = false
+    for other_id, agent in pairs(self._agents) do
+        local other_agent_id, other_generation = self.agent:subagent_id(other_id)
+        if
+            other_agent_id == agent_id
+            and other_generation < generation
+            and agent.transcript
+        then
+            for _, winid in ipairs(vim.fn.win_findbuf(agent.transcript.bufnr)) do
+                vim.api.nvim_win_set_buf(winid, bufnr)
+                shown = true
+            end
+        end
+    end
+    return shown
+end
+
 --- End a running subagent: stop its indicator, stamp its unresolved calls
 --- `cancelled` unless it completed, end its writer's runs, set its block's
---- status, and close the subagent window after the last one when
---- `windows.subagent.auto_close` is set. A no-op for an unknown or ended one.
+--- status. With `windows.subagent.auto_close` set, close the windows showing
+--- its transcript or message input outside the current tabpage, where the
+--- user is not reading them. A no-op for an unknown or ended one.
 --- @param child_id string
 --- @param state agentic.acp.SubagentState
 function SessionManager:_close_agent(child_id, state)
@@ -1088,19 +1136,19 @@ function SessionManager:_close_agent(child_id, state)
         transcript:set_header(block and block.subagent, state)
     end
 
-    if Config.windows.subagent.auto_close and not self:_any_agent_open() then
-        self.widget:close_subagent_window()
-    end
-end
-
---- @return boolean
-function SessionManager:_any_agent_open()
-    for _, agent in pairs(self._agents) do
-        if agent.open then
-            return true
+    if Config.windows.subagent.auto_close and transcript then
+        local input = self._inputs[(self.agent:subagent_id(child_id))]
+        local winids = vim.fn.win_findbuf(transcript.bufnr)
+        if input then
+            vim.list_extend(winids, vim.fn.win_findbuf(input.bufnr))
+        end
+        local tab = vim.api.nvim_get_current_tabpage()
+        for _, winid in ipairs(winids) do
+            if vim.api.nvim_win_get_tabpage(winid) ~= tab then
+                vim.api.nvim_win_close(winid, true)
+            end
         end
     end
-    return false
 end
 
 --- Close every running subagent as `state`.
@@ -1122,8 +1170,10 @@ function SessionManager:_forget_agents()
     end
 end
 
---- Forget every subagent the conversation started, and wipe the transcripts.
+--- Forget every subagent the conversation started, and wipe the transcripts
+--- and message inputs.
 function SessionManager:_reset_subagents()
+    self:_destroy_inputs()
     for _, agent in pairs(self._agents) do
         if agent.transcript then
             agent.transcript:destroy()
@@ -1132,6 +1182,183 @@ function SessionManager:_reset_subagents()
     self._agents = {}
     self._agent_by_task = {}
     self._tool_call_owner = {}
+end
+
+--- Wipe an agent's message input. Unsent text in it is given back in a
+--- notification.
+--- @param agent_id string
+function SessionManager:_destroy_input(agent_id)
+    local input = self._inputs[agent_id]
+    self._inputs[agent_id] = nil
+    local text = input:text()
+    input:destroy()
+    if text:find("%S") then
+        Logger.notify(
+            string.format(
+                "Unsent message to subagent %s, discarded:\n%s",
+                self:_agent_label(self:_latest_generation(agent_id) or agent_id),
+                text
+            ),
+            vim.log.levels.WARN
+        )
+    end
+end
+
+--- Wipe every message input.
+function SessionManager:_destroy_inputs()
+    for agent_id in pairs(self._inputs) do
+        self:_destroy_input(agent_id)
+    end
+end
+
+--- The child session of an agent's latest generation that this session
+--- manager knows.
+--- @param agent_id string
+--- @return string|nil child_id
+function SessionManager:_latest_generation(agent_id)
+    local latest, latest_generation
+    for child_id in pairs(self._agents) do
+        local id, generation = self.agent:subagent_id(child_id)
+        if id == agent_id and generation > (latest_generation or 0) then
+            latest, latest_generation = child_id, generation
+        end
+    end
+    return latest
+end
+
+--- The message input of the agent whose transcript is `bufnr`.
+--- @param bufnr integer
+--- @return agentic.ui.SubagentInput|nil
+function SessionManager:_input_of_transcript(bufnr)
+    for child_id, agent in pairs(self._agents) do
+        if agent.transcript and agent.transcript.bufnr == bufnr then
+            return self._inputs[(self.agent:subagent_id(child_id))]
+        end
+    end
+    return nil
+end
+
+--- Give a running subagent known to run in the background a message input,
+--- shown in no window. No-op when it has one, for an agent that has ended or
+--- was restored, and for a provider whose main agent cannot message one.
+--- @param child_id string
+function SessionManager:_open_input(child_id)
+    local agent = self._agents[child_id]
+    local block = self:_agent_block(child_id)
+    local subagent = block and block.subagent
+    local agent_id = (self.agent:subagent_id(child_id))
+    if
+        self._inputs[agent_id]
+        or not (agent and agent.open)
+        or not (subagent and subagent.mode == "background")
+        or not self.agent:subagent_message_instruction(
+            agent_id,
+            subagent.label,
+            ""
+        )
+    then
+        return
+    end
+
+    local transcript = self:_transcript_for(child_id)
+    --- @type agentic.ui.SubagentInput
+    local input
+    input = SubagentInput:new(
+        vim.fn.fnamemodify(vim.api.nvim_buf_get_name(transcript.bufnr), ":t"),
+        subagent.label,
+        self.widget,
+        {
+            on_submit = function(text, opts)
+                return self:_relay_to_agent(child_id, text, opts)
+            end,
+            setup_buf = function(bufnr)
+                self:_bind_session_keymaps(bufnr)
+                BufHelpers.multi_keymap_set(
+                    Config.keymaps.widget.stop_generation,
+                    bufnr,
+                    function()
+                        self:_stop_agent(child_id)
+                    end,
+                    { desc = "Agentic: Stop subagent" }
+                )
+            end,
+            on_wipeout = function()
+                if self._inputs[agent_id] == input then
+                    self._inputs[agent_id] = nil
+                end
+            end,
+        }
+    )
+    self._inputs[agent_id] = input
+end
+
+--- The window to type into for a subagent: the window in the current
+--- tabpage showing its message input, else one opened below the current
+--- window. For an agent without a message input, the session's input
+--- (`ChatWidget:input_win_for_chat`).
+--- @param agent_id string
+--- @return integer winid
+function SessionManager:_agent_input_win(agent_id)
+    local input = self._inputs[agent_id]
+    if input then
+        return WidgetLayout.input_win(input.bufnr)
+    end
+    return self.widget:input_win_for_chat()
+end
+
+--- Bind the keys of a subagent's transcript that act on the agent, each
+--- resolving the agent's message input when pressed: the insert keys start
+--- insert in the agent's input window (`_agent_input_win`), `p` and `P`
+--- paste there, and `keymaps.widget.stop_generation` stops the agent, or the
+--- main agent's turn for an agent without a message input.
+--- @param child_id string
+--- @param bufnr integer The transcript
+function SessionManager:_bind_agent_keymaps(child_id, bufnr)
+    local agent_id = (self.agent:subagent_id(child_id))
+    for _, key in ipairs(BufHelpers.INSERT_KEYS) do
+        BufHelpers.keymap_set(bufnr, "n", key, function()
+            vim.api.nvim_set_current_win(self:_agent_input_win(agent_id))
+            BufHelpers.start_insert_on_last_char()
+        end)
+    end
+    for _, key in ipairs({ "p", "P" }) do
+        BufHelpers.keymap_set(bufnr, "n", key, function()
+            vim.api.nvim_set_current_win(self:_agent_input_win(agent_id))
+            vim.cmd("normal! " .. key)
+        end)
+    end
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.stop_generation,
+        bufnr,
+        function()
+            if self._inputs[agent_id] then
+                self:_stop_agent(child_id)
+            else
+                self:stop_generation()
+            end
+        end,
+        { desc = "Agentic: Stop subagent or generation" }
+    )
+end
+
+--- A subagent's display name, else the id addressing it.
+--- @param child_id string
+--- @return string
+function SessionManager:_agent_label(child_id)
+    local block = self:_agent_block(child_id)
+    return block and block.subagent and block.subagent.label
+        or (self.agent:subagent_id(child_id))
+end
+
+--- Whether the provider's record says a subagent blocks its spawner.
+--- @param child_id string
+--- @return boolean
+function SessionManager:_confirmed_blocking(child_id)
+    local block = self:_agent_block(child_id)
+    local subagent = block and block.subagent
+    return subagent ~= nil
+        and subagent.confirmed
+        and subagent.mode == "blocking"
 end
 
 --- Run a message chunk's text through `boundary`. `update` is not modified.
@@ -2073,7 +2300,9 @@ function SessionManager:_on_request_permission(request, callback)
         -- escape (add_request has already run, so the callback is safe).
         local ok, err = pcall(function()
             -- A hidden float is signalled by `_on_permission_hidden`.
-            if self.permission_manager.permission_float:is_shown() then
+            if
+                self.permission_manager.permission_float:is_visible_in_current_tab()
+            then
                 self:_notify_attention("[?]", true)
             end
 
@@ -2708,18 +2937,25 @@ end
 --- No entry for `in_flight`: a running turn holds only the automatic drains,
 --- which have the queue's own highlight to stand in for them, never a submit.
 --- @type table<agentic.SubmitDeferReason, string>
-local DEFER_NOTICE = {
-    usage_limited = "Message held — usage limit in force.",
-    loading = "Message held — the session is still loading.",
-    not_ready = "Message held — no session yet.",
+local HOLD_CAUSE = {
+    usage_limited = "usage limit in force",
+    loading = "the session is still loading",
+    not_ready = "no session yet",
 }
+
+--- The notice of a prompt held for each reason.
+--- @type table<agentic.SubmitDeferReason, string>
+local DEFER_NOTICE = {}
+for reason, cause in pairs(HOLD_CAUSE) do
+    DEFER_NOTICE[reason] = "Message held — " .. cause .. "."
+end
 
 --- Why `prompt` cannot go out as a turn of its own right now, or nil if it can.
 ---
 --- Three of the reasons are about the session's ability to take a prompt at
 --- all. `in_flight` is not: the provider accepts a mid-turn prompt and runs it
 --- as the next turn, so this reason exists to sequence the automatic drains one
---- block per turn, and `_handle_input_submit` ignores it.
+--- block per turn, and `_submit_hold_reason` ignores it.
 ---
 --- Local commands are never deferred — they need no provider round-trip, so
 --- they answer mid-turn and before a session exists, which is what makes
@@ -2789,16 +3025,8 @@ end
 --- @return boolean dispatched
 function SessionManager:_handle_input_submit(input_text, opts)
     opts = opts or {}
-    local reason = self:_submit_defer_reason(input_text)
-    if reason == "in_flight" then
-        reason = nil
-    end
-    -- `force` bypasses waiting for a usage reset, but there is no session to
-    -- send into under the other two — forcing would hand send_prompt a nil
-    -- session id and lose the text, since the caller treats a dispatch as
-    -- consumed.
-    local unsendable = reason == "not_ready" or reason == "loading"
-    if reason and (not opts.force or unsendable) then
+    local reason = self:_submit_hold_reason(input_text, opts.force)
+    if reason then
         if not opts.from_buffer then
             self._pending_bufferless_prompt = input_text
             self.message_writer:write_error_action(DEFER_NOTICE[reason])
@@ -2807,6 +3035,111 @@ function SessionManager:_handle_input_submit(input_text, opts)
     end
     self:_handle_input_submit_inner(input_text)
     return true
+end
+
+--- Why the gate holds back a submit of `prompt`, or nil if it goes out. A
+--- turn in flight holds no submit.
+--- @param prompt string
+--- @param force boolean|nil Send past a usage limit
+--- @return agentic.SubmitDeferReason|nil
+function SessionManager:_submit_hold_reason(prompt, force)
+    local reason = self:_submit_defer_reason(prompt)
+    if reason == "in_flight" then
+        return nil
+    end
+    -- `force` bypasses waiting for a usage reset, but there is no session to
+    -- send into under the other two — forcing would hand send_prompt a nil
+    -- session id and lose the text, since the caller treats a dispatch as
+    -- consumed.
+    local unsendable = reason == "not_ready" or reason == "loading"
+    if reason and (not force or unsendable) then
+        return reason
+    end
+    return nil
+end
+
+--- Send a prompt to the main agent on the user's behalf, apart from their
+--- own turns. It passes the submit gate, but carries none of the pending
+--- context, title, restored history or system info of a user submit, and
+--- clears no badge, todo panel or scroll pause. A held relay is not kept.
+--- @param instruction string
+--- @param opts agentic.ui.PromptInput.SubmitOpts
+--- @return agentic.SubmitDeferReason|nil held Why it was not sent; nil when sent
+function SessionManager:_relay(instruction, opts)
+    local reason = self:_submit_hold_reason(instruction, opts.force)
+    if not reason then
+        self:_send_user_prompt(instruction, {}, {})
+    end
+    return reason
+end
+
+--- Ask the main agent to stop a subagent, through the provider's stop
+--- instruction. A blocking one stops by stopping the main agent's turn.
+--- Notifies when the agent's latest generation has finished, the provider
+--- gives no instruction, or the gate holds the request.
+--- @param child_id string Any generation of the agent
+function SessionManager:_stop_agent(child_id)
+    local agent_id = (self.agent:subagent_id(child_id))
+    local latest = self:_latest_generation(agent_id) or child_id
+    if self:_confirmed_blocking(latest) then
+        self:stop_generation()
+        return
+    end
+    local label = self:_agent_label(latest)
+    if not (self._agents[latest] and self._agents[latest].open) then
+        Logger.notify(string.format("Subagent %s has finished", label))
+        return
+    end
+    local instruction = self.agent:subagent_stop_instruction(agent_id, label)
+    if not instruction then
+        Logger.notify(
+            string.format(
+                "%s cannot stop subagent %s",
+                self.agent.provider_config.name,
+                label
+            ),
+            vim.log.levels.WARN
+        )
+        return
+    end
+    local held = self:_relay(instruction, { force = false })
+    if held then
+        Logger.notify(
+            string.format("Subagent %s not stopped — %s.", label, HOLD_CAUSE[held]),
+            vim.log.levels.WARN
+        )
+    end
+end
+
+--- Ask the main agent to pass `text` to a subagent, through the provider's
+--- message instruction. A finished agent resumes as a new generation.
+--- Notifies for an agent that blocks its spawner, a provider that gives no
+--- instruction, or a message the gate holds.
+--- @param child_id string Any generation of the agent
+--- @param text string
+--- @param opts agentic.ui.PromptInput.SubmitOpts
+--- @return boolean sent
+function SessionManager:_relay_to_agent(child_id, text, opts)
+    if not text:find("%S") then
+        return false
+    end
+    local agent_id = (self.agent:subagent_id(child_id))
+    local latest = self:_latest_generation(agent_id) or child_id
+    local label = self:_agent_label(latest)
+    local instruction = not self:_confirmed_blocking(latest)
+        and self.agent:subagent_message_instruction(agent_id, label, text)
+    if not instruction then
+        Logger.notify(
+            string.format("Subagent %s cannot be messaged", label),
+            vim.log.levels.WARN
+        )
+        return false
+    end
+    local held = self:_relay(instruction, opts)
+    if held then
+        Logger.notify(DEFER_NOTICE[held], vim.log.levels.WARN)
+    end
+    return not held
 end
 
 --- Supersede the current session generation, so callbacks still in flight for
@@ -2820,6 +3153,7 @@ function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self:_set_prompt_pending(0)
     self:_forget_agents()
+    self:_destroy_inputs()
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -3172,8 +3506,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
         local diagnostics = self.diagnostics_list:get_diagnostics()
         self.diagnostics_list:clear()
 
-        local WidgetLayout = require("agentic.ui.widget_layout")
-
         local chat_width = WidgetLayout.calculate_width(Config.windows.width)
         local chat_winid = self.widget:panel_win("chat")
         if chat_winid then
@@ -3194,6 +3526,16 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
+    self:_send_user_prompt(input_text, prompt, extra_lines)
+end
+
+--- Send the user's prompt as a turn: `input_text` after the `prompt` blocks
+--- assembled so far, shown in the chat with `extra_lines` below it and
+--- recorded in the history as the user's message.
+--- @param input_text string
+--- @param prompt agentic.acp.Content[] Blocks to send ahead of the text. The text block is appended to it
+--- @param extra_lines string[] Display-only lines below the prompt in the chat
+function SessionManager:_send_user_prompt(input_text, prompt, extra_lines)
     table.insert(prompt, {
         type = "text",
         text = input_text,

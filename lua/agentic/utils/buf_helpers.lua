@@ -152,6 +152,17 @@ function BufHelpers.is_buffer_empty(bufnr)
     return true
 end
 
+--- Normal-mode keys that start insert, which a buffer that cannot be typed in
+--- can map to typing in another.
+BufHelpers.INSERT_KEYS = { "a", "A", "o", "O", "i", "I", "c", "C", "x", "X" }
+
+--- Set a buffer's `modified` to whether it holds text, for a buffer whose
+--- text is unsent rather than unwritten.
+--- @param bufnr integer
+function BufHelpers.sync_modified(bufnr)
+    vim.bo[bufnr].modified = not BufHelpers.is_buffer_empty(bufnr)
+end
+
 --- Count the blank (whitespace-only) rows that end a buffer.
 --- @param bufnr integer
 --- @param max integer Stop counting at this many

@@ -84,23 +84,6 @@ vim.api.nvim_win_is_valid(_G.taken)
         assert.is_true(taken_shows_other())
     end)
 
-    it("close_optional_window leaves it open", function()
-        open_session()
-        child.lua([[
-_G.s:_on_session_update({
-    sessionUpdate = "subagent_spawned",
-    subagentSessionId = "c1",
-    name = "n",
-    task = "t",
-}, "root")
-_G.s.widget:show_subagent(_G.s._agents.c1.transcript.bufnr)
-]])
-        take_slot("subagent")
-
-        child.lua([[_G.s.widget:close_subagent_window()]])
-        assert.is_true(taken_shows_other())
-    end)
-
     it("Agentic.close in the only tab does not quit", function()
         -- The widget fills the only tab.
         open_session({ position = "tab" })
@@ -154,7 +137,7 @@ _G.s.widget:close_empty_non_widget_windows()
         assert.is_true(taken_shows_other())
     end)
 
-    it("p in the chat does not paste into it", function()
+    it("p in the chat pastes into a reopened input, not into it", function()
         open_session()
         take_slot("input")
         child.lua([[
@@ -164,7 +147,11 @@ vim.api.nvim_set_current_win(_G.s.widget:panel_win("chat"))
 
         child.type_keys("p")
 
-        assert.same({ "" }, child.api.nvim_buf_get_lines(0, 0, -1, false))
+        assert.equal(
+            child.lua_get("_G.s.widget.buf_nrs.input"),
+            child.api.nvim_get_current_buf()
+        )
+        assert.same({ "pasted" }, child.api.nvim_buf_get_lines(0, 0, -1, false))
         assert.same(
             { "" },
             child.lua_get(

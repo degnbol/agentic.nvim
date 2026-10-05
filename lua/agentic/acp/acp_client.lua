@@ -205,6 +205,33 @@ function ACPClient:subagent_id(child_id)
     return child_id, 1
 end
 
+--- The mode a subagent is expected to run in until the provider's record of
+--- its spawn confirms one. Adapters for providers that can force a mode
+--- override this.
+--- @return "background"|"blocking"
+function ACPClient:subagent_predicted_mode()
+    return "blocking"
+end
+
+--- A prompt for the main agent to stop a background subagent. Adapters for
+--- providers whose main agent can stop one override this.
+--- @param _agent_id string Id addressing the subagent
+--- @param _label string Display name of the subagent
+--- @return string|nil instruction Nil when the main agent cannot stop it
+function ACPClient:subagent_stop_instruction(_agent_id, _label)
+    return nil
+end
+
+--- A prompt for the main agent to pass a message to a background subagent.
+--- Adapters for providers whose main agent can message one override this.
+--- @param _agent_id string Id addressing the subagent
+--- @param _label string Display name of the subagent
+--- @param _message string Text for the subagent to receive
+--- @return string|nil instruction Nil when the main agent cannot message it
+function ACPClient:subagent_message_instruction(_agent_id, _label, _message)
+    return nil
+end
+
 --- The subscribed session a session belongs to: the root that spawned a child
 --- session, else the session itself.
 --- @param session_id string

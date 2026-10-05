@@ -635,14 +635,17 @@ describe("agentic.ui.ChatWidget", function()
             assert.is_true(vim.bo[widget.buf_nrs.input].modified)
         end)
 
-        it("an insert key in the chat reopens a closed input window", function()
+        it("an insert key in the chat reopens the widget's input slot", function()
             vim.api.nvim_win_close(widget.win_nrs.input, true)
             assert.is_nil(widget.win_nrs.input)
 
             vim.api.nvim_set_current_win(widget.win_nrs.chat)
-            widget:focus_input_for_insert()
+            widget:focus_input_for_chat()
+            vim.cmd("stopinsert")
+            widget:show({ focus_prompt = false })
 
             assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.input))
+            assert.equal(1, #vim.fn.win_findbuf(widget.buf_nrs.input))
         end)
     end)
 
