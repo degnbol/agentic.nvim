@@ -198,6 +198,13 @@
   "od":      { "read_only": [{}] },
   "strings": { "read_only": [{}] },
 
+  "base64": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["o", "output"] }]
+  },
+  "base32":  { "read_only": [{}] },
+  "basenc":  { "read_only": [{}] },
+
   "md5":       { "read_only": [{}] },
   "md5sum":    { "read_only": [{}] },
   "shasum":    { "read_only": [{}] },

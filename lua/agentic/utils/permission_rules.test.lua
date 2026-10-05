@@ -2290,6 +2290,18 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("shuf --out=x"))
         end)
 
+        it("auto-approves base64 -d file", function()
+            assert.is_true(PermissionRules.should_auto_approve("base64 -d file"))
+        end)
+
+        it("denies base64 -o out (BSD output file)", function()
+            assert.is_false(PermissionRules.should_auto_approve("base64 -o out"))
+        end)
+
+        it("denies base64 --out=x (abbreviation)", function()
+            assert.is_false(PermissionRules.should_auto_approve("base64 --out=x"))
+        end)
+
         it("auto-approves pkg-config queries", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
