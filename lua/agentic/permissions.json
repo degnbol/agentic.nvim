@@ -193,7 +193,10 @@
   },
 
   "xmllint": { "read_only": [{}] },
-  "xxd":     { "read_only": [{}] },
+  "xxd": {
+    "read_only": [{}],
+    "ask":       [{ "positionals": ["*", "*"] }]
+  },
   "hexdump": { "read_only": [{}] },
   "od":      { "read_only": [{}] },
   "strings": { "read_only": [{}] },

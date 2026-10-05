@@ -2302,6 +2302,18 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("base64 --out=x"))
         end)
 
+        it("auto-approves xxd file", function()
+            assert.is_true(PermissionRules.should_auto_approve("xxd file"))
+        end)
+
+        it("denies xxd in out (outfile positional)", function()
+            assert.is_false(PermissionRules.should_auto_approve("xxd in out"))
+        end)
+
+        it("denies xxd -r - out (revert to outfile)", function()
+            assert.is_false(PermissionRules.should_auto_approve("xxd -r - out"))
+        end)
+
         it("auto-approves pkg-config queries", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
