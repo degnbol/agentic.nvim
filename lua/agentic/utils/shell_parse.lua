@@ -406,15 +406,13 @@ end
 --- Command-substitution-bearing nodes (rejected at the command level) never
 --- reach here.
 ---
---- `arith_static` (default false, fail-closed) treats an arithmetic expansion
---- (`$((l))`) as a static numeric token instead of dynamic. Arithmetic output
---- is always an integer — it can never expand to a flag, subcommand, or path —
---- so dropping its deny/ask wildcard only removes a prompt. Sound *only* under a
---- zsh exec shell (bash re-evaluates a referenced variable's value as
---- arithmetic and runs command substitution in an array subscript); the caller
---- gates it — see `exec_shell.gate_is_zsh` and the permissions skill. Only the
---- argument site passes a true value; redirect targets and the dead-utility site
---- keep the default false.
+--- `arith_static` (default false) treats an arithmetic expansion (`$((40))`) as
+--- a static numeric token instead of dynamic. Arithmetic output is always an
+--- integer — it can never expand to a flag, subcommand, or path — so dropping
+--- its deny/ask wildcard only removes a prompt. Arithmetic that reads a value
+--- fails `parse_zsh`, so it never reaches here. Only the argument site passes
+--- true; a redirect target needs the literal path, which the token's raw text
+--- is not.
 --- @param node TSNode
 --- @param arith_static boolean|nil
 --- @return boolean
@@ -822,10 +820,258 @@ local function continues_inside_word(root, src, literal)
     return false
 end
 
+--- True iff arithmetic `text` may read a variable: it has a letter or a `$`
+--- other than `$#`, `$?`, `$$` and `$!`. zsh evaluates the variable's value as
+--- arithmetic too, and a subscript in that value runs its command
+--- substitutions.
+--- @param text string
+--- @return boolean
+local function reads_value(text)
+    return (text:gsub("%$[#?$!]", "")):find("[%a$]") ~= nil
+end
+
+--- True iff the text of `node` matches any of the Lua `patterns`.
+--- @param node TSNode
+--- @param src string
+--- @param patterns string[]
+--- @return boolean
+local function text_finds(node, src, patterns)
+    local text = vim.treesitter.get_node_text(node, src)
+    for _, pattern in ipairs(patterns) do
+        if text:find(pattern) then
+            return true
+        end
+    end
+    return false
+end
+
+--- True iff a subscript of `node` (the text between its anonymous `[` and `]`
+--- children) reads a value. Subscripts are arithmetic.
+--- @param node TSNode
+--- @param src string
+--- @return boolean
+local function subscript_reads_value(node, src)
+    local open
+    for child in node:iter_children() do
+        if child:type() == "[" and not child:named() then
+            local _, _, start_byte = child:start()
+            open = start_byte + child:byte_length()
+        elseif child:type() == "]" and not child:named() and open then
+            local _, _, close = child:start()
+            if reads_value(src:sub(open + 1, close)) then
+                return true
+            end
+            open = nil
+        end
+    end
+    return false
+end
+
+--- `[[ … ]]` operators whose operands zsh evaluates as arithmetic.
+local ARITHMETIC_TEST_OPERATORS =
+    { ["-eq"] = true, ["-ne"] = true, ["-lt"] = true, ["-le"] = true, ["-gt"] = true, ["-ge"] = true }
+
+--- True iff `node` is a `[[ … ]]` arithmetic comparison with an operand that
+--- reads a value. `[ … ]` and `test` compare without arithmetic.
+--- @param node TSNode
+--- @param src string
+--- @return boolean
+local function comparison_reads_value(node, src)
+    local test = node:parent()
+    while test and test:type() ~= "test_command" do
+        test = test:parent()
+    end
+    if not (test and test:child(0):type() == "[[") then
+        return false
+    end
+    local arithmetic, reads = false, false
+    for child in node:iter_children() do
+        local text = vim.treesitter.get_node_text(child, src)
+        if child:type() == "test_operator" then
+            arithmetic = ARITHMETIC_TEST_OPERATORS[text] == true
+        elseif child:named() and reads_value(text) then
+            reads = true
+        end
+    end
+    return arithmetic and reads
+end
+
+--- Per node type, the test for syntax that makes zsh run code while it expands
+--- a word (zshexpn(1) § Parameter Expansion Flags, § Glob Qualifiers). Flag and
+--- qualifier patterns match the whole text, arguments included, so a delimiter
+--- character can only add a false positive, never hide a flag.
+--- @type table<string, fun(node: TSNode, src: string): boolean>
+local CODE_RUNNING_SYNTAX = {
+    -- `e` re-expands the value, `P` reads it as a parameter name (whose
+    -- subscript runs substitutions), `#`/`l`/`r`/`I` evaluate arithmetic, and
+    -- `%` prompt-expands, which runs substitutions under PROMPT_SUBST.
+    expansion_flags = function(node, src)
+        return text_finds(node, src, { "[ePlrI#%%]" })
+    end,
+    -- `+cmd`, `e…` and `oe…` run code, `[…]` evaluates arithmetic, and zsh
+    -- substitutes a `$` or backtick in an argument (`P:…:`, `:s/…/…/`).
+    zsh_glob_qualifier = function(node, src)
+        return text_finds(node, src, { "[e%[%$`]", "%+[%a_]" })
+    end,
+    -- `~` (GLOB_SUBST) applies glob qualifiers in the value, code-running ones
+    -- included.
+    expansion_style = function(node, src)
+        return text_finds(node, src, { "~" })
+    end,
+    arithmetic_expansion = function(node, src)
+        return reads_value(vim.treesitter.get_node_text(node, src):sub(2))
+    end,
+    expansion_substring = function(node, src)
+        for _, field in ipairs({ "offset", "length" }) do
+            local part = node:field(field)[1]
+            if part and reads_value(vim.treesitter.get_node_text(part, src)) then
+                return true
+            end
+        end
+        return false
+    end,
+    -- An element's `[key]=` index; the grammar parses it as a glob.
+    array = function(node, src)
+        for child in node:iter_children() do
+            local key = vim.treesitter.get_node_text(child, src):match("^%[(.-)%]=")
+            if key and reads_value(key) then
+                return true
+            end
+        end
+        return false
+    end,
+    binary_expression = comparison_reads_value,
+}
+
+--- True iff the tree runs code while it expands a word: a node that fails its
+--- `CODE_RUNNING_SYNTAX` test, or a subscript that reads a value.
+--- @param root TSNode
+--- @param src string
+--- @return boolean
+local function runs_code_on_expansion(root, src)
+    local matches = node_ranges(root, function(node)
+        local t = node:type()
+        local test = CODE_RUNNING_SYNTAX[t]
+        if test and test(node, src) then
+            return true
+        end
+        return (t == "subscript" or t == "variable_ref" or t:find("^expansion") ~= nil)
+            and subscript_reads_value(node, src)
+    end)
+    return #matches > 0
+end
+
+--- Builtins that evaluate each argument as arithmetic.
+local ARITHMETIC_ARG_BUILTINS = {
+    shift = true,
+    ["return"] = true,
+    exit = true,
+    logout = true,
+    ["break"] = true,
+    continue = true,
+}
+
+--- True iff any of `args` from index `first` on reads a value.
+--- @param args string[]
+--- @param first integer
+--- @return boolean
+local function any_reads_value(args, first)
+    for i = first, #args do
+        if reads_value(args[i]) then
+            return true
+        end
+    end
+    return false
+end
+
+--- True iff the subscript of parameter name `name` reads a value.
+--- @param name string
+--- @return boolean
+local function index_reads_value(name)
+    local index = name:match("%[(.*)%]")
+    return index ~= nil and reads_value(index)
+end
+
+--- True iff `format` makes printf evaluate an argument as arithmetic: it has a
+--- `$` (an expansion, or a positional `%1$d`), or a directive other than `%s`,
+--- `%b`, `%c` or `%q` with a digit-only width and precision.
+--- @param format string
+--- @return boolean
+local function format_takes_arithmetic(format)
+    format = format:gsub("%%%%", "")
+    if format:find("%$") then
+        return true
+    end
+    for spec, conversion in format:gmatch("%%([^%a]*)(%a?)") do
+        if spec:find("%*") or not conversion:find("^[sbcq]$") then
+            return true
+        end
+    end
+    return false
+end
+
+--- True iff an argument that `cmd_name` evaluates as arithmetic reads a value
+--- (see `reads_value`). Checks every argument of `ARITHMETIC_ARG_BUILTINS`
+--- (`shift`, `return`, `exit`, `logout`, `break`, `continue`); for `printf`
+--- and `print`, the subscript of a `-v` target name and the arguments after a
+--- format that takes arithmetic. `print` options are found in every word,
+--- attached values included, so an unmodelled option can only add a check.
+--- @param cmd_name string
+--- @param args string[] delivered words, dynamic ones as raw text
+--- @return boolean
+local function arithmetic_args_read_value(cmd_name, args)
+    if ARITHMETIC_ARG_BUILTINS[cmd_name] then
+        return any_reads_value(args, 1)
+    end
+    if cmd_name == "printf" then
+        local i = 1
+        while args[i] and args[i]:match("^%-v") do
+            local name = args[i]:sub(3)
+            if name == "" then
+                i = i + 1
+                name = args[i] or ""
+            end
+            if index_reads_value(name) then
+                return true
+            end
+            i = i + 1
+        end
+        if args[i] == "--" then
+            i = i + 1
+        end
+        return args[i] ~= nil
+            and format_takes_arithmetic(args[i])
+            and any_reads_value(args, i + 1)
+    end
+    if cmd_name ~= "print" then
+        return false
+    end
+    for i, arg in ipairs(args) do
+        local name = arg:match("^%-%a-v(.*)$")
+        if name and index_reads_value(name ~= "" and name or args[i + 1] or "") then
+            return true
+        end
+        local format = arg:match("^%-%a-f(.*)$")
+        if format then
+            local i_format = format == "" and i + 1 or i
+            format = format ~= "" and format or args[i + 1]
+            if
+                format
+                and format_takes_arithmetic(format)
+                and any_reads_value(args, i_format + 1)
+            then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 --- Parse a command string with the zsh grammar. Returns the root node, or nil
---- (fail-closed) on missing parser, parse error, any error node, or syntax the
+--- (fail-closed) on missing parser, parse error, any error node, syntax the
 --- grammar parses differently from zsh (a hidden backtick substitution, a line
---- continuation inside a word).
+--- continuation inside a word), or a word expansion or arithmetic that can run
+--- code.
 ---
 --- Bails before parsing on the tree-sitter-zsh hang trigger (see
 --- `zsh_parse_guard`): `parse()` would never return and no in-process mechanism
@@ -853,6 +1099,9 @@ local function parse_zsh(src)
         then
             return nil
         end
+    end
+    if runs_code_on_expansion(root, src) then
+        return nil
     end
     return root
 end
@@ -926,15 +1175,6 @@ end
 --- file read, no TOCTOU window), so it is re-parsed and walked recursively
 --- instead of firing the unconditional `c`-flag ask.
 local SHELL_C_COMMANDS = { zsh = true, bash = true, sh = true, dash = true }
-
---- Subset of `SHELL_C_COMMANDS` whose `-c` body / script file is evaluated by a
---- NON-zsh shell. Recursing into one switches the evaluating shell, so a
---- consumer whose analysis is sound only under zsh (the arithmetic-static
---- permission gate) must clear it for the inner body — bash/sh/dash re-evaluate
---- a referenced variable's value as arithmetic (RCE laundering) where zsh does
---- not. `zsh`, `source`/`.` (run in the current shell), and the exec-wrappers
---- keep the current shell and are absent.
-local NON_ZSH_SHELL_INVOKERS = { bash = true, sh = true, dash = true }
 
 --- Recursion-depth cap for nested transparent prefixes — inline `-c` bodies
 --- (`zsh -c 'zsh -c "…"'`) and exec-wrappers (`stdbuf -oL timeout 5 grep foo`). It is
@@ -1693,6 +1933,7 @@ end
 
 M.strip_command_path = strip_command_path
 M.parse_zsh = parse_zsh
+M.arithmetic_args_read_value = arithmetic_args_read_value
 M.subtree_has_substitution = subtree_has_substitution
 M.safe_assignment_name = safe_assignment_name
 M.pure_literal_token = pure_literal_token
@@ -1706,7 +1947,6 @@ M.heredoc_pure_body = heredoc_pure_body
 M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source
-M.NON_ZSH_SHELL_INVOKERS = NON_ZSH_SHELL_INVOKERS
 M.resolve_against_cwd = resolve_against_cwd
 M.CONTAINER_TYPES = CONTAINER_TYPES
 M.SUBSTITUTION_TYPES = SUBSTITUTION_TYPES

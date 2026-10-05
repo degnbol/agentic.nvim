@@ -84,7 +84,7 @@
   "print": {
     "read_only": [{}],
     "ask": [
-      { "options": ["s", "S", "z", "p", "u", "v"] }
+      { "options": ["s", "S", "z", "p", "u", "v", "P"] }
     ]
   },
 

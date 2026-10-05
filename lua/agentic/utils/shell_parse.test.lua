@@ -457,6 +457,103 @@ describe("ShellParse.extract_commands", function()
             assert.is_not_nil(ShellParse.parse_zsh("echo a |\\\ngrep a"))
             assert.is_not_nil(ShellParse.parse_zsh("echo a &&\\\necho b"))
         end)
+
+        it("rejects parameter flags that run code from the value", function()
+            local parsed = {}
+            for _, src in ipairs({
+                "echo ${(e)x}",
+                "echo ${(P)x}",
+                "echo ${(#)x}",
+                "echo ${(%%)x}",
+                "echo ${(l:n:)x}",
+                "echo ${(r:n:)x}",
+                "echo ${(I:n:)x#a}",
+                "echo ${(fe)x}",
+                "echo ${~x}",
+                "ls $~x",
+            }) do
+                if ShellParse.parse_zsh(src) ~= nil then
+                    table.insert(parsed, src)
+                end
+            end
+            assert.same({}, parsed)
+        end)
+
+        it("rejects glob qualifiers that run code", function()
+            local parsed = {}
+            for _, src in ipairs({
+                "echo d/*(+pwd)",
+                "echo *(.+f)",
+                "echo *(oe:x:)",
+                "echo *(Y$n)",
+            }) do
+                if ShellParse.parse_zsh(src) ~= nil then
+                    table.insert(parsed, src)
+                end
+            end
+            assert.same({}, parsed)
+        end)
+
+        it("rejects arithmetic that reads a value", function()
+            local parsed = {}
+            for _, src in ipairs({
+                "echo $((n))",
+                "echo $(($n + 1))",
+                "echo $(($1)) $((${1})) $(($@)) $(($*))",
+                "echo $(($(cat f)))",
+                "echo ${x[$1]}",
+                "echo ${x:$n} ${x:0:$n}",
+                'echo "${x:1:$n}"',
+                "y=([n]=Q)",
+                "[[ $1 -eq 1 ]]",
+                "echo $[n]",
+                "echo ${x[n]}",
+                "echo $x[n]",
+                'echo "${x[i]:-d}"',
+                "echo ${x[n,2]}",
+                "x[n]=b",
+                "[[ n -eq 1 ]]",
+                "[[ 1 -lt $a ]]",
+            }) do
+                if ShellParse.parse_zsh(src) ~= nil then
+                    table.insert(parsed, src)
+                end
+            end
+            assert.same({}, parsed)
+        end)
+
+        it("keeps parsing arithmetic on numbers only", function()
+            local rejected = {}
+            for _, src in ipairs({
+                "echo $((1 + 2 * 3)) $[4] $(($# - 1)) $(($? + 1))",
+                "echo ${x[1]} ${x[-1]} ${x[1,2]} ${#x} ${x:1:2}",
+                "y=([2]=a b)",
+                "[[ $# -gt 0 ]]",
+                "[ n -eq 1 ]",
+                "[ -f foo ] && [[ -n $x ]]",
+                "echo ${x//[a-z]/} ${x#[ab]}",
+            }) do
+                if ShellParse.parse_zsh(src) == nil then
+                    table.insert(rejected, src)
+                end
+            end
+            assert.same({}, rejected)
+        end)
+
+        it("keeps parsing flags and qualifiers that only reshape", function()
+            local rejected = {}
+            for _, src in ipairs({
+                "echo ${(f)x} ${(U)x} ${(@)x} ${(k)x} ${(j:,:)x}",
+                "echo ${(@ps:\\t:)x} ${(s:/:)x} ${(j: OR :)x}",
+                "echo ${=x} ${#x} ${^x}",
+                "echo *(.) *(N) *(.N) *(/) *(om) *(Lk+5)",
+            }) do
+                if ShellParse.parse_zsh(src) == nil then
+                    table.insert(rejected, src)
+                end
+            end
+            assert.same({}, rejected)
+        end)
     end)
 
     describe("zsh-hang trigger (must not reach parse())", function()
@@ -493,7 +590,7 @@ describe("ShellParse.extract_commands", function()
         )
     end)
 
-    describe("token_is_dynamic arithmetic gate", function()
+    describe("token_is_dynamic arith_static", function()
         --- First named node of `node_type` (DFS) in the parse of `cmd`.
         --- @param cmd string
         --- @param node_type string
@@ -518,31 +615,31 @@ describe("ShellParse.extract_commands", function()
             return found
         end
 
-        -- Under the gate (arith_static=true) an arithmetic-only token is static;
-        -- with the gate off it is dynamic (today's always-dynamic baseline).
-        it("classifies a bare arithmetic expansion by the gate", function()
-            local node = find_node("sed $((l - 18))", "arithmetic_expansion")
+        -- With arith_static an arithmetic-only token is static; without it,
+        -- dynamic.
+        it("classifies a bare arithmetic expansion by arith_static", function()
+            local node = find_node("sed $((40 - 18))", "arithmetic_expansion")
             assert.is_false(ShellParse.token_is_dynamic(node, true))
             assert.is_true(ShellParse.token_is_dynamic(node, false))
         end)
 
-        it("classifies an arithmetic-only string by the gate", function()
-            local node = find_node('sed "$((l))p"', "string")
+        it("classifies an arithmetic-only string by arith_static", function()
+            local node = find_node('sed "$((40))p"', "string")
             assert.is_false(ShellParse.token_is_dynamic(node, true))
             assert.is_true(ShellParse.token_is_dynamic(node, false))
         end)
 
-        it("classifies an arithmetic concatenation by the gate", function()
-            local node = find_node("sed -$((n))", "concatenation")
+        it("classifies an arithmetic concatenation by arith_static", function()
+            local node = find_node("sed -$((5))", "concatenation")
             assert.is_false(ShellParse.token_is_dynamic(node, true))
             assert.is_true(ShellParse.token_is_dynamic(node, false))
         end)
 
         -- Whitelist fail-closed: a var- or command-sub-bearing string stays
-        -- dynamic under both gate states — the arithmetic-only carve-out must
+        -- dynamic either way — the arithmetic-only carve-out must
         -- not widen to a string with any other expansion child.
         it("keeps a var+arithmetic string dynamic under both", function()
-            local node = find_node('sed "$f$((n))"', "string")
+            local node = find_node('sed "$f$((5))"', "string")
             assert.is_true(ShellParse.token_is_dynamic(node, true))
             assert.is_true(ShellParse.token_is_dynamic(node, false))
         end)

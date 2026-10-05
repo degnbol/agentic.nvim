@@ -52,22 +52,4 @@ function M.resolve()
         or known_executable_shell(child_env("SHELL"))
 end
 
---- Security-gate accessor: whether the exec shell is *provably* zsh. Pins the
---- fail-closed `nil` policy in one named place — arithmetic may only be treated
---- as a static numeric token under zsh (bash recursively re-evaluates a
---- variable's value as arithmetic and runs command substitution in an array
---- subscript, laundering an RCE). A `nil` resolve MUST NOT fall back to a guess
---- here; guessing zsh under bash reopens that hole. See §"Why this is sound only
---- in zsh" in the permissions skill.
----
---- Re-resolves live per call. The SDK memoises `findSuitableShell()` once per
---- session (first command, spawned with `-l`), so soundness assumes the child's
---- `SHELL`/`CLAUDE_CODE_SHELL`/provider `env` are immutable after session start;
---- a mid-session bash→zsh flip would gate zsh-sound while the SDK still runs the
---- memoised bash. The env is stable across a neovim session, so this holds.
---- @return boolean
-function M.gate_is_zsh()
-    return M.resolve() == "zsh"
-end
-
 return M

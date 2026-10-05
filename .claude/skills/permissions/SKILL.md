@@ -159,9 +159,9 @@ it).
   (`$var`, unquoted glob; `~` exempt) satisfies any deny/ask `options` or
   positional requirement at or after its index, so laundering a payload through
   `$f` at a gated command prompts. For allow it stays concrete, so it never
-  widens an approval. Arithmetic `$((…))` is the one expansion classified
-  *static* — argument position, provably-zsh exec shell only (see
-  [references/parsing.md](references/parsing.md) § "Arithmetic (zsh-gated)").
+  widens an approval. Number-only arithmetic `$((…))` is the one expansion
+  classified *static*, at argument position (see
+  [references/parsing.md](references/parsing.md) § "Static arithmetic").
 - **Over-approximation is sound for deny/ask.** Option presence is
   over-approximated per token — extra candidates can only widen a deny/ask
   match, never miss one. Allow uses a single parse, so an unknown subcommand

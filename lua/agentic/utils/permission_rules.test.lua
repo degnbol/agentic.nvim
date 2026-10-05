@@ -2605,6 +2605,62 @@ describe("PermissionRules", function()
             )
         end)
 
+        describe("builtins that evaluate arguments as arithmetic", function()
+            it("prompts when such an argument reads a value", function()
+                local approved = {}
+                for _, cmd in ipairs({
+                    "shift n",
+                    "f() { return n }; f",
+                    "exit $code",
+                    "exit $1",
+                    "printf '%d' $1",
+                    "for x in 1; do break n; done",
+                    "for x in 1; do continue n; done",
+                    "printf '%d\\n' n",
+                    "printf -v out '%5.2f' n",
+                    "printf '%*s' w x",
+                    "printf \"$fmt\" n",
+                    "print -f '%d' n",
+                    "print -rf '%x' n",
+                    "print -f%d n",
+                    "print -rf%d n",
+                    "print -C 1 -f %d n",
+                    "printf '%ld' n",
+                    "printf '%5ld' n",
+                    "printf '%hd' $1",
+                    "printf -v 'x[n]' %s Z",
+                    "logout n",
+                    "print -P x",
+                }) do
+                    if PermissionRules.should_auto_approve(cmd) then
+                        table.insert(approved, cmd)
+                    end
+                end
+                assert.same({}, approved)
+            end)
+
+            it("approves numbers and non-numeric formats", function()
+                local prompted = {}
+                for _, cmd in ipairs({
+                    "shift 2",
+                    "exit $?",
+                    "for x in 1; do break; done",
+                    "printf '%d items\\n' 3",
+                    "printf '%s\\n' name",
+                    "printf '%%d %s' name",
+                    "printf '%-10s|%.3s|%c|%q|%b' a b c d e",
+                    "printf -v out '%s' name",
+                    "print -r name",
+                    "n=4; shift $n",
+                }) do
+                    if not PermissionRules.should_auto_approve(cmd) then
+                        table.insert(prompted, cmd)
+                    end
+                end
+                assert.same({}, prompted)
+            end)
+        end)
+
         -- An inline `<shell> -c '<literal body>'` is re-parsed and walked
         -- recursively (the body is verbatim in rawInput, no file read), so it
         -- approves iff the body approves — instead of firing the `c`-flag ask.
@@ -4521,54 +4577,37 @@ describe("PermissionRules", function()
         end)
     end)
 
-    describe("arithmetic argument gate", function()
+    describe("number-only arithmetic arguments", function()
         local Config = require("agentic.config")
         local orig_shell
-        local orig_code_shell
         local orig_provider
-
-        --- Pin the exec-shell gate for the duration of a test.
-        --- @param shell string
-        --- @param provider string
-        local function gate(shell, provider)
-            vim.env.SHELL = shell
-            Config.provider = provider
-        end
 
         before_each(function()
             orig_shell = vim.env.SHELL
-            orig_code_shell = vim.env.CLAUDE_CODE_SHELL
             orig_provider = Config.provider
-            vim.env.CLAUDE_CODE_SHELL = nil
             PermissionRules.invalidate_cache()
         end)
 
         after_each(function()
             vim.env.SHELL = orig_shell
-            vim.env.CLAUDE_CODE_SHELL = orig_code_shell
             Config.provider = orig_provider
             PermissionRules.invalidate_cache()
         end)
 
-        local SED = 'sed -n "$((l - 18)),$((l))p" f'
+        local SED = 'sed -n "$((40 - 18)),$((40))p" f'
 
-        it("approves an arithmetic sed range under the zsh gate", function()
-            gate("/bin/zsh", "claude-agent-acp")
-            assert.is_true(PermissionRules.should_auto_approve(SED))
+        it("approves an arithmetic sed range for any shell and provider", function()
+            for _, case in ipairs({
+                { "/bin/zsh", "claude-agent-acp" },
+                { "/bin/bash", "claude-agent-acp" },
+                { "/bin/zsh", "opencode-acp" },
+            }) do
+                vim.env.SHELL, Config.provider = case[1], case[2]
+                assert.is_true(PermissionRules.should_auto_approve(SED))
+            end
         end)
 
-        it("prompts under a bash exec shell (gate off)", function()
-            gate("/bin/bash", "claude-agent-acp")
-            assert.is_false(PermissionRules.should_auto_approve(SED))
-        end)
-
-        it("prompts under a non-capable provider (gate off)", function()
-            gate("/bin/zsh", "opencode-acp")
-            assert.is_false(PermissionRules.should_auto_approve(SED))
-        end)
-
-        it("keeps a redirect target dynamic even under the gate", function()
-            gate("/bin/zsh", "claude-agent-acp")
+        it("keeps a redirect target dynamic", function()
             local orig_read_json = PermissionRules.read_json
             PermissionRules.read_json = function(path)
                 if path:find("settings%.json$") then
@@ -4577,15 +4616,14 @@ describe("PermissionRules", function()
                 return nil
             end
             PermissionRules.invalidate_cache()
-            -- `> $((n))` resolves to no literal path — the redirect write bails.
+            -- `> $((5))` resolves to no literal path — the redirect write bails.
             assert.is_false(
-                PermissionRules.should_auto_approve("echo hi > $((n))")
+                PermissionRules.should_auto_approve("echo hi > $((5))")
             )
             PermissionRules.read_json = orig_read_json
         end)
 
         it("does not spuriously deny-reject a benign arithmetic arg", function()
-            gate("/bin/zsh", "claude-agent-acp")
             local orig_read_json = PermissionRules.read_json
             PermissionRules.read_json = function(path)
                 if path:find("settings%.json$") then
@@ -4599,64 +4637,36 @@ describe("PermissionRules", function()
         end)
 
         it("does not auto-approve a functions -M registration", function()
-            gate("/bin/zsh", "claude-agent-acp")
             assert.is_false(
                 PermissionRules.should_auto_approve("functions -M foo 1 1")
             )
         end)
 
-        it("still prompts a $var-bearing string under the gate", function()
-            gate("/bin/zsh", "claude-agent-acp")
+        it("still prompts a $var-bearing string", function()
             assert.is_false(
                 PermissionRules.should_auto_approve('sed -n "$v p" f')
             )
         end)
 
-        -- The gate is the OUTER exec shell. A `bash -c`/`sh -c` wrapper switches
-        -- the inner evaluating shell to a non-zsh one, where arithmetic
-        -- re-evaluates a variable's value (RCE laundering) — the gate MUST clear
-        -- for that inner body or a single-quoted assignment launders past sed.
-        it("clears the gate inside a bash -c body", function()
-            gate("/bin/zsh", "claude-agent-acp")
-            assert.is_false(
-                PermissionRules.should_auto_approve(
-                    [[bash -c 'sed -n "$((l))p" f']]
-                )
-            )
-        end)
-
-        it("clears the gate inside an sh -c body", function()
-            gate("/bin/zsh", "claude-agent-acp")
-            assert.is_false(
-                PermissionRules.should_auto_approve(
-                    [[sh -c 'sed -n "$((l))p" f']]
-                )
-            )
-        end)
-
-        it("preserves the gate inside a zsh -c body", function()
-            gate("/bin/zsh", "claude-agent-acp")
-            assert.is_true(
-                PermissionRules.should_auto_approve(
-                    [[zsh -c 'sed -n "$((l))p" f']]
-                )
-            )
-        end)
-
-        it("preserves the gate through a benign exec-wrapper", function()
-            gate("/bin/zsh", "claude-agent-acp")
-            assert.is_true(
-                PermissionRules.should_auto_approve(
-                    'env FOO=1 sed -n "$((l))p" f'
-                )
-            )
+        it("approves inside a -c body of any shell and an exec-wrapper", function()
+            local prompted = {}
+            for _, cmd in ipairs({
+                [[bash -c 'sed -n "$((40))p" f']],
+                [[sh -c 'sed -n "$((40))p" f']],
+                [[zsh -c 'sed -n "$((40))p" f']],
+                'env FOO=1 sed -n "$((40))p" f',
+            }) do
+                if not PermissionRules.should_auto_approve(cmd) then
+                    table.insert(prompted, cmd)
+                end
+            end
+            assert.same({}, prompted)
         end)
 
         -- A command substitution *inside* arithmetic is opaque; the whitelist
         -- must never treat it as static (belt to the subtree_has_substitution
         -- bail that catches it first).
         it("does not approve command-sub inside arithmetic", function()
-            gate("/bin/zsh", "claude-agent-acp")
             assert.is_false(
                 PermissionRules.should_auto_approve('sed -n "$(( $(id) ))p" f')
             )

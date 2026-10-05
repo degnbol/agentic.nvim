@@ -48,39 +48,15 @@ describe("ExecShell", function()
         end)
 
         it(
-            "reads the provider env override, not raw vim.env (fail-open guard)",
+            "reads the provider env override, not raw vim.env",
             function()
                 -- The child runs bash because the provider config overlays
                 -- SHELL=/bin/bash, even though vim.env.SHELL is still zsh.
-                -- Detecting the raw vim.env here would classify arithmetic as
-                -- static under bash — the RCE-laundering hole this guards.
                 vim.env.SHELL = "/bin/zsh"
                 Config.acp_providers[Config.provider].env =
                     { SHELL = "/bin/bash" }
                 assert.equal("bash", ExecShell.resolve())
             end
         )
-    end)
-
-    describe("gate_is_zsh", function()
-        it("is true only when the exec shell resolves to zsh", function()
-            vim.env.SHELL = "/bin/zsh"
-            assert.is_true(ExecShell.gate_is_zsh())
-        end)
-
-        it("is false under bash", function()
-            vim.env.SHELL = "/bin/bash"
-            assert.is_false(ExecShell.gate_is_zsh())
-        end)
-
-        it("is false on an unprovable (nil) resolve", function()
-            assert.is_false(ExecShell.gate_is_zsh())
-        end)
-
-        it("is false when the provider env overrides SHELL to bash", function()
-            vim.env.SHELL = "/bin/zsh"
-            Config.acp_providers[Config.provider].env = { SHELL = "/bin/bash" }
-            assert.is_false(ExecShell.gate_is_zsh())
-        end)
     end)
 end)

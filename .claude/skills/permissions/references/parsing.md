@@ -99,15 +99,22 @@ Wildcarded only against deny/ask, **never allow**: a dynamic subcommand fails th
 allowlist (→ prompt) and a trailing dynamic arg (`git log $ref`) is harmless, so
 a dynamic token never widens an approval.
 
-**Arithmetic (zsh-gated)** — an `arithmetic_expansion` (`$((l))`, `"$((l))p"`,
-`-$((n))`) is *static* at argument position when `ctx.arith_static` holds: a
-capable provider AND a provably-zsh exec shell (`arith_static_gate` =
-provider set + `exec_shell.gate_is_zsh`). Sound because its output is always an
-integer, never a flag/subcommand/path. Dynamic (fail-closed) otherwise: under
-bash/sh/dash or a non-capable provider; at a redirect target (default `false`);
-and inside a non-zsh `-c` body or script, where the transparent-prefix recursion
-clears the gate (`NON_ZSH_SHELL_INVOKERS`) since bash/sh/dash re-evaluate a
-variable's value as arithmetic (RCE laundering) where zsh does not. The `string`
+**Arithmetic that reads a value fails the parse.** zsh, like bash, evaluates a
+variable's value as arithmetic when arithmetic names it, and a subscript in that
+value runs its command substitutions (`n='y[$(cmd)]'; echo $((n))`). So
+`parse_zsh` returns nil for any arithmetic with a letter or a `$` other than
+`$#`/`$?`/`$$`/`$!`: a `$((…))`/`$[…]` body, a subscript, a `${x:off:len}`
+offset or length, an array literal's `[key]=`, a `[[ … -eq … ]]` operand. The
+walk applies the same test to the arguments of builtins that evaluate them
+(`shift`, `return`, `exit`, `logout`, `break`, `continue`; for `printf`/`print`
+the subscript of a `-v` target and the arguments after a format with any
+directive but `%s`/`%b`/`%c`/`%q`, a `*` width or a `$`). Rules per node type:
+`CODE_RUNNING_SYNTAX` in `shell_parse.lua`.
+
+**Static arithmetic** — an `arithmetic_expansion` that passes the parse
+(`$((40))`, `"$((40))p"`, `-$((5))`) is *static* at argument position, in
+every shell: its output is always an integer, never a flag/subcommand/path. It
+stays dynamic at a redirect target, which needs the literal path. The `string`
 classifier is a whitelist — arithmetic mixed with a `$var`/`$(…)` child stays
 dynamic.
 
@@ -157,8 +164,10 @@ handling.
 
 1. **Parse** with the zsh treesitter grammar. Fail-closed: no parser, parse
    failure, any error node, or syntax the grammar parses differently from zsh
-   (a hidden backtick substitution, a line continuation inside a word) →
-   prompt. The zsh parser is a hard dependency.
+   (a hidden backtick substitution, a line continuation inside a word), or a
+   parameter flag / glob qualifier that runs code (`${(e)x}`, `*(+cmd)`,
+   `${~x}`; `CODE_RUNNING_SYNTAX` in `shell_parse.lua`) → prompt. The zsh parser is a
+   hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
    builtins (`eval`/`source`/`.`). A **transparent prefix** is not a leaf:
    `inner_source` slices out its inner command and re-walks that on its own
