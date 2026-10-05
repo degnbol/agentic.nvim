@@ -412,7 +412,7 @@ describe("ToolCallRenderer", function()
                     confirmed = false,
                 }, { "Find the files." })
 
-                assert.equal("### map UI (Background?)", lines[1])
+                assert.equal("### Background? map UI", lines[1])
                 assert.equal("agentic://1/subagent/map-UI-c3d4e5", lines[2])
             end)
 
@@ -452,7 +452,7 @@ describe("ToolCallRenderer", function()
 
             it("prefixes the heading with the agent type once known", function()
                 assert.equal(
-                    "Explore · map UI (Blocking)",
+                    "Blocking Explore · map UI",
                     Renderer.subagent_heading({
                         label = "map UI",
                         agent_type = "Explore",

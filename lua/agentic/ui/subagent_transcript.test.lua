@@ -131,7 +131,7 @@ describe("agentic.ui.SubagentTranscript", function()
     it("opens with its heading", function()
         local transcript = new_transcript("aa11bb22cc33dd44")
 
-        assert.equal("## map the UI (Background?)", lines_of(transcript.bufnr)[1])
+        assert.equal("## Background? map the UI", lines_of(transcript.bufnr)[1])
     end)
 
     it("writes its heading again on :e", function()
@@ -140,7 +140,7 @@ describe("agentic.ui.SubagentTranscript", function()
         in_window(transcript.bufnr, "edit")
 
         assert.equal(1, calls.on_reload)
-        assert.equal("## map the UI (Background?)", lines_of(transcript.bufnr)[1])
+        assert.equal("## Background? map the UI", lines_of(transcript.bufnr)[1])
     end)
 
     it("has the panel's b-vars and maps at creation and after :e", function()
@@ -219,7 +219,7 @@ describe("agentic.ui.SubagentTranscript", function()
         transcript:set_header(info, "completed")
 
         local header = vim.b[transcript.bufnr].agentic_header
-        assert.is_true(header.title:find("map the UI (Background?)", 1, true) ~= nil)
+        assert.is_true(header.title:find("Background? map the UI", 1, true) ~= nil)
         assert.equal("completed", header.context)
     end)
 end)

@@ -214,7 +214,7 @@ function M.subagent_mode_text(subagent)
         .. (subagent.confirmed and "" or "?")
 end
 
---- Heading text of a subagent: `<agent type> · <label> (<mode text>)`, without
+--- Heading text of a subagent: `<mode text> <agent type> · <label>`, without
 --- the type while it is unknown, with the label `Agent` when it has none, and
 --- `Agent` alone when nothing is known.
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
@@ -224,10 +224,10 @@ function M.subagent_heading(subagent)
         return "Agent"
     end
     return string.format(
-        "%s%s (%s)",
+        "%s %s%s",
+        M.subagent_mode_text(subagent),
         subagent.agent_type and (subagent.agent_type .. " · ") or "",
-        subagent.label or "Agent",
-        M.subagent_mode_text(subagent)
+        subagent.label or "Agent"
     )
 end
 

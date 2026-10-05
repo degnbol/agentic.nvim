@@ -94,7 +94,7 @@ describe("native subagent sessions", function()
         assert.truthy(
             child
                 .lua_get([[_G.text(_G.transcript("aa11bb22cc33dd44").bufnr)]])
-                :find("## find it (Blocking?)", 1, true)
+                :find("## Blocking? find it", 1, true)
         )
     end)
 
@@ -175,7 +175,7 @@ _G.s:_on_tool_call({
         assert.truthy(
             child
                 .lua_get([[_G.text(_G.s.widget.buf_nrs.chat)]])
-                :find("Explore · find it (Background)", 1, true)
+                :find("Background Explore · find it", 1, true)
         )
     end)
 

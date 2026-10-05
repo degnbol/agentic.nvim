@@ -609,7 +609,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             subagent_call("c-1", "task-1")
             local lines = sub_lines()
             assert.is_true(sub_text_has("ls c-1"))
-            assert.is_true(sub_text_has("map ("))
+            assert.is_true(vim.endswith(lines[1], " map"))
             capture_notify()
 
             in_subagent("edit!")
@@ -698,7 +698,7 @@ end)()]]))
                 return vim.startswith(line, "## ")
             end, sub_lines())
             assert.equal(1, #headings)
-            assert.truthy(headings[1]:find("## map (", 1, true))
+            assert.is_true(vim.endswith(headings[1], " map"))
             assert.equal(1, select(2, table.concat(sub_lines(), "\n"):gsub("first", "")))
         end)
 

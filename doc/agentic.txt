@@ -981,12 +981,12 @@ shows its subagent as working until the subagent ends.
 Each subagent also has a block in the chat:
 
     Line             Content ~
-    Heading          `<type> · <name> (<mode>)`
+    Heading          `<mode> <type> · <name>`
     Name             The transcript's buffer name
     Prompt           Folded when longer than one line
     Footer           `in_progress`, `completed`, `failed` or `cancelled`
 
-The mode is `(Background)` or `(Blocking)`, with a `?` until the SDK's record
+The mode is `Background` or `Blocking`, with a `?` until the SDK's record
 of the spawn confirms it; the type shows once that record is read. |gf|,
 |CTRL-W_f| or |CTRL-W_gf| on the name line opens the transcript.
 
