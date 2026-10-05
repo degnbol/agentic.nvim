@@ -117,8 +117,8 @@ the fence is set per kind:
 | Search command (argument fence) | `bash` | |
 | Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | claude-agent-acp pre-wraps in its own console fence; `prepare_block_lines` unwraps an already-fenced execute body before re-wrapping |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
-| Fetch / WebSearch / SubAgent body | `markdown-fold` (multi-line) or `markdown` | Always folded + dimmed (sidecar) when multi-line; dim via `set_dim_range` (`AgenticDimmedBlock`) |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`fold_open` return): open normally, closed when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. The open is sent at render, at any status. A close is sent when the call reaches a final status (see `MessageWriter:_render_block_fold`). No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
+| Fetch / WebSearch / SubAgent body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`fold_state` return): `open` normally, `closed_when_final` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
@@ -162,7 +162,12 @@ Threshold config keys (in `config_default.lua`):
 
 - `search_max_lines` — search/grep bodies
 - `execute_max_lines` — shell stdout (and execute failure_reason)
-- Fetch / WebSearch / SubAgent — always folded when multi-line, no config
+- Fetch / WebSearch / SubAgent — fold when multi-line, no config.
+  Fetch/WebSearch close at a final status, a subagent's prompt at render
+
+`prepare_block_lines` returns a `fold_state` (`agentic.ui.FoldState`) with
+each fold: when the state is due. A kind that sets none closes at a final
+status.
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
 word when it has one, plus a character count on thought runs.
@@ -173,7 +178,7 @@ Adding a new foldable kind:
    `prepare_block_lines` when the body exceeds it.
 2. Return the correct `fold_anchor` (offset within the returned `lines` to
    the first body line — the line *inside* the fold, not the fence
-   delimiter).
+   delimiter), and a `fold_state` if not `closed_when_final`.
 3. No changes needed to `folds.scm`, `injections.scm` or `folds.lua` — they
    match the `fold$` suffix generically (use `<lang>-fold` to fold *and* inject
    the base language; the `difffold` marker is the special case that suppresses

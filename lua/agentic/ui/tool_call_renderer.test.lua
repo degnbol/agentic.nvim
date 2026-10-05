@@ -416,16 +416,38 @@ describe("ToolCallRenderer", function()
                 assert.equal("agentic://1/subagent/map-UI-c3d4e5", lines[2])
             end)
 
-            it("folds a one-line prompt", function()
+            it("does not fold a one-line prompt", function()
                 local lines = subagent_lines({
                     label = "map UI",
                     mode = "blocking",
                     confirmed = true,
                 }, { "Find the files." })
 
-                assert.equal("```markdown-fold", lines[3])
+                assert.equal("```markdown", lines[3])
                 assert.equal("Find the files.", lines[4])
                 assert.equal("```", lines[5])
+            end)
+
+            it("folds a multi-line prompt closed at render", function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "a1b2c3d4e5",
+                    status = "in_progress",
+                    kind = "SubAgent",
+                    argument = "agentic://1/subagent/map-UI-c3d4e5",
+                    subagent = {
+                        label = "map UI",
+                        mode = "blocking",
+                        confirmed = true,
+                    },
+                    body = { "Find the files.", "", "List them." },
+                }
+                local lines, _, _, fold_anchor, _, fold_state =
+                    Renderer.prepare_block_lines(block, 80)
+
+                assert.equal("```markdown-fold", lines[3])
+                assert.equal(3, fold_anchor)
+                assert.equal("closed", fold_state)
             end)
 
             it("prefixes the heading with the agent type once known", function()
@@ -730,7 +752,7 @@ describe("ToolCallRenderer", function()
                     failure_reason = { "Permission denied." },
                 }
 
-                local lines, _, _, fold_anchor, _, fold_open =
+                local lines, _, _, fold_anchor, _, fold_state =
                     Renderer.prepare_block_lines(block, 0)
 
                 -- The diff is kept (not replaced by the reason)...
@@ -756,9 +778,9 @@ describe("ToolCallRenderer", function()
                 assert.is_not_nil(lines[fence_i]:match("difffold$"))
 
                 -- ...and a failed edit folds closed: fold_anchor points at the
-                -- first body line with fold_open = false.
+                -- first body line.
                 assert.equal(old_i - 1, fold_anchor)
-                assert.is_false(fold_open)
+                assert.equal("closed_when_final", fold_state)
             end
         )
 
@@ -776,8 +798,8 @@ describe("ToolCallRenderer", function()
             end)
 
             --- @param diff agentic.ui.MessageWriter.ToolCallDiff
-            --- @return boolean|nil fold_open
-            local function fold_open_for(diff)
+            --- @return agentic.ui.FoldState|nil fold_state
+            local function fold_state_for(diff)
                 --- @type agentic.ui.MessageWriter.ToolCallBlock
                 local block = {
                     tool_call_id = "tc-create",
@@ -786,23 +808,27 @@ describe("ToolCallRenderer", function()
                     status = "completed",
                     diff = diff,
                 }
-                local _, _, _, _, _, fold_open =
+                local _, _, _, _, _, fold_state =
                     Renderer.prepare_block_lines(block, 0)
-                return fold_open
+                return fold_state
             end
 
             it("folds a large created file closed", function()
-                assert.is_false(
-                    fold_open_for({ old = {}, new = { "a", "b", "c", "d" } })
+                assert.equal(
+                    "closed_when_final",
+                    fold_state_for({ old = {}, new = { "a", "b", "c", "d" } })
                 )
             end)
 
             it("leaves a small created file open", function()
-                assert.is_true(fold_open_for({ old = {}, new = { "a", "b" } }))
+                assert.equal(
+                    "open",
+                    fold_state_for({ old = {}, new = { "a", "b" } })
+                )
             end)
 
             it("never collapses an edit, even when large", function()
-                assert.is_true(fold_open_for({
+                assert.equal("open", fold_state_for({
                     old = { "x" },
                     new = { "a", "b", "c", "d" },
                 }))
@@ -1018,6 +1044,21 @@ describe("ToolCallRenderer", function()
             local lines, _ = Renderer.prepare_block_lines(block, 0)
             assert_no_markers(lines)
         end)
+    end)
+
+    it("folds a multi-line fetch body closed when final", function()
+        --- @type agentic.ui.MessageWriter.ToolCallBlock
+        local block = {
+            tool_call_id = "fetch-state",
+            status = "in_progress",
+            kind = "fetch",
+            argument = "https://example.com prompt",
+            body = { "line 1", "", "line 2" },
+        }
+        local _, _, _, _, _, fold_state =
+            Renderer.prepare_block_lines(block, 80)
+
+        assert.equal("closed_when_final", fold_state)
     end)
 
     describe("shell command fence label", function()

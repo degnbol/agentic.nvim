@@ -2257,34 +2257,28 @@ function MessageWriter:_drop_block_fold(block)
     block.fold_sent = nil
 end
 
---- Place a rendered tool call block's fold anchor, and queue the fold state
---- that is due now. Sets the block's fold fields.
----
---- An open is queued at once, at any status, so a diff is open while its
---- permission prompt shows. The open must be explicit: under foldmethod=expr,
---- a fold created after a closed one also starts closed. A diff renders once
---- (a failed transition re-renders it closed), so the open cannot undo a
---- fold the user closed.
----
---- A close is queued only at a final status, so a large new file stays open
---- until it is approved and a sidecar body stays visible while it streams.
---- Before that the close is deferred and `fold_sent` stays nil.
+--- Place a rendered tool call block's fold anchor, and queue its fold state
+--- if the state is due at the block's status. Sets the block's fold fields.
+--- `fold_sent` stays nil while the state is not due. Each re-render sends a
+--- due state again, which replaces a fold change the user made by hand.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @param start_row integer 0-indexed first row of the block
 --- @param fold_anchor integer|nil Offset from `start_row` of the first body row of the block's foldable fence. Nil when it has none.
---- @param fold_open boolean|nil True opens the fold, false or nil closes it
+--- @param fold_state agentic.ui.FoldState|nil Fold state of the block's fence. Nil when it has none.
 function MessageWriter:_render_block_fold(
     block,
     start_row,
     fold_anchor,
-    fold_open
+    fold_state
 )
     if not fold_anchor then
         return
     end
     block.fold_anchor_id = self:_place_fold_anchor(start_row + fold_anchor)
-    block.fold_open = fold_open == true
-    if block.fold_open or is_final_status(block.status) then
+    block.fold_open = fold_state == "open"
+    if
+        fold_state ~= "closed_when_final" or is_final_status(block.status)
+    then
         self:_queue_fold_op(block.fold_anchor_id, block.fold_open)
         block.fold_sent = block.fold_open
     end
@@ -2467,7 +2461,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         local kind = tool_call_block.kind
 
-        local lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_open =
+        local lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_state =
             Renderer.prepare_block_lines(
                 tool_call_block,
                 self:_get_wrap_width()
@@ -2503,7 +2497,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             tool_call_block,
             start_row,
             fold_anchor,
-            fold_open
+            fold_state
         )
         if dim_range then
             local dim_id = Renderer.set_dim_range(
@@ -2727,7 +2721,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             return false
         end
 
-        local new_lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_open =
+        local new_lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_state =
             Renderer.prepare_block_lines(tracker, self:_get_wrap_width())
 
         -- Compare content lines excluding the footer — the buffer's footer
@@ -2747,7 +2741,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         if content_unchanged then
             Renderer.apply_status_footer(bufnr, old_end_row, tracker.status)
             if is_final_status(tracker.status) then
-                self:_settle_block_fold(tracker, fold_open == true)
+                self:_settle_block_fold(tracker, fold_state == "open")
             end
             return false
         end
@@ -2873,7 +2867,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             tracker.kind
         )
 
-        self:_render_block_fold(tracker, start_row, fold_anchor, fold_open)
+        self:_render_block_fold(tracker, start_row, fold_anchor, fold_state)
         if dim_range then
             local dim_id = Renderer.set_dim_range(
                 bufnr,

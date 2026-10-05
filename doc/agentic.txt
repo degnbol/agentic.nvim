@@ -975,7 +975,7 @@ Each subagent also has a block in the chat:
     Line             Content ~
     Heading          `<type> · <name> (<mode>)`
     Name             The transcript's buffer name
-    Prompt           Folded
+    Prompt           Folded when longer than one line
     Footer           `in_progress`, `completed`, `failed` or `cancelled`
 
 The mode is `(Background)` or `(Blocking)`, with a `?` until the SDK's record

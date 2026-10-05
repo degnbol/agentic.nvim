@@ -4578,6 +4578,65 @@ describe("agentic.ui.MessageWriter", function()
             )
         end
 
+        it("closes a subagent block at spawn", function()
+            writer:write_tool_call_block({
+                tool_call_id = "spawn-exec",
+                status = "completed",
+                kind = "execute",
+                argument = "ls",
+                body = long_execute_body(),
+            })
+            writer:write_tool_call_block({
+                tool_call_id = "spawn-edit",
+                status = "pending",
+                kind = "create",
+                argument = "/tmp/agentic_difffold_spawn.lua",
+                diff = { old = {}, new = diff_new },
+            })
+            deferred.drain()
+            writer:update_tool_call_block({
+                tool_call_id = "spawn-edit",
+                status = "completed",
+            })
+            deferred.drain()
+
+            writer:write_tool_call_block({
+                tool_call_id = "spawn-agent",
+                status = "in_progress",
+                kind = "SubAgent",
+                argument = "finder",
+                body = { "first", "", "second", "", "third" },
+                subagent = { label = "finder", mode = "blocking", confirmed = true },
+            })
+            local body_start = fold_fence_lines()[2] + 1
+            deferred.drain()
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+        end)
+
+        it("keeps a subagent prompt the user opened through completion", function()
+            writer:write_tool_call_block({
+                tool_call_id = "spawn-reopen",
+                status = "in_progress",
+                kind = "SubAgent",
+                argument = "finder",
+                body = { "first", "", "second", "", "third" },
+                subagent = { label = "finder", mode = "blocking", confirmed = true },
+            })
+            local body_start = fold_fence_lines()[1] + 1
+            deferred.drain()
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd(body_start .. "foldopen")
+            end)
+            writer:update_tool_call_block({
+                tool_call_id = "spawn-reopen",
+                status = "completed",
+            })
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+        end)
+
         it("closes a large created file only when it completes", function()
             Config.tool_call_display.create_max_lines = 3
             writer:write_tool_call_block({
