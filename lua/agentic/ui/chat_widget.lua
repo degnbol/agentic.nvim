@@ -170,6 +170,8 @@ function ChatWidget:show_in(winid)
     end
     if
         replaced ~= self.buf_nrs.chat
+        -- 'bufhidden=wipe' wipes it as the chat replaces it.
+        and vim.api.nvim_buf_is_valid(replaced)
         and BufHelpers.is_blank_unnamed(replaced)
         and #vim.fn.win_findbuf(replaced) == 0
     then

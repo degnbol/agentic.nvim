@@ -137,6 +137,16 @@ describe("agentic.ui.ChatWidget", function()
             assert.is_false(vim.api.nvim_buf_is_valid(blank))
         end)
 
+        it("show_in replaces a buffer that wipes when hidden", function()
+            local wiping = vim.api.nvim_get_current_buf()
+            vim.bo[wiping].bufhidden = "wipe"
+
+            show(widget)
+
+            assert.is_false(vim.api.nvim_buf_is_valid(wiping))
+            assert.equal(widget:home_win(), vim.api.nvim_get_current_win())
+        end)
+
         it("show_in keeps a replaced buffer that has a name", function()
             vim.cmd.edit(vim.fn.tempname())
             local named = vim.api.nvim_get_current_buf()
