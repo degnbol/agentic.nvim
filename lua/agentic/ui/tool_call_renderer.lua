@@ -104,10 +104,10 @@ end
 --- Prose kinds — an `execute` description, a `switch_mode` label, a `SubAgent`
 --- line, a `Skill` name, a `SlashCommand` line (bare, like the user's own
 --- `/command` prompt), and the generic title bucket — guard only the words
---- markdown would reinterpret. That bucket cannot be typed either way: an
---- adapter's fallback yields `rawInput.command` or `update.title` under one
---- kind (see `ClaudeAgentAcpAdapter:__build_tool_call_update`), so a bare
---- command still reaches a prose-typed head.
+--- that hold a markdown-special character. That bucket cannot be typed either
+--- way: an adapter's fallback yields `rawInput.command` or `update.title`
+--- under one kind (see `ClaudeAgentAcpAdapter:__build_tool_call_update`), so a
+--- bare command still reaches a prose-typed head.
 --- @type table<string, boolean>
 local CODE_KINDS = {
     read = true,
@@ -155,128 +155,133 @@ local function guard_whole(text)
     return wrap_code_span(text, string.rep("`", longest_backtick_run(text) + 1))
 end
 
---- @param ranges { start: integer, stop: integer }[]
---- @param range { start: integer, stop: integer }
---- @return boolean overlaps Whether `range` shares a byte with any of `ranges`
-local function overlaps_any(ranges, range)
-    return vim.iter(ranges):any(function(other)
-        return range.start < other.stop and other.start < range.stop
-    end)
+--- Characters that can open inline markdown in any context: code spans,
+--- emphasis, strikethrough, links, HTML, autolinks and escapes. `!`, `]` and
+--- `>` are absent, as an image, link or tag needs a `[` or `<` too. `$`, `#`
+--- and `&` are absent, as they act only in certain shapes.
+local MARKDOWN_INLINE_SPECIALS = "[`*_~%[<\\]"
+
+--- Whether markdown could reinterpret `word`: it holds an always-special
+--- character, a `$` on a line with math pairs, an entity, or only `#` (a
+--- heading's closing sequence).
+--- @param word string Word with its code spans removed
+--- @param math_pairs boolean Whether the line holds two or more `$`
+--- @return boolean
+local function needs_guard(word, math_pairs)
+    return (
+        word:find(MARKDOWN_INLINE_SPECIALS)
+        or (math_pairs and word:find("$", 1, true))
+        or word:find("&#?%w+;")
+        or word:find("^#+$")
+    ) ~= nil
 end
 
---- The whole words of `text` that `constructs` touch, widened over every one
---- of `spans` they reach, until they reach no more.
---- @param text string
---- @param constructs { start: integer, stop: integer }[] 0-based `[start, stop)`
---- @param spans { start: integer, stop: integer }[] 0-based `[start, stop)`
---- @return { start: integer, stop: integer }[] words Sorted, disjoint
-local function words_absorbing_spans(text, constructs, spans)
-    local ranges = vim.list_slice(constructs)
-    local words
-    repeat
-        words = TextWrap.word_aligned(text, ranges)
-        local reached = vim.tbl_filter(function(span)
-            return overlaps_any(words, span)
-        end, spans)
-        spans = vim.tbl_filter(function(span)
-            return not overlaps_any(words, span)
-        end, spans)
-        vim.list_extend(ranges, reached)
-    until #reached == 0
-    return words
+--- @param s string
+--- @return integer surplus How many more `)` than `(` `s` holds
+local function surplus_closes(s)
+    return select(2, s:gsub("%)", "")) - select(2, s:gsub("%(", ""))
 end
 
---- @param text string
---- @param ranges { start: integer, stop: integer }[] Sorted, 0-based `[start, stop)`
---- @return boolean only_spans Whether the only inline markdown in `text` is
----   one code span at each of `ranges`
-local function is_code_spans_at(text, ranges)
-    local nodes = Treesitter.top_level_nodes(text, "markdown_inline")
-    if #nodes ~= #ranges then
-        return false
+--- Split leading `("'` and trailing `.,:!?)"'` off `word`. A parenthesis
+--- stays in `core` when its partner does, so `core` never holds an
+--- unmatched one that the split made.
+--- @param word string
+--- @return string head
+--- @return string core
+--- @return string tail
+local function strip_punctuation(word)
+    local head, core = word:match("^([(\"']*)(.*)$")
+    local tail = ""
+    while core:find("[.,:!?)\"']$") do
+        local last = core:sub(-1)
+        if last == ")" and surplus_closes(core) <= 0 then
+            break
+        end
+        core, tail = core:sub(1, -2), last .. tail
     end
-    for i, node in ipairs(nodes) do
-        if
-            node.type ~= "code_span"
-            or node.start ~= ranges[i].start
-            or node.stop ~= ranges[i].stop
-        then
-            return false
+    while head:sub(-1) == "(" and surplus_closes(core) > 0 do
+        head, core = head:sub(1, -2), "(" .. core
+    end
+    return head, core, tail
+end
+
+--- Code spans that CommonMark and tree-sitter `markdown_inline` both read
+--- in `text`, ignoring escapes, HTML and autolinks: a backtick run paired
+--- with the next run of equal length, kept only if no run between them is
+--- as long. Tree-sitter closes a span at the first run at least as long,
+--- CommonMark only at an equal one.
+--- @param text string
+--- @return { start: integer, stop: integer }[] spans 0-based `[start, stop)`, sorted
+local function backtick_spans(text)
+    --- @type { start: integer, stop: integer }[]
+    local runs = {}
+    for start, stop in text:gmatch("()`+()") do
+        table.insert(runs, { start = start - 1, stop = stop - 1 })
+    end
+    local function length(i)
+        return runs[i] and runs[i].stop - runs[i].start or math.huge
+    end
+
+    --- @type { start: integer, stop: integer }[]
+    local spans = {}
+    local i = 1
+    while runs[i] do
+        local j = i + 1
+        while length(j) < length(i) do
+            j = j + 1
+        end
+        if length(j) == length(i) then
+            table.insert(spans, { start = runs[i].start, stop = runs[j].stop })
+            i = j + 1
+        else
+            i = i + 1
         end
     end
-    return true
+    return spans
 end
 
---- Make `text` render literally as markdown inline content, wrapping in code
---- spans only the words that markdown would reinterpret.
+--- Wrap in a code span each word of `text` that holds a markdown-special
+--- character, so that code in prose (mainly identifiers like `foo_bar`)
+--- reads as code. A word is a whitespace-delimited run, and a code span
+--- already in `text` counts as one unit of its word: it stays as it is,
+--- unless the rest of its word needs a guard. Then the guard covers the whole
+--- word. Punctuation at the word's ends stays outside the guard.
 ---
---- The `markdown_inline` parser decides what needs a guard, not the
---- characters present: `foo_bar` and `fix #12` parse as plain text and stay
---- bare. Each construct it finds is guarded across the whole words it touches.
---- A code span already in `text` stays as it is, unless a guard reaches into
---- it. Then the span joins the guard, since splitting it would pair its
---- orphaned ticks with others. All guards use one backtick run, longer than
---- any in `text`, so no guard can pair with a stray tick in the line.
----
---- The parser is not exact CommonMark, and a guard can expose a construct it
---- missed before. In that case `text` is guarded whole instead.
+--- The result renders as text and code spans only. An escaped tick can make
+--- the pairing differ from CommonMark's on `text`, which moves the code
+--- colour but renders nothing as markdown.
 --- @param text string Single line
 --- @return string guarded
-local function guard_constructs(text)
-    --- @type agentic.utils.Treesitter.Node[]
-    local constructs = {}
-    --- @type agentic.utils.Treesitter.Node[]
-    local spans = {}
-    for _, node in ipairs(Treesitter.top_level_nodes(text, "markdown_inline")) do
-        table.insert(node.type == "code_span" and spans or constructs, node)
-    end
-    if #constructs == 0 then
-        return text
-    end
-
-    local words = words_absorbing_spans(text, constructs, spans)
-    local kept_spans = vim.tbl_filter(function(span)
-        return not overlaps_any(words, span)
-    end, spans)
-
-    --- @type { start: integer, stop: integer, guard: boolean }[]
-    local pieces = {}
-    for _, word in ipairs(words) do
-        table.insert(
-            pieces,
-            { start = word.start, stop = word.stop, guard = true }
-        )
-    end
-    for _, span in ipairs(kept_spans) do
-        table.insert(
-            pieces,
-            { start = span.start, stop = span.stop, guard = false }
-        )
-    end
-    table.sort(pieces, function(a, b)
-        return a.start < b.start
-    end)
-
+local function guard_words(text)
+    -- CommonMark and tree-sitter pair every run the same way, because:
+    -- 1. Outside the guards and kept spans, no byte can start markdown.
+    -- 2. Every guard's backtick run is longer than any run in `text`.
+    -- 3. A kept span holds no run as long as its delimiters.
     local run = string.rep("`", longest_backtick_run(text) + 1)
-    local parts, out_len, cursor = {}, 0, 0
-    --- @type { start: integer, stop: integer }[]
-    local expected_spans = {}
-    local function emit(s)
-        table.insert(parts, s)
-        out_len = out_len + #s
+    local math_pairs = select(2, text:gsub("%$", "")) >= 2
+    -- NUL is neither whitespace nor special, so a masked span splits no word
+    -- and triggers no guard.
+    local masked = text
+    for _, span in ipairs(backtick_spans(text)) do
+        masked = masked:sub(1, span.start)
+            .. ("\0"):rep(span.stop - span.start)
+            .. masked:sub(span.stop + 1)
     end
-    for _, piece in ipairs(pieces) do
-        emit(text:sub(cursor + 1, piece.start))
-        local segment = text:sub(piece.start + 1, piece.stop)
-        local span_start = out_len
-        emit(piece.guard and wrap_code_span(segment, run) or segment)
-        table.insert(expected_spans, { start = span_start, stop = out_len })
-        cursor = piece.stop
+
+    local parts, cursor = {}, 1
+    for start, stop in masked:gmatch("()%S+()") do
+        table.insert(parts, text:sub(cursor, start - 1))
+        local word = text:sub(start, stop - 1)
+        local bare = masked:sub(start, stop - 1):gsub("%z", "")
+        if needs_guard(bare, math_pairs) then
+            local head, core, tail = strip_punctuation(word)
+            word = head .. wrap_code_span(core, run) .. tail
+        end
+        table.insert(parts, word)
+        cursor = stop
     end
-    emit(text:sub(cursor + 1))
-    local guarded = table.concat(parts)
-    return is_code_spans_at(guarded, expected_spans) and guarded
-        or guard_whole(text)
+    table.insert(parts, text:sub(cursor))
+    return table.concat(parts)
 end
 
 --- Wrap `text` whole in a code span, cut so that the span fits `width`
@@ -291,23 +296,21 @@ local function guard_whole_within(text, width)
     return guard_whole(TextWrap.truncate_to_width(text, width - guard_cost))
 end
 
---- Guard the words of `text` that markdown would reinterpret, cut so that
---- the result fits `width` display cells.
+--- Guard the words of `text` that hold a markdown-special character, cut so
+--- that the result fits `width` display cells.
 ---
 --- The text is cut before it is guarded, so a cut never leaves a guard open.
---- A construct cut in half no longer parses and stays bare. If no cut fits,
---- `text` is guarded whole instead.
+--- If no cut fits, `text` is guarded whole instead.
 --- @param text string Single line
 --- @param width number `math.huge` for no limit
 --- @return string
-local function guard_constructs_within(text, width)
+local function guard_words_within(text, width)
     local cut_width = math.min(width, vim.fn.strdisplaywidth(text))
     -- The guards' cost depends on where the cut lands, so each overshoot
     -- shortens the cut until it fits or reaches the shortest cut
     -- `truncate_to_width` makes.
     repeat
-        local guarded =
-            guard_constructs(TextWrap.truncate_to_width(text, cut_width))
+        local guarded = guard_words(TextWrap.truncate_to_width(text, cut_width))
         local overflow = vim.fn.strdisplaywidth(guarded) - width
         if overflow <= 0 then
             return guarded
@@ -322,7 +325,7 @@ end
 --- lives in the sign column, so the heading text is only the informative
 --- content (filename / description / command) that treesitter-context pins as a
 --- breadcrumb. A `CODE_KINDS` name is wrapped whole in a code span. A prose
---- name has only the words guarded that markdown would reinterpret.
+--- name has each word guarded that holds a markdown-special character.
 ---
 --- An empty `name` yields a bare `###` — used before the argument has streamed
 --- in, and for execute calls with no model description (the command already
@@ -351,7 +354,7 @@ local function collapsed_header(kind, name, wrap_width, truncate)
         .. (
             CODE_KINDS[AcpKind.normalise(kind)]
                 and guard_whole_within(name, width)
-            or guard_constructs_within(name, width)
+            or guard_words_within(name, width)
         )
 end
 

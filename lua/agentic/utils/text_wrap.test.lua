@@ -660,45 +660,6 @@ describe("agentic.utils.TextWrap", function()
         end)
     end)
 
-    describe("word_aligned", function()
-        it("widens a range to the words it touches", function()
-            assert.same(
-                { { start = 4, stop = 13 } },
-                TextWrap.word_aligned("one two_three four", {
-                    { start = 7, stop = 9 },
-                })
-            )
-        end)
-
-        it("reaches the text's edges", function()
-            assert.same(
-                { { start = 0, stop = 7 } },
-                TextWrap.word_aligned("foo*bar", { { start = 3, stop = 4 } })
-            )
-        end)
-
-        it("merges ranges that share a word and sorts the result", function()
-            assert.same(
-                { { start = 0, stop = 3 }, { start = 8, stop = 13 } },
-                TextWrap.word_aligned("abc def ghijk", {
-                    { start = 11, stop = 12 },
-                    { start = 0, stop = 1 },
-                    { start = 9, stop = 10 },
-                })
-            )
-        end)
-
-        it("merges ranges whose words overlap", function()
-            assert.same(
-                { { start = 0, stop = 7 } },
-                TextWrap.word_aligned("abc def", {
-                    { start = 1, stop = 5 },
-                    { start = 6, stop = 7 },
-                })
-            )
-        end)
-    end)
-
     describe("abbreviate_count", function()
         it("spells out a count below a thousand", function()
             assert.equal("0", TextWrap.abbreviate_count(0))

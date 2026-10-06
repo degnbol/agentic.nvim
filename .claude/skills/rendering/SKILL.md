@@ -101,8 +101,8 @@ section-close boundary `write_message_chunk` emits; both must stay uncaptured
 by `queries/agentic/context.scm`.
 
 `collapsed_header` backtick-guards the whole name when the kind is in
-`CODE_KINDS`. A prose head guards only the words around each construct that
-`markdown_inline` finds (`guard_constructs`). The docstrings carry the
+`CODE_KINDS`. A prose head guards each word that `needs_guard` accepts, with
+its punctuation outside the span (`guard_words`). The docstrings carry the
 rationale.
 
 ## Fence info-strings — cross-kind reference

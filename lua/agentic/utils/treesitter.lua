@@ -6,35 +6,10 @@
 --- markdown treesitter injection only sees the isolated diff lines and
 --- can't know they live inside e.g. a Python triple-quoted string.
 ---
---- `top_level_nodes` lists what a parser builds from a string.
----
 --- @class agentic.utils.Treesitter
 local M = {}
 
 local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
-
---- A syntax node's type and byte range.
---- @class agentic.utils.Treesitter.Node
---- @field type string
---- @field start integer 0-based byte offset into the parsed text
---- @field stop integer 0-based byte offset, exclusive
-
---- Parse `text` as `lang` and list the named children of the tree's root.
----
---- Raises when no parser for `lang` is installed.
---- @param text string
---- @param lang string Parser language
---- @return agentic.utils.Treesitter.Node[] nodes In text order
-function M.top_level_nodes(text, lang)
-    local root = vim.treesitter.get_string_parser(text, lang):parse()[1]:root()
-    --- @type agentic.utils.Treesitter.Node[]
-    local nodes = {}
-    for _, node in ipairs(root:named_children()) do
-        local _, _, start, _, _, stop = node:range(true)
-        table.insert(nodes, { type = node:type(), start = start, stop = stop })
-    end
-    return nodes
-end
 
 --- Parse `new_lines` spliced into the surrounding file content, then extract
 --- highlight captures for just the new_lines rows. The result maps
