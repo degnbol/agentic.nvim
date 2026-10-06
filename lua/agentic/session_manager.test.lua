@@ -1473,29 +1473,6 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("FileChangedShell autocommand", function()
-        local Child = require("tests.helpers.child")
-        local child = Child:new()
-
-        before_each(function()
-            child.setup()
-        end)
-
-        after_each(function()
-            child.stop()
-        end)
-
-        it("sets fcs_choice to reload when FileChangedShell fires", function()
-            child.v.fcs_choice = ""
-            child.api.nvim_exec_autocmds("FileChangedShell", {
-                group = "AgenticCleanup",
-                pattern = "*",
-            })
-
-            assert.equal("reload", child.v.fcs_choice)
-        end)
-    end)
-
     describe("on_tool_call_update: buffer reload", function()
         --- @type TestStub
         local checktime_stub

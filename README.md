@@ -100,6 +100,8 @@ cannot be worked around from the plugin side.
 
 ## Setup
 
+The plugin works without a setup call. To change options, call `setup()` before the first session:
+
 ```lua
 require("agentic").setup({
     provider = "claude-agent-acp",

@@ -1,5 +1,7 @@
--- <Plug> mappings for agentic.nvim
+-- Highlight groups and <Plug> mappings for agentic.nvim
 -- Users map their preferred keys to these; e.g. vim.keymap.set("n", "<leader>ii", "<Plug>(agentic-toggle)")
+
+require("agentic.theme").setup()
 
 local function agentic(fn)
     return function()

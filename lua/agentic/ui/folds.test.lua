@@ -10,8 +10,8 @@ describe("agentic.ui.folds", function()
 
     before_each(function()
         -- The chat buffer parses as the private `agentic` clone of markdown so
-        -- queries/agentic/ applies to it alone; Agentic.setup registers it at
-        -- runtime (see init.lua), and nothing in this file calls setup.
+        -- queries/agentic/ applies to it alone; Bootstrap.ensure registers it
+        -- for the first session, and nothing in this file starts one.
         local md = vim.api.nvim_get_runtime_file("parser/markdown.so", false)[1]
         assert.is_not_nil(md)
         vim.treesitter.language.add("agentic", {

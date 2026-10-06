@@ -6,6 +6,7 @@
 
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
+local Bootstrap = require("agentic.bootstrap")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
@@ -346,6 +347,8 @@ end
 local last_id = 0
 
 function SessionManager:new()
+    Bootstrap.ensure()
+
     local AgentInstance = require("agentic.acp.agent_instance")
     local ChatWidget = require("agentic.ui.chat_widget")
     local CodeSelection = require("agentic.ui.code_selection")

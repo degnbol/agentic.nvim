@@ -112,6 +112,8 @@ local function set_hl(name, definition)
     applied[name] = vim.api.nvim_get_hl(0, { name = name })
 end
 
+--- Define the plugin's highlight groups, keeping any group already defined
+--- by someone else, and redefine them on every `ColorScheme`.
 function Theme.setup()
     local user_glyph = user_glyph_source()
 

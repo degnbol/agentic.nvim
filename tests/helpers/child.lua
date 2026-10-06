@@ -3,7 +3,8 @@
 local MiniTest = require("mini.test")
 
 --- @class tests.helpers.Child : MiniTest.child
---- @field setup fun() Restart child and load plugin and run agentic.setup() to run auto commands and configurations
+--- @field launch fun() Restart child, put the plugin on the runtimepath with the ACP transport and health mocked, and source its `plugin/` file as startup does
+--- @field setup fun() `launch`, then run agentic.setup()
 --- @field flush fun() Flush pending scheduled callbacks in child neovim and wait a bit to ensure they are processed
 
 --- @class tests.helpers.ChildModule
@@ -15,7 +16,7 @@ function M.new()
     local child = MiniTest.new_child_neovim() --[[@as tests.helpers.Child]]
     local root_dir = vim.fn.getcwd()
 
-    function child.setup()
+    function child.launch()
         child.restart({ "-u", "NONE" })
         child.lua("vim.opt.rtp:prepend(...)", { root_dir })
 
@@ -29,6 +30,12 @@ function M.new()
             package.loaded["agentic.acp.acp_health"] = ACPHealthMock
         ]])
 
+        -- `-u NONE` skips loading plugins.
+        child.cmd("runtime plugin/agentic.lua")
+    end
+
+    function child.setup()
+        child.launch()
         child.lua([[
             require("agentic").setup()
         ]])

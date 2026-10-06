@@ -4658,7 +4658,8 @@ describe("agentic.ui.MessageWriter", function()
 
             -- The chat buffer parses as the private `agentic` language so its
             -- folds query (queries/agentic/folds.scm) drives folding. Mirror
-            -- the runtime setup from init.lua / chat_widget / widget_layout.
+            -- the runtime setup from bootstrap.lua / chat_buffer /
+            -- widget_layout.
             local md =
                 vim.api.nvim_get_runtime_file("parser/markdown.so", false)[1]
             pcall(vim.treesitter.language.add, "agentic", {

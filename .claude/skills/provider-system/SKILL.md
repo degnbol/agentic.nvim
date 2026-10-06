@@ -204,7 +204,7 @@ is dropped from the body (the description is read from `rawInput.description`).
   fires — see the folding note in the project CLAUDE.md). Falls back to
   `markdown` if the `agentic` language could not be registered.
 - The zsh treesitter parser must be installed (bash is aliased to zsh via
-  `vim.treesitter.language.register("zsh", "bash")` in `init.lua` as fallback)
+  `vim.treesitter.language.register("zsh", "bash")` in `bootstrap.lua` as fallback)
 - The `_apply_block_highlights` Comment extmarks skip the code fence lines to
   avoid overriding treesitter highlights (extmark default priority 4096 >
   treesitter priority 100)

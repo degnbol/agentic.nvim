@@ -14,7 +14,7 @@ description:
 
 The chat buffer is `filetype=AgenticChat` parsed as the private `agentic`
 treesitter language — a clone of the markdown parser registered in
-`init.lua` (see the `language.add` block there for the registration rationale).
+`bootstrap.lua` (see the `language.add` block there for the registration rationale).
 Two consequences worth carrying in your head:
 
 - Folding uses `agentic.ui.folds`'s own foldexpr over `queries/agentic/folds.scm`,

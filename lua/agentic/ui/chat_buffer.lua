@@ -60,8 +60,8 @@ end
 --- @param bufnr integer
 function ChatBuffer.start(bufnr)
     -- Chat parses as the private `agentic` language so its folds query is
-    -- isolated from real markdown buffers (see init.lua). Fall back to markdown
-    -- if the agentic language could not be registered.
+    -- isolated from real markdown buffers (see bootstrap.lua). Fall back to
+    -- markdown if the agentic language could not be registered.
     if not pcall(vim.treesitter.start, bufnr, "agentic") then
         pcall(vim.treesitter.start, bufnr, "markdown")
     end
