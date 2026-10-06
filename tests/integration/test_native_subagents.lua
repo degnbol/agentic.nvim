@@ -6,7 +6,7 @@ local Child = require("tests.helpers.child")
 --- what the bridge sends.
 local SETUP = [[
 require("agentic.config").session_restore.storage_path = vim.fn.tempname()
-require("agentic").toggle()
+vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").bound_session(
     vim.api.nvim_get_current_tabpage()
 )
@@ -388,7 +388,7 @@ _G.mid_file = table.concat(vim.fn.readfile(
 
         assert.equal(1, child.lua_get("#_G.s.chat_history.messages"))
         child.lua([[
-vim.api.nvim_set_current_win(_G.s.widget:panel_win("chat"))
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
 local name = _G.block("c1").argument
 for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
     if line == name then
@@ -434,7 +434,7 @@ end
     it("a restore into another session manager names the new transcript", function()
         child.lua([[
 vim.cmd("tabnew")
-require("agentic").toggle()
+vim.cmd("Agentic")
 _G.s2 = require("agentic.session_registry").bound_session(
     vim.api.nvim_get_current_tabpage()
 )
@@ -564,7 +564,7 @@ _G.chunk("c1", "back", "toolu_1")
 _G.spawn("c1")
 vim.cmd("$tab sbuffer " .. _G.transcript("c1").bufnr)
 vim.cmd("tabnew")
-require("agentic").toggle()
+vim.cmd("Agentic")
 _G.s2 = require("agentic.session_registry").bound_session(
     vim.api.nvim_get_current_tabpage()
 )
@@ -613,7 +613,7 @@ describe("transcript windows", function()
             -- Let the spawn's follow scroll land before the cursor is placed.
             child.flush()
             child.lua([[
-vim.api.nvim_set_current_win(_G.s.widget:panel_win("chat"))
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
 local name = _G.block("c1").argument
 for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
     if line == name then

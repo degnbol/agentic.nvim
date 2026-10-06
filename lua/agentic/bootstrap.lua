@@ -114,15 +114,7 @@ local function wrap_paste()
                 return false
             end
 
-            local ret = session.file_list:add(file_path) or false
-
-            if ret then
-                session.widget:show({
-                    focus_prompt = false,
-                })
-            end
-
-            return ret
+            return session.file_list:add(file_path) or false
         end,
     })
 end

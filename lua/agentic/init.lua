@@ -2,17 +2,15 @@ local Config = require("agentic.config")
 local SessionRegistry = require("agentic.session_registry")
 local SessionRestore = require("agentic.session_restore")
 local Object = require("agentic.utils.object")
+local WidgetLayout = require("agentic.ui.widget_layout")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.Agentic
 local Agentic = {}
 
---- Resolves the effective window position for a call.
---- @param opts agentic.ui.ChatWidget.ShowOpts|nil
---- @return agentic.UserConfig.Windows.Position
-local function effective_position(opts)
-    return (opts and opts.position) or Config.windows.position
-end
+--- @class agentic.OpenOpts
+--- @field mods? vim.api.keyset.cmd_mods Command modifiers. A split or tab modifier opens the chat in a new window.
+--- @field auto_add_to_context? boolean Add the current selection or file to the context (default true)
 
 --- When the current window shows a session's chat, bind that session to the
 --- current tabpage (see `SessionManager:bind_to_tab`).
@@ -27,190 +25,109 @@ local function bind_shown_chat()
     end
 end
 
---- Opens the widget inside a dedicated tab, creating/reusing a tab as needed.
---- Never closes. Used by the `"tab"` position dispatch.
---- @param opts agentic.ui.ChatWidget.ShowOpts|nil
-local function open_in_tab(opts)
-    bind_shown_chat()
-    local tab = vim.api.nvim_get_current_tabpage()
-    local existing = SessionRegistry.bound_session(tab)
-    if existing and existing.widget:is_open() then
-        SessionRegistry.get_session_for_tab_page(nil, function(session)
-            session.widget:show(opts)
-        end)
-        return
-    end
-
-    local wins = vim.fn.filter(
-        vim.api.nvim_tabpage_list_wins(tab),
-        function(_, w)
-            return vim.api.nvim_win_get_config(w).relative == ""
-        end
-    )
-    local fresh = false
-    if #wins == 1 then
-        local buf = vim.api.nvim_win_get_buf(wins[1])
-        local ft = vim.bo[buf].filetype
-        fresh = ft == "dashboard"
-            or (ft == "" and vim.api.nvim_buf_get_name(buf) == "")
-    end
-    if not fresh then
-        vim.cmd("tabnew")
-    end
-    local empty_win = vim.api.nvim_get_current_win()
-
-    SessionRegistry.get_session_for_tab_page(nil, function(session)
-        local show_opts = vim.deepcopy(opts or {})
-        show_opts.auto_add_to_context = false
-        show_opts.position = nil
-        session.widget:show(show_opts)
-        if vim.api.nvim_win_is_valid(empty_win) then
-            local ebuf = vim.api.nvim_win_get_buf(empty_win)
-            pcall(vim.api.nvim_win_close, empty_win, true)
-            pcall(vim.api.nvim_buf_delete, ebuf, { force = true })
-        end
-    end)
+--- Whether command modifiers open a new window: a split or tab modifier.
+--- @param mods vim.api.keyset.cmd_mods|nil
+--- @return boolean
+local function opens_window(mods)
+    return mods ~= nil
+        and (
+            (mods.tab or -1) ~= -1
+            or (mods.split or "") ~= ""
+            or mods.vertical == true
+            or mods.horizontal == true
+        )
 end
 
---- Opens the chat widget for the current tab page
---- Safe to call multiple times
---- @param opts agentic.ui.ChatWidget.ShowOpts|nil
-function Agentic.open(opts)
-    if effective_position(opts) == "tab" then
-        return open_in_tab(opts)
+--- Show the session's chat. With a split or tab modifier in `mods`, in a new
+--- window (`:sbuffer`) that becomes home, its tabpage bound to the session,
+--- else as `ChatWidget:reveal`.
+--- @param session agentic.SessionManager
+--- @param mods vim.api.keyset.cmd_mods|nil
+local function show_chat(session, mods)
+    if not opens_window(mods) then
+        session.widget:reveal()
+        return
     end
+    vim.cmd.sbuffer({ args = { session.widget.buf_nrs.chat }, mods = mods })
+    session:bind_to_tab(vim.api.nvim_get_current_tabpage())
+    session.widget:show_in(vim.api.nvim_get_current_win())
+end
 
+--- Notify `message` when the session's chat has no home window in the
+--- current tabpage, where its panels would show the change.
+--- @param session agentic.SessionManager
+--- @param message string
+local function notify_unless_shown(session, message)
+    local home = session.widget:home_win()
+    if
+        not home
+        or vim.api.nvim_win_get_tabpage(home)
+            ~= vim.api.nvim_get_current_tabpage()
+    then
+        Logger.notify(message, vim.log.levels.INFO, { title = "Agentic" })
+    end
+end
+
+--- Show the chat of the current tabpage's session, created when there is
+--- none, and add the current selection or file to its context unless
+--- `opts.auto_add_to_context` is false.
+---
+--- With a split or tab modifier in `opts.mods`, the chat opens in a new
+--- window (`:sbuffer`) that becomes its home: the panels of the previous home
+--- close, and the non-empty content panels open at the new one. Else focus a
+--- window in the current tabpage that shows the chat, the home window first,
+--- or show the chat in the current window.
+--- @param opts agentic.OpenOpts|nil
+function Agentic.open(opts)
+    opts = opts or {}
     bind_shown_chat()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
-        if not opts or opts.auto_add_to_context ~= false then
+        if opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()
         end
-
-        session.widget:show(opts)
-    end)
-end
-
---- Whether a tabpage has a non-floating window outside `winids`.
---- @param tab integer
---- @param winids integer[]
---- @return boolean
-local function has_other_window(tab, winids)
-    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-        if
-            not vim.tbl_contains(winids, winid)
-            and vim.api.nvim_win_get_config(winid).relative == ""
-        then
-            return true
-        end
-    end
-    return false
-end
-
---- Closes the widget windows of the tab's session; the session lives on in
---- its buffers. A tab the widget fills is closed with it, and when that is
---- the last tab, vim quits by its own rules: unsaved history or an unsent
---- prompt refuses.
---- Safe to call multiple times or when no session exists.
---- @param tab_page_id integer|nil Tabpage to close. Nil = current tabpage.
-function Agentic.close(tab_page_id)
-    local tab = tab_page_id or vim.api.nvim_get_current_tabpage()
-    local session = SessionRegistry.bound_session(tab)
-    if not session or not session.widget:has_windows() then
-        return
-    end
-
-    if has_other_window(tab, session.widget:panel_wins()) then
-        session.widget:hide()
-    elseif #vim.api.nvim_list_tabpages() > 1 then
-        vim.cmd.tabclose(vim.api.nvim_tabpage_get_number(tab))
-    else
-        local ok, err = pcall(vim.cmd.qall)
-        if not ok then
-            Logger.notify(tostring(err), vim.log.levels.ERROR)
-        end
-    end
-end
-
---- Toggles the chat widget for the current tab page
---- Safe to call multiple times
---- @param opts agentic.ui.ChatWidget.ShowOpts|nil
-function Agentic.toggle(opts)
-    if effective_position(opts) == "tab" then
-        return Agentic.toggle_tab(opts)
-    end
-
-    bind_shown_chat()
-    SessionRegistry.get_session_for_tab_page(nil, function(session)
-        if session.widget:has_windows() then
-            Agentic.close()
-        else
-            if not opts or opts.auto_add_to_context ~= false then
-                session:add_selection_or_file_to_session()
-            end
-
-            session.widget:show(opts)
-        end
-    end)
-end
-
---- Toggle in a dedicated tab: opens a new tab for agentic, closes the tab on
---- toggle-off when only the agentic window remains. Reuses dashboard/empty tabs.
---- @param opts agentic.ui.ChatWidget.ShowOpts|nil
-function Agentic.toggle_tab(opts)
-    local tab = vim.api.nvim_get_current_tabpage()
-    local session = SessionRegistry.bound_session(tab)
-    if session and session.widget:has_windows() then
-        Agentic.close(tab)
-    else
-        open_in_tab(opts)
-    end
-end
-
---- Rotates through predefined window layouts for the chat widget
---- @param layouts agentic.UserConfig.Windows.Position[]|nil
-function Agentic.rotate_layout(layouts)
-    SessionRegistry.get_session_for_tab_page(nil, function(session)
-        session.widget:rotate_layout(layouts)
+        show_chat(session, opts.mods)
     end)
 end
 
 --- Add the current visual selection to the Chat context
---- @param opts agentic.ui.ChatWidget.AddToContextOpts|nil
-function Agentic.add_selection(opts)
+function Agentic.add_selection()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:add_selection_to_session()
-        session.widget:show(opts)
+        notify_unless_shown(session, "Added the selection to the chat context")
     end)
 end
 
 --- Add the current file to the Chat context
---- @param opts agentic.ui.ChatWidget.AddToContextOpts|nil
-function Agentic.add_file(opts)
+function Agentic.add_file()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:add_file_to_session()
-        session.widget:show(opts)
+        notify_unless_shown(session, "Added the file to the chat context")
     end)
 end
 
 --- Add either the current visual selection or the current file to the Chat context
---- @param opts agentic.ui.ChatWidget.AddToContextOpts|nil
-function Agentic.add_selection_or_file_to_context(opts)
+function Agentic.add_selection_or_file_to_context()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:add_selection_or_file_to_session()
-        session.widget:show(opts)
+        notify_unless_shown(
+            session,
+            "Added the selection or file to the chat context"
+        )
     end)
 end
 
---- @class agentic.ui.NewSessionOpts : agentic.ui.ChatWidget.ShowOpts
+--- @class agentic.ui.NewSessionOpts : agentic.OpenOpts
 --- @field provider? agentic.UserConfig.ProviderName
 
 --- Add diagnostics at the current cursor line to the Chat context
---- @param opts agentic.ui.ChatWidget.AddToContextOpts|nil
-function Agentic.add_current_line_diagnostics(opts)
+function Agentic.add_current_line_diagnostics()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         local count = session:add_current_line_diagnostics_to_context()
         if count > 0 then
-            session.widget:show(opts)
+            notify_unless_shown(
+                session,
+                string.format("Added %d diagnostics to the chat context", count)
+            )
         else
             Logger.notify(
                 "No diagnostics found on the current line",
@@ -221,12 +138,14 @@ function Agentic.add_current_line_diagnostics(opts)
 end
 
 --- Add all diagnostics from the current buffer to the Chat context
---- @param opts agentic.ui.ChatWidget.AddToContextOpts|nil
-function Agentic.add_buffer_diagnostics(opts)
+function Agentic.add_buffer_diagnostics()
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         local count = session:add_buffer_diagnostics_to_context()
         if count > 0 then
-            session.widget:show(opts)
+            notify_unless_shown(
+                session,
+                string.format("Added %d diagnostics to the chat context", count)
+            )
         else
             Logger.notify(
                 "No diagnostics found in the current buffer",
@@ -236,27 +155,24 @@ function Agentic.add_buffer_diagnostics(opts)
     end)
 end
 
---- Destroys the current Chat session and starts a new one
+--- Destroys the current Chat session, starts a new one and shows its chat.
 --- @param opts agentic.ui.NewSessionOpts|nil
 function Agentic.new_session(opts)
-    if opts and opts.provider then
+    opts = opts or {}
+    if opts.provider then
         Config.provider = opts.provider
     end
 
     local session = SessionRegistry.new_session()
     if session then
-        if effective_position(opts) == "tab" then
-            open_in_tab(opts)
-            return
-        end
-        if not opts or opts.auto_add_to_context ~= false then
+        if opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()
         end
-        session.widget:show(opts)
+        show_chat(session, opts.mods)
     end
 end
 
---- @param opts agentic.ui.ChatWidget.ShowOpts|nil
+--- @param opts agentic.OpenOpts|nil
 function Agentic.new_session_with_provider(opts)
     SessionRegistry.select_provider(function(provider_name)
         if provider_name then
@@ -306,15 +222,15 @@ function Agentic.stop_generation()
 end
 
 --- Show or hide the panel listing the files this session's agent has changed.
---- Requires an open widget in the current tabpage: the panel is a split of the
---- prompt window, and `get_session_for_tab_page` would spawn a whole provider
---- for a session with nowhere to put it.
+--- Notifies when no session is bound to the current tabpage.
 function Agentic.toggle_file_activity()
+    -- Not `get_session_for_tab_page`: it would spawn a whole provider for a
+    -- session with no chat shown to attach the panel to.
     local session =
         SessionRegistry.bound_session(vim.api.nvim_get_current_tabpage())
-    if not session or not session.widget:is_open() then
+    if not session then
         Logger.notify(
-            "No Agentic widget open in this tabpage.",
+            "No Agentic session in this tabpage.",
             vim.log.levels.WARN,
             { title = "Agentic" }
         )
@@ -339,7 +255,7 @@ function Agentic.restore_session()
 end
 
 --- Load an existing ACP session by full UUID.
---- Opens the chat widget and sends session/load to the agent.
+--- Reveals the chat and sends session/load to the agent.
 --- @param session_id string
 --- @param cwd? string Original working directory for the session (from JSONL).
 ---   Falls back to vim.fn.getcwd() if nil.
@@ -353,8 +269,7 @@ function Agentic.load_acp_session(session_id, cwd, model)
     end
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:load_acp_session(session_id, cwd, model)
-        session.widget:show()
-        session.widget:close_empty_non_widget_windows()
+        session.widget:reveal()
     end)
 end
 
@@ -367,7 +282,7 @@ function Agentic.resolve_session(query, callback)
     SessionRestore.resolve_query(query, callback)
 end
 
---- Resolve a session reference and open it in a new tab.
+--- Resolve a session reference and load it (`load_acp_session`).
 --- No match: emits a notification, no UI change.
 --- @param query string
 function Agentic.resume_query(query)
@@ -379,7 +294,6 @@ function Agentic.resume_query(query)
             )
             return
         end
-        Agentic.toggle_tab()
         Agentic.load_acp_session(session_id, cwd, model)
     end)
 end
@@ -398,7 +312,7 @@ function Agentic.send_prompt(text)
     SessionRegistry.get_session_for_tab_page(nil, function(session)
         session:on_user_submit()
         session:_handle_input_submit(text)
-        session.widget:show({ focus_prompt = false })
+        notify_unless_shown(session, "Sent the prompt to the chat")
     end)
 end
 
@@ -429,6 +343,7 @@ function Agentic.setup(opts)
             { title = "Agentic: user config merge error" }
         )
     end
+    WidgetLayout.validate_stack()
 end
 
 return Agentic

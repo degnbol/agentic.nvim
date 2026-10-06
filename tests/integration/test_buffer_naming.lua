@@ -32,7 +32,7 @@ end)()
     end
 
     it("the chat name's tail is the session title", function()
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
         assert.equal("chat", get_panel_basename("chat"))
 
@@ -45,7 +45,7 @@ require("agentic.session_registry").bound_session(tab).widget:set_chat_title("fi
     end)
 
     it("the attention badge stays out of the name", function()
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
         child.lua([[
 local tab = vim.api.nvim_get_current_tabpage()
@@ -56,10 +56,10 @@ require("agentic.session_registry").bound_session(tab).widget:set_badge("[idle]"
     end)
 
     it("names are unique across instances", function()
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
         child.cmd("tabnew")
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
         vim.uv.sleep(50)
         child.flush()
@@ -87,7 +87,7 @@ end)()
     end)
 
     it("renames leave no buffer behind", function()
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
         vim.uv.sleep(50)
         child.flush()
@@ -102,7 +102,7 @@ end, vim.api.nvim_list_bufs())
 
     it("prevents buffer name collision errors", function()
         for _ = 1, 5 do
-            child.lua([[ require("agentic").toggle() ]])
+            child.cmd("Agentic")
             child.flush()
             child.cmd("tabnew")
         end
@@ -115,7 +115,7 @@ end, vim.api.nvim_list_bufs())
     end)
 
     it("panel names keep their panel as the tail", function()
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
 
         for _, panel in ipairs({ "input", "code", "files", "todos" }) do

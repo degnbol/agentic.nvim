@@ -1,5 +1,5 @@
--- Highlight groups and <Plug> mappings for agentic.nvim
--- Users map their preferred keys to these; e.g. vim.keymap.set("n", "<leader>ii", "<Plug>(agentic-toggle)")
+-- Highlight groups, <Plug> mappings and commands for agentic.nvim
+-- Users map their preferred keys to these; e.g. vim.keymap.set("n", "<leader>io", "<Plug>(agentic-open)")
 
 require("agentic.theme").setup()
 
@@ -11,11 +11,7 @@ end
 
 local map = vim.keymap.set
 
--- Toggle / open / close
-map("n", "<Plug>(agentic-toggle)", agentic("toggle"))
-map("n", "<Plug>(agentic-toggle-tab)", agentic("toggle_tab"))
 map("n", "<Plug>(agentic-open)", agentic("open"))
-map("n", "<Plug>(agentic-close)", agentic("close"))
 
 -- Session management
 map("n", "<Plug>(agentic-new-session)", agentic("new_session"))
@@ -53,8 +49,12 @@ map("n", "<Plug>(agentic-send-line)", function()
 end)
 map("x", "<Plug>(agentic-send)", agentic("add_selection"))
 
--- Layout
-map("n", "<Plug>(agentic-rotate-layout)", agentic("rotate_layout"))
+vim.api.nvim_create_user_command("Agentic", function(args)
+    require("agentic").open({ mods = args.smods, auto_add_to_context = false })
+end, {
+    nargs = 0,
+    desc = "Show the agentic chat; split and tab modifiers open a new window",
+})
 
 vim.api.nvim_create_user_command("AgenticResume", function(args)
     require("agentic").resume_query(args.args)

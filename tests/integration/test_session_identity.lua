@@ -17,7 +17,7 @@ describe("Session identity", function()
     --- @return integer owner_tab
     --- @return integer foreign_tab
     local function show_chat_in_foreign_tab()
-        child.lua([[ require("agentic").toggle() ]])
+        child.cmd("Agentic")
         child.flush()
         local owner_tab = child.api.nvim_get_current_tabpage()
         child.lua([[
@@ -48,7 +48,8 @@ _G.owner.stop_generation = function() _G.stopped = true end
     end)
 
     it("open from a shown chat binds its session to the tab", function()
-        local owner_tab, foreign_tab = show_chat_in_foreign_tab()
+        local _, foreign_tab = show_chat_in_foreign_tab()
+        local foreign_win = child.api.nvim_get_current_win()
 
         child.lua([[ require("agentic").open() ]])
         child.flush()
@@ -62,15 +63,12 @@ _G.owner.stop_generation = function() _G.stopped = true end
             1,
             child.lua_get("vim.tbl_count(" .. registry .. ".by_id)")
         )
-        assert.is_true(child.lua_get("_G.owner.widget:is_open()"))
+        -- The chat stays in the window that already shows it.
+        assert.equal(foreign_win, child.api.nvim_get_current_win())
         assert.equal(
-            foreign_tab,
-            child.lua_get(
-                "vim.api.nvim_win_get_tabpage(_G.owner.widget.win_nrs.chat)"
-            )
+            child.lua_get("_G.owner.widget.buf_nrs.chat"),
+            child.api.nvim_get_current_buf()
         )
-        -- The widget left the tab it was bound to.
-        assert.equal(1, #child.api.nvim_tabpage_list_wins(owner_tab))
     end)
 
     it("an insert key in a foreign tab opens the input below", function()

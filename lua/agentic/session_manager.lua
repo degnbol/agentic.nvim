@@ -136,8 +136,8 @@ end
 --- @param badge string Badge text (e.g. "[idle]", "[?]")
 --- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
 function SessionManager:_notify_attention(badge, skip_badge)
-    local is_chat_focused = self.widget:panel_win("chat")
-        == vim.api.nvim_get_current_win()
+    local is_chat_focused = vim.api.nvim_get_current_buf()
+        == self.widget.buf_nrs.chat
 
     if skip_badge then
         if not is_chat_focused then
@@ -190,7 +190,7 @@ function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
 end
 
 --- The window an "edit" open replaces: the current one, unless it shows an
---- input buffer or a widget panel other than the chat. Then the widget's chat
+--- input buffer or a widget panel other than the chat. Then the chat's home
 --- window if it is in the current tabpage, else any window there showing the
 --- chat. Nil when there is none.
 --- @return integer|nil
@@ -203,9 +203,9 @@ function SessionManager:_edit_target_win()
         return current
     end
     local tab = vim.api.nvim_get_current_tabpage()
-    local chat_win = self.widget:panel_win("chat")
-    if chat_win and vim.api.nvim_win_get_tabpage(chat_win) == tab then
-        return chat_win
+    local home = self.widget:home_win()
+    if home and vim.api.nvim_win_get_tabpage(home) == tab then
+        return home
     end
     for _, winid in ipairs(vim.fn.win_findbuf(self.widget.buf_nrs.chat)) do
         if vim.api.nvim_win_get_tabpage(winid) == tab then
@@ -430,31 +430,6 @@ function SessionManager:new()
         self:_refresh()
     end
 
-    -- What the writer's BufWinEnter does for any other window. The folds a
-    -- tick later: a window opened in the same layout pass has no fold levels
-    -- yet. Queued ahead of the scroll `on_window_shown` schedules, so that
-    -- scroll measures the folds as they end up.
-    self.widget.on_window_opened = function(winid)
-        local shown = self:_writer_of_buf(vim.api.nvim_win_get_buf(winid))
-        if not shown then
-            return
-        end
-        vim.schedule(function()
-            if self.destroyed or not vim.api.nvim_win_is_valid(winid) then
-                return
-            end
-            local writer =
-                self:_writer_of_buf(vim.api.nvim_win_get_buf(winid))
-            if not writer then
-                return
-            end
-            writer:replay_folds(winid)
-            writer:flush_pending_fold_ops()
-            self.permission_manager:refresh_float()
-        end)
-        shown:on_window_shown(winid)
-    end
-
     self.widget.on_goto_bottom = function(winid)
         local writer = self:_writer_of_buf(vim.api.nvim_win_get_buf(winid))
         if writer then
@@ -462,16 +437,9 @@ function SessionManager:new()
         end
     end
 
-    self.widget.on_hide = function()
-        if #self.chat_history.messages > 0 and self.session_id then
-            local short_id = self.session_id:sub(1, 8)
-            Logger.notify("Session " .. short_id)
-        end
-    end
-
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.chat)
     self.message_writer = MessageWriter:new(self.widget.buf_nrs.chat, function()
-        return self.widget:panel_win("chat")
+        return self.widget:home_win()
     end)
 
     self.permission_manager = PermissionManager:new(
@@ -533,11 +501,11 @@ function SessionManager:new()
 
     self.file_list = FileList:new(self.widget.buf_nrs.files, function(file_list)
         if file_list:is_empty() then
-            self.widget:close_optional_window("files")
+            self.widget:close_panel("files")
             self.widget:move_cursor_to("input")
         else
             self.widget:render_header("files", tostring(#file_list:get_files()))
-            self.widget:show({ focus_prompt = false })
+            self.widget:sync_panels()
         end
     end)
 
@@ -556,14 +524,14 @@ function SessionManager:new()
         self.widget.buf_nrs.code,
         function(code_selection)
             if code_selection:is_empty() then
-                self.widget:close_optional_window("code")
+                self.widget:close_panel("code")
                 self.widget:move_cursor_to("input")
             else
                 self.widget:render_header(
                     "code",
                     tostring(#code_selection:get_selections())
                 )
-                self.widget:show({ focus_prompt = false })
+                self.widget:sync_panels()
             end
         end
     )
@@ -572,25 +540,24 @@ function SessionManager:new()
         self.widget.buf_nrs.diagnostics,
         function(diagnostics_list)
             if diagnostics_list:is_empty() then
-                self.widget:close_optional_window("diagnostics")
+                self.widget:close_panel("diagnostics")
                 self.widget:move_cursor_to("input")
             else
-                -- show() opens layouts but does not update the diagnostics header count
                 self.widget:render_header(
                     "diagnostics",
                     tostring(#diagnostics_list:get_diagnostics())
                 )
-                self.widget:show({ focus_prompt = false })
+                self.widget:sync_panels()
             end
         end
     )
 
     self.todo_list = TodoList:new(self.widget.buf_nrs.todos, function(todo_list)
         if not todo_list:is_empty() then
-            self.widget:show({ focus_prompt = false })
+            self.widget:sync_panels()
         end
     end, function()
-        self.widget:close_optional_window("todos")
+        self.widget:close_panel("todos")
     end)
 
     self:_setup_buffer_lifecycle()
@@ -598,19 +565,9 @@ function SessionManager:new()
     return self
 end
 
---- Bind this session to `tab`, which shows one widget: the tab's previous
---- session hides its widget, and this session's widget windows elsewhere
---- close.
+--- Bind this session to `tab`.
 --- @param tab integer
 function SessionManager:bind_to_tab(tab)
-    if SessionRegistry.tab_of(self.id) == tab then
-        return
-    end
-    local previous = SessionRegistry.bound_session(tab)
-    if previous then
-        previous.widget:hide()
-    end
-    self.widget:close_windows()
     SessionRegistry.bind(tab, self)
 end
 
@@ -632,13 +589,6 @@ end
 --- @param bufnr integer
 function SessionManager:_bind_owner_keymaps(bufnr)
     local keymaps = Config.keymaps.widget
-    BufHelpers.multi_keymap_set(keymaps.close, bufnr, function()
-        local tab = SessionRegistry.tab_of(self.id)
-        if tab then
-            require("agentic").close(tab)
-        end
-    end, { desc = "Agentic: Close Chat widget" })
-
     BufHelpers.multi_keymap_set(keymaps.switch_provider, bufnr, function()
         SessionRegistry.select_provider(function(provider_name)
             if provider_name then
@@ -1324,15 +1274,15 @@ end
 --- The window to type into for a subagent: the window in the current
 --- tabpage showing its message input, else one opened below the current
 --- window. For an agent without a message input, the session's input
---- (`ChatWidget:input_win_for_chat`).
+--- (`ChatWidget:input_win`).
 --- @param agent_id string
---- @return integer winid
+--- @return integer|nil winid Nil when the session's input panel fails to open
 function SessionManager:_agent_input_win(agent_id)
     local input = self._inputs[agent_id]
     if input then
         return WidgetLayout.input_win(input.bufnr)
     end
-    return self.widget:input_win_for_chat()
+    return self.widget:input_win()
 end
 
 --- Bind the keys of a subagent's transcript that act on the agent, each
@@ -1346,14 +1296,20 @@ function SessionManager:_bind_agent_keymaps(child_id, bufnr)
     local agent_id = (self.agent:subagent_id(child_id))
     for _, key in ipairs(BufHelpers.INSERT_KEYS) do
         BufHelpers.keymap_set(bufnr, "n", key, function()
-            vim.api.nvim_set_current_win(self:_agent_input_win(agent_id))
-            BufHelpers.start_insert_on_last_char()
+            local winid = self:_agent_input_win(agent_id)
+            if winid then
+                vim.api.nvim_set_current_win(winid)
+                BufHelpers.start_insert_on_last_char()
+            end
         end)
     end
     for _, key in ipairs({ "p", "P" }) do
         BufHelpers.keymap_set(bufnr, "n", key, function()
-            vim.api.nvim_set_current_win(self:_agent_input_win(agent_id))
-            vim.cmd("normal! " .. key)
+            local winid = self:_agent_input_win(agent_id)
+            if winid then
+                vim.api.nvim_set_current_win(winid)
+                vim.cmd("normal! " .. key)
+            end
         end)
     end
     BufHelpers.multi_keymap_set(
@@ -3557,11 +3513,9 @@ function SessionManager:_handle_input_submit_inner(input_text)
         local diagnostics = self.diagnostics_list:get_diagnostics()
         self.diagnostics_list:clear()
 
-        local chat_width = WidgetLayout.calculate_width(Config.windows.width)
-        local chat_winid = self.widget:panel_win("chat")
-        if chat_winid then
-            chat_width = vim.api.nvim_win_get_width(chat_winid)
-        end
+        local home = self.widget:home_win()
+        local chat_width = home and vim.api.nvim_win_get_width(home)
+            or vim.o.columns
 
         local DiagnosticsContext = require("agentic.ui.diagnostics_context")
 

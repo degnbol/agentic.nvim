@@ -401,8 +401,7 @@ buffer from the chat, so chat updates never displace the prompt.
   `on_hidden_resolved` when it ends.
 - **Follows the layout.** While a request is shown,
   `PermissionManager:refresh_float` re-runs `PermissionFloat:place` on
-  `TabEnter`, `WinClosed` and `BufWinEnter`, and when the widget opens a
-  chat window (widget windows open without autocmds). So the float
+  `TabEnter`, `WinClosed` and `BufWinEnter`. So the float
   re-anchors, hides, or reopens after the user closes it.
 
 ## Known ACP limitation

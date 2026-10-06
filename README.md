@@ -15,7 +15,8 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 - Auto-continue scheduled after usage-limit reset (WIP)
 - Attention bell/badge when chat is unfocused or no chat window follows
 - Follow toggle (default: `<localLeader>a`)
-- Todos / code / files / diagnostics panels alongside chat
+- `:Agentic` shows the chat in the current window, and modifiers such as `:tab Agentic` or `:vert Agentic` place it
+- Todos / code / files / diagnostics panels below the chat, in a configurable order (`windows.stack`)
 - Changed-files panel (default: `<localLeader>f`) — one row per file the agent created or edited this session (see `:help agentic-file-activity`)
 - External UI hook (`AgenticHeadersChanged` autocmd + `vim.b.agentic_header`) for plugins like [incline.nvim](https://github.com/b0o/incline.nvim)
 - `:w[rite]` of your input prompt submits it (by default).
@@ -25,7 +26,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
   - Set new keymaps for the submission of common custom prompts. Comes with `<localLeader>c` to send "Continue"
 - Completion of any terms mentioned in chat
 - Navigation keymap (default: `[[` and `]]`) for cursor jump between prompts.
-- `:AgenticResume {query}` — open a cached session by `session_id` prefix or exact title (case-insensitive). Opens a tab via `toggle_tab` and sends `session/load` to the agent. With `session_restore.cd_on_load` (default `true`), nvim's working directory is changed to the session's recorded cwd.
+- `:AgenticResume {query}` — open a cached session by `session_id` prefix or exact title (case-insensitive). Shows the chat and sends `session/load` to the agent. With `session_restore.cd_on_load` (default `true`), nvim's working directory is changed to the session's recorded cwd.
 - **Forwarded slash commands** (work via ACP, not intercepted locally):
   - `/init` — generate a project `CLAUDE.md`
   - `/review` — pull-request review

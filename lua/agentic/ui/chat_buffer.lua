@@ -79,8 +79,7 @@ end
 
 --- `start` the buffer, and give every window it enters the chat window
 --- options, merged with `Config.windows[<panel>].win_opts`. Set with local
---- scope, so a window that later shows another buffer does not keep them;
---- `winfix*` is left to the widget layout, which sizes its own windows.
+--- scope, so a window that later shows another buffer does not keep them.
 ---
 --- Call before creating the buffer's MessageWriter: its BufWinEnter applies
 --- pending folds, which needs `foldmethod=expr` in place.
@@ -103,13 +102,11 @@ function ChatBuffer.setup(bufnr)
                 window_config.win_opts or {}
             )
             for name, value in pairs(opts) do
-                if not name:match("^winfix") then
-                    vim.api.nvim_set_option_value(
-                        name,
-                        value,
-                        { win = winid, scope = "local" }
-                    )
-                end
+                vim.api.nvim_set_option_value(
+                    name,
+                    value,
+                    { win = winid, scope = "local" }
+                )
             end
         end,
     })

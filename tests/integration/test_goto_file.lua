@@ -7,8 +7,8 @@ describe("gf in a transcript", function()
     before_each(function()
         child.setup()
         child.lua([[
-require("agentic").toggle()
-_G.s = require("agentic.session_registry").bound_session(
+vim.cmd("Agentic")
+_G.s =require("agentic.session_registry").bound_session(
     vim.api.nvim_get_current_tabpage()
 )
 table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
@@ -28,7 +28,7 @@ _G.s.message_writer:write_tool_call_block({
     argument = _G.edited,
     diff = { old = { "old1", "old2" }, new = { "new1", "see " .. _G.mentioned } },
 })
-_G.chat_win = _G.s.widget:panel_win("chat")
+_G.chat_win = _G.s.widget:home_win()
 ]])
         child.flush()
     end)

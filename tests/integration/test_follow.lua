@@ -6,13 +6,15 @@ describe("Follow", function()
 
     before_each(function()
         child.setup()
-        child.lua([[require("agentic").toggle()]])
+        child.cmd("Agentic")
         child.flush()
         child.lua([[
 local tab = vim.api.nvim_get_current_tabpage()
 _G.s = require("agentic.session_registry").bound_session(tab)
 _G.chat = _G.s.widget.buf_nrs.chat
-_G.win = _G.s.widget.win_nrs.chat
+_G.win = _G.s.widget:home_win()
+-- The window the tests focus to leave the chat unfocused.
+_G.s.widget:input_win()
 local lines = {}
 for i = 1, 200 do lines[i] = "line " .. i end
 _G.s.message_writer:_own_edit(function(bufnr)
@@ -251,20 +253,21 @@ vim.api.nvim_win_set_cursor(_G.win, { 10, 0 })
         assert.is_false(user_controlled())
     end)
 
-    --- Hide the widget and show it again, with `between` run while hidden.
+    --- Show another buffer in the home window and show the chat there again
+    --- with `:Agentic`, with `between` run while the chat is not shown.
     --- @param between fun()
     local function reopen(between)
         -- A draft keeps the hidden session from being destroyed as empty.
         child.lua([[
 vim.bo[_G.s.widget.buf_nrs.input].modified = true
-vim.cmd("botright vnew")
-_G.s.widget:hide()
+vim.api.nvim_set_current_win(_G.win)
+vim.cmd("enew")
 ]])
         child.flush()
         between()
         child.lua([[
-_G.s.widget:show()
-_G.win = _G.s.widget.win_nrs.chat
+vim.cmd("Agentic")
+_G.win = _G.s.widget:home_win()
 ]])
         settle()
     end

@@ -164,7 +164,7 @@ end
 --- @field _user_controlled table<integer, true> Windows in user control, which writes do not scroll; every other window follows. Survives turn boundaries.
 --- @field _has_last_position boolean Whether the last window the buffer left, as no other window showed it, was in user control, and no window has shown the buffer since. False after `new` and `reset`. While false, the `"` mark stays on the last line, and a window that newly shows the buffer opens at the follow target.
 --- @field _newly_shown table<integer, true> Following windows that newly show the buffer, whose next scroll starts from the top: vim restores such a window's cursor from its history after BufWinEnter, possibly below the follow target, and `BufHelpers.scroll_down` never scrolls up. Cleared by that scroll, or when the window goes to user control.
---- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed when a window shows the buffer again: its BufWinEnter, or for widget windows (opened without autocmds) `ChatWidget.on_window_opened`. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
+--- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter of a window that shows the buffer again. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _home_window? fun(): integer|nil The window hard wrap measures while it shows the buffer
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
@@ -374,14 +374,14 @@ function MessageWriter:on_window_leave(winid)
     end
 end
 
---- BufWinEnter and widget-open hook: decide the mode of a window that newly
---- shows the buffer. With a last position, it goes to user control and keeps
+--- Decide the mode of a window that newly shows the buffer. With a last
+--- position, it goes to user control and keeps
 --- its place, and the buffer's last position is used up. Without one, it
 --- follows, and the next scroll takes it from the top to the follow target.
 --- With `follow.enabled` off, it goes to the last line instead. Call it
 --- synchronously, before `flush_pending_fold_ops` scrolls the following
---- windows. Public so the autocmd closure and `SessionManager` can reach it
---- without tripping LuaLS's invisible-field check.
+--- windows. Public so the autocmd closure can reach it without tripping
+--- LuaLS's invisible-field check.
 --- @param winid integer A window showing the buffer
 function MessageWriter:on_window_shown(winid)
     -- The view vim's cursor restore leaves is then no motion up.

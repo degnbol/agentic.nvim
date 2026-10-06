@@ -11,7 +11,7 @@ local Config = require("agentic.config")
 Config.session_restore.storage_path = vim.fn.tempname()
 Config.subagents.force_background = true
 Config.keymaps.prompt.submit = "<F5>"
-require("agentic").toggle()
+vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").bound_session(
     vim.api.nvim_get_current_tabpage()
 )
@@ -479,19 +479,30 @@ _G.press(_G.transcript("c1").bufnr, "p")
         assert.equal("pasted", child.lua_get([[_G.text(_G.input("c1").bufnr)]]))
     end)
 
-    it("in the widget's chat window reopen the widget's input slot", function()
+    it("in the home window open the input panel, then reuse it", function()
         child.lua([[
-vim.api.nvim_win_close(_G.s.widget.win_nrs.input, true)
-vim.api.nvim_set_current_win(_G.s.widget:panel_win("chat"))
+_G.home = _G.s.widget:home_win()
+vim.api.nvim_set_current_win(_G.home)
 _G.press(_G.s.widget.buf_nrs.chat, "i")
-_G.s.widget:show({ focus_prompt = false })
+_G.first = vim.api.nvim_get_current_win()
+vim.cmd("stopinsert")
+vim.api.nvim_set_current_win(_G.home)
+_G.press(_G.s.widget.buf_nrs.chat, "a")
 ]])
 
-        assert.is_true(child.lua_get([[_G.s.widget:panel_win("input") ~= nil]]))
+        assert.equal(
+            child.lua_get([[_G.s.widget:panel_win("input")]]),
+            child.lua_get("vim.api.nvim_get_current_win()")
+        )
+        assert.equal(child.lua_get("_G.first"), child.lua_get("vim.api.nvim_get_current_win()"))
         assert.equal(1, child.lua_get("_G.wins_of(_G.s.widget.buf_nrs.input)"))
+        assert.equal(
+            child.lua_get("_G.home"),
+            child.lua_get([[vim.fn.win_getid(vim.fn.winnr("k"))]])
+        )
     end)
 
-    it("in a chat window outside the widget open a split below it", function()
+    it("in a chat window outside the home's tab open a split below it", function()
         child.lua([[
 vim.cmd("tabnew")
 _G.chat_win = vim.api.nvim_get_current_win()
@@ -506,11 +517,11 @@ _G.input_win = vim.api.nvim_get_current_win()
         )
         assert.equal(2, child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"))
         assert.is_true(
-            child.lua_get([[_G.s.widget.win_nrs.input ~= _G.input_win]])
+            child.lua_get([[_G.s.widget:panel_win("input") ~= _G.input_win]])
         )
     end)
 
-    it("p in a chat window outside the widget pastes into the split below", function()
+    it("p in a chat window outside the home's tab pastes into the split below", function()
         child.lua([[
 vim.fn.setreg('"', "pasted")
 vim.cmd("tabnew")
@@ -600,7 +611,7 @@ _G.float_win = function()
     return vim.api.nvim_win_get_config(_G.float._winid).win
 end
 _G.chat_win = function()
-    return _G.s.widget:panel_win("chat")
+    return _G.s.widget:home_win()
 end
 _G.transcript_win = function()
     return vim.fn.win_findbuf(_G.transcript("c1").bufnr)[1]
@@ -714,7 +725,7 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
 
         it("\\e in the input replaces the chat window and focuses it", function()
             local chat_win = child.lua_get("_G.chat_win()")
-            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:panel_win("input"))]])
+            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:input_win())]])
 
             request_and_press("<localLeader>e")
 
@@ -743,18 +754,21 @@ _G.request()
             assert.equal(vim.NIL, child.lua_get("_G.badge()"))
         end)
 
-        it("with the widget closed, badges the chat and shows on its reopen", function()
+        it("with the chat not shown, badges the chat and shows when :Agentic shows it", function()
             child.lua([[
 _G.badge = function()
     return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.chat).badge
 end
-require("agentic").toggle()
+-- A message keeps the session alive while its chat is not shown.
+table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
+vim.api.nvim_set_current_win(_G.chat_win())
+vim.cmd("enew")
 _G.request()
 ]])
             child.flush()
             assert.equal("[?]", child.lua_get("_G.badge()"))
 
-            child.lua([[require("agentic").toggle()]])
+            child.cmd("Agentic")
             child.flush()
 
             assert.equal(child.lua_get("_G.chat_win()"), child.lua_get("_G.float_win()"))

@@ -20,19 +20,17 @@ describe("Buffer lifecycle", function()
         return (pcall(child.lua_get, "1"))
     end
 
-    --- Open a widget and give its session an id and a temporary session
-    --- folder, as a session/new response would. Exposes it as `_G.s`.
-    --- @param opts? { position?: string }
-    local function open_session(opts)
-        child.lua(
-            [[require("agentic").toggle(...)]],
-            { opts or vim.empty_dict() }
-        )
+    --- Show a chat in the current window and give its session an id and a
+    --- temporary session folder, as a session/new response would. Exposes it
+    --- as `_G.s`.
+    local function open_session()
+        child.cmd("Agentic")
         child.flush()
         child.lua([[
 require("agentic.config").session_restore.storage_path = vim.fn.tempname()
-local tab = vim.api.nvim_get_current_tabpage()
-_G.s = require("agentic.session_registry").bound_session(tab)
+_G.s = require("agentic.session_registry").owner_of_buf(
+    vim.api.nvim_get_current_buf()
+)
 _G.s.session_id = "sid-1"
 _G.s.chat_history.session_id = "sid-1"
 _G.chat = _G.s.widget.buf_nrs.chat
@@ -100,7 +98,7 @@ _G.s.message_writer:write_message(
                 child.lua([[
 _G.s.chat_history:add_message(_G.user_msg("hello"))
 _G.s:_sync_modified(_G.s.chat_history)
-vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
 ]])
                 assert.is_true(chat_modified())
 
@@ -115,7 +113,7 @@ vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)
             open_session()
             mutate(true)
             child.lua(
-                [[vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)]]
+                [[vim.api.nvim_set_current_win(_G.s.widget:home_win())]]
             )
 
             child.cmd("write")
@@ -200,7 +198,7 @@ end
                 child.lua([[
 local input = _G.s.widget.buf_nrs.input
 vim.api.nvim_buf_set_lines(input, 0, -1, false, { "hello" })
-vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)
+vim.api.nvim_set_current_win(_G.s.widget:input_win())
 vim.cmd("stopinsert")
 ]])
 
@@ -214,36 +212,22 @@ vim.cmd("stopinsert")
                 assert.same({ "hello" }, child.lua_get("_G.sent"))
             end)
         end
-
-        it("the close keymap in the last window refuses while dirty", function()
-            open_session({ position = "tab" })
-            mutate(true)
-
-            child.lua([[require("agentic").close()]])
-
-            assert.is_true(child_alive())
-            assert.is_true(child.lua_get("_G.s.widget:is_open()"))
-        end)
-
-        it("the close keymap in the last window quits when clean", function()
-            open_session({ position = "tab" })
-            mutate(false)
-
-            pcall(child.lua, [[require("agentic").close()]])
-            vim.uv.sleep(100)
-
-            assert.is_false(child_alive())
-        end)
     end)
 
     describe("windows", function()
+        --- The window showing the session's `panel`: the home window for the
+        --- chat, the input panel (opened when closed) for the input.
+        local wins = {
+            chat = "_G.s.widget:home_win()",
+            input = "_G.s.widget:input_win()",
+        }
         for _, panel in ipairs({ "chat", "input" }) do
             it(":q on the " .. panel .. " window keeps the session", function()
+                child.cmd("vsplit")
                 open_session()
                 mutate(false)
                 child.lua(
-                    [[vim.api.nvim_set_current_win(_G.s.widget.win_nrs[...])]],
-                    { panel }
+                    "vim.api.nvim_set_current_win(" .. wins[panel] .. ")"
                 )
 
                 child.cmd("quit")
@@ -254,9 +238,10 @@ vim.cmd("stopinsert")
         end
 
         it("an empty session ends when its last window closes", function()
+            child.cmd("vsplit")
             open_session()
 
-            child.lua([[_G.s.widget:close_windows()]])
+            child.cmd("quit")
             child.flush()
 
             assert.equal(0, live_sessions())
@@ -265,13 +250,14 @@ vim.cmd("stopinsert")
         it(
             "a session with an unsent draft survives losing its windows",
             function()
+                child.cmd("vsplit")
                 open_session()
                 child.lua([[
 local input = _G.s.widget.buf_nrs.input
 vim.api.nvim_buf_set_lines(input, 0, -1, false, { "draft" })
 require("agentic.utils.buf_helpers").sync_modified(input)
-_G.s.widget:close_windows()
 ]])
+                child.cmd("quit")
                 child.flush()
 
                 assert.equal(1, live_sessions())
@@ -279,26 +265,10 @@ _G.s.widget:close_windows()
         )
 
         it(
-            "the close keymap closes what is left after :q on the chat",
-            function()
-                open_session()
-                mutate(false)
-                child.lua(
-                    [[vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)]]
-                )
-                child.cmd("quit")
-
-                child.lua([[require("agentic").close()]])
-
-                assert.is_false(child.lua_get("_G.s.widget:has_windows()"))
-            end
-        )
-
-        it(
             "a new session replaces one that fills its tab, in that tab",
             function()
                 child.cmd("tabnew")
-                open_session({ position = "tab" })
+                open_session()
                 local tab = child.api.nvim_get_current_tabpage()
 
                 child.lua([[require("agentic").new_session()]])
@@ -307,12 +277,12 @@ _G.s.widget:close_windows()
                 child.flush()
 
                 assert.is_true(child.api.nvim_tabpage_is_valid(tab))
-                assert.is_true(
-                    child.lua_get(
-                        [[require("agentic.session_registry").bound_session(...).widget:is_open()]],
-                        { tab }
-                    )
+                local home = child.lua_get(
+                    [[require("agentic.session_registry").bound_session(...).widget:home_win()]],
+                    { tab }
                 )
+                assert.is_not.equal(vim.NIL, home)
+                assert.equal(tab, child.api.nvim_win_get_tabpage(home))
             end
         )
     end)
@@ -334,7 +304,7 @@ _G.s.widget:close_windows()
 local widget = _G.s.widget
 vim.api.nvim_buf_set_lines(widget.buf_nrs.input, 0, -1, false, { "queued" })
 widget:_queue_line_range(0, 0)
-vim.api.nvim_set_current_win(widget.win_nrs.chat)
+vim.api.nvim_set_current_win(widget:home_win())
 widget:consume_queued_block()
 ]])
 
@@ -407,7 +377,7 @@ _G.s.chat_history.messages = {
     },
 }
 _G.s.chat_history.dirty = true
-vim.api.nvim_set_current_win(_G.s.widget.win_nrs.chat)
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
 ]])
 
             child.cmd("edit!")
@@ -444,7 +414,7 @@ _G.s.message_writer:write_message_chunk({
             child.lua([[
 local input = _G.s.widget.buf_nrs.input
 vim.api.nvim_buf_set_lines(input, 0, -1, false, { "draft" })
-vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)
+vim.api.nvim_set_current_win(_G.s.widget:input_win())
 ]])
 
             child.cmd("edit!")

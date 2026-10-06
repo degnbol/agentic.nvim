@@ -30,7 +30,8 @@ CONTENTS                                                    *agentic-contents*
        7.1 Local commands ........................... |agentic-commands-local|
        7.2 Forwarded commands ................... |agentic-commands-forwarded|
        7.3 Command notices ................................. |agentic-notices|
-       7.4 :AgenticResume .......................... |agentic-commands-resume|
+       7.4 :Agentic ................................ |agentic-commands-open|
+       7.5 :AgenticResume .......................... |agentic-commands-resume|
     8. Permissions ..................................... |agentic-permissions|
        8.1 The permission prompt ................ |agentic-permissions-prompt|
        8.2 Auto-approval .......................... |agentic-permissions-auto|
@@ -52,8 +53,8 @@ CONTENTS                                                    *agentic-contents*
 1. INTRODUCTION                                         *agentic-introduction*
 
 agentic.nvim is a Claude-focused AI chat interface for Neovim, communicating
-via the Agent Client Protocol (ACP). It provides a sidebar chat widget with
-tool call rendering, permission management, and session persistence.
+via the Agent Client Protocol (ACP). It provides a chat buffer with context
+panels, tool call rendering, permission management, and session persistence.
 
 This is a fork of carlos-algms/agentic.nvim.
 
@@ -155,18 +156,15 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                                   *agentic-config-windows-tbl*
 `windows` table
-    Widget layout and sizing.
+    Panels and wrapping.
 
-    `position`          `"right"` | `"left"` | `"bottom"` | `"tab"`
-                        (default: `"right"`)
-    `width`             string or number (default: `"50%"`)
-    `height`            string or number (default: `"20%"`)
-    `stack_width_ratio` number (default: 0.4)
+    `stack`             list (default: `{ "todos", "code", "files",`
+                        `"diagnostics", "activity", "input" }`)
     `max_wrap_width`    integer (default: 80)
     `min_wrap_width`    integer (default: 40)
 
-    `"tab"` opens the widget in a dedicated tabpage with no file window and
-    closes that tab on hide. The other three split the current tab.
+    `stack` is the top-to-bottom order of the panels below the chat's
+    window (|agentic-buffers|). It must list each of the six exactly once.
 
     Chat prose is hard-wrapped to the chat window width, clamped between
     `min_wrap_width` and `max_wrap_width`. Setting either to 0 drops that
@@ -450,23 +448,13 @@ agentic.setup({opts})
 
                                                               *agentic.open()*
 agentic.open({opts})
-    Open the chat sidebar. Optional `opts` table.
-
-                                                             *agentic.close()*
-agentic.close({tab_page_id})
-    Close the chat sidebar. Optional tab page ID.
-
-                                                            *agentic.toggle()*
-agentic.toggle({opts})
-    Toggle the chat sidebar open/closed.
-
-                                                        *agentic.toggle_tab()*
-agentic.toggle_tab({opts})
-    Toggle the chat in a dedicated tab. Optional `opts` table.
-
-                                                     *agentic.rotate_layout()*
-agentic.rotate_layout({layouts})
-    Cycle the sidebar through layout positions. Optional list of positions.
+    Show the session's chat: focus a window in the current tabpage that
+    shows it, else show it in the current window. Optional `opts` table:
+      `mods`                 |:command-modifiers| as in |nvim_cmd()|. With a
+                             split or tab modifier the chat opens in a new
+                             window, and its panels move there.
+      `auto_add_to_context`  Add the current selection or file to the
+                             context first (default: true).
 
                                                        *agentic.send_prompt()*
 agentic.send_prompt({text})
@@ -475,28 +463,32 @@ agentic.send_prompt({text})
     first is sent replaces it.
 
                                                      *agentic.add_selection()*
-agentic.add_selection({opts})
+agentic.add_selection()
     Add the current visual selection to the context panel.
 
                                                           *agentic.add_file()*
-agentic.add_file({opts})
+agentic.add_file()
     Add the current file to the context panel.
 
                                   *agentic.add_selection_or_file_to_context()*
-agentic.add_selection_or_file_to_context({opts})
+agentic.add_selection_or_file_to_context()
     Add visual selection if active, otherwise the current file.
 
                                       *agentic.add_current_line_diagnostics()*
-agentic.add_current_line_diagnostics({opts})
+agentic.add_current_line_diagnostics()
     Add diagnostics from the cursor line to context.
 
                                            *agentic.add_buffer_diagnostics()*
-agentic.add_buffer_diagnostics({opts})
+agentic.add_buffer_diagnostics()
     Add all buffer diagnostics to context.
+
+The `add_*` functions and |agentic.send_prompt()| notify what they added
+when the chat's window is not in the current tabpage.
 
                                                        *agentic.new_session()*
 agentic.new_session({opts})
-    Start a new chat session.
+    Start a new chat session and show it as |agentic.open()| does. Takes
+    the `opts` of |agentic.open()| and `provider`.
 
                                          *agentic.new_session_with_provider()*
 agentic.new_session_with_provider({opts})
@@ -565,7 +557,6 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>R`   n       Restore session
     `<localLeader>p`   n       Switch provider
     `<localLeader>M`   n       Switch model
-    `<localLeader>q`   n       Close widget (|agentic-buffers|)
     `<localLeader>!`   n       Restart session
     `<localLeader>f`   n       Toggle changed-files panel
     `<localLeader>a`   n       Toggle follow (|agentic-follow|)
@@ -610,9 +601,9 @@ folded; |zo|, |zc| and |za| toggle a fold as usual.
 An insert key (`i`, `a`, `o`, `c`, `x`, ...) starts insert in an input: a
 background subagent's transcript in its message input (|agentic-subagents|),
 the chat, a panel or any other transcript in the session's. It uses the
-input's window in the current tabpage, else opens one below the current
-window, or the widget's input window inside the widget. `p` and `P` in the
-chat paste there.
+input's window in the current tabpage, else opens the input panel below the
+chat's window (|agentic-buffers|) when that is in the current tabpage, else
+opens one below the current window. `p` and `P` in the chat paste there.
 
 ------------------------------------------------------------------------------
 6.4 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
@@ -654,10 +645,7 @@ The float's footer lists the enabled keys, with a shared prefix written once:
 Global `<Plug>` mappings for binding from any buffer:
 
     Mapping                                  Mode   Description ~
-    `<Plug>(agentic-toggle)`                   n      Toggle sidebar
-    `<Plug>(agentic-toggle-tab)`               n      Toggle in tab
-    `<Plug>(agentic-open)`                     n      Open sidebar
-    `<Plug>(agentic-close)`                    n      Close sidebar
+    `<Plug>(agentic-open)`                     n      Add file, show chat
     `<Plug>(agentic-send)`                     n/x    Send motion/selection
     `<Plug>(agentic-send-line)`                n      Send current line
     `<Plug>(agentic-add-file)`                 n      Add file to context
@@ -669,7 +657,6 @@ Global `<Plug>` mappings for binding from any buffer:
     `<Plug>(agentic-switch-provider)`          n      Switch provider
     `<Plug>(agentic-restore-session)`          n      Restore session
     `<Plug>(agentic-stop)`                     n      Stop generation
-    `<Plug>(agentic-rotate-layout)`            n      Rotate layout
 
 ==============================================================================
 7. COMMANDS                                                 *agentic-commands*
@@ -708,12 +695,21 @@ session report back in the chat as a notice heading. `[[` and `]]` stop on
 notices as well as prompts (|agentic-keymaps-chat|).
 
 ------------------------------------------------------------------------------
-7.4 :AGENTICRESUME                                   *agentic-commands-resume*
+7.4 :AGENTIC                                           *agentic-commands-open*
+
+                                                                    *:Agentic*
+:Agentic
+    Show the session's chat as |agentic.open()| does, without adding the
+    current file. Takes |:command-modifiers|: `:tab Agentic`, `:vert Agentic`
+    and `:bo Agentic` open the chat in a new window.
+
+------------------------------------------------------------------------------
+7.5 :AGENTICRESUME                                   *agentic-commands-resume*
 
                                                               *:AgenticResume*
 :AgenticResume {query}
     Open the cached session {query} matches (|agentic.resolve_session()|).
-    Opens the widget in a tab and
+    Shows the chat as |agentic.open()| does and
     sends `session/load` to the agent. Zero or several matches emit a
     notification and change nothing. `session_restore.cd_on_load` governs
     the working directory.
@@ -876,14 +872,21 @@ restore do not render them again.
 A session with no messages and an empty input ends when no window shows its
 chat: after |:q| on its chat window, or |:e| or |gf| there.
 
-A widget window can show any buffer. While it shows a buffer that is not its
-panel's, it is not a widget window: closing the widget leaves it open, and
-opening the widget gives a new window for that panel. It keeps the panel's
-'winfixwidth' or 'winfixheight'. A 'winfixbuf' set in `win_opts` stops |gf|
-and |:e| in that window.
+The chat shows in any window, like any buffer. Its panels attach to one
+window showing it, the chat's window: the first window the chat enters
+while it has none, or the window |agentic.open()| opens. The panels stack
+below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
+panels open while they list something. The input opens on the first insert
+key (|agentic-keymaps-chat|). `<localLeader>f` toggles the file activity
+panel.
 
-`<localLeader>q` closes the widget's windows. A tabpage the widget fills
-closes with it; in the last tabpage, vim quits by |:qall|.
+When the chat's window closes or shows another buffer, its panels close.
+|:q| in the chat's window closes its panels first; when vim refuses the
+quit, they open again.
+
+A panel window can show any buffer. While it shows a buffer that is not its
+panel's, it is not a panel window. A 'winfixbuf' set in `win_opts` stops |gf|
+and |:e| in that window.
 
 ------------------------------------------------------------------------------
 9.2 FOLLOW                                                    *agentic-follow*

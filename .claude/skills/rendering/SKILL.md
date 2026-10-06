@@ -49,7 +49,7 @@ whatever level it chose, and are not part of this scheme; `[[`/`]]` navigation
 therefore reads `NS_USER_ACTIONS` extmarks rather than scanning for `## `.
 
 Only levels 2 and 3 are dimmed by the chat window's `winhighlight`
-(`widget_layout.lua`).
+(`chat_buffer.lua`).
 
 ## Tool call block layout
 

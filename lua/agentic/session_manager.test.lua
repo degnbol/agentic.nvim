@@ -2107,7 +2107,6 @@ describe("agentic.SessionManager", function()
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
-                    panel_win = noop,
                     get_chat_width = function()
                         return 80
                     end,
@@ -2311,7 +2310,6 @@ describe("agentic.SessionManager", function()
                 },
                 widget = {
                     buf_nrs = { chat = 0 },
-                    panel_win = noop,
                     get_chat_width = function()
                         return 80
                     end,
@@ -2952,9 +2950,9 @@ describe("agentic.SessionManager", function()
                 _agents = {},
                 _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
-                -- nil chat window => unfocused => bell would ring if notified
+                -- chat not current => unfocused => bell would ring if notified
                 widget = {
-                    panel_win = function() end,
+                    buf_nrs = { chat = -1 },
                 },
                 permission_manager = {
                     add_request = function()

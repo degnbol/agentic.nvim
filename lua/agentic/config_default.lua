@@ -196,16 +196,8 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.Windows.Subagent
     --- @field win_opts? agentic.UserConfig.WinOpts
 
-    --- `"tab"` opens the widget in a dedicated tabpage (no file window),
-    --- closes the tab on hide. `"right"`, `"left"`, `"bottom"` split in the
-    --- current tab next to the existing windows.
-    --- @alias agentic.UserConfig.Windows.Position "right"|"left"|"bottom"|"tab"
-
     --- @class agentic.UserConfig.Windows
-    --- @field position agentic.UserConfig.Windows.Position
-    --- @field width string|number
-    --- @field height string|number
-    --- @field stack_width_ratio number
+    --- @field stack agentic.ui.ChatWidget.StackPanel[] Top-to-bottom order of the panels below the chat, each listed once
     --- @field max_wrap_width integer
     --- @field min_wrap_width integer
     --- @field chat agentic.UserConfig.Windows.Chat
@@ -217,10 +209,7 @@ local ConfigDefault = {
     --- @field todos agentic.UserConfig.Windows.Todos
     --- @field subagent agentic.UserConfig.Windows.Subagent
     windows = {
-        position = "right",
-        width = "50%",
-        height = "20%",
-        stack_width_ratio = 0.4,
+        stack = { "todos", "code", "files", "diagnostics", "activity", "input" },
         max_wrap_width = 80,
         min_wrap_width = 40,
         chat = { win_opts = {} },
@@ -242,7 +231,6 @@ local ConfigDefault = {
     keymaps = {
         --- Keys bindings for ALL buffers in the widget
         widget = {
-            close = "<localLeader>q",
             stop_generation = {
                 {
                     "<C-c>",

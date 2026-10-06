@@ -32,6 +32,14 @@ describe("object utils", function()
         assert.same(expected, result)
     end)
 
+    it("replaces a list instead of merging it by index", function()
+        local target = { list = { "a", "b", "c" }, map = { x = 1 } }
+
+        Object.deep_merge_into(target, { list = { "z" }, map = {} })
+
+        assert.same({ list = { "z" }, map = { x = 1 } }, target)
+    end)
+
     it(
         "merges config with default config with keymaps overrides instead of merge",
         function()

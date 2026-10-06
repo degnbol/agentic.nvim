@@ -116,8 +116,7 @@ local function do_restore(item, tab_page_id, has_conflict)
             end, item.file_path)
         end
 
-        session.widget:show()
-        session.widget:close_empty_non_widget_windows()
+        session.widget:reveal()
     end)
 end
 

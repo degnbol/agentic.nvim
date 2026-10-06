@@ -48,7 +48,7 @@ describe("agentic.Bootstrap", function()
                     require("agentic.session_restore").resolve_query = function(_, callback)
                         callback("sid-x", vim.fn.getcwd())
                     end
-                    require("agentic").load_acp_session = function() end
+                    require("agentic.session_manager").load_acp_session = function() end
                 ]])
                 child.cmd("AgenticResume sid")
                 child.flush()

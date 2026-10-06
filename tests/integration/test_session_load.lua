@@ -7,7 +7,7 @@ describe("session/load history", function()
     before_each(function()
         child.setup()
         child.lua([[
-require("agentic").toggle()
+vim.cmd("Agentic")
 local tab = vim.api.nvim_get_current_tabpage()
 _G.s = require("agentic.session_registry").bound_session(tab)
 _G.persists = 0

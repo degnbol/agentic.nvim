@@ -1,7 +1,6 @@
 local Config = require("agentic.config")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
-local SessionRegistry = require("agentic.session_registry")
 local Logger = require("agentic.utils.logger")
 local LspServer = require("agentic.completion.lsp_server")
 local MessageWriter = require("agentic.ui.message_writer")
@@ -31,27 +30,18 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
 --- @alias agentic.ui.ChatWidget.Headers table<agentic.ui.ChatWidget.PanelNames, agentic.ui.ChatWidget.HeaderParts>
 
---- Options for controlling widget display behavior
---- @class agentic.ui.ChatWidget.AddToContextOpts
---- @field focus_prompt? boolean
-
---- Options for showing the widget
---- @class agentic.ui.ChatWidget.ShowOpts : agentic.ui.ChatWidget.AddToContextOpts
---- @field auto_add_to_context? boolean Automatically add current selection or file to context when opening
---- @field position? agentic.UserConfig.Windows.Position Override `windows.position` for this call only
-
---- A sidebar-style chat widget with multiple windows stacked vertically
---- The main chat window is the first, and contains the width, the below ones adapt to its size
+--- A session's buffers: the chat, shown in any window, and the panels, which
+--- attach below the chat's home window in `Config.windows.stack` order.
 --- @class agentic.ui.ChatWidget
 --- @field _owner_id integer `SessionManager.id` of the owning session
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
---- @field win_nrs agentic.ui.ChatWidget.WinNrs
+--- @field win_nrs agentic.ui.ChatWidget.WinNrs Panel windows
 --- @field on_submit_input fun(prompt: string, opts?: agentic.SessionManager.SubmitOpts): boolean external callback for a submitted prompt; false means it was deferred and the range should be tagged
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
---- @field on_window_opened? fun(winid: integer) external callback after the widget opens a chat window
 --- @field on_goto_bottom? fun(winid: integer) external callback that moves a window showing the chat or a transcript to its last line
---- @field on_hide? fun() external callback called after the widget is hidden
 --- @field _draining? boolean guard so drain's own buffer edits don't self-untag
+--- @field _home_win? integer The window the panels attach to
+--- @field _home_closed_autocmd? integer The WinClosed autocmd of `_home_win`
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -104,125 +94,138 @@ function ChatWidget:panel_win(panel)
     return WidgetLayout.panel_win(self.win_nrs, self.buf_nrs, panel)
 end
 
---- The widget's windows that show their panel's buffer.
---- @return integer[] winids
-function ChatWidget:panel_wins()
-    local winids = {}
-    for panel in pairs(self.win_nrs) do
-        local winid = self:panel_win(panel)
-        if winid then
-            table.insert(winids, winid)
-        end
+--- The home window while it is valid and shows the chat, else nil.
+--- @return integer|nil winid
+function ChatWidget:home_win()
+    local winid = self._home_win
+    if
+        winid
+        and vim.api.nvim_win_is_valid(winid)
+        and vim.api.nvim_win_get_buf(winid) == self.buf_nrs.chat
+    then
+        return winid
     end
-    return winids
+    return nil
 end
 
-function ChatWidget:is_open()
-    return self:panel_win("chat") ~= nil
-end
-
---- Whether any panel window is open.
---- @return boolean
-function ChatWidget:has_windows()
-    return #self:panel_wins() > 0
-end
-
---- The tabpage the owning session is bound to.
---- @return integer|nil
-function ChatWidget:_tab()
-    return SessionRegistry.tab_of(self._owner_id)
-end
-
---- Open the widget in the owning session's tabpage. No-op when the session
---- is bound to none.
---- @param opts agentic.ui.ChatWidget.ShowOpts|agentic.ui.ChatWidget.AddToContextOpts|nil
-function ChatWidget:show(opts)
-    opts = opts or {}
-    local tab = self:_tab()
-    if not tab then
+--- Make `winid` home, closing the panels of a previous home, and sync the
+--- content panels. When `winid` closes, its panels close and the home clears.
+--- No-op for a floating window.
+--- @param winid integer
+function ChatWidget:_adopt_home(winid)
+    -- A float has no column to stack panels in.
+    if vim.api.nvim_win_get_config(winid).relative ~= "" then
         return
     end
+    if self._home_win ~= winid then
+        self:close_panels()
+        self._home_win = winid
+        if self._home_closed_autocmd then
+            pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
+        end
+        self._home_closed_autocmd = vim.api.nvim_create_autocmd("WinClosed", {
+            pattern = tostring(winid),
+            once = true,
+            callback = function()
+                self._home_closed_autocmd = nil
+                -- WinClosed does not nest: a panel closed in here would not
+                -- run its own WinClosed.
+                vim.schedule(function()
+                    self:_release_home(winid)
+                end)
+            end,
+        })
+    end
+    self:sync_panels()
+end
 
-    local before = self:panel_win("chat")
-    WidgetLayout.open({
-        tab_page_id = tab,
-        buf_nrs = self.buf_nrs,
-        win_nrs = self.win_nrs,
-        focus_prompt = opts.focus_prompt,
-        position = opts.position,
-    })
-    -- Widget windows open without autocmds, so the chat's BufWinEnter does
-    -- not run for a new one.
-    local chat_win = self:panel_win("chat")
-    if self.on_window_opened and chat_win and chat_win ~= before then
-        self.on_window_opened(chat_win)
+--- Close the panels and clear the home, while `winid` is the home.
+--- @param winid integer
+function ChatWidget:_release_home(winid)
+    if self._home_win == winid then
+        self:close_panels()
+        self._home_win = nil
     end
 end
 
---- @param layouts agentic.UserConfig.Windows.Position[]|nil
-function ChatWidget:rotate_layout(layouts)
-    if not layouts or #layouts == 0 then
-        layouts = { "right", "bottom", "left" }
-    end
-
-    if #layouts == 1 then
+--- Show the chat in `winid`, with its chat window options and follow mode,
+--- make `winid` home unless it floats, closing the panels of a previous home,
+--- and sync the content panels. Notifies when the window refuses the buffer
+--- (`'winfixbuf'`).
+--- @param winid integer
+function ChatWidget:show_in(winid)
+    -- With autocmds: the chat's BufWinEnter sets its window options and
+    -- follow mode.
+    local ok, err =
+        pcall(vim.api.nvim_win_set_buf, winid, self.buf_nrs.chat)
+    if not ok then
         Logger.notify(
-            "Only one layout defined for rotation, it'll always show the same: "
-                .. layouts[1],
-            vim.log.levels.WARN,
-            { title = "Agentic: rotate layout" }
+            "Cannot show the chat here: " .. tostring(err),
+            vim.log.levels.ERROR,
+            { title = "Agentic" }
         )
+        return
     end
-
-    local current = Config.windows.position
-    local next_layout = layouts[1]
-
-    for i, layout in ipairs(layouts) do
-        if layout == current then
-            local next_index = i % #layouts + 1
-            if layouts[next_index] then
-                next_layout = layouts[next_index]
-            end
-            break
-        end
-    end
-
-    Config.windows.position = next_layout
-
-    local previous_mode = vim.fn.mode()
-    local previous_buf = vim.api.nvim_get_current_buf()
-
-    self:close_windows()
-    self:show({
-        focus_prompt = false,
-    })
-
-    vim.schedule(function()
-        local win = vim.fn.bufwinid(previous_buf)
-        if win ~= -1 then
-            vim.api.nvim_set_current_win(win)
-        end
-        if previous_mode == "i" then
-            vim.cmd("startinsert")
-        end
-    end)
+    self:_adopt_home(winid)
 end
 
---- Closes all windows but keeps buffers in memory, then runs `on_hide` if
---- the widget was open.
-function ChatWidget:hide()
-    local was_open = self:is_open()
-    self:close_windows()
-    if was_open and self.on_hide then
-        self.on_hide()
+--- Focus a window in the current tabpage showing the chat, the home window
+--- first. Without one, show the chat in the current window and make it home.
+function ChatWidget:reveal()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local home = self:home_win()
+    --- @type integer[]
+    local winids = home and { home } or {}
+    vim.list_extend(winids, vim.fn.win_findbuf(self.buf_nrs.chat))
+    for _, winid in ipairs(winids) do
+        if vim.api.nvim_win_get_tabpage(winid) == tab then
+            vim.api.nvim_set_current_win(winid)
+            return
+        end
+    end
+    self:show_in(vim.api.nvim_get_current_win())
+end
+
+--- Open or close each content panel (code, files, diagnostics, and todos
+--- when `Config.windows.todos.display`) to match its buffer. No-op without a
+--- home window.
+function ChatWidget:sync_panels()
+    local home = self:home_win()
+    if not home then
+        return
+    end
+    for _, panel in ipairs(Config.windows.stack) do
+        local is_content = panel ~= "input" and panel ~= "activity"
+        if
+            is_content and (panel ~= "todos" or Config.windows.todos.display)
+        then
+            WidgetLayout.sync_panel(self.win_nrs, self.buf_nrs, home, panel)
+        end
     end
 end
 
---- Closes all widget windows, keeping the buffers. Closing the last windows
---- of a tabpage closes the tabpage; the editor's last window is left open.
-function ChatWidget:close_windows()
-    vim.cmd("stopinsert")
+--- Close the panel windows, keeping the buffers. Leaves insert mode when the
+--- current window is one of them.
+function ChatWidget:close_panels()
+    local current = vim.api.nvim_get_current_win()
+    if vim.list_contains(vim.tbl_values(self.win_nrs), current) then
+        vim.cmd("stopinsert")
+    end
     WidgetLayout.close(self.win_nrs, self.buf_nrs)
+end
+
+--- The panels with an open window.
+--- @return agentic.ui.ChatWidget.StackPanel[]
+function ChatWidget:_open_panels()
+    return vim.tbl_filter(function(panel)
+        return self:panel_win(panel) ~= nil
+    end, Config.windows.stack)
+end
+
+--- Close the `panel` window.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+function ChatWidget:close_panel(panel)
+    WidgetLayout.close_panel(self.win_nrs, self.buf_nrs, panel)
 end
 
 --- Clears every panel buffer's content without destroying them, except
@@ -271,10 +274,15 @@ end
 --- The chat is wiped on the next tick, so this can run from the chat's own
 --- `BufDelete`, where wiping the chat raises E937.
 function ChatWidget:destroy()
-    -- Not `close_windows`: wiping a buffer closes its windows anyway, except
+    -- Not `close_panels`: wiping a buffer closes its windows anyway, except
     -- a tab's last one, which shows another buffer instead. Closing them
     -- first would close a tab the widget fills, before a replacement session
     -- can open there.
+    if self._home_closed_autocmd then
+        pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
+        self._home_closed_autocmd = nil
+    end
+    self._home_win = nil
     local chat = self.buf_nrs.chat
     for name, bufnr in pairs(self.buf_nrs) do
         self.buf_nrs[name] = nil
@@ -805,14 +813,15 @@ function ChatWidget:cancel_queue()
     vim.api.nvim_buf_clear_namespace(self.buf_nrs.input, NS_QUEUED, 0, -1)
 end
 
---- On the next tick, focus the `panel` window and, unless it is the chat,
---- scroll it to the bottom, then run `callback`. No-op when no window shows
---- the panel then.
+--- On the next tick, focus the `panel` window, the home window for the chat,
+--- and, unless it is the chat, scroll it to the bottom, then run `callback`.
+--- No-op when no window shows the panel then.
 --- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param callback fun()|nil
 function ChatWidget:move_cursor_to(panel, callback)
     vim.schedule(function()
-        local winid = self:panel_win(panel)
+        local winid = panel == "chat" and self:home_win()
+            or self:panel_win(panel)
         if winid then
             vim.api.nvim_set_current_win(winid)
 
@@ -829,49 +838,101 @@ function ChatWidget:move_cursor_to(panel, callback)
     end)
 end
 
---- Focus the input window for insert, reopening it first if it was closed.
---- Outside the owning session's tabpage, focus the input's window there, or
---- open one below the current window, leaving the widget where it is.
-function ChatWidget:focus_input_for_insert()
-    if vim.api.nvim_get_current_tabpage() ~= self:_tab() then
-        WidgetLayout.focus_input(self.buf_nrs.input)
-        return
-    end
-
-    if not self:panel_win("input") then
-        self:show({ focus_prompt = false })
-    end
-    self:move_cursor_to("input", BufHelpers.start_insert_on_last_char)
-end
-
---- The window to type into from a current window showing the chat: the one
---- in the current tabpage showing the input, else the widget's input slot
---- when the current window is the widget's chat window, else a new split
---- below the current window. Opens the window when there is none.
---- @return integer winid
-function ChatWidget:input_win_for_chat()
+--- The window to type into: the input's window in the current tabpage, else
+--- the input panel when the home window is in the current tabpage, else a
+--- split below the current window. Opens the window when there is none.
+--- @return integer|nil winid Nil when the input panel fails to open
+function ChatWidget:input_win()
     local input = self.buf_nrs.input
     local shown = vim.fn.bufwinid(input)
     if shown ~= -1 then
         return shown
     end
-    -- Through the widget, so `win_nrs.input` tracks the window and a later
-    -- `show` opens no second one.
-    if vim.api.nvim_get_current_win() == self:panel_win("chat") then
-        self:show({ focus_prompt = false })
-        local winid = self:panel_win("input")
-        if winid then
-            return winid
-        end
+    local home = self:home_win()
+    if
+        home
+        and vim.api.nvim_win_get_tabpage(home)
+            == vim.api.nvim_get_current_tabpage()
+    then
+        return WidgetLayout.open_panel(
+            self.win_nrs,
+            self.buf_nrs,
+            home,
+            "input"
+        )
     end
     return WidgetLayout.open_input_below(input)
 end
 
---- Focus `input_win_for_chat()` and start insert on the input's last
---- character.
-function ChatWidget:focus_input_for_chat()
-    vim.api.nvim_set_current_win(self:input_win_for_chat())
-    BufHelpers.start_insert_on_last_char()
+--- Focus `input_win()` and start insert on the input's last character.
+--- No-op when the input panel fails to open.
+function ChatWidget:focus_input()
+    local winid = self:input_win()
+    if winid then
+        vim.api.nvim_set_current_win(winid)
+        BufHelpers.start_insert_on_last_char()
+    end
+end
+
+--- Buffer-local autocmds on the chat that tie the home window to it: a
+--- window the chat enters becomes home while there is none, a home that
+--- shows another buffer loses its panels, and `:q` on the home closes its
+--- panels first, so it quits as on a single window.
+--- @param chat integer
+function ChatWidget:_track_home(chat)
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+        buffer = chat,
+        callback = function()
+            local winid = vim.api.nvim_get_current_win()
+            if self:home_win() or vim.api.nvim_win_get_buf(winid) ~= chat then
+                return
+            end
+            self:_adopt_home(winid)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = chat,
+        callback = function()
+            -- The window shows its new buffer once the leave is done.
+            vim.schedule(function()
+                local home = self._home_win
+                if
+                    home
+                    and vim.api.nvim_win_is_valid(home)
+                    and not self:home_win()
+                then
+                    self:_release_home(home)
+                end
+            end)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("QuitPre", {
+        buffer = chat,
+        callback = function()
+            local home = self:home_win()
+            if vim.api.nvim_get_current_win() ~= home then
+                return
+            end
+            local open_panels = self:_open_panels()
+            self:close_panels()
+            -- The home is still open when vim refused the quit (E37, E162).
+            vim.schedule(function()
+                if self:home_win() ~= home then
+                    return
+                end
+                for _, panel in ipairs(open_panels) do
+                    WidgetLayout.open_panel(
+                        self.win_nrs,
+                        self.buf_nrs,
+                        home,
+                        panel
+                    )
+                end
+            end)
+        end,
+    })
 end
 
 function ChatWidget:_initialize()
@@ -880,6 +941,7 @@ function ChatWidget:_initialize()
     self:_bind_keymaps()
     self:_setup_queue()
     self:_attach_input()
+    self:_track_home(self.buf_nrs.chat)
 
     local input = self.buf_nrs.input
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
@@ -1059,7 +1121,7 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
 
     -- A transcript's keys depend on its agent; its session binds them.
     if panel ~= "input" and panel ~= "message" and panel ~= "subagent" then
-        self:_bind_insert_keymaps(panel, bufnr)
+        self:_bind_insert_keymaps(bufnr)
     end
 end
 
@@ -1098,22 +1160,17 @@ end
 
 --- Bind the insert keys and `p`/`P` on a read-only panel buffer to type and
 --- paste into the input.
---- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param bufnr integer
-function ChatWidget:_bind_insert_keymaps(panel, bufnr)
-    local is_chat = panel == "chat"
-    local focus = is_chat and self.focus_input_for_chat
-        or self.focus_input_for_insert
+function ChatWidget:_bind_insert_keymaps(bufnr)
     for _, key in ipairs(BufHelpers.INSERT_KEYS) do
         BufHelpers.keymap_set(bufnr, "n", key, function()
-            focus(self)
+            self:focus_input()
         end)
     end
 
     for _, key in ipairs({ "p", "P" }) do
         BufHelpers.keymap_set(bufnr, "n", key, function()
-            local input_win = is_chat and self:input_win_for_chat()
-                or self:panel_win("input")
+            local input_win = self:input_win()
             if input_win then
                 vim.api.nvim_set_current_win(input_win)
                 vim.cmd("normal! " .. key)
@@ -1407,11 +1464,6 @@ function ChatWidget:set_chat_title(title)
     )
 end
 
---- @param panel_name agentic.ui.ChatWidget.PanelNames
-function ChatWidget:close_optional_window(panel_name)
-    WidgetLayout.close_optional_window(self.win_nrs, self.buf_nrs, panel_name)
-end
-
 --- @return boolean
 function ChatWidget:is_activity_window_open()
     return self:panel_win("activity") ~= nil
@@ -1419,52 +1471,39 @@ end
 
 --- Show or hide the file activity panel. `on_open` runs before the window
 --- appears, so a caller can reconcile the rows first; `on_close` after it goes,
---- to record that the rows have been seen.
+--- to record that the rows have been seen. Unlike the content panels, the
+--- buffer's rows never open or close it. Notifies when the chat has no home
+--- window to attach it to.
 --- @param on_open fun()|nil
 --- @param on_close fun()|nil
 function ChatWidget:toggle_activity_window(on_open, on_close)
     if self:is_activity_window_open() then
-        self:close_optional_window("activity")
+        self:close_panel("activity")
         if on_close then
             on_close()
         end
         return
     end
 
+    local home = self:home_win()
+    if not home then
+        Logger.notify(
+            "Show the chat to open the file activity panel.",
+            vim.log.levels.WARN,
+            { title = "Agentic" }
+        )
+        return
+    end
     if on_open then
         on_open()
     end
-    WidgetLayout.open_activity(self.win_nrs, self.buf_nrs)
+    WidgetLayout.open_panel(self.win_nrs, self.buf_nrs, home, "activity")
 end
 
 --- Keep the open activity panel's height matched to its row count. No-op while
 --- the panel is closed, which is its normal state during a turn.
 function ChatWidget:resize_activity_window()
-    WidgetLayout.resize_activity(self.win_nrs, self.buf_nrs)
-end
-
---- Close non-widget windows on the tabpage that hold unmodified empty unnamed
---- buffers. Mirrors the cleanup in Agentic.toggle_tab so the widget fills the
---- tab when restoring a session on a dedicated tab.
-function ChatWidget:close_empty_non_widget_windows()
-    local tab = self:_tab()
-    if not tab then
-        return
-    end
-    local panel_wins = self:panel_wins()
-    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-        if not vim.tbl_contains(panel_wins, winid) then
-            local bufnr = vim.api.nvim_win_get_buf(winid)
-            local ft = vim.bo[bufnr].filetype
-            local is_empty = (ft == "" or ft == "dashboard")
-                and vim.api.nvim_buf_get_name(bufnr) == ""
-                and not vim.bo[bufnr].modified
-            if is_empty then
-                pcall(vim.api.nvim_win_close, winid, true)
-                pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
-            end
-        end
-    end
+    WidgetLayout.resize_panel(self.win_nrs, self.buf_nrs, "activity")
 end
 
 return ChatWidget

@@ -1,5 +1,4 @@
 local Config = require("agentic.config")
-local WidgetLayout = require("agentic.ui.widget_layout")
 local FileSystem = require("agentic.utils.file_system")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -206,11 +205,9 @@ function DiagnosticsList:render()
     local lines = {}
     local icons = get_diagnostic_icons()
 
-    local buf_width = WidgetLayout.calculate_width(Config.windows.width)
     local winid = vim.fn.bufwinid(self._bufnr)
-    if winid ~= -1 then
-        buf_width = vim.api.nvim_win_get_width(winid)
-    end
+    local buf_width = winid ~= -1 and vim.api.nvim_win_get_width(winid)
+        or vim.o.columns
 
     for _, diagnostic in ipairs(self._diagnostics) do
         local icon = icons[diagnostic.severity]

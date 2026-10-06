@@ -6,7 +6,7 @@ describe("Rendering in any window", function()
 
     before_each(function()
         child.setup()
-        child.lua([[require("agentic").toggle()]])
+        child.cmd("Agentic")
         child.flush()
         child.lua([[
 local tab = vim.api.nvim_get_current_tabpage()
@@ -102,7 +102,7 @@ end, vim.fn.win_findbuf(_G.chat))
         assert.same({ 3, 3 }, closed)
     end)
 
-    it("the widget's chat window gets the folds when it reopens", function()
+    it("the home window gets the folds when show_in shows the chat again", function()
         child.lua([[
 _G.s.chat_history:add_message({ type = "user", text = "x", timestamp = 0, provider_name = "p" })
 local writer = _G.s.message_writer
@@ -117,16 +117,20 @@ writer:_close_fold(2)
         vim.uv.sleep(50)
         child.flush()
 
-        child.lua([[_G.s.widget:hide()]])
-        child.lua([[_G.s.widget:show()]])
+        local home = child.lua_get("_G.s.widget:home_win()")
+        child.cmd("enew")
+        child.flush()
+        assert.equal(vim.NIL, child.lua_get("_G.s.widget:home_win()"))
+        child.lua("_G.s.widget:show_in(...)", { home })
         child.flush()
         vim.uv.sleep(50)
         child.flush()
 
+        assert.equal(home, child.lua_get("_G.s.widget:home_win()"))
         assert.equal(
             3,
             child.lua_get([[
-vim.api.nvim_win_call(_G.s.widget.win_nrs.chat, function()
+vim.api.nvim_win_call(_G.s.widget:home_win(), function()
     return vim.fn.foldclosed(3)
 end)
 ]])
@@ -135,7 +139,7 @@ end)
 
     it("each window follows writes on its own", function()
         local foreign = show_chat_in_new_tab()
-        local widget = child.lua_get("_G.s.widget.win_nrs.chat")
+        local widget = child.lua_get("_G.s.widget:home_win()")
         child.lua(
             [[
 local writer = _G.s.message_writer
@@ -180,7 +184,7 @@ end)
         -- A message keeps the session alive once its chat is hidden.
         child.lua([[
 _G.s.chat_history:add_message({ type = "user", text = "x", timestamp = 0, provider_name = "p" })
-_G.s.widget:hide()
+vim.cmd("enew")
 _G.bells = 0
 require("agentic.session_manager")._ring_bell = function() _G.bells = _G.bells + 1 end
 ]])
@@ -225,29 +229,32 @@ _G.s:_on_request_permission({
         assert.equal(vim.NIL, badge())
     end)
 
-    it("a detached permission moves to the widget when it opens", function()
+    it("a detached permission moves to the home window when show_in shows the chat", function()
         child.lua([[
 _G.s.chat_history:add_message({ type = "user", text = "x", timestamp = 0, provider_name = "p" })
-_G.s.widget:hide()
+_G.home = _G.s.widget:home_win()
+vim.cmd("enew")
 _G.answer = nil
 _G.s.permission_manager:add_request({
     sessionId = "s",
     toolCall = { toolCallId = "tc-1", kind = "edit" },
     options = { { optionId = "allow-once", name = "Allow", kind = "allow_once" } },
 }, function(option_id) _G.answer = option_id end)
-_G.s.widget:show()
+_G.s.widget:show_in(_G.home)
 ]])
         child.flush()
         vim.uv.sleep(50)
         child.flush()
 
+        local home = child.lua_get("_G.home")
+        assert.equal(home, child.lua_get("_G.s.widget:home_win()"))
         assert.equal(
-            child.lua_get("_G.s.widget.win_nrs.chat"),
+            home,
             child.lua_get(
                 "vim.api.nvim_win_get_config(_G.s.permission_manager.permission_float._winid).win"
             )
         )
-        child.api.nvim_set_current_win(child.lua_get("_G.s.widget.win_nrs.chat"))
+        child.api.nvim_set_current_win(home)
         child.type_keys("\\y")
         child.flush()
         assert.equal("allow-once", child.lua_get("_G.answer"))

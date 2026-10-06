@@ -7,7 +7,7 @@ describe("Partial-send", function()
     before_each(function()
         child.setup()
         child.lua([[
-            require("agentic").toggle()
+            vim.cmd("Agentic")
             local tab_id = vim.api.nvim_get_current_tabpage()
             local session = require("agentic.session_registry").bound_session(tab_id)
             _G._sent_prompts = {}
@@ -16,6 +16,7 @@ describe("Partial-send", function()
                 return true
             end
             _G._widget = session.widget
+            _G._widget:input_win()
         ]])
         child.flush()
     end)
@@ -151,10 +152,8 @@ describe("Partial-send", function()
         -- stomp a shared module-level reference.
         child.lua([[
             vim.cmd("tabnew")
-            require("agentic").toggle()
+            vim.cmd("Agentic")
         ]])
-        -- Let the open's scheduled focus (`G$`) land before placing the
-        -- cursor, or it moves the cursor to the last line.
         child.flush()
         child.lua([[
             local tab_id_2 = vim.api.nvim_get_current_tabpage()
@@ -170,7 +169,7 @@ describe("Partial-send", function()
                 _G._widget_2.buf_nrs.input,
                 0, -1, false, { "two-alpha", "two-beta", "two-gamma" }
             )
-            vim.api.nvim_set_current_win(_G._widget_2.win_nrs.input)
+            vim.api.nvim_set_current_win(_G._widget_2:input_win())
             vim.cmd("stopinsert")
             vim.api.nvim_win_set_cursor(_G._widget_2.win_nrs.input, {1, 0})
         ]])
@@ -200,7 +199,7 @@ describe("Context panels across a /command head", function()
     before_each(function()
         child.setup()
         child.lua([[
-            require("agentic").toggle()
+            vim.cmd("Agentic")
             local tab_id = vim.api.nvim_get_current_tabpage()
             local session = require("agentic.session_registry").bound_session(tab_id)
             session.session_id = "sid"

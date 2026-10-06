@@ -51,8 +51,7 @@ describe("SessionRestore", function()
                     or { loadSession = false },
             },
             widget = {
-                show = spy.new(function() end),
-                close_empty_non_widget_windows = spy.new(function() end),
+                reveal = spy.new(function() end),
             },
             clear_chat = spy.new(function() end),
             restore_from_history = spy.new(function() end),
@@ -305,7 +304,7 @@ describe("SessionRestore", function()
             local restore_call = mock_session.restore_from_history.calls[1]
             assert.equal(mock_history, restore_call[2])
             assert.is_true(restore_call[3].reuse_session)
-            assert.spy(mock_session.widget.show).was.called(1)
+            assert.spy(mock_session.widget.reveal).was.called(1)
         end)
     end)
 
@@ -469,7 +468,7 @@ describe("SessionRestore", function()
             assert.equal("session-1", mock_session.load_acp_session.calls[1][2])
             assert.spy(mock_session.restore_from_history).was.called(0)
             assert.spy(chat_history_load_stub).was.called(0)
-            assert.spy(mock_session.widget.show).was.called(1)
+            assert.spy(mock_session.widget.reveal).was.called(1)
         end)
 
         it(

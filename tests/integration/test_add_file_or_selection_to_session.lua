@@ -15,13 +15,13 @@ describe("Add file or selection to session", function()
     end)
 
     it("Adds current file when open", function()
-        child.lua([[ require("agentic").toggle() ]])
+        child.lua([[ require("agentic").open() ]])
         child.flush()
 
         local files_winid = child.lua([[
             local session = require("agentic.session_registry")
                 .get_session_for_tab_page()
-            return session.widget.win_nrs.files
+            return session.widget:panel_win("files")
         ]])
 
         local files_list = child.lua([[
@@ -40,8 +40,8 @@ describe("Add file or selection to session", function()
         -- Select lines 28-29 using visual mode
         child.cmd("normal! 28GVj")
 
-        -- Toggle widget while selection is active - should auto-add selection
-        child.lua([[ require("agentic").toggle() ]])
+        -- Open the chat while selection is active - should auto-add selection
+        child.lua([[ require("agentic").open() ]])
         child.flush()
 
         -- Get selections from code_selection
