@@ -17,19 +17,16 @@
 --- @class agentic.UserConfig.PromptSubmitData
 --- @field prompt string The user's prompt text
 --- @field session_id string The ACP session ID
---- @field tab_page_id? number The tabpage the session is bound to, if any
 
 --- Data passed to the on_response_complete hook
 --- @class agentic.UserConfig.ResponseCompleteData
 --- @field session_id string The ACP session ID
---- @field tab_page_id? number The tabpage the session is bound to, if any
 --- @field success boolean Whether response completed without error
 --- @field error? table Error details if failed
 
 --- Data passed to the on_permission_request hook
 --- @class agentic.UserConfig.PermissionRequestData
 --- @field session_id string The ACP session ID
---- @field tab_page_id? number The tabpage the session is bound to, if any
 --- @field tool_call_id string The tool call ID requesting permission
 
 --- @class agentic.UserConfig.Hooks
@@ -545,7 +542,7 @@ local ConfigDefault = {
     --- "fzf-lua" — fzf-lua with preview and scope toggle; falls back to quickfix if not installed.
     --- "select" — delegates to vim.ui.select (works with dressing.nvim, etc; no scope toggle or delete).
     --- @field confirm_delete? boolean Prompt for confirmation before /delete (default: true)
-    --- @field cd_on_load? boolean Change nvim's working directory to the session's recorded cwd when calling load_acp_session (default: true). Applies to the picker, `:AgenticResume`, and direct API calls.
+    --- @field cd_on_load? boolean Change nvim's working directory to the session's recorded cwd when calling load_acp_session (default: true). Applies to the picker, `:Agentic {query}`, and direct API calls.
     session_restore = {
         storage_path = nil,
         picker = "quickfix",

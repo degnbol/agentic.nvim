@@ -177,7 +177,7 @@ MessageWriter.__index = MessageWriter
 --- notice (`write_notice`). Drives both the row's identity sign and `[[`/`]]`
 --- navigation, replacing the old text-scan on `line == "##"` (dead since the
 --- heading became `## <first line>`). Global namespace + buffer-scoped marks is
---- sanctioned by .claude/rules/multi-tabpage.md (mirrors Renderer.NS_TOOL_BLOCKS).
+--- sanctioned by .claude/rules/session-isolation.md (mirrors Renderer.NS_TOOL_BLOCKS).
 MessageWriter.NS_USER_ACTIONS =
     vim.api.nvim_create_namespace("agentic_user_actions")
 

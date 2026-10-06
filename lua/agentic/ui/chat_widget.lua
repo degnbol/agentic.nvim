@@ -12,7 +12,7 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 local WidgetLayout = require("agentic.ui.widget_layout")
 
 --- Highlight namespace for queued input regions. Extmarks are buffer-scoped,
---- so a module-level (global) namespace is fine (see multi-tabpage rules).
+--- so a module-level (global) namespace is fine (see session-isolation rules).
 local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
 --- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"|"message"
@@ -219,6 +219,31 @@ function ChatWidget:reveal()
             return
         end
     end
+    self:show_in(vim.api.nvim_get_current_win())
+end
+
+--- Whether command modifiers open a new window: a split or tab modifier.
+--- @param mods vim.api.keyset.cmd_mods|nil
+--- @return boolean
+local function opens_window(mods)
+    return mods ~= nil
+        and (
+            (mods.tab or -1) ~= -1
+            or (mods.split or "") ~= ""
+            or mods.vertical == true
+            or mods.horizontal == true
+        )
+end
+
+--- Show the chat. With a split or tab modifier in `mods`, in a new window
+--- (`:sbuffer`) that becomes home, else as `reveal`.
+--- @param mods vim.api.keyset.cmd_mods|nil
+function ChatWidget:show(mods)
+    if not opens_window(mods) then
+        self:reveal()
+        return
+    end
+    vim.cmd.sbuffer({ args = { self.buf_nrs.chat }, mods = mods })
     self:show_in(vim.api.nvim_get_current_win())
 end
 
@@ -1174,11 +1199,6 @@ function ChatWidget:_bind_canned_prompt_keymaps(bufnr)
             local desc = (type(spec) == "table" and spec.desc)
                 or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
 
-            -- Send via this widget's own session (self.on_submit_input ==
-            -- session:_handle_input_submit), not send_prompt: a buffer-local
-            -- map only fires from a focused widget window, so the session
-            -- already exists and is visible — avoids send_prompt's
-            -- get_session_for_tab_page(nil, …) auto-spawn branch.
             BufHelpers.multi_keymap_set(km, bufnr, function()
                 self.on_submit_input(prompt)
             end, { desc = desc })

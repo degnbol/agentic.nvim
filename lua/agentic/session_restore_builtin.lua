@@ -10,8 +10,7 @@ local M = {}
 
 --- @class agentic.SessionRestoreBuiltin.Opts
 --- @field scope agentic.SessionRestore.Scope
---- @field tab_page_id integer
---- @field current_session agentic.SessionManager|nil
+--- @field current_session agentic.SessionManager
 
 --- @class agentic.SessionRestoreBuiltin.DeleteEntry
 --- @field index integer Original index in items list at time of deletion
@@ -82,8 +81,7 @@ end
 --- @param opts agentic.SessionRestoreBuiltin.Opts
 function M.show(items, on_select, opts) -- luacheck: ignore
     local scope = opts.scope or "local"
-    local current_session_id = opts.current_session
-        and opts.current_session.session_id
+    local current_session_id = opts.current_session.session_id
     --- @type agentic.SessionRestoreBuiltin.DeleteEntry[]
     local pending_deletes = {}
     local committed = false
@@ -216,11 +214,7 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         commit_and_notify()
         vim.cmd("cclose")
         local new_scope = scope == "all" and "local" or "all"
-        SessionRestore.show_picker(
-            opts.tab_page_id,
-            opts.current_session,
-            new_scope
-        )
+        SessionRestore.show_picker(opts.current_session, new_scope)
     end, map_opts)
 
     vim.keymap.set("n", "q", function()

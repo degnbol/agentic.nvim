@@ -8,8 +8,7 @@ describe("Partial-send", function()
         child.setup()
         child.lua([[
             vim.cmd("Agentic")
-            local tab_id = vim.api.nvim_get_current_tabpage()
-            local session = require("agentic.session_registry").bound_session(tab_id)
+            local session = require("agentic.session_registry").current()
             _G._sent_prompts = {}
             session.widget.on_submit_input = function(prompt)
                 table.insert(_G._sent_prompts, prompt)
@@ -152,13 +151,12 @@ describe("Partial-send", function()
         -- stomp a shared module-level reference.
         child.lua([[
             vim.cmd("tabnew")
-            vim.cmd("Agentic")
+            require("agentic").new_session({ auto_add_to_context = false })
         ]])
         child.flush()
         child.lua([[
-            local tab_id_2 = vim.api.nvim_get_current_tabpage()
             local session_2 =
-                require("agentic.session_registry").bound_session(tab_id_2)
+                require("agentic.session_registry").current()
             _G._sent_prompts_2 = {}
             session_2.widget.on_submit_input = function(prompt)
                 table.insert(_G._sent_prompts_2, prompt)
@@ -200,8 +198,7 @@ describe("Context panels across a /command head", function()
         child.setup()
         child.lua([[
             vim.cmd("Agentic")
-            local tab_id = vim.api.nvim_get_current_tabpage()
-            local session = require("agentic.session_registry").bound_session(tab_id)
+            local session = require("agentic.session_registry").current()
             session.session_id = "sid"
             session.agent.state = "ready"
             session._persist_history = function() end

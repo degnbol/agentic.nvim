@@ -21,8 +21,7 @@ describe("Session identity", function()
         child.flush()
         local owner_tab = child.api.nvim_get_current_tabpage()
         child.lua([[
-local tab = vim.api.nvim_get_current_tabpage()
-_G.owner = require("agentic.session_registry").bound_session(tab)
+_G.owner = require("agentic.session_registry").current()
 ]])
         child.cmd("tabnew")
         child.cmd("buffer " .. child.lua_get("_G.owner.widget.buf_nrs.chat"))
@@ -47,21 +46,18 @@ _G.owner.stop_generation = function() _G.stopped = true end
         )
     end)
 
-    it("open from a shown chat binds its session to the tab", function()
-        local _, foreign_tab = show_chat_in_foreign_tab()
+    it("open from a shown chat acts on its session", function()
+        show_chat_in_foreign_tab()
         local foreign_win = child.api.nvim_get_current_win()
 
         child.lua([[ require("agentic").open() ]])
         child.flush()
 
-        local registry = [[require("agentic.session_registry")]]
-        assert.equal(
-            foreign_tab,
-            child.lua_get(registry .. ".tab_of(_G.owner.id)")
-        )
         assert.equal(
             1,
-            child.lua_get("vim.tbl_count(" .. registry .. ".by_id)")
+            child.lua_get(
+                [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+            )
         )
         -- The chat stays in the window that already shows it.
         assert.equal(foreign_win, child.api.nvim_get_current_win())

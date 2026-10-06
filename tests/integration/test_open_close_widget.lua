@@ -116,8 +116,38 @@ _G.s.code_selection:add({
         assert.same({ "AgenticChat" }, get_tabpage_filetypes(first_tab))
         assert.equal(
             child.lua_get("_G.s.id"),
+            child.lua_get([[require("agentic.session_registry").current().id]])
+        )
+    end)
+
+    it(":tab Agentic {query} resumes into a new session in a new tabpage", function()
+        open()
+        local first_tab = child.api.nvim_get_current_tabpage()
+        child.lua([[
+require("agentic.session_restore").resolve_query = function(query, callback)
+    _G.query = query
+    callback("sid-x", vim.fn.getcwd())
+end
+require("agentic.session_manager").load_acp_session = function(this, sid)
+    _G.loaded = sid
+end
+]])
+
+        child.cmd("tab Agentic fix the tests")
+        child.flush()
+
+        assert.equal("fix the tests", child.lua_get("_G.query"))
+        assert.equal("sid-x", child.lua_get("_G.loaded"))
+        assert.are_not.equal(first_tab, child.api.nvim_get_current_tabpage())
+        assert.same({ "AgenticChat" }, get_tabpage_filetypes(0))
+        local resumed = child.lua_get(
+            [[require("agentic.session_registry").owner_of_buf(0).id]]
+        )
+        assert.are_not.equal(child.lua_get("_G.s.id"), resumed)
+        assert.equal(
+            child.api.nvim_get_current_win(),
             child.lua_get(
-                [[require("agentic.session_registry").bound_session(vim.api.nvim_get_current_tabpage()).id]]
+                [[require("agentic.session_registry").owner_of_buf(0).widget:home_win()]]
             )
         )
     end)
@@ -191,58 +221,97 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
         assert.same({ "AgenticChat", "AgenticInput" }, get_tabpage_filetypes(0))
     end)
 
-    it("creates independent sessions per tabpage", function()
+    --- @return integer
+    local function live_sessions()
+        return child.lua_get(
+            [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+        )
+    end
+
+    it(":Agentic in another tabpage shows the last active session", function()
         open()
-        local tab1_id = child.api.nvim_get_current_tabpage()
+        local first = child.lua_get("_G.s.id")
 
         child.cmd("tabnew")
         open()
-        assert.is_not.equal(tab1_id, child.api.nvim_get_current_tabpage())
 
-        assert.equal(
-            2,
-            child.lua_get(
-                [[vim.tbl_count(require("agentic.session_registry").by_id)]]
-            )
-        )
-
+        assert.equal(first, child.lua_get("_G.s.id"))
+        assert.equal(1, live_sessions())
         assert.has_no_errors(function()
             child.cmd("tabclose")
         end)
+        assert.equal(1, live_sessions())
+    end)
 
-        assert.equal(
-            1,
+    it("new_session leaves the previous session alive", function()
+        open()
+        local first = child.lua_get("_G.s.id")
+        child.lua([[
+table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
+]])
+
+        child.new_session()
+
+        assert.equal(2, live_sessions())
+        assert.are_not.equal(
+            first,
             child.lua_get(
-                [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+                [[require("agentic.session_registry").owner_of_buf(0).id]]
             )
         )
     end)
 
-    it(
-        "tabclose destroys the closed tab's session, not the one at its number",
-        function()
-            local tabs = {}
-            for i = 1, 3 do
-                if i > 1 then
-                    child.cmd("tabnew")
-                end
-                child.cmd("Agentic")
-                tabs[i] = child.api.nvim_get_current_tabpage()
+    it("add_file goes to the session entered last", function()
+        child.cmd("edit tests/init.lua")
+        local source_win = child.api.nvim_get_current_win()
+        child.cmd("vsplit")
+        open()
+        local first = child.lua_get("_G.s.id")
+        child.cmd("split")
+        child.new_session()
+        child.lua(
+            [[
+_G.second = require("agentic.session_registry").owner_of_buf(0)
+_G.first = require("agentic.session_registry").by_id[...]
+]],
+            { first }
+        )
+        -- Both chats show in this tabpage; enter the first one last.
+        child.api.nvim_set_current_win(
+            child.lua_get("vim.fn.win_findbuf(_G.first.widget.buf_nrs.chat)[1]")
+        )
+        child.api.nvim_set_current_win(source_win)
+
+        child.lua([[require("agentic").add_file()]])
+        child.flush()
+
+        assert.equal(1, child.lua_get("#_G.first.file_list:get_files()"))
+        assert.equal(0, child.lua_get("#_G.second.file_list:get_files()"))
+    end)
+
+    it("tabclose destroys only the unused sessions it hides", function()
+        local ids = {}
+        for i = 1, 3 do
+            if i > 1 then
+                child.cmd("tabnew")
             end
-            child.flush()
-
-            -- Handles 1, 2, 3 at numbers 1, 2, 3. Closing handle 1 moves handle 3
-            -- to number 2; closing it must not destroy handle 2's session.
-            child.cmd("1tabclose")
-            child.cmd("2tabclose")
-            child.flush()
-
-            local live = child.lua_get([[
-vim.tbl_keys(require("agentic.session_registry").tab_bindings)
-]])
-            assert.same({ tabs[2] }, live)
+            child.new_session()
+            ids[i] = child.lua_get(
+                [[require("agentic.session_registry").owner_of_buf(0).id]]
+            )
         end
-    )
+
+        child.cmd("1tabclose")
+        child.cmd("2tabclose")
+        child.flush()
+
+        assert.same(
+            { ids[2] },
+            child.lua_get(
+                [[vim.tbl_keys(require("agentic.session_registry").by_id)]]
+            )
+        )
+    end)
 
     it("handles tabclose while in insert mode without errors", function()
         open()

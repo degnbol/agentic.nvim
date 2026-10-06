@@ -17,7 +17,7 @@ describe("agentic.Bootstrap", function()
     local function chat_lang()
         return child.lua_get([[vim.treesitter.get_parser(
             require("agentic.session_registry")
-                .bound_session(vim.api.nvim_get_current_tabpage()).widget.buf_nrs.chat
+                .current().widget.buf_nrs.chat
         ):lang()]])
     end
 
@@ -42,7 +42,7 @@ describe("agentic.Bootstrap", function()
         end)
 
         it(
-            ":AgenticResume gives a chat parsed as the agentic language",
+            ":Agentic {query} gives a chat parsed as the agentic language",
             function()
                 child.lua([[
                     require("agentic.session_restore").resolve_query = function(_, callback)
@@ -50,7 +50,7 @@ describe("agentic.Bootstrap", function()
                     end
                     require("agentic.session_manager").load_acp_session = function() end
                 ]])
-                child.cmd("AgenticResume sid")
+                child.cmd("Agentic sid")
                 child.flush()
 
                 assert.equal("agentic", chat_lang())

@@ -17,15 +17,13 @@ local function mode_update(mode_id)
     return { sessionUpdate = "current_mode_update", currentModeId = mode_id }
 end
 
-local last_bound_id = 0
+local last_id = 0
 
---- A fresh `SessionManager.id` bound to the current tabpage.
+--- A fresh `SessionManager.id`.
 --- @return integer
-local function bound_id()
-    last_bound_id = last_bound_id + 1
-    require("agentic.session_registry").tab_bindings[vim.api.nvim_get_current_tabpage()] =
-        last_bound_id
-    return last_bound_id
+local function fresh_id()
+    last_id = last_id + 1
+    return last_id
 end
 
 describe("agentic.SessionManager", function()
@@ -56,7 +54,7 @@ describe("agentic.SessionManager", function()
             local AgentModels = require("agentic.acp.agent_models")
 
             session = {
-                id = bound_id(),
+                id = fresh_id(),
                 config_options = {
                     legacy_agent_modes = legacy_modes,
                     legacy_agent_models = AgentModels:new(),
@@ -136,7 +134,7 @@ describe("agentic.SessionManager", function()
             keymap_stub:revert()
 
             session = {
-                id = bound_id(),
+                id = fresh_id(),
                 config_options = config_opts,
                 widget = {
                     render_header = render_header_spy,
@@ -3425,7 +3423,7 @@ describe("agentic.SessionManager", function()
             }
 
             session = {
-                id = bound_id(),
+                id = fresh_id(),
                 permission_manager = pm,
                 widget = {
                     buf_nrs = { chat = test_bufnr },
@@ -3563,7 +3561,7 @@ describe("agentic.SessionManager", function()
                 set_trust_scope = spy.new(function() end),
             }
             session = {
-                id = bound_id(),
+                id = fresh_id(),
                 permission_manager = pm,
                 widget = {
                     buf_nrs = { chat = test_bufnr },

@@ -72,9 +72,7 @@ describe("SessionRestore", function()
     end
 
     local function setup_registry_stub(session)
-        session_registry_stub:invokes(function(_tab_id, callback)
-            callback(session)
-        end)
+        session_registry_stub:returns(session)
     end
 
     local original_loaded = {}
@@ -104,8 +102,7 @@ describe("SessionRestore", function()
 
         chat_history_load_stub = spy.stub(ChatHistory, "load")
         chat_history_list_stub = spy.stub(ChatHistory, "list_sessions")
-        session_registry_stub =
-            spy.stub(SessionRegistry, "get_session_for_tab_page")
+        session_registry_stub = spy.stub(SessionRegistry, "create")
         logger_notify_stub = spy.stub(Logger, "notify")
         vim_fn_confirm_stub = spy.stub(vim.fn, "confirm")
         vim_fn_confirm_stub:returns(0) -- default: cancel (no choice)
@@ -258,7 +255,9 @@ describe("SessionRestore", function()
         it("notifies and skips picker when no sessions exist", function()
             setup_list_stub({})
 
-            SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(
+                create_mock_session() --[[@as agentic.SessionManager]]
+            )
 
             assert.spy(logger_notify_stub).was.called(1)
             assert.equal(
@@ -284,18 +283,44 @@ describe("SessionRestore", function()
             builtin_show_stub:revert()
         end)
 
+        it("shows a picked session that is already open", function()
+            local mock_session = create_mock_session({
+                chat_history = { messages = { { type = "user" } } },
+            })
+            local open_session = create_mock_session()
+            local open_stub = spy.stub(SessionRegistry, "session_for_acp_id")
+            open_stub:returns(open_session)
+            setup_list_stub()
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
+            end)
+
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
+
+            assert.equal("session-1", open_stub.calls[1][1])
+            assert.spy(open_session.widget.reveal).was.called(1)
+            assert.spy(vim_fn_confirm_stub).was.called(0)
+            assert.spy(session_registry_stub).was.called(0)
+            assert.spy(mock_session.restore_from_history).was.called(0)
+            assert.spy(mock_session.load_acp_session).was.called(0)
+            open_stub:revert()
+        end)
+
         it("restores directly with reuse_session=true", function()
             local mock_session = create_mock_session()
             setup_list_stub()
             setup_load_stub(mock_history)
-            setup_registry_stub(mock_session)
 
             -- Stub builtin.show to immediately call on_select
             builtin_show_stub:invokes(function(picker_items, on_select)
                 on_select(picker_items[1])
             end)
 
-            SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
 
             assert.spy(mock_session.agent.cancel_session).was.called(0)
             assert.spy(mock_session.clear_chat).was.called(0)
@@ -336,7 +361,6 @@ describe("SessionRestore", function()
             end)
 
             SessionRestore.show_picker(
-                1,
                 mock_session --[[@as agentic.SessionManager]]
             )
 
@@ -356,7 +380,6 @@ describe("SessionRestore", function()
             end)
 
             SessionRestore.show_picker(
-                1,
                 mock_session --[[@as agentic.SessionManager]]
             )
 
@@ -369,7 +392,6 @@ describe("SessionRestore", function()
                 local mock_session = session_with_messages()
                 setup_list_stub()
                 setup_load_stub(mock_history)
-                setup_registry_stub(mock_session)
                 vim_fn_confirm_stub:returns(1) -- "Restore here"
 
                 builtin_show_stub:invokes(function(picker_items, on_select)
@@ -377,7 +399,6 @@ describe("SessionRestore", function()
                 end)
 
                 SessionRestore.show_picker(
-                    1,
                     mock_session --[[@as agentic.SessionManager]]
                 )
 
@@ -386,6 +407,75 @@ describe("SessionRestore", function()
 
                 local restore_call = mock_session.restore_from_history.calls[1]
                 assert.is_false(restore_call[3].reuse_session)
+            end
+        )
+
+        it(
+            "restores into a new session when the current one was destroyed",
+            function()
+                local mock_session = session_with_messages()
+                local new_session = create_mock_session()
+                setup_list_stub()
+                setup_load_stub(mock_history)
+                setup_registry_stub(new_session)
+                builtin_show_stub:invokes(function(picker_items, on_select)
+                    mock_session.destroyed = true
+                    on_select(picker_items[1])
+                end)
+
+                SessionRestore.show_picker(
+                    mock_session --[[@as agentic.SessionManager]]
+                )
+
+                assert.spy(vim_fn_confirm_stub).was.called(0)
+                assert.spy(mock_session.restore_from_history).was.called(0)
+                assert.spy(new_session.restore_from_history).was.called(1)
+                assert.is_true(
+                    new_session.restore_from_history.calls[1][3].reuse_session
+                )
+                assert.spy(new_session.widget.reveal).was.called(1)
+            end
+        )
+
+        it(
+            "restores into a new session shown in a new tab when 'Open in new tab' chosen",
+            function()
+                local mock_session = session_with_messages()
+                local new_session = create_mock_session()
+                local chat = vim.api.nvim_create_buf(false, true)
+                new_session.widget.buf_nrs = { chat = chat }
+                new_session.widget.show = require("agentic.ui.chat_widget").show
+                new_session.widget.show_in = spy.new(function() end)
+                setup_list_stub()
+                setup_load_stub(mock_history)
+                setup_registry_stub(new_session)
+                vim_fn_confirm_stub:returns(2)
+                builtin_show_stub:invokes(function(picker_items, on_select)
+                    on_select(picker_items[1])
+                end)
+                local tabs_before = #vim.api.nvim_list_tabpages()
+
+                SessionRestore.show_picker(
+                    mock_session --[[@as agentic.SessionManager]]
+                )
+
+                assert.spy(mock_session.restore_from_history).was.called(0)
+                assert.spy(new_session.restore_from_history).was.called(1)
+                assert.equal(tabs_before + 1, #vim.api.nvim_list_tabpages())
+                assert.same(
+                    { chat },
+                    vim.tbl_map(
+                        vim.api.nvim_win_get_buf,
+                        vim.api.nvim_tabpage_list_wins(0)
+                    )
+                )
+                assert.equal(
+                    vim.api.nvim_get_current_win(),
+                    new_session.widget.show_in.calls[1][2]
+                )
+
+                vim.cmd("tabclose")
+                vim.api.nvim_buf_delete(chat, { force = true })
             end
         )
     end)
@@ -410,9 +500,10 @@ describe("SessionRestore", function()
             local mock_session = create_mock_session()
             setup_list_stub()
             setup_load_stub(nil, "File not found")
-            setup_registry_stub(mock_session)
 
-            SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
 
             assert.spy(logger_notify_stub).was.called(1)
             assert.truthy(
@@ -425,9 +516,10 @@ describe("SessionRestore", function()
             local mock_session = create_mock_session()
             setup_list_stub()
             setup_load_stub(nil, nil)
-            setup_registry_stub(mock_session)
 
-            SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
 
             assert.spy(logger_notify_stub).was.called(1)
             assert.truthy(logger_notify_stub.calls[1][1]:match("unknown error"))
@@ -460,9 +552,10 @@ describe("SessionRestore", function()
         it("uses load_acp_session when agent supports loadSession", function()
             local mock_session = session_with_load_support()
             setup_list_stub()
-            setup_registry_stub(mock_session)
 
-            SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
 
             assert.spy(mock_session.load_acp_session).was.called(1)
             assert.equal("session-1", mock_session.load_acp_session.calls[1][2])
@@ -478,12 +571,10 @@ describe("SessionRestore", function()
                     chat_history = { messages = { { type = "user" } } },
                 })
                 setup_list_stub()
-                setup_registry_stub(mock_session)
 
                 vim_fn_confirm_stub:returns(1) -- "Restore here"
 
                 SessionRestore.show_picker(
-                    1,
                     mock_session --[[@as agentic.SessionManager]]
                 )
 
@@ -499,9 +590,10 @@ describe("SessionRestore", function()
                 local mock_session = create_mock_session()
                 setup_list_stub()
                 setup_load_stub(mock_history)
-                setup_registry_stub(mock_session)
 
-                SessionRestore.show_picker(1, nil)
+                SessionRestore.show_picker(
+                    mock_session --[[@as agentic.SessionManager]]
+                )
 
                 assert.spy(mock_session.load_acp_session).was.called(0)
                 assert.spy(mock_session.restore_from_history).was.called(1)
@@ -521,9 +613,10 @@ describe("SessionRestore", function()
                     },
                 })
             end)
-            setup_registry_stub(mock_session)
 
-            SessionRestore.show_picker(1, nil)
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
 
             assert.spy(mock_session.load_acp_session).was.called(1)
             assert.equal(
@@ -547,21 +640,23 @@ describe("SessionRestore", function()
                         },
                     })
                 end)
-                setup_registry_stub(mock_session)
-                local bound_stub = spy.stub(SessionRegistry, "bound_session")
-                bound_stub:returns(mock_session)
+                local replacement = session_with_load_support()
+                setup_registry_stub(replacement)
                 local destroy_stub = spy.stub(SessionRegistry, "destroy")
                 local original_provider = Config.provider
 
-                SessionRestore.show_picker(1, nil)
+                SessionRestore.show_picker(
+                    mock_session --[[@as agentic.SessionManager]]
+                )
 
                 assert.equal("opencode-acp", Config.provider)
                 assert.spy(destroy_stub).was.called(1)
                 assert.equal(mock_session, destroy_stub.calls[1][1])
+                assert.spy(replacement.load_acp_session).was.called(1)
+                assert.spy(mock_session.load_acp_session).was.called(0)
 
                 Config.provider = original_provider
                 destroy_stub:revert()
-                bound_stub:revert()
             end
         )
 
@@ -570,9 +665,10 @@ describe("SessionRestore", function()
             function()
                 local mock_session = session_with_load_support()
                 setup_list_stub() -- default test_sessions have no provider field
-                setup_registry_stub(mock_session)
 
-                SessionRestore.show_picker(1, nil)
+                SessionRestore.show_picker(
+                    mock_session --[[@as agentic.SessionManager]]
+                )
 
                 local messages = {}
                 for _, call in ipairs(logger_notify_stub.calls) do
@@ -607,51 +703,33 @@ describe("SessionRestore", function()
             builtin_show_stub:revert()
         end)
 
-        it("detects no conflict when current_session is nil", function()
-            setup_list_stub()
-
-            SessionRestore.show_picker(1, nil)
-
-            -- No conflict dialogue
-            assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
-        end)
-
         it("detects no conflict when session_id is nil", function()
-            local session = {
-                session_id = nil,
+            local session = create_mock_session({
                 chat_history = { messages = { { type = "user" } } },
-            }
+            })
+            session.session_id = nil
             setup_list_stub()
 
-            SessionRestore.show_picker(
-                1,
-                session --[[@as agentic.SessionManager]]
-            )
+            SessionRestore.show_picker(session --[[@as agentic.SessionManager]])
 
             assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)
 
         it("detects no conflict when chat_history is nil", function()
-            local session = { session_id = "current", chat_history = nil }
+            local session = create_mock_session()
+            session.chat_history = nil
             setup_list_stub()
 
-            SessionRestore.show_picker(
-                1,
-                session --[[@as agentic.SessionManager]]
-            )
+            SessionRestore.show_picker(session --[[@as agentic.SessionManager]])
 
             assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)
 
         it("detects no conflict when messages array is empty", function()
-            local session =
-                { session_id = "current", chat_history = { messages = {} } }
+            local session = create_mock_session()
             setup_list_stub()
 
-            SessionRestore.show_picker(
-                1,
-                session --[[@as agentic.SessionManager]]
-            )
+            SessionRestore.show_picker(session --[[@as agentic.SessionManager]])
 
             assert.spy(vim_fn_confirm_stub).was.called(0) -- no conflict dialogue
         end)

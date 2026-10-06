@@ -386,7 +386,7 @@ instance per session, paired with its `PermissionManager`. Separate
 buffer from the chat, so chat updates never displace the prompt.
 
 - **Anchor.** `relative = "win"` against a window showing the requesting
-  buffer: current tab, else bound tab, else any. With none (a hidden
+  buffer: current tab, else any. With none (a hidden
   transcript), the chat's window instead (`is_on_fallback`), titled with the
   transcript name and a hint of the open keys; the chat holds the subagent's
   block (`proxy_tool_call`). Corner and offsets from

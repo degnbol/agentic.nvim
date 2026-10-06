@@ -8,9 +8,7 @@ describe("gf in a transcript", function()
         child.setup()
         child.lua([[
 vim.cmd("Agentic")
-_G.s =require("agentic.session_registry").bound_session(
-    vim.api.nvim_get_current_tabpage()
-)
+_G.s =require("agentic.session_registry").current()
 table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
 --- Write `lines` to a new file. Returns its resolved path, the name `:edit`
 --- gives its buffer.

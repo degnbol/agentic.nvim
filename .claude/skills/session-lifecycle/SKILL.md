@@ -32,8 +32,8 @@ Three race conditions can overwrite `self.session_id` during ACP
 
 3. **Cross-provider restore, two linked hazards.** Picking a saved session
    whose provider differs from `Config.provider` requires destroying the
-   tab's bound SessionManager, flipping `Config.provider`, and letting
-   `get_session_for_tab_page` spawn a replacement bound to the new agent.
+   picker's `current_session`, flipping `Config.provider`, and letting
+   `SessionRegistry.create()` spawn a replacement bound to the new agent.
    This sequence surfaces two races that don't affect same-provider restore:
 
    a. **Capability check during agent init.** `agent_supports_load` is called

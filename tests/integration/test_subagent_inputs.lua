@@ -12,9 +12,7 @@ Config.session_restore.storage_path = vim.fn.tempname()
 Config.subagents.force_background = true
 Config.keymaps.prompt.submit = "<F5>"
 vim.cmd("Agentic")
-_G.s = require("agentic.session_registry").bound_session(
-    vim.api.nvim_get_current_tabpage()
-)
+_G.s = require("agentic.session_registry").current()
 _G.s.session_id = "root"
 _G.s.chat_history.session_id = "root"
 _G.s.agent.state = "ready"

@@ -78,19 +78,17 @@ local function create_global_autocmds()
         desc = "Cleanup Agentic processes on exit",
     })
 
-    -- A session outlives its tab, as a buffer outlives its windows; only the
-    -- binding goes. `<amatch>` is the closed tab's number, not its handle, so
-    -- find the bindings whose tab is gone instead.
-    vim.api.nvim_create_autocmd("TabClosed", {
+    -- Global rather than per buffer, so it covers every session buffer,
+    -- subagent transcripts included.
+    vim.api.nvim_create_autocmd("BufEnter", {
         group = group,
-        callback = function()
-            for tab in pairs(SessionRegistry.tab_bindings) do
-                if not vim.api.nvim_tabpage_is_valid(tab) then
-                    SessionRegistry.tab_bindings[tab] = nil
-                end
+        callback = function(args)
+            local owner = SessionRegistry.owner_of_buf(args.buf)
+            if owner then
+                SessionRegistry.set_active(owner)
             end
         end,
-        desc = "Unbind Agentic sessions from closed tabs",
+        desc = "Record the Agentic session whose buffer was entered last",
     })
 end
 

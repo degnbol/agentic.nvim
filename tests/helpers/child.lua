@@ -6,6 +6,7 @@ local MiniTest = require("mini.test")
 --- @field launch fun() Restart child, put the plugin on the runtimepath with the ACP transport and health mocked, and source its `plugin/` file as startup does
 --- @field setup fun() `launch`, then run agentic.setup()
 --- @field flush fun() Flush pending scheduled callbacks in child neovim and wait a bit to ensure they are processed
+--- @field new_session fun() Start another session with nothing added to its context, show its chat, then `flush`
 
 --- @class tests.helpers.ChildModule
 local M = {}
@@ -47,6 +48,13 @@ function M.new()
         ]])
 
         child.api.nvim_eval("1")
+    end
+
+    function child.new_session()
+        child.lua(
+            [[require("agentic").new_session({ auto_add_to_context = false })]]
+        )
+        child.flush()
     end
 
     return child

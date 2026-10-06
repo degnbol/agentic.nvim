@@ -7,9 +7,7 @@ local Child = require("tests.helpers.child")
 local SETUP = [[
 require("agentic.config").session_restore.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
-_G.s = require("agentic.session_registry").bound_session(
-    vim.api.nvim_get_current_tabpage()
-)
+_G.s = require("agentic.session_registry").current()
 _G.s.session_id = "root"
 _G.s.chat_history.session_id = "root"
 _G.config_dir = vim.fn.tempname()
@@ -434,10 +432,8 @@ end
     it("a restore into another session manager names the new transcript", function()
         child.lua([[
 vim.cmd("tabnew")
-vim.cmd("Agentic")
-_G.s2 = require("agentic.session_registry").bound_session(
-    vim.api.nvim_get_current_tabpage()
-)
+require("agentic").new_session({ auto_add_to_context = false })
+_G.s2 = require("agentic.session_registry").current()
 ]])
         -- The new session's own `new_session`, deferred, runs first.
         child.flush()
@@ -564,10 +560,8 @@ _G.chunk("c1", "back", "toolu_1")
 _G.spawn("c1")
 vim.cmd("$tab sbuffer " .. _G.transcript("c1").bufnr)
 vim.cmd("tabnew")
-vim.cmd("Agentic")
-_G.s2 = require("agentic.session_registry").bound_session(
-    vim.api.nvim_get_current_tabpage()
-)
+require("agentic").new_session({ auto_add_to_context = false })
+_G.s2 = require("agentic.session_registry").current()
 ]])
         child.flush()
         child.lua([[

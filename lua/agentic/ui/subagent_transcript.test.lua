@@ -3,7 +3,6 @@ local Config = require("agentic.config")
 
 describe("agentic.ui.SubagentTranscript", function()
     local ChatWidget = require("agentic.ui.chat_widget")
-    local SessionRegistry = require("agentic.session_registry")
     local SubagentTranscript = require("agentic.ui.subagent_transcript")
 
     --- @type agentic.ui.ChatWidget
@@ -22,8 +21,6 @@ describe("agentic.ui.SubagentTranscript", function()
 
     before_each(function()
         owner_id = owner_id + 1
-        SessionRegistry.tab_bindings[vim.api.nvim_get_current_tabpage()] =
-            owner_id
         widget = ChatWidget:new(owner_id, function()
             return true
         end)
@@ -36,7 +33,6 @@ describe("agentic.ui.SubagentTranscript", function()
             transcript:destroy()
         end
         widget:destroy()
-        SessionRegistry.tab_bindings[vim.api.nvim_get_current_tabpage()] = nil
     end)
 
     --- @param agent_id string

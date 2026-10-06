@@ -19,8 +19,7 @@ describe("Buffer Naming", function()
         local bufname = child.lua_get(string.format(
             [[
 (function()
-    local tab_id = vim.api.nvim_get_current_tabpage()
-    local session = require("agentic.session_registry").bound_session(tab_id)
+    local session = require("agentic.session_registry").current()
     return vim.api.nvim_buf_get_name(session.widget.buf_nrs.%s)
 end)()
 ]],
@@ -37,8 +36,7 @@ end)()
         assert.equal("chat", get_panel_basename("chat"))
 
         child.lua([[
-local tab = vim.api.nvim_get_current_tabpage()
-require("agentic.session_registry").bound_session(tab).widget:set_chat_title("fix a/b")
+require("agentic.session_registry").current().widget:set_chat_title("fix a/b")
 ]])
 
         assert.equal("fix a-b", get_panel_basename("chat"))
@@ -48,8 +46,7 @@ require("agentic.session_registry").bound_session(tab).widget:set_chat_title("fi
         child.cmd("Agentic")
         child.flush()
         child.lua([[
-local tab = vim.api.nvim_get_current_tabpage()
-require("agentic.session_registry").bound_session(tab).widget:set_badge("[idle]")
+require("agentic.session_registry").current().widget:set_badge("[idle]")
 ]])
 
         assert.equal("chat", get_panel_basename("chat"))
@@ -59,8 +56,7 @@ require("agentic.session_registry").bound_session(tab).widget:set_badge("[idle]"
         child.cmd("Agentic")
         child.flush()
         child.cmd("tabnew")
-        child.cmd("Agentic")
-        child.flush()
+        child.new_session()
         vim.uv.sleep(50)
         child.flush()
 
@@ -102,8 +98,7 @@ end, vim.api.nvim_list_bufs())
 
     it("prevents buffer name collision errors", function()
         for _ = 1, 5 do
-            child.cmd("Agentic")
-            child.flush()
+            child.new_session()
             child.cmd("tabnew")
         end
 

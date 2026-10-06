@@ -7,8 +7,6 @@ local M = {}
 
 --- @class agentic.SessionRestoreFzf.Opts
 --- @field scope agentic.SessionRestore.Scope
---- @field tab_page_id integer
---- @field current_session agentic.SessionManager|nil
 
 --- Show the fzf-lua session picker with preview and scope toggle.
 --- @param items agentic.SessionRestore.PickerItem[]

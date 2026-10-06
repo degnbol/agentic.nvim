@@ -24,10 +24,10 @@ skill.
 For runtime debugging (logging, diagnostics) and recurring misdiagnosed
 symptoms (freezes/hangs, chat display desync), load the `issues` skill.
 
-## Multi-tabpage architecture
+## Session isolation
 
-Multi-tabpage isolation rules (no module-level shared state, buffer-local keymaps,
-`vim.b`/`vim.t` scoping, namespace lifecycle) live in `.claude/rules/multi-tabpage.md`.
+Session isolation rules (no module-level shared state, buffer-local keymaps,
+`vim.b`/`vim.w` scoping, namespace lifecycle) live in `.claude/rules/session-isolation.md`.
 That rule auto-loads when session/widget/registry files are accessed.
 
 ## Validation

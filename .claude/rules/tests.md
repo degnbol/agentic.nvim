@@ -80,14 +80,12 @@ after_each(function()
 end)
 ```
 
-## Multi-tabpage tests
+## Multi-session tests
 
-A tabpage binds to at most one session (`SessionRegistry.tab_bindings`). Any
-test that touches session/widget/registry state must verify cross-tabpage
-isolation — open `tabnew`, instantiate, assert independence, close, assert no
-leaks. A unit test building a `ChatWidget` or `PermissionFloat` without a
-registry must bind its owner id to the tab itself (`SessionRegistry.bind`),
-or the widget has no tab to open in.
+`:Agentic` in a new tabpage shows the last active session; a second session
+comes from `require("agentic").new_session()`. Any test that touches
+session/widget/registry state must verify isolation across sessions —
+create two, assert independence, close one, assert no leaks.
 
 ## Integration tests: mock transport
 

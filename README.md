@@ -11,7 +11,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 ### Session & workflow
 
-- One session per tabpage
+- Any number of sessions, each chat in any window of any tabpage
 - Auto-continue scheduled after usage-limit reset (WIP)
 - Attention bell/badge when chat is unfocused or no chat window follows
 - Follow toggle (default: `<localLeader>a`)
@@ -26,7 +26,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
   - Set new keymaps for the submission of common custom prompts. Comes with `<localLeader>c` to send "Continue"
 - Completion of any terms mentioned in chat
 - Navigation keymap (default: `[[` and `]]`) for cursor jump between prompts.
-- `:AgenticResume {query}` — open a cached session by `session_id` prefix or exact title (case-insensitive). Shows the chat and sends `session/load` to the agent. With `session_restore.cd_on_load` (default `true`), nvim's working directory is changed to the session's recorded cwd.
+- `:Agentic {query}` — open a cached session by `session_id` prefix or exact title (case-insensitive). Shows the chat and sends `session/load` to the agent. With `session_restore.cd_on_load` (default `true`), nvim's working directory is changed to the session's recorded cwd.
 - **Forwarded slash commands** (work via ACP, not intercepted locally):
   - `/init` — generate a project `CLAUDE.md`
   - `/review` — pull-request review

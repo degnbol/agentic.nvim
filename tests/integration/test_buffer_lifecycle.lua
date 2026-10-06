@@ -265,7 +265,7 @@ require("agentic.utils.buf_helpers").sync_modified(input)
         )
 
         it(
-            "a new session replaces one that fills its tab, in that tab",
+            "a new session started from a chat that fills its tab shows in that tab",
             function()
                 child.cmd("tabnew")
                 open_session()
@@ -278,8 +278,7 @@ require("agentic.utils.buf_helpers").sync_modified(input)
 
                 assert.is_true(child.api.nvim_tabpage_is_valid(tab))
                 local home = child.lua_get(
-                    [[require("agentic.session_registry").bound_session(...).widget:home_win()]],
-                    { tab }
+                    [[require("agentic.session_registry").current().widget:home_win()]]
                 )
                 assert.is_not.equal(vim.NIL, home)
                 assert.equal(tab, child.api.nvim_win_get_tabpage(home))
@@ -703,6 +702,7 @@ return _G.s._checktime_scheduled
             subagent_call("c-1", "task-1")
             child.lua([[_G.first, _G.first_sub = _G.s, _G.sub]])
             child.cmd("tabnew")
+            child.new_session()
             open_session()
             open_task("task-1")
             subagent_call("c-2", "task-1")

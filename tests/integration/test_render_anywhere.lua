@@ -9,8 +9,7 @@ describe("Rendering in any window", function()
         child.cmd("Agentic")
         child.flush()
         child.lua([[
-local tab = vim.api.nvim_get_current_tabpage()
-_G.s = require("agentic.session_registry").bound_session(tab)
+_G.s = require("agentic.session_registry").current()
 _G.chat = _G.s.widget.buf_nrs.chat
 ]])
     end)

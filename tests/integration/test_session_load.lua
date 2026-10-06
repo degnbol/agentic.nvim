@@ -8,8 +8,7 @@ describe("session/load history", function()
         child.setup()
         child.lua([[
 vim.cmd("Agentic")
-local tab = vim.api.nvim_get_current_tabpage()
-_G.s = require("agentic.session_registry").bound_session(tab)
+_G.s = require("agentic.session_registry").current()
 _G.persists = 0
 _G.s._persist_history = function() _G.persists = _G.persists + 1 end
 require("agentic.ui.chat_history").read = function() return nil end
@@ -23,6 +22,26 @@ end
 
     after_each(function()
         child.stop()
+    end)
+
+    it("load_acp_session shows an open session instead of loading it", function()
+        child.lua([[_G.s.session_id = "sid-open"]])
+        child.cmd("tabnew")
+
+        child.lua([[require("agentic").load_acp_session("sid-open")]])
+        child.flush()
+
+        assert.equal(
+            1,
+            child.lua_get(
+                [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+            )
+        )
+        assert.equal(
+            child.lua_get("_G.s.widget.buf_nrs.chat"),
+            child.api.nvim_get_current_buf()
+        )
+        assert.is_true(child.lua_get("_G.load_cb == nil"))
     end)
 
     it("records the replayed and the later tool calls", function()

@@ -39,7 +39,7 @@ describe("agentic.ui.PermissionManager", function()
         })
 
         writer = MessageWriter:new(bufnr)
-        pm = PermissionManager:new(writer, { chat = bufnr }, 1)
+        pm = PermissionManager:new(writer, { chat = bufnr })
 
         open_stub = spy.stub(pm.permission_float, "open")
         open_stub:invokes(function(_, options)

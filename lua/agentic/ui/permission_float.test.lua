@@ -2,7 +2,6 @@
 local assert = require("tests.helpers.assert")
 local Deferred = require("tests.helpers.deferred")
 local MiniTest = require("mini.test")
-local SessionRegistry = require("agentic.session_registry")
 
 describe("agentic.ui.PermissionFloat", function()
     --- @type agentic.ui.PermissionFloat
@@ -50,8 +49,6 @@ describe("agentic.ui.PermissionFloat", function()
         local chat_bufnr
         --- @type integer|nil
         local chat_winid
-        --- @type integer
-        local tab_page_id
         --- @type agentic.ui.MessageWriter
         local writer
         --- @type agentic.ui.PermissionFloat
@@ -75,7 +72,6 @@ describe("agentic.ui.PermissionFloat", function()
 
         before_each(function()
             vim.cmd("tabnew")
-            tab_page_id = vim.api.nvim_get_current_tabpage()
 
             chat_bufnr = vim.api.nvim_create_buf(false, true)
             chat_winid = vim.api.nvim_open_win(chat_bufnr, true, {
@@ -87,16 +83,13 @@ describe("agentic.ui.PermissionFloat", function()
             })
 
             writer = MessageWriter:new(chat_bufnr)
-            local owner_id = 4242
-            SessionRegistry.bind(tab_page_id, { id = owner_id })
-            float = PermissionFloat:new(writer, { chat = chat_bufnr }, owner_id)
+            float = PermissionFloat:new(writer, { chat = chat_bufnr })
         end)
 
         after_each(function()
             pcall(function()
                 float:close()
             end)
-            SessionRegistry.tab_bindings[tab_page_id] = nil
             if chat_winid and vim.api.nvim_win_is_valid(chat_winid) then
                 vim.api.nvim_win_close(chat_winid, true)
             end
@@ -202,7 +195,6 @@ describe("agentic.ui.PermissionFloat", function()
         end)
 
         it("anchors to the chat in any tab", function()
-            SessionRegistry.tab_bindings[tab_page_id] = nil
             vim.cmd("tabnew")
 
             float:open(make_options())

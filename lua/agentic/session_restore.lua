@@ -46,13 +46,13 @@ local function agent_supports_load(session)
     return session.agent.agent_capabilities.loadSession == true
 end
 
---- If the session's saved provider differs from the active one, destroy the
---- current session on the tab and switch Config.provider so
---- get_session_for_tab_page creates a fresh session bound to the right agent.
---- @param tab_page_id integer
+--- If the session's saved provider differs from the active one, destroy
+--- `current_session` and switch Config.provider so a session created next
+--- runs the right agent.
+--- @param current_session agentic.SessionManager|nil
 --- @param provider? agentic.UserConfig.ProviderName config key from the saved session
 --- @return boolean changed true if Config.provider was updated
-local function align_provider_for_restore(tab_page_id, provider)
+local function align_provider_for_restore(current_session, provider)
     if not provider or provider == Config.provider then
         return false
     end
@@ -69,70 +69,94 @@ local function align_provider_for_restore(tab_page_id, provider)
         return false
     end
 
-    local bound = SessionRegistry.bound_session(tab_page_id)
-    if bound then
-        SessionRegistry.destroy(bound)
+    if current_session then
+        SessionRegistry.destroy(current_session)
     end
     Config.provider = provider
     return true
 end
 
+--- Restore `item` into `current_session`, or into a new session when there
+--- is none or the saved provider differs.
 --- @param item agentic.SessionRestore.PickerItem
---- @param tab_page_id integer
+--- @param current_session agentic.SessionManager|nil
 --- @param has_conflict boolean
-local function do_restore(item, tab_page_id, has_conflict)
-    align_provider_for_restore(tab_page_id, item.provider)
+--- @return agentic.SessionManager|nil session The session restored into, nil when none could be created
+local function do_restore(item, current_session, has_conflict)
+    -- Not `get_or_create`: after a destroy, `current()` can return another
+    -- live session.
+    local changed = align_provider_for_restore(current_session, item.provider)
+    local session = (not changed and current_session)
+        or SessionRegistry.create()
+    if not session then
+        return nil
+    end
 
-    SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
-        if agent_supports_load(session) then
-            if not item.provider then
-                Logger.notify(
-                    "Session has no saved provider — restoring with current provider '"
-                        .. Config.provider
-                        .. "'. May fail if the session was created with a different provider.",
-                    vim.log.levels.WARN
-                )
-            end
-            session:load_acp_session(item.session_id, item.cwd, item.model)
-        else
-            if has_conflict and session.session_id then
-                session.agent:cancel_session(session.session_id)
-                session:clear_chat()
-            end
-
-            ChatHistory.load(item.session_id, function(history, err)
-                if err or not history then
-                    Logger.notify(
-                        "Failed to load session: " .. (err or "unknown error"),
-                        vim.log.levels.WARN
-                    )
-                    return
-                end
-
-                session:restore_from_history(
-                    history,
-                    { reuse_session = not has_conflict }
-                )
-            end, item.file_path)
+    if agent_supports_load(session) then
+        if not item.provider then
+            Logger.notify(
+                "Session has no saved provider — restoring with current provider '"
+                    .. Config.provider
+                    .. "'. May fail if the session was created with a different provider.",
+                vim.log.levels.WARN
+            )
+        end
+        session:load_acp_session(item.session_id, item.cwd, item.model)
+    else
+        if has_conflict and session.session_id then
+            session.agent:cancel_session(session.session_id)
+            session:clear_chat()
         end
 
-        session.widget:reveal()
-    end)
+        ChatHistory.load(item.session_id, function(history, err)
+            if err or not history then
+                Logger.notify(
+                    "Failed to load session: " .. (err or "unknown error"),
+                    vim.log.levels.WARN
+                )
+                return
+            end
+
+            session:restore_from_history(
+                history,
+                { reuse_session = not has_conflict }
+            )
+        end, item.file_path)
+    end
+
+    return session
 end
 
---- Restore a session in a new tabpage.
+--- `do_restore`, then reveal the chat of the session restored into.
+--- @param item agentic.SessionRestore.PickerItem
+--- @param current_session agentic.SessionManager|nil
+--- @param has_conflict boolean
+local function restore_here(item, current_session, has_conflict)
+    local session = do_restore(item, current_session, has_conflict)
+    if session then
+        session.widget:reveal()
+    end
+end
+
+--- Restore `item` into a new session and show its chat in a new tabpage.
 --- @param item agentic.SessionRestore.PickerItem
 local function restore_in_new_tab(item)
-    vim.cmd("tabnew")
-    local new_tab = vim.api.nvim_get_current_tabpage()
-    do_restore(item, new_tab, false)
+    local session = do_restore(item, nil, false)
+    if not session then
+        return
+    end
+    session.widget:show({
+        tab = vim.api.nvim_tabpage_get_number(
+            vim.api.nvim_get_current_tabpage()
+        ),
+    })
 end
 
 --- @param item agentic.SessionRestore.PickerItem
---- @param tab_page_id integer
+--- @param current_session agentic.SessionManager|nil
 --- @param has_conflict boolean
 --- @return boolean accepted true if user chose to restore (not cancelled)
-local function restore_with_conflict_check(item, tab_page_id, has_conflict)
+local function restore_with_conflict_check(item, current_session, has_conflict)
     if has_conflict then
         local choice = vim.fn.confirm(
             "Current session has messages:",
@@ -140,14 +164,14 @@ local function restore_with_conflict_check(item, tab_page_id, has_conflict)
             3
         ) -- no nvim_* equivalent
         if choice == 1 then
-            do_restore(item, tab_page_id, has_conflict)
+            restore_here(item, current_session, has_conflict)
         elseif choice == 2 then
             restore_in_new_tab(item)
         else
             return false
         end
     else
-        do_restore(item, tab_page_id, has_conflict)
+        restore_here(item, current_session, has_conflict)
     end
     return true
 end
@@ -263,10 +287,9 @@ end
 --- @alias agentic.SessionRestore.Scope "local"|"all"
 
 --- Show session picker and restore selected session
---- @param tab_page_id integer
---- @param current_session agentic.SessionManager|nil
+--- @param current_session agentic.SessionManager Session to restore into. A new one when it has ended by the time an item is picked
 --- @param scope? agentic.SessionRestore.Scope "local" (default) or "all"
-function SessionRestore.show_picker(tab_page_id, current_session, scope)
+function SessionRestore.show_picker(current_session, scope)
     scope = scope or "local"
     local list_fn = scope == "all" and ChatHistory.list_all_sessions
         or ChatHistory.list_sessions
@@ -280,12 +303,25 @@ function SessionRestore.show_picker(tab_page_id, current_session, scope)
         local show_cwd = scope == "all"
         local items =
             SessionRestore.build_items(sessions, { show_cwd = show_cwd })
-        local has_conflict = check_conflict(current_session)
 
         --- @param item agentic.SessionRestore.PickerItem
         --- @return boolean accepted
         local function on_select(item)
-            return restore_with_conflict_check(item, tab_page_id, has_conflict)
+            local open_session =
+                SessionRegistry.session_for_acp_id(item.session_id)
+            if open_session then
+                open_session.widget:reveal()
+                return true
+            end
+            -- The picker does not block, so the session can end before a pick.
+            local live_session = not current_session.destroyed
+                    and current_session
+                or nil
+            return restore_with_conflict_check(
+                item,
+                live_session,
+                check_conflict(live_session)
+            )
         end
 
         -- Three genuinely different backends (builtin quickfix, fzf-lua,
@@ -294,7 +330,6 @@ function SessionRestore.show_picker(tab_page_id, current_session, scope)
         local picker_name = Config.session_restore.picker or "quickfix"
         local picker_opts = {
             scope = scope,
-            tab_page_id = tab_page_id,
             current_session = current_session,
         }
 

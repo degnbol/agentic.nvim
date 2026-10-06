@@ -12,17 +12,13 @@ describe("agentic.ui.ChatWidget", function()
     local ChatWidget
 
     ChatWidget = require("agentic.ui.chat_widget")
-    local SessionRegistry = require("agentic.session_registry")
-
     local last_owner_id = 1000
 
-    --- A widget whose owner id is bound to the current tabpage.
+    --- A widget with a fresh owner id.
     --- @param on_submit function
     --- @return agentic.ui.ChatWidget
     local function new_widget(on_submit)
         last_owner_id = last_owner_id + 1
-        SessionRegistry.tab_bindings[vim.api.nvim_get_current_tabpage()] =
-            last_owner_id
         return ChatWidget:new(last_owner_id, on_submit)
     end
 

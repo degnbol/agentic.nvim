@@ -5,43 +5,15 @@ local ACPHealth = require("agentic.acp.acp_health")
 
 --- @class agentic.SessionRegistry
 --- @field by_id table<integer, agentic.SessionManager> Live sessions by `SessionManager.id`. Removed only by `destroy`
---- @field tab_bindings table<integer, integer> tab_page_id -> session id of the session whose widget the tab shows. The only record of a session's tab
+--- @field last_active_id? integer `SessionManager.id` of the session created or whose buffer was entered last
 local SessionRegistry = {
     by_id = {},
-    tab_bindings = {},
 }
 
---- The session bound to a tabpage.
---- @param tab_page_id integer
---- @return agentic.SessionManager|nil
-function SessionRegistry.bound_session(tab_page_id)
-    local id = SessionRegistry.tab_bindings[tab_page_id]
-    return id and SessionRegistry.by_id[id]
-end
-
---- The tabpage a session is bound to.
---- @param id integer `SessionManager.id`
---- @return integer|nil tab_page_id
-function SessionRegistry.tab_of(id)
-    for tab, bound_id in pairs(SessionRegistry.tab_bindings) do
-        if bound_id == id then
-            return tab
-        end
-    end
-    return nil
-end
-
---- Bind a session to a tabpage. A session has at most one tab and a tab at
---- most one session, so this drops the session's previous binding and the
---- tab's previous session.
---- @param tab_page_id integer
+--- Record `session` as the last active one.
 --- @param session agentic.SessionManager
-function SessionRegistry.bind(tab_page_id, session)
-    local previous_tab = SessionRegistry.tab_of(session.id)
-    if previous_tab then
-        SessionRegistry.tab_bindings[previous_tab] = nil
-    end
-    SessionRegistry.tab_bindings[tab_page_id] = session.id
+function SessionRegistry.set_active(session)
+    SessionRegistry.last_active_id = session.id
 end
 
 --- The live session owning an Agentic buffer.
@@ -52,56 +24,41 @@ function SessionRegistry.owner_of_buf(bufnr)
     return id and SessionRegistry.by_id[id]
 end
 
---- The tab's bound session, creating and binding one when there is none.
---- @param tab_page_id integer|nil Nil = current tabpage
---- @param callback fun(session: agentic.SessionManager)|nil
---- @return agentic.SessionManager|nil session valid session instance or nil on failure
-function SessionRegistry.get_session_for_tab_page(tab_page_id, callback)
-    tab_page_id = tab_page_id or vim.api.nvim_get_current_tabpage()
-    local instance = SessionRegistry.bound_session(tab_page_id)
-
-    if not instance then
-        if not ACPHealth.check_configured_provider() then
-            Logger.debug("Session creation aborted: No configured ACP provider")
-            return nil
-        end
-
-        local SessionManager = require("agentic.session_manager")
-
-        instance = SessionManager:new() --[[@as agentic.SessionManager|nil]]
-        if instance ~= nil then
-            SessionRegistry.by_id[instance.id] = instance
-            SessionRegistry.bind(tab_page_id, instance)
-        end
-    end
-
-    if instance and callback then
-        local ok, err = pcall(callback, instance)
-
-        if not ok then
-            Logger.notify("Session create callback error: " .. vim.inspect(err))
-        end
-    end
-
-    return instance
-end
-
---- Destroys the tab's bound session, if any, and creates and binds a new one
---- @param tab_page_id integer|nil Nil = current tabpage
+--- The owner of the current buffer, else the last active session.
 --- @return agentic.SessionManager|nil
-function SessionRegistry.new_session(tab_page_id)
-    tab_page_id = tab_page_id or vim.api.nvim_get_current_tabpage()
-
-    local bound = SessionRegistry.bound_session(tab_page_id)
-    if bound then
-        SessionRegistry.destroy(bound)
-    end
-
-    return SessionRegistry.get_session_for_tab_page(tab_page_id)
+function SessionRegistry.current()
+    local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
+    local id = SessionRegistry.last_active_id
+    return owner or (id and SessionRegistry.by_id[id])
 end
 
---- Destroy a session and drop it and its tab binding from the registry. The
---- one destroy path. A no-op on a session already destroyed.
+--- Create, register and activate a new session. Nil when no provider is
+--- configured or creation fails.
+--- @return agentic.SessionManager|nil
+function SessionRegistry.create()
+    if not ACPHealth.check_configured_provider() then
+        Logger.debug("Session creation aborted: No configured ACP provider")
+        return nil
+    end
+
+    local SessionManager = require("agentic.session_manager")
+    local session = SessionManager:new() --[[@as agentic.SessionManager|nil]]
+    if session then
+        SessionRegistry.by_id[session.id] = session
+        SessionRegistry.set_active(session)
+    end
+    return session
+end
+
+--- `current()`, else `create()`.
+--- @return agentic.SessionManager|nil
+function SessionRegistry.get_or_create()
+    return SessionRegistry.current() or SessionRegistry.create()
+end
+
+--- Destroy a session and drop it from the registry. When it was the last
+--- active session, the newest remaining one becomes last active. The one
+--- destroy path. A no-op on a session already destroyed.
 --- @param session agentic.SessionManager
 function SessionRegistry.destroy(session)
     if session.destroyed then
@@ -117,9 +74,10 @@ function SessionRegistry.destroy(session)
     end
 
     SessionRegistry.by_id[session.id] = nil
-    local tab = SessionRegistry.tab_of(session.id)
-    if tab then
-        SessionRegistry.tab_bindings[tab] = nil
+    if SessionRegistry.last_active_id == session.id then
+        local ids = vim.tbl_keys(SessionRegistry.by_id)
+        SessionRegistry.last_active_id = #ids > 0 and math.max(unpack(ids))
+            or nil
     end
 end
 
@@ -173,7 +131,7 @@ function SessionRegistry.select_provider(on_selected)
     vim.list_extend(sorted_providers, not_installed)
 
     vim.ui.select(sorted_providers, {
-        prompt = "Select ACP provider (new session)",
+        prompt = "Select ACP provider",
         --- @param item _ProviderStatus
         format_item = function(item)
             local label = item.name

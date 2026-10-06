@@ -2,12 +2,10 @@ local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
-local SessionRegistry = require("agentic.session_registry")
 
 --- @class agentic.ui.PermissionFloat
 --- @field message_writer agentic.ui.MessageWriter
 --- @field _buf_nrs agentic.ui.ChatWidget.BufNrs
---- @field _owner_id integer `SessionManager.id` of the owning session
 --- @field _winid? integer
 --- @field _bufnr? integer
 --- @field _anchor_bufnr? integer Buffer the float anchors to while open
@@ -26,13 +24,11 @@ PermissionFloat.__index = PermissionFloat
 
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
---- @param owner_id integer `SessionManager.id` of the owning session
 --- @return agentic.ui.PermissionFloat
-function PermissionFloat:new(message_writer, buf_nrs, owner_id)
+function PermissionFloat:new(message_writer, buf_nrs)
     local instance = setmetatable({
         message_writer = message_writer,
         _buf_nrs = buf_nrs,
-        _owner_id = owner_id,
         _winid = nil,
         _bufnr = nil,
         _autocmd_ids = {},
@@ -87,24 +83,19 @@ function PermissionFloat._anchor_position(
     return row, col
 end
 
---- Find a window showing `bufnr`: on the current tab page, else on the
---- owning session's, else on any. Nil when no window shows it.
+--- Find a window showing `bufnr`: on the current tab page, else any. Nil
+--- when no window shows it.
 --- @param bufnr integer
 --- @return integer|nil
 function PermissionFloat:_find_anchor_winid(bufnr)
     local winids = vim.fn.win_findbuf(bufnr)
-    local function in_tab(tab)
-        for _, winid in ipairs(winids) do
-            if vim.api.nvim_win_get_tabpage(winid) == tab then
-                return winid
-            end
+    local tab = vim.api.nvim_get_current_tabpage()
+    for _, winid in ipairs(winids) do
+        if vim.api.nvim_win_get_tabpage(winid) == tab then
+            return winid
         end
-        return nil
     end
-    local owner_tab = SessionRegistry.tab_of(self._owner_id)
-    return in_tab(vim.api.nvim_get_current_tabpage())
-        or (owner_tab and in_tab(owner_tab))
-        or winids[1]
+    return winids[1]
 end
 
 --- Build the lines and option_mapping for the prompt body. Mirrors the

@@ -33,7 +33,7 @@ end
 
     local function get_session_diagnostics()
         return child.lua([[
-            local session = require("agentic.session_registry").get_session_for_tab_page()
+            local session = require("agentic.session_registry").current()
             return session.diagnostics_list:get_diagnostics()
         ]])
     end
@@ -41,7 +41,7 @@ end
     --- @return integer|vim.NIL winid
     local function diagnostics_panel_win()
         return child.lua_get([[
-require("agentic.session_registry").get_session_for_tab_page().widget:panel_win("diagnostics")
+require("agentic.session_registry").current().widget:panel_win("diagnostics")
 ]])
     end
 

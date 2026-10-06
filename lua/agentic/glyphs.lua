@@ -106,7 +106,7 @@ Glyphs.ERROR = "󰅚"
 Glyphs.PROMPT = "❯"
 
 --- Identities reported after the fact, with no command that asks for them: a
---- provider swap, a session restored through the picker or `:AgenticResume`,
+--- provider swap, a session restored through the picker or `:Agentic {query}`,
 --- and a re-login from the error block's `[r]` keymap.
 Glyphs.PROVIDER = "󰚥"
 Glyphs.RESUME = "󰁯"

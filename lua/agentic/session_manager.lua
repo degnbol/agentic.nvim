@@ -445,7 +445,6 @@ function SessionManager:new()
     self.permission_manager = PermissionManager:new(
         self.message_writer,
         self.widget.buf_nrs,
-        self.id,
         function(tool_call_id)
             return self:_writer_for(tool_call_id)
         end
@@ -565,12 +564,6 @@ function SessionManager:new()
     return self
 end
 
---- Bind this session to `tab`.
---- @param tab integer
-function SessionManager:bind_to_tab(tab)
-    SessionRegistry.bind(tab, self)
-end
-
 --- Bind the session's own buffer-local maps (the widget binds its own) to a
 --- buffer of this session.
 --- @param bufnr integer
@@ -585,7 +578,7 @@ end
 
 --- Bind the widget keymaps that act on a whole session to a buffer of this
 --- one, as closures over it: they act on the buffer's owner wherever the
---- buffer is shown, never on whichever session the current tab is bound to.
+--- buffer is shown.
 --- @param bufnr integer
 function SessionManager:_bind_owner_keymaps(bufnr)
     local keymaps = Config.keymaps.widget
@@ -611,12 +604,7 @@ function SessionManager:_bind_owner_keymaps(bufnr)
     end, { desc = "Agentic: Restart session (cancel and restore)" })
 
     BufHelpers.multi_keymap_set(keymaps.restore_session, bufnr, function()
-        local tab = SessionRegistry.tab_of(self.id)
-        if not tab then
-            tab = vim.api.nvim_get_current_tabpage()
-            self:bind_to_tab(tab)
-        end
-        SessionRestore.show_picker(tab, self)
+        SessionRestore.show_picker(self)
     end, { desc = "Agentic: Restore previous session" })
 end
 
@@ -2293,7 +2281,6 @@ function SessionManager:_on_request_permission(request, callback)
 
             P.invoke_hook("on_permission_request", {
                 session_id = self.session_id,
-                tab_page_id = SessionRegistry.tab_of(self.id),
                 tool_call_id = tool_call_id,
             })
         end)
@@ -3561,7 +3548,6 @@ function SessionManager:_send_user_prompt(input_text, prompt, extra_lines)
     P.invoke_hook("on_prompt_submit", {
         prompt = input_text,
         session_id = self.session_id,
-        tab_page_id = SessionRegistry.tab_of(self.id),
     })
 
     self:_dispatch_turn(prompt)
@@ -3587,7 +3573,6 @@ function SessionManager:_dispatch_turn(prompt)
     self.status_indicator:start("thinking")
 
     local session_id = self.session_id
-    local tab_page_id = SessionRegistry.tab_of(self.id)
     local epoch = self._session_epoch
     -- Capture chat_history before send to avoid race with _cancel_session
     -- replacing self.chat_history while the callback is pending
@@ -3725,7 +3710,6 @@ function SessionManager:_dispatch_turn(prompt)
             -- retried attempts are not outcomes the user asked about.
             P.invoke_hook("on_response_complete", {
                 session_id = session_id,
-                tab_page_id = tab_page_id,
                 success = err == nil,
                 error = err,
             })

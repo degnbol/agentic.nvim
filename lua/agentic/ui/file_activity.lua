@@ -7,7 +7,7 @@ local Logger = require("agentic.utils.logger")
 local Theme = require("agentic.theme")
 
 --- Extmarks are buffer-scoped, so a module-level namespace is fine even though
---- one FileActivity exists per tabpage (see `.claude/rules/multi-tabpage.md`).
+--- one FileActivity exists per session (see `.claude/rules/session-isolation.md`).
 local NS_ACTIVITY = vim.api.nvim_create_namespace("agentic_file_activity")
 
 --- @alias agentic.ui.FileActivity.OpClass "create"|"edit"|"delete"|"read"
@@ -94,7 +94,7 @@ end
 ---
 --- Resolved through `canonical_path` because `/tmp` and `$TMPDIR` are symlinks
 --- on macOS while recorded paths are canonicalised. Computed once per process:
---- these are environment, not per-tabpage state.
+--- these are environment, not per-session state.
 --- @type string[]|nil
 local scratch_cache = nil
 

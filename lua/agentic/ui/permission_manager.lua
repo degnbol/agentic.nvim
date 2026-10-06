@@ -50,19 +50,14 @@ PermissionManager.__index = PermissionManager
 
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
---- @param owner_id integer `SessionManager.id` of the owning session
 --- @param writer_for? fun(tool_call_id: string): agentic.ui.MessageWriter Resolver for the writer owning a tool call (main vs subagent)
 --- @return agentic.ui.PermissionManager
-function PermissionManager:new(message_writer, buf_nrs, owner_id, writer_for)
+function PermissionManager:new(message_writer, buf_nrs, writer_for)
     local instance = setmetatable({
         message_writer = message_writer,
         _writer_for = writer_for,
         _buf_nrs = buf_nrs or { chat = message_writer.bufnr },
-        permission_float = PermissionFloat:new(
-            message_writer,
-            buf_nrs,
-            owner_id
-        ),
+        permission_float = PermissionFloat:new(message_writer, buf_nrs),
         queue = {},
         current_request = nil,
         _keymap_restores = {},
