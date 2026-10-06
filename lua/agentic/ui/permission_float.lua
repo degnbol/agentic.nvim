@@ -253,19 +253,13 @@ local function open_keys_hint(width)
     return vim.fn.strcharpart(format_keys(keys), 0, width)
 end
 
---- Resolve the float buffer. Reuses the existing buffer if it is still
---- valid (e.g. reopen between requests within one session) to avoid
---- churning buffer numbers on every prompt.
---- @return integer
-function PermissionFloat:_resolve_buffer()
-    if self._bufnr and vim.api.nvim_buf_is_valid(self._bufnr) then
-        return self._bufnr
-    end
+--- A new scratch buffer for the float.
+--- @return integer bufnr
+local function create_buffer()
     local bufnr = vim.api.nvim_create_buf(false, true)
     vim.bo[bufnr].buftype = "nofile"
     vim.bo[bufnr].swapfile = false
     vim.bo[bufnr].filetype = "AgenticPermissionFloat"
-    self._bufnr = bufnr
     return bufnr
 end
 
@@ -340,7 +334,7 @@ function PermissionFloat:open(options, anchor_bufnr)
 
     local lines, option_mapping = build_lines(options)
     local cfg = Config.permission_float
-    self:_resolve_buffer()
+    self._bufnr = create_buffer()
     self._lines = lines
     self._anchor = cfg.anchor
     self._width = cfg.width
@@ -468,9 +462,8 @@ function PermissionFloat:_close_window()
     self._anchor_winid = nil
 end
 
---- Close the float window and tear down associated state. Buffer deletion
---- is deferred via vim.schedule per the neovim skill's bufhidden=wipe
---- warning. Safe to call when already closed.
+--- Close the float window, delete its buffer and tear down associated
+--- state. Safe to call when already closed.
 function PermissionFloat:close()
     self:_close_window()
     self._anchor_bufnr = nil
@@ -479,11 +472,7 @@ function PermissionFloat:close()
     local bufnr = self._bufnr
     self._bufnr = nil
     if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-        vim.schedule(function()
-            if vim.api.nvim_buf_is_valid(bufnr) then
-                pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
-            end
-        end)
+        vim.api.nvim_buf_delete(bufnr, { force = true })
     end
 end
 

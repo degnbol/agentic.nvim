@@ -1,7 +1,5 @@
 --- @diagnostic disable: invisible, missing-fields
 local assert = require("tests.helpers.assert")
-local Deferred = require("tests.helpers.deferred")
-local MiniTest = require("mini.test")
 
 describe("agentic.ui.PermissionFloat", function()
     --- @type agentic.ui.PermissionFloat
@@ -222,25 +220,29 @@ describe("agentic.ui.PermissionFloat", function()
             assert.equal(winid, float._winid)
         end)
 
-        it("close() closes window and defers buffer deletion", function()
+        it("close() closes window and deletes the buffer", function()
             float:open(make_options())
             --- @type integer
             local opened_winid = float._winid
             --- @type integer
             local opened_bufnr = float._bufnr
 
-            local deferred = Deferred.capture()
-            MiniTest.finally(deferred.revert)
             float:close()
 
             assert.is_nil(float._winid)
             assert.is_nil(float._bufnr)
             assert.is_false(vim.api.nvim_win_is_valid(opened_winid))
-
-            -- Buffer deletion runs on the next event-loop tick
-            assert.is_true(vim.api.nvim_buf_is_valid(opened_bufnr))
-            deferred.drain()
             assert.is_false(vim.api.nvim_buf_is_valid(opened_bufnr))
+        end)
+
+        it("open() gives each request a new buffer", function()
+            float:open(make_options())
+            local first_bufnr = float._bufnr --[[@as integer]]
+
+            float:open(make_options())
+
+            assert.is_false(vim.api.nvim_buf_is_valid(first_bufnr))
+            assert.is_true(float._bufnr ~= first_bufnr)
         end)
 
         it("close() is idempotent", function()
