@@ -165,6 +165,17 @@ function BufHelpers.multi_keymap_set(
     end
 end
 
+--- Whether a buffer is an unnamed, unmodified normal buffer with no text, as
+--- startup, `:enew` and `:tabnew` leave.
+--- @param bufnr integer
+--- @return boolean
+function BufHelpers.is_blank_unnamed(bufnr)
+    return vim.api.nvim_buf_get_name(bufnr) == ""
+        and vim.bo[bufnr].buftype == ""
+        and not vim.bo[bufnr].modified
+        and BufHelpers.is_buffer_empty(bufnr)
+end
+
 --- @param bufnr integer
 --- @return boolean
 function BufHelpers.is_buffer_empty(bufnr)

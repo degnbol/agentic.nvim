@@ -150,10 +150,12 @@ end
 
 --- Show the chat in `winid`, with its chat window options and follow mode,
 --- make `winid` home unless it floats, closing the panels of a previous home,
---- and sync the content panels. Notifies when the window refuses the buffer
---- (`'winfixbuf'`).
+--- and sync the content panels. Deletes the buffer the chat replaces when it
+--- is blank and unnamed (`BufHelpers.is_blank_unnamed`) and no other window
+--- shows it. Notifies when the window refuses the buffer (`'winfixbuf'`).
 --- @param winid integer
 function ChatWidget:show_in(winid)
+    local replaced = vim.api.nvim_win_get_buf(winid)
     -- With autocmds: the chat's BufWinEnter sets its window options and
     -- follow mode.
     local ok, err =
@@ -166,7 +168,41 @@ function ChatWidget:show_in(winid)
         )
         return
     end
+    if
+        replaced ~= self.buf_nrs.chat
+        and BufHelpers.is_blank_unnamed(replaced)
+        and #vim.fn.win_findbuf(replaced) == 0
+    then
+        vim.api.nvim_buf_delete(replaced, {})
+    end
     self:_adopt_home(winid)
+end
+
+--- The home window when it is in the current tabpage, else a window there
+--- showing the chat, the current one first, made home. Nil when the current
+--- tabpage shows the chat in no window that can be home.
+--- @return integer|nil winid
+function ChatWidget:_home_in_tab()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local home = self:home_win()
+    if home and vim.api.nvim_win_get_tabpage(home) == tab then
+        return home
+    end
+    --- @type integer[]
+    local winids = { vim.api.nvim_get_current_win() }
+    vim.list_extend(winids, vim.fn.win_findbuf(self.buf_nrs.chat))
+    for _, winid in ipairs(winids) do
+        if
+            vim.api.nvim_win_get_buf(winid) == self.buf_nrs.chat
+            and vim.api.nvim_win_get_tabpage(winid) == tab
+        then
+            self:_adopt_home(winid)
+            if self:home_win() == winid then
+                return winid
+            end
+        end
+    end
+    return nil
 end
 
 --- Focus a window in the current tabpage showing the chat, the home window
@@ -274,10 +310,6 @@ end
 --- The chat is wiped on the next tick, so this can run from the chat's own
 --- `BufDelete`, where wiping the chat raises E937.
 function ChatWidget:destroy()
-    -- Not `close_panels`: wiping a buffer closes its windows anyway, except
-    -- a tab's last one, which shows another buffer instead. Closing them
-    -- first would close a tab the widget fills, before a replacement session
-    -- can open there.
     if self._home_closed_autocmd then
         pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
         self._home_closed_autocmd = nil
@@ -839,7 +871,7 @@ function ChatWidget:move_cursor_to(panel, callback)
 end
 
 --- The window to type into: the input's window in the current tabpage, else
---- the input panel when the home window is in the current tabpage, else a
+--- the input panel of the chat in the current tabpage (`_home_in_tab`), else a
 --- split below the current window. Opens the window when there is none.
 --- @return integer|nil winid Nil when the input panel fails to open
 function ChatWidget:input_win()
@@ -848,12 +880,8 @@ function ChatWidget:input_win()
     if shown ~= -1 then
         return shown
     end
-    local home = self:home_win()
-    if
-        home
-        and vim.api.nvim_win_get_tabpage(home)
-            == vim.api.nvim_get_current_tabpage()
-    then
+    local home = self:_home_in_tab()
+    if home then
         return WidgetLayout.open_panel(
             self.win_nrs,
             self.buf_nrs,
@@ -1472,20 +1500,13 @@ end
 --- Show or hide the file activity panel. `on_open` runs before the window
 --- appears, so a caller can reconcile the rows first; `on_close` after it goes,
 --- to record that the rows have been seen. Unlike the content panels, the
---- buffer's rows never open or close it. Notifies when the chat has no home
---- window to attach it to.
+--- buffer's rows never open or close it. Acts on the panels of the chat in
+--- the current tabpage, moving them to a window there that shows it
+--- (`_home_in_tab`). Notifies when the current tabpage shows no chat.
 --- @param on_open fun()|nil
 --- @param on_close fun()|nil
 function ChatWidget:toggle_activity_window(on_open, on_close)
-    if self:is_activity_window_open() then
-        self:close_panel("activity")
-        if on_close then
-            on_close()
-        end
-        return
-    end
-
-    local home = self:home_win()
+    local home = self:_home_in_tab()
     if not home then
         Logger.notify(
             "Show the chat to open the file activity panel.",
@@ -1494,6 +1515,15 @@ function ChatWidget:toggle_activity_window(on_open, on_close)
         )
         return
     end
+
+    if self:is_activity_window_open() then
+        self:close_panel("activity")
+        if on_close then
+            on_close()
+        end
+        return
+    end
+
     if on_open then
         on_open()
     end

@@ -602,8 +602,8 @@ An insert key (`i`, `a`, `o`, `c`, `x`, ...) starts insert in an input: a
 background subagent's transcript in its message input (|agentic-subagents|),
 the chat, a panel or any other transcript in the session's. It uses the
 input's window in the current tabpage, else opens the input panel below the
-chat's window (|agentic-buffers|) when that is in the current tabpage, else
-opens one below the current window. `p` and `P` in the chat paste there.
+chat's window (|agentic-buffers|) when the current tabpage shows the chat,
+else opens one below the current window. `p` and `P` in the chat paste there.
 
 ------------------------------------------------------------------------------
 6.4 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
@@ -874,7 +874,10 @@ chat: after |:q| on its chat window, or |:e| or |gf| there.
 
 The chat shows in any window, like any buffer. Its panels attach to one
 window showing it, the chat's window: the first window the chat enters
-while it has none, or the window |agentic.open()| opens. The panels stack
+while it has none, or the window |agentic.open()| opens. In a tabpage
+without the chat's window, a key that opens a panel (an insert key, `p`,
+`<localLeader>f`) makes a window there that shows the chat, the current one
+first, the chat's window. The panels stack
 below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
 panels open while they list something. The input opens on the first insert
 key (|agentic-keymaps-chat|). `<localLeader>f` toggles the file activity

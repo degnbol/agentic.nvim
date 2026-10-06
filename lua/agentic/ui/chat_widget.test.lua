@@ -132,6 +132,24 @@ describe("agentic.ui.ChatWidget", function()
             assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.code))
         end)
 
+        it("show_in deletes the blank unnamed buffer it replaces", function()
+            local blank = vim.api.nvim_get_current_buf()
+            assert.is_true(vim.api.nvim_buf_get_name(blank) == "")
+
+            show(widget)
+
+            assert.is_false(vim.api.nvim_buf_is_valid(blank))
+        end)
+
+        it("show_in keeps a replaced buffer that has a name", function()
+            vim.cmd.edit(vim.fn.tempname())
+            local named = vim.api.nvim_get_current_buf()
+
+            show(widget)
+
+            assert.is_true(vim.api.nvim_buf_is_valid(named))
+        end)
+
         it("show_in a float shows the chat without making it home", function()
             fill_buffer(widget, "code", { "line1" })
             local float = vim.api.nvim_open_win(
@@ -500,6 +518,30 @@ describe("agentic.ui.ChatWidget", function()
         end)
 
         describe("activity panel", function()
+            it("moves the panels to a chat window in the current tab", function()
+                fill_buffer(widget, "code", { "line1" })
+                fill_buffer(widget, "activity", { "a.lua" })
+                local first = show(widget)
+                vim.cmd("tabnew")
+                MiniTest.finally(function()
+                    pcall(vim.cmd.tabclose)
+                end)
+                local second = vim.api.nvim_get_current_win()
+                vim.api.nvim_win_set_buf(second, widget.buf_nrs.chat)
+                assert.equal(first, widget:home_win())
+
+                widget:toggle_activity_window()
+
+                assert.equal(second, widget:home_win())
+                local tab = vim.api.nvim_get_current_tabpage()
+                for _, panel in ipairs({ "code", "activity" }) do
+                    assert.equal(
+                        tab,
+                        vim.api.nvim_win_get_tabpage(widget.win_nrs[panel])
+                    )
+                end
+            end)
+
             it("notifies and opens nothing without a home", function()
                 local notify_stub = spy.stub(Logger, "notify")
                 MiniTest.finally(function()

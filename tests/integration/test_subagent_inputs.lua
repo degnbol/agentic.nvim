@@ -502,7 +502,7 @@ _G.press(_G.s.widget.buf_nrs.chat, "a")
         )
     end)
 
-    it("in a chat window outside the home's tab open a split below it", function()
+    it("in a chat window outside the home's tab move the home there", function()
         child.lua([[
 vim.cmd("tabnew")
 _G.chat_win = vim.api.nvim_get_current_win()
@@ -516,12 +516,14 @@ _G.input_win = vim.api.nvim_get_current_win()
             child.lua_get("vim.api.nvim_win_get_buf(_G.input_win)")
         )
         assert.equal(2, child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"))
-        assert.is_true(
-            child.lua_get([[_G.s.widget:panel_win("input") ~= _G.input_win]])
+        assert.equal(child.lua_get("_G.chat_win"), child.lua_get("_G.s.widget:home_win()"))
+        assert.equal(
+            child.lua_get("_G.input_win"),
+            child.lua_get([[_G.s.widget:panel_win("input")]])
         )
     end)
 
-    it("p in a chat window outside the home's tab pastes into the split below", function()
+    it("p in a chat window outside the home's tab pastes into its input", function()
         child.lua([[
 vim.fn.setreg('"', "pasted")
 vim.cmd("tabnew")

@@ -307,20 +307,10 @@ end
 --- @param panel agentic.ui.ChatWidget.PanelNames
 function WidgetLayout.close_panel(win_nrs, buf_nrs, panel)
     local winid = WidgetLayout.panel_win(win_nrs, buf_nrs, panel)
-    win_nrs[panel] = nil
     if winid then
-        local ok, err = pcall(vim.api.nvim_win_close, winid, true)
-        if not ok then
-            Logger.debug(
-                string.format(
-                    "Failed to close window '%s' with id %d: %s",
-                    panel,
-                    winid,
-                    tostring(err)
-                )
-            )
-        end
+        vim.api.nvim_win_close(winid, true)
     end
+    win_nrs[panel] = nil
 end
 
 --- Open an input buffer in a split below the current window, outside any
