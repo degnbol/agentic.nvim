@@ -902,6 +902,9 @@ that ends there), on `<localLeader>G`, or when a prompt is submitted. Prompts
 sent from the queue do not. Entering the window, e.g. by a click, and
 resizing it do not change its mode.
 
+A chat or transcript opens following. If the last window that showed it was
+in user control, it opens at the same position, in user control.
+
 While a permission prompt is active, a following window shows the prompting
 tool call instead: centred once, then up to its heading at the top as output
 grows. With the prompt on the chat in place of a transcript, that is the

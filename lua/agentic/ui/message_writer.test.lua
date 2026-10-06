@@ -2135,6 +2135,224 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("last position", function()
+        --- @type TestStub
+        local schedule_stub
+
+        --- @return integer
+        local function last_position_line()
+            return vim.api.nvim_buf_get_mark(bufnr, '"')[1]
+        end
+
+        --- Append `n` lines as the writer's own edit.
+        --- @param n integer
+        local function write(n)
+            writer:_own_edit(function(b)
+                local more = {}
+                for i = 1, n do
+                    more[i] = "more " .. i
+                end
+                vim.api.nvim_buf_set_lines(b, -1, -1, false, more)
+            end)
+        end
+
+        --- Hide the buffer from its one window, which BufWinLeave reports.
+        local function hide()
+            vim.api.nvim_win_close(winid, true)
+        end
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            schedule_stub:invokes(function(fn)
+                fn()
+            end)
+            vim.wo[winid].scrolloff = 0
+            setup_buffer(50, 1)
+            writer:_own_change(function() end)
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("is the last line until the buffer has one", function()
+            hide()
+            write(5)
+            assert.equal(55, last_position_line())
+
+            write(5)
+            assert.equal(60, last_position_line())
+        end)
+
+        it("is where a window in user control left it", function()
+            writer._user_controlled[winid] = true
+            vim.api.nvim_win_set_cursor(winid, { 10, 0 })
+
+            hide()
+            write(5)
+
+            assert.equal(10, last_position_line())
+        end)
+
+        it("is not set by a window that left following", function()
+            vim.api.nvim_win_set_cursor(winid, { 10, 0 })
+
+            hide()
+            assert.equal(50, last_position_line())
+            write(5)
+            assert.equal(55, last_position_line())
+        end)
+
+        it("without it, a shown window follows to the bottom", function()
+            writer._user_controlled[winid] = true
+
+            writer:on_window_shown(winid)
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("without it, a shown window reaches a pin above its view", function()
+            writer._prose_anchor_line = 10
+            vim.api.nvim_win_call(winid, function()
+                vim.fn.winrestview({ topline = 31, lnum = 31 })
+            end)
+
+            writer:on_window_shown(winid)
+
+            vim.cmd("redraw")
+            assert.equal(11, vim.fn.line("w0", winid))
+        end)
+
+        it("without it, a window vim restores below the pin reaches the pin", function()
+            vim.api.nvim_win_set_cursor(winid, { 45, 0 })
+            hide()
+            writer._prose_anchor_line = 9
+            schedule_stub:revert()
+            local deferred = Deferred.capture()
+            MiniTest.finally(deferred.revert)
+
+            vim.cmd("sbuffer " .. bufnr)
+            winid = vim.api.nvim_get_current_win()
+            -- Vim's restore from the window history, after BufWinEnter.
+            assert.equal(45, vim.api.nvim_win_get_cursor(winid)[1])
+            vim.cmd("redraw")
+            deferred.drain()
+
+            vim.cmd("redraw")
+            assert.equal(10, vim.fn.line("w0", winid))
+            assert.is_nil(writer._user_controlled[winid])
+        end)
+
+        it("without it and follow off, a shown window goes to the last line", function()
+            Config.follow = vim.tbl_extend("force", Config.follow, {
+                enabled = false,
+            }) --[[@as agentic.UserConfig.Follow]]
+
+            writer:on_window_shown(winid)
+
+            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("with it, a shown window keeps its place in user control", function()
+            writer._has_last_position = true
+            vim.api.nvim_win_set_cursor(winid, { 10, 0 })
+            writer._scroll_owed = true
+            writer._pending_fold_ops = {
+                { id = writer:_place_fold_anchor(5), open = false },
+            }
+
+            writer:on_window_shown(winid)
+            writer:flush_pending_fold_ops()
+
+            assert.is_true(writer._user_controlled[winid])
+            assert.equal(10, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("with it, only the first window shown after it keeps its place", function()
+            writer._has_last_position = true
+            writer:on_window_shown(winid)
+
+            local other = vim.api.nvim_open_win(bufnr, false, {
+                relative = "editor",
+                width = 60,
+                height = 20,
+                row = 0,
+                col = 62,
+            })
+            MiniTest.finally(function()
+                vim.api.nvim_win_close(other, true)
+            end)
+
+            assert.is_true(writer._user_controlled[winid])
+            assert.is_nil(writer._user_controlled[other])
+        end)
+
+        it("with it, follow_in after the show still follows", function()
+            writer._has_last_position = true
+
+            writer:on_window_shown(winid)
+            writer:follow_in(winid)
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("a window opened on a hidden buffer opens at the bottom", function()
+            hide()
+            winid = vim.api.nvim_open_win(bufnr, true, {
+                relative = "editor",
+                width = 60,
+                height = 20,
+                row = 0,
+                col = 0,
+            })
+
+            assert.is_nil(writer._user_controlled[winid])
+            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+        end)
+
+        it("a closed window is forgotten", function()
+            local other = vim.api.nvim_open_win(bufnr, false, {
+                relative = "editor",
+                width = 60,
+                height = 20,
+                row = 0,
+                col = 62,
+            })
+            writer:_own_change(function() end)
+            writer._user_controlled[other] = true
+            writer._pin_held[other] = true
+            writer._newly_shown[other] = true
+
+            vim.api.nvim_win_close(other, true)
+
+            assert.is_nil(writer._user_controlled[other])
+            assert.is_nil(writer._views[other])
+            assert.is_nil(writer._pin_held[other])
+            assert.is_nil(writer._newly_shown[other])
+            assert.is_not_nil(writer._views[winid])
+        end)
+
+        it("the last window is forgotten after its last position is kept", function()
+            writer._user_controlled[winid] = true
+
+            hide()
+
+            assert.is_true(writer._has_last_position)
+            assert.is_nil(writer._user_controlled[winid])
+            assert.is_nil(writer._views[winid])
+        end)
+
+        it("is forgotten on reset", function()
+            writer._has_last_position = true
+
+            writer:reset()
+
+            assert.is_false(writer._has_last_position)
+        end)
+    end)
+
     describe("prose anchor pin", function()
         it("sets anchor on first prose chunk", function()
             writer:write_message_chunk(

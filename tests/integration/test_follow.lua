@@ -251,6 +251,77 @@ vim.api.nvim_win_set_cursor(_G.win, { 10, 0 })
         assert.is_false(user_controlled())
     end)
 
+    --- Hide the widget and show it again, with `between` run while hidden.
+    --- @param between fun()
+    local function reopen(between)
+        -- A draft keeps the hidden session from being destroyed as empty.
+        child.lua([[
+vim.bo[_G.s.widget.buf_nrs.input].modified = true
+vim.cmd("botright vnew")
+_G.s.widget:hide()
+]])
+        child.flush()
+        between()
+        child.lua([[
+_G.s.widget:show()
+_G.win = _G.s.widget.win_nrs.chat
+]])
+        settle()
+    end
+
+    it("a widget hidden while following reopens at the bottom, following", function()
+        reopen(function()
+            write_more()
+        end)
+
+        assert.is_false(user_controlled())
+        assert.is_true(shows_last_line())
+    end)
+
+    it("a widget reopened while following fills the window to a closed fold at the end", function()
+        child.lua([[
+local writer = _G.s.message_writer
+local first_body = vim.api.nvim_buf_line_count(_G.chat) + 1
+writer:_own_edit(function(bufnr)
+    local block = { "```text-fold" }
+    for i = 1, 40 do block[#block + 1] = "body " .. i end
+    vim.list_extend(block, { "```", "end" })
+    vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, block)
+end)
+writer:_close_fold(first_body)
+]])
+        settle()
+
+        reopen(function() end)
+
+        assert.is_true(shows_last_line())
+        -- Rows of text from the topline down: a scroll measured against the
+        -- open fold leaves empty rows below the end once it closes.
+        assert.is_true(child.lua_get([[
+vim.api.nvim_win_text_height(_G.win, {
+    start_row = vim.fn.getwininfo(_G.win)[1].topline - 1,
+}).all >= vim.api.nvim_win_get_height(_G.win) - 1
+]]))
+    end)
+
+    it("a widget hidden in user control reopens where it was left", function()
+        child.type_keys("100G")
+        child.flush()
+        assert.is_true(user_controlled())
+
+        reopen(function()
+            write_more()
+            child.lua([[
+local writer = _G.s.message_writer
+writer:_queue_fold_op(writer:_place_fold_anchor(10), false)
+]])
+            child.flush()
+        end)
+
+        assert.is_true(user_controlled())
+        assert.equal(100, child.lua_get("vim.api.nvim_win_get_cursor(_G.win)[1]"))
+    end)
+
     it("goto bottom puts an unfocused window in following", function()
         child.type_keys("k")
         child.flush()

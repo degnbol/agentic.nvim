@@ -162,6 +162,8 @@ end
 --- @field _views table<integer, agentic.ui.MessageWriter.View> Per window, the last view seen, recorded by `_own_change` and at each view change. `on_view_change` reads the user's motion as the difference from it.
 --- @field _entered_window? integer The window that just became current, whose next view change is the entry and not a motion
 --- @field _user_controlled table<integer, true> Windows in user control, which writes do not scroll; every other window follows. Survives turn boundaries.
+--- @field _has_last_position boolean Whether the last window the buffer left, as no other window showed it, was in user control, and no window has shown the buffer since. False after `new` and `reset`. While false, the `"` mark stays on the last line, and a window that newly shows the buffer opens at the follow target.
+--- @field _newly_shown table<integer, true> Following windows that newly show the buffer, whose next scroll starts from the top: vim restores such a window's cursor from its history after BufWinEnter, possibly below the follow target, and `BufHelpers.scroll_down` never scrolls up. Cleared by that scroll, or when the window goes to user control.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed when a window shows the buffer again: its BufWinEnter, or for widget windows (opened without autocmds) `ChatWidget.on_window_opened`. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _home_window? fun(): integer|nil The window hard wrap measures while it shows the buffer
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
@@ -195,6 +197,7 @@ function MessageWriter:reset()
     self._error_block = nil
     self._pending_fold_ops = {}
     self._fold_states = {}
+    self._has_last_position = false
     self:reset_turn_state()
     vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
 end
@@ -225,6 +228,8 @@ function MessageWriter:new(bufnr, home_window)
         _views = {},
         _entered_window = nil,
         _user_controlled = {},
+        _has_last_position = false,
+        _newly_shown = {},
         _pending_fold_ops = {},
         _fold_states = {},
     }, self)
@@ -276,6 +281,20 @@ function MessageWriter:new(bufnr, home_window)
             end
         end,
     })
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+        group = group,
+        buffer = bufnr,
+        callback = function()
+            instance:on_last_window_leave()
+        end,
+    })
+    -- Not buffer-scoped: a closed window may show another buffer by then.
+    vim.api.nvim_create_autocmd("WinClosed", {
+        group = group,
+        callback = function(args)
+            instance:on_window_closed(tonumber(args.match) --[[@as integer]])
+        end,
+    })
     vim.api.nvim_create_autocmd("BufWipeout", {
         buffer = bufnr,
         once = true,
@@ -286,16 +305,18 @@ function MessageWriter:new(bufnr, home_window)
 
     -- Fold state is window-local. A fold rendered while no window showed the
     -- buffer never got its initial open/close, and a window opened later has
-    -- none of the applied ones: apply the pending ops, then give this window
-    -- every recorded state.
+    -- none of the applied ones: give this window every recorded state, then
+    -- apply the pending ops, whose flush scrolls against the folds as they
+    -- end up.
     vim.api.nvim_create_autocmd("BufWinEnter", {
         buffer = bufnr,
         callback = function()
-            instance:flush_pending_fold_ops()
             local winid = vim.api.nvim_get_current_win()
             if vim.api.nvim_win_get_buf(winid) == bufnr then
+                instance:on_window_shown(winid)
                 instance:replay_folds(winid)
             end
+            instance:flush_pending_fold_ops()
         end,
     })
 
@@ -353,6 +374,79 @@ function MessageWriter:on_window_leave(winid)
     end
 end
 
+--- BufWinEnter and widget-open hook: decide the mode of a window that newly
+--- shows the buffer. With a last position, it goes to user control and keeps
+--- its place, and the buffer's last position is used up. Without one, it
+--- follows, and the next scroll takes it from the top to the follow target.
+--- With `follow.enabled` off, it goes to the last line instead. Call it
+--- synchronously, before `flush_pending_fold_ops` scrolls the following
+--- windows. Public so the autocmd closure and `SessionManager` can reach it
+--- without tripping LuaLS's invisible-field check.
+--- @param winid integer A window showing the buffer
+function MessageWriter:on_window_shown(winid)
+    -- The view vim's cursor restore leaves is then no motion up.
+    self:_own_change(function() end)
+    if self._has_last_position then
+        self._has_last_position = false
+        self._user_controlled[winid] = true
+        return
+    end
+    if Config.follow and Config.follow.enabled == false then
+        self:go_to_bottom(winid)
+        return
+    end
+    self._newly_shown[winid] = true
+    self:follow_in(winid)
+end
+
+--- BufWinLeave hook: the buffer leaves its last window. Left in user control,
+--- the buffer keeps the last position vim put in `"`. Left following, it has
+--- none, and `"` goes back to the last line. Public so the autocmd closure
+--- can reach it without tripping LuaLS's invisible-field check.
+function MessageWriter:on_last_window_leave()
+    -- The leaving window still shows the buffer.
+    local winid = vim.fn.win_findbuf(self.bufnr)[1]
+    self._has_last_position = winid ~= nil
+        and self._user_controlled[winid] == true
+    self:_mark_last_line()
+    if winid then
+        self:_forget_window(winid)
+    end
+end
+
+--- WinClosed hook: forget the state kept for `winid`. The buffer's last
+--- window is left to `on_last_window_leave`, whose BufWinLeave comes after
+--- WinClosed and reads that state. Public so the autocmd closure can reach
+--- it without tripping LuaLS's invisible-field check.
+--- @param winid integer The closing window
+function MessageWriter:on_window_closed(winid)
+    local winids = vim.fn.win_findbuf(self.bufnr)
+    if not (#winids == 1 and winids[1] == winid) then
+        self:_forget_window(winid)
+    end
+end
+
+--- Drop every per-window entry of `winid`.
+--- @param winid integer
+function MessageWriter:_forget_window(winid)
+    self._user_controlled[winid] = nil
+    self._views[winid] = nil
+    self._pin_held[winid] = nil
+    self._newly_shown[winid] = nil
+    if self._entered_window == winid then
+        self._entered_window = nil
+    end
+end
+
+--- Put the `"` mark on the last line while the buffer has no last position.
+function MessageWriter:_mark_last_line()
+    if self._has_last_position or not vim.api.nvim_buf_is_valid(self.bufnr) then
+        return
+    end
+    local last = vim.api.nvim_buf_line_count(self.bufnr)
+    vim.api.nvim_buf_set_mark(self.bufnr, '"', last, 0, {})
+end
+
 --- WinScrolled and CursorMoved hook. Reads the user's motion in `winid` as
 --- the difference from the last view seen there, and sets its mode by the
 --- direction:
@@ -390,6 +484,7 @@ function MessageWriter:on_view_change(winid, resized)
         self._user_controlled[winid] = nil
     elseif up then
         self._user_controlled[winid] = true
+        self._newly_shown[winid] = nil
     end
 end
 
@@ -547,6 +642,7 @@ function MessageWriter:_own_edit(fn)
         end
         return written
     end)
+    self:_mark_last_line()
     BufHelpers.redraw_if_cmdline()
     return result
 end
@@ -2241,6 +2337,12 @@ function MessageWriter:_scroll(winids)
                 vim.api.nvim_win_is_valid(winid)
                 and vim.api.nvim_win_get_buf(winid) == self.bufnr
             then
+                if self._newly_shown[winid] then
+                    self._newly_shown[winid] = nil
+                    vim.api.nvim_win_call(winid, function()
+                        vim.fn.winrestview({ topline = 1, lnum = 1, col = 0 })
+                    end)
+                end
                 if not held_start then
                     self._pin_held[winid] = BufHelpers.scroll_down(
                         winid,

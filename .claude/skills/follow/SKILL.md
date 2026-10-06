@@ -39,7 +39,9 @@ view, hands it back. Besides, `go_to_bottom` (`<localLeader>G`),
 `resume_follow` (submit) and `follow_in` (a permission open key) hand windows
 back, and a pin
 that held the view short of the last line (`_pin_held`) puts its window in
-user control when it releases.
+user control when it releases. A window that newly shows the buffer gets its
+mode from `on_window_shown`: following at the follow target without a last
+position (`_has_last_position`), user control with one.
 
 ## Write path
 

@@ -427,9 +427,15 @@ function SessionManager:new()
         self:_refresh()
     end
 
-    -- What the writer's BufWinEnter does for any other window. A tick later:
-    -- a window opened in the same layout pass has no fold levels yet.
+    -- What the writer's BufWinEnter does for any other window. The folds a
+    -- tick later: a window opened in the same layout pass has no fold levels
+    -- yet. Queued ahead of the scroll `on_window_shown` schedules, so that
+    -- scroll measures the folds as they end up.
     self.widget.on_window_opened = function(winid)
+        local shown = self:_writer_of_buf(vim.api.nvim_win_get_buf(winid))
+        if not shown then
+            return
+        end
         vim.schedule(function()
             if self.destroyed or not vim.api.nvim_win_is_valid(winid) then
                 return
@@ -439,10 +445,11 @@ function SessionManager:new()
             if not writer then
                 return
             end
-            writer:flush_pending_fold_ops()
             writer:replay_folds(winid)
+            writer:flush_pending_fold_ops()
             self.permission_manager:refresh_float()
         end)
+        shown:on_window_shown(winid)
     end
 
     self.widget.on_goto_bottom = function(winid)

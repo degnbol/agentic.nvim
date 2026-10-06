@@ -630,4 +630,21 @@ end
             )
         end)
     end
+
+    it("a finished transcript opened in a new tab shows its last line", function()
+        child.lua([[
+_G.spawn("c1")
+local lines = {}
+for i = 1, 200 do lines[i] = "finding " .. i end
+_G.chunk("c1", table.concat(lines, "\n\n"), "toolu_1")
+_G.state("c1", "completed")
+]])
+        child.flush()
+        child.lua([[vim.cmd("tab sbuffer " .. _G.transcript("c1").bufnr)]])
+        child.flush()
+
+        assert.is_true(child.lua_get([[
+vim.fn.line("w$") == vim.api.nvim_buf_line_count(_G.transcript("c1").bufnr)
+]]))
+    end)
 end)
