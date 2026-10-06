@@ -42,7 +42,7 @@
     ],
     "checkThirdParty": false,
     "preloadFileSize": 10000,
-    "ignoreDir": [".git", "node_modules", ".github", "deps"]
+    "ignoreDir": [".git", "node_modules", ".github", "deps", ".claude/worktrees"]
   },
   "type": {
     "checkTableShape": true,
