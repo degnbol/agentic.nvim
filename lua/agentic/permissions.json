@@ -328,10 +328,47 @@
 
   "brew": {
     "read_only": [
+      { "leading_options": ["prefix", "cellar", "cache", "repository", "repo", "caskroom", "taps", "env", "config", "version", "S"] },
       { "positionals": ["info"] },
+      { "positionals": ["abv"] },
+      { "positionals": ["desc"] },
+      { "positionals": ["deps"] },
+      { "positionals": ["uses"] },
       { "positionals": ["leaves"] },
       { "positionals": ["list"] },
-      { "positionals": ["search"] }
+      { "positionals": ["ls"] },
+      { "positionals": ["search"] },
+      { "positionals": ["options"] },
+      { "positionals": ["missing"] },
+      { "positionals": ["vulns"] },
+      { "positionals": ["tap-info"] },
+      { "positionals": ["which-formula"] },
+      { "positionals": ["commands"] },
+      { "positionals": ["command"] },
+      { "positionals": ["config"] },
+      { "positionals": ["doctor"] },
+      { "positionals": ["dr"] },
+      { "positionals": ["environment"] },
+      { "positionals": ["shellenv"] },
+      { "positionals": ["formulae"] },
+      { "positionals": ["casks"] },
+      { "positionals": ["log"] },
+      { "positionals": ["services", "list"] },
+      { "positionals": ["services", "info"] },
+      { "positionals": ["analytics", "state"] },
+      { "positionals": ["completions", "state"] },
+      { "positionals": ["developer", "state"] },
+      { "positionals": ["cleanup"], "options": ["n", "dry-run"] },
+      { "positionals": ["autoremove"], "options": ["n", "dry-run"] }
+    ],
+    "safe_write": [
+      { "positionals": ["outdated"] },
+      { "positionals": ["update"] },
+      { "positionals": ["up"] },
+      { "positionals": ["fetch"] },
+      { "positionals": ["bundle", "check"] },
+      { "positionals": ["bundle", "list"] },
+      { "positionals": ["bundle", "env"] }
     ]
   },
 
