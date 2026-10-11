@@ -185,6 +185,59 @@ describe("BufHelpers", function()
         end)
     end)
 
+    describe("append_paragraph", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        local function lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("replaces an empty buffer", function()
+            assert.equal(0, BufHelpers.append_paragraph(bufnr, { "a", "b" }))
+            assert.same({ "a", "b" }, lines())
+        end)
+
+        it("replaces a whitespace-only buffer", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { " ", "\t" })
+            assert.equal(0, BufHelpers.append_paragraph(bufnr, { "a" }))
+            assert.same({ "a" }, lines())
+        end)
+
+        it("puts a blank line after a last line with text", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
+            assert.equal(3, BufHelpers.append_paragraph(bufnr, { "a" }))
+            assert.same({ "x", "y", "", "a" }, lines())
+        end)
+
+        it("adds no blank line after a blank last line", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "" })
+            assert.equal(2, BufHelpers.append_paragraph(bufnr, { "a" }))
+            assert.same({ "x", "", "a" }, lines())
+        end)
+
+        it("reports a change that starts after the last line", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
+            local start_rows = {}
+            vim.api.nvim_buf_attach(bufnr, false, {
+                on_bytes = function(_, _, _, start_row)
+                    table.insert(start_rows, start_row)
+                end,
+            })
+
+            BufHelpers.append_paragraph(bufnr, { "a" })
+
+            assert.same({ 2 }, start_rows)
+        end)
+    end)
+
     describe("rename", function()
         --- @param name string
         --- @return integer[]

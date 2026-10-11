@@ -1180,7 +1180,8 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
     end
 end
 
---- Bind each `Config.keymaps.prompts` entry on a buffer to send its prompt.
+--- Bind each `Config.keymaps.prompts` entry on a buffer to put its prompt in
+--- the input.
 --- @param bufnr integer
 function ChatWidget:_bind_canned_prompt_keymaps(bufnr)
     for lhs, spec in pairs(Config.keymaps.prompts) do
@@ -1199,13 +1200,36 @@ function ChatWidget:_bind_canned_prompt_keymaps(bufnr)
                     and { { lhs, mode = spec.mode } }
                 or lhs
             local desc = (type(spec) == "table" and spec.desc)
-                or ("Prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
+                or ("Input prompt: " .. prompt:gsub("%s+", " "):sub(1, 40))
 
             BufHelpers.multi_keymap_set(km, bufnr, function()
-                self.on_submit_input(prompt)
+                self:_stage_input(prompt)
             end, { desc = desc })
         end
     end
+end
+
+--- Add text to the end of the input as a paragraph of its own, and focus the
+--- input in normal mode with the cursor on the text's first line. Leading and
+--- trailing empty lines of the text are dropped.
+--- @param text string
+function ChatWidget:_stage_input(text)
+    local lines = vim.split(text, "\n", { trimempty = true })
+    if #lines == 0 then
+        return
+    end
+    local row = BufHelpers.append_paragraph(self.buf_nrs.input, lines)
+
+    if vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]") then
+        vim.cmd("normal! \27")
+    end
+    vim.cmd("stopinsert")
+    local winid = self:input_win()
+    if not winid then
+        return
+    end
+    vim.api.nvim_set_current_win(winid)
+    vim.api.nvim_win_set_cursor(winid, { row + 1, 0 })
 end
 
 --- Bind the insert keys and `p`/`P` on a read-only panel buffer to type and

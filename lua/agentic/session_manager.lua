@@ -3011,7 +3011,7 @@ end
 ---
 --- A deferred submit that came from the input buffer stays there as a tagged
 --- region for the caller to mark; one that did not (`Agentic.send_prompt`,
---- `Config.keymaps.prompts`, the synthetic "continue") has no range to tag and
+--- the synthetic "continue") has no range to tag and
 --- is retained here instead, last-write-wins. Those have nothing on screen to
 --- show they were held, so the reason is written to chat.
 --- @param input_text string
@@ -3374,8 +3374,8 @@ function SessionManager:_handle_input_submit_inner(input_text)
     local prompt = {}
 
     -- The splitter's line shape, so a block dispatches as what it was split
-    -- as, and text that never went through the splitter (`Agentic.send_prompt`,
-    -- `Config.keymaps.prompts`) classifies the same way.
+    -- as, and text that never went through the splitter (`Agentic.send_prompt`)
+    -- classifies the same way.
     local is_command = PromptBlocks.command(input_text) ~= nil
 
     if is_command then

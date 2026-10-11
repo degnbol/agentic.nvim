@@ -23,7 +23,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
   - Opt-in register copy via `settings.send_register`.
   - Partial prompt submit (similar to Claude Code stash functionality.
     - `<CR><CR>` sends the current line (with count), `<CR>{motion}` sends the motion range, visual `<CR>` sends the selection.
-  - Set new keymaps for the submission of common custom prompts. Comes with `<localLeader>c` to send "Continue"
+  - Set new keymaps that put common custom prompts in the input. Comes with `<localLeader>c` for "Continue"
 - Completion of any terms mentioned in chat
 - Navigation keymap (default: `[[` and `]]`) for cursor jump between prompts.
 - `:Agentic {query}` — open a cached session by `session_id` prefix or exact title (case-insensitive). Shows the chat and sends `session/load` to the agent. With `session_restore.cd_on_load` (default `true`), nvim's working directory is changed to the session's recorded cwd.

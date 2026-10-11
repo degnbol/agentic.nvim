@@ -1513,4 +1513,164 @@ describe("agentic.ui.ChatWidget", function()
             assert.same({ { 0, 1 } }, tags())
         end)
     end)
+
+    describe("_stage_input", function()
+        local widget
+        local home
+        local submit_spy
+
+        before_each(function()
+            vim.cmd("tabnew")
+            submit_spy = spy.new(function()
+                return true
+            end)
+            widget = new_widget(submit_spy --[[@as function]])
+            home = show(widget)
+        end)
+
+        after_each(function()
+            vim.cmd("stopinsert")
+            pcall(function()
+                widget:destroy()
+            end)
+            pcall(function()
+                vim.cmd("tabclose")
+            end)
+        end)
+
+        --- @param w agentic.ui.ChatWidget
+        --- @return string[]
+        local function input_lines(w)
+            return vim.api.nvim_buf_get_lines(w.buf_nrs.input, 0, -1, false)
+        end
+
+        it("focuses the input in normal mode on the new text", function()
+            fill_buffer(widget, "input", { "draft" })
+            vim.api.nvim_set_current_win(home)
+
+            widget:_stage_input("Continue")
+
+            local winid = vim.api.nvim_get_current_win()
+            assert.equal(widget.buf_nrs.input, vim.api.nvim_win_get_buf(winid))
+            assert.same({ 3, 0 }, vim.api.nvim_win_get_cursor(winid))
+            assert.equal("n", vim.api.nvim_get_mode().mode)
+            assert.same({ "draft", "", "Continue" }, input_lines(widget))
+            assert.spy(submit_spy).was.called(0)
+        end)
+
+        --- Map `<Plug>(agentic-test-stage)` in insert and visual mode on the
+        --- input to stage "Continue", and focus the input.
+        local function map_stage()
+            vim.keymap.set({ "i", "x", "s" }, "<Plug>(agentic-test-stage)", function()
+                widget:_stage_input("Continue")
+            end, { buffer = widget.buf_nrs.input })
+            vim.api.nvim_set_current_win(widget:input_win() --[[@as integer]])
+        end
+
+        -- Insert mode would type the trailing "X"; normal mode at col 0
+        -- ignores it.
+        it("leaves insert mode", function()
+            map_stage()
+
+            press("i" .. vim.keycode("<Plug>(agentic-test-stage)") .. "X")
+
+            assert.same({ "Continue" }, input_lines(widget))
+        end)
+
+        it("leaves visual mode", function()
+            fill_buffer(widget, "input", { "one", "two" })
+            map_stage()
+
+            press("ggVj" .. vim.keycode("<Plug>(agentic-test-stage)"))
+
+            assert.equal("n", vim.api.nvim_get_mode().mode)
+            assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(0))
+        end)
+
+        it("leaves select mode", function()
+            fill_buffer(widget, "input", { "one", "two" })
+            map_stage()
+
+            press("ggVj\7" .. vim.keycode("<Plug>(agentic-test-stage)"))
+
+            assert.equal("n", vim.api.nvim_get_mode().mode)
+            assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(0))
+        end)
+
+        it("adds every line, cursor on the first", function()
+            fill_buffer(widget, "input", { "draft" })
+
+            widget:_stage_input("first\nsecond\n")
+
+            assert.same({ "draft", "", "first", "second" }, input_lines(widget))
+            assert.equal(widget.buf_nrs.input, vim.api.nvim_get_current_buf())
+            assert.same({ 3, 0 }, vim.api.nvim_win_get_cursor(0))
+        end)
+
+        it("opens a closed input panel and focuses it", function()
+            widget:close_panel("input")
+            vim.api.nvim_set_current_win(home)
+
+            widget:_stage_input("Continue")
+
+            local winid = vim.api.nvim_get_current_win()
+            assert.equal(widget.buf_nrs.input, vim.api.nvim_win_get_buf(winid))
+            assert.equal(
+                vim.api.nvim_get_current_tabpage(),
+                vim.api.nvim_win_get_tabpage(winid)
+            )
+            assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(winid))
+        end)
+
+        it("keeps a queued region on the last line", function()
+            local ns = vim.api.nvim_create_namespace("agentic_queued_region")
+            fill_buffer(widget, "input", { "queued" })
+            widget:_queue_line_range(0, 0)
+
+            widget:_stage_input("Continue")
+
+            local marks = vim.api.nvim_buf_get_extmarks(
+                widget.buf_nrs.input,
+                ns,
+                0,
+                -1,
+                { details = true }
+            )
+            assert.equal(1, #marks)
+            assert.same({ 0, 0 }, { marks[1][2], marks[1][4].end_row })
+        end)
+
+        it("changes only its own input", function()
+            local other = new_widget(function()
+                return true
+            end)
+            MiniTest.finally(function()
+                other:destroy()
+            end)
+
+            widget:_stage_input("Continue")
+
+            assert.is_true(vim.bo[widget.buf_nrs.input].modified)
+            assert.same({ "" }, input_lines(other))
+            assert.is_false(vim.bo[other.buf_nrs.input].modified)
+        end)
+
+        it("is what a canned prompt key calls, instead of sending", function()
+            local stage_spy = spy.on(widget, "_stage_input")
+            MiniTest.finally(function()
+                stage_spy:revert()
+            end)
+            local keymaps =
+                vim.api.nvim_buf_get_keymap(widget.buf_nrs.chat, "n")
+            local canned = vim.tbl_filter(function(km)
+                return km.desc == "Input prompt: Continue"
+            end, keymaps)[1]
+
+            canned.callback()
+
+            assert.spy(stage_spy).was.called(1)
+            assert.equal("Continue", stage_spy.calls[1][2])
+            assert.spy(submit_spy).was.called(0)
+        end)
+    end)
 end)

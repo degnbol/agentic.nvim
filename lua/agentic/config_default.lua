@@ -250,7 +250,8 @@ local ConfigDefault = {
             switch_model = "<localLeader>M",
         },
 
-        --- Send a fixed prompt to this widget's session. key → prompt text
+        --- Put a fixed prompt at the end of this widget's input buffer, with
+        --- the cursor on it in normal mode. key → prompt text
         --- (or { prompt, mode?, desc? } for mode/desc control). Applied to
         --- every widget buffer, so these only exist while a session is open.
         --- Merges by key, so user entries add to these defaults. Set a key to

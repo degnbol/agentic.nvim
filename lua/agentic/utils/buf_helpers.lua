@@ -200,6 +200,28 @@ function BufHelpers.is_buffer_empty(bufnr)
     return true
 end
 
+--- Add lines to the end of a buffer as a paragraph of their own: they replace
+--- a buffer with no text, and follow a blank line otherwise. In a buffer with
+--- text, the change `on_bytes` reports starts on the row after the last line,
+--- so it covers no existing row.
+--- @param bufnr integer
+--- @param lines string[]
+--- @return integer first_row 0-indexed row of lines[1]
+function BufHelpers.append_paragraph(bufnr, lines)
+    if BufHelpers.is_buffer_empty(bufnr) then
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        return 0
+    end
+    local first_row = vim.api.nvim_buf_line_count(bufnr)
+    local last = vim.api.nvim_buf_get_lines(bufnr, -2, -1, false)[1]
+    if last:match("%S") then
+        lines = vim.list_extend({ "" }, lines)
+        first_row = first_row + 1
+    end
+    vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
+    return first_row
+end
+
 --- Normal-mode keys that start insert, which a buffer that cannot be typed in
 --- can map to typing in another.
 BufHelpers.INSERT_KEYS = { "a", "A", "o", "O", "i", "I", "c", "C", "x", "X" }
