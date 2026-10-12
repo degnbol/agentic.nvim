@@ -266,9 +266,7 @@ describe("agentic.SessionManager", function()
                 session_id = nil, -- skip the cancel/clear-content block
                 _title_user_set = true, -- as if the user had /rename'd
                 permission_manager = {
-                    clear = function() end,
-                    clear_grant_scopes = function() end,
-                },
+                    clear = function() end,                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -308,9 +306,7 @@ describe("agentic.SessionManager", function()
                     is_generating = true, -- as if a turn were streaming
                     agent = { cancel_session = noop },
                     permission_manager = {
-                        clear = noop,
-                        clear_grant_scopes = function() end,
-                    },
+                        clear = noop,                    },
                     todo_list = { clear = noop },
                     file_list = { clear = noop },
                     code_selection = { clear = noop },
@@ -417,9 +413,7 @@ describe("agentic.SessionManager", function()
                 session_id = nil, -- skip the cancel/clear-content block
                 _budget = { rateLimitType = "five_hour" },
                 permission_manager = {
-                    clear = function() end,
-                    clear_grant_scopes = function() end,
-                },
+                    clear = function() end,                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -463,9 +457,7 @@ describe("agentic.SessionManager", function()
                 _usage_reset_epoch = os.time() + 3600,
                 _pending_bufferless_prompt = "stranded",
                 permission_manager = {
-                    clear = function() end,
-                    clear_grant_scopes = function() end,
-                },
+                    clear = function() end,                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -677,10 +669,7 @@ describe("agentic.SessionManager", function()
                     set_chat_title = noop,
                     buf_nrs = { chat = 0, input = 0 },
                 },
-                permission_manager = {
-                    clear = noop,
-                    clear_grant_scopes = function() end,
-                },
+                permission_manager = { clear = noop },
                 todo_list = { clear = noop },
                 file_list = { clear = noop },
                 code_selection = { clear = noop },
@@ -740,14 +729,14 @@ describe("agentic.SessionManager", function()
             end
         )
 
-        it("drops the outgoing session's grants", function()
+        it("clears the outgoing session's permission state", function()
             local session = make_load_session()
-            local clear_grants = spy.new(function() end)
-            session.permission_manager.clear_grant_scopes = clear_grants
+            local clear = spy.new(function() end)
+            session.permission_manager.clear = clear
 
             session:_do_load_acp_session("test-session-id", "/tmp")
 
-            assert.equal(1, clear_grants.call_count)
+            assert.equal(1, clear.call_count)
         end)
 
         it("resolves `.` grants against the loaded session's cwd", function()
@@ -1255,7 +1244,7 @@ describe("agentic.SessionManager", function()
             "soft cancels old session without clearing widget/history",
             function()
                 local cancel_spy = spy.new(function() end)
-                local perm_clear_spy = spy.new(function() end)
+                local perm_cancel_spy = spy.new(function() end)
                 local todo_clear_spy = spy.new(function() end)
                 local widget_clear_spy = spy.new(function() end)
                 local file_list_clear_spy = spy.new(function() end)
@@ -1291,9 +1280,7 @@ describe("agentic.SessionManager", function()
                         provider_config = { name = "Old Provider" },
                     },
                     permission_manager = {
-                        clear = perm_clear_spy,
-                        clear_grant_scopes = function() end,
-                    },
+                        cancel_requests = perm_cancel_spy,                    },
                     todo_list = { clear = todo_clear_spy },
                     widget = { clear = widget_clear_spy },
                     file_list = { clear = file_list_clear_spy },
@@ -1309,7 +1296,7 @@ describe("agentic.SessionManager", function()
 
                 assert.spy(cancel_spy).was.called(1)
                 assert.is_nil(session.session_id)
-                assert.spy(perm_clear_spy).was.called(1)
+                assert.spy(perm_cancel_spy).was.called(1)
                 assert.spy(todo_clear_spy).was.called(1)
 
                 assert.spy(widget_clear_spy).was.called(0)
@@ -1361,9 +1348,7 @@ describe("agentic.SessionManager", function()
                         provider_config = { name = "Old" },
                     },
                     permission_manager = {
-                        clear = function() end,
-                        clear_grant_scopes = function() end,
-                    },
+                        cancel_requests = function() end,                    },
                     todo_list = { clear = function() end },
                     message_writer = { write_notice = spy.new(function() end) },
                     widget = { buf_nrs = {} },
@@ -1422,9 +1407,7 @@ describe("agentic.SessionManager", function()
                     provider_config = { name = "Old" },
                 },
                 permission_manager = {
-                    clear = function() end,
-                    clear_grant_scopes = function() end,
-                },
+                    cancel_requests = function() end,                },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = spy.new(function() end) },
                 chat_history = { messages = {}, session_id = "old" },
@@ -1460,9 +1443,7 @@ describe("agentic.SessionManager", function()
 
                 agent = mock_agent,
                 permission_manager = {
-                    clear = spy.new(function() end),
-                    clear_grant_scopes = function() end,
-                },
+                    cancel_requests = spy.new(function() end),                },
                 todo_list = { clear = spy.new(function() end) },
                 chat_history = { messages = {} },
                 _is_first_message = false,
@@ -1474,7 +1455,9 @@ describe("agentic.SessionManager", function()
             session:switch_provider()
 
             assert.spy(mock_agent.cancel_session).was.called(0)
-            assert.spy(session.permission_manager.clear).was.called(1)
+            assert
+                .spy(session.permission_manager.cancel_requests).was
+                .called(1)
             assert.spy(session.todo_list.clear).was.called(1)
             assert.spy(session.new_session).was.called(1)
         end)
@@ -1501,9 +1484,7 @@ describe("agentic.SessionManager", function()
                     provider_config = { name = "Old" },
                 },
                 permission_manager = {
-                    clear = function() end,
-                    clear_grant_scopes = function() end,
-                },
+                    cancel_requests = function() end,                },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = notice_spy },
                 widget = { buf_nrs = {} },
@@ -3541,6 +3522,102 @@ describe("agentic.SessionManager", function()
             assert.equal(4, session._session_epoch)
             assert.equal(0, session._prompt_pending)
             assert.is_nil(session:_submit_defer_reason("hello"))
+        end)
+    end)
+
+    describe("permission memory", function()
+        local Recovery = require("agentic.session_recovery")
+        local SlashCommands = require("agentic.acp.slash_commands")
+        local MessageWriter = require("agentic.ui.message_writer")
+        local PermissionManager = require("agentic.ui.permission_manager")
+
+        --- @type TestStub[]
+        local stubs
+        --- @type integer
+        local bufnr
+        --- @type agentic.SessionManager
+        local session
+
+        --- @param tool_call_id string
+        --- @return TestSpy callback
+        local function request_edit(tool_call_id)
+            local cb = spy.new(function() end)
+            session.permission_manager:add_request({
+                sessionId = "s-1",
+                toolCall = {
+                    toolCallId = tool_call_id,
+                    kind = "edit",
+                    rawInput = { file_path = "/tmp/foo.lua" },
+                },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "allow-always",
+                        name = "Always",
+                        kind = "allow_always",
+                    },
+                },
+            }, cb --[[@as function]])
+            return cb
+        end
+
+        before_each(function()
+            stubs = {
+                spy.stub(Recovery, "remove_reauth_keymap"),
+                spy.stub(Recovery, "cancel_health_check_timer"),
+                spy.stub(Recovery, "cancel_retry_timer"),
+                spy.stub(SlashCommands, "setCommands"),
+            }
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local pm =
+                PermissionManager:new(MessageWriter:new(bufnr), { chat = bufnr })
+            table.insert(stubs, spy.stub(pm.permission_float, "open"))
+            table.insert(stubs, spy.stub(pm.permission_float, "close"))
+
+            session = {
+                session_id = "s-1",
+                agent = { stop_generation = function() end },
+                status_indicator = { stop = function() end },
+                permission_manager = pm,
+                widget = {
+                    buf_nrs = { input = 0 },
+                    set_chat_title = function() end,
+                },
+                stop_generation = SessionManager.stop_generation,
+                _cancel_session = SessionManager._cancel_session,
+                _reset_subagents = function() end,
+                _sync_modified = SessionManager._sync_modified,
+                _agents = {},
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+            } --[[@as agentic.SessionManager]]
+
+            request_edit("tc-1")
+            pm:_complete_request("allow-always")
+        end)
+
+        after_each(function()
+            for _, s in ipairs(stubs) do
+                s:revert()
+            end
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("survives stop_generation", function()
+            session:stop_generation()
+            local cb = request_edit("tc-2")
+            assert.is_true(cb:called_with("allow-once"))
+        end)
+
+        it("ends with the session", function()
+            session.session_id = nil -- skip the cancel/clear-content block
+            session:_cancel_session()
+            local cb = request_edit("tc-2")
+            assert.spy(cb).was.called(0)
+            assert.is_not_nil(session.permission_manager.current_request)
         end)
     end)
 

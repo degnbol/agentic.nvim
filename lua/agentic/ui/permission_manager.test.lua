@@ -203,6 +203,56 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
+    describe("cancel_requests", function()
+        --- @param tool_call_id string
+        --- @return TestSpy callback
+        local function request_edit(tool_call_id)
+            local cb = spy.new(function() end)
+            pm:add_request({
+                sessionId = "test-session",
+                toolCall = { toolCallId = tool_call_id, kind = "edit" },
+                options = {
+                    { optionId = "allow-once", name = "Allow", kind = "allow_once" },
+                },
+            }, cb --[[@as function]])
+            return cb
+        end
+
+        before_each(function()
+            pm._always_cache["k"] = "allow"
+            pm._execute_leaf_allow["frobnicate a"] = true
+            pm:record_pending_edit("tc-a", "/tmp/a.lua", 1, { "x" })
+            pm:finalize_edit_range("tc-a")
+            pm:record_pending_edit("tc-b", "/tmp/a.lua", 5, { "y" })
+        end)
+
+        it("resolves the open and queued requests with nil", function()
+            local open = request_edit("tc-1")
+            local queued = request_edit("tc-2")
+            pm:cancel_requests()
+            assert.is_true(open:called_with(nil))
+            assert.is_true(queued:called_with(nil))
+            assert.is_nil(pm.current_request)
+            assert.same({}, pm.queue)
+        end)
+
+        it("keeps the session's permission memory", function()
+            pm:cancel_requests()
+            assert.equal("allow", pm._always_cache["k"])
+            assert.is_true(pm._execute_leaf_allow["frobnicate a"])
+            assert.is_not_nil(pm._edit_records["tc-a"])
+            assert.is_not_nil(pm._pending_edits["tc-b"])
+        end)
+
+        it("clear() also forgets it", function()
+            pm:clear()
+            assert.same({}, pm._always_cache)
+            assert.same({}, pm._execute_leaf_allow)
+            assert.same({}, pm._edit_records)
+            assert.same({}, pm._pending_edits)
+        end)
+    end)
+
     describe("option keys", function()
         --- @type TestStub
         local visible_stub
@@ -1362,10 +1412,16 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
-        it("clear() keeps the grant scopes", function()
+        it("cancel_requests() keeps the grant scopes", function()
+            grant(repo)
+            pm:cancel_requests()
+            assert.equal(1, #pm:get_grant_scopes())
+        end)
+
+        it("clear() drops the grant scopes", function()
             grant(repo)
             pm:clear()
-            assert.equal(1, #pm:get_grant_scopes())
+            assert.same({}, pm:get_grant_scopes())
         end)
 
         it("prompts for a `..` after a symlink", function()

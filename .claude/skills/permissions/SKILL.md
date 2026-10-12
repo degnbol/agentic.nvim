@@ -31,8 +31,8 @@ block it. For an *unconditional* block the user must also add a settings.json
 `deny` rule (SDK-enforced, tier 1). Our deny is a backstop on the escalation
 surface, not a hard guarantee.
 
-State is per-session. Everything below clears on `/new`, session cancel,
-or tabpage close. Grants alone survive stopping a turn.
+State is per-session: it clears when the session ends or a saved session
+loads, and survives a stop, a respawn and a provider switch.
 
 ## Permission flow
 

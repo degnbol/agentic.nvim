@@ -264,7 +264,9 @@ describe("agentic.session_recovery", function()
                         timestamp = 1,
                         messages = { { type = "user", text = "hi" } },
                     },
-                    permission_manager = { clear = function() end },
+                    permission_manager = {
+                        cancel_requests = function() end,
+                    },
                     todo_list = { clear = function() end },
                     widget = { buf_nrs = {} },
                     _adopt_history = SessionManager._adopt_history,

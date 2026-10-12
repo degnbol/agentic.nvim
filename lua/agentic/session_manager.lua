@@ -2369,9 +2369,7 @@ end
 ---
 --- Goes straight to the writer rather than through
 --- `SessionManager:_on_tool_call_update`, which would also restart the status
---- indicator and re-record edit ranges. The permission cleanup that funnel
---- does has already run, in `stop_generation`'s `permission_manager:clear()`,
---- or is not owed, for a subagent that ended.
+--- indicator and re-record edit ranges.
 --- @param writer agentic.ui.MessageWriter
 --- @return string[] tool_call_ids The ids that were stamped
 local function stamp_cancelled(writer)
@@ -3213,7 +3211,7 @@ function SessionManager:stop_generation()
         return
     end
     self.agent:stop_generation(self.session_id)
-    self.permission_manager:clear()
+    self.permission_manager:cancel_requests()
     self.is_generating = false
     self.status_indicator:stop()
     -- The cancel ends the subagents too, and their state updates close them.
@@ -3759,7 +3757,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
         -- Above the history save below, so the corrected statuses are the ones
         -- persisted. `stop_generation` reaches this callback two ways — the
         -- `session/cancel` it sends, and the outstanding permission request its
-        -- `permission_manager:clear()` resolves with nil.
+        -- `permission_manager:cancel_requests()` resolves with nil.
         if type(response) == "table" and response.stopReason == "cancelled" then
             self:_mark_unresolved_tool_calls_cancelled()
         end
@@ -4044,7 +4042,6 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
-    self.permission_manager:clear_grant_scopes()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
     self._plan_exit_pending = false
@@ -4233,7 +4230,6 @@ function SessionManager:_cancel_session()
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
-    self.permission_manager:clear_grant_scopes()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
     self._plan_exit_pending = false
@@ -4320,7 +4316,7 @@ function SessionManager:switch_provider()
         old_agent:cancel_session(old_session_id)
     end
     self.session_id = nil
-    self.permission_manager:clear()
+    self.permission_manager:cancel_requests()
     self.todo_list:clear()
 
     -- If agent was already cached, on_ready fired synchronously above.

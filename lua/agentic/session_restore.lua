@@ -106,6 +106,7 @@ local function do_restore(item, current_session, has_conflict)
         if has_conflict and session.session_id then
             session.agent:cancel_session(session.session_id)
             session:clear_chat()
+            session.permission_manager:clear()
         end
 
         ChatHistory.load(item.session_id, function(history, err)

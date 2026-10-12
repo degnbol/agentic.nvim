@@ -382,7 +382,7 @@ function M.respawn_preserving_history(sm, on_created)
     -- request callback still pending on it rather than orphaning them.
     AgentInstance.invalidate(provider_name)
     sm.session_id = nil
-    sm.permission_manager:clear()
+    sm.permission_manager:cancel_requests()
     sm.todo_list:clear()
 
     sm.agent = AgentInstance.get_instance(provider_name, function(client)

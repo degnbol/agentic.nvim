@@ -1017,9 +1017,9 @@ function PermissionManager:_complete_request(option_id)
     self:_process_next()
 end
 
---- Clear all displayed buttons and keymaps, cancel all pending requests.
---- Called when session ends or user cancels generation.
-function PermissionManager:clear()
+--- Close the prompt and resolve the open and queued requests with nil.
+--- Remembered decisions and edit records stay.
+function PermissionManager:cancel_requests()
     if self.current_request then
         self.permission_float:close()
         self:_clear_unapproved_highlight()
@@ -1027,7 +1027,10 @@ function PermissionManager:clear()
 
         local ok, err = pcall(self.current_request.callback, nil)
         if not ok then
-            Logger.debug("Permission callback error during clear:", err)
+            Logger.notify(
+                "Permission callback error during cancel: " .. tostring(err),
+                vim.log.levels.ERROR
+            )
         end
         self.current_request = nil
     end
@@ -1036,20 +1039,31 @@ function PermissionManager:clear()
         local callback = item[3]
         local ok, err = pcall(callback, nil)
         if not ok then
-            Logger.debug("Queued permission callback error during clear:", err)
+            Logger.notify(
+                "Queued permission callback error during cancel: "
+                    .. tostring(err),
+                vim.log.levels.ERROR
+            )
         end
     end
 
     self.queue = {}
+end
+
+--- Resolve all requests with nil and forget allow/reject-always decisions,
+--- remembered execute leaves, recorded edit ranges and grant scopes.
+function PermissionManager:clear()
+    self:cancel_requests()
     self._always_cache = {}
     self._execute_leaf_allow = {}
     self._edit_records = {}
     self._pending_edits = {}
+    self:clear_grant_scopes()
 end
 
 --- Reject the current request and cancel all remaining queued requests.
---- Unlike clear(), sends reject_once (not cancelled) for the current request
---- so the provider sees an active rejection and can adapt its approach.
+--- Unlike `cancel_requests`, sends reject_once (not cancelled) for the current
+--- request so the provider sees an active rejection and can adapt its approach.
 function PermissionManager:reject_and_cancel_remaining()
     if not self.current_request then
         return
