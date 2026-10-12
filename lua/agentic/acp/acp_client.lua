@@ -764,21 +764,18 @@ end
 --- order (see `SkillPath.roots`). Per session rather than per client: one
 --- client serves every tabpage using the provider, and a restored session
 --- carries the cwd it was saved with, not the editor's current one.
---- @protected
 --- @param session_id string|nil
 --- @return string[] roots Empty for a session this client neither created nor loaded
-function ACPClient:__session_roots(session_id)
+function ACPClient:session_roots(session_id)
     return session_id and self._session_roots[self:_root_session(session_id)]
         or {}
 end
 
 --- Build the message for a tool_call. it's usually the first update received for a tool call
 --- Adapters override this to add provider-specific fields or transformations.
---- The session is passed for overrides that resolve session-scoped state
---- (`__session_roots`); nothing in the standard fields needs it.
 --- @protected
 --- @param update agentic.acp.ToolCallMessage
---- @param _session_id string|nil
+--- @param _session_id string|nil Unused here. For overrides that resolve session-scoped state such as `session_roots`
 --- @return agentic.ui.MessageWriter.ToolCallBlock message
 function ACPClient:__build_tool_call_message(update, _session_id)
     --- @type agentic.ui.MessageWriter.ToolCallBlock
@@ -811,11 +808,9 @@ end
 
 --- Build the message for a tool_call_update.
 --- Adapters override this to add provider-specific fields.
---- The session is passed for overrides that resolve session-scoped state
---- (`__session_roots`); nothing in the standard fields needs it.
 --- @protected
 --- @param update agentic.acp.ToolCallUpdate
---- @param _session_id string|nil
+--- @param _session_id string|nil Unused here. For overrides that resolve session-scoped state such as `session_roots`
 --- @return agentic.ui.MessageWriter.ToolCallBase message
 function ACPClient:__build_tool_call_update(update, _session_id)
     --- @type agentic.ui.MessageWriter.ToolCallBase

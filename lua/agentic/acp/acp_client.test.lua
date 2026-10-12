@@ -767,7 +767,7 @@ describe("agentic.acp.ACPClient", function()
             local client = make_client({
                 agent_capabilities = { loadSession = true },
                 _send_request = function(this)
-                    roots_at_send = this:__session_roots("s-load")
+                    roots_at_send = this:session_roots("s-load")
                 end,
             })
 
@@ -793,7 +793,7 @@ describe("agentic.acp.ACPClient", function()
 
             client:create_session("/proj", {}, function() end)
 
-            assert.equal("/proj", client:__session_roots("s-new")[1])
+            assert.equal("/proj", client:session_roots("s-new")[1])
         end)
 
         it("drops them with the subscriber", function()
@@ -804,7 +804,7 @@ describe("agentic.acp.ACPClient", function()
 
             client:unsubscribe("s-1")
 
-            assert.same({}, client:__session_roots("s-1"))
+            assert.same({}, client:session_roots("s-1"))
             assert.is_nil(client.subscribers["s-1"])
         end)
 
@@ -975,7 +975,7 @@ describe("agentic.acp.ACPClient", function()
 
             spawn(client, "root", "child")
 
-            assert.same({ "/tmp/project" }, client:__session_roots("child"))
+            assert.same({ "/tmp/project" }, client:session_roots("child"))
         end)
 
         it("forwards a child's replayed user chunk while the root loads", function()

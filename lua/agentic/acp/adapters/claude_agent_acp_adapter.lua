@@ -333,7 +333,7 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
             local reported = ClaudeUtils.claude_meta(update).skillPath
             message.skill_path = (reported and FileSystem.is_file(reported))
                     and reported
-                or SkillPath.find(skill, self:__session_roots(session_id))
+                or SkillPath.find(skill, self:session_roots(session_id))
         end
         return
     elseif mode_label then

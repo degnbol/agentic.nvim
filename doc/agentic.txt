@@ -560,9 +560,10 @@ What the queue bindings dispatch, and when, is in |agentic-queue|.
     `]]`     n       Next prompt or command notice
 
 |gf|, |CTRL-W_f| and |CTRL-W_gf| open file and buffer names in the chat and
-the subagent transcripts. On a diff row where they find no file, they open the
-edited file at that row's line: in the window, in a split, or in a new
-tabpage. A count is ignored there.
+the subagent transcripts. On `/skill` in the chat, the transcripts, the input
+and the todos, they open that skill's SKILL.md. On a diff row where they find
+no file, they open the edited file at that row's line: in the window, in a
+split, or in a new tabpage. A count is ignored there.
 
 Tool output over its line threshold (|agentic-config-tool-display|) is
 folded; |zo|, |zc| and |za| toggle a fold as usual.

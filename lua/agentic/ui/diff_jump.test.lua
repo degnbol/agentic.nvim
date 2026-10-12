@@ -1,3 +1,4 @@
+local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -280,30 +281,46 @@ describe("diff_jump", function()
         end)
     end)
 
-    describe("target_at", function()
+    --- Lay `block` out in `bufnr` from row 1, below one prose row, spanning
+    --- `n_rows` rows.
+    --- @param bufnr integer
+    --- @param block agentic.ui.MessageWriter.ToolCallBlock
+    --- @param n_rows integer
+    --- @return table<string, agentic.ui.MessageWriter.ToolCallBlock>
+    local function lay_out_in(bufnr, block, n_rows)
         local Renderer = require("agentic.ui.tool_call_renderer")
+        local lines = { "prose" }
+        for i = 1, n_rows do
+            lines[i + 1] = "row " .. i
+        end
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        block.extmark_id = vim.api.nvim_buf_set_extmark(
+            bufnr,
+            Renderer.NS_TOOL_BLOCKS,
+            1,
+            0,
+            { end_row = n_rows }
+        )
+        return { [block.tool_call_id] = block }
+    end
+
+    --- Edit block replacing `old1`, `old2` with `new1`, `new2`. Laid out from
+    --- row 1: header, fence, old1, old2, new1, new2, fence.
+    --- @return agentic.ui.MessageWriter.ToolCallBlock
+    local function modification()
+        return make_edit_block({ "old1", "old2" }, { "new1", "new2" })
+    end
+
+    describe("target_at", function()
         --- @type integer
         local bufnr
 
-        --- Lay `block` out in `bufnr` from row 1, below one prose row,
-        --- spanning `n_rows` rows.
+        --- `lay_out_in` on `bufnr`.
         --- @param block agentic.ui.MessageWriter.ToolCallBlock
         --- @param n_rows integer
         --- @return table<string, agentic.ui.MessageWriter.ToolCallBlock>
         local function lay_out(block, n_rows)
-            local lines = { "prose" }
-            for i = 1, n_rows do
-                lines[i + 1] = "row " .. i
-            end
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-            block.extmark_id = vim.api.nvim_buf_set_extmark(
-                bufnr,
-                Renderer.NS_TOOL_BLOCKS,
-                1,
-                0,
-                { end_row = n_rows }
-            )
-            return { [block.tool_call_id] = block }
+            return lay_out_in(bufnr, block, n_rows)
         end
 
         before_each(function()
@@ -314,11 +331,6 @@ describe("diff_jump", function()
         after_each(function()
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
-
-        -- Layout from row 1: header, fence, old1, old2, new1, new2, fence.
-        local function modification()
-            return make_edit_block({ "old1", "old2" }, { "new1", "new2" })
-        end
 
         it("maps an added row to its file line and column", function()
             local blocks = lay_out(modification(), 7)
@@ -374,6 +386,36 @@ describe("diff_jump", function()
             } --[[@as agentic.ui.MessageWriter.ToolCallBlock]], 3)
 
             assert.is_nil(DiffJump.target_at(bufnr, 2, 0, blocks))
+        end)
+    end)
+
+    describe("set_goto_file_keymaps", function()
+        it("opens the edited line past the agentic includeexpr", function()
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_set_current_buf(bufnr)
+            vim.bo[bufnr].includeexpr = require("agentic.goto_file").EXPR
+            read_stub:returns({ "x", "old1", "old2", "y" })
+            local blocks = lay_out_in(bufnr, modification(), 7)
+            --- @diagnostic disable-next-line: missing-fields
+            DiffJump.set_goto_file_keymaps(bufnr, {
+                tool_call_blocks = blocks,
+            })
+            local open_stub = spy.stub(DiffJump, "open")
+            MiniTest.finally(function()
+                open_stub:revert()
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end)
+            vim.api.nvim_buf_set_lines(bufnr, 5, 6, false, { "/missing" })
+            vim.api.nvim_win_set_cursor(0, { 6, 0 })
+
+            vim.api.nvim_feedkeys("gf", "mx", false)
+
+            assert.same({
+                path = "/file.lua",
+                file_row = 2,
+                file_col = 0,
+            }, open_stub.calls[1][1])
+            assert.equal("edit", open_stub.calls[1][2])
         end)
     end)
 end)
