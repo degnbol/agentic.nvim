@@ -1,5 +1,6 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local MiniTest = require("mini.test")
 
 describe("BufHelpers", function()
     --- @type agentic.utils.BufHelpers
@@ -235,6 +236,97 @@ describe("BufHelpers", function()
             BufHelpers.append_paragraph(bufnr, { "a" })
 
             assert.same({ 2 }, start_rows)
+        end)
+    end)
+
+    describe("prepend_paragraph", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        local function lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("replaces an empty buffer", function()
+            BufHelpers.prepend_paragraph(bufnr, { "a", "b" })
+            assert.same({ "a", "b" }, lines())
+        end)
+
+        it("replaces a whitespace-only buffer", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { " ", "\t" })
+            BufHelpers.prepend_paragraph(bufnr, { "a" })
+            assert.same({ "a" }, lines())
+        end)
+
+        it("adds no blank line before a blank first line", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "", "x" })
+            BufHelpers.prepend_paragraph(bufnr, { "a" })
+            assert.same({ "a", "", "x" }, lines())
+        end)
+
+        it("puts a blank line before a first line with text", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
+            BufHelpers.prepend_paragraph(bufnr, { "a" })
+            assert.same({ "a", "", "x", "y" }, lines())
+        end)
+    end)
+
+    describe("prepend_draft", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            -- A `nofile` buffer is never `modified`.
+            vim.bo[bufnr].buftype = "acwrite"
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        local function lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("adds the text's lines above the draft", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "draft" })
+
+            BufHelpers.prepend_draft(bufnr, "\nfirst\nsecond\n")
+
+            assert.same({ "first", "second", "", "draft" }, lines())
+            assert.is_true(vim.bo[bufnr].modified)
+        end)
+
+        it("adds nothing for empty text", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "draft" })
+            vim.bo[bufnr].modified = false
+
+            BufHelpers.prepend_draft(bufnr, "\n")
+
+            assert.same({ "draft" }, lines())
+            assert.is_false(vim.bo[bufnr].modified)
+        end)
+
+        it("keeps a window's cursor on its text", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "one", "two" })
+            local current = vim.api.nvim_get_current_win()
+            local winid = vim.api.nvim_open_win(bufnr, false, { split = "below" })
+            MiniTest.finally(function()
+                vim.api.nvim_win_close(winid, true)
+            end)
+            vim.api.nvim_win_set_cursor(winid, { 2, 1 })
+
+            BufHelpers.prepend_draft(bufnr, "refused")
+
+            assert.same({ 4, 1 }, vim.api.nvim_win_get_cursor(winid))
+            assert.equal(current, vim.api.nvim_get_current_win())
         end)
     end)
 

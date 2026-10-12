@@ -222,6 +222,36 @@ function BufHelpers.append_paragraph(bufnr, lines)
     return first_row
 end
 
+--- Add lines to the start of a buffer as a paragraph of their own: they
+--- replace a buffer with no text, and precede a blank line otherwise.
+--- @param bufnr integer
+--- @param lines string[]
+function BufHelpers.prepend_paragraph(bufnr, lines)
+    if BufHelpers.is_buffer_empty(bufnr) then
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        return
+    end
+    local first = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+    if first:match("%S") then
+        lines = vim.list_extend(vim.list_slice(lines), { "" })
+    end
+    vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, lines)
+end
+
+--- Add text to the start of a draft buffer as a paragraph of its own, then set
+--- the buffer's `modified` to whether it holds text. Leading and trailing empty
+--- lines of the text are dropped. Text with no lines left changes nothing.
+--- @param bufnr integer
+--- @param text string
+function BufHelpers.prepend_draft(bufnr, text)
+    local lines = vim.split(text, "\n", { trimempty = true })
+    if #lines == 0 then
+        return
+    end
+    BufHelpers.prepend_paragraph(bufnr, lines)
+    BufHelpers.sync_modified(bufnr)
+end
+
 --- Normal-mode keys that start insert, which a buffer that cannot be typed in
 --- can map to typing in another.
 BufHelpers.INSERT_KEYS = { "a", "A", "o", "O", "i", "I", "c", "C", "x", "X" }

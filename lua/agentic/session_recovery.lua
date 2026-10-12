@@ -6,6 +6,8 @@
 --   - Auto-continue retry after usage_limit errors.
 --   - Silent auto-retry after transient server errors.
 --   - Surfacing of "successful but empty" prompt responses.
+--   - Return of a refused prompt: its text and context go back to the input,
+--     and everything queued behind it becomes draft.
 -- All functions take the SessionManager (`sm`) as the first argument and
 -- read/write its fields (`_reauth_keymap`, `_health_check_timer`,
 -- `_retry_*`, `_reauth_job`, `destroyed`, ...). LuaLS treats those
@@ -13,6 +15,7 @@
 -- a tightly-coupled helper that legitimately reaches in.
 --- @diagnostic disable: invisible
 
+local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
@@ -65,6 +68,57 @@ function M.surface_unexpected_response(sm, response)
         message = table.concat(lines, "\n"),
     }
     sm.message_writer:write_error_message(synthetic_error)
+end
+
+--- Give a refused prompt back for editing. Every queued block becomes draft,
+--- and a deferred prompt with no buffer range goes into the session's input,
+--- since both expected the prompt to succeed. A held synthetic "continue" is
+--- indistinguishable from the user's own and goes in too. The prompt's text
+--- goes on top of the input in `bufnr` and the context panels it consumed are
+--- attached again. The provider keeps the refused message in its
+--- conversation, so the restored history and system info it carried are not
+--- sent again. Writes what was returned and the number of drafted prompts to
+--- the chat.
+--- @param sm agentic.SessionManager
+--- @param text string The refused prompt as the user wrote it
+--- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
+--- @param bufnr integer|nil Input to put the text in, default the session's input
+function M.restore_refused_prompt(sm, text, consumed, bufnr)
+    local input = sm.widget.buf_nrs.input
+    local count = sm.widget:queued_block_count()
+    sm.widget:cancel_queue()
+    if sm._pending_bufferless_prompt then
+        BufHelpers.prepend_draft(input, sm._pending_bufferless_prompt)
+        sm._pending_bufferless_prompt = nil
+        count = count + 1
+    end
+
+    BufHelpers.prepend_draft(bufnr or input, text)
+
+    for _, selection in ipairs(consumed.selections) do
+        sm.code_selection:add(selection)
+    end
+    for _, file in ipairs(consumed.files) do
+        sm.file_list:add(file)
+    end
+    sm.diagnostics_list:add_many(consumed.diagnostics)
+
+    local key = Config.keymaps.widget.switch_model
+    if type(key) == "string" and key ~= "" then
+        sm.message_writer:write_error_action(
+            string.format(
+                "Prompt returned to the input. Switch model with [%s] to send it again.",
+                key
+            )
+        )
+    else
+        sm.message_writer:write_error_action("Prompt returned to the input.")
+    end
+    if count > 0 then
+        sm.message_writer:write_error_action(
+            string.format("%d held or queued prompt(s) left as draft.", count)
+        )
+    end
 end
 
 --- Offer re-authentication after a Claude auth error.

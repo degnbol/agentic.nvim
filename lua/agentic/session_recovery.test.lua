@@ -309,4 +309,137 @@ describe("agentic.session_recovery", function()
             end)
         end)
     end)
+
+    describe("restore_refused_prompt", function()
+        local ChatWidget = require("agentic.ui.chat_widget")
+        local Config = require("agentic.config")
+        local MiniTest = require("mini.test")
+        local original_key
+        local last_owner_id = 9000
+        --- @type agentic.SessionManager.PanelContext
+        local NO_CONTEXT = { selections = {}, files = {}, diagnostics = {} }
+
+        before_each(function()
+            original_key = Config.keymaps.widget.switch_model
+            Config.keymaps.widget.switch_model = "<M>"
+        end)
+
+        after_each(function()
+            Config.keymaps.widget.switch_model = original_key
+        end)
+
+        --- A session over a real widget whose input holds `lines`, each
+        --- `{ sr, er }` of `queued` tagged as a queued region, recording what
+        --- goes into its context panels and chat.
+        --- @param lines string[]
+        --- @param queued integer[][]
+        --- @return agentic.SessionManager session
+        --- @return table sink
+        local function make_session(lines, queued)
+            local sink = {
+                actions = {},
+                selections = {},
+                files = {},
+                diagnostics = {},
+            }
+            last_owner_id = last_owner_id + 1
+            local widget = ChatWidget:new(last_owner_id, function() end)
+            MiniTest.finally(function()
+                widget:destroy()
+            end)
+            local input = widget.buf_nrs.input
+            vim.api.nvim_buf_set_lines(input, 0, -1, false, lines)
+            for _, range in ipairs(queued) do
+                widget:_queue_line_range(range[1], range[2])
+            end
+            local session = {
+                widget = widget,
+                code_selection = {
+                    add = function(_self, selection)
+                        table.insert(sink.selections, selection)
+                    end,
+                },
+                file_list = {
+                    add = function(_self, path)
+                        table.insert(sink.files, path)
+                    end,
+                },
+                diagnostics_list = {
+                    add_many = function(_self, diagnostics)
+                        vim.list_extend(sink.diagnostics, diagnostics)
+                    end,
+                },
+                message_writer = {
+                    write_error_action = function(_self, text)
+                        table.insert(sink.actions, text)
+                    end,
+                },
+            }
+            return session --[[@as agentic.SessionManager]], sink
+        end
+
+        --- @param session agentic.SessionManager
+        --- @return string[]
+        local function input_lines(session)
+            local input = session.widget.buf_nrs.input
+            return vim.api.nvim_buf_get_lines(input, 0, -1, false)
+        end
+
+        it("returns the text with its context", function()
+            local session, sink = make_session({}, {})
+
+            Recovery.restore_refused_prompt(session, "refused", {
+                selections = { { lines = { "x" } } },
+                files = { "/a.lua" },
+                diagnostics = { { message = "d" } },
+            })
+
+            assert.same({ "refused" }, input_lines(session))
+            assert.is_true(vim.bo[session.widget.buf_nrs.input].modified)
+            assert.same({ { lines = { "x" } } }, sink.selections)
+            assert.same({ "/a.lua" }, sink.files)
+            assert.same({ { message = "d" } }, sink.diagnostics)
+        end)
+
+        it("leaves the queue as draft below the text", function()
+            local session, sink =
+                make_session({ "one", "", "two", "draft" }, { { 0, 0 }, { 2, 2 } })
+            session._pending_bufferless_prompt = "held"
+
+            Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+
+            assert.same(
+                { "refused", "", "held", "", "one", "", "two", "draft" },
+                input_lines(session)
+            )
+            assert.equal(0, session.widget:queued_block_count())
+            assert.is_nil(session._pending_bufferless_prompt)
+            assert.same({
+                "Prompt returned to the input. Switch model with [<M>] to send it again.",
+                "3 held or queued prompt(s) left as draft.",
+            }, sink.actions)
+        end)
+
+        it("puts the text in the input it is given", function()
+            local session = make_session({}, {})
+            local other = vim.api.nvim_create_buf(false, true)
+            MiniTest.finally(function()
+                vim.api.nvim_buf_delete(other, { force = true })
+            end)
+
+            Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT, other)
+
+            assert.same({ "refused" }, vim.api.nvim_buf_get_lines(other, 0, -1, false))
+            assert.same({ "" }, input_lines(session))
+        end)
+
+        it("names no key when switching models has none", function()
+            Config.keymaps.widget.switch_model = ""
+            local session, sink = make_session({}, {})
+
+            Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+
+            assert.same({ "Prompt returned to the input." }, sink.actions)
+        end)
+    end)
 end)

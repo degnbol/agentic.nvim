@@ -933,9 +933,13 @@ has not dispatched.
 
 The queue dispatches one block in buffer order at each turn that ends
 normally, and one when a session becomes ready. A turn stopped with `<C-c>`,
-or ended early by the agent, leaves the rest tagged. Editing a region (any
-change to it, or entering insert mode with the cursor inside it) drops it
-back to ordinary draft.
+or ended early by the agent, leaves the rest tagged; a refused turn leaves
+them as draft. Editing a region (any change to it, or entering insert mode
+with the cursor inside it) drops it back to ordinary draft.
+
+When the agent refuses a prompt, the prompt goes back to the top of the input
+it was sent from, and its context goes back in the context panels. The refused
+message stays in the agent's conversation.
 
 `/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
 the queue rather than as a submit's first block. Declining leaves every

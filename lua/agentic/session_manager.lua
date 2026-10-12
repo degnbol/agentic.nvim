@@ -3036,6 +3036,12 @@ end
 --- @field from_buffer? boolean The caller owns a buffer range and tags it when the submit defers
 --- @field force? boolean Bypass the usage-limit gate
 
+--- Items of the context panels.
+--- @class agentic.SessionManager.PanelContext
+--- @field selections agentic.Selection[]
+--- @field files string[]
+--- @field diagnostics agentic.ui.DiagnosticsList.Diagnostic[]
+
 --- Dispatch a submitted prompt, or report that the gate deferred it.
 ---
 --- A running turn is not a reason to hold a submit. The provider takes a
@@ -3092,11 +3098,12 @@ end
 --- clears no badge, todo panel or user control. A held relay is not kept.
 --- @param instruction string
 --- @param opts agentic.ui.PromptInput.SubmitOpts
+--- @param on_refusal fun()|nil Called when the turn ends refused
 --- @return agentic.SubmitDeferReason|nil held Why it was not sent; nil when sent
-function SessionManager:_relay(instruction, opts)
+function SessionManager:_relay(instruction, opts, on_refusal)
     local reason = self:_submit_hold_reason(instruction, opts.force)
     if not reason then
-        self:_send_user_prompt(instruction, {}, {})
+        self:_send_user_prompt(instruction, {}, {}, on_refusal)
     end
     return reason
 end
@@ -3142,7 +3149,9 @@ end
 --- Ask the main agent to pass `text` to a subagent, through the provider's
 --- message instruction. A finished agent resumes as a new generation.
 --- Notifies for an agent that blocks its spawner, a provider that gives no
---- instruction, or a message the gate holds.
+--- instruction, or a message the gate holds. A refused message goes back to
+--- the top of the agent's input, or of the session's input once the agent's
+--- is gone.
 --- @param child_id string Any generation of the agent
 --- @param text string
 --- @param opts agentic.ui.PromptInput.SubmitOpts
@@ -3163,7 +3172,15 @@ function SessionManager:_relay_to_agent(child_id, text, opts)
         )
         return false
     end
-    local held = self:_relay(instruction, opts)
+    local held = self:_relay(instruction, opts, function()
+        local input = self._inputs[agent_id]
+        Recovery.restore_refused_prompt(
+            self,
+            text,
+            { selections = {}, files = {}, diagnostics = {} },
+            input and input.bufnr
+        )
+    end)
     if held then
         Logger.notify(DEFER_NOTICE[held], vim.log.levels.WARN)
     end
@@ -3412,6 +3429,9 @@ function SessionManager:_handle_input_submit_inner(input_text)
     -- classifies the same way.
     local is_command = PromptBlocks.command(input_text) ~= nil
 
+    --- @type agentic.SessionManager.PanelContext
+    local consumed = { selections = {}, files = {}, diagnostics = {} }
+
     if is_command then
         self:_warn_unadvertised_command(input_text)
     else
@@ -3463,6 +3483,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         local selections = self.code_selection:get_selections()
         self.code_selection:clear()
+        consumed.selections = selections
 
         for _, selection in ipairs(selections) do
             if selection and #selection.lines > 0 then
@@ -3517,6 +3538,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         local files = self.file_list:get_files()
         self.file_list:clear()
+        consumed.files = files
 
         for _, file_path in ipairs(files) do
             table.insert(prompt, ACPPayloads.create_file_content(file_path))
@@ -3533,6 +3555,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         local diagnostics = self.diagnostics_list:get_diagnostics()
         self.diagnostics_list:clear()
+        consumed.diagnostics = diagnostics
 
         local home = self.widget:home_win()
         local chat_width = home and vim.api.nvim_win_get_width(home)
@@ -3552,7 +3575,9 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    self:_send_user_prompt(input_text, prompt, extra_lines)
+    self:_send_user_prompt(input_text, prompt, extra_lines, function()
+        Recovery.restore_refused_prompt(self, input_text, consumed)
+    end)
 end
 
 --- Send the user's prompt as a turn: `input_text` after the `prompt` blocks
@@ -3561,7 +3586,13 @@ end
 --- @param input_text string
 --- @param prompt agentic.acp.Content[] Blocks to send ahead of the text. The text block is appended to it
 --- @param extra_lines string[] Display-only lines below the prompt in the chat
-function SessionManager:_send_user_prompt(input_text, prompt, extra_lines)
+--- @param on_refusal fun()|nil Called when the turn ends refused
+function SessionManager:_send_user_prompt(
+    input_text,
+    prompt,
+    extra_lines,
+    on_refusal
+)
     table.insert(prompt, {
         type = "text",
         text = input_text,
@@ -3584,7 +3615,7 @@ function SessionManager:_send_user_prompt(input_text, prompt, extra_lines)
         session_id = self.session_id,
     })
 
-    self:_dispatch_turn(prompt)
+    self:_dispatch_turn(prompt, on_refusal)
 end
 
 --- Send a prompt that the user did not author, recording nothing that would
@@ -3603,7 +3634,8 @@ end
 --- notification, hooks and queue drain. Shared by user submits and synthetic
 --- prompts — everything that records user intent happens before this is called.
 --- @param prompt agentic.acp.Content[]
-function SessionManager:_dispatch_turn(prompt)
+--- @param on_refusal fun()|nil Called when the turn ends refused, after the refusal is reported
+function SessionManager:_dispatch_turn(prompt, on_refusal)
     self.status_indicator:start("thinking")
 
     local session_id = self.session_id
@@ -3679,6 +3711,9 @@ function SessionManager:_dispatch_turn(prompt)
             Recovery.surface_unexpected_response(self, response)
             if type(response) == "table" then
                 turn_usage = response.usage
+                if on_refusal and response.stopReason == "refusal" then
+                    on_refusal()
+                end
             end
         elseif not retrying then
             local error_type, reset_epoch =

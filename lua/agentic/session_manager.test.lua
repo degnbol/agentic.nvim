@@ -2222,8 +2222,11 @@ describe("agentic.SessionManager", function()
         local auto_continue_stub
         --- @type TestStub
         local schedule_stub
+        --- @type TestStub
+        local restore_stub
 
         before_each(function()
+            restore_stub = spy.stub(Recovery, "restore_refused_prompt")
             reauth_stub = spy.stub(Recovery, "offer_reauth")
             respawn_stub = spy.stub(Recovery, "respawn_preserving_history")
             auto_continue_stub = spy.stub(Recovery, "offer_auto_continue")
@@ -2234,6 +2237,7 @@ describe("agentic.SessionManager", function()
         end)
 
         after_each(function()
+            restore_stub:revert()
             reauth_stub:revert()
             respawn_stub:revert()
             auto_continue_stub:revert()
@@ -2613,6 +2617,232 @@ describe("agentic.SessionManager", function()
                     0,
                     drains_after({ stopReason = "max_turn_requests" })
                 )
+            end)
+        end)
+
+        describe("refusal", function()
+            --- A session whose turns end with `response` and `err`, with a
+            --- background subagent `c1` (agent id `a1`) whose message input is
+            --- buffer 42.
+            --- @param response table|nil
+            --- @param err table|nil
+            --- @return agentic.SessionManager session
+            local function refusing_session(response, err)
+                local session = make_session(nil, nil, {})
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb(response, err)
+                end
+                session.agent.subagent_id = function()
+                    return "a1"
+                end
+                session.agent.subagent_message_instruction = function(
+                    _self,
+                    _id,
+                    _label,
+                    text
+                )
+                    return "relay: " .. text
+                end
+                session.agent.subagent_stop_instruction = function()
+                    return "stop it"
+                end
+                session._latest_generation = function()
+                    return "c1"
+                end
+                session._agent_label = function()
+                    return "x"
+                end
+                session._confirmed_blocking = function()
+                    return false
+                end
+                session._inputs = { a1 = { bufnr = 42 } }
+                session._relay = SessionManager._relay
+                session._relay_to_agent = SessionManager._relay_to_agent
+                session._stop_agent = SessionManager._stop_agent
+                return session
+            end
+
+            --- A context panel that holds `items`, read with `getter`.
+            --- @param getter string
+            --- @param items table[]
+            --- @return table
+            local function panel(getter, items)
+                return {
+                    is_empty = function()
+                        return false
+                    end,
+                    [getter] = function()
+                        return items
+                    end,
+                    clear = function() end,
+                }
+            end
+
+            --- A session whose prompt ends refused with every context panel
+            --- holding one item.
+            --- @return agentic.SessionManager session
+            --- @return table context The items, by `PanelContext` field
+            local function session_with_context()
+                local session = refusing_session({ stopReason = "refusal" })
+                local context = {
+                    selections = {
+                        {
+                            lines = { "x" },
+                            start_line = 1,
+                            end_line = 1,
+                            file_path = "/a.lua",
+                            file_type = "lua",
+                        },
+                    },
+                    files = { "/b.lua" },
+                    diagnostics = { { message = "d" } },
+                }
+                session.code_selection =
+                    panel("get_selections", context.selections)
+                session.file_list = panel("get_files", context.files)
+                session.diagnostics_list =
+                    panel("get_diagnostics", context.diagnostics)
+                session.widget.home_win = function() end
+                return session, context
+            end
+
+            local DiagnosticsContext = require("agentic.ui.diagnostics_context")
+            --- @type TestStub
+            local format_stub
+
+            before_each(function()
+                format_stub = spy.stub(DiagnosticsContext, "format_diagnostics")
+                format_stub:returns({ prompt_entries = {}, summary_lines = {} })
+            end)
+
+            after_each(function()
+                format_stub:revert()
+            end)
+
+            it("returns the prompt with the context it took", function()
+                local session, context = session_with_context()
+
+                session:_handle_input_submit("hello")
+
+                assert.spy(restore_stub).was.called(1)
+                local call = restore_stub.calls[1]
+                assert.equal(session, call[1])
+                assert.equal("hello", call[2])
+                assert.same(context, call[3])
+                assert.is_nil(call[4])
+            end)
+
+            it("returns a command with no context", function()
+                local session = session_with_context()
+                session._warn_unadvertised_command = function() end
+
+                session:_handle_input_submit("/compact")
+
+                assert.equal("/compact", restore_stub.calls[1][2])
+                assert.same(
+                    { selections = {}, files = {}, diagnostics = {} },
+                    restore_stub.calls[1][3]
+                )
+            end)
+
+            it("returns the prompt with a later turn outstanding", function()
+                local session = refusing_session()
+                --- @type function
+                local resolve
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    resolve = cb
+                end
+
+                session:_handle_input_submit("hello")
+                session._prompt_pending = 2
+                resolve({ stopReason = "refusal" }, nil)
+
+                assert.spy(restore_stub).was.called(1)
+            end)
+
+            it("returns nothing to a destroyed or replaced session", function()
+                for _, supersede in ipairs({
+                    function(session)
+                        session.destroyed = true
+                    end,
+                    function(session)
+                        session._session_epoch = 1
+                    end,
+                }) do
+                    local session = refusing_session()
+                    --- @type function
+                    local resolve
+                    session.agent.send_prompt = function(_self, _sid, _p, cb)
+                        resolve = cb
+                    end
+
+                    session:_handle_input_submit("hello")
+                    supersede(session)
+                    resolve({ stopReason = "refusal" }, nil)
+                end
+
+                assert.spy(restore_stub).was.called(0)
+            end)
+
+            it("leaves other turn endings alone", function()
+                refusing_session({ stopReason = "end_turn" }):_handle_input_submit(
+                    "a"
+                )
+                refusing_session({ stopReason = "max_tokens" }):_handle_input_submit(
+                    "b"
+                )
+                refusing_session(nil, { message = "boom" }):_handle_input_submit(
+                    "c"
+                )
+
+                assert.spy(restore_stub).was.called(0)
+            end)
+
+            it("returns nothing for a synthetic prompt", function()
+                refusing_session({ stopReason = "refusal" }):_send_synthetic_prompt(
+                    "continue"
+                )
+
+                assert.spy(restore_stub).was.called(0)
+            end)
+
+            it("returns nothing for a subagent stop", function()
+                refusing_session({ stopReason = "refusal" }):_stop_agent("c1")
+
+                assert.spy(restore_stub).was.called(0)
+            end)
+
+            describe("of a subagent message", function()
+                it("returns it to the subagent's input", function()
+                    local session =
+                        refusing_session({ stopReason = "refusal" })
+
+                    session:_relay_to_agent("c1", "hi", { force = false })
+
+                    assert.spy(restore_stub).was.called(1)
+                    local call = restore_stub.calls[1]
+                    assert.equal("hi", call[2])
+                    assert.same(
+                        { selections = {}, files = {}, diagnostics = {} },
+                        call[3]
+                    )
+                    assert.equal(42, call[4])
+                end)
+
+                it("returns it to the main input once that is gone", function()
+                    local session = refusing_session()
+                    --- @type function
+                    local resolve
+                    session.agent.send_prompt = function(_self, _sid, _p, cb)
+                        resolve = cb
+                    end
+
+                    session:_relay_to_agent("c1", "hi", { force = false })
+                    session._inputs.a1 = nil
+                    resolve({ stopReason = "refusal" }, nil)
+
+                    assert.is_nil(restore_stub.calls[1][4])
+                end)
             end)
         end)
 
