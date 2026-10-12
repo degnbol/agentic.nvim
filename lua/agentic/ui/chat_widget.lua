@@ -22,7 +22,6 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field title string Main header text
 --- @field context? string Dynamic info (managed internally)
 --- @field session_name? string Custom session name (set by /rename or first message)
---- @field trust? string Active /trust scope display (set by /trust)
 --- @field badge? string Attention badge (e.g. "[idle]", "[?]")
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>

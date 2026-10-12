@@ -48,10 +48,10 @@ function SlashCommands.setCommands(bufnr, available_commands)
             menu = "Delete current session",
             info = "Delete the current session from disk and clear the UI",
         },
-        trust = {
-            word = "trust",
-            menu = "Set edit trust scope",
-            info = "Set scope for auto-approving edits. Subcommands: repo, here, tmp, off, or a path/glob",
+        grant = {
+            word = "grant",
+            menu = "Grant edits under a path",
+            info = "Auto-approve recoverable edits under a path or glob. `.` is the cwd, `root` its git root, `off` clears every grant; no argument opens a picker",
         },
     }
 

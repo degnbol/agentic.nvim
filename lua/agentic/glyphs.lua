@@ -132,9 +132,9 @@ Glyphs.AUTH = "󰍂"
 --- `new` and `clear` are synonyms handled by one code path, so they share a
 --- glyph. Both reset the chat buffer they would be written to, so neither is
 --- visible today; they are listed so the vocabulary stays complete if that
---- changes. Trust uses a handshake rather than a lock or shield because setting
+--- changes. Grant uses a handshake rather than a lock or shield because adding
 --- a scope *grants* auto-approval — the guarding metaphors read the wrong way
---- round. Clearing it reuses the same glyph struck through, Nerd Fonts having
+--- round. Removing it reuses the same glyph struck through, Nerd Fonts having
 --- no struck-through variant.
 --- @type table<string, string>
 Glyphs.COMMAND = {
@@ -160,7 +160,7 @@ Glyphs.COMMAND = {
     config = "󰘮",
     hooks = Glyphs.HOOK,
     -- Permissions
-    trust = "󱈘",
+    grant = "󱈘",
     permissions = "󰌋",
     -- Work
     init = "󱀺",

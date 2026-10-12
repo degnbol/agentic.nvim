@@ -536,7 +536,7 @@ describe("agentic.ui.MessageWriter", function()
     end)
 
     describe("write_notice", function()
-        local GLYPH = Glyphs.COMMAND.trust
+        local GLYPH = Glyphs.COMMAND.grant
         local original_windows
 
         before_each(function()
@@ -619,7 +619,7 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_notice({
                 glyph = GLYPH,
                 glyph_hl = Theme.HL_GROUPS.GLYPH_OFF,
-                title = "trust cleared",
+                title = "grant cleared",
             })
 
             assert.equal(Theme.HL_GROUPS.GLYPH_OFF, action_marks()[1][3])
@@ -812,7 +812,7 @@ describe("agentic.ui.MessageWriter", function()
         it("flushes before a mid-turn notice", function()
             writer:write_message_chunk(make_thought_update("mid\nthought"))
             writer:write_notice({
-                glyph = Glyphs.COMMAND.trust,
+                glyph = Glyphs.COMMAND.grant,
                 title = "repo",
                 mid_turn = true,
             })

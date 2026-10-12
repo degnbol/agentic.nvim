@@ -119,7 +119,7 @@ not through buffer names.
 in every window showing the buffer.
 
 `vim.b[buf].agentic_header` (a `HeaderParts`: `title`, `context`, `badge`,
-`session_name`, `trust`) is the single source of truth for header display
+`session_name`) is the single source of truth for header display
 data; `vim.b[buf].agentic_window` names the buffer's panel.
 
 **Do not rely on buffer names for UI display.** `nvim_buf_set_name` fires no

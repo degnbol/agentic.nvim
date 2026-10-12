@@ -152,14 +152,14 @@ function Theme.setup()
         { Theme.HL_GROUPS.GLYPH_AGENT, { link = "Normal" } },
 
         -- The same user glyph for a command that undid its own effect
-        -- (`/trust` with no argument). Not a link: nvim_set_hl ignores every
-        -- other field when `link` is set, so the strikethrough needs a
-        -- resolved colour, an attribute-only group having no foreground of its
-        -- own to strike (it falls through to SignColumn, dimmer than the glyph
-        -- it pairs with). A colorscheme that leaves the source group to the
-        -- terminal resolves to no foreground at all, and nothing can be
-        -- inherited then, so that case trades the strikethrough away rather
-        -- than the colour.
+        -- (`/grant off`, a grant removed in the picker). Not a link:
+        -- nvim_set_hl ignores every other field when `link` is set, so the
+        -- strikethrough needs a resolved colour, an attribute-only group
+        -- having no foreground of its own to strike (it falls through to
+        -- SignColumn, dimmer than the glyph it pairs with). A colorscheme
+        -- that leaves the source group to the terminal resolves to no
+        -- foreground at all, and nothing can be inherited then, so that case
+        -- trades the strikethrough away rather than the colour.
         { Theme.HL_GROUPS.GLYPH_OFF, glyph_off_hl(user_glyph) },
 
         -- Sidecar body dim (fetch/WebSearch/SubAgent output)

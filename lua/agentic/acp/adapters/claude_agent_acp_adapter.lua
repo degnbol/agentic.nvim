@@ -466,7 +466,7 @@ end
 --- partials with `tbl_deep_extend("force", …)`, which merges list-valued
 --- `diff.old` / `diff.new` element-by-element: a hook diff carrying context
 --- lines would corrupt the tracker's diff data — and with it
---- `cached_diff_blocks` and the trust ranges — while the rendered diff stays
+--- `cached_diff_blocks` and the grant edit ranges — while the rendered diff stays
 --- frozen at whatever was drawn first. Only the two scalar/flat fields below
 --- are surfaced.
 --- @param update agentic.acp.ClaudeAgentToolCallUpdate

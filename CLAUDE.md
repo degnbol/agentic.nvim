@@ -120,9 +120,9 @@ commands, the session-ending confirm — is in docstrings on
 See the `permissions` project skill for the two-tier model
 (SDK-internal + ACP-bridge), the four auto-approval mechanisms
 (read-only tools, compound Bash matching, allow/reject-always cache,
-`/trust` scope) and the six safety properties layered on top of trust
-scope. Implementation lives in `PermissionManager`, `PermissionRules`,
-`TrustSafety`, `GitFiles`, and `PermissionFloat`.
+`/grant` scopes) and the safety properties layered on top of grants.
+Implementation lives in `PermissionManager`, `PermissionRules`,
+`GrantSafety`, `GitFiles`, and `PermissionFloat`.
 
 ## ACP details
 

@@ -791,9 +791,9 @@ describe("agentic.acp.ACPClient", function()
                 end,
             })
 
-            client:create_session({}, function() end)
+            client:create_session("/proj", {}, function() end)
 
-            assert.equal(vim.fn.getcwd(), client:__session_roots("s-new")[1])
+            assert.equal("/proj", client:__session_roots("s-new")[1])
         end)
 
         it("drops them with the subscriber", function()

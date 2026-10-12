@@ -227,7 +227,7 @@ fence rather than escaped to literal `\n`.
 
 See the `permissions` project skill for the permission flow ASCII
 diagram, the four auto-approval mechanisms, response keys table, and
-the six `/trust` safety properties.
+the `/grant` safety properties.
 
 ## Adapter override points
 

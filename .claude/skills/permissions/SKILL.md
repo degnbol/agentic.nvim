@@ -2,12 +2,12 @@
 name: permissions
 description:
   Permission flow and client-side auto-approval — read-only tools, parse-tree
-  shell command matching, allow/reject-always cache, /trust scope. Use when editing
-  PermissionManager, PermissionRules, TrustSafety, GitFiles, PermissionFloat,
-  the permission keymaps, or anything in the request-permission code path.
-  Per-function rationale lives in docstrings on those modules — read them
-  first; this skill is the cross-file overview, the four-mechanism rationale,
-  and the safety-property index for /trust.
+  shell command matching, allow/reject-always cache, /grant path scopes. Use
+  when editing PermissionManager, PermissionRules, GrantSafety, GitFiles,
+  PermissionFloat, the permission keymaps, or anything in the
+  request-permission code path. Per-function rationale lives in docstrings on
+  those modules — read them first; this skill is the cross-file overview, the
+  four-mechanism rationale, and the safety-property index for /grant.
 ---
 
 # Permissions
@@ -21,7 +21,7 @@ into `session/request_permission` over ACP. The plugin is **strictly
 downstream**: we can't override what the SDK silently approves or denies,
 only decide how to handle what it escalates as `ask`. Every layer below
 reduces prompt fatigue inside that escalation surface; the one exception
-that *grants* new authorisation is `/trust`, which compensates with
+that *grants* new authorisation is `/grant`, which compensates with
 git-recoverability gates.
 
 This bounds our `deny` too: a bundled/structured `deny` only fires on the SDK's
@@ -32,7 +32,7 @@ block it. For an *unconditional* block the user must also add a settings.json
 surface, not a hard guarantee.
 
 State is per-session. Everything below clears on `/new`, session cancel,
-or tabpage close.
+or tabpage close. Grants alone survive stopping a turn.
 
 ## Permission flow
 
@@ -55,8 +55,8 @@ Provider sends "session/request_permission"
 ## Four auto-approval mechanisms
 
 All in `PermissionManager._try_auto_approve()`. Independent — any one can
-approve or reject; first decision wins. Read-only tools, skills, and trust
-scope each have a `Config.auto_approve_*` master switch (all default `true`);
+approve or reject; first decision wins. Read-only tools, skills, and grants
+each have a `Config.auto_approve_*` master switch (all default `true`);
 shell command parsing always runs (no switch — see mechanism 2).
 
 ### 1. Read-only tools (`Config.auto_approve_read_only_tools`)
@@ -263,54 +263,49 @@ structural parts aren't rememberable (`complete = false`), so the
 whole-command `_always_cache` entry is also kept as a fallback. `reject_always`
 stays whole-command.
 
-### 4. Trust scope (`/trust`, `Config.auto_approve_trust_scope`)
+### 4. Grant scopes (`/grant`, `Config.auto_approve_grant`)
 
-Per-session scope for file-scoped tool kinds (edit, write, create, delete,
-move). The user picks a scope via `/trust`; the `tmp` scope is also activated
-automatically at session start when `Config.permissions.trust_tmp` is on
-(default), so scratch operations work out of the box. `SessionManager:_apply_default_trust`
-(called from `new_session` and `load_acp_session`) sets it silently — no chat
-message, headers still update — and never overrides a scope the user set this
-session.
+A per-session **set** of path scopes (`PermissionManager._grant_scopes`):
+`/grant X` adds, `/grant off` clears, the picker toggles.
+`Config.permissions.default_grant` (`/tmp`, `$TMPDIR`) is added silently at
+session start (`SessionManager:_apply_default_grants`). Every scope is a path
+or glob compiled by `GrantSafety.compile_scope`; the keywords `.` and `root`
+resolve against the session's ACP cwd in `SessionManager:_resolve_grant_input`.
 
-| Argument | Meaning |
-|---|---|
-| `repo` | Any git-tracked file in the current repo |
-| `here` | Tracked files under the activation cwd |
-| `tmp` | Scratch files strictly under a tmp root (`/tmp`, `$TMPDIR`) |
-| `off` | Clear |
-| any other | Literal path or `vim.glob.to_lpeg` glob |
+Two mutation producers feed one policy: ACP file tool calls (`_check_grant`)
+and Bash effects — redirect writes and plain `rm` operands that
+`PermissionRules.evaluate` pins to literal paths (`_bash_effects_clear`).
+Bash effects clear only for absolute paths: the Bash tool's cwd persists
+across calls and moves with an in-command `cd`.
 
-The `tmp` scope is git-agnostic — recoverability is "ephemeral by convention",
-not git, so clobbering scratch is not loss of work (`TrustSafety.build_tmp_scope`,
-`is_under_tmp`; `safe_for_kind` short-circuits write/create on `args.tmp`). It is
-also the first scope to gate a **second mutation producer**: alongside ACP file
-edits, Bash redirect writes now feed the same policy oracle.
-`PermissionRules.evaluate` extracts them as `write` effects — see its docstring
-and `PermissionManager._bash_effects_clear` for the extraction and per-effect
-tmp check. Under `Config.permissions.tmp_cleanup` (default on), deletes are also
-cleared, correlated to a write/create earlier in the **same** command
-(intra-command only — no cross-command ledger yet). The rm-delete fallback in
-`walk_command` documents the per-command delete-emission mechanics.
+**Membership is necessary but not sufficient** — safety properties on top:
 
-**Scope membership is necessary but not sufficient** — the orchestrator
-(`PermissionManager._check_trust`) layers six safety properties on top:
-
-1. **Symlink resolution.** Both the original path AND its
-   `vim.uv.fs_realpath` must lie inside scope. A tracked symlink pointing
-   outside (`~/.ssh/authorized_keys`) is rejected.
-2. **Per-kind recoverability** — see `TrustSafety.safe_for_kind` and the
-   `safe_for_*` predicates in `lua/agentic/utils/trust_safety.lua`:
+1. **Full resolution.** `GrantSafety.resolve` realpaths the deepest existing
+   ancestor, so a symlinked *parent* resolves too; a `..` path never
+   resolves (the kernel applies it after the link). Both the literal and the
+   resolved path must be granted (`_granted_pair`); each scope matches on its
+   literal root and its resolved root.
+2. **Hidden exclusion.** A `.`-segment below a scope root (`.git/hooks`,
+   `.envrc`) is out unless the pattern names it with a literal-`.` segment
+   (`GrantSafety.scope_contains`).
+3. **Recoverability** — `GrantSafety.safe_for_kind`. Scratch (untracked,
+   under a tmp root in both forms; `is_scratch`): write/create/edit always
+   clear; a Bash delete clears only for a path redirected to earlier in the
+   same command (`tmp_cleanup`). A tracked file under tmp gets git rules.
+   Otherwise:
    - `create` — file does not exist
    - `write` — new file, OR tracked + clean
-   - `delete` — tracked + clean
+   - `delete` — tracked + clean, not a directory (`rm -r`/`-d`/`dir/` emit no
+     effect at all)
    - `edit` — new file, tracked + clean, pure addition (diff.old is a
      contiguous line subsequence of diff.new), edit range disjoint from
      unstaged hunks, OR every overlapping hunk is a verified Claude-owned
      range
-   - `move` — source satisfies `edit`, destination satisfies `write`,
-     both symlink endpoints in scope
-3. **Verified Claude-owned range.** Ranges are *recorded at edit time,
+   - `move` — source satisfies `edit`, destination satisfies `write`
+
+   write/create/edit read file and git state from the resolved path;
+   delete and a move's source from the link itself (`_kind_args`).
+4. **Verified Claude-owned range.** Ranges are *recorded at edit time,
    not re-discovered at check time*. At the initial `tool_call`
    notification (which fires *before* the SDK applies the edit — see acp
    skill § "Edits are not applied before permission"),
@@ -320,8 +315,8 @@ cleared, correlated to a write/create earlier in the **same** command
    `_pending_edits`. On the matching `tool_call_update`
    with `status: "completed"`, `finalize_edit_range` promotes it to
    `_edit_records` with `end_line = start_line + #diff.new - 1` and the
-   recorded `new_lines`. At trust-check time,
-   `TrustSafety.verify_edit_range` confirms the on-disk content at the
+   recorded `new_lines`. At grant-check time,
+   `GrantSafety.verify_edit_range` confirms the on-disk content at the
    recorded range still equals `new_lines`. Any divergence drops the
    record.
 
@@ -332,24 +327,19 @@ cleared, correlated to a write/create earlier in the **same** command
    ourselves using the tool's `old_string` uniqueness contract. Searching
    for `diff.new` at check time would be ambiguous for short replacements
    like `}`, `end`, blank lines.
-4. **TOCTOU revalidation.** Capture `mtime`/`size` (or non-existence)
+5. **TOCTOU revalidation.** Capture `mtime`/`size` (or non-existence)
    before the safety check, re-stat just before approving, bail on any
-   change. Closes the same-process race between the git snapshot and
-   `callback`.
-5. **Cache precedence.** A cached `reject_always` (`_always_cache`) wins
-   over a would-be-safe trust check — trust runs *after* the cache.
-6. **Wide-scope WARN.** When the user supplies a path scope that covers
-   `$HOME`, a top-level dir (`/`, `/tmp`, `/var`, …), or starts with an
-   unanchored `**`, `Logger.notify` fires a WARN with the affected
-   kinds (`TrustSafety.is_wide_scope`).
+   change — for ACP calls and non-tmp Bash effects alike.
+6. **Cache precedence.** A cached `reject_always` (`_always_cache`) wins
+   over a would-be-safe grant check — both grant paths (ACP and Bash
+   effects) run *after* the cache.
+7. **Wide-scope WARN.** A scope rooted at `$HOME` or a top-level dir warns
+   (`GrantSafety.is_wide_scope`); a tmp root does not.
 
 `git_files.lua` resolves the worktree's actual index path via
 `git rev-parse --git-path index` (`.git/worktrees/<name>/index` for
 worktree checkouts, plain `.git/index` otherwise) and uses that for
 mtime-based cache invalidation of the tracked-files set.
-
-Scope display string is also pushed into the chat's `vim.b.agentic_header` so
-external UI plugins surface it via `AgenticHeadersChanged`.
 
 ## Permission response keys
 
@@ -410,6 +400,6 @@ There is no ACP method for managing persistent permission rules. The
 TUI's `/permissions` has no protocol equivalent — clients can only
 respond to per-call escalations, not query or write SDK rules. That's
 *why* the four mechanisms above exist; for persistent rules the user
-edits `~/.claude/settings.json` directly. The plugin also exposes a
-`/trust` scope and `Config.permissions.*` lists as project-local
+edits `~/.claude/settings.json` directly. The plugin also exposes
+`/grant` scopes and `Config.permissions.*` lists as project-local
 extensions of the same idea.

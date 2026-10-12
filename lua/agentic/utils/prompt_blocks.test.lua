@@ -131,8 +131,8 @@ describe("agentic.utils.PromptBlocks", function()
 
         it("strips a command line's trailing whitespace", function()
             assert.same(
-                { { "/trust repo", 0, 0 } },
-                shape(PromptBlocks.split({ "/trust repo  " }))
+                { { "/grant root", 0, 0 } },
+                shape(PromptBlocks.split({ "/grant root  " }))
             )
         end)
     end)

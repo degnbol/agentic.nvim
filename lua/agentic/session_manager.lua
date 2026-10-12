@@ -16,6 +16,7 @@ local DiffJump = require("agentic.ui.diff_jump")
 local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
+local GrantSafety = require("agentic.utils.grant_safety")
 local HookRecordReader = require("agentic.hook_record_reader")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
@@ -27,7 +28,6 @@ local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local SubagentInput = require("agentic.ui.subagent_input")
 local Theme = require("agentic.theme")
-local TrustSafety = require("agentic.utils.trust_safety")
 local WidgetLayout = require("agentic.ui.widget_layout")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -99,6 +99,7 @@ end
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _pending_load_cwd? string CWD for the deferred session/load
+--- @field _cwd string Working directory of the ACP session
 --- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _budget? agentic.acp.RateLimitInfo Last known subscription rate-limit budget (claude.ai auth only)
@@ -368,6 +369,7 @@ function SessionManager:new()
         is_generating = false,
         _restoring = false,
         _session_epoch = 0,
+        _cwd = vim.fn.getcwd(),
         destroyed = false,
         --- @type string|nil Smart path of the most recently edited .md file (plan candidate)
         _last_edited_md = nil,
@@ -1643,80 +1645,111 @@ function SessionManager:_rename_session(new_title)
     self:_persist_history(self.chat_history)
 end
 
---- Push the trust scope display into the chat panel headers state so
---- external UI plugins (incline, tabline) can surface it.
---- @param display? string Trust scope display string, or nil to clear
-function SessionManager:_push_trust_to_headers(display)
-    local chat = self.widget.buf_nrs.chat
-    -- Nil once the widget is destroyed.
-    if not chat then
-        return
+--- Resolve a `/grant` argument to an absolute path or glob. `root` is the git
+--- root of the session cwd. Anything else (`.` included) has `~` and env vars
+--- expanded and, when relative, resolves against the session cwd. An unset
+--- env var stays literal.
+--- @param input string
+--- @return string|nil pattern
+--- @return string|nil err Why `input` does not resolve
+function SessionManager:_resolve_grant_input(input)
+    if input == "root" then
+        local root = vim.fs.root(self._cwd, ".git")
+        if not root then
+            return nil, "no git root"
+        end
+        return root, nil
     end
-    local header = WindowDecoration.get_header(chat)
-    header.trust = display
-    WindowDecoration.set_header(chat, header)
+    local expanded = vim.fs.normalize(input)
+    if expanded:sub(1, 1) ~= "/" then
+        expanded = vim.fs.normalize(vim.fs.joinpath(self._cwd, expanded))
+    end
+    return expanded, nil
 end
 
---- Apply a compiled trust scope: store on PermissionManager, write a chat
---- confirmation, push to headers, and emit a WARN notify when the scope is
---- judged unusually wide.
---- @param scope agentic.utils.TrustSafety.Scope
-function SessionManager:_apply_trust_scope(scope)
-    self.permission_manager:set_trust_scope(scope)
-    self:_push_trust_to_headers(scope.display)
-
+--- Write a `/grant` chat notice.
+--- @param title string
+--- @param off boolean The notice withdraws a grant
+function SessionManager:_write_grant_notice(title, off)
     self.message_writer:write_notice({
-        glyph = Glyphs.COMMAND.trust,
-        title = scope.display,
+        glyph = Glyphs.COMMAND.grant,
+        -- Same glyph as the add notice, struck through — Nerd Fonts has no
+        -- struck-through handshake to switch to.
+        glyph_hl = off and Theme.HL_GROUPS.GLYPH_OFF or nil,
+        title = title,
         mid_turn = self.is_generating,
     })
+end
 
-    local wide, reason = TrustSafety.is_wide_scope(scope)
+--- Add a grant scope for the `/grant` argument `input`. A root that does not
+--- exist yet is still granted, with a warning. Unless `quiet`, also reports
+--- an argument that does not resolve, confirms in the chat, and warns about a
+--- wide scope.
+--- @param input string
+--- @param quiet boolean
+function SessionManager:_add_grant(input, quiet)
+    local pattern, err = self:_resolve_grant_input(input)
+    if not pattern then
+        if not quiet then
+            self.message_writer:write_error_action(
+                string.format("/grant %s: %s", input, err)
+            )
+        end
+        return
+    end
+
+    local scope = GrantSafety.compile_scope(pattern, input)
+    local added = self.permission_manager:add_grant_scope(scope)
+
+    if not GrantSafety.root_exists(scope) then
+        Logger.notify(
+            string.format("/grant: %s does not exist yet", scope.root),
+            vim.log.levels.WARN,
+            { title = "Agentic /grant" }
+        )
+    end
+
+    if quiet then
+        return
+    end
+    if not added then
+        self:_write_grant_notice("already granted: " .. scope.display, false)
+        return
+    end
+    self:_write_grant_notice(scope.display, false)
+    local wide, reason =
+        GrantSafety.is_wide_scope(scope, GrantSafety.tmp_roots())
     if wide then
         Logger.notify(
             string.format(
-                "Wide trust scope (%s): %s — auto-approves edit/write/create/delete/move",
+                "Wide grant (%s): %s — auto-approves edit/write/create/delete/move",
                 reason or "wide",
                 scope.display
             ),
             vim.log.levels.WARN,
-            { title = "Agentic /trust" }
+            { title = "Agentic /grant" }
         )
     end
 end
 
---- Activate the default `/trust tmp` scope at session start when
---- `permissions.trust_tmp` is on. Silent (no chat message — it would fire on
---- every new session); the headers still update so the scope is visible. A
---- scope the user set this session is left untouched.
-function SessionManager:_apply_default_trust()
-    if
-        not (Config.auto_approve_trust_scope and Config.permissions.trust_tmp)
-    then
+--- Grant every `Config.permissions.default_grant` entry, unless
+--- `Config.auto_approve_grant` is off. An entry naming an unset env var
+--- (`$TMPDIR` on most Linux systems) is skipped.
+function SessionManager:_apply_default_grants()
+    if not Config.auto_approve_grant then
         return
     end
-    if self.permission_manager:get_trust_scope() then
-        return
+    for _, entry in ipairs(Config.permissions.default_grant) do
+        if not vim.fs.normalize(entry):find("%$[%w_]") then
+            self:_add_grant(entry, true)
+        end
     end
-    local cwd = vim.uv.cwd() or vim.fn.getcwd()
-    local scope = TrustSafety.build_tmp_scope(cwd)
-    self.permission_manager:set_trust_scope(scope)
-    self:_push_trust_to_headers(scope.display)
 end
 
---- Clear the active trust scope.
-function SessionManager:_clear_trust_scope()
-    self.permission_manager:clear_trust_scope()
-    self:_push_trust_to_headers(nil)
-
-    -- Same glyph as the set notice, struck through — Nerd Fonts has no
-    -- struck-through handshake to switch to.
-    self.message_writer:write_notice({
-        glyph = Glyphs.COMMAND.trust,
-        glyph_hl = Theme.HL_GROUPS.GLYPH_OFF,
-        title = "trust cleared",
-        mid_turn = self.is_generating,
-    })
+--- Remove every grant scope.
+function SessionManager:_clear_grants()
+    self.permission_manager:clear_grant_scopes()
+    self:_write_grant_notice("grant cleared", true)
 end
 
 --- @param prompt string
@@ -1729,104 +1762,107 @@ local function ui_select(prompt, items, on_choice, format_item)
     }, on_choice)
 end
 
---- Open the /trust selector menu (no argument form).
---- @param on_done? fun() Called once the scope question is settled, cancelling
+--- Open the /grant selector menu: `.`, `root` and every active scope as
+--- toggles (active ones marked `✓`), a path or glob prompt, and Off.
+--- @param on_done fun()|nil Called once the grant question is settled, cancelling
 ---   included. Both dialogs here outlive the call, so this is what the
 ---   sequencer waits on before dispatching the next queued block.
-function SessionManager:_show_trust_picker(on_done)
+function SessionManager:_show_grant_picker(on_done)
     on_done = on_done or function() end
-    local cwd = vim.uv.cwd() or vim.fn.getcwd()
-    --- @type { kind: "repo"|"here"|"tmp"|"path"|"off", label: string }[]
-    local items = {
-        { kind = "repo", label = "Git-tracked files in repo" },
-        {
-            kind = "here",
-            label = string.format(
-                "Git-tracked files under %s",
-                vim.fn.fnamemodify(cwd, ":~")
-            ),
-        },
-        { kind = "tmp", label = "Scratch files under tmp" },
-        { kind = "path", label = "Path or glob…" },
-        { kind = "off", label = "Off" },
-    }
-    ui_select("Agentic trust scope:", items, function(choice)
-        if not choice then
-            on_done()
+
+    --- @type table<string, agentic.utils.GrantSafety.Scope>
+    local active = {}
+    for _, scope in ipairs(self.permission_manager:get_grant_scopes()) do
+        active[scope.key] = scope
+    end
+
+    --- @type { kind: "toggle"|"path"|"off", label: string, input?: string, key?: string }[]
+    local items = {}
+    --- @type table<string, boolean>
+    local listed = {}
+    --- @param input string
+    --- @param key string|nil Scope key `input` resolves to; nil skips it
+    local function add_toggle(input, key)
+        if not key or listed[key] then
             return
         end
-        if choice.kind == "off" then
-            self:_clear_trust_scope()
+        listed[key] = true
+        local label = input
+        if input == "." or input == "root" then
+            label =
+                string.format("%s (%s)", input, vim.fn.fnamemodify(key, ":~"))
+        end
+        table.insert(items, {
+            kind = "toggle",
+            label = (active[key] and "✓ " or "") .. label,
+            input = input,
+            key = key,
+        })
+    end
+    add_toggle(".", (self:_resolve_grant_input(".")))
+    add_toggle("root", (self:_resolve_grant_input("root")))
+    for _, scope in ipairs(self.permission_manager:get_grant_scopes()) do
+        add_toggle(scope.display, scope.key)
+    end
+    table.insert(items, { kind = "path", label = "Path or glob…" })
+    table.insert(items, { kind = "off", label = "Off" })
+
+    ui_select("Agentic grant:", items, function(choice)
+        if not choice then
+            on_done()
+        elseif choice.kind == "off" then
+            self:_clear_grants()
             on_done()
         elseif choice.kind == "path" then
             vim.ui.input({ prompt = "Path or glob: " }, function(input)
-                if not input or vim.trim(input) == "" then
+                if input and vim.trim(input) ~= "" then
+                    self:_handle_grant_command(vim.trim(input), on_done)
+                else
                     on_done()
-                    return
                 end
-                self:_handle_trust_command(vim.trim(input), on_done)
             end)
+        elseif active[choice.key] then
+            self.permission_manager:remove_grant_scope(choice.key)
+            self:_write_grant_notice(
+                "grant removed: " .. active[choice.key].display,
+                true
+            )
+            on_done()
         else
-            self:_handle_trust_command(choice.kind, on_done)
+            self:_add_grant(choice.input, false)
+            on_done()
         end
     end, function(item)
         return item.label
     end)
 end
 
---- Dispatch /trust subcommands. Empty arg opens the picker; the three
---- reserved literals are handled directly; anything else is treated as a
---- path or glob.
+--- Dispatch /grant: an empty arg opens the picker, `off` clears every grant,
+--- anything else is added as a path or glob.
 --- @param arg string Trimmed argument
---- @param on_done? fun() Called once the scope question is settled — every
+--- @param on_done fun()|nil Called once the grant question is settled — every
 ---   branch here answers it before returning except the picker, which owns it.
-function SessionManager:_handle_trust_command(arg, on_done)
+function SessionManager:_handle_grant_command(arg, on_done)
     on_done = on_done or function() end
 
-    if not Config.auto_approve_trust_scope then
+    if not Config.auto_approve_grant then
         self.message_writer:write_error_action(
-            "/trust is disabled (Config.auto_approve_trust_scope = false)."
+            "/grant is disabled (Config.auto_approve_grant = false)."
         )
         on_done()
         return
     end
 
     if arg == "" then
-        self:_show_trust_picker(on_done)
+        self:_show_grant_picker(on_done)
         return
     end
 
     if arg == "off" then
-        self:_clear_trust_scope()
-        on_done()
-        return
+        self:_clear_grants()
+    else
+        self:_add_grant(arg, false)
     end
-
-    local cwd = vim.uv.cwd() or vim.fn.getcwd()
-
-    if arg == "tmp" then
-        self:_apply_trust_scope(TrustSafety.build_tmp_scope(cwd))
-        on_done()
-        return
-    end
-
-    if arg == "repo" or arg == "here" then
-        local git_root = vim.fs.root(cwd, ".git")
-        if not git_root then
-            self.message_writer:write_error_action(
-                string.format("/trust %s: no git repository at %s.", arg, cwd)
-            )
-            on_done()
-            return
-        end
-        local scope = TrustSafety.build_reserved_scope(arg, cwd, git_root)
-        self:_apply_trust_scope(scope)
-        on_done()
-        return
-    end
-
-    local scope = TrustSafety.compile_path_scope(arg, cwd)
-    self:_apply_trust_scope(scope)
     on_done()
 end
 
@@ -1991,10 +2027,6 @@ end
 --- matches. Skips the session/load replay for the same reason: the bridge
 --- replays each past Edit as `pending`, but disk already holds the edit, so
 --- `diff.old` is either gone or found at a post-edit position.
----
---- The recorded path is canonicalised to match the shape
---- `PermissionManager:_check_trust` uses for lookup (derived from
---- `rawInput.file_path`, normalised via vim.fs.normalize).
 --- @param tool_call_id string
 function SessionManager:_try_record_edit_range(tool_call_id)
     if not tool_call_id or self._loading then
@@ -2023,17 +2055,19 @@ function SessionManager:_try_record_edit_range(tool_call_id)
     if not tracker.argument then
         return
     end
-    local path = vim.fs.normalize(
-        vim.fn.fnamemodify(tracker.argument, ":p"),
-        { expand_env = false }
-    )
+    -- Resolved: `PermissionManager:_kind_args` reads an edited file's state,
+    -- and looks up its edit records, by the resolved path.
+    local path = GrantSafety.resolve(vim.fn.fnamemodify(tracker.argument, ":p"))
+    if not path then
+        return
+    end
     local file_lines, err = FileSystem.read_from_disk(path)
     if not file_lines then
-        Logger.debug("trust: pre-edit read failed for", path, err)
+        Logger.debug("grant: pre-edit read failed for", path, err)
         return
     end
     local start_line =
-        TrustSafety.find_unique_subsequence(file_lines, old_lines)
+        GrantSafety.find_unique_subsequence(file_lines, old_lines)
     if not start_line then
         return
     end
@@ -2848,7 +2882,7 @@ local LOCAL_COMMANDS = {
     clear = { takes_arg = true, async = false, session_ending = true },
     context = { takes_arg = false, async = false, session_ending = false },
     rename = { takes_arg = true, async = false, session_ending = false },
-    trust = { takes_arg = true, async = true, session_ending = false },
+    grant = { takes_arg = true, async = true, session_ending = false },
     delete = { takes_arg = false, async = false, session_ending = true },
 }
 
@@ -2909,8 +2943,8 @@ function SessionManager:_run_local_command(word, arg, on_done)
             return
         end
         self:_rename_session(arg)
-    elseif word == "trust" then
-        self:_handle_trust_command(arg, on_done)
+    elseif word == "grant" then
+        self:_handle_grant_command(arg, on_done)
     elseif word == "delete" then
         self:_delete_session()
     end
@@ -3787,7 +3821,8 @@ function SessionManager:new_session(opts)
     self:_advance_session_epoch()
     local epoch = self._session_epoch
 
-    self.agent:create_session(handlers, function(response, err)
+    self._cwd = vim.fn.getcwd()
+    self.agent:create_session(self._cwd, handlers, function(response, err)
         -- Provider-switch restore: this SessionManager may have been destroyed
         -- (by align_provider_for_restore) while session/new was in flight on
         -- the outgoing provider. Its agent and widget are gone but the
@@ -3827,7 +3862,7 @@ function SessionManager:new_session(opts)
         self.session_id = response.sessionId
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
-        self:_apply_default_trust()
+        self:_apply_default_grants()
         vim.api.nvim_exec_autocmds("User", {
             pattern = "AgenticSessionChanged",
             data = { session_id = response.sessionId },
@@ -3974,6 +4009,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
+    self.permission_manager:clear_grant_scopes()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
     self._plan_exit_pending = false
@@ -3991,7 +4027,8 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.session_id = session_id
     self.chat_history.session_id = session_id
     self.chat_history.timestamp = os.time()
-    self:_apply_default_trust()
+    self._cwd = cwd or vim.fn.getcwd()
+    self:_apply_default_grants()
     vim.api.nvim_exec_autocmds("User", {
         pattern = "AgenticSessionChanged",
         data = { session_id = session_id },
@@ -4015,10 +4052,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.chat_history.subagents = saved_history.subagents
     end
 
-    local effective_cwd = cwd or vim.fn.getcwd() --[[@as string]]
     self.agent:load_session(
         session_id,
-        effective_cwd,
+        self._cwd,
         {},
         handlers,
         function(result, err)
@@ -4162,6 +4198,7 @@ function SessionManager:_cancel_session()
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
+    self.permission_manager:clear_grant_scopes()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
     self._plan_exit_pending = false

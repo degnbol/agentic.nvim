@@ -1,16 +1,16 @@
 local assert = require("tests.helpers.assert")
 
-describe("agentic.utils.trust_safety", function()
-    --- @type agentic.utils.TrustSafety
-    local TrustSafety
+describe("agentic.utils.grant_safety", function()
+    --- @type agentic.utils.GrantSafety
+    local GrantSafety
 
     before_each(function()
-        TrustSafety = require("agentic.utils.trust_safety")
+        GrantSafety = require("agentic.utils.grant_safety")
     end)
 
     describe("find_subsequence", function()
         it("matches at the start", function()
-            local idx = TrustSafety.find_subsequence(
+            local idx = GrantSafety.find_subsequence(
                 { "a", "b", "c", "d" },
                 { "a", "b" }
             )
@@ -18,7 +18,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("matches in the middle", function()
-            local idx = TrustSafety.find_subsequence(
+            local idx = GrantSafety.find_subsequence(
                 { "a", "b", "c", "d" },
                 { "b", "c" }
             )
@@ -26,7 +26,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("returns nil when missing", function()
-            local idx = TrustSafety.find_subsequence(
+            local idx = GrantSafety.find_subsequence(
                 { "a", "b", "c" },
                 { "x", "y" }
             )
@@ -34,11 +34,11 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("returns nil for empty target", function()
-            assert.is_nil(TrustSafety.find_subsequence({ "a" }, {}))
+            assert.is_nil(GrantSafety.find_subsequence({ "a" }, {}))
         end)
 
         it("respects start_at", function()
-            local idx = TrustSafety.find_subsequence(
+            local idx = GrantSafety.find_subsequence(
                 { "a", "b", "a", "b" },
                 { "a", "b" },
                 2
@@ -49,21 +49,21 @@ describe("agentic.utils.trust_safety", function()
 
     describe("range helpers", function()
         it("range_overlaps detects touching ranges", function()
-            assert.is_true(TrustSafety.range_overlaps({ 1, 5 }, { 5, 10 }))
-            assert.is_true(TrustSafety.range_overlaps({ 1, 5 }, { 3, 4 }))
-            assert.is_false(TrustSafety.range_overlaps({ 1, 5 }, { 6, 10 }))
+            assert.is_true(GrantSafety.range_overlaps({ 1, 5 }, { 5, 10 }))
+            assert.is_true(GrantSafety.range_overlaps({ 1, 5 }, { 3, 4 }))
+            assert.is_false(GrantSafety.range_overlaps({ 1, 5 }, { 6, 10 }))
         end)
 
         it("range_within is strict containment", function()
-            assert.is_true(TrustSafety.range_within({ 3, 4 }, { 1, 5 }))
-            assert.is_true(TrustSafety.range_within({ 1, 5 }, { 1, 5 }))
-            assert.is_false(TrustSafety.range_within({ 1, 6 }, { 1, 5 }))
+            assert.is_true(GrantSafety.range_within({ 3, 4 }, { 1, 5 }))
+            assert.is_true(GrantSafety.range_within({ 1, 5 }, { 1, 5 }))
+            assert.is_false(GrantSafety.range_within({ 1, 6 }, { 1, 5 }))
         end)
     end)
 
     describe("find_unique_subsequence", function()
         it("returns start when match is unique", function()
-            local idx = TrustSafety.find_unique_subsequence(
+            local idx = GrantSafety.find_unique_subsequence(
                 { "a", "b", "c", "d" },
                 { "b", "c" }
             )
@@ -71,7 +71,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("returns nil when match appears more than once", function()
-            local idx = TrustSafety.find_unique_subsequence(
+            local idx = GrantSafety.find_unique_subsequence(
                 { "a", "b", "a", "b" },
                 { "a", "b" }
             )
@@ -79,7 +79,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("returns nil when no match", function()
-            local idx = TrustSafety.find_unique_subsequence(
+            local idx = GrantSafety.find_unique_subsequence(
                 { "a", "b" },
                 { "x" }
             )
@@ -96,7 +96,7 @@ describe("agentic.utils.trust_safety", function()
                 end_line = 3,
                 new_lines = { "c1", "c2" },
             }
-            local r = TrustSafety.verify_edit_range(record, file_lines) --[[@as agentic.utils.TrustSafety.Range]]
+            local r = GrantSafety.verify_edit_range(record, file_lines) --[[@as agentic.utils.GrantSafety.Range]]
             assert.is_not_nil(r)
             assert.equal(2, r[1])
             assert.equal(3, r[2])
@@ -110,7 +110,7 @@ describe("agentic.utils.trust_safety", function()
                 end_line = 2,
                 new_lines = { "c1", "c2" },
             }
-            assert.is_nil(TrustSafety.verify_edit_range(record, file_lines))
+            assert.is_nil(GrantSafety.verify_edit_range(record, file_lines))
         end)
 
         it("returns nil when range extends past end of file", function()
@@ -121,7 +121,7 @@ describe("agentic.utils.trust_safety", function()
                 end_line = 2,
                 new_lines = { "c1", "c2" },
             }
-            assert.is_nil(TrustSafety.verify_edit_range(record, file_lines))
+            assert.is_nil(GrantSafety.verify_edit_range(record, file_lines))
         end)
     end)
 
@@ -138,7 +138,7 @@ describe("agentic.utils.trust_safety", function()
                         new_lines = { "c1", "c2" },
                     },
                 }
-                local ranges = TrustSafety.claude_owned_ranges(
+                local ranges = GrantSafety.claude_owned_ranges(
                     "/repo/a.lua",
                     records,
                     "in-flight",
@@ -160,7 +160,7 @@ describe("agentic.utils.trust_safety", function()
                     new_lines = { "c1", "c2" },
                 },
             }
-            local ranges = TrustSafety.claude_owned_ranges(
+            local ranges = GrantSafety.claude_owned_ranges(
                 "/repo/a.lua",
                 records,
                 "in-flight",
@@ -197,7 +197,7 @@ describe("agentic.utils.trust_safety", function()
                         new_lines = { "end" },
                     },
                 }
-                local ranges = TrustSafety.claude_owned_ranges(
+                local ranges = GrantSafety.claude_owned_ranges(
                     "/repo/a.lua",
                     records,
                     "in-flight",
@@ -217,7 +217,7 @@ describe("agentic.utils.trust_safety", function()
                     new_lines = { "claude" },
                 },
             }
-            local ranges = TrustSafety.claude_owned_ranges(
+            local ranges = GrantSafety.claude_owned_ranges(
                 "/repo/a.lua",
                 records,
                 "self",
@@ -236,7 +236,7 @@ describe("agentic.utils.trust_safety", function()
                     new_lines = { "claude" },
                 },
             }
-            local ranges = TrustSafety.claude_owned_ranges(
+            local ranges = GrantSafety.claude_owned_ranges(
                 "/repo/a.lua",
                 records,
                 "in-flight",
@@ -248,21 +248,21 @@ describe("agentic.utils.trust_safety", function()
 
     describe("is_pure_addition", function()
         it("returns true when new prepends lines around old", function()
-            assert.is_true(TrustSafety.is_pure_addition({
+            assert.is_true(GrantSafety.is_pure_addition({
                 old = { "foo", "bar" },
                 new = { "header", "foo", "bar" },
             }))
         end)
 
         it("returns true when new appends lines around old", function()
-            assert.is_true(TrustSafety.is_pure_addition({
+            assert.is_true(GrantSafety.is_pure_addition({
                 old = { "foo", "bar" },
                 new = { "foo", "bar", "footer" },
             }))
         end)
 
         it("returns true for no-op (old == new)", function()
-            assert.is_true(TrustSafety.is_pure_addition({
+            assert.is_true(GrantSafety.is_pure_addition({
                 old = { "foo" },
                 new = { "foo" },
             }))
@@ -271,28 +271,28 @@ describe("agentic.utils.trust_safety", function()
         it("returns false when old is split by inserted lines", function()
             -- Non-contiguous: "foo" and "baz" separated by "bar" in new.
             -- Safe in principle but narrower contiguous check rejects it.
-            assert.is_false(TrustSafety.is_pure_addition({
+            assert.is_false(GrantSafety.is_pure_addition({
                 old = { "foo", "baz" },
                 new = { "foo", "bar", "baz" },
             }))
         end)
 
         it("returns false when any line of old is missing from new", function()
-            assert.is_false(TrustSafety.is_pure_addition({
+            assert.is_false(GrantSafety.is_pure_addition({
                 old = { "foo", "bar" },
                 new = { "foo", "baz" },
             }))
         end)
 
         it("returns false when new is shorter than old", function()
-            assert.is_false(TrustSafety.is_pure_addition({
+            assert.is_false(GrantSafety.is_pure_addition({
                 old = { "foo", "bar" },
                 new = { "foo" },
             }))
         end)
 
         it("returns false for diff.all (whole-file write)", function()
-            assert.is_false(TrustSafety.is_pure_addition({
+            assert.is_false(GrantSafety.is_pure_addition({
                 all = true,
                 old = {},
                 new = { "anything" },
@@ -300,13 +300,13 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("returns false for nil diff", function()
-            assert.is_false(TrustSafety.is_pure_addition(nil))
+            assert.is_false(GrantSafety.is_pure_addition(nil))
         end)
 
         it("returns false when old is empty (pure insertion)", function()
             -- Edit tool enforces non-empty old_string, so this shouldn't arise
             -- in practice — but guard against it anyway.
-            assert.is_false(TrustSafety.is_pure_addition({
+            assert.is_false(GrantSafety.is_pure_addition({
                 old = {},
                 new = { "new content" },
             }))
@@ -315,20 +315,20 @@ describe("agentic.utils.trust_safety", function()
 
     describe("edit_target_range", function()
         it("returns whole-file range for diff.all", function()
-            local r = TrustSafety.edit_target_range(
+            local r = GrantSafety.edit_target_range(
                 { all = true, old = {}, new = {} },
                 { "a", "b", "c" }
-            ) --[[@as agentic.utils.TrustSafety.Range]]
+            ) --[[@as agentic.utils.GrantSafety.Range]]
             assert.is_not_nil(r)
             assert.equal(1, r[1])
             assert.equal(3, r[2])
         end)
 
         it("locates diff.old in the file", function()
-            local r = TrustSafety.edit_target_range(
+            local r = GrantSafety.edit_target_range(
                 { old = { "b", "c" }, new = { "B", "C" } },
                 { "a", "b", "c", "d" }
-            ) --[[@as agentic.utils.TrustSafety.Range]]
+            ) --[[@as agentic.utils.GrantSafety.Range]]
             assert.is_not_nil(r)
             assert.equal(2, r[1])
             assert.equal(3, r[2])
@@ -336,7 +336,7 @@ describe("agentic.utils.trust_safety", function()
 
         it("returns nil when diff.old missing", function()
             assert.is_nil(
-                TrustSafety.edit_target_range(
+                GrantSafety.edit_target_range(
                     { old = {}, new = { "x" } },
                     { "a" }
                 )
@@ -345,7 +345,7 @@ describe("agentic.utils.trust_safety", function()
 
         it("returns nil when diff.old not in file", function()
             assert.is_nil(
-                TrustSafety.edit_target_range(
+                GrantSafety.edit_target_range(
                     { old = { "ghost" }, new = { "x" } },
                     { "a", "b" }
                 )
@@ -355,7 +355,7 @@ describe("agentic.utils.trust_safety", function()
 
     describe("safe_for_kind", function()
         it("create on nonexistent file is safe", function()
-            local ok = TrustSafety.safe_for_kind("create", {
+            local ok = GrantSafety.safe_for_kind("create", {
                 exists = false,
                 tracked = false,
                 has_unstaged_hunks = false,
@@ -366,7 +366,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("create on existing file is unsafe", function()
-            local ok = TrustSafety.safe_for_kind("create", {
+            local ok = GrantSafety.safe_for_kind("create", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = false,
@@ -377,7 +377,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("write on tracked + clean is safe", function()
-            local ok = TrustSafety.safe_for_kind("write", {
+            local ok = GrantSafety.safe_for_kind("write", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = false,
@@ -388,7 +388,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("write on dirty tracked file is unsafe", function()
-            local ok = TrustSafety.safe_for_kind("write", {
+            local ok = GrantSafety.safe_for_kind("write", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -399,7 +399,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("write on untracked existing file is unsafe", function()
-            local ok = TrustSafety.safe_for_kind("write", {
+            local ok = GrantSafety.safe_for_kind("write", {
                 exists = true,
                 tracked = false,
                 has_unstaged_hunks = false,
@@ -410,7 +410,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("delete on tracked + clean is safe", function()
-            local ok = TrustSafety.safe_for_kind("delete", {
+            local ok = GrantSafety.safe_for_kind("delete", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = false,
@@ -420,8 +420,20 @@ describe("agentic.utils.trust_safety", function()
             assert.is_true(ok)
         end)
 
+        it("delete of a directory is unsafe", function()
+            local ok = GrantSafety.safe_for_kind("delete", {
+                exists = true,
+                is_dir = true,
+                tracked = true,
+                has_unstaged_hunks = false,
+                hunks = {},
+                claude_owned_ranges = {},
+            })
+            assert.is_false(ok)
+        end)
+
         it("delete on dirty tracked file is unsafe", function()
-            local ok = TrustSafety.safe_for_kind("delete", {
+            local ok = GrantSafety.safe_for_kind("delete", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -432,7 +444,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("edit on clean tracked file is safe", function()
-            local ok = TrustSafety.safe_for_kind("edit", {
+            local ok = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = false,
@@ -444,7 +456,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("edit disjoint from unstaged hunks is safe", function()
-            local ok = TrustSafety.safe_for_kind("edit", {
+            local ok = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -456,7 +468,7 @@ describe("agentic.utils.trust_safety", function()
         end)
 
         it("edit overlapping a Claude-owned (intact) hunk is safe", function()
-            local ok = TrustSafety.safe_for_kind("edit", {
+            local ok = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -470,7 +482,7 @@ describe("agentic.utils.trust_safety", function()
         it(
             "edit overlapping a hunk that is NOT Claude-owned is unsafe",
             function()
-                local ok = TrustSafety.safe_for_kind("edit", {
+                local ok = GrantSafety.safe_for_kind("edit", {
                     exists = true,
                     tracked = true,
                     has_unstaged_hunks = true,
@@ -483,7 +495,7 @@ describe("agentic.utils.trust_safety", function()
         )
 
         it("edit overlapping a pure-deletion hunk is unsafe", function()
-            local ok = TrustSafety.safe_for_kind("edit", {
+            local ok = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -497,7 +509,7 @@ describe("agentic.utils.trust_safety", function()
         it(
             "edit on dirty file with no locatable target range is unsafe",
             function()
-                local ok = TrustSafety.safe_for_kind("edit", {
+                local ok = GrantSafety.safe_for_kind("edit", {
                     exists = true,
                     tracked = true,
                     has_unstaged_hunks = true,
@@ -510,7 +522,7 @@ describe("agentic.utils.trust_safety", function()
         )
 
         it("pure addition overlapping a non-Claude hunk is safe", function()
-            local ok, reason = TrustSafety.safe_for_kind("edit", {
+            local ok, reason = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -527,7 +539,7 @@ describe("agentic.utils.trust_safety", function()
             -- Without pure-addition, a count=0 hunk rejects outright.
             -- Pure addition bypasses that because user content is
             -- preserved inside diff.new regardless of hunk type.
-            local ok = TrustSafety.safe_for_kind("edit", {
+            local ok = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -543,7 +555,7 @@ describe("agentic.utils.trust_safety", function()
             -- Pure-addition recoverability is a property of diff alone;
             -- an unlocatable edit_range just means the edit will fail at
             -- tool level, which is still safe for the user.
-            local ok = TrustSafety.safe_for_kind("edit", {
+            local ok = GrantSafety.safe_for_kind("edit", {
                 exists = true,
                 tracked = true,
                 has_unstaged_hunks = true,
@@ -574,87 +586,204 @@ describe("agentic.utils.trust_safety", function()
 
             local source_safe = vim.deepcopy(clean)
             source_safe.dest = vim.deepcopy(clean)
-            assert.is_true(TrustSafety.safe_for_kind("move", source_safe))
+            assert.is_true(GrantSafety.safe_for_kind("move", source_safe))
 
             local source_ok_dest_dirty = vim.deepcopy(clean)
             source_ok_dest_dirty.dest = vim.deepcopy(dirty_dest)
             assert.is_false(
-                TrustSafety.safe_for_kind("move", source_ok_dest_dirty)
+                GrantSafety.safe_for_kind("move", source_ok_dest_dirty)
             )
         end)
     end)
 
-    describe("build_reserved_scope", function()
-        it("abbreviates a path under $HOME in the display string", function()
-            local home = vim.uv.os_homedir()
-            local root = home .. "/src/project"
-            local scope = TrustSafety.build_reserved_scope("repo", root, root)
+    describe("compile_scope", function()
+        --- @param pattern string
+        --- @return agentic.utils.GrantSafety.Scope
+        local function compile(pattern)
+            return GrantSafety.compile_scope(pattern, pattern)
+        end
 
-            assert.equal("Recoverable edits under ~/src/project", scope.display)
-            assert.equal(root, scope.cwd)
+        it("a path matches itself and everything below it", function()
+            local scope = compile("/r/src")
+            assert.equal("/r/src", scope.key)
+            assert.equal("/r/src", scope.root)
+            assert.is_true(GrantSafety.scope_contains(scope, "/r/src"))
+            assert.is_true(GrantSafety.scope_contains(scope, "/r/src/a/b.lua"))
+            assert.is_false(GrantSafety.scope_contains(scope, "/r/srcx"))
+            assert.is_false(GrantSafety.scope_contains(scope, "/r"))
         end)
 
-        it("leaves a path outside $HOME unabbreviated", function()
-            local scope =
-                TrustSafety.build_reserved_scope("here", "/srv/repo/sub")
+        it("a glob is rooted at its leading literal segments", function()
+            local scope = compile("/r/src/**/*.lua")
+            assert.equal("/r/src", scope.root)
+            assert.is_true(GrantSafety.scope_contains(scope, "/r/src/a/b.lua"))
+            assert.is_false(GrantSafety.scope_contains(scope, "/r/src/a/b.txt"))
+        end)
 
-            assert.equal("Recoverable edits under /srv/repo/sub", scope.display)
+        it("a brace glob ends the literal root", function()
+            local scope = compile("/r/{a,b}/x")
+            assert.equal("/r", scope.root)
+            assert.is_true(GrantSafety.scope_contains(scope, "/r/b/x"))
+            assert.is_false(GrantSafety.scope_contains(scope, "/r/c/x"))
+        end)
+
+        it("a nonexistent root compiles", function()
+            local scope = compile("/nonexistent-agentic-root/sub")
+            assert.is_false(GrantSafety.root_exists(scope))
+            assert.is_true(
+                GrantSafety.scope_contains(
+                    scope,
+                    "/nonexistent-agentic-root/sub/x"
+                )
+            )
+        end)
+
+        it("/tmp matches the realpath of a path under it", function()
+            local scope = compile("/tmp")
+            local real_tmp = vim.uv.fs_realpath("/tmp") --[[@as string]]
+            assert.is_true(GrantSafety.scope_contains(scope, "/tmp/x"))
+            assert.is_true(GrantSafety.scope_contains(scope, real_tmp .. "/x"))
+        end)
+
+        describe("hidden parts", function()
+            it("are excluded below the root", function()
+                local scope = compile("/r")
+                assert.is_false(
+                    GrantSafety.scope_contains(scope, "/r/.git/hooks/x")
+                )
+                assert.is_false(GrantSafety.scope_contains(scope, "/r/a/.env"))
+                assert.is_true(GrantSafety.scope_contains(scope, "/r/a/b"))
+            end)
+
+            it("are included when the pattern names them", function()
+                local scope = compile("/r/.github")
+                assert.is_true(
+                    GrantSafety.scope_contains(scope, "/r/.github/ci.yml")
+                )
+            end)
+
+            it("a glob names only the hidden segment it spells", function()
+                local scope = compile("/r/**/.github/**")
+                assert.is_true(
+                    GrantSafety.scope_contains(scope, "/r/a/.github/ci.yml")
+                )
+                assert.is_false(
+                    GrantSafety.scope_contains(scope, "/r/a/.git/.github/x")
+                )
+            end)
+
+            it("a hidden scope root stays matchable", function()
+                local scope = compile("/h/.config")
+                assert.is_true(
+                    GrantSafety.scope_contains(
+                        scope,
+                        "/h/.config/nvim/init.lua"
+                    )
+                )
+            end)
+        end)
+
+        describe("through symlinks", function()
+            --- @type string
+            local base
+
+            before_each(function()
+                local dir = vim.fn.tempname()
+                vim.fn.mkdir(dir .. "/.store/proj", "p")
+                base = vim.uv.fs_realpath(dir) --[[@as string]]
+                vim.uv.fs_symlink(base .. "/.store/proj", base .. "/proj")
+            end)
+
+            after_each(function()
+                vim.fs.rm(base, { recursive = true, force = true })
+            end)
+
+            it("matches the resolved form of a symlinked root", function()
+                local scope = compile(base .. "/proj")
+                assert.is_true(
+                    GrantSafety.scope_contains(scope, base .. "/.store/proj/a")
+                )
+            end)
+
+            it("walks hidden parts below each form's own root", function()
+                local scope = compile(base .. "/proj")
+                assert.is_false(
+                    GrantSafety.scope_contains(
+                        scope,
+                        base .. "/.store/proj/.git/x"
+                    )
+                )
+            end)
+
+            it("resolve follows a symlinked parent", function()
+                assert.equal(
+                    base .. "/.store/proj/new/file",
+                    GrantSafety.resolve(base .. "/proj/new/file")
+                )
+            end)
+
+            it("resolve keeps a nonexistent tail", function()
+                assert.equal(
+                    base .. "/a/b",
+                    GrantSafety.resolve(base .. "/a/b")
+                )
+            end)
+
+            it("resolve is nil for a path with a `..` segment", function()
+                assert.is_nil(GrantSafety.resolve(base .. "/proj/../x"))
+            end)
+
+            it("resolve is nil for a broken symlink", function()
+                vim.uv.fs_symlink(base .. "/nope", base .. "/broken")
+                assert.is_nil(GrantSafety.resolve(base .. "/broken"))
+                assert.is_nil(GrantSafety.resolve(base .. "/broken/x"))
+            end)
         end)
     end)
 
     describe("is_wide_scope", function()
-        it("never warns for reserved literals", function()
-            assert.is_false(TrustSafety.is_wide_scope({
-                kind = "repo",
-                display = "git-tracked files in /repo",
-                cwd = "/repo",
-            }))
-            assert.is_false(TrustSafety.is_wide_scope({
-                kind = "here",
-                display = "git-tracked files under /repo/sub",
-                cwd = "/repo/sub",
-            }))
+        local tmp_roots = { "/tmp", "/private/tmp" }
+
+        it("is quiet for a tmp root", function()
+            local scope = GrantSafety.compile_scope("/tmp", "/tmp")
+            assert.is_false(GrantSafety.is_wide_scope(scope, tmp_roots))
         end)
 
-        it("warns for /tmp", function()
-            local wide = TrustSafety.is_wide_scope({
-                kind = "path",
-                display = "/tmp",
-                cwd = "/repo",
-            })
-            assert.is_true(wide)
+        it("warns for $HOME and a top-level directory", function()
+            local home = vim.uv.os_homedir() --[[@as string]]
+            assert.is_true(
+                GrantSafety.is_wide_scope(
+                    GrantSafety.compile_scope(home, "~"),
+                    tmp_roots
+                )
+            )
+            assert.is_true(
+                GrantSafety.is_wide_scope(
+                    GrantSafety.compile_scope("/**", "/**"),
+                    tmp_roots
+                )
+            )
         end)
 
-        it("warns for unanchored ** glob", function()
-            local wide = TrustSafety.is_wide_scope({
-                kind = "path",
-                display = "**/*.lua",
-                cwd = "/repo",
-            })
-            assert.is_true(wide)
+        it("warns for the resolved form of a top-level directory", function()
+            local real_var = vim.uv.fs_realpath("/var") --[[@as string]]
+            assert.is_true(
+                GrantSafety.is_wide_scope(
+                    GrantSafety.compile_scope(real_var, real_var),
+                    tmp_roots
+                )
+            )
         end)
 
         it("does not warn for a focused subdirectory", function()
-            local wide = TrustSafety.is_wide_scope({
-                kind = "path",
-                display = "/repo/src",
-                cwd = "/repo",
-            })
-            assert.is_false(wide)
-        end)
-
-        it("never warns for a tmp scope", function()
-            assert.is_false(TrustSafety.is_wide_scope({
-                kind = "tmp",
-                display = "tmp scratch",
-                cwd = "/repo",
-            }))
+            local scope = GrantSafety.compile_scope("/repo/src", "src")
+            assert.is_false(GrantSafety.is_wide_scope(scope, tmp_roots))
         end)
     end)
 
     describe("tmp scope", function()
         it("tmp_roots includes a realpath'd /tmp", function()
-            local roots = TrustSafety.tmp_roots()
+            local roots = GrantSafety.tmp_roots()
             assert.is_true(#roots >= 1)
             -- /tmp realpaths to /private/tmp on macOS, /tmp on Linux.
             local has_tmp = false
@@ -669,31 +798,25 @@ describe("agentic.utils.trust_safety", function()
         it("is_under_tmp matches paths strictly under a root", function()
             local roots = { "/private/tmp", "/var/folders/ab/T" }
             assert.is_true(
-                TrustSafety.is_under_tmp("/private/tmp/scratch.txt", roots)
+                GrantSafety.is_under_tmp("/private/tmp/scratch.txt", roots)
             )
             assert.is_true(
-                TrustSafety.is_under_tmp("/var/folders/ab/T/x/y", roots)
+                GrantSafety.is_under_tmp("/var/folders/ab/T/x/y", roots)
             )
         end)
 
         it("is_under_tmp rejects the root itself and outside paths", function()
             local roots = { "/private/tmp" }
-            assert.is_false(TrustSafety.is_under_tmp("/private/tmp", roots))
-            assert.is_false(TrustSafety.is_under_tmp("/etc/passwd", roots))
+            assert.is_false(GrantSafety.is_under_tmp("/private/tmp", roots))
+            assert.is_false(GrantSafety.is_under_tmp("/etc/passwd", roots))
             -- A `..` escape collapses out of the root.
             assert.is_false(
-                TrustSafety.is_under_tmp("/private/tmp/../etc/x", roots)
+                GrantSafety.is_under_tmp("/private/tmp/../etc/x", roots)
             )
         end)
 
-        it("build_tmp_scope yields a tmp scope with resolved roots", function()
-            local scope = TrustSafety.build_tmp_scope("/repo")
-            assert.equal("tmp", scope.kind)
-            assert.is_true(#scope.tmp_roots >= 1)
-        end)
-
         it(
-            "safe_for_kind: tmp write/create are unconditionally safe",
+            "safe_for_kind: tmp write/create/edit are unconditionally safe",
             function()
                 -- tmp short-circuits before any git field, even on an existing,
                 -- untracked, dirty file (the worst case for the git-backed branch).
@@ -705,9 +828,36 @@ describe("agentic.utils.trust_safety", function()
                     hunks = {},
                     claude_owned_ranges = {},
                 }
-                assert.is_true(TrustSafety.safe_for_kind("write", args))
-                assert.is_true(TrustSafety.safe_for_kind("create", args))
+                assert.is_true(GrantSafety.safe_for_kind("write", args))
+                assert.is_true(GrantSafety.safe_for_kind("create", args))
+                assert.is_true(GrantSafety.safe_for_kind("edit", args))
             end
         )
+
+        it("safe_for_kind: a tracked file under tmp gets git rules", function()
+            local args = {
+                tmp = true,
+                exists = true,
+                tracked = true,
+                has_unstaged_hunks = true,
+                hunks = { { start_line = 1, end_line = 1, count = 1 } },
+                edit_range = { 1, 1 },
+                claude_owned_ranges = {},
+            }
+            assert.is_false(GrantSafety.safe_for_kind("write", args))
+            assert.is_false(GrantSafety.safe_for_kind("edit", args))
+        end)
+
+        it("safe_for_kind: tmp does not clear a delete", function()
+            local ok = GrantSafety.safe_for_kind("delete", {
+                tmp = true,
+                exists = true,
+                tracked = false,
+                has_unstaged_hunks = false,
+                hunks = {},
+                claude_owned_ranges = {},
+            })
+            assert.is_false(ok)
+        end)
     end)
 end)

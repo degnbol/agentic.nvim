@@ -265,7 +265,10 @@ describe("agentic.SessionManager", function()
             local session = {
                 session_id = nil, -- skip the cancel/clear-content block
                 _title_user_set = true, -- as if the user had /rename'd
-                permission_manager = { clear = function() end },
+                permission_manager = {
+                    clear = function() end,
+                    clear_grant_scopes = function() end,
+                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -304,7 +307,10 @@ describe("agentic.SessionManager", function()
                     session_id = "live-session", -- exercise the teardown block
                     is_generating = true, -- as if a turn were streaming
                     agent = { cancel_session = noop },
-                    permission_manager = { clear = noop },
+                    permission_manager = {
+                        clear = noop,
+                        clear_grant_scopes = function() end,
+                    },
                     todo_list = { clear = noop },
                     file_list = { clear = noop },
                     code_selection = { clear = noop },
@@ -410,7 +416,10 @@ describe("agentic.SessionManager", function()
             local session = {
                 session_id = nil, -- skip the cancel/clear-content block
                 _budget = { rateLimitType = "five_hour" },
-                permission_manager = { clear = function() end },
+                permission_manager = {
+                    clear = function() end,
+                    clear_grant_scopes = function() end,
+                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -453,7 +462,10 @@ describe("agentic.SessionManager", function()
                 _prompt_pending = 0,
                 _usage_reset_epoch = os.time() + 3600,
                 _pending_bufferless_prompt = "stranded",
-                permission_manager = { clear = function() end },
+                permission_manager = {
+                    clear = function() end,
+                    clear_grant_scopes = function() end,
+                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -665,7 +677,10 @@ describe("agentic.SessionManager", function()
                     set_chat_title = noop,
                     buf_nrs = { chat = 0, input = 0 },
                 },
-                permission_manager = { clear = noop },
+                permission_manager = {
+                    clear = noop,
+                    clear_grant_scopes = function() end,
+                },
                 todo_list = { clear = noop },
                 file_list = { clear = noop },
                 code_selection = { clear = noop },
@@ -687,7 +702,8 @@ describe("agentic.SessionManager", function()
                 _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
-                _apply_default_trust = noop,
+                _apply_default_grants = noop,
+                _resolve_grant_input = SessionManager._resolve_grant_input,
                 _on_session_update = noop,
                 _on_tool_call = noop,
                 _on_tool_call_update = noop,
@@ -723,6 +739,25 @@ describe("agentic.SessionManager", function()
                 assert.is_true(session._restoring)
             end
         )
+
+        it("drops the outgoing session's grants", function()
+            local session = make_load_session()
+            local clear_grants = spy.new(function() end)
+            session.permission_manager.clear_grant_scopes = clear_grants
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+
+            assert.equal(1, clear_grants.call_count)
+        end)
+
+        it("resolves `.` grants against the loaded session's cwd", function()
+            local session = make_load_session()
+
+            session:_do_load_acp_session("test-session-id", "/saved/proj")
+
+            assert.equal("/saved/proj", session:_resolve_grant_input("."))
+            assert.equal("/saved/proj/src", session:_resolve_grant_input("src"))
+        end)
 
         it("clears _restoring on successful load", function()
             local session = make_load_session()
@@ -837,7 +872,12 @@ describe("agentic.SessionManager", function()
                 local captured_create_cb
 
                 -- Wire up create_session to capture its callback
-                session.agent.create_session = function(_self, _handlers, cb)
+                session.agent.create_session = function(
+                    _self,
+                    _cwd,
+                    _handlers,
+                    cb
+                )
                     captured_create_cb = cb
                 end
 
@@ -1250,7 +1290,10 @@ describe("agentic.SessionManager", function()
                         cancel_session = cancel_spy,
                         provider_config = { name = "Old Provider" },
                     },
-                    permission_manager = { clear = perm_clear_spy },
+                    permission_manager = {
+                        clear = perm_clear_spy,
+                        clear_grant_scopes = function() end,
+                    },
                     todo_list = { clear = todo_clear_spy },
                     widget = { clear = widget_clear_spy },
                     file_list = { clear = file_list_clear_spy },
@@ -1317,7 +1360,10 @@ describe("agentic.SessionManager", function()
                         cancel_session = spy.new(function() end),
                         provider_config = { name = "Old" },
                     },
-                    permission_manager = { clear = function() end },
+                    permission_manager = {
+                        clear = function() end,
+                        clear_grant_scopes = function() end,
+                    },
                     todo_list = { clear = function() end },
                     message_writer = { write_notice = spy.new(function() end) },
                     widget = { buf_nrs = {} },
@@ -1375,7 +1421,10 @@ describe("agentic.SessionManager", function()
                     cancel_session = spy.new(function() end),
                     provider_config = { name = "Old" },
                 },
-                permission_manager = { clear = function() end },
+                permission_manager = {
+                    clear = function() end,
+                    clear_grant_scopes = function() end,
+                },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = spy.new(function() end) },
                 chat_history = { messages = {}, session_id = "old" },
@@ -1410,7 +1459,10 @@ describe("agentic.SessionManager", function()
                 session_id = nil,
 
                 agent = mock_agent,
-                permission_manager = { clear = spy.new(function() end) },
+                permission_manager = {
+                    clear = spy.new(function() end),
+                    clear_grant_scopes = function() end,
+                },
                 todo_list = { clear = spy.new(function() end) },
                 chat_history = { messages = {} },
                 _is_first_message = false,
@@ -1448,7 +1500,10 @@ describe("agentic.SessionManager", function()
                     cancel_session = spy.new(function() end),
                     provider_config = { name = "Old" },
                 },
-                permission_manager = { clear = function() end },
+                permission_manager = {
+                    clear = function() end,
+                    clear_grant_scopes = function() end,
+                },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = notice_spy },
                 widget = { buf_nrs = {} },
@@ -3022,7 +3077,7 @@ describe("agentic.SessionManager", function()
         --- @type TestSpy
         local new_session_spy
         --- @type TestSpy
-        local trust_spy
+        local grant_spy
         --- @type TestSpy
         local delete_spy
         --- @type TestSpy
@@ -3035,7 +3090,7 @@ describe("agentic.SessionManager", function()
             end
 
             dispatch_spy = spy.new(noop)
-            trust_spy = spy.new(noop)
+            grant_spy = spy.new(noop)
             delete_spy = spy.new(noop)
             rename_spy = spy.new(noop)
             new_session_spy = spy.new(function(_self, opts)
@@ -3074,7 +3129,7 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 new_session = new_session_spy,
                 _rename_session = rename_spy,
-                _handle_trust_command = trust_spy,
+                _handle_grant_command = grant_spy,
                 _delete_session = delete_spy,
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -3097,7 +3152,7 @@ describe("agentic.SessionManager", function()
                 session:_handle_input_submit(text)
             end
             assert.equal(0, new_session_spy.call_count)
-            assert.equal(0, trust_spy.call_count)
+            assert.equal(0, grant_spy.call_count)
             assert.equal(0, delete_spy.call_count)
             return dispatch_spy.call_count
         end
@@ -3107,7 +3162,7 @@ describe("agentic.SessionManager", function()
             function()
                 local texts = {
                     "/newsflash: build broken",
-                    "/trustworthy people",
+                    "/granted, it works",
                     "/clearance to land",
                     "/contextual clue",
                     "/renamed the file",
@@ -3119,14 +3174,14 @@ describe("agentic.SessionManager", function()
 
         it("sends a command name followed by punctuation as prose", function()
             -- A word boundary is whitespace or end-of-string, not any non-word
-            -- character: `/trust/etc` compiling as a path scope would silently
+            -- character: `/grant/etc` compiling as a path scope would silently
             -- widen edit permissions.
             local texts = {
                 "/new: build broken",
                 "/new/data/f.csv please read this",
                 "/new-parser is failing",
-                "/trust: what does this mean?",
-                "/trust/etc",
+                "/grant: what does this mean?",
+                "/grant/etc",
             }
             assert.equal(#texts, count_dispatched_as_prose(texts))
         end)
@@ -3154,12 +3209,12 @@ describe("agentic.SessionManager", function()
             assert.equal("my work", rename_spy.calls[2][2])
         end)
 
-        it("still intercepts /trust, bare and with a scope argument", function()
-            session:_handle_input_submit("/trust")
-            session:_handle_input_submit("/trust repo")
-            assert.equal(2, trust_spy.call_count)
-            assert.equal("", trust_spy.calls[1][2])
-            assert.equal("repo", trust_spy.calls[2][2])
+        it("still intercepts /grant, bare and with a scope argument", function()
+            session:_handle_input_submit("/grant")
+            session:_handle_input_submit("/grant root")
+            assert.equal(2, grant_spy.call_count)
+            assert.equal("", grant_spy.calls[1][2])
+            assert.equal("root", grant_spy.calls[2][2])
             assert.equal(0, dispatch_spy.call_count)
         end)
 
@@ -3174,11 +3229,11 @@ describe("agentic.SessionManager", function()
             assert.is_true(session:_handle_input_submit("/delete"))
 
             session._usage_reset_epoch = os.time() + 600
-            assert.is_true(session:_handle_input_submit("/trust repo"))
+            assert.is_true(session:_handle_input_submit("/grant root"))
 
             assert.equal(1, new_session_spy.call_count)
             assert.equal(1, delete_spy.call_count)
-            assert.equal(1, trust_spy.call_count)
+            assert.equal(1, grant_spy.call_count)
             assert.equal(0, dispatch_spy.call_count)
         end)
     end)
@@ -3381,7 +3436,8 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("/trust dispatch", function()
+    describe("/grant", function()
+        local PermissionManager = require("agentic.ui.permission_manager")
         --- @type TestStub
         local select_stub
         --- @type TestStub
@@ -3392,41 +3448,68 @@ describe("agentic.SessionManager", function()
         local git_root_stub
         --- @type agentic.SessionManager
         local session
-        --- @type integer
-        local test_bufnr
-        --- @type table
-        local pm
         --- @type agentic.ui.MessageWriter.Notice[]
         local notices
         --- @type any[]
         local errors
+        --- Resolved temp dir standing in for the session cwd's git root.
+        --- @type string
+        local repo
+        local orig_auto, orig_defaults
 
         local SessionManagerModule
 
+        --- @return string[] keys The active grant scope keys, in order
+        local function grant_keys()
+            return vim.tbl_map(function(scope)
+                return scope.key
+            end, session.permission_manager:get_grant_scopes())
+        end
+
+        --- @param needle string
+        --- @return integer count WARN notifications whose message contains `needle`
+        local function warn_count(needle)
+            local count = 0
+            for _, c in ipairs(notify_stub.calls) do
+                if
+                    c[2] == vim.log.levels.WARN
+                    and c[1]:find(needle, 1, true)
+                then
+                    count = count + 1
+                end
+            end
+            return count
+        end
+
         before_each(function()
             SessionManagerModule = require("agentic.session_manager")
+
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir .. "/sub", "p")
+            repo = vim.uv.fs_realpath(dir) --[[@as string]]
 
             select_stub = spy.stub(vim.ui, "select")
             input_stub = spy.stub(vim.ui, "input")
             notify_stub = spy.stub(Logger, "notify")
             git_root_stub = spy.stub(vim.fs, "root")
-            git_root_stub:returns("/repo")
+            git_root_stub:returns(repo)
 
-            test_bufnr = vim.api.nvim_create_buf(false, true)
+            orig_auto = Config.auto_approve_grant
+            orig_defaults = Config.permissions.default_grant
+            Config.auto_approve_grant = true
 
             notices = {}
             errors = {}
 
-            pm = {
-                set_trust_scope = spy.new(function() end),
-                clear_trust_scope = spy.new(function() end),
-            }
-
             session = {
                 id = fresh_id(),
-                permission_manager = pm,
-                widget = {
-                    buf_nrs = { chat = test_bufnr },
+                _cwd = repo .. "/sub",
+                permission_manager = {
+                    _grant_scopes = {},
+                    add_grant_scope = PermissionManager.add_grant_scope,
+                    remove_grant_scope = PermissionManager.remove_grant_scope,
+                    clear_grant_scopes = PermissionManager.clear_grant_scopes,
+                    get_grant_scopes = PermissionManager.get_grant_scopes,
                 },
                 message_writer = {
                     write_notice = spy.new(function(_, notice)
@@ -3436,11 +3519,13 @@ describe("agentic.SessionManager", function()
                         table.insert(errors, msg)
                     end),
                 },
-                _push_trust_to_headers = SessionManagerModule._push_trust_to_headers,
-                _apply_trust_scope = SessionManagerModule._apply_trust_scope,
-                _clear_trust_scope = SessionManagerModule._clear_trust_scope,
-                _show_trust_picker = SessionManagerModule._show_trust_picker,
-                _handle_trust_command = SessionManagerModule._handle_trust_command,
+                _resolve_grant_input = SessionManagerModule._resolve_grant_input,
+                _write_grant_notice = SessionManagerModule._write_grant_notice,
+                _add_grant = SessionManagerModule._add_grant,
+                _apply_default_grants = SessionManagerModule._apply_default_grants,
+                _clear_grants = SessionManagerModule._clear_grants,
+                _show_grant_picker = SessionManagerModule._show_grant_picker,
+                _handle_grant_command = SessionManagerModule._handle_grant_command,
             } --[[@as agentic.SessionManager]]
         end)
 
@@ -3449,169 +3534,154 @@ describe("agentic.SessionManager", function()
             input_stub:revert()
             notify_stub:revert()
             git_root_stub:revert()
-            vim.api.nvim_buf_delete(test_bufnr, { force = true })
-            Config.auto_approve_trust_scope = true
+            Config.auto_approve_grant = orig_auto
+            Config.permissions.default_grant = orig_defaults
+            vim.fs.rm(repo, { recursive = true, force = true })
         end)
 
-        it("repo subcommand sets a repo scope on the manager", function()
-            session:_handle_trust_command("repo")
-            assert.equal(1, pm.set_trust_scope.call_count)
-            local scope = pm.set_trust_scope.calls[1][2]
-            assert.equal("repo", scope.kind)
-            assert.equal(scope.display, notices[1].title)
-            assert.equal(Glyphs.COMMAND.trust, notices[1].glyph)
+        it("`.` grants the session cwd and confirms in the chat", function()
+            session:_handle_grant_command(".")
+            assert.same({ repo .. "/sub" }, grant_keys())
+            assert.equal(".", notices[1].title)
+            assert.equal(Glyphs.COMMAND.grant, notices[1].glyph)
             assert.is_nil(notices[1].glyph_hl)
         end)
 
-        it("here subcommand sets a here scope on the manager", function()
-            session:_handle_trust_command("here")
-            assert.equal(1, pm.set_trust_scope.call_count)
-            local scope = pm.set_trust_scope.calls[1][2]
-            assert.equal("here", scope.kind)
+        it("grants combine", function()
+            session:_handle_grant_command("root")
+            session:_handle_grant_command(".")
+            assert.same({ repo, repo .. "/sub" }, grant_keys())
+        end)
+
+        it("re-adding a grant only reports it", function()
+            session:_handle_grant_command(".")
+            session:_handle_grant_command("./")
+            assert.equal(1, #grant_keys())
+            assert.equal("already granted: ./", notices[2].title)
         end)
 
         it("nests the notice in the turn it widens", function()
-            -- A scope set mid-turn governs the tool calls after it, so it
+            -- A scope added mid-turn governs the tool calls after it, so it
             -- renders inside the running turn rather than at the boundary.
             session.is_generating = true
-            session:_handle_trust_command("repo")
+            session:_handle_grant_command(".")
             assert.is_true(notices[1].mid_turn)
         end)
 
-        it("off subcommand clears the scope", function()
-            session:_handle_trust_command("off")
-            assert.equal(1, pm.clear_trust_scope.call_count)
-            -- The cleared notice reuses the set glyph, struck through.
-            assert.equal(Glyphs.COMMAND.trust, notices[1].glyph)
-            assert.equal(Theme.HL_GROUPS.GLYPH_OFF, notices[1].glyph_hl)
+        it("off clears every grant", function()
+            session:_handle_grant_command(".")
+            session:_handle_grant_command("off")
+            assert.equal(0, #grant_keys())
+            -- The cleared notice reuses the add glyph, struck through.
+            assert.equal(Glyphs.COMMAND.grant, notices[2].glyph)
+            assert.equal(Theme.HL_GROUPS.GLYPH_OFF, notices[2].glyph_hl)
         end)
 
-        it("path subcommand compiles a path scope", function()
-            session:_handle_trust_command("/repo/src/**/*.lua")
-            assert.equal(1, pm.set_trust_scope.call_count)
-            local scope = pm.set_trust_scope.calls[1][2]
-            assert.equal("path", scope.kind)
-            assert.equal("/repo/src/**/*.lua", scope.display)
+        it("a relative glob resolves against the session cwd", function()
+            session:_handle_grant_command("src/**/*.lua")
+            assert.same({ repo .. "/sub/src/**/*.lua" }, grant_keys())
+            assert.equal("src/**/*.lua", notices[1].title)
         end)
 
-        it("empty arg opens the picker", function()
-            session:_handle_trust_command("")
-            assert.equal(1, select_stub.call_count)
-        end)
-
-        it("repo subcommand without git root errors", function()
+        it("root without a git root errors", function()
             git_root_stub:returns(nil)
-            session:_handle_trust_command("repo")
-            assert.equal(0, pm.set_trust_scope.call_count)
+            session:_handle_grant_command("root")
+            assert.equal(0, #grant_keys())
             assert.equal(1, #errors)
         end)
 
-        it("disabled config rejects /trust", function()
-            Config.auto_approve_trust_scope = false
-            session:_handle_trust_command("repo")
-            assert.equal(0, pm.set_trust_scope.call_count)
+        it("is rejected when the switch is off", function()
+            Config.auto_approve_grant = false
+            session:_handle_grant_command(".")
+            assert.equal(0, #grant_keys())
             assert.equal(1, #errors)
         end)
 
-        it("emits a WARN for wide path scopes", function()
-            session:_handle_trust_command("/tmp")
-            assert.equal(1, pm.set_trust_scope.call_count)
-            local warn_count = 0
-            for _, c in ipairs(notify_stub.calls) do
-                if c[2] == vim.log.levels.WARN then
-                    warn_count = warn_count + 1
-                end
+        it("warns for a wide grant, not for a tmp root", function()
+            session:_handle_grant_command("/")
+            assert.equal(1, warn_count("Wide grant"))
+            session:_handle_grant_command("/tmp")
+            assert.equal(1, warn_count("Wide grant"))
+        end)
+
+        it("adds a missing path and warns", function()
+            session:_handle_grant_command("typo/dir")
+            assert.same({ repo .. "/sub/typo/dir" }, grant_keys())
+            assert.equal(1, warn_count("does not exist yet"))
+        end)
+
+        describe("picker", function()
+            --- @return { label: string }[] items
+            --- @return fun(item: table|nil) on_choice
+            local function open_picker()
+                session:_handle_grant_command("")
+                local call = select_stub.calls[select_stub.call_count]
+                return call[1], call[3]
             end
-            assert.equal(1, warn_count)
-        end)
 
-        it("does not emit a WARN for reserved literals", function()
-            session:_handle_trust_command("repo")
-            local warn_count = 0
-            for _, c in ipairs(notify_stub.calls) do
-                if c[2] == vim.log.levels.WARN then
-                    warn_count = warn_count + 1
-                end
-            end
-            assert.equal(0, warn_count)
-        end)
-    end)
+            it("toggles `.`, `root` and active grants", function()
+                session:_handle_grant_command("/tmp")
+                session:_handle_grant_command(".")
+                local items, on_choice = open_picker()
+                local labels = vim.tbl_map(function(item)
+                    return item.label
+                end, items)
+                assert.is_true(vim.startswith(labels[1], "✓ . ("))
+                assert.is_true(vim.startswith(labels[2], "root ("))
+                assert.equal("✓ /tmp", labels[3])
+                assert.same(
+                    { "Path or glob…", "Off" },
+                    { labels[4], labels[5] }
+                )
 
-    describe("_apply_default_trust", function()
-        --- @type table
-        local pm
-        --- @type agentic.SessionManager
-        local session
-        --- @type integer
-        local test_bufnr
-        local orig_auto, orig_trust_tmp
+                on_choice(items[1])
+                assert.same({ "/tmp" }, grant_keys())
+                assert.equal("grant removed: .", notices[#notices].title)
 
-        before_each(function()
-            local SessionManagerModule = require("agentic.session_manager")
-            test_bufnr = vim.api.nvim_create_buf(false, true)
-            orig_auto = Config.auto_approve_trust_scope
-            orig_trust_tmp = Config.permissions.trust_tmp
-            Config.auto_approve_trust_scope = true
-            Config.permissions.trust_tmp = true
-
-            pm = {
-                get_trust_scope = spy.new(function()
-                    return nil
-                end),
-                set_trust_scope = spy.new(function() end),
-            }
-            session = {
-                id = fresh_id(),
-                permission_manager = pm,
-                widget = {
-                    buf_nrs = { chat = test_bufnr },
-                },
-                _push_trust_to_headers = SessionManagerModule._push_trust_to_headers,
-                _apply_default_trust = SessionManagerModule._apply_default_trust,
-            } --[[@as agentic.SessionManager]]
-        end)
-
-        after_each(function()
-            vim.api.nvim_buf_delete(test_bufnr, { force = true })
-            Config.auto_approve_trust_scope = orig_auto
-            Config.permissions.trust_tmp = orig_trust_tmp
-        end)
-
-        it(
-            "activates a tmp scope when both flags are on and none is set",
-            function()
-                session:_apply_default_trust()
-                assert.equal(1, pm.set_trust_scope.call_count)
-                local scope = pm.set_trust_scope.calls[1][2]
-                assert.equal("tmp", scope.kind)
-            end
-        )
-
-        it("leaves a user-set scope untouched", function()
-            pm.get_trust_scope = spy.new(function()
-                return { kind = "repo" }
+                on_choice(items[2])
+                assert.same({ "/tmp", repo }, grant_keys())
             end)
-            session:_apply_default_trust()
-            assert.equal(0, pm.set_trust_scope.call_count)
+
+            it("lists root once when it is the cwd", function()
+                session._cwd = repo
+                local items = open_picker()
+                assert.equal(3, #items)
+            end)
         end)
 
-        it("does nothing when trust_tmp is off", function()
-            Config.permissions.trust_tmp = false
-            session:_apply_default_trust()
-            assert.equal(0, pm.set_trust_scope.call_count)
-        end)
+        describe("default grants", function()
+            it("are added silently", function()
+                Config.permissions.default_grant = { "/tmp", "." }
+                session:_apply_default_grants()
+                assert.same({ "/tmp", repo .. "/sub" }, grant_keys())
+                assert.equal(0, #notices)
+                assert.equal(0, warn_count(""))
+            end)
 
-        it("does nothing when auto_approve_trust_scope is off", function()
-            Config.auto_approve_trust_scope = false
-            session:_apply_default_trust()
-            assert.equal(0, pm.set_trust_scope.call_count)
+            it("skip an unset variable and warn for a missing path", function()
+                Config.permissions.default_grant = {
+                    "$AGENTIC_UNSET_VAR",
+                    "$AGENTIC_UNSET_VAR/sub",
+                    "/nonexistent-agentic-root",
+                }
+                session:_apply_default_grants()
+                assert.same({ "/nonexistent-agentic-root" }, grant_keys())
+                assert.equal(1, warn_count("does not exist yet"))
+            end)
+
+            it("do nothing when the switch is off", function()
+                Config.auto_approve_grant = false
+                Config.permissions.default_grant = { "/tmp" }
+                session:_apply_default_grants()
+                assert.equal(0, #grant_keys())
+            end)
         end)
     end)
 
     describe("block sequencing", function()
         local dispatch_spy
         local new_session_spy
-        local trust_spy
+        local grant_spy
         local delete_spy
         local context_spy
         local rename_spy
@@ -3643,7 +3713,7 @@ describe("agentic.SessionManager", function()
             errors = {}
             dispatch_spy = spy.new(noop)
             context_spy = spy.new(noop)
-            trust_spy = spy.new(noop)
+            grant_spy = spy.new(noop)
             delete_spy = spy.new(noop)
             rename_spy = spy.new(noop)
             new_session_spy = spy.new(function(this)
@@ -3693,7 +3763,7 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 new_session = new_session_spy,
                 _display_context_usage = context_spy,
-                _handle_trust_command = trust_spy,
+                _handle_grant_command = grant_spy,
                 _delete_session = delete_spy,
                 _rename_session = rename_spy,
                 _dispatch_turn = dispatch_spy,
@@ -3751,10 +3821,10 @@ describe("agentic.SessionManager", function()
             assert.equal(0, #queued)
         end)
 
-        it("passes a trust scope without the block behind it", function()
-            submit("/trust repo", { "Also do X" })
+        it("passes a grant scope without the block behind it", function()
+            submit("/grant root", { "Also do X" })
 
-            assert.equal("repo", trust_spy.calls[1][2])
+            assert.equal("root", grant_spy.calls[1][2])
         end)
 
         -- The confirm belongs to the drain path only: as a submit's own first
@@ -3787,13 +3857,13 @@ describe("agentic.SessionManager", function()
         -- The picker outlives the call, so dispatching now would race a dialog
         -- the user is still answering.
         it("waits for an async command's dialog to resolve", function()
-            submit("/trust", { "Also do X" })
+            submit("/grant", { "Also do X" })
 
-            assert.equal(1, trust_spy.call_count)
+            assert.equal(1, grant_spy.call_count)
             assert.spy(dispatch_spy).was.called(0)
 
             -- The scope question is settled: on_done resumes the sequence.
-            trust_spy.calls[1][3]()
+            grant_spy.calls[1][3]()
             deferred.drain()
 
             assert.spy(dispatch_spy).was.called(1)

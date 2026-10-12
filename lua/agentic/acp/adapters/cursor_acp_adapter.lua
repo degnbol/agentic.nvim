@@ -16,9 +16,10 @@ function CursorACPAdapter:new(config, on_ready)
 end
 
 --- Overloading create_session to handle slash commands, as cursor sends them before session starts
+--- @param cwd string
 --- @param handlers agentic.acp.ClientHandlers
 --- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
-function CursorACPAdapter:create_session(handlers, callback)
+function CursorACPAdapter:create_session(cwd, handlers, callback)
     --- @param result agentic.acp.SessionCreationResponse|nil
     --- @param err agentic.acp.ACPError|nil
     local function wrapped_callback(result, err)
@@ -39,7 +40,7 @@ function CursorACPAdapter:create_session(handlers, callback)
         end
     end
 
-    ACPClient.create_session(self, handlers, wrapped_callback)
+    ACPClient.create_session(self, cwd, handlers, wrapped_callback)
 end
 
 --- @param params table

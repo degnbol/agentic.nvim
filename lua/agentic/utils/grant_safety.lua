@@ -1,35 +1,38 @@
---- Pure(-ish) safety checks for the /trust scoped auto-approval layer.
+--- Safety checks for the /grant scoped auto-approval layer. Nothing here
+--- writes; path resolution and scope compilation read the filesystem.
 ---
---- The orchestrator in PermissionManager handles I/O (git, stat, file read)
---- and threads concrete inputs into the per-kind predicate here. Keeping
---- the predicates and matchers free of side effects lets us unit-test the
---- safety matrix without mocking PermissionManager.
+--- The orchestrator in PermissionManager handles git and file reads and
+--- threads concrete inputs into the per-kind predicate here, so the safety
+--- matrix is unit-testable without mocking PermissionManager.
 
---- @class agentic.utils.TrustSafety
+--- @class agentic.utils.GrantSafety
 local M = {}
 
---- @class agentic.utils.TrustSafety.Range
+--- @class agentic.utils.GrantSafety.Range
 --- @field [1] integer start_line (1-based)
 --- @field [2] integer end_line_inclusive
 
---- @class agentic.utils.TrustSafety.StatSnapshot
+--- @class agentic.utils.GrantSafety.StatSnapshot
 --- @field exists boolean
 --- @field mtime_sec? integer
 --- @field mtime_nsec? integer
 --- @field size? integer
 
---- @class agentic.utils.TrustSafety.Scope
---- @field kind "repo"|"here"|"path"|"tmp"
---- @field display string Original user input or reserved literal
---- @field cwd string Activation cwd (anchors "here", relative paths)
---- @field glob_matcher? fun(path: string): boolean Compiled matcher for "path"
---- @field tmp_roots? string[] Resolved tmp roots (kind == "tmp")
+--- @class agentic.utils.GrantSafety.ScopeForm
+--- @field root string Absolute directory the pattern is anchored at
+--- @field pattern vim.lpeg.Pattern Matches a whole absolute path
+
+--- @class agentic.utils.GrantSafety.Scope
+--- @field key string Absolute normalised pattern, the scope's identity
+--- @field display string The user's input
+--- @field root string Literal root: the pattern's leading segments with no glob metacharacter
+--- @field forms agentic.utils.GrantSafety.ScopeForm[] The pattern on `root`, and on the resolved `root` when that differs
+--- @field dot_segments vim.lpeg.Pattern[] Pattern segments below `root` that start with a literal `.`, each compiled alone
 
 --- Top-level directories that are too coarse to silently auto-approve.
 --- Used by `is_wide_scope` for the WARN notification.
 local WIDE_TOPLEVEL = {
     ["/"] = true,
-    ["/tmp"] = true,
     ["/var"] = true,
     ["/usr"] = true,
     ["/etc"] = true,
@@ -44,87 +47,170 @@ local function normalize(path)
     return vim.fs.normalize(path, { expand_env = false })
 end
 
---- Home-relative form of a path, for display strings only (`~/src/x`). Scope
---- matching always runs on the unabbreviated path; the shortening exists
---- because the display string lands in width-bounded places (the chat notice
---- heading, the headers state external UI plugins render).
---- @param path string
---- @return string
-local function tilde(path)
-    return vim.fn.fnamemodify(path, ":~")
+--- @param path string Absolute path or pattern
+--- @return string[] segments The non-empty `/`-separated parts
+local function segments(path)
+    return vim.split(path, "/", { trimempty = true })
 end
 
 --- True iff `pat` contains glob metacharacters.
 --- @param pat string
 --- @return boolean
 local function has_glob_meta(pat)
-    return pat:find("[%*%?%[]") ~= nil
+    return pat:find("[%*%?%[{]") ~= nil
 end
 
---- Compile a /trust argument into a TrustScope record.
---- "repo" / "here" / "off" are handled by the caller.
---- @param input string The user's argument (already trimmed, non-empty,
----                     not a reserved literal)
---- @param cwd string Activation cwd
---- @return agentic.utils.TrustSafety.Scope
-function M.compile_path_scope(input, cwd)
-    local expanded = normalize(input)
+--- The leading segments of an absolute pattern that hold no glob
+--- metacharacter, as a path.
+--- @param pattern string Absolute, normalised
+--- @return string root
+local function literal_root(pattern)
+    local literal = {}
+    for _, seg in ipairs(segments(pattern)) do
+        if has_glob_meta(seg) then
+            break
+        end
+        table.insert(literal, seg)
+    end
+    return "/" .. table.concat(literal, "/")
+end
 
-    -- Resolve relative paths against cwd.
-    local pattern = expanded
-    if pattern:sub(1, 1) ~= "/" then
-        pattern = normalize(vim.fs.joinpath(cwd, pattern))
+--- Compile an absolute pattern into a whole-path matcher. A pattern with no
+--- glob metacharacter matches itself and every path below it.
+--- @param pattern string Absolute, normalised
+--- @return vim.lpeg.Pattern
+local function compile_pattern(pattern)
+    if has_glob_meta(pattern) then
+        return vim.glob.to_lpeg(pattern)
+    end
+    local below = pattern == "/" and "/" or pattern .. "/"
+    return vim.lpeg.P(pattern) * -1 + vim.lpeg.P(below)
+end
+
+--- @param patterns vim.lpeg.Pattern[]
+--- @param s string
+--- @return boolean
+local function matches_any(patterns, s)
+    for _, p in ipairs(patterns) do
+        if p:match(s) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Full realpath of a path that need not exist: the realpath of its deepest
+--- existing ancestor, with the remaining segments appended. So a path through
+--- a symlinked parent resolves to where a write would land.
+--- @param path string Absolute path
+--- @return string|nil real Nil when an existing part of the path does not resolve (a broken symlink), or `path` has a `..` segment
+function M.resolve(path)
+    -- The kernel applies `..` after following a symlink before it, so
+    -- `/r/link/../x` lands beside the link's target; normalising would
+    -- collapse it to `/r/x` as text.
+    if vim.list_contains(segments(path), "..") then
+        return nil
+    end
+    local dir = normalize(path)
+    --- @type string[]
+    local tail = {}
+    while true do
+        local real = vim.uv.fs_realpath(dir)
+        if real then
+            return vim.fs.joinpath(real, unpack(tail))
+        end
+        if vim.uv.fs_lstat(dir) then
+            return nil
+        end
+        table.insert(tail, 1, vim.fs.basename(dir))
+        dir = vim.fs.dirname(dir)
+    end
+end
+
+--- Compile a path or glob into a scope. The pattern matches in two forms:
+--- on its literal root, and on the resolved root, so a path given in either
+--- form matches (`/tmp/x` and `/private/tmp/x` on macOS).
+---
+--- A hidden part below the root (a segment starting with `.`) is excluded
+--- unless the pattern names it with a segment that starts with a literal `.`
+--- (`/r/**/.github/**` admits `.github`, not `.git`). A hidden name written
+--- any other way (`{.a,b}`, `[.]a`) stays excluded.
+---
+--- A path containing `*`, `?`, `[` or `{` compiles as a glob, so it covers
+--- only the paths it matches, not those below them.
+--- @param pattern string Absolute path or glob, `~` and env vars expanded
+--- @param display string Shown to the user for the scope
+--- @return agentic.utils.GrantSafety.Scope
+function M.compile_scope(pattern, display)
+    local key = normalize(pattern)
+    local root = literal_root(key)
+    local below = key:sub(#root + 1)
+
+    --- @type agentic.utils.GrantSafety.ScopeForm[]
+    local forms = { { root = root, pattern = compile_pattern(key) } }
+    local real_root = M.resolve(root)
+    if real_root and real_root ~= root then
+        table.insert(forms, {
+            root = real_root,
+            pattern = compile_pattern(real_root .. below),
+        })
     end
 
-    -- Bare directory with no glob characters → match anything beneath it.
-    if not has_glob_meta(pattern) then
-        local stat = vim.uv.fs_stat(pattern)
-        if stat and stat.type == "directory" then
-            pattern = pattern .. "/**"
+    --- @type vim.lpeg.Pattern[]
+    local dot_segments = {}
+    for _, seg in ipairs(segments(below)) do
+        if seg:sub(1, 1) == "." then
+            table.insert(dot_segments, vim.glob.to_lpeg(seg))
         end
     end
 
-    local lpeg_pat = vim.glob.to_lpeg(pattern)
-    --- @type agentic.utils.TrustSafety.Scope
+    --- @type agentic.utils.GrantSafety.Scope
     local scope = {
-        kind = "path",
-        display = input,
-        cwd = cwd,
-        glob_matcher = function(path)
-            return lpeg_pat:match(path) ~= nil
-        end,
+        key = key,
+        display = display,
+        root = root,
+        forms = forms,
+        dot_segments = dot_segments,
     }
     return scope
 end
 
---- Build a "repo" or "here" scope. The actual tracked-set membership check
---- happens in the orchestrator via git_files.
---- @param kind "repo"|"here"
---- @param cwd string
---- @param git_root? string Used for the display string when kind == "repo"
---- @return agentic.utils.TrustSafety.Scope
-function M.build_reserved_scope(kind, cwd, git_root)
-    local where
-    if kind == "repo" then
-        where = git_root or "<git root>"
-    else
-        where = cwd
+--- @param scope agentic.utils.GrantSafety.Scope
+--- @return boolean
+function M.root_exists(scope)
+    return vim.uv.fs_stat(scope.root) ~= nil
+end
+
+--- True iff `path` is in the scope: some form's pattern matches it, and every
+--- hidden segment of it below that form's root is named by the pattern (see
+--- `compile_scope`).
+--- @param scope agentic.utils.GrantSafety.Scope
+--- @param path string Absolute, normalised path
+--- @return boolean
+function M.scope_contains(scope, path)
+    for _, form in ipairs(scope.forms) do
+        if form.pattern:match(path) then
+            local hidden_granted = true
+            for _, seg in ipairs(segments(path:sub(#form.root + 1))) do
+                if
+                    seg:sub(1, 1) == "."
+                    and not matches_any(scope.dot_segments, seg)
+                then
+                    hidden_granted = false
+                    break
+                end
+            end
+            if hidden_granted then
+                return true
+            end
+        end
     end
-    --- @type agentic.utils.TrustSafety.Scope
-    local scope = {
-        kind = kind,
-        display = string.format("Recoverable edits under %s", tilde(where)),
-        cwd = cwd,
-    }
-    return scope
+    return false
 end
 
 --- The deduplicated temp roots: `/tmp` and the platform `$TMPDIR` (macOS
---- `/var/folders/.../T`), each in **both** its literal and realpath form.
---- Both are needed because a candidate path is only realpathed at its leaf
---- (`resolve_symlink_pair`), not through a symlinked parent — so on macOS
---- `/tmp/x` stays `/tmp/x` (matches the literal `/tmp` root) while a path
---- captured under `/private/tmp` matches the realpath root.
+--- `/var/folders/.../T`), each in **both** its literal and realpath form, so
+--- a path matches in either form (`/tmp/x` and `/private/tmp/x`).
 --- @return string[]
 function M.tmp_roots()
     local roots = {}
@@ -162,79 +248,32 @@ function M.is_under_tmp(path, roots)
     return false
 end
 
---- Build a "tmp" scope: auto-approve mutations of scratch files under any tmp
---- root. Recoverability comes from "ephemeral by convention", not git, so
---- `safe_for_kind` short-circuits on `args.tmp`.
---- @param cwd string Activation cwd
---- @return agentic.utils.TrustSafety.Scope
-function M.build_tmp_scope(cwd)
-    local roots = M.tmp_roots()
-    --- @type agentic.utils.TrustSafety.Scope
-    local scope = {
-        kind = "tmp",
-        display = "tmp scratch (" .. table.concat(roots, ", ") .. ")",
-        cwd = cwd,
-        tmp_roots = roots,
-    }
-    return scope
-end
-
 --- Heuristic check for "this scope might cover much more than the user
---- intended." Reserved literals never warn.
---- @param scope agentic.utils.TrustSafety.Scope
+--- intended": its root is `$HOME` or a top-level directory, in literal or
+--- resolved form (`/private/var` is `/var`), and not one of `tmp_roots`.
+--- @param scope agentic.utils.GrantSafety.Scope
+--- @param tmp_roots string[] Roots that are never wide
 --- @return boolean wide
 --- @return string|nil reason
-function M.is_wide_scope(scope)
-    if scope.kind ~= "path" then
+function M.is_wide_scope(scope, tmp_roots)
+    local root = scope.root
+    if vim.tbl_contains(tmp_roots, root) then
         return false, nil
     end
-
-    local raw = scope.display
-    local expanded = normalize(raw)
-    if expanded:sub(1, 1) ~= "/" then
-        expanded = normalize(vim.fs.joinpath(scope.cwd, expanded))
+    --- @param dir string
+    --- @return boolean
+    local function is_root(dir)
+        return dir == root or vim.uv.fs_realpath(dir) == root
     end
-
-    local home = vim.uv.os_homedir() or ""
-    if expanded == home or expanded == home .. "/**" then
+    if is_root(vim.uv.os_homedir() or "") then
         return true, "covers $HOME"
     end
-
-    -- Strip a trailing /** to inspect the underlying root.
-    local base = expanded:gsub("/%*%*$", "")
-    if WIDE_TOPLEVEL[base] then
-        return true, "covers a top-level directory: " .. base
-    end
-
-    -- A glob with no anchoring prefix (`**/...`).
-    if raw:sub(1, 2) == "**" then
-        return true, "unanchored ** glob"
-    end
-
-    return false, nil
-end
-
---- Resolve a path's symlink endpoints. Returns the original normalised path
---- and its realpath. realpath equals path when the file is not a symlink or
---- does not yet exist (the latter applies to `create`/`write` of new files).
---- Returns nil if the symlink is broken.
---- @param path string Absolute path
---- @return string|nil orig
---- @return string|nil real
-function M.resolve_symlink_pair(path)
-    local norm = normalize(path)
-    local lstat = vim.uv.fs_lstat(norm)
-    if not lstat then
-        return norm, norm
-    end
-    if lstat.type == "link" then
-        local real = vim.uv.fs_realpath(norm)
-        if not real then
-            return nil, nil
+    for dir in pairs(WIDE_TOPLEVEL) do
+        if is_root(dir) then
+            return true, "covers a top-level directory: " .. root
         end
-        return norm, real
     end
-    return norm, norm
+    return false, nil
 end
 
 --- True iff target_lines occurs as a contiguous subsequence in file_lines,
@@ -269,22 +308,22 @@ function M.find_subsequence(file_lines, target_lines, start_at)
     return nil
 end
 
---- @param a agentic.utils.TrustSafety.Range
---- @param b agentic.utils.TrustSafety.Range
+--- @param a agentic.utils.GrantSafety.Range
+--- @param b agentic.utils.GrantSafety.Range
 --- @return boolean
 function M.range_overlaps(a, b)
     return not (a[2] < b[1] or b[2] < a[1])
 end
 
---- @param inner agentic.utils.TrustSafety.Range
---- @param outer agentic.utils.TrustSafety.Range
+--- @param inner agentic.utils.GrantSafety.Range
+--- @param outer agentic.utils.GrantSafety.Range
 --- @return boolean
 function M.range_within(inner, outer)
     return inner[1] >= outer[1] and inner[2] <= outer[2]
 end
 
---- @param target agentic.utils.TrustSafety.Range
---- @param ranges agentic.utils.TrustSafety.Range[]
+--- @param target agentic.utils.GrantSafety.Range
+--- @param ranges agentic.utils.GrantSafety.Range[]
 --- @return boolean
 function M.any_overlap(target, ranges)
     for _, r in ipairs(ranges) do
@@ -318,7 +357,7 @@ function M.find_unique_subsequence(file_lines, target_lines)
     return first
 end
 
---- @class agentic.utils.TrustSafety.EditRecord
+--- @class agentic.utils.GrantSafety.EditRecord
 --- @field path string Absolute file path
 --- @field start_line integer 1-based inclusive, position of new_lines[1]
 --- @field end_line integer 1-based inclusive, position of new_lines[#new_lines]
@@ -329,9 +368,9 @@ end
 --- shifted or modified that region. Line numbers in `record` must index into
 --- `file_lines` as they currently exist on disk.
 ---
---- @param record agentic.utils.TrustSafety.EditRecord
+--- @param record agentic.utils.GrantSafety.EditRecord
 --- @param file_lines string[]
---- @return agentic.utils.TrustSafety.Range|nil
+--- @return agentic.utils.GrantSafety.Range|nil
 function M.verify_edit_range(record, file_lines)
     local expected = record.new_lines
     if not expected or #expected == 0 then
@@ -354,12 +393,12 @@ end
 --- shifting lines) drops the record from the result, fall-through-safe.
 ---
 --- @param path string Absolute file path
---- @param records table<string, agentic.utils.TrustSafety.EditRecord>
---- @param exclude_id string The in-flight tool call ID
+--- @param records table<string, agentic.utils.GrantSafety.EditRecord>
+--- @param exclude_id string|nil The in-flight tool call ID
 --- @param file_lines string[] Current on-disk content of `path`
---- @return agentic.utils.TrustSafety.Range[]
+--- @return agentic.utils.GrantSafety.Range[]
 function M.claude_owned_ranges(path, records, exclude_id, file_lines)
-    --- @type agentic.utils.TrustSafety.Range[]
+    --- @type agentic.utils.GrantSafety.Range[]
     local ranges = {}
     for id, record in pairs(records) do
         if id ~= exclude_id and record.path == path then
@@ -406,7 +445,7 @@ end
 ---
 --- @param diff agentic.ui.MessageWriter.ToolCallDiff|nil
 --- @param file_lines string[]
---- @return agentic.utils.TrustSafety.Range|nil
+--- @return agentic.utils.GrantSafety.Range|nil
 function M.edit_target_range(diff, file_lines)
     if not diff then
         return nil
@@ -433,15 +472,15 @@ end
 --- Capture mtime+size of a file, or `{exists=false}` when it doesn't exist.
 --- Used to bracket the safety check and detect concurrent user writes.
 --- @param path string Absolute path
---- @return agentic.utils.TrustSafety.StatSnapshot
+--- @return agentic.utils.GrantSafety.StatSnapshot
 function M.stat_snapshot(path)
     local stat = vim.uv.fs_stat(path)
     if not stat then
-        --- @type agentic.utils.TrustSafety.StatSnapshot
+        --- @type agentic.utils.GrantSafety.StatSnapshot
         local s = { exists = false }
         return s
     end
-    --- @type agentic.utils.TrustSafety.StatSnapshot
+    --- @type agentic.utils.GrantSafety.StatSnapshot
     local snap = {
         exists = true,
         mtime_sec = stat.mtime.sec,
@@ -452,7 +491,7 @@ function M.stat_snapshot(path)
 end
 
 --- @param path string
---- @param snapshot agentic.utils.TrustSafety.StatSnapshot
+--- @param snapshot agentic.utils.GrantSafety.StatSnapshot
 --- @return boolean
 function M.stat_unchanged(path, snapshot)
     local current = M.stat_snapshot(path)
@@ -467,27 +506,36 @@ function M.stat_unchanged(path, snapshot)
         and current.size == snapshot.size
 end
 
---- @class agentic.utils.TrustSafety.KindArgs
+--- @class agentic.utils.GrantSafety.KindArgs
 --- @field exists boolean File exists on disk
 --- @field tracked boolean File is tracked in the relevant git index
 --- @field has_unstaged_hunks boolean Working tree differs from index
 --- @field hunks agentic.utils.GitFiles.Hunk[] Unstaged hunk ranges in the new file
---- @field edit_range? agentic.utils.TrustSafety.Range Target range of an Edit
---- @field claude_owned_ranges agentic.utils.TrustSafety.Range[] Verified ranges
+--- @field edit_range? agentic.utils.GrantSafety.Range Target range of an Edit
+--- @field claude_owned_ranges agentic.utils.GrantSafety.Range[] Verified ranges
 --- @field is_pure_addition? boolean diff.old is a contiguous subsequence of diff.new
 --- @field write_all? boolean Write replaces the entire file (diff.all)
---- @field tmp? boolean Path is inside a tmp scope (write/create unconditionally safe)
---- @field dest? agentic.utils.TrustSafety.KindArgs Destination state for `move`
+--- @field tmp? boolean Path and its realpath are under a tmp root
+--- @field is_dir? boolean Path is a directory (a symlink to one is not)
+--- @field dest? agentic.utils.GrantSafety.KindArgs Destination state for `move`
 
---- Per-kind safety predicate. See the `permissions` skill § "Trust scope"
---- (property 2, "Per-kind recoverability").
+--- True iff the path is scratch: under a tmp root and not tracked by git.
+--- Scratch is write/create/edit-safe with no further check.
+--- @param args agentic.utils.GrantSafety.KindArgs
+--- @return boolean
+function M.is_scratch(args)
+    return args.tmp == true and not args.tracked
+end
+
+--- Per-kind safety predicate. See the `permissions` skill § "Grant scopes"
+--- (property 3, "Recoverability").
 --- @param kind agentic.acp.ToolKind
---- @param args agentic.utils.TrustSafety.KindArgs
+--- @param args agentic.utils.GrantSafety.KindArgs
 --- @return boolean safe
 --- @return string|nil reason
 function M.safe_for_kind(kind, args)
     if kind == "create" then
-        if args.tmp then
+        if M.is_scratch(args) then
             return true, "tmp scratch create"
         end
         if args.exists then
@@ -497,7 +545,7 @@ function M.safe_for_kind(kind, args)
     end
 
     if kind == "write" then
-        if args.tmp then
+        if M.is_scratch(args) then
             return true, "tmp scratch write"
         end
         if not args.exists then
@@ -516,6 +564,9 @@ function M.safe_for_kind(kind, args)
         if not args.exists then
             return false, "file does not exist"
         end
+        if args.is_dir then
+            return false, "path is a directory"
+        end
         if not args.tracked then
             return false, "file untracked"
         end
@@ -526,6 +577,9 @@ function M.safe_for_kind(kind, args)
     end
 
     if kind == "edit" then
+        if M.is_scratch(args) then
+            return true, "tmp scratch edit"
+        end
         if not args.exists then
             return true, "edit on nonexistent file"
         end

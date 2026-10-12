@@ -34,7 +34,7 @@ CONTENTS                                                    *agentic-contents*
     8. Permissions ..................................... |agentic-permissions|
        8.1 The permission prompt ................ |agentic-permissions-prompt|
        8.2 Auto-approval .......................... |agentic-permissions-auto|
-       8.3 Trust scopes .......................... |agentic-permissions-trust|
+       8.3 Grants ................................ |agentic-permissions-grant|
        8.4 Shell commands ........................ |agentic-permissions-shell|
     9. Chat behaviour ......................................... |agentic-chat|
        9.1 Sessions and buffers ............................ |agentic-buffers|
@@ -272,17 +272,16 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         Cmd-keyed structured rules merged over the bundled defaults.
     `highlight_unapproved`  boolean (default: true)
         Enable |AgenticUnapprovedCommand|.
-    `trust_tmp`             boolean (default: true)
-        Activate `/trust tmp` at session start. See
-        |agentic-permissions-trust|.
+    `default_grant`         string list (default: { "/tmp", "$TMPDIR" })
+        Paths or globs granted at session start. See
+        |agentic-permissions-grant|.
     `tmp_cleanup`           boolean (default: true)
-        Extend `/trust tmp` to `rm` of scratch files. See
-        |agentic-permissions-trust|.
+        Auto-approve `rm` of a tmp file redirected to earlier in the same
+        command. See |agentic-permissions-grant|.
 
-                                     *agentic-config-auto_approve_trust_scope*
-`auto_approve_trust_scope` boolean (default: true)
-    Gate the per-session `/trust` scope check. See
-    |agentic-permissions-trust|.
+                                           *agentic-config-auto_approve_grant*
+`auto_approve_grant` boolean (default: true)
+    Enable `/grant` and `default_grant`. See |agentic-permissions-grant|.
 
                                             *agentic-config-permission_float*
 `permission_float` table
@@ -650,8 +649,8 @@ and appear in slash-command completion.
                        UI. Prompts first while
                        `session_restore.confirm_delete` is on.
     `/context`         Token-usage readout for the session.
-    `/trust [scope]`   Set the edit trust scope. See
-                       |agentic-permissions-trust|.
+    `/grant [path]`    Grant a path for auto-approval. See
+                       |agentic-permissions-grant|.
 
 A command line dispatches as its own prompt; see |agentic-queue|.
 
@@ -664,7 +663,7 @@ appear in completion.
 ------------------------------------------------------------------------------
 7.3 COMMAND NOTICES                                          *agentic-notices*
 
-`/trust`, `/rename`, `/context`, a model or provider switch and a resumed
+`/grant`, `/rename`, `/context`, a model or provider switch and a resumed
 session report back in the chat as a notice heading. `[[` and `]]` stop on
 notices as well as prompts (|agentic-keymaps-chat|).
 
@@ -731,35 +730,48 @@ A tool call runs without a prompt when any of these holds:
   (|agentic-permissions-shell|).
 - It matches a cached "Allow always" decision
   (|agentic-permissions-prompt|).
-- It writes a file covered by the active trust scope
-  (|agentic-permissions-trust|).
+- It is a recoverable change under a granted path
+  (|agentic-permissions-grant|).
 
 ------------------------------------------------------------------------------
-8.3 TRUST SCOPES                                   *agentic-permissions-trust*
+8.3 GRANTS                                         *agentic-permissions-grant*
 
-`/trust` sets a per-session scope in which file-scoped tool calls (edit,
-write, create, delete, move) auto-approve. Bare `/trust` opens a picker.
+`/grant` adds a path to the session's grants. Under a granted path, file
+tool calls (edit, write, create, delete, move), shell redirects (`>`, `>>`)
+and `rm` auto-approve when the change is recoverable. Grants last until the
+session ends.
 
-    `/trust repo`     Git-tracked files anywhere in the repository.
-    `/trust here`     Git-tracked files under the current directory.
-    `/trust tmp`      Scratch files under `/tmp` and `$TMPDIR`.
-    `/trust off`      Clear the scope.
-    `/trust {path}`   A path or glob. Relative paths anchor at the cwd.
+    `/grant .`        The session's working directory.
+    `/grant root`     The git root of the working directory.
+    `/grant {path}`   A path or glob. A relative path resolves against the
+                      working directory; `~` and `$VAR` expand. The path
+                      need not exist.
+    `/grant off`      Remove every grant.
+    `/grant`          Open a picker to add or remove grants.
 
-`repo` and `here` need a git repository at the cwd; without one the command
-reports an error and leaves the scope untouched. A scope covering a home or
-system directory writes a warning notice.
+A directory named `root` or `off` is granted as `./root` or `./off`.
 
-Inside the scope a file auto-approves only when the change is recoverable:
-a pure addition, a tracked file with no uncommitted change, or a recorded
-agent-owned line range whose content still matches the file on disk.
+A path covers everything below it. A glob covers the paths it matches. Below
+the granted directory, a file or directory whose name starts with `.`
+(`.git`, `.env`) is excluded unless the path names it: `/grant .github`, or
+`/grant **/.github/**`. A symlink needs both the link and its target granted.
 
-`/trust tmp` is active from session start while `permissions.trust_tmp` is
-on. `permissions.tmp_cleanup` extends it to a plain `rm` of a scratch file
-created earlier in the same Bash command; `rm -f` and `rm --force` are
-always rejected.
+A change is recoverable when:
+- the file does not exist,
+- the file is tracked by git and has no uncommitted change, or
+- an edit to a tracked file only adds lines, or changes no line with an
+  uncommitted change other than lines the agent wrote earlier in the
+  session that are unchanged since.
+A delete needs a tracked file with no uncommitted change.
 
-The whole mechanism is gated by `auto_approve_trust_scope`.
+An untracked file under `/tmp` or `$TMPDIR` can always be written, created
+or edited. An `rm` of one needs the file redirected to earlier in the same
+command, and `permissions.tmp_cleanup` on.
+
+A redirect or `rm` target must be an absolute path with no `..` segment.
+
+`permissions.default_grant` is granted at session start. An entry naming an
+unset variable is skipped. `auto_approve_grant = false` disables grants.
 
 ------------------------------------------------------------------------------
 8.4 SHELL COMMANDS                                 *agentic-permissions-shell*
@@ -770,8 +782,9 @@ one, so `cd /path && git status` matches `Bash(git *)` on its `git` leaf.
 
 The walk rejects by default: a missing parser, a parse error, command or
 process substitution (`$(...)`, backticks, `<(...)`), control flow (loops,
-conditionals, subshells, functions), a file-writing redirect (anything but
-`/dev/null` and fd duplication such as `2>&1`), a dynamic command name, or
+conditionals, subshells, functions), a file-writing redirect outside a grant
+(|agentic-permissions-grant|; `/dev/null` and fd duplication such as `2>&1`
+are not file-writing), a dynamic command name, or
 a code-taking builtin (`eval`, `source`, `.`) all fall through to a prompt.
 
 Each remaining leaf is stripped of a `stdbuf` wrapper and a system
@@ -802,7 +815,7 @@ kind-arrays wholesale, and `vim.NIL` disables the bundled entry. >lua
             structured = {
                 -- Auto-approve `tee` when writing (safe_write kind).
                 tee = { safe_write = { {} } },
-                -- Disable the bundled `rm` prompt.
+                -- Remove the bundled `rm` entry (`nil` or `{}` keep it).
                 rm = vim.NIL,
                 -- Silence pacman's destructive-flag ask.
                 pacman = { ask = {} },

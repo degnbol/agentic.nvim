@@ -7,7 +7,7 @@ local Logger = require("agentic.utils.logger")
 local PermissionFloat = require("agentic.ui.permission_float")
 local PermissionHighlight = require("agentic.ui.permission_highlight")
 local PermissionRules = require("agentic.utils.permission_rules")
-local TrustSafety = require("agentic.utils.trust_safety")
+local GrantSafety = require("agentic.utils.grant_safety")
 
 --- Highlights washing the non-known-safe parts of an execute permission prompt.
 --- Module-level (shared id across tabs) but cleared per-buffer, so each tab's
@@ -42,8 +42,9 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _execute_leaf_allow table<string, boolean> Session-remembered execute leaves vouched for via allow_always
---- @field _trust_scope? agentic.utils.TrustSafety.Scope Active trust scope (set by /trust)
---- @field _edit_records table<string, agentic.utils.TrustSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
+--- @field _grant_scopes agentic.utils.GrantSafety.Scope[] Active grant scopes (set by /grant)
+--- @field _tmp_roots string[] Temp roots, each in literal and resolved form
+--- @field _edit_records table<string, agentic.utils.GrantSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
 --- @field _pending_edits table<string, { path: string, start_line: integer, new_lines: string[] }> Range data captured at tool_call time, promoted to _edit_records on completion
 local PermissionManager = {}
 PermissionManager.__index = PermissionManager
@@ -64,7 +65,8 @@ function PermissionManager:new(message_writer, buf_nrs, writer_for)
         _hidden = false,
         _always_cache = {},
         _execute_leaf_allow = {},
-        _trust_scope = nil,
+        _grant_scopes = {},
+        _tmp_roots = GrantSafety.tmp_roots(),
         _edit_records = {},
         _pending_edits = {},
     }, self)
@@ -300,14 +302,16 @@ end
 --- single source of truth shared by the `canUseTool` path (`_try_auto_approve`)
 --- and the auto-mode PreToolUse hook RPC.
 ---
---- Independent checks (any can decide):
+--- Checks in order (the first to decide wins):
 --- 1. Read-only tool kinds ("read", "search") — always safe regardless of path.
 --- 2. Skill loading ("skill") — injects a SKILL.md into context, no mutation.
 --- 3. Compound Bash commands — a concrete `deny` match on any executed leaf
----    → "deny"; otherwise every leaf matching an allow pattern with no deny/ask
----    → "allow".
---- 4. allow_always/reject_always client cache.
---- 5. Trust scope for file-scoped kinds.
+---    → "deny".
+--- 4. allow_always/reject_always client cache, so a cached reject also beats
+---    the checks below.
+--- 5. Compound Bash commands — every leaf matching an allow pattern with no
+---    deny/ask, and every file effect clearing the grant scopes → "allow".
+--- 6. Grant scopes for file-scoped kinds.
 ---
 --- Tracker-free by contract: `kind` and `diff` are passed in (the tracker may
 --- be unpopulated at hook time). `command` is read straight from
@@ -315,7 +319,7 @@ end
 --- the `_try_auto_approve` caller before it delegates here.
 --- @param kind string|nil ACP tool kind
 --- @param tool_call agentic.acp.ToolCall
---- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff for the trust check
+--- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff for the grant check
 --- @return "allow"|"deny"|nil
 function PermissionManager:decide(kind, tool_call, diff)
     local kind_lc = AcpKind.normalise(kind)
@@ -332,13 +336,6 @@ function PermissionManager:decide(kind, tool_call, diff)
     if command and PermissionRules.should_auto_reject(command) then
         return "deny"
     end
-    if command then
-        local ok, effects =
-            PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
-        if ok and self:_bash_effects_clear(effects) then
-            return "allow"
-        end
-    end
 
     local cache_key = self:_build_cache_key(tool_call)
     if cache_key then
@@ -350,12 +347,20 @@ function PermissionManager:decide(kind, tool_call, diff)
         end
     end
 
+    if command then
+        local ok, effects =
+            PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
+        if ok and self:_bash_effects_clear(effects) then
+            return "allow"
+        end
+    end
+
     if
-        Config.auto_approve_trust_scope
-        and self._trust_scope
+        Config.auto_approve_grant
+        and #self._grant_scopes > 0
         and FILE_SCOPED_KINDS[kind_lc]
     then
-        if self:_check_trust(kind_lc, tool_call, diff) then
+        if self:_check_grant(kind_lc, tool_call, diff) then
             return "allow"
         end
     end
@@ -452,111 +457,116 @@ local function raw_input_destination(raw)
         or raw.targetPath
 end
 
---- Check whether `path` lies inside the active trust scope. The orchestrator
---- handles symlink resolution at the call site, so this is a pure-membership
---- check over the (already-resolved) path.
+--- True iff some active grant scope contains `path`.
 --- @param path string Absolute, normalised path
 --- @return boolean
-function PermissionManager:_path_in_trust_scope(path)
-    local scope = self._trust_scope
-    if not scope then
-        return false
-    end
-
-    if scope.kind == "tmp" then
-        return TrustSafety.is_under_tmp(path, scope.tmp_roots)
-    end
-
-    if scope.kind == "path" and scope.glob_matcher then
-        return scope.glob_matcher(path) == true
-    end
-
-    local git_root = vim.fs.root(scope.cwd, ".git")
-    if not git_root then
-        return false
-    end
-    if not GitFiles.is_tracked(path, git_root) then
-        return false
-    end
-    if scope.kind == "here" then
-        local cwd = scope.cwd
-        if cwd:sub(-1) ~= "/" then
-            cwd = cwd .. "/"
+function PermissionManager:_path_granted(path)
+    for _, scope in ipairs(self._grant_scopes) do
+        if GrantSafety.scope_contains(scope, path) then
+            return true
         end
-        return vim.startswith(path, cwd)
     end
-    return true
+    return false
+end
+
+--- The literal and resolved forms of `path`, or nil when either is not
+--- granted, or `path` is relative or does not resolve.
+--- @param path string
+--- @return string|nil orig Normalised `path`
+--- @return string|nil real Resolved `path`, symlinked parents included
+function PermissionManager:_granted_pair(path)
+    if path:sub(1, 1) ~= "/" then
+        return nil, nil
+    end
+    local orig = vim.fs.normalize(path, { expand_env = false })
+    local real = GrantSafety.resolve(path)
+    if real and self:_path_granted(orig) and self:_path_granted(real) then
+        return orig, real
+    end
+    return nil, nil
+end
+
+--- `GrantSafety.is_under_tmp` against this manager's tmp roots.
+--- @param path string
+--- @return boolean
+function PermissionManager:_is_under_tmp(path)
+    return GrantSafety.is_under_tmp(path, self._tmp_roots)
 end
 
 --- Whether every file-mutating effect a Bash command would produce clears
---- against the active trust scope. Empty effects → trivially clear (a command
---- with no concrete writes auto-approves on structural grounds alone, as
---- before). A non-empty list requires an active `tmp` trust scope and every
---- effect — symlink endpoints included — to land strictly under a tmp root.
+--- against the active grant scopes. Empty effects → trivially clear (a
+--- command with no concrete writes auto-approves on structural grounds
+--- alone). Otherwise `Config.auto_approve_grant` must be on, and every effect
+--- path absolute and granted in both its literal and resolved form. A
+--- relative path never clears: the Bash tool keeps its cwd between calls and
+--- an in-command `cd` moves it, so the file it names is unknown.
 ---
---- The effects list is **ordered**, so a `delete` is correlated intra-command:
---- it clears only when an earlier `write`/`create` in the same list targeted
---- the same resolved path (and `Config.permissions.tmp_cleanup` is on). tmp
---- scratch is git-unrecoverable, so a delete is only safe when we know it was
---- this command's own scratch — there is no cross-command session ledger yet,
---- so `rm /tmp/x` in a later command still prompts.
+--- Each effect must pass `GrantSafety.safe_for_kind`, except a delete of
+--- scratch (`GrantSafety.is_scratch`): it clears only when an earlier write
+--- in the same (ordered) list targeted the same path and
+--- `Config.permissions.tmp_cleanup` is on. The file state is rechecked before
+--- returning.
+---
+--- Effects are judged against the file state before the command runs. An
+--- earlier leaf in the same command that changes files (an allowed
+--- formatter, as in `black f.py; rm f.py`) can change that state.
 --- @param effects agentic.utils.PermissionRules.Effect[]
 --- @return boolean
 function PermissionManager:_bash_effects_clear(effects)
     if #effects == 0 then
         return true
     end
-    local scope = self._trust_scope
-    if
-        not (Config.auto_approve_trust_scope and scope and scope.kind == "tmp")
-    then
+    if not Config.auto_approve_grant then
         return false
     end
-    local cwd = vim.uv.cwd() or ""
-    --- Resolved paths created/written earlier in this same command.
-    local created = {}
+    --- Paths written earlier in this same command.
+    --- @type table<string, boolean>
+    local written = {}
+    --- @type { path: string, snap: agentic.utils.GrantSafety.StatSnapshot }[]
+    local snapshots = {}
     for _, eff in ipairs(effects) do
-        local path = eff.path
-        if path:sub(1, 1) ~= "/" then
-            path = vim.fs.joinpath(cwd, path)
-        end
-        local orig, real = TrustSafety.resolve_symlink_pair(path)
-        if not orig then
+        local orig, real = self:_granted_pair(eff.path)
+        if not orig or not real then
             return false
         end
-        if not TrustSafety.is_under_tmp(orig, scope.tmp_roots) then
-            return false
-        end
-        if
-            real ~= orig and not TrustSafety.is_under_tmp(real, scope.tmp_roots)
-        then
-            return false
-        end
-        if eff.kind == "delete" then
-            if not (Config.permissions.tmp_cleanup and created[orig]) then
+        local snap = GrantSafety.stat_snapshot(orig)
+        local args = self:_kind_args(eff.kind, orig, real, nil, nil)
+        if eff.kind == "delete" and GrantSafety.is_scratch(args) then
+            if not (Config.permissions.tmp_cleanup and written[orig]) then
                 return false
             end
-        else
-            local args = { tmp = true, exists = vim.uv.fs_stat(orig) ~= nil }
-            if not TrustSafety.safe_for_kind(eff.kind, args) then
-                return false
-            end
-            created[orig] = true
+        elseif not GrantSafety.safe_for_kind(eff.kind, args) then
+            return false
+        end
+        table.insert(snapshots, { path = orig, snap = snap })
+        if eff.kind == "write" then
+            written[orig] = true
+        end
+    end
+    for _, s in ipairs(snapshots) do
+        if not GrantSafety.stat_unchanged(s.path, s.snap) then
+            return false
         end
     end
     return true
 end
 
 --- Build a `KindArgs` for one path: stat, tracked-state, hunks, edit range,
---- and Claude-owned ranges. Returns nil if the path is missing or git lookup
---- fails.
---- @param tool_call agentic.acp.ToolCall
---- @param path string Absolute, normalised path (post-symlink for orig)
---- @param git_root string|nil Git root for the scope, or nil for kind="path"
---- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff, passed in so this stays tracker-free (see `decide`)
---- @return agentic.utils.TrustSafety.KindArgs|nil
-function PermissionManager:_build_kind_args(tool_call, path, git_root, diff)
-    local snap = TrustSafety.stat_snapshot(path)
+--- Claude-owned ranges, and the tmp and directory flags. write/create/edit
+--- follow a symlink, so their file state is read from `real`. delete and
+--- move (source and destination) act on the link itself, so theirs is read
+--- from `orig`. Git state comes from the repo holding that file.
+--- @param kind string Normalised tool kind acting on the path
+--- @param orig string Absolute, normalised path
+--- @param real string Resolved `orig`, symlinked parents included
+--- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff, passed in so this stays tracker-free (see `decide`)
+--- @param exclude_id string|nil Tool call whose own edit record is left out of the Claude-owned ranges
+--- @return agentic.utils.GrantSafety.KindArgs
+function PermissionManager:_kind_args(kind, orig, real, diff, exclude_id)
+    local path = (kind == "delete" or kind == "move") and orig or real
+    local snap = GrantSafety.stat_snapshot(path)
+    local lstat = vim.uv.fs_lstat(path)
+    local git_root = vim.fs.root(vim.fs.dirname(path), ".git")
     local tracked = git_root ~= nil and GitFiles.is_tracked(path, git_root)
     local hunks = (tracked and snap.exists)
             and GitFiles.diff_hunks(git_root, path)
@@ -569,19 +579,19 @@ function PermissionManager:_build_kind_args(tool_call, path, git_root, diff)
         if read_lines then
             file_lines = read_lines
         else
-            Logger.debug("trust: could not read", path, err)
+            Logger.debug("grant: could not read", path, err)
         end
     end
 
-    local edit_range = TrustSafety.edit_target_range(diff, file_lines)
-    local owned = TrustSafety.claude_owned_ranges(
+    local edit_range = GrantSafety.edit_target_range(diff, file_lines)
+    local owned = GrantSafety.claude_owned_ranges(
         path,
         self._edit_records,
-        tool_call.toolCallId,
+        exclude_id,
         file_lines
     )
 
-    --- @type agentic.utils.TrustSafety.KindArgs
+    --- @type agentic.utils.GrantSafety.KindArgs
     local args = {
         exists = snap.exists,
         tracked = tracked,
@@ -589,107 +599,74 @@ function PermissionManager:_build_kind_args(tool_call, path, git_root, diff)
         hunks = hunks,
         edit_range = edit_range,
         claude_owned_ranges = owned,
-        is_pure_addition = TrustSafety.is_pure_addition(diff),
+        is_pure_addition = GrantSafety.is_pure_addition(diff),
         write_all = diff and diff.all or nil,
+        tmp = self:_is_under_tmp(orig) and self:_is_under_tmp(real),
+        is_dir = lstat ~= nil and lstat.type == "directory",
     }
     return args
 end
 
---- Orchestrator for the trust check: symlink resolution → scope match →
---- stat snapshot → git state → safety predicate → mtime revalidation.
+--- Whether the file mutation of `tool_call` is safe to auto-approve under
+--- the active grant scopes: its path (and a move's destination) is granted
+--- in literal and resolved form, passes `GrantSafety.safe_for_kind`, and
+--- does not change on disk during the check.
 --- @param kind_lc string Normalised tool kind (passed in — see `decide`)
 --- @param tool_call agentic.acp.ToolCall
---- @param diff? { old?: string[], new?: string[], all?: boolean } Edit diff, threaded to `_build_kind_args`
+--- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff
 --- @return boolean ok
---- @return string reason
-function PermissionManager:_check_trust(kind_lc, tool_call, diff)
+--- @return string reason Why the mutation is or is not safe
+function PermissionManager:_check_grant(kind_lc, tool_call, diff)
     local raw = tool_call.rawInput
     local source_path = raw_input_path(raw)
     if not source_path then
         return false, "no file path"
     end
 
-    local orig, real = TrustSafety.resolve_symlink_pair(source_path)
-    if not orig then
-        return false, "broken symlink"
+    local orig, real = self:_granted_pair(source_path)
+    if not orig or not real then
+        return false, "path not granted"
     end
 
-    if not self:_path_in_trust_scope(orig) then
-        return false, "path not in scope"
-    end
-    if real ~= orig and not self:_path_in_trust_scope(real) then
-        return false, "symlink realpath outside scope"
-    end
+    local source_snap = GrantSafety.stat_snapshot(orig)
+    local source_args =
+        self:_kind_args(kind_lc, orig, real, diff, tool_call.toolCallId)
 
-    local source_snap = TrustSafety.stat_snapshot(orig)
-
-    local scope = self._trust_scope --[[@as agentic.utils.TrustSafety.Scope]]
-    local git_root = nil
-    if scope.kind == "repo" or scope.kind == "here" then
-        git_root = vim.fs.root(scope.cwd, ".git")
-        if not git_root then
-            return false, "no git root for scope"
-        end
-    elseif scope.kind == "path" then
-        -- For path scope, infer git root from the file's location for hunk
-        -- detection. Failure is fine — without a git root we treat the file
-        -- as untracked, which will still allow create/new-file paths.
-        git_root = vim.fs.root(vim.fs.dirname(orig), ".git")
-    end
-    -- tmp scope is git-agnostic: clobbering scratch is not loss of work, so
-    -- `safe_for_kind` short-circuits on `args.tmp` before any git field.
-
-    local source_args = self:_build_kind_args(tool_call, orig, git_root, diff)
-    if not source_args then
-        return false, "could not build source args"
-    end
-    if scope.kind == "tmp" then
-        source_args.tmp = true
-    end
-
-    --- @type agentic.utils.TrustSafety.StatSnapshot|nil
+    --- @type string|nil
+    local dest_orig = nil
+    --- @type agentic.utils.GrantSafety.StatSnapshot|nil
     local dest_snap = nil
     if kind_lc == "move" then
         local dest = raw_input_destination(raw)
         if not dest then
             return false, "move missing destination"
         end
-        local d_orig, d_real = TrustSafety.resolve_symlink_pair(dest)
-        if not d_orig then
-            return false, "destination broken symlink"
+        local dest_real
+        dest_orig, dest_real = self:_granted_pair(dest)
+        if not dest_orig or not dest_real then
+            return false, "destination not granted"
         end
-        if not self:_path_in_trust_scope(d_orig) then
-            return false, "destination outside scope"
-        end
-        if d_real ~= d_orig and not self:_path_in_trust_scope(d_real) then
-            return false, "destination symlink realpath outside scope"
-        end
-        dest_snap = TrustSafety.stat_snapshot(d_orig)
-        local dest_git_root = git_root
-            or vim.fs.root(vim.fs.dirname(d_orig), ".git")
-        local dest_args =
-            self:_build_kind_args(tool_call, d_orig, dest_git_root)
-        if not dest_args then
-            return false, "could not build destination args"
-        end
-        if scope.kind == "tmp" then
-            dest_args.tmp = true
-        end
-        source_args.dest = dest_args
+        dest_snap = GrantSafety.stat_snapshot(dest_orig)
+        source_args.dest = self:_kind_args(
+            "move",
+            dest_orig,
+            dest_real,
+            nil,
+            tool_call.toolCallId
+        )
     end
 
-    local ok, reason = TrustSafety.safe_for_kind(kind_lc, source_args)
+    local ok, reason = GrantSafety.safe_for_kind(kind_lc, source_args)
     if not ok then
         return false, reason or "unsafe"
     end
 
     -- TOCTOU revalidation: re-stat between snapshot and approval.
-    if not TrustSafety.stat_unchanged(orig, source_snap) then
+    if not GrantSafety.stat_unchanged(orig, source_snap) then
         return false, "source changed during check"
     end
-    if dest_snap then
-        local dest = raw_input_destination(raw) or ""
-        if dest ~= "" and not TrustSafety.stat_unchanged(dest, dest_snap) then
+    if dest_orig and dest_snap then
+        if not GrantSafety.stat_unchanged(dest_orig, dest_snap) then
             return false, "destination changed during check"
         end
     end
@@ -728,7 +705,7 @@ function PermissionManager:finalize_edit_range(tool_call_id)
         return
     end
     self._pending_edits[tool_call_id] = nil
-    --- @type agentic.utils.TrustSafety.EditRecord
+    --- @type agentic.utils.GrantSafety.EditRecord
     local record = {
         path = pending.path,
         start_line = pending.start_line,
@@ -754,21 +731,34 @@ function PermissionManager:has_edit_range(tool_call_id)
         or self._edit_records[tool_call_id] ~= nil
 end
 
---- Set the active trust scope. Replaces any existing scope.
---- @param scope agentic.utils.TrustSafety.Scope
-function PermissionManager:set_trust_scope(scope)
-    self._trust_scope = scope
+--- Add a grant scope to the active set.
+--- @param scope agentic.utils.GrantSafety.Scope
+--- @return boolean added False when a scope with the same key is active
+function PermissionManager:add_grant_scope(scope)
+    for _, active in ipairs(self._grant_scopes) do
+        if active.key == scope.key then
+            return false
+        end
+    end
+    table.insert(self._grant_scopes, scope)
+    return true
 end
 
---- Clear the active trust scope.
-function PermissionManager:clear_trust_scope()
-    self._trust_scope = nil
+--- Remove the active grant scope with `key`, if any.
+--- @param key string The scope's `key` field
+function PermissionManager:remove_grant_scope(key)
+    self._grant_scopes = vim.tbl_filter(function(scope)
+        return scope.key ~= key
+    end, self._grant_scopes)
 end
 
---- Read the active trust scope (or nil if unset).
---- @return agentic.utils.TrustSafety.Scope|nil
-function PermissionManager:get_trust_scope()
-    return self._trust_scope
+function PermissionManager:clear_grant_scopes()
+    self._grant_scopes = {}
+end
+
+--- @return agentic.utils.GrantSafety.Scope[] scopes The active grant scopes, in the order added
+function PermissionManager:get_grant_scopes()
+    return self._grant_scopes
 end
 
 --- Add a new permission request to the queue to be processed sequentially
@@ -1053,7 +1043,6 @@ function PermissionManager:clear()
     self.queue = {}
     self._always_cache = {}
     self._execute_leaf_allow = {}
-    self._trust_scope = nil
     self._edit_records = {}
     self._pending_edits = {}
 end

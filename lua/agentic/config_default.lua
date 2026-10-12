@@ -497,8 +497,8 @@ local ConfigDefault = {
     --- @field ask string[] Ask patterns — withhold approval and prompt (override allow, lower precedence than deny)
     --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
     --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of the auto_approve switches).
-    --- @field tmp_cleanup boolean Under `/trust tmp`, auto-approve a plain `rm` of scratch files created earlier in the same Bash command (intra-command correlation only). `rm -f`/`--force` always rejects regardless.
-    --- @field trust_tmp boolean Activate the `/trust tmp` scope automatically at session start, so writes (and, with `tmp_cleanup`, deletes) of scratch files under a tmp root auto-approve without a manual `/trust tmp`. Requires `auto_approve_trust_scope`.
+    --- @field tmp_cleanup boolean In a granted path under a tmp root, auto-approve a plain `rm` of an untracked tmp file redirected to earlier in the same Bash command.
+    --- @field default_grant string[] Paths or globs granted at session start, as with `/grant`. `$VAR` and `~` expand (an entry naming an unset var is skipped), and a relative entry resolves against the session cwd. Requires `auto_approve_grant`.
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
@@ -510,10 +510,13 @@ local ConfigDefault = {
         structured = {},
         highlight_unapproved = true,
         tmp_cleanup = true,
-        trust_tmp = true,
+        default_grant = { "/tmp", "$TMPDIR" },
     },
 
-    auto_approve_trust_scope = true,
+    --- Auto-approve recoverable file mutations under the paths granted with
+    --- `/grant` (and `permissions.default_grant`), Bash redirect writes and
+    --- `rm` included. When false, `/grant` is disabled.
+    auto_approve_grant = true,
 
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings

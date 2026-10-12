@@ -1097,10 +1097,10 @@ function ACPClient:_authenticate(method_id)
     end)
 end
 
+--- @param cwd string Working directory of the session
 --- @param handlers agentic.acp.ClientHandlers
 --- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
-function ACPClient:create_session(handlers, callback)
-    local cwd = vim.fn.getcwd()
+function ACPClient:create_session(cwd, handlers, callback)
     local additional_dirs = PermissionRules.get_additional_directories()
 
     self:_send_request("session/new", {

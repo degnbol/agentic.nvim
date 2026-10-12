@@ -443,10 +443,6 @@ screen so we can read it.
 - **Stale-read warning on Edit/Write**: see
   `notes/feature-stale-read-warning.md`.
 
-- **`/trust` completion and typo tolerance**: a misspelled subcommand
-  goes through unvalidated. Completion for subcommands (`repo`, `here`,
-  `off`) would prevent typos.
-
 - **Permission float is not settled by `$/cancel_request`**: the ACP SDK
   sends that notification when an outgoing request carrying a
   `cancellationSignal` aborts, and claude-agent-acp attaches one to
@@ -455,9 +451,6 @@ screen so we can read it.
   source but unobserved — zero occurrences across 7.9 M lines of debug
   log against 1331 inbound permission requests, so confirm it arrives
   before building the handler.
-
-- **`/trust` glob coverage**: verify the `/trust` system works with glob
-  patterns using `~/`, relative paths, and absolute folders.
 
 - **Context-sensitive status label**: currently opencode's `in_progress`
   is relabelled to `pending` in the opencode adapter (since opencode flips
@@ -688,11 +681,11 @@ already works.
 <localleader>C etc. should queue-send, instead of interrupt send.
 
 
-## trust git rm
+## grant git rm
 
-Under the concept of /trust we have recoverable edits.
-`git rm` kind of falls under that category, i.e. without -f/--force we can recover.
-Should we expand the /trust command to not just consider Edit calls, but to include such execution calls?
+`/grant` covers Edit calls, Bash redirects and plain `rm` of a tracked, clean
+file. `git rm` is the same recoverable delete (without -f/--force) but still
+prompts: it emits no delete effect.
 This may just be expanding the permissions.json list to have a new category, so it's read_only, safe_write, recoverable, ask, then deny.
 
 ## Agents don't understand handover

@@ -849,16 +849,13 @@ describe("PermissionRules", function()
         local orig_plugin
         local orig_claude
         local orig_read_json
-        local orig_cleanup
 
         before_each(function()
             Config = require("agentic.config")
             orig_plugin = Config.permissions.use_plugin_defaults
             orig_claude = Config.permissions.use_claude_settings
-            orig_cleanup = Config.permissions.tmp_cleanup
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.tmp_cleanup = false
 
             orig_read_json = PermissionRules.read_json
             -- Only stub settings.json paths, let plugin permissions.json load
@@ -874,7 +871,6 @@ describe("PermissionRules", function()
         after_each(function()
             Config.permissions.use_plugin_defaults = orig_plugin
             Config.permissions.use_claude_settings = orig_claude
-            Config.permissions.tmp_cleanup = orig_cleanup
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
         end)
@@ -934,7 +930,7 @@ describe("PermissionRules", function()
         end)
 
         -- evaluate() surfaces a concrete file-write redirect as an effect (ok,
-        -- but needs a /trust tmp scope to clear) instead of bailing. The policy
+        -- but needs a grant scope to clear) instead of bailing. The policy
         -- layer (permission_manager) then decides; should_auto_approve, which
         -- has no scope, stays false for these.
         it("evaluate: emits a write effect for an output redirect", function()
@@ -1015,7 +1011,6 @@ describe("PermissionRules", function()
         it(
             "evaluate: known-var write then rm correlate on the resolved path",
             function()
-                Config.permissions.tmp_cleanup = true
                 local ok, effects = PermissionRules.evaluate(
                     [[f=/tmp/x; echo y > "$f"; rm "$f"]]
                 )
@@ -1036,11 +1031,9 @@ describe("PermissionRules", function()
             end
         )
 
-        -- Under tmp_cleanup, rm emits ordered delete effects instead
-        -- of bailing to the structured `ask`; the policy layer correlates them
-        -- against earlier writes and the tmp scope.
-        it("evaluate: rm emits a delete effect under tmp_cleanup", function()
-            Config.permissions.tmp_cleanup = true
+        -- rm emits ordered delete effects instead of bailing to the structured
+        -- `ask`. The policy layer clears them against the grant scopes.
+        it("evaluate: rm emits a delete effect", function()
             local ok, effects = PermissionRules.evaluate("rm /tmp/x")
             assert.is_true(ok)
             assert.equal(1, #effects)
@@ -1048,16 +1041,25 @@ describe("PermissionRules", function()
             assert.equal("/tmp/x", effects[1].path)
         end)
 
-        it("evaluate: rm bails to a prompt without tmp_cleanup", function()
-            local ok, effects = PermissionRules.evaluate("rm /tmp/x")
-            assert.is_false(ok)
-            assert.equal(0, #effects)
+        it("evaluate: a directory rm bails (no effect)", function()
+            for _, command in ipairs({
+                "rm -r x",
+                "rm -Rv x",
+                "rm -d x",
+                "rm --dir x",
+                "rm --recursive x",
+                "rm --rec x",
+                "rm link/",
+            }) do
+                local ok, effects = PermissionRules.evaluate(command)
+                assert.is_false(ok)
+                assert.equal(0, #effects)
+            end
         end)
 
         it(
             "evaluate: redirect-write then rm emits write then delete",
             function()
-                Config.permissions.tmp_cleanup = true
                 local ok, effects =
                     PermissionRules.evaluate("echo x > /tmp/f; rm /tmp/f")
                 assert.is_true(ok)
@@ -1071,8 +1073,7 @@ describe("PermissionRules", function()
         it(
             "evaluate: rm flags are options, only operands emit effects",
             function()
-                Config.permissions.tmp_cleanup = true
-                local ok, effects = PermissionRules.evaluate("rm -rf /tmp/d")
+                local ok, effects = PermissionRules.evaluate("rm -v /tmp/d")
                 assert.is_true(ok)
                 assert.equal(1, #effects)
                 assert.equal("/tmp/d", effects[1].path)
@@ -1080,7 +1081,6 @@ describe("PermissionRules", function()
         )
 
         it("evaluate: a dynamic rm operand bails (no effect)", function()
-            Config.permissions.tmp_cleanup = true
             local ok, effects = PermissionRules.evaluate("rm $x")
             assert.is_false(ok)
             assert.equal(0, #effects)
@@ -1089,7 +1089,6 @@ describe("PermissionRules", function()
         it(
             "evaluate: rm -- treats a trailing dash-word as an operand",
             function()
-                Config.permissions.tmp_cleanup = true
                 local ok, effects = PermissionRules.evaluate("rm -- -weird")
                 assert.is_true(ok)
                 assert.equal("-weird", effects[1].path)
@@ -1097,8 +1096,6 @@ describe("PermissionRules", function()
         )
 
         it("should_auto_reject: rm -f always rejects", function()
-            assert.is_true(PermissionRules.should_auto_reject("rm -f /tmp/x"))
-            Config.permissions.tmp_cleanup = true
             assert.is_true(PermissionRules.should_auto_reject("rm -f /tmp/x"))
         end)
     end)

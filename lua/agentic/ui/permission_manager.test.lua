@@ -940,17 +940,14 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
-    describe("trust scope", function()
-        --- @type agentic.utils.TrustSafety
-        local TrustSafety
+    describe("grant scopes", function()
+        local Config = require("agentic.config")
+        --- @type agentic.utils.GrantSafety
+        local GrantSafety
         --- @type agentic.utils.GitFiles
         local GitFiles
         --- @type agentic.utils.FileSystem
         local FileSystem
-        --- @type TestStub
-        local fs_stat_stub
-        --- @type TestStub
-        local fs_lstat_stub
         --- @type TestStub
         local read_disk_stub
         --- @type TestStub
@@ -959,12 +956,32 @@ describe("agentic.ui.PermissionManager", function()
         local diff_hunks_stub
         --- @type TestStub
         local git_root_stub
+        --- Resolved temp dir holding `repo/` and a stand-in tmp root `tmp/`.
+        --- @type string
+        local base
+        --- @type string
+        local repo
+        --- @type string
+        local tmp
+        --- A tracked, clean file in `repo`.
+        --- @type string
+        local a_lua
+        --- A tracked file in `repo` with unstaged changes.
+        --- @type string
+        local dirty_md
+        local orig_cleanup
+
+        --- @param path string
+        local function touch(path)
+            vim.fn.mkdir(vim.fs.dirname(path), "p")
+            vim.fn.writefile({ "line 1", "line 2" }, path)
+        end
 
         --- @param tool_call_id string
         --- @param kind agentic.acp.ToolKind
         --- @param file_path string
         --- @return agentic.acp.RequestPermission
-        local function make_trust_request(tool_call_id, kind, file_path)
+        local function make_grant_request(tool_call_id, kind, file_path)
             return {
                 sessionId = "test-session",
                 toolCall = {
@@ -988,23 +1005,25 @@ describe("agentic.ui.PermissionManager", function()
         end
 
         before_each(function()
-            TrustSafety = require("agentic.utils.trust_safety")
+            GrantSafety = require("agentic.utils.grant_safety")
             GitFiles = require("agentic.utils.git_files")
             FileSystem = require("agentic.utils.file_system")
 
-            fs_stat_stub = spy.stub(vim.uv, "fs_stat")
-            fs_stat_stub:returns({
-                mtime = { sec = 1, nsec = 0 },
-                size = 100,
-                type = "file",
-            })
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir .. "/repo", "p")
+            vim.fn.mkdir(dir .. "/tmp", "p")
+            base = vim.uv.fs_realpath(dir) --[[@as string]]
+            repo = base .. "/repo"
+            tmp = base .. "/tmp"
+            a_lua = repo .. "/a.lua"
+            dirty_md = repo .. "/dirty.md"
+            touch(a_lua)
+            touch(dirty_md)
+            -- `base` itself lies under the real tmp roots.
+            pm._tmp_roots = { tmp }
 
-            fs_lstat_stub = spy.stub(vim.uv, "fs_lstat")
-            fs_lstat_stub:returns({
-                mtime = { sec = 1, nsec = 0 },
-                size = 100,
-                type = "file",
-            })
+            orig_cleanup = Config.permissions.tmp_cleanup
+            Config.permissions.tmp_cleanup = true
 
             read_disk_stub = spy.stub(FileSystem, "read_from_disk")
             read_disk_stub:invokes(function(_)
@@ -1012,28 +1031,126 @@ describe("agentic.ui.PermissionManager", function()
             end)
 
             is_tracked_stub = spy.stub(GitFiles, "is_tracked")
-            is_tracked_stub:returns(true)
+            is_tracked_stub:invokes(function(path)
+                return vim.startswith(path, repo .. "/")
+            end)
 
             diff_hunks_stub = spy.stub(GitFiles, "diff_hunks")
-            diff_hunks_stub:returns({})
+            diff_hunks_stub:invokes(function(_, path)
+                if path == dirty_md then
+                    return { { start_line = 1, end_line = 1, count = 1 } }
+                end
+                return {}
+            end)
 
             git_root_stub = spy.stub(vim.fs, "root")
-            git_root_stub:returns("/repo")
+            git_root_stub:invokes(function(path)
+                return vim.startswith(path, repo) and repo or nil
+            end)
         end)
 
         after_each(function()
-            fs_stat_stub:revert()
-            fs_lstat_stub:revert()
             read_disk_stub:revert()
             is_tracked_stub:revert()
             diff_hunks_stub:revert()
             git_root_stub:revert()
+            Config.permissions.tmp_cleanup = orig_cleanup
+            vim.fs.rm(base, { recursive = true, force = true })
+        end)
+
+        --- @param path string
+        local function grant(path)
+            pm:add_grant_scope(GrantSafety.compile_scope(path, path))
+        end
+
+        --- @param path string
+        --- @return boolean
+        local function write_approves(path)
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_grant_request("tc-" .. path, "write", path),
+                cb --[[@as function]]
+            )
+            local approved = cb.call_count == 1
+            if not approved then
+                pm:_complete_request("reject-once")
+            end
+            return approved
+        end
+
+        it("scopes combine, re-adding is a no-op, remove by key", function()
+            assert.is_true(
+                pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
+            )
+            assert.is_true(
+                pm:add_grant_scope(GrantSafety.compile_scope(tmp, tmp))
+            )
+            assert.is_false(
+                pm:add_grant_scope(
+                    GrantSafety.compile_scope(repo .. "/", "root")
+                )
+            )
+            assert.equal(2, #pm:get_grant_scopes())
+            assert.is_true(write_approves(repo .. "/new.lua"))
+            assert.is_true(write_approves(tmp .. "/x"))
+
+            pm:remove_grant_scope(repo)
+            assert.equal(1, #pm:get_grant_scopes())
+            assert.is_false(write_approves(repo .. "/new.lua"))
+        end)
+
+        it("approves a new file under the grant", function()
+            grant(repo)
+            assert.is_true(write_approves(repo .. "/sub/new.lua"))
+        end)
+
+        it("prompts for a hidden part below the grant root", function()
+            grant(repo)
+            assert.is_false(write_approves(repo .. "/.git/hooks/x"))
+        end)
+
+        it("prompts for a write through a link into .git", function()
+            vim.fn.mkdir(repo .. "/.git/hooks", "p")
+            vim.uv.fs_symlink(repo .. "/.git/hooks", repo .. "/hooks")
+            grant(repo)
+            assert.is_false(write_approves(repo .. "/hooks/pre-commit"))
+        end)
+
+        it(
+            "prompts for a tmp link to a dirty file in a granted repo",
+            function()
+                vim.uv.fs_symlink(dirty_md, tmp .. "/l")
+                grant(tmp)
+                grant(repo)
+                assert.is_false(write_approves(tmp .. "/l"))
+            end
+        )
+
+        it(
+            "prompts for a write through a tracked link to a dirty file",
+            function()
+                vim.uv.fs_symlink(dirty_md, repo .. "/link.md")
+                grant(repo)
+                assert.is_false(write_approves(repo .. "/link.md"))
+            end
+        )
+
+        it("approves an edit of an untracked tmp file", function()
+            touch(tmp .. "/x")
+            grant(tmp)
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_grant_request("tc-tmp-edit", "edit", tmp .. "/x"),
+                cb --[[@as function]]
+            )
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("allow-once"))
         end)
 
         it("falls through when no scope is set", function()
             local cb = spy.new(function() end)
             pm:add_request(
-                make_trust_request("tc-no-scope", "edit", "/repo/a.lua"),
+                make_grant_request("tc-no-scope", "edit", a_lua),
                 cb --[[@as function]]
             )
             assert.spy(cb).was.called(0)
@@ -1041,13 +1158,11 @@ describe("agentic.ui.PermissionManager", function()
         end)
 
         it("auto-approves edit on tracked clean file in scope", function()
-            pm:set_trust_scope(
-                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-            )
+            pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
 
             local cb = spy.new(function() end)
             pm:add_request(
-                make_trust_request("tc-clean", "edit", "/repo/a.lua"),
+                make_grant_request("tc-clean", "edit", a_lua),
                 cb --[[@as function]]
             )
             assert.spy(cb).was.called(1)
@@ -1055,14 +1170,16 @@ describe("agentic.ui.PermissionManager", function()
         end)
 
         it("falls through when path is outside scope", function()
-            pm:set_trust_scope(
-                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-            )
+            pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
             is_tracked_stub:returns(false)
 
             local cb = spy.new(function() end)
             pm:add_request(
-                make_trust_request("tc-outside", "edit", "/elsewhere/a.lua"),
+                make_grant_request(
+                    "tc-outside",
+                    "edit",
+                    base .. "/elsewhere/a.lua"
+                ),
                 cb --[[@as function]]
             )
             assert.spy(cb).was.called(0)
@@ -1072,9 +1189,7 @@ describe("agentic.ui.PermissionManager", function()
         it(
             "falls through on dirty tracked file when edit overlaps non-Claude hunk",
             function()
-                pm:set_trust_scope(
-                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-                )
+                pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
                 diff_hunks_stub:returns({
                     { start_line = 1, end_line = 1, count = 1 },
                 })
@@ -1082,13 +1197,13 @@ describe("agentic.ui.PermissionManager", function()
                     tool_call_id = "tc-dirty",
                     status = "pending",
                     kind = "edit",
-                    argument = "/repo/a.lua",
+                    argument = a_lua,
                     diff = { old = { "line 1" }, new = { "modified" } },
                 }
 
                 local cb = spy.new(function() end)
                 pm:add_request(
-                    make_trust_request("tc-dirty", "edit", "/repo/a.lua"),
+                    make_grant_request("tc-dirty", "edit", a_lua),
                     cb --[[@as function]]
                 )
                 assert.spy(cb).was.called(0)
@@ -1099,9 +1214,7 @@ describe("agentic.ui.PermissionManager", function()
         it(
             "auto-approves when overlapping dirty hunk is Claude-owned and intact",
             function()
-                pm:set_trust_scope(
-                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-                )
+                pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
                 read_disk_stub:invokes(function(_)
                     return { "claude wrote", "claude wrote 2" }, nil
                 end)
@@ -1109,7 +1222,7 @@ describe("agentic.ui.PermissionManager", function()
                     { start_line = 1, end_line = 2, count = 2 },
                 })
                 pm._edit_records["earlier-tc"] = {
-                    path = "/repo/a.lua",
+                    path = a_lua,
                     start_line = 1,
                     end_line = 2,
                     new_lines = { "claude wrote", "claude wrote 2" },
@@ -1118,7 +1231,7 @@ describe("agentic.ui.PermissionManager", function()
                     tool_call_id = "tc-claude-edit",
                     status = "pending",
                     kind = "edit",
-                    argument = "/repo/a.lua",
+                    argument = a_lua,
                     diff = {
                         old = { "claude wrote", "claude wrote 2" },
                         new = { "next iter", "next iter 2" },
@@ -1127,7 +1240,7 @@ describe("agentic.ui.PermissionManager", function()
 
                 local cb = spy.new(function() end)
                 pm:add_request(
-                    make_trust_request("tc-claude-edit", "edit", "/repo/a.lua"),
+                    make_grant_request("tc-claude-edit", "edit", a_lua),
                     cb --[[@as function]]
                 )
                 assert.spy(cb).was.called(1)
@@ -1138,9 +1251,7 @@ describe("agentic.ui.PermissionManager", function()
         it(
             "falls through when Claude-owned range was modified by user",
             function()
-                pm:set_trust_scope(
-                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-                )
+                pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
                 read_disk_stub:invokes(function(_)
                     return { "user changed this", "claude wrote 2" }, nil
                 end)
@@ -1148,7 +1259,7 @@ describe("agentic.ui.PermissionManager", function()
                     { start_line = 1, end_line = 2, count = 2 },
                 })
                 pm._edit_records["earlier-tc"] = {
-                    path = "/repo/a.lua",
+                    path = a_lua,
                     start_line = 1,
                     end_line = 2,
                     new_lines = { "claude wrote", "claude wrote 2" },
@@ -1157,7 +1268,7 @@ describe("agentic.ui.PermissionManager", function()
                     tool_call_id = "tc-user-edit",
                     status = "pending",
                     kind = "edit",
-                    argument = "/repo/a.lua",
+                    argument = a_lua,
                     diff = {
                         old = { "user changed this", "claude wrote 2" },
                         new = { "next", "next 2" },
@@ -1166,7 +1277,7 @@ describe("agentic.ui.PermissionManager", function()
 
                 local cb = spy.new(function() end)
                 pm:add_request(
-                    make_trust_request("tc-user-edit", "edit", "/repo/a.lua"),
+                    make_grant_request("tc-user-edit", "edit", a_lua),
                     cb --[[@as function]]
                 )
                 assert.spy(cb).was.called(0)
@@ -1177,10 +1288,9 @@ describe("agentic.ui.PermissionManager", function()
         it(
             "falls through when stat changes between snapshot and approval",
             function()
-                pm:set_trust_scope(
-                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-                )
+                pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
                 local call_count = 0
+                local fs_stat_stub = spy.stub(vim.uv, "fs_stat")
                 fs_stat_stub:invokes(function(_)
                     call_count = call_count + 1
                     if call_count <= 1 then
@@ -1199,36 +1309,30 @@ describe("agentic.ui.PermissionManager", function()
 
                 local cb = spy.new(function() end)
                 pm:add_request(
-                    make_trust_request("tc-toctou", "edit", "/repo/a.lua"),
+                    make_grant_request("tc-toctou", "edit", a_lua),
                     cb --[[@as function]]
                 )
+                fs_stat_stub:revert()
                 assert.spy(cb).was.called(0)
                 pm:_complete_request("reject-once")
             end
         )
 
-        it(
-            "cached reject_always wins over a would-be-safe trust scope",
-            function()
-                pm:set_trust_scope(
-                    TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-                )
-                pm._always_cache["edit:/repo/a.lua"] = "reject"
+        it("cached reject_always wins over a would-be-safe grant", function()
+            pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
+            pm._always_cache["edit:" .. a_lua] = "reject"
 
-                local cb = spy.new(function() end)
-                pm:add_request(
-                    make_trust_request("tc-rej", "edit", "/repo/a.lua"),
-                    cb --[[@as function]]
-                )
-                assert.spy(cb).was.called(1)
-                assert.is_true(cb:called_with("reject-once"))
-            end
-        )
-
-        it("non-file-scoped kinds fall through even with trust set", function()
-            pm:set_trust_scope(
-                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_grant_request("tc-rej", "edit", a_lua),
+                cb --[[@as function]]
             )
+            assert.spy(cb).was.called(1)
+            assert.is_true(cb:called_with("reject-once"))
+        end)
+
+        it("non-file-scoped kinds fall through even with a grant", function()
+            pm:add_grant_scope(GrantSafety.compile_scope(repo, "."))
 
             local cb = spy.new(function() end)
             pm:add_request({
@@ -1238,7 +1342,7 @@ describe("agentic.ui.PermissionManager", function()
                     kind = "execute",
                     -- Command outside read_only_commands list so the
                     -- read-only auto-approve layer doesn't fire — the test
-                    -- is about trust scope, not command matching.
+                    -- is about grant scopes, not command matching.
                     rawInput = { command = "make build" } --[[@as agentic.acp.RawInput]],
                 },
                 options = {
@@ -1258,12 +1362,66 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
-        it("clear() wipes the trust scope", function()
-            pm:set_trust_scope(
-                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
-            )
+        it("clear() keeps the grant scopes", function()
+            grant(repo)
             pm:clear()
-            assert.is_nil(pm:get_trust_scope())
+            assert.equal(1, #pm:get_grant_scopes())
+        end)
+
+        it("prompts for a `..` after a symlink", function()
+            vim.fn.mkdir(base .. "/secret/sub", "p")
+            vim.uv.fs_symlink(base .. "/secret/sub", repo .. "/link")
+            grant(repo)
+            local escape = repo .. "/link/../evil"
+            assert.is_false(write_approves(escape))
+            assert.is_false(
+                pm:_bash_effects_clear({ { kind = "write", path = escape } })
+            )
+            assert.is_false(
+                pm:_bash_effects_clear({ { kind = "delete", path = escape } })
+            )
+        end)
+
+        describe("move", function()
+            --- @param dest string
+            --- @return boolean
+            local function move_approves(dest)
+                local request = make_grant_request("tc-move", "move", a_lua)
+                request.toolCall.rawInput = {
+                    file_path = a_lua,
+                    destination_path = dest,
+                } --[[@as agentic.acp.RawInput]]
+                local cb = spy.new(function() end)
+                pm:add_request(request, cb --[[@as function]])
+                local approved = cb.call_count == 1
+                if not approved then
+                    pm:_complete_request("reject-once")
+                end
+                return approved
+            end
+
+            it("approves a move to a new file in the grant", function()
+                grant(repo)
+                assert.is_true(move_approves(repo .. "/moved.lua"))
+            end)
+
+            it("prompts for a destination outside the grants", function()
+                grant(repo)
+                assert.is_false(move_approves(base .. "/elsewhere.lua"))
+            end)
+
+            it(
+                "judges a destination link by the link, not its target",
+                function()
+                    -- `mv` replaces the untracked link; its clean target is untouched.
+                    vim.uv.fs_symlink(a_lua, repo .. "/untracked.lua")
+                    is_tracked_stub:invokes(function(path)
+                        return path == a_lua
+                    end)
+                    grant(repo)
+                    assert.is_false(move_approves(repo .. "/untracked.lua"))
+                end
+            )
         end)
 
         it(
@@ -1271,14 +1429,14 @@ describe("agentic.ui.PermissionManager", function()
             function()
                 pm:record_pending_edit(
                     "tc-42",
-                    "/repo/a.lua",
+                    a_lua,
                     10,
                     { "new line 1", "new line 2" }
                 )
                 pm:finalize_edit_range("tc-42")
                 local rec = pm._edit_records["tc-42"]
                 assert.is_not_nil(rec)
-                assert.equal("/repo/a.lua", rec.path)
+                assert.equal(a_lua, rec.path)
                 assert.equal(10, rec.start_line)
                 assert.equal(11, rec.end_line)
                 assert.equal(nil, pm._pending_edits["tc-42"])
@@ -1286,39 +1444,195 @@ describe("agentic.ui.PermissionManager", function()
         )
 
         it("drop_pending_edit removes pending without finalizing", function()
-            pm:record_pending_edit("tc-x", "/repo/a.lua", 1, { "x" })
+            pm:record_pending_edit("tc-x", a_lua, 1, { "x" })
             pm:drop_pending_edit("tc-x")
             assert.is_nil(pm._pending_edits["tc-x"])
             assert.is_nil(pm._edit_records["tc-x"])
         end)
 
         it("clear() wipes edit records and pending", function()
-            pm:record_pending_edit("tc-a", "/repo/a.lua", 1, { "x" })
+            pm:record_pending_edit("tc-a", a_lua, 1, { "x" })
             pm:finalize_edit_range("tc-a")
-            pm:record_pending_edit("tc-b", "/repo/a.lua", 5, { "y" })
+            pm:record_pending_edit("tc-b", a_lua, 5, { "y" })
             pm:clear()
             assert.is_nil(pm._edit_records["tc-a"])
             assert.is_nil(pm._pending_edits["tc-b"])
         end)
 
-        it("respects auto_approve_trust_scope toggle", function()
-            local Config = require("agentic.config")
-            local original = Config.auto_approve_trust_scope
-            Config.auto_approve_trust_scope = false
+        it("respects the auto_approve_grant switch", function()
+            local original = Config.auto_approve_grant
+            Config.auto_approve_grant = false
+            grant(repo)
 
-            pm:set_trust_scope(
-                TrustSafety.build_reserved_scope("repo", "/repo", "/repo")
+            local approved = write_approves(repo .. "/new.lua")
+            local cleared = pm:_bash_effects_clear({
+                { kind = "write", path = repo .. "/new.lua" },
+            })
+            Config.auto_approve_grant = original
+            assert.is_false(approved)
+            assert.is_false(cleared)
+        end)
+
+        describe("_bash_effects_clear", function()
+            --- @param kind "write"|"delete"
+            --- @param path string
+            --- @return boolean
+            local function clears(kind, path)
+                return pm:_bash_effects_clear({ { kind = kind, path = path } })
+            end
+
+            it("empty effects clear with no grant", function()
+                assert.is_true(pm:_bash_effects_clear({}))
+            end)
+
+            it("no grant → effects never clear", function()
+                assert.is_false(clears("write", tmp .. "/x"))
+                assert.is_false(clears("write", repo .. "/new.lua"))
+            end)
+
+            it("a write to a tracked clean file clears", function()
+                grant(repo)
+                assert.is_true(clears("write", a_lua))
+            end)
+
+            it("a write to a dirty file does not clear", function()
+                grant(repo)
+                assert.is_false(clears("write", dirty_md))
+            end)
+
+            it("a write to a new file clears", function()
+                grant(repo)
+                assert.is_true(clears("write", repo .. "/new.md"))
+            end)
+
+            it("a relative path does not clear", function()
+                grant(repo)
+                assert.is_false(clears("write", "new.md"))
+            end)
+
+            it("a delete of a tracked clean file clears", function()
+                grant(repo)
+                assert.is_true(clears("delete", a_lua))
+            end)
+
+            it("a write under tmp clears", function()
+                grant(tmp)
+                assert.is_true(clears("write", tmp .. "/x"))
+            end)
+
+            it(
+                "a tmp link resolving outside the grants does not clear",
+                function()
+                    touch(base .. "/elsewhere")
+                    vim.uv.fs_symlink(base .. "/elsewhere", tmp .. "/l")
+                    grant(tmp)
+                    assert.is_false(clears("write", tmp .. "/l"))
+                end
             )
 
-            local cb = spy.new(function() end)
-            pm:add_request(
-                make_trust_request("tc-toggle", "edit", "/repo/a.lua"),
-                cb --[[@as function]]
+            it(
+                "a tmp delete clears only after a write in the command",
+                function()
+                    touch(tmp .. "/x")
+                    grant(tmp)
+                    assert.is_false(clears("delete", tmp .. "/x"))
+                    assert.is_true(pm:_bash_effects_clear({
+                        { kind = "write", path = tmp .. "/x" },
+                        { kind = "delete", path = tmp .. "/x" },
+                    }))
+                    assert.is_false(pm:_bash_effects_clear({
+                        { kind = "write", path = tmp .. "/x" },
+                        { kind = "delete", path = tmp .. "/other" },
+                    }))
+                end
             )
-            assert.spy(cb).was.called(0)
-            pm:_complete_request("reject-once")
 
-            Config.auto_approve_trust_scope = original
+            it("a delete of a directory does not clear", function()
+                vim.fn.mkdir(repo .. "/d", "p")
+                grant(repo)
+                assert.is_false(clears("delete", repo .. "/d"))
+            end)
+
+            it("a delete of a link is judged by the link", function()
+                vim.uv.fs_symlink(dirty_md, repo .. "/tracked_link.md")
+                vim.uv.fs_symlink(a_lua, repo .. "/untracked_link.lua")
+                is_tracked_stub:invokes(function(path)
+                    return path ~= repo .. "/untracked_link.lua"
+                end)
+                grant(repo)
+                assert.is_true(clears("delete", repo .. "/tracked_link.md"))
+                assert.is_false(clears("delete", repo .. "/untracked_link.lua"))
+            end)
+
+            it("does not clear a file that changes during the check", function()
+                grant(repo)
+                local calls = 0
+                local fs_stat_stub = spy.stub(vim.uv, "fs_stat")
+                fs_stat_stub:invokes(function(_)
+                    calls = calls + 1
+                    return {
+                        mtime = { sec = calls, nsec = 0 },
+                        size = 100,
+                        type = "file",
+                    }
+                end)
+                local cleared = clears("write", a_lua)
+                fs_stat_stub:revert()
+                assert.is_false(cleared)
+            end)
+
+            it(
+                "a write to a dirty tracked file under tmp does not clear",
+                function()
+                    local cloned = tmp .. "/clone/f.md"
+                    touch(cloned)
+                    git_root_stub:invokes(function(path)
+                        return vim.startswith(path, tmp .. "/clone")
+                                and tmp .. "/clone"
+                            or nil
+                    end)
+                    is_tracked_stub:invokes(function(path)
+                        return path == cloned
+                    end)
+                    diff_hunks_stub:invokes(function(_, path)
+                        return path == cloned
+                                and {
+                                    { start_line = 1, end_line = 1, count = 1 },
+                                }
+                            or {}
+                    end)
+                    grant(tmp)
+                    assert.is_false(clears("write", cloned))
+                    assert.is_true(clears("write", tmp .. "/clone/new.md"))
+                end
+            )
+
+            it("a cached reject beats a grant", function()
+                grant(repo)
+                --- @type agentic.acp.ToolCall
+                local tool_call = {
+                    toolCallId = "tc-rej-bash",
+                    kind = "execute",
+                    rawInput = {
+                        command = "echo x > " .. repo .. "/new.md",
+                    } --[[@as agentic.acp.RawInput]],
+                }
+                assert.equal("allow", pm:decide("execute", tool_call, nil))
+                pm._always_cache[
+                    pm:_build_cache_key(tool_call) --[[@as string]]
+                ] =
+                    "reject"
+                assert.equal("deny", pm:decide("execute", tool_call, nil))
+            end)
+
+            it("a tmp delete does not clear without tmp_cleanup", function()
+                Config.permissions.tmp_cleanup = false
+                grant(tmp)
+                assert.is_false(pm:_bash_effects_clear({
+                    { kind = "write", path = tmp .. "/x" },
+                    { kind = "delete", path = tmp .. "/x" },
+                }))
+            end)
         end)
     end)
 
@@ -1404,99 +1718,6 @@ describe("agentic.ui.PermissionManager", function()
             assert.spy(cb).was.called(0)
             assert.is_not_nil(pm.current_request)
             pm:_complete_request("reject-once")
-        end)
-    end)
-
-    describe("_bash_effects_clear (tmp scope)", function()
-        local TrustSafety = require("agentic.utils.trust_safety")
-        local Config = require("agentic.config")
-        local tmp_path = vim.uv.os_tmpdir() .. "/agentic_effects_test"
-        local orig_cleanup
-
-        before_each(function()
-            orig_cleanup = Config.permissions.tmp_cleanup
-            Config.permissions.tmp_cleanup = false
-        end)
-        after_each(function()
-            Config.permissions.tmp_cleanup = orig_cleanup
-        end)
-
-        it("empty effects clear regardless of scope", function()
-            pm._trust_scope = nil
-            assert.is_true(pm:_bash_effects_clear({}))
-        end)
-
-        it("a write under tmp clears with /trust tmp active", function()
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            assert.is_true(
-                pm:_bash_effects_clear({ { kind = "write", path = tmp_path } })
-            )
-        end)
-
-        it("a write outside tmp does not clear", function()
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            assert.is_false(
-                pm:_bash_effects_clear({ { kind = "write", path = "/repo/x" } })
-            )
-        end)
-
-        it("a tmp write does not clear without a tmp scope", function()
-            pm._trust_scope = nil
-            assert.is_false(
-                pm:_bash_effects_clear({ { kind = "write", path = tmp_path } })
-            )
-        end)
-
-        it("a non-tmp trust scope does not clear tmp writes", function()
-            pm._trust_scope = TrustSafety.compile_path_scope("/repo", "/repo")
-            assert.is_false(
-                pm:_bash_effects_clear({ { kind = "write", path = tmp_path } })
-            )
-        end)
-
-        it("a tmp symlink resolving outside tmp does not clear", function()
-            local link = vim.uv.os_tmpdir() .. "/agentic_evil_link"
-            vim.uv.fs_unlink(link)
-            vim.uv.fs_symlink("/etc/passwd", link)
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            local cleared =
-                pm:_bash_effects_clear({ { kind = "write", path = link } })
-            vim.uv.fs_unlink(link)
-            assert.is_false(cleared)
-        end)
-
-        it("a delete does not clear without tmp_cleanup", function()
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            assert.is_false(pm:_bash_effects_clear({
-                { kind = "write", path = tmp_path },
-                { kind = "delete", path = tmp_path },
-            }))
-        end)
-
-        it("a delete clears when correlated with an earlier write", function()
-            Config.permissions.tmp_cleanup = true
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            assert.is_true(pm:_bash_effects_clear({
-                { kind = "write", path = tmp_path },
-                { kind = "delete", path = tmp_path },
-            }))
-        end)
-
-        it("an uncorrelated delete does not clear", function()
-            Config.permissions.tmp_cleanup = true
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            assert.is_false(pm:_bash_effects_clear({
-                { kind = "delete", path = tmp_path },
-            }))
-        end)
-
-        it("a delete of an uncreated path does not clear", function()
-            Config.permissions.tmp_cleanup = true
-            pm._trust_scope = TrustSafety.build_tmp_scope("/repo")
-            assert.is_false(pm:_bash_effects_clear({
-                { kind = "write", path = tmp_path },
-                { kind = "delete", path = tmp_path .. "_other" },
-            }))
         end)
     end)
 

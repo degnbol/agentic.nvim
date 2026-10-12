@@ -1416,7 +1416,7 @@ function MessageWriter:write_notice(notice)
     self:flush_thought_run()
 
     -- Never wrapped or truncated: an ATX heading has to stay on one row, and
-    -- the title is the notice's whole record of the command — for `/trust` the
+    -- the title is the notice's whole record of the command — for `/grant` the
     -- part that would be cut is the scope path it exists to report. A title
     -- wider than the (nowrap) chat window runs past its edge and is reached by
     -- scrolling horizontally.
@@ -1873,7 +1873,7 @@ end
 --- Two populations of caller. What an error led to — an auto-continue
 --- countdown, a health check, a reauth offer — lands under the error that
 --- prompted it and belongs in its region. Standalone plugin notices (a rejected
---- `/trust` scope, a truncated queue) reach the same styling with no error
+--- `/grant` scope, a truncated queue) reach the same styling with no error
 --- above them, and get no region.
 ---
 --- Which one it is comes from the buffer no longer ending where the block did,

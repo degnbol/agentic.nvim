@@ -528,7 +528,7 @@ end
 --- destination the redirect would truncate/append to; the caller resolves it to a
 --- concrete literal path (quote-strip + `known`-var resolution, which live in
 --- permission_rules) and surfaces a `write` effect so the policy layer can clear
---- it against a trust scope (see permission_manager's `_bash_effects_clear`).
+--- it against the grant scopes (see permission_manager's `_bash_effects_clear`).
 ---
 --- Returns nil for the forms `redirect_is_safe` already approves (input `<`, fd
 --- duplication, `/dev/null`) and for a command/process-substitution destination

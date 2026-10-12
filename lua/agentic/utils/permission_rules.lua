@@ -569,14 +569,14 @@ end
 --- A file-mutating leaf the walker pinned to a concrete literal path. The walk
 --- still bails structurally on everything it cannot model; a leaf that *can* be
 --- modelled as a recoverable mutation is emitted here instead of bailing, for
---- the policy layer to clear against a trust scope (over-prompt-only: an effect
---- that does not clear still blocks approval). `path` may be relative — the
---- policy layer resolves it against cwd.
+--- the policy layer to clear against the grant scopes (over-prompt-only: an
+--- effect that does not clear still blocks approval). `path` may be
+--- relative.
 --- @class agentic.utils.PermissionRules.Effect
 --- @field kind "write"|"delete" Mutation kind (redirect write, or an `rm` operand)
 --- @field path string Concrete target path
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, tmp_cleanup: boolean, for_budget: integer }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer }
 
 --- Maximum number of body walks a literal for-loop may unroll into. Nested
 --- literal loops multiply, so the budget is divided down each level; a loop whose
@@ -1198,24 +1198,23 @@ local function walk_command(node, src, ctx, known, funcs)
         return false
     end
 
-    -- Under `/trust tmp` + `tmp_cleanup`, an `rm` emits a delete
-    -- effect per concrete operand instead of bailing to the structured `ask`.
-    -- A dash-token rm parses as an option (it never deletes a file for it), so
-    -- only `--`-trailing words and plain words are operands. A dynamic operand
-    -- (`rm $x`) cannot be pinned to a literal → bail like a dynamic redirect.
-    -- The policy layer (`_bash_effects_clear`) then requires each operand to be
-    -- under a tmp root AND correlated with an earlier create/write in the same
-    -- command. With `tmp_cleanup` off this branch is skipped and rm prompts.
+    -- An `rm` emits a delete effect per concrete operand instead of bailing to
+    -- the structured `ask`. A dash-token rm parses as an option (it never
+    -- deletes a file for it), so only `--`-trailing words and plain words are
+    -- operands. A dynamic operand (`rm $x`) cannot be pinned to a literal →
+    -- bail like a dynamic redirect. A directory delete (`-r`/`-R`/`-d`, their
+    -- long forms, an operand ending in `/`) bails too: the policy layer judges
+    -- one file per effect. The policy layer (`_bash_effects_clear`) then
+    -- clears each operand against the grant scopes.
     --
     -- This is a fallback for an `rm` that would otherwise prompt: an explicit
     -- glob allow (`Bash(rm *)`) approves it cleanly with no effect, so it is not
     -- intercepted here (the effect would make `should_auto_approve` withhold the
     -- user's own allow). `rm -f`/`--force` never reaches this walk under normal
     -- flow — `should_auto_reject` runs first and rejects it (force is a
-    -- structured deny gate, no longer carved out for tmp).
+    -- structured deny gate).
     if
-        ctx.tmp_cleanup
-        and cmd_name == "rm"
+        cmd_name == "rm"
         and args_dynamic ~= nil
         and not M.matches_any_pattern(leaf, ctx.allow)
     then
@@ -1230,10 +1229,23 @@ local function walk_command(node, src, ctx, known, funcs)
                 is_operand = false
             end
             if is_operand then
-                if args_dynamic[i] then
+                if args_dynamic[i] or a:sub(-1) == "/" then
                     return false
                 end
                 table.insert(operands, a)
+            else
+                -- GNU getopt takes any unambiguous prefix of a long option.
+                local long = a:match("^%-%-(.+)$")
+                if long then
+                    if
+                        vim.startswith("recursive", long)
+                        or vim.startswith("dir", long)
+                    then
+                        return false
+                    end
+                elseif a:find("[rRd]") then
+                    return false
+                end
             end
         end
         if #operands > 0 then
@@ -1282,7 +1294,7 @@ local function walk_command(node, src, ctx, known, funcs)
 
     -- Non-`-c` script execution: read the on-disk bytes and walk them like a
     -- `-c` body. Every body leaf hits the same deny/ask gates and emits its own
-    -- effects into the shared `ctx.effects` (so a script writing outside a trust
+    -- effects into the shared `ctx.effects` (so a script writing outside a grant
     -- scope still bails); a sourced helper recurses transitively. An
     -- unreadable/oversize/unparseable body bails. Unlike the `-c` recursion (a
     -- shrinking substring), files can cycle (`a.sh` sources `b.sh` sources
@@ -1438,8 +1450,8 @@ end
 --- non-heredoc redirect) is unmodelled and bails.
 ---
 --- Two side-channels feed the downstream script-file walk (`walk_command`):
---- every concrete file write emits a `ctx.effects` entry (cleared against a
---- trust scope by the policy layer), and `ctx.written` maps each written path
+--- every concrete file write emits a `ctx.effects` entry (cleared against the
+--- grant scopes by the policy layer), and `ctx.written` maps each written path
 --- (cwd-resolved) to the bytes the file will hold — reconstructed content for a
 --- `cat > f.sh <<'EOF' … EOF` heredoc, else `false` (taint) for a write whose
 --- output is not statically known. A later `zsh f.sh` consults that map instead
@@ -1478,7 +1490,7 @@ function walk_redirected(node, src, ctx, known)
                 if not redirect_is_safe(child, src) then
                     -- A concrete file-write redirect (`cmd > /tmp/x`) is not
                     -- bailed but emitted as a write effect; the policy layer
-                    -- clears it against the trust scope. The destination is
+                    -- clears it against the grant scopes. The destination is
                     -- resolved to a literal exactly as an `rm` operand is (so the
                     -- two correlate for the intra-command create-then-delete
                     -- check): a `$var` bound to a literal earlier in the sequence
@@ -2622,7 +2634,8 @@ end
 --- all return false.
 ---
 --- `ok` means structurally approvable; the second return is the ordered list of
---- concrete file-mutating effects (redirect writes) the command would produce.
+--- concrete file-mutating effects (redirect writes, `rm` operands) the command
+--- would produce.
 --- A structurally-ok command with effects STILL requires every effect to clear
 --- at the policy layer before approval — `ok` alone is not approval (see
 --- permission_manager's `_bash_effects_clear`). Empty effects means a pure
@@ -2674,15 +2687,14 @@ function M.evaluate(command, extra_allow)
         depth = 0,
         effects = effects,
         written = {},
-        tmp_cleanup = Config.permissions.tmp_cleanup,
         for_budget = FOR_UNROLL_CAP,
     })
     return ok, effects
 end
 
---- Whether a command auto-approves on its own, with no trust scope. True iff it
+--- Whether a command auto-approves on its own, with no grant scope. True iff it
 --- is structurally approvable AND produces no file-mutating effects (a redirect
---- write needs `/trust tmp` to clear — see `evaluate` / `_bash_effects_clear`).
+--- write or an `rm`, see `evaluate`).
 --- @param command string
 --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil session-remembered leaf patterns (forwarded to `evaluate`)
 --- @return boolean
