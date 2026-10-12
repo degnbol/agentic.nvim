@@ -51,31 +51,15 @@ end
 --- @field original string
 --- @field lua_pattern string
 
---- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
-local cached_deny_patterns
+--- @alias agentic.utils.PermissionRules.SettingsList "allow"|"deny"|"ask"
 
---- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
-local cached_ask_patterns
-
---- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
-local cached_read_only_patterns
-
---- @type agentic.utils.PermissionRules.CompiledPattern[]|nil
-local cached_safe_write_patterns
+--- Compiled settings.json patterns, keyed by permissions list
+--- @type table<agentic.utils.PermissionRules.SettingsList, agentic.utils.PermissionRules.CompiledPattern[]>|nil
+local cached_settings_patterns
 
 --- mtime of each settings.json at last load, keyed by path
 --- @type table<string, number>
 local cached_mtimes = {}
-
---- Cached config patterns, keyed by table reference
---- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
-local cached_config_read_only_ref, cached_config_read_only_patterns = nil, {}
---- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
-local cached_config_safe_write_ref, cached_config_safe_write_patterns = nil, {}
---- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
-local cached_config_deny_ref, cached_config_deny_patterns = nil, {}
---- @type table|nil, agentic.utils.PermissionRules.CompiledPattern[]
-local cached_config_ask_ref, cached_config_ask_patterns = nil, {}
 
 --- @type agentic.StructuredEntries|nil
 local cached_plugin_structured_entries
@@ -131,16 +115,18 @@ function M.glob_to_lua_pattern(glob)
     return "^" .. table.concat(result) .. "$"
 end
 
---- Compile a list of `Bash(...)` glob strings into matched patterns. Skips
---- non-Bash entries and malformed strings.
---- @param strings string[]|nil
+--- Compile the `Bash(...)` entries of one list in a settings.json permissions
+--- table. Skips other tools' entries and malformed strings.
+--- @param permissions table settings.json `permissions` table
+--- @param list_key agentic.utils.PermissionRules.SettingsList
 --- @return agentic.utils.PermissionRules.CompiledPattern[]
-local function patterns_from_strings(strings)
+function M.extract_bash_patterns(permissions, list_key)
     local out = {}
-    if type(strings) ~= "table" then
+    local entries = permissions[list_key]
+    if type(entries) ~= "table" then
         return out
     end
-    for _, entry in ipairs(strings) do
+    for _, entry in ipairs(entries) do
         if type(entry) == "string" then
             local inner = entry:match("^Bash%((.+)%)$")
             if inner then
@@ -152,14 +138,6 @@ local function patterns_from_strings(strings)
         end
     end
     return out
-end
-
---- Extract Bash(...) allow patterns from a settings.json permissions table.
---- @param permissions table
---- @param list_key string "allow" or "deny" or "ask"
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.extract_bash_patterns(permissions, list_key)
-    return patterns_from_strings(permissions[list_key])
 end
 
 --- Read and decode a JSON file, returning nil on any error.
@@ -214,83 +192,34 @@ local function settings_changed()
         or get_mtime(project_path) ~= (cached_mtimes[project_path] or 0)
 end
 
---- Load and cache patterns from all sources:
---- 1. Bundled permissions.json (if Config.permissions.use_plugin_defaults)
---- 2. ~/.claude/settings.json and .claude/settings.json (if Config.permissions.use_claude_settings)
---- 3. Config.permissions.read_only/safe_write/deny/ask (user additions)
---- Re-reads automatically when file mtimes change.
-function M.load_patterns()
-    if cached_read_only_patterns and not settings_changed() then
-        return
-    end
+--- Compiled `Bash(...)` patterns of one list, merged from the global and
+--- project settings.json. Empty when
+--- `Config.permissions.use_claude_settings` is off. Re-reads the files when
+--- their mtimes change.
+--- @param list_key agentic.utils.PermissionRules.SettingsList
+--- @return agentic.utils.PermissionRules.CompiledPattern[] patterns shared with the cache; do not mutate
+function M.get_settings_patterns(list_key)
+    if not cached_settings_patterns or settings_changed() then
+        local global_path, project_path = M.settings_paths()
+        cached_mtimes[global_path] = get_mtime(global_path)
+        cached_mtimes[project_path] = get_mtime(project_path)
 
-    cached_read_only_patterns = {}
-    cached_safe_write_patterns = {}
-    cached_deny_patterns = {}
-    cached_ask_patterns = {}
-
-    local global_path, project_path = M.settings_paths()
-    cached_mtimes[global_path] = get_mtime(global_path)
-    cached_mtimes[project_path] = get_mtime(project_path)
-
-    -- 1. Load bundled permissions.json
-    if Config.permissions.use_plugin_defaults then
-        local plugin_path = plugin_permissions_path()
-        local plugin_perms = M.read_json(plugin_path)
-        if plugin_perms then
-            vim.list_extend(
-                cached_read_only_patterns,
-                M.extract_bash_patterns(plugin_perms, "read_only")
-            )
-            vim.list_extend(
-                cached_safe_write_patterns,
-                M.extract_bash_patterns(plugin_perms, "safe_write")
-            )
-            vim.list_extend(
-                cached_deny_patterns,
-                M.extract_bash_patterns(plugin_perms, "deny")
-            )
-            vim.list_extend(
-                cached_ask_patterns,
-                M.extract_bash_patterns(plugin_perms, "ask")
-            )
+        cached_settings_patterns = { allow = {}, deny = {}, ask = {} }
+        if Config.permissions.use_claude_settings then
+            for _, path in ipairs({ global_path, project_path }) do
+                local settings = M.read_json(path)
+                if settings and settings.permissions then
+                    for key, patterns in pairs(cached_settings_patterns) do
+                        vim.list_extend(
+                            patterns,
+                            M.extract_bash_patterns(settings.permissions, key)
+                        )
+                    end
+                end
+            end
         end
     end
-
-    -- 2. Load from Claude settings.json files (allow maps to read_only for compatibility)
-    if Config.permissions.use_claude_settings then
-        local global = M.read_json(global_path)
-        if global and global.permissions then
-            vim.list_extend(
-                cached_read_only_patterns,
-                M.extract_bash_patterns(global.permissions, "allow")
-            )
-            vim.list_extend(
-                cached_deny_patterns,
-                M.extract_bash_patterns(global.permissions, "deny")
-            )
-            vim.list_extend(
-                cached_ask_patterns,
-                M.extract_bash_patterns(global.permissions, "ask")
-            )
-        end
-
-        local project = M.read_json(project_path)
-        if project and project.permissions then
-            vim.list_extend(
-                cached_read_only_patterns,
-                M.extract_bash_patterns(project.permissions, "allow")
-            )
-            vim.list_extend(
-                cached_deny_patterns,
-                M.extract_bash_patterns(project.permissions, "deny")
-            )
-            vim.list_extend(
-                cached_ask_patterns,
-                M.extract_bash_patterns(project.permissions, "ask")
-            )
-        end
-    end
+    return cached_settings_patterns[list_key]
 end
 
 --- Read additionalDirectories from ~/.claude/settings.json, expanding ~ to
@@ -340,84 +269,6 @@ function M.matches_any_pattern(segment, patterns)
         end
     end
     return false
-end
-
---- Resolve the merged read_only pattern list from all sources.
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.get_read_only_patterns()
-    M.load_patterns()
-    local result = {}
-    vim.list_extend(result, cached_read_only_patterns or {})
-    local list = Config.permissions.read_only
-    if list ~= cached_config_read_only_ref then
-        cached_config_read_only_ref = list
-        cached_config_read_only_patterns = patterns_from_strings(list)
-    end
-    vim.list_extend(result, cached_config_read_only_patterns)
-    return result
-end
-
---- Resolve the merged safe_write pattern list from all sources.
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.get_safe_write_patterns()
-    M.load_patterns()
-    local result = {}
-    vim.list_extend(result, cached_safe_write_patterns or {})
-    local list = Config.permissions.safe_write
-    if list ~= cached_config_safe_write_ref then
-        cached_config_safe_write_ref = list
-        cached_config_safe_write_patterns = patterns_from_strings(list)
-    end
-    vim.list_extend(result, cached_config_safe_write_patterns)
-    return result
-end
-
---- Resolve the merged allow-pattern list based on auto_approve setting.
---- Returns read_only + safe_write if "allow", read_only only if "read-only".
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.get_allow_patterns()
-    local auto_approve = Config.permissions.auto_approve
-    if not auto_approve then
-        return {}
-    end
-
-    local result = M.get_read_only_patterns()
-
-    if auto_approve == "allow" then
-        vim.list_extend(result, M.get_safe_write_patterns())
-    end
-
-    return result
-end
-
---- Resolve the merged deny-pattern list from all sources.
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.get_deny_patterns()
-    M.load_patterns()
-    local result = {}
-    vim.list_extend(result, cached_deny_patterns or {})
-    local list = Config.permissions.deny
-    if list ~= cached_config_deny_ref then
-        cached_config_deny_ref = list
-        cached_config_deny_patterns = patterns_from_strings(list)
-    end
-    vim.list_extend(result, cached_config_deny_patterns)
-    return result
-end
-
---- Resolve the merged ask-pattern list from all sources.
---- @return agentic.utils.PermissionRules.CompiledPattern[]
-function M.get_ask_patterns()
-    M.load_patterns()
-    local result = {}
-    vim.list_extend(result, cached_ask_patterns or {})
-    local list = Config.permissions.ask
-    if list ~= cached_config_ask_ref then
-        cached_config_ask_ref = list
-        cached_config_ask_patterns = patterns_from_strings(list)
-    end
-    vim.list_extend(result, cached_config_ask_patterns)
-    return result
 end
 
 --- Strip leading dashes from a rule option so `"--exec"`, `"-exec"`, and
@@ -1270,14 +1121,14 @@ local function walk_command(node, src, ctx, known, funcs)
     -- before the structured matcher so a shell's `c` gate does not pre-empt the
     -- `-c` recursion. A body at the depth cap, or one that does not resolve,
     -- falls through to the leaf matchers. A `writes` wrapper (uv's env sync) is
-    -- safe_write-tier: recurse only at the allow tier, else fall through so the
-    -- inner's read_only class cannot launder the command into read-only.
+    -- safe_write-tier: recurse only at the safe_write tier, else fall through so
+    -- the inner's read_only class cannot launder the command into read_only.
     local inner, _, writes =
         inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if
         inner
         and ctx.depth < NESTED_MAX_DEPTH
-        and (not writes or ctx.auto_approve == "allow")
+        and (not writes or ctx.auto_approve == "safe_write")
     then
         local root = parse_zsh(inner)
         if not root then
@@ -1854,11 +1705,11 @@ end
 -- continue, vs bail on first).
 --
 -- Classification is CATEGORY-level (`PermissionStructured.classify_leaf` + the
--- four glob buckets), not the `auto_approve`-resolved decision: a leaf is
--- known-safe iff it matches a read_only/safe_write rule AND no deny/ask rule, so
--- a `safe_write` like `git add` never lights up even in read-only mode.
+-- settings.json allow/deny/ask globs), not the `auto_approve`-resolved
+-- decision, so a `safe_write` like `git add` never lights up even at the
+-- read_only tier.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { read_only: agentic.utils.PermissionRules.CompiledPattern[], safe_write: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer }
+--- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -1960,10 +1811,11 @@ local function translate_ranges(ranges, origin)
     return out
 end
 
---- Whether a `command` leaf is known-safe: it matches a read_only/safe_write
---- rule (glob or structured) AND no deny/ask rule, with no structural reason to
---- bail (substitution in a non-bare position, env-hijack prefix, dynamic name,
---- code-taking builtin, unextractable token). Mirrors `walk_command`'s
+--- Whether a `command` leaf is known-safe: it matches a structured
+--- read_only/safe_write rule or a settings.json allow AND no deny/ask rule,
+--- with no structural reason to bail (substitution in a non-bare position,
+--- env-hijack prefix, dynamic name, code-taking builtin, unextractable token).
+--- Mirrors `walk_command`'s
 --- extraction but classifies by category instead of resolving the mode-gated
 --- decision.
 ---
@@ -2078,8 +1930,8 @@ local function command_known_safe(node, src, ctx, known, funcs)
 
     -- Non-`-c` script execution: tally the on-disk body. Clean → known-safe. A
     -- file body has no representation in the chat buffer (no origin to anchor
-    -- ranges to — see notes/perm-walk-into-scripts.md § Out of scope), so an
-    -- unsafe body washes the whole leaf and is not rememberable (no leaf return).
+    -- ranges to), so an unsafe body washes the whole leaf and is not
+    -- rememberable (no leaf return).
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
         local body = read_script(script_path)
         if not body then
@@ -2105,8 +1957,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return #body_ranges == 0
     end
 
-    local glob_safe = M.matches_any_pattern(leaf, ctx.read_only)
-        or M.matches_any_pattern(leaf, ctx.safe_write)
+    local glob_safe = M.matches_any_pattern(leaf, ctx.allow)
 
     local struct_safe = false
     if next(ctx.structured_entries) ~= nil then
@@ -2452,10 +2303,9 @@ function M.tally_unapproved(command)
 
     --- @type agentic.utils.PermissionRules.TallyCtx
     local ctx = {
-        read_only = M.get_read_only_patterns(),
-        safe_write = M.get_safe_write_patterns(),
-        deny = M.get_deny_patterns(),
-        ask = M.get_ask_patterns(),
+        allow = M.get_settings_patterns("allow"),
+        deny = M.get_settings_patterns("deny"),
+        ask = M.get_settings_patterns("ask"),
         structured_entries = M.get_structured_entries(),
         depth = 0,
         leaves = {},
@@ -2493,7 +2343,7 @@ end
 local reject_walk
 
 --- Whether a single `command` leaf is a concrete deny: a glob deny pattern from
---- settings.json/Config, or a structured deny gate (concrete-only). A transparent
+--- settings.json, or a structured deny gate (concrete-only). A transparent
 --- prefix (`timeout … cmd`, `sh -c '…'`) re-walks its inner command so a wrapped
 --- deny still rejects. Returns false on any extraction bail — the leaf's own
 --- denial cannot be established, and any executed substitution inside it is
@@ -2605,7 +2455,7 @@ function M.should_auto_reject(command)
         return false
     end
 
-    local deny = M.get_deny_patterns()
+    local deny = M.get_settings_patterns("deny")
     local structured_entries = M.get_structured_entries()
     if #deny == 0 and next(structured_entries) == nil then
         return false
@@ -2657,10 +2507,13 @@ function M.evaluate(command, extra_allow)
         return false, {}
     end
 
-    -- `get_allow_patterns` returns a fresh list each call, so appending the
-    -- session-remembered leaves here is safe and keeps the empty-rules guard
-    -- below honest: with remembered leaves `#allow > 0`, so it iterates.
-    local allow = M.get_allow_patterns()
+    -- Build a new list: extending the cached settings list would leak session
+    -- leaves into the cache. Remembered leaves count even when `auto_approve`
+    -- is nil, because the user approved each one.
+    local allow = {}
+    if Config.permissions.auto_approve then
+        vim.list_extend(allow, M.get_settings_patterns("allow"))
+    end
     if extra_allow then
         vim.list_extend(allow, extra_allow)
     end
@@ -2680,8 +2533,8 @@ function M.evaluate(command, extra_allow)
     local effects = {}
     local ok = walk(root, command, {
         allow = allow,
-        deny = M.get_deny_patterns(),
-        ask = M.get_ask_patterns(),
+        deny = M.get_settings_patterns("deny"),
+        ask = M.get_settings_patterns("ask"),
         structured_entries = structured_entries,
         auto_approve = Config.permissions.auto_approve,
         depth = 0,
@@ -2718,23 +2571,12 @@ end
 
 --- Invalidate cached patterns (forces re-read on next check).
 function M.invalidate_cache()
-    cached_deny_patterns = nil
-    cached_ask_patterns = nil
-    cached_read_only_patterns = nil
-    cached_safe_write_patterns = nil
+    cached_settings_patterns = nil
     cached_plugin_structured_entries = nil
     cached_plugin_structured_mtime = 0
     cached_config_structured_ref = nil
     cached_config_structured_entries = {}
     cached_mtimes = {}
-    cached_config_read_only_ref = nil
-    cached_config_read_only_patterns = {}
-    cached_config_safe_write_ref = nil
-    cached_config_safe_write_patterns = {}
-    cached_config_deny_ref = nil
-    cached_config_deny_patterns = {}
-    cached_config_ask_ref = nil
-    cached_config_ask_patterns = {}
 end
 
 return M

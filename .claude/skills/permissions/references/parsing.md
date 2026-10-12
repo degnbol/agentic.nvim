@@ -1,11 +1,5 @@
 # Shell command parsing — matcher internals
 
-Token-level mechanics behind the **Shell command parsing** auto-approval
-mechanism. The conceptual model — what the two layers guarantee, the
-safety-not-correctness boundary, composition, and residual risk — lives in
-[../SKILL.md](../SKILL.md). This file is *how the matcher decides per token*;
-read it before changing `permission_rules.lua` or `permission_structured.lua`.
-
 ## Over-approximation (sound for deny/ask)
 
 The matcher over-approximates option presence per token (single-dash `-uo`
@@ -28,7 +22,7 @@ directions read that ambiguity differently:
   first-positional (subcommand) indices; the rare multi-element positional gate
   enumerates parses (bounded). Owns soundness — an over-match only over-prompts.
 - *allow is a single parse* — a leading flag absorbs its next word iff it is a
-  known value-taker (`value_options`, a fail-safe optimisation; an unlisted flag
+  known value-taker (`value_taking_options`, a fail-safe optimisation; an unlisted flag
   absorbs 0, only over-prompting). Convenience only: the existential pass has
   already cleared every parse. Single-parse — *not* existential — keeps an
   unknown subcommand → prompt, so a leading bare flag cannot launder a dangerous
@@ -234,8 +228,8 @@ handling.
 4. **Extract** each safe leaf — the command name and quote-stripped arg
    tokens, minus redirects and env-prefixes. The leaf goes to the glob
    matcher as a joined string; the tokenised form (`{cmd_name, args}`)
-   goes to the structured matcher. `stdbuf` wrappers and system
-   binary-dir prefixes are stripped on the command name.
+   goes to the structured matcher. A system binary-dir prefix is stripped
+   from the command name (`strip_command_path`).
 5. **Check** against compiled patterns and structured entries, sourced
    per layer:
    - Bundled `lua/agentic/permissions.json` (when
@@ -243,19 +237,10 @@ handling.
    - `~/.claude/settings.json` and `.claude/settings.json` (when
      `Config.permissions.use_claude_settings`) — glob patterns.
      Mtime-cached.
-   - `Config.permissions.{read_only, safe_write, deny, ask}` — glob
-     patterns. `Config.permissions.structured` — structured entries.
+   - `Config.permissions.structured` — structured entries.
      Recompiled on table-reference change.
-6. **Resolve** the allow list per `Config.permissions.auto_approve`. Both
-   layers honour the same toggle: `"allow"` accepts entries in
-   `read_only` ∪ `safe_write` (mkdir, touch, git add, …); `"read-only"`
-   accepts `read_only` only; `nil` accepts no allow rules (compound path
-   will not approve; deny/ask still apply).
-7. **Compose** per leaf:
-   `approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR
-   structured_deny OR glob_ask OR structured_ask)`. Deny/ask are OR across
-   layers; allow is union. A leaf approves only when every layer that
-   votes against it stays silent.
+6. **Resolve** the allow list per `Config.permissions.auto_approve` and
+7. **compose** per leaf: SKILL.md § "Composition per leaf".
 
 ## Command-source fallback
 

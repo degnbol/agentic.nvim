@@ -485,16 +485,9 @@ local ConfigDefault = {
     auto_approve_skills = true,
 
     --- @class agentic.UserConfig.Permissions
-    --- @field use_plugin_defaults boolean Load bundled patterns from permissions.json
-    --- @field use_claude_settings boolean Merge patterns from ~/.claude/settings.json and .claude/settings.json
-    --- @field auto_approve "allow"|"read-only"|nil Which Bash patterns to auto-approve:
-    ---   "allow" — read_only + safe_write patterns
-    ---   "read-only" — only read_only patterns
-    ---   nil — no patterns auto-approved (still respects deny/ask)
-    --- @field read_only string[] Additional read-only patterns (Bash(...) glob format)
-    --- @field safe_write string[] Additional safe-write patterns
-    --- @field deny string[] Deny patterns (Bash(...) glob format) — take precedence over all other fields and REJECT the command immediately (no prompt, the command never runs)
-    --- @field ask string[] Ask patterns — withhold approval and prompt (override allow, lower precedence than deny)
+    --- @field use_plugin_defaults boolean Load the bundled structured rules from permissions.json
+    --- @field use_claude_settings boolean Match the Bash(...) allow/deny/ask patterns in the global and project Claude settings.json
+    --- @field auto_approve agentic.PermAutoApprove Which allow rules auto-approve a Bash command. Settings.json allow patterns count under either tier. nil approves none (deny/ask still apply).
     --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
     --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of the auto_approve switches).
     --- @field tmp_cleanup boolean In a granted path under a tmp root, auto-approve a plain `rm` of an untracked tmp file redirected to earlier in the same Bash command.
@@ -502,11 +495,7 @@ local ConfigDefault = {
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
-        auto_approve = "allow",
-        read_only = {},
-        safe_write = {},
-        deny = {},
-        ask = {},
+        auto_approve = "safe_write",
         structured = {},
         highlight_unapproved = true,
         tmp_cleanup = true,

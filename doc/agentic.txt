@@ -254,22 +254,14 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `structured` format are described in |agentic-permissions-shell|.
 
     `use_plugin_defaults`   boolean (default: true)
-        Load the bundled patterns from `permissions.json`.
+        Load the bundled rules from `permissions.json`.
     `use_claude_settings`   boolean (default: true)
-        Merge `Bash(...)` patterns from Claude's settings.json files.
-    `auto_approve`          `"allow"` | `"read-only"` | nil
-                            (default: `"allow"`)
-        Selects which pattern kinds are auto-approved.
-    `read_only`             string list (default: {})
-        Additional read-only `Bash(...)` glob patterns.
-    `safe_write`            string list (default: {})
-        Additional safe-write glob patterns.
-    `deny`                  string list (default: {})
-        Deny `Bash(...)` glob patterns.
-    `ask`                   string list (default: {})
-        Ask patterns.
+        Use the `Bash(...)` rules in Claude's settings.json files.
+    `auto_approve`          `"safe_write"` | `"read_only"` | nil
+                            (default: `"safe_write"`)
+        Selects which allow rules auto-approve.
     `structured`            table (default: {})
-        Cmd-keyed structured rules merged over the bundled defaults.
+        Cmd-keyed rules merged over the bundled rules.
     `highlight_unapproved`  boolean (default: true)
         Enable |AgenticUnapprovedCommand|.
     `default_grant`         string list (default: { "/tmp", "$TMPDIR" })
@@ -778,7 +770,7 @@ unset variable is skipped. `auto_approve_grant = false` disables grants.
 
 Every Bash command is parsed with the `zsh` treesitter grammar
 (|agentic-requirements-parsers|) and its leaf commands are matched one by
-one, so `cd /path && git status` matches `Bash(git *)` on its `git` leaf.
+one, so `cd /path && git status` matches a `git` rule on its `git` leaf.
 
 The walk rejects by default: a missing parser, a parse error, command or
 process substitution (`$(...)`, backticks, `<(...)`), control flow (loops,
@@ -790,19 +782,20 @@ a code-taking builtin (`eval`, `source`, `.`) all fall through to a prompt.
 Each remaining leaf is stripped of a `stdbuf` wrapper and a system
 binary-dir prefix, then checked against two layers:
 
-- Glob rules: `Bash(...)` patterns from `~/.claude/settings.json` and
-  `.claude/settings.json`, plus the `read_only`, `safe_write`, `deny` and
-  `ask` lists in `permissions`.
 - Structured rules: the bundled `permissions.json` plus
   `permissions.structured`. These match on tokenised flag identifiers, so
   option clustering (`sort -uo out`), GNU abbreviation (`sort --out=x`)
   and glued arguments (`sort -oFILE`) are matched.
+- Claude's settings: the `Bash(...)` entries of the `allow`, `deny` and
+  `ask` lists in `~/.claude/settings.json` and `.claude/settings.json`.
 
 A leaf auto-approves when a layer allows it and no layer denies or asks.
 `deny` rejects the command immediately, with no prompt and no execution;
 `ask` withholds approval so the command prompts. Which allow rules count
-follows `permissions.auto_approve`: `"allow"` admits read-only and
-safe-write rules, `"read-only"` admits read-only only, nil admits none.
+follows `permissions.auto_approve`, the highest rule kind that counts:
+`"safe_write"` admits `safe_write` and `read_only` rules, `"read_only"`
+admits `read_only` rules, nil admits none. A settings.json `allow` entry
+counts unless `auto_approve` is nil.
 
 Structured rules are a cmd-keyed table. Each command maps to up to four
 gate-kind arrays, `read_only`, `safe_write`, `ask` and `deny`, and each

@@ -335,8 +335,8 @@ end
 --- Extract the token text from one node that appears as a child of a
 --- `command` (an argument token) or as the inner of a `command_name`. Returns
 --- the joined string, or nil to bail. Lenient for top-level expansion-bearing
---- tokens (`"$f"`, `$bar`) — they're emitted as raw source text, preserving
---- the Phase 1a behaviour where `ls "$f"` matches `Bash(ls *)`. Strict
+--- tokens (`"$f"`, `$bar`) — they're emitted as raw source text, so
+--- `ls "$f"` matches a settings.json `Bash(ls *)` glob. Strict
 --- (`pure_literal_token`) inside a concatenation, so an expansion glued into a
 --- flag (`-ex"$x"c`) cannot be silently joined to a deny-matching literal.
 --- @param node TSNode
@@ -359,7 +359,7 @@ local function literal_token(node, src)
         -- string composed only of `string_content` yields its delivered text
         -- (so `"rm"` cannot evade a deny pattern), or nil to bail. A string
         -- that mixes `string_content` with expansions yields the raw quoted
-        -- text, preserving Phase 1a glob matching.
+        -- text, which settings.json globs match.
         if is_static_string(node) then
             return static_string_text(node, src)
         end
@@ -1209,7 +1209,7 @@ end
 --- @field attached? string[] Lua patterns for self-contained forms — attached short value (`-oL`), `--long=value`, bare numeric (`-5`)
 --- @field positionals? integer count of fixed positional operands before the inner command (timeout's `DURATION` = 1); skipped by count, not inspected
 --- @field subcommand? string require this literal first positional (uv's `run`); options are consumed both before and after it, and a non-match falls through to the leaf matchers (so `uv pip`/`uv lock` keep their own allow rules)
---- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the allow/safe_write tier — a read-only inner must not launder the command into a read-only one.
+--- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the safe_write tier — a read-only inner must not launder the command into a read-only one.
 
 --- Exec-wrappers: effect-neutral prefixes whose sole job is to launch the
 --- following command. Excluding a write option / requiring a positional makes
@@ -1235,7 +1235,7 @@ end
 --- rules. It is not effect-neutral like timeout/stdbuf, though: it first syncs the
 --- project env, which may install the repo's already-declared deps. That sync is a
 --- recoverable write, so `writes = true` marks it `safe_write`-tier — the decision
---- walk only recurses at the allow tier, never laundering a read-only inner into a
+--- walk only recurses at the safe_write tier, never laundering a read-only inner into a
 --- read-only command. Transparency is further gated to the bare form: the empty
 --- option lists make `skip_wrapper_operands` bail on *any* dash token, so the
 --- code-injecting options (`--with PKG`, `-s`/`--script`, `--with-requirements`,
@@ -1263,7 +1263,7 @@ local EXEC_WRAPPERS = {
         },
     },
     -- run COMMAND — bare only (no option lists → any dash token bails); env
-    -- sync is a recoverable write, so it needs the allow tier (`writes`).
+    -- sync is a recoverable write, so it needs the safe_write level (`writes`).
     uv = { subcommand = "run", writes = true },
     -- [OPTION]... COMMAND [ARGS]... — inner classified on its own merits; the
     -- runtime stdin items are modelled by a dynamic token appended in

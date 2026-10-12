@@ -3,6 +3,7 @@ local SessionRegistry = require("agentic.session_registry")
 local SessionRestore = require("agentic.session_restore")
 local Object = require("agentic.utils.object")
 local WidgetLayout = require("agentic.ui.widget_layout")
+local PermissionStructured = require("agentic.utils.permission_structured")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.Agentic
@@ -247,6 +248,7 @@ function Agentic.setup(opts)
             { title = "Agentic: user config merge error" }
         )
     end
+    PermissionStructured.validate_auto_approve()
     WidgetLayout.validate_stack()
 end
 

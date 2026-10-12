@@ -6,7 +6,7 @@
 ---     decide_leaf(
 ---         entries: StructuredEntries,   -- cmd-keyed dict, "*" wildcard key
 ---         parsed: ParsedLeaf,
----         auto_approve: "allow"|"read-only"|nil
+---         auto_approve: "safe_write"|"read_only"|nil
 ---     ) -> "allow"|"ask"|"deny"|nil
 
 local assert = require("tests.helpers.assert")
@@ -172,7 +172,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("git", { "push" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -186,7 +186,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("pdftotext", { "foo.pdf", "-" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -199,7 +199,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("git", { "push", "--foo", "bar" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -211,7 +211,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("git", { "pop" }),
-                "allow"
+                "safe_write"
             )
             assert.is_nil(decision)
         end)
@@ -232,7 +232,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     entries,
                     parsed("git", { "-C", "path", "config", "--get", "foo" }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("allow", decision)
             end
@@ -253,7 +253,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("sed", { "-i", "s/a/b/", "file" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -268,7 +268,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("yq", { "-i", "expr", "file" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -278,7 +278,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("ls", { "-la" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -288,7 +288,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("grep", { "pattern", "file" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -300,7 +300,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("grep", { "pattern" }),
-                "allow"
+                "safe_write"
             )
             assert.is_nil(decision)
         end)
@@ -321,7 +321,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 find_entry,
                 parsed("find", { ".", "-name", "foo" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -330,7 +330,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 find_entry,
                 parsed("find", { ".", "-exec", "rm", "{}" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -345,7 +345,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("sort", { "-o", "out", "in" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -357,7 +357,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("ls", { "--help" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -370,7 +370,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("sort", { "-o", "out" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -385,7 +385,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("ls", { "--help" }),
-                "allow"
+                "safe_write"
             )
             assert.is_nil(decision)
         end)
@@ -398,7 +398,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("ls", { "--help" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -408,7 +408,7 @@ describe("PermissionStructured", function()
     -- Eligible allow kinds (read_only vs safe_write) against auto_approve
     -- ------------------------------------------------------------------
     -- The kind name encodes the policy: read_only auto-approves at
-    -- "read-only" or "allow"; safe_write only at "allow". deny/ask are
+    -- "read_only" or "safe_write"; safe_write only at "safe_write". deny/ask are
     -- unconditional. auto_approve=nil admits no allow kind.
     describe("eligible allow kinds", function()
         local mlr_entry = {
@@ -418,20 +418,20 @@ describe("PermissionStructured", function()
             },
         }
 
-        it("deny wins at auto_approve='allow'", function()
+        it("deny wins at auto_approve='safe_write'", function()
             local decision = PermissionStructured.decide_leaf(
                 mlr_entry,
                 parsed("mlr", { "-I", "foo" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
 
-        it("deny is unconditional at auto_approve='read-only'", function()
+        it("deny is unconditional at auto_approve='read_only'", function()
             local decision = PermissionStructured.decide_leaf(
                 mlr_entry,
                 parsed("mlr", { "-I", "foo" }),
-                "read-only"
+                "read_only"
             )
             assert.equal("deny", decision)
         end)
@@ -445,22 +445,22 @@ describe("PermissionStructured", function()
             assert.equal("deny", decision)
         end)
 
-        it("safe_write allow fires at auto_approve='allow'", function()
+        it("safe_write allow fires at auto_approve='safe_write'", function()
             local decision = PermissionStructured.decide_leaf(
                 mlr_entry,
                 parsed("mlr", { "foo" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
 
         it(
-            "safe_write allow is filtered out at auto_approve='read-only'",
+            "safe_write allow is filtered out at auto_approve='read_only'",
             function()
                 local decision = PermissionStructured.decide_leaf(
                     mlr_entry,
                     parsed("mlr", { "foo" }),
-                    "read-only"
+                    "read_only"
                 )
                 assert.is_nil(decision)
             end
@@ -477,20 +477,20 @@ describe("PermissionStructured", function()
 
         local cat_entry = { cat = { read_only = { {} } } }
 
-        it("read_only allow fires at auto_approve='read-only'", function()
+        it("read_only allow fires at auto_approve='read_only'", function()
             local decision = PermissionStructured.decide_leaf(
                 cat_entry,
                 parsed("cat", { "foo" }),
-                "read-only"
+                "read_only"
             )
             assert.equal("allow", decision)
         end)
 
-        it("read_only allow fires at auto_approve='allow'", function()
+        it("read_only allow fires at auto_approve='safe_write'", function()
             local decision = PermissionStructured.decide_leaf(
                 cat_entry,
                 parsed("cat", { "foo" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -520,7 +520,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 sort_entry,
                 parsed("sort", { "-uo", "out" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -529,7 +529,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 sort_entry,
                 parsed("sort", { "--out=x" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -538,7 +538,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 sort_entry,
                 parsed("sort", { "-oFILE" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -555,7 +555,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     entries,
                     parsed("git", { "-C", "diff", "push" }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.is_nil(decision)
             end
@@ -572,7 +572,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("git", { "-C", "path", "config", "--get", "foo" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -586,7 +586,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("pdftotext", { "foo.pdf", "-" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -597,7 +597,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 {},
                 parsed("tee", { "out" }),
-                "allow"
+                "safe_write"
             )
             assert.is_nil(decision)
         end)
@@ -612,7 +612,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("curl", { "-K", "config.txt" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -626,7 +626,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("ls", { "--help" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -643,7 +643,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 pacman_entry,
                 parsed("pacman", { "-QR", "foo" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -652,7 +652,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 pacman_entry,
                 parsed("pacman", { "-Q", "kitty" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -682,7 +682,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 find_entry,
                 parsed_dyn("find", { ".", "$f" }, { false, true }),
-                "allow"
+                "safe_write"
             )
             assert.equal("deny", decision)
         end)
@@ -695,7 +695,7 @@ describe("PermissionStructured", function()
                     { ".", "-name", "x" },
                     { false, false, false }
                 ),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -713,7 +713,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     git_entry,
                     parsed_dyn("git", { "$sub" }, { true }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("ask", decision)
             end
@@ -727,7 +727,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     git_entry,
                     parsed_dyn("git", { "log", "$ref" }, { false, true }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("allow", decision)
             end
@@ -741,7 +741,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     { ls = { read_only = { { positionals = { "src" } } } } },
                     parsed_dyn("ls", { "$dir" }, { true }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.is_nil(decision)
             end
@@ -761,7 +761,7 @@ describe("PermissionStructured", function()
                         { "-C", "$x", "log" },
                         { false, true, false }
                     ),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("ask", decision)
             end
@@ -775,7 +775,7 @@ describe("PermissionStructured", function()
                     { "-C", "/repo", "log" },
                     { false, false, false }
                 ),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -795,7 +795,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 leading_entry,
                 parsed_dyn("git", { "-c", "x", "log" }, { false, false, false }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -806,7 +806,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     leading_entry,
                     parsed_dyn("git", { "log", "$ref" }, { false, true }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("allow", decision)
             end
@@ -816,7 +816,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 leading_entry,
                 parsed_dyn("git", { "$sub" }, { true }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -827,7 +827,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     leading_entry,
                     parsed_dyn("git", { "log", "-c" }, { false, false }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("allow", decision)
             end
@@ -861,7 +861,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 git_entry,
                 parsed("git", { "-C", "/repo", "log" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -872,7 +872,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     git_entry,
                     parsed("git", { "-C", "push", "log" }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("ask", decision)
             end
@@ -882,7 +882,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 git_entry,
                 parsed("git", { "-p", "push" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -891,7 +891,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 git_entry,
                 parsed("git", { "--no-pager", "push" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -902,7 +902,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     git_entry,
                     parsed("git", { "--new-global", "val", "push" }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.equal("ask", decision)
             end
@@ -918,7 +918,7 @@ describe("PermissionStructured", function()
                 local decision = PermissionStructured.decide_leaf(
                     git_entry,
                     parsed("git", { "--foo", "ci", "log" }),
-                    "allow"
+                    "safe_write"
                 )
                 assert.is_nil(decision)
             end
@@ -928,7 +928,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 { xargs = { read_only = { { positionals = { "ls" } } } } },
                 parsed("xargs", { "-0", "ls" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("allow", decision)
         end)
@@ -942,7 +942,7 @@ describe("PermissionStructured", function()
             local decision = PermissionStructured.decide_leaf(
                 entries,
                 parsed("gh", { "-R", "x", "issue", "create" }),
-                "allow"
+                "safe_write"
             )
             assert.equal("ask", decision)
         end)
@@ -1057,7 +1057,7 @@ describe("PermissionStructured", function()
                     PermissionStructured.decide_leaf(
                         rm_force,
                         dynamic_flag,
-                        "allow"
+                        "safe_write"
                     )
                 )
             end)

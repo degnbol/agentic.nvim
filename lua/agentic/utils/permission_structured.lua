@@ -1,3 +1,5 @@
+local Config = require("agentic.config")
+local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
 
 --- Structured option matcher for compound-Bash auto-approval. Consumes a
@@ -22,7 +24,9 @@ local PermissionRules = require("agentic.utils.permission_rules")
 --- @class agentic.utils.PermissionStructured
 local M = {}
 
---- @alias agentic.PermAutoApprove "allow" | "read-only" | nil
+--- The highest structured allow kind that auto-approves. Every safer kind
+--- approves too.
+--- @alias agentic.PermAutoApprove "safe_write" | "read_only" | nil
 --- @alias agentic.PermDecision "allow" | "ask" | "deny" | nil
 --- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
 
@@ -45,8 +49,8 @@ local M = {}
 ---        trailing token like the `$ref` in `git log $ref` can never inject it.
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
---- `read_only` approves at "read-only"|"allow", `safe_write` only at "allow",
---- `ask` withholds approval and prompts, `deny` rejects immediately (no prompt,
+--- `read_only` approves at either auto_approve tier, `safe_write` only at
+--- "safe_write", `ask` withholds approval and prompts, `deny` rejects immediately (no prompt,
 --- the command never runs — see `PermissionRules.should_auto_reject`). Each is an
 --- array of gates.
 --- @class agentic.StructuredCmdEntry
@@ -585,20 +589,36 @@ local function gate_matches_allow(gate, parse)
     return true
 end
 
---- The allow-kind names eligible for approval under the active auto_approve
---- mode. `"allow"` admits read_only ∪ safe_write; `"read-only"` admits
---- read_only only; `nil` admits none (no allow gate can fire). Deny/ask gates
+--- The allow kinds that approve at the `auto_approve` tier. Deny/ask gates
 --- are unconditional and do not consult this.
 --- @param auto_approve agentic.PermAutoApprove
 --- @return agentic.PermKind[]
 local function eligible_allow_kinds(auto_approve)
-    if auto_approve == "allow" then
+    if auto_approve == "safe_write" then
         return { "read_only", "safe_write" }
     end
-    if auto_approve == "read-only" then
+    if auto_approve == "read_only" then
         return { "read_only" }
     end
     return {}
+end
+
+--- Reset `Config.permissions.auto_approve` to nil, with a warning, when it is
+--- not an `agentic.PermAutoApprove` value. Any other string is truthy, so it
+--- would let settings.json allow patterns count while no structured kind does.
+function M.validate_auto_approve()
+    local auto_approve = Config.permissions.auto_approve
+    if auto_approve == nil or #eligible_allow_kinds(auto_approve) > 0 then
+        return
+    end
+    Logger.notify(
+        'permissions.auto_approve must be "safe_write", "read_only" or nil, got '
+            .. vim.inspect(auto_approve)
+            .. "; using nil: no allow rule auto-approves.",
+        vim.log.levels.WARN,
+        { title = "Agentic" }
+    )
+    Config.permissions.auto_approve = nil
 end
 
 --- True iff some gate in `gates` matches under `predicate`. A nil or empty
@@ -719,7 +739,7 @@ end
 --- Where `decide_leaf` resolves a single mode-gated decision, this reports
 --- which of the four gate kinds match — the highlight layer needs the
 --- intrinsic category ("is this known-safe") not "was this auto-approved", so
---- a `safe_write` like `git add` reads as safe even in `read-only` mode.
+--- a `safe_write` like `git add` reads as safe even at the `read_only` tier.
 --- deny/ask use existential matching; read_only/safe_write use the allow parse.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf

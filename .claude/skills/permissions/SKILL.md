@@ -39,7 +39,7 @@ or tabpage close. Grants alone survive stopping a turn.
 ```
 Provider sends "session/request_permission"
   -> PermissionManager.add_request(request, callback)
-     -> _try_auto_approve() runs the four checks below
+     -> decide() runs the checks below
         -> approved/rejected: callback fires immediately, skip UI
         -> otherwise: fall through to interactive prompt
      -> Queue request (sequential — one prompt at a time)
@@ -54,8 +54,8 @@ Provider sends "session/request_permission"
 
 ## Four auto-approval mechanisms
 
-All in `PermissionManager._try_auto_approve()`. Independent — any one can
-approve or reject; first decision wins. Read-only tools, skills, and grants
+All in `PermissionManager:decide`, in the order its docstring gives; the
+first decision wins. Read-only tools, skills, and grants
 each have a `Config.auto_approve_*` master switch (all default `true`);
 shell command parsing always runs (no switch — see mechanism 2).
 
@@ -81,18 +81,17 @@ whole-string glob cannot see. This runs unconditionally with no master switch:
 the parser only ever turns the provider's SDK `ask` escalations into approvals
 for provably-safe commands or rejections for provably-dangerous ones — both
 strictly better than the prompt you'd get otherwise, with no safety downside
-(the SDK runs its own check underneath). "Confirm every shell command" is
-achieved by leaving the allow rules empty. This fills a provider gap: the SDK
-matches the
-entire command string against each `Bash(...)` pattern, so `grep foo | head -20`
+(the SDK runs its own check underneath). `auto_approve = nil` approves no
+shell command; deny/ask still apply. This fills a provider gap: the SDK matches
+the entire command string against each `Bash(...)` pattern, so `grep foo | head -20`
 prompts even when both `Bash(grep *)` and `Bash(head *)` are allowed.
 `PermissionRules` (`lua/agentic/utils/permission_rules.lua`) walks the parse
 tree and matches each leaf separately.
 
 **Two matcher layers run per leaf.** The **glob matcher** consumes Claude's
-`Bash(...)` patterns from `~/.claude/settings.json`, `.claude/settings.json`,
-and `Config.permissions.{read_only, safe_write, deny, ask}` — shared schema
-with the Claude TUI, kept for user-side rules. The **structured matcher**
+`Bash(...)` `allow`/`deny`/`ask` patterns from the global and project
+settings.json (`PermissionRules.get_settings_patterns`) — the Claude TUI's own
+rules, honoured so they also apply per leaf. The **structured matcher**
 (`lua/agentic/utils/permission_structured.lua`) consumes the bundled
 `lua/agentic/permissions.json` (purely structured, no globs) plus any
 `Config.permissions.structured` additions. It is cmd-keyed: each command maps
@@ -109,7 +108,7 @@ safety does not require knowing a command's valid call signature, and a
 malformed command that fails at runtime fails safely — its redirects and
 env-prefixes are still classified structurally (below), separately from the
 command itself. Modelling call signatures would be scope creep that buys no
-safety. (`value_options` on the allow path is a fail-safe convenience to cut
+safety. (`value_taking_options` on the allow path is a fail-safe convenience to cut
 over-prompts — an unlisted flag over-prompts, never under-guards — not a
 correctness model.)
 
@@ -117,9 +116,9 @@ correctness model.)
 `read_only` (writing via pipe/redirect is caught structurally by the walker);
 one that mutates disk or executes arbitrary code as its normal action is
 `safe_write`, with write-causing options/subcommands carved out as `ask`/`deny`.
-The kind name encodes the policy — `read_only` approves at "read-only"/"allow",
-`safe_write` only at "allow", `ask` and `deny` are both unconditional but differ
-in outcome: **`ask` withholds approval and prompts; `deny` rejects immediately
+The kind name encodes the policy — `read_only` approves at either
+`auto_approve` level, `safe_write` only at `"safe_write"`, `ask` and `deny`
+are both unconditional but differ in outcome: **`ask` withholds approval and prompts; `deny` rejects immediately
 (no prompt, the command never runs)**. Users override via
 `Config.permissions.structured` (deep-merged over the bundled defaults; a cmd
 key replaces that command's bundled kind-arrays wholesale, `vim.NIL` disables
@@ -143,8 +142,8 @@ it).
   outer command still prompts. A quoted string in argument position whose only
   expansions are command substitutions (`"count: $(ls)"`) recurses each inner
   and splices the whole quoted arg as one dynamic token. Process substitution
-  `<(…)`/`>(…)` in argument
-  position likewise recurses its inner, splicing a static `/dev/fd` placeholder.
+  `<(…)`/`>(…)` in argument position likewise recurses its inner, splicing a
+  static `/dev/fd` placeholder.
   Substitution as the command name, unquoted concatenation (`a$(b)c`), a quoted
   string mixing `$var`/arithmetic with text (`"x$y$(ls)"`), process
   substitution outside argument position, case value/pattern, or redirect target
@@ -161,7 +160,7 @@ it).
   `$f` at a gated command prompts. For allow it stays concrete, so it never
   widens an approval. Number-only arithmetic `$((…))` is the one expansion
   classified *static*, at argument position (see
-  [references/parsing.md](references/parsing.md) § "Static arithmetic").
+  [references/parsing.md](references/parsing.md) § Token expansion).
 - **Over-approximation is sound for deny/ask.** Option presence is
   over-approximated per token — extra candidates can only widen a deny/ask
   match, never miss one. Allow uses a single parse, so an unknown subcommand
@@ -170,14 +169,16 @@ it).
 **Composition per leaf:**
 `approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR
 structured_deny OR glob_ask OR structured_ask)`. Deny/ask are OR across layers;
-allow is union; the allow set resolves per `Config.permissions.auto_approve`
-(`"allow"` = `read_only` ∪ `safe_write`, `"read-only"` = `read_only` only,
-`nil` = no allow rules). A leaf approves only when every layer that votes
-against it stays silent.
+allow is union; the allow set resolves per `Config.permissions.auto_approve`,
+the highest kind that counts (`"safe_write"` = `read_only` ∪ `safe_write`,
+`"read_only"` = `read_only` only, `nil` = none). A settings.json `allow`
+counts at either non-nil level; session allow-always leaves count at every
+level. A leaf approves only when every layer that votes against it stays
+silent.
 
 Deny additionally **short-circuits to a rejection**: a separate existential pass
 (`PermissionRules.should_auto_reject`, run by the manager *before*
-`should_auto_approve`) rejects the whole command — no prompt — as soon as any one
+`evaluate`) rejects the whole command — no prompt — as soon as any one
 executed leaf matches a concrete deny gate. Ask only *withholds approval* (the
 command still prompts). The deny pass is **concrete-only**: a dynamic token
 (`$var`, glob) does NOT satisfy a deny gate there, so `rm $flags x` falls through
@@ -189,8 +190,8 @@ a silent reject.
 
 A command whose write/exec intent is hidden inside an opaque token cannot
 be classified by token-level matching. These are accepted residuals, not
-bugs — the failure mode is auto-approving a write at `auto_approve` =
-`"read-only"`, never bypassing a `deny`/`ask` that *did* match:
+bugs — the failure mode is auto-approving a write at any non-nil
+`auto_approve`, never bypassing a `deny`/`ask` that *did* match:
 
 - **`sed`** `e`/`s///e` (exec) and `w`/`W`/`s///w` (write) — the script
   body is opaque (no sed parser/injection). A glob carve-out in the
@@ -227,7 +228,7 @@ bugs — the failure mode is auto-approving a write at `auto_approve` =
   prompts). A multi-word / glob / substitution value, or a binding rebound by an
   un-enumerable construct, stays dynamic and prompts.
 - A user *glob* deny in settings.json cannot get the dynamic-token wildcard
-  treatment (only the typed structured gates can), so it keeps the pre-existing
+  treatment (only the typed structured gates can), so it keeps the
   hole — express the gate structurally to close it.
 
 Sub-language injection (awk/jq/sql/python parsed *into* command-argument
@@ -401,5 +402,5 @@ TUI's `/permissions` has no protocol equivalent — clients can only
 respond to per-call escalations, not query or write SDK rules. That's
 *why* the four mechanisms above exist; for persistent rules the user
 edits `~/.claude/settings.json` directly. The plugin also exposes
-`/grant` scopes and `Config.permissions.*` lists as project-local
+`/grant` scopes and `Config.permissions.structured` rules as project-local
 extensions of the same idea.

@@ -312,8 +312,11 @@
     "read_only":  [{ "positionals": ["query"] }],
     "safe_write": [{}]
   },
-  "latexmk":   { "safe_write": [{}] },
-  "tlmgr":     { "safe_write": [{}] },
+  "tlmgr": {
+    "read_only":  [{ "positionals": ["info"] }],
+    "safe_write": [{ "positionals": ["install"] },
+                   { "positionals": ["update"] }]
+  },
   "kpsewhich": { "read_only":  [{}] },
 
   "javap": { "read_only": [{}] },
@@ -365,10 +368,7 @@
       { "positionals": ["outdated"] },
       { "positionals": ["update"] },
       { "positionals": ["up"] },
-      { "positionals": ["fetch"] },
-      { "positionals": ["bundle", "check"] },
-      { "positionals": ["bundle", "list"] },
-      { "positionals": ["bundle", "env"] }
+      { "positionals": ["fetch"] }
     ]
   },
 
@@ -383,16 +383,12 @@
       { "positionals": ["verify-project"] }
     ],
     "safe_write": [
-      { "positionals": ["build"] },
-      { "positionals": ["check"] },
-      { "positionals": ["clippy"] },
-      { "positionals": ["doc"] },
       { "positionals": ["fetch"] },
       { "positionals": ["fmt"] },
       { "positionals": ["generate-lockfile"] },
-      { "positionals": ["test"] },
       { "positionals": ["update"] }
-    ]
+    ],
+    "ask": [{ "options": ["config", "Z"] }]
   },
 
   "conda": {
@@ -456,17 +452,19 @@
   },
   "mypy": {
     "safe_write": [{}],
-    "ask":        [{ "options": ["install-types"] }]
+    "ask":        [{ "options": ["install-types", "python-executable", "config-file"] }]
   },
   "shellcheck": { "read_only": [{}] },
 
   "luacheck":             { "read_only": [{}] },
-  "lua-language-server":  { "read_only": [{}] },
   "bash-language-server": { "read_only": [{}] },
   "harper-ls":            { "read_only": [{}] },
   "texlab":               { "read_only": [{}] },
   "chktex":               { "read_only": [{}] },
-  "pylint":               { "read_only": [{}] },
+  "pylint": {
+    "read_only": [{}],
+    "ask":       [{ "options": ["init-hook", "load-plugins", "rcfile"] }]
+  },
   "flake8":               { "read_only": [{}] },
   "bandit":               { "read_only": [{}] },
   "yamllint":             { "read_only": [{}] },
@@ -704,26 +702,6 @@
 
   "mktemp": { "safe_write": [{}] },
 
-  "just": {
-    "safe_write": [
-      { "positionals": ["lint"] },
-      { "positionals": ["type"] }
-    ]
-  },
-
-  "make": {
-    "safe_write": [
-      { "positionals": ["test"] },
-      { "positionals": ["test-file"] },
-      { "positionals": ["validate"] },
-      { "positionals": ["format"] },
-      { "positionals": ["luacheck"] },
-      { "positionals": ["luals"] }
-    ]
-  },
-
-  "bun": { "safe_write": [{ "positionals": ["test"] }] },
-
   "ruff": {
     "safe_write": [{}],
     "ask":        [{ "options": ["fix", "fix-only"] }]
@@ -736,8 +714,6 @@
     "ask":        [{ "options": ["replace"] }]
   },
 
-  "tree-sitter": { "safe_write": [{}] },
-  "npx": { "safe_write": [{ "positionals": ["tree-sitter"] }] },
 
   "claude": {
     "read_only": [
@@ -753,12 +729,6 @@
     "read_only": [{ "options": ["n"] }],
     "ask":       [{ "options": ["c", "i", "s", "f"] }]
   },
-  "python3": {
-    "safe_write": [{ "options": ["m"], "positionals": ["unittest*"] }]
-  },
-
-  "blender": { "safe_write": [{ "options": ["background"] }] },
-  "pymol":   { "safe_write": [{}] },
 
   "rm": {
     "ask":  [{}],

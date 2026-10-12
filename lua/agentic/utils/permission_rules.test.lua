@@ -1105,9 +1105,6 @@ describe("PermissionRules", function()
         local Config
         local orig_plugin
         local orig_claude
-        local orig_read_only
-        local orig_safe_write
-        local orig_deny
         local orig_auto_approve
         local orig_read_json
 
@@ -1115,9 +1112,6 @@ describe("PermissionRules", function()
             Config = require("agentic.config")
             orig_plugin = Config.permissions.use_plugin_defaults
             orig_claude = Config.permissions.use_claude_settings
-            orig_read_only = Config.permissions.read_only
-            orig_safe_write = Config.permissions.safe_write
-            orig_deny = Config.permissions.deny
             orig_auto_approve = Config.permissions.auto_approve
 
             -- Stub settings.json to empty so only plugin defaults apply
@@ -1134,9 +1128,6 @@ describe("PermissionRules", function()
         after_each(function()
             Config.permissions.use_plugin_defaults = orig_plugin
             Config.permissions.use_claude_settings = orig_claude
-            Config.permissions.read_only = orig_read_only
-            Config.permissions.safe_write = orig_safe_write
-            Config.permissions.deny = orig_deny
             Config.permissions.auto_approve = orig_auto_approve
             PermissionRules.read_json = orig_read_json
             PermissionRules.invalidate_cache()
@@ -1156,61 +1147,61 @@ describe("PermissionRules", function()
 
         describe("uv run wrapper (safe_write tier)", function()
             it(
-                "approves a bare `uv run <checker>` at the allow tier",
+                "approves a bare `uv run <checker>` at the safe_write tier",
                 function()
                     assert.is_true(
-                        approves_at("allow", "uv run basedpyright probe.py")
+                        approves_at("safe_write", "uv run basedpyright probe.py")
                     )
                 end
             )
 
             it(
-                "prompts the same command at the read-only tier (env sync writes)",
+                "prompts the same command at the read_only tier (env sync writes)",
                 function()
                     assert.is_false(
-                        approves_at("read-only", "uv run basedpyright probe.py")
+                        approves_at("read_only", "uv run basedpyright probe.py")
                     )
                 end
             )
 
             it("prompts when the inner command is not approved", function()
-                assert.is_false(approves_at("allow", "uv run rm -rf /"))
+                assert.is_false(approves_at("safe_write", "uv run rm -rf /"))
             end)
 
             it("prompts when a code-injecting option is present", function()
                 assert.is_false(
                     approves_at(
-                        "allow",
+                        "safe_write",
                         "uv run --with=evil basedpyright probe.py"
                     )
                 )
             end)
 
             it("approves a non-`run` subcommand by its own rule", function()
-                assert.is_true(approves_at("allow", "uv pip list"))
+                assert.is_true(approves_at("safe_write", "uv pip list"))
             end)
         end)
 
         describe("checker and formatter commands", function()
-            it("approves a no-write checker at the read-only tier", function()
-                assert.is_true(approves_at("read-only", "basedpyright src.py"))
-                assert.is_true(approves_at("read-only", "selene src.lua"))
-                assert.is_true(approves_at("read-only", "shellcheck script.sh"))
+            it("approves a no-write checker at the read_only tier", function()
+                assert.is_true(approves_at("read_only", "basedpyright src.py"))
+                assert.is_true(approves_at("read_only", "selene src.lua"))
+                assert.is_true(approves_at("read_only", "shellcheck script.sh"))
             end)
 
             it("prompts on a checker's write/exec option", function()
                 -- basedpyright --writebaseline / --createstub / --gitlabcodequality
                 -- write files; mypy --install-types runs pip (arbitrary code).
                 assert.is_false(
-                    approves_at("allow", "basedpyright --writebaseline")
+                    approves_at("safe_write", "basedpyright --writebaseline")
                 )
                 assert.is_false(
                     approves_at(
-                        "allow",
+                        "safe_write",
                         "basedpyright --gitlabcodequality out.json"
                     )
                 )
-                assert.is_false(approves_at("allow", "mypy --install-types"))
+                assert.is_false(approves_at("safe_write", "mypy --install-types"))
             end)
 
             it(
@@ -1222,8 +1213,8 @@ describe("PermissionRules", function()
                         "stylua init.lua",
                         "ruff format src.py",
                     }) do
-                        assert.is_true(approves_at("allow", cmd))
-                        assert.is_false(approves_at("read-only", cmd))
+                        assert.is_true(approves_at("safe_write", cmd))
+                        assert.is_false(approves_at("read_only", cmd))
                     end
                 end
             )
@@ -1237,7 +1228,7 @@ describe("PermissionRules", function()
                     -- recurse-approve, so the whole command auto-approves.
                     assert.is_true(
                         approves_at(
-                            "read-only",
+                            "read_only",
                             "diff <(sort a.tsv) <(sort b.tsv)"
                         )
                     )
@@ -1248,7 +1239,7 @@ describe("PermissionRules", function()
                 "prompts when a procsub inner is not in any allow list",
                 function()
                     assert.is_false(
-                        approves_at("allow", "diff <(sort a.tsv) <(rm -rf /)")
+                        approves_at("safe_write", "diff <(sort a.tsv) <(rm -rf /)")
                     )
                 end
             )
@@ -1256,7 +1247,7 @@ describe("PermissionRules", function()
             it("rejects when a procsub inner hits a deny gate", function()
                 assert.is_false(
                     approves_at(
-                        "allow",
+                        "safe_write",
                         "diff <(find . -exec rm {} +) <(sort b)"
                     )
                 )
@@ -1264,11 +1255,11 @@ describe("PermissionRules", function()
         end)
 
         it(
-            "approves command from plugin defaults when auto_approve=allow",
+            "approves command from plugin defaults when auto_approve=safe_write",
             function()
                 Config.permissions.use_plugin_defaults = true
                 Config.permissions.use_claude_settings = false
-                Config.permissions.auto_approve = "allow"
+                Config.permissions.auto_approve = "safe_write"
                 PermissionRules.invalidate_cache()
                 assert.is_true(
                     PermissionRules.should_auto_approve("ls -la /tmp")
@@ -1277,11 +1268,11 @@ describe("PermissionRules", function()
         )
 
         it(
-            "approves command from plugin defaults when auto_approve=read-only",
+            "approves command from plugin defaults when auto_approve=read_only",
             function()
                 Config.permissions.use_plugin_defaults = true
                 Config.permissions.use_claude_settings = false
-                Config.permissions.auto_approve = "read-only"
+                Config.permissions.auto_approve = "read_only"
                 PermissionRules.invalidate_cache()
                 assert.is_true(
                     PermissionRules.should_auto_approve("ls -la /tmp")
@@ -1300,7 +1291,7 @@ describe("PermissionRules", function()
         it("rejects when both sources disabled", function()
             Config.permissions.use_plugin_defaults = false
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
         end)
@@ -1308,7 +1299,7 @@ describe("PermissionRules", function()
         it("approves compound of two plugin-default commands", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_true(
                 PermissionRules.should_auto_approve("cat foo.txt | head -5")
@@ -1318,7 +1309,7 @@ describe("PermissionRules", function()
         it("rejects find -exec via plugin deny list", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_false(
                 PermissionRules.should_auto_approve(
@@ -1330,7 +1321,7 @@ describe("PermissionRules", function()
         it("rejects find -okdir via plugin deny list", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_false(
                 PermissionRules.should_auto_approve(
@@ -1342,7 +1333,7 @@ describe("PermissionRules", function()
         it("approves find without -exec", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_true(
                 PermissionRules.should_auto_approve("find . -name '*.lua'")
@@ -1352,7 +1343,7 @@ describe("PermissionRules", function()
         it("rejects awk system() via plugin deny list", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_false(
                 PermissionRules.should_auto_approve(
@@ -1370,7 +1361,7 @@ describe("PermissionRules", function()
         it("approves benign sed substitution", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_true(
                 PermissionRules.should_auto_approve("sed 's/a/b/' file")
@@ -1380,37 +1371,22 @@ describe("PermissionRules", function()
         it("rejects command not in any allow list", function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_false(
                 PermissionRules.should_auto_approve("rm -rf /tmp/foo")
             )
         end)
 
-        it(
-            "recompiles when Config.permissions.read_only is replaced",
-            function()
-                Config.permissions.use_plugin_defaults = false
-                Config.permissions.use_claude_settings = false
-                Config.permissions.auto_approve = "read-only"
-                Config.permissions.read_only = { "Bash(custom *)" }
-                PermissionRules.invalidate_cache()
-                -- Default `ls` no longer in list
-                assert.is_false(PermissionRules.should_auto_approve("ls -la"))
-                assert.is_true(
-                    PermissionRules.should_auto_approve("custom thing")
-                )
-            end
-        )
-
-        it("merges Config patterns with settings.json patterns", function()
-            Config.permissions.use_plugin_defaults = false
+        it("combines settings.json allow with structured rules", function()
+            Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
-            Config.permissions.auto_approve = "read-only"
-            Config.permissions.read_only = { "Bash(ls *)" }
-            Config.permissions.deny = {}
+            Config.permissions.auto_approve = "read_only"
 
             PermissionRules.read_json = function(path)
+                if path:find("permissions%.json$") then
+                    return orig_read_json(path)
+                end
                 if path:find("settings%.json$") then
                     return {
                         permissions = {
@@ -1428,9 +1404,50 @@ describe("PermissionRules", function()
                 PermissionRules.should_auto_approve("ls /tmp && make test x")
             )
         end)
+
+        --- Stub both settings.json files with one allow and one deny glob.
+        local function stub_settings()
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(make test*)" },
+                            deny = { "Bash(make deploy*)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            PermissionRules.invalidate_cache()
+        end
+
+        it("ignores settings.json allow when auto_approve is nil", function()
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = true
+            Config.permissions.auto_approve = nil
+            stub_settings()
+            assert.is_false(PermissionRules.should_auto_approve("make test x"))
+            assert.is_true(PermissionRules.should_auto_reject("make deploy"))
+            -- A remembered leaf still counts.
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    "make test x",
+                    { PermissionRules.literal_pattern("make test x") }
+                )
+            )
+        end)
+
+        it("use_claude_settings=false drops settings.json allow and deny", function()
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve = "safe_write"
+            stub_settings()
+            assert.is_false(PermissionRules.should_auto_approve("make test x"))
+            assert.is_false(PermissionRules.should_auto_reject("make deploy"))
+        end)
     end)
 
-    -- Phase 1a walker: structural decomposition via the zsh treesitter parse
+    -- Walker: structural decomposition via the zsh treesitter parse
     -- tree. Reject-by-default — substitution, control flow, file-writing
     -- redirects, dynamic command names, and parse errors all bail to a prompt.
     describe("should_auto_approve (treesitter walker)", function()
@@ -2251,7 +2268,7 @@ describe("PermissionRules", function()
             orig_use_claude = Config.permissions.use_claude_settings
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
         end)
 
@@ -2428,9 +2445,9 @@ describe("PermissionRules", function()
         end)
 
         it(
-            "does not auto-approve mlr -I foo even at auto_approve = 'allow' (ask wins)",
+            "does not auto-approve mlr -I foo even at auto_approve = 'safe_write' (ask wins)",
             function()
-                Config.permissions.auto_approve = "allow"
+                Config.permissions.auto_approve = "safe_write"
                 PermissionRules.invalidate_cache()
                 assert.is_false(
                     PermissionRules.should_auto_approve("mlr -I foo")
@@ -2439,18 +2456,18 @@ describe("PermissionRules", function()
         )
 
         it(
-            "auto-approves mlr foo at read-only (mlr writes to stdout)",
+            "auto-approves mlr foo at read_only (mlr writes to stdout)",
             function()
-                Config.permissions.auto_approve = "read-only"
+                Config.permissions.auto_approve = "read_only"
                 PermissionRules.invalidate_cache()
                 assert.is_true(PermissionRules.should_auto_approve("mlr foo"))
             end
         )
 
         it(
-            "does not auto-approve a safe_write command at read-only (stylua)",
+            "does not auto-approve a safe_write command at read_only (stylua)",
             function()
-                Config.permissions.auto_approve = "read-only"
+                Config.permissions.auto_approve = "read_only"
                 PermissionRules.invalidate_cache()
                 assert.is_false(
                     PermissionRules.should_auto_approve("stylua foo.lua")
@@ -2458,8 +2475,8 @@ describe("PermissionRules", function()
             end
         )
 
-        it("auto-approves a safe_write command at allow (stylua)", function()
-            Config.permissions.auto_approve = "allow"
+        it("auto-approves a safe_write command at safe_write (stylua)", function()
+            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_true(
                 PermissionRules.should_auto_approve("stylua foo.lua")
@@ -3744,7 +3761,11 @@ describe("PermissionRules", function()
         it("does not return a safe_write leaf (intrinsically safe)", function()
             with_perms(
                 { allow = { "Bash(echo *)" } },
-                { safe_write = { "Bash(git add *)" } },
+                {
+                    structured = {
+                        git = { safe_write = { { positionals = { "add" } } } },
+                    },
+                },
                 function()
                     local ranges = PermissionRules.tally_unapproved("git add x")
                     assert.equal(0, #ranges)

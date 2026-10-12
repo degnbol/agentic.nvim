@@ -1682,7 +1682,7 @@ describe("agentic.ui.PermissionManager", function()
             orig_auto_approve = Config.permissions.auto_approve
             orig_use_plugin = Config.permissions.use_plugin_defaults
             orig_use_claude = Config.permissions.use_claude_settings
-            Config.permissions.auto_approve = "allow"
+            Config.permissions.auto_approve = "safe_write"
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
             PermissionRules.invalidate_cache()
