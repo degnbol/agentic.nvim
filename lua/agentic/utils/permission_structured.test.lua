@@ -7,7 +7,7 @@
 ---         entries: StructuredEntries,   -- cmd-keyed dict, "*" wildcard key
 ---         parsed: ParsedLeaf,
 ---         auto_approve: "safe_write"|"read_only"|nil
----     ) -> "allow"|"ask"|"deny"|nil
+---     ) -> "allow"|"ask"|"deny"|nil, "read_only"|"safe_write"|nil
 
 local assert = require("tests.helpers.assert")
 local PermissionStructured = require("agentic.utils.permission_structured")
@@ -164,6 +164,45 @@ describe("PermissionStructured", function()
     -- Positional matching — exercised via decide_leaf since the public
     -- API matches positionals inside a gate, not as a standalone helper.
     -- ------------------------------------------------------------------
+    describe("decide_leaf allow kind", function()
+        it("reports the kind of the allow gate that matched", function()
+            local entries = { grep = { read_only = { {} } } }
+            local decision, kind = PermissionStructured.decide_leaf(
+                entries,
+                parsed("grep", { "x", "f" }),
+                "safe_write"
+            )
+            assert.equal("allow", decision)
+            assert.equal("read_only", kind)
+        end)
+
+        it("prefers the command's own entry over the wildcard", function()
+            local entries = {
+                sort = { safe_write = { {} } },
+                ["*"] = { read_only = { {} } },
+            }
+            local _, kind = PermissionStructured.decide_leaf(
+                entries,
+                parsed("sort", { "-o", "x", "f" }),
+                "safe_write"
+            )
+            assert.equal("safe_write", kind)
+        end)
+
+        it("reports no kind for a deny", function()
+            local entries = {
+                rm = { read_only = { {} }, deny = { { options = { "f" } } } },
+            }
+            local decision, kind = PermissionStructured.decide_leaf(
+                entries,
+                parsed("rm", { "-f", "x" }),
+                "safe_write"
+            )
+            assert.equal("deny", decision)
+            assert.is_nil(kind)
+        end)
+    end)
+
     describe("positional matching (via decide_leaf)", function()
         it("matches a literal first positional", function()
             local entries = {

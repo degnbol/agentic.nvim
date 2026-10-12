@@ -49,7 +49,7 @@ end
 --- Fail-open: any decode error, unknown tool, missing session, or `decide`
 --- error returns "" (empty) — the caller emits no permissionDecision and the
 --- call falls through to the classifier. Never returns a spurious verdict.
---- @param b64 string base64-encoded JSON: `{session_id, transcript_path, tool_name, tool_input}`
+--- @param b64 string base64-encoded JSON: `{session_id, transcript_path, tool_name, tool_input, tool_use_id}`
 --- @return string verdict "allow" | "deny" | "" (undecided / fall-through)
 function M.evaluate(b64)
     local ok, verdict = pcall(function()
@@ -86,7 +86,10 @@ function M.evaluate(b64)
         }
         local diff = kind == "edit" and build_edit_diff(tool_input) or nil
 
-        local decision = pm:decide(kind, tool_call, diff)
+        local decision, deciders = pm:decide(kind, tool_call, diff)
+        if deciders and type(payload.tool_use_id) == "string" then
+            pm:record_deciders(payload.tool_use_id, deciders)
+        end
         Logger.debug_to_file(
             "permission_hook:",
             tool,

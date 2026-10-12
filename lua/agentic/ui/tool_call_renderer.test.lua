@@ -1874,5 +1874,68 @@ describe("ToolCallRenderer", function()
                 assert.equal(" pending ", render_footer("pending"))
             end)
         end)
+
+        describe("with a note", function()
+            local Config = require("agentic.config")
+            local Theme = require("agentic.theme")
+            local original_icons
+            local bufnr
+
+            before_each(function()
+                original_icons = vim.deepcopy(Config.status_icons)
+                Config.status_icons = {}
+                bufnr = vim.api.nvim_create_buf(false, true)
+            end)
+
+            after_each(function()
+                Config.status_icons = original_icons
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end)
+
+            --- Each status extmark on the footer as `{ start_col, end_col, hl_group }`.
+            --- @return table[]
+            local function marks()
+                local found = {}
+                for _, m in
+                    ipairs(
+                        vim.api.nvim_buf_get_extmarks(
+                            bufnr,
+                            Renderer.NS_STATUS,
+                            0,
+                            -1,
+                            { details = true }
+                        )
+                    )
+                do
+                    table.insert(found, { m[3], m[4].end_col, m[4].hl_group })
+                end
+                return found
+            end
+
+            it("writes the note after the status in its own group", function()
+                Renderer.apply_status_footer(bufnr, 0, "completed", "grant")
+
+                local line = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+                assert.equal(" completed · grant ", line)
+                assert.same({
+                    { 0, 11, Theme.HL_GROUPS.STATUS_COMPLETED },
+                    { 11, #line, Theme.HL_GROUPS.FOOTER_NOTE },
+                }, marks())
+            end)
+
+            it("replaces the marks of an earlier footer", function()
+                Renderer.apply_status_footer(bufnr, 0, "pending", "grant")
+                Renderer.apply_status_footer(bufnr, 0, "completed")
+
+                assert.equal(
+                    " completed ",
+                    vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
+                )
+                assert.same(
+                    { { 0, 11, Theme.HL_GROUPS.STATUS_COMPLETED } },
+                    marks()
+                )
+            end)
+        end)
     end)
 end)

@@ -25,6 +25,10 @@ local PERMISSION_KIND_PRIORITY = {
     reject_always = 4,
 }
 
+--- What allowed or rejected a tool call: a rule kind, a remembered decision,
+--- a grant, or the user at the prompt.
+--- @alias agentic.PermissionDecider "read-only"|"safe-write"|"deny"|"glob-allow"|"glob-deny"|"session-allow"|"session-reject"|"grant"|"skill"|"prompt-allow"|"prompt-reject"
+
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Main-chat writer; default when no per-tool-call resolver is set
 --- @field _writer_for? fun(tool_call_id: string): agentic.ui.MessageWriter Resolves the writer owning a tool call (main vs subagent); falls back to message_writer
@@ -39,6 +43,8 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field open_anchor? fun(bufnr: integer, how: agentic.ui.OpenHow): integer|nil Opens `bufnr` and returns its window, or nil when nothing opened. Called by the open keys, which are bound while a request's float shows on the chat in place of its tool call's buffer
 --- @field proxy_tool_call? fun(anchor_bufnr: integer): string|nil The id of the tool call in the chat that stands for the owner of `anchor_bufnr`, or nil when there is none
 --- @field companion_bufs? fun(anchor: integer): integer[] Buffers besides the session's own that also get the option keys of a request whose tool call is in `anchor`
+--- @field on_decided? fun(tool_call_id: string, deciders: agentic.PermissionDecider[]) Called on a later event loop tick after deciders are recorded for a tool call
+--- @field _deciders table<string, agentic.PermissionDecider[]> Recorded deciders not yet taken, keyed by tool call id
 --- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _execute_leaf_allow table<string, boolean> Session-remembered execute leaves vouched for via allow_always
@@ -69,6 +75,7 @@ function PermissionManager:new(message_writer, buf_nrs, writer_for)
         _tmp_roots = GrantSafety.tmp_roots(),
         _edit_records = {},
         _pending_edits = {},
+        _deciders = {},
     }, self)
 
     return instance
@@ -297,6 +304,18 @@ function PermissionManager:_remembered_leaf_patterns()
     return patterns
 end
 
+--- The shell sources in the order their decider words display.
+--- @type agentic.utils.PermissionRules.Source[]
+local SHELL_SOURCE_ORDER =
+    { "read_only", "safe_write", "glob_allow", "session_allow" }
+
+--- The decider word of a permission rule source.
+--- @param source agentic.utils.PermissionRules.Source|"deny"|"glob_deny"
+--- @return agentic.PermissionDecider
+local function decider_word(source)
+    return (source:gsub("_", "-")) --[[@as agentic.PermissionDecider]]
+end
+
 --- Run the deterministic permission ladder and return its verdict, with **no**
 --- ACP-side effect (no callback, no auto_approve/auto_reject). This is the
 --- single source of truth shared by the `canUseTool` path (`_try_auto_approve`)
@@ -320,38 +339,52 @@ end
 --- @param kind string|nil ACP tool kind
 --- @param tool_call agentic.acp.ToolCall
 --- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff for the grant check
---- @return "allow"|"deny"|nil
+--- @return "allow"|"deny"|nil verdict
+--- @return agentic.PermissionDecider[]|nil deciders What decided the verdict, in display order; nil when there is no verdict
 function PermissionManager:decide(kind, tool_call, diff)
     local kind_lc = AcpKind.normalise(kind)
 
     if Config.auto_approve_read_only_tools and READ_ONLY_KINDS[kind_lc] then
-        return "allow"
+        return "allow", { "read-only" }
     end
 
     if Config.auto_approve_skills and kind_lc == "skill" then
-        return "allow"
+        return "allow", { "skill" }
     end
 
     local command = tool_call.rawInput and tool_call.rawInput.command
-    if command and PermissionRules.should_auto_reject(command) then
-        return "deny"
+    if command then
+        local rejected, source = PermissionRules.should_auto_reject(command)
+        if rejected then
+            return "deny", { decider_word(source) }
+        end
     end
 
     local cache_key = self:_build_cache_key(tool_call)
     if cache_key then
         local cached = self._always_cache[cache_key]
         if cached == "allow" then
-            return "allow"
+            return "allow", { "session-allow" }
         elseif cached == "reject" then
-            return "deny"
+            return "deny", { "session-reject" }
         end
     end
 
     if command then
-        local ok, effects =
+        local ok, effects, sources =
             PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
         if ok and self:_bash_effects_clear(effects) then
-            return "allow"
+            --- @type agentic.PermissionDecider[]
+            local deciders = {}
+            for _, source in ipairs(SHELL_SOURCE_ORDER) do
+                if sources[source] then
+                    table.insert(deciders, decider_word(source))
+                end
+            end
+            if #effects > 0 then
+                table.insert(deciders, "grant")
+            end
+            return "allow", deciders
         end
     end
 
@@ -361,11 +394,11 @@ function PermissionManager:decide(kind, tool_call, diff)
         and FILE_SCOPED_KINDS[kind_lc]
     then
         if self:_check_grant(kind_lc, tool_call, diff) then
-            return "allow"
+            return "allow", { "grant" }
         end
     end
 
-    return nil
+    return nil, nil
 end
 
 --- Try to auto-approve/reject a permission request without user interaction.
@@ -406,13 +439,53 @@ function PermissionManager:_try_auto_approve(request, callback)
     end
 
     local diff = tracker and tracker.diff
-    local verdict = self:decide(kind, tool_call, diff)
+    local verdict, deciders = self:decide(kind, tool_call, diff)
+    local handled = false
     if verdict == "allow" then
-        return auto_approve(request, callback, "ladder verdict: allow")
+        handled = auto_approve(request, callback, "ladder verdict: allow")
     elseif verdict == "deny" then
-        return auto_reject(request, callback, "ladder verdict: deny")
+        handled = auto_reject(request, callback, "ladder verdict: deny")
     end
-    return false
+    -- Unhandled (no matching option), the request goes to the prompt.
+    if handled and deciders then
+        self:record_deciders(tool_call.toolCallId, deciders)
+    end
+    return handled
+end
+
+--- Hold `deciders` for a tool call, replacing any already held.
+--- @param tool_call_id string
+--- @param deciders agentic.PermissionDecider[]
+function PermissionManager:stash_deciders(tool_call_id, deciders)
+    self._deciders[tool_call_id] = deciders
+end
+
+--- Hold `deciders` for a tool call, then call `on_decided` on a later event
+--- loop tick. Does no other work, so it is safe in a context that must not
+--- fail or block.
+--- @param tool_call_id string
+--- @param deciders agentic.PermissionDecider[]
+function PermissionManager:record_deciders(tool_call_id, deciders)
+    self:stash_deciders(tool_call_id, deciders)
+    vim.schedule(function()
+        if self.on_decided then
+            self.on_decided(tool_call_id, deciders)
+        end
+    end)
+end
+
+--- Remove and return the deciders held for a tool call.
+--- @param tool_call_id string
+--- @return agentic.PermissionDecider[]|nil deciders
+function PermissionManager:take_deciders(tool_call_id)
+    local deciders = self._deciders[tool_call_id]
+    self._deciders[tool_call_id] = nil
+    return deciders
+end
+
+--- Forget the deciders held for every tool call.
+function PermissionManager:drop_deciders()
+    self._deciders = {}
 end
 
 --- Read the file path from a tool call's rawInput. Different ACP providers
@@ -1007,6 +1080,12 @@ function PermissionManager:_complete_request(option_id)
         end
     end
 
+    if vim.startswith(selected, "allow_") then
+        self:record_deciders(current.toolCallId, { "prompt-allow" })
+    elseif vim.startswith(selected, "reject_") then
+        self:record_deciders(current.toolCallId, { "prompt-reject" })
+    end
+
     self.permission_float:close()
     self:_clear_unapproved_highlight()
 
@@ -1058,6 +1137,7 @@ function PermissionManager:clear()
     self._execute_leaf_allow = {}
     self._edit_records = {}
     self._pending_edits = {}
+    self:drop_deciders()
     self:clear_grant_scopes()
 end
 
@@ -1076,6 +1156,13 @@ function PermissionManager:reject_and_cancel_remaining()
             reject_option_id = option.optionId
             break
         end
+    end
+
+    if reject_option_id then
+        self:record_deciders(
+            self.current_request.toolCallId,
+            { "prompt-reject" }
+        )
     end
 
     -- Remove UI and keymaps for current request

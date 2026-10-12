@@ -43,6 +43,17 @@ local function materialize_injections(bufnr, start_row, end_row)
     end
 end
 
+--- The status footer note of a tool call: its deciders, or nil when it has none.
+--- @param block agentic.ui.MessageWriter.ToolCallBase
+--- @return string|nil note
+local function footer_note(block)
+    local deciders = block.decided_by
+    if not deciders or #deciders == 0 then
+        return nil
+    end
+    return table.concat(deciders, ", ")
+end
+
 --- Tool call statuses that will not change again (safe to force a final parse).
 --- @param status string|nil
 --- @return boolean
@@ -105,6 +116,7 @@ end
 --- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives a session restore, which re-deriving from disk cannot (the file is post-edit by then).
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
 --- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in the main chat
+--- @field decided_by? agentic.PermissionDecider[] What let the call run or stopped it; nil when the provider decided
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -2740,7 +2752,12 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
 
-        Renderer.apply_status_footer(bufnr, end_row, tool_call_block.status)
+        Renderer.apply_status_footer(
+            bufnr,
+            end_row,
+            tool_call_block.status,
+            footer_note(tool_call_block)
+        )
 
         materialize_injections(bufnr, start_row, end_row)
 
@@ -2921,7 +2938,12 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 
             -- Decorations (kind glyph, │, ╰─) are stable — leave them in place.
             -- Only refresh status footer which changes on completion.
-            Renderer.apply_status_footer(bufnr, old_end_row, tracker.status)
+            Renderer.apply_status_footer(
+                bufnr,
+                old_end_row,
+                tracker.status,
+                footer_note(tracker)
+            )
             -- A non-failed diff's fold state does not depend on the status,
             -- so the state stored at render still holds.
             if is_final_status(tracker.status) then
@@ -2949,7 +2971,12 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         end
 
         if content_unchanged then
-            Renderer.apply_status_footer(bufnr, old_end_row, tracker.status)
+            Renderer.apply_status_footer(
+                bufnr,
+                old_end_row,
+                tracker.status,
+                footer_note(tracker)
+            )
             if is_final_status(tracker.status) then
                 self:_settle_block_fold(tracker, fold_state == "open")
             end
@@ -3087,7 +3114,12 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             table.insert(tracker.decoration_extmark_ids, dim_id)
         end
 
-        Renderer.apply_status_footer(bufnr, new_end_row, tracker.status)
+        Renderer.apply_status_footer(
+            bufnr,
+            new_end_row,
+            tracker.status,
+            footer_note(tracker)
+        )
 
         materialize_injections(bufnr, start_row, new_end_row)
     end)

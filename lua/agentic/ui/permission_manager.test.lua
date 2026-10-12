@@ -1681,6 +1681,22 @@ describe("agentic.ui.PermissionManager", function()
                 assert.equal("deny", pm:decide("execute", tool_call, nil))
             end)
 
+            it(
+                "a granted redirect is decided by its command and the grant",
+                function()
+                    grant(tmp)
+                    local verdict, deciders = pm:decide("execute", {
+                        toolCallId = "tc-grant-redirect",
+                        kind = "execute",
+                        rawInput = {
+                            command = "grep x f > " .. tmp .. "/out",
+                        } --[[@as agentic.acp.RawInput]],
+                    }, nil)
+                    assert.equal("allow", verdict)
+                    assert.same({ "read-only", "grant" }, deciders)
+                end
+            )
+
             it("a tmp delete does not clear without tmp_cleanup", function()
                 Config.permissions.tmp_cleanup = false
                 grant(tmp)
@@ -1762,6 +1778,15 @@ describe("agentic.ui.PermissionManager", function()
             assert.spy(cb).was.called(1)
             assert.is_true(cb:called_with("reject-once"))
             assert.is_nil(pm.current_request)
+            assert.same({ "deny" }, pm:take_deciders("tc-deny-1"))
+        end)
+
+        it("records the rule kinds that auto-approved a command", function()
+            pm:add_request(
+                make_execute_request("ls -la | grep x", "tc-allow-1"),
+                function() end
+            )
+            assert.same({ "read-only" }, pm:take_deciders("tc-allow-1"))
         end)
 
         it("prompts an ask command instead of rejecting", function()
@@ -1786,12 +1811,18 @@ describe("agentic.ui.PermissionManager", function()
         end)
 
         it("allows read-only kinds", function()
-            assert.equal("allow", pm:decide("read", { toolCallId = "t" }))
+            assert.same(
+                { "allow", { "read-only" } },
+                { pm:decide("read", { toolCallId = "t" }) }
+            )
             assert.equal("allow", pm:decide("search", { toolCallId = "t" }))
         end)
 
         it("allows skill loads", function()
-            assert.equal("allow", pm:decide("skill", { toolCallId = "t" }))
+            assert.same(
+                { "allow", { "skill" } },
+                { pm:decide("skill", { toolCallId = "t" }) }
+            )
         end)
 
         it("denies a settings-denied bash command", function()
@@ -1813,33 +1844,33 @@ describe("agentic.ui.PermissionManager", function()
 
         it("honours the allow_always cache", function()
             pm._always_cache["execute:echo hi"] = "allow"
-            assert.equal(
-                "allow",
+            assert.same({ "allow", { "session-allow" } }, {
                 pm:decide("execute", {
                     toolCallId = "t",
                     kind = "execute",
                     rawInput = { command = "echo hi" },
-                })
-            )
+                }),
+            })
         end)
 
         it("honours the reject_always cache", function()
             pm._always_cache["execute:secret"] = "reject"
-            assert.equal(
-                "deny",
+            assert.same({ "deny", { "session-reject" } }, {
                 pm:decide("execute", {
                     toolCallId = "t",
                     kind = "execute",
                     rawInput = { command = "secret" },
-                })
-            )
+                }),
+            })
         end)
 
         it("returns nil with no matching rule", function()
-            assert.is_nil(pm:decide("edit", {
-                toolCallId = "t",
-                rawInput = { file_path = "/some/repo/file.lua" },
-            }))
+            assert.same({}, {
+                pm:decide("edit", {
+                    toolCallId = "t",
+                    rawInput = { file_path = "/some/repo/file.lua" },
+                }),
+            })
         end)
 
         it("read-only auto-approval respects the config toggle", function()
@@ -1847,6 +1878,111 @@ describe("agentic.ui.PermissionManager", function()
             Config.auto_approve_read_only_tools = false
             assert.is_nil(pm:decide("read", { toolCallId = "t" }))
             Config.auto_approve_read_only_tools = original
+        end)
+    end)
+
+    describe("deciders", function()
+        --- @param tool_call_id string
+        --- @param kind agentic.acp.ToolKind
+        --- @param option_kinds string[]
+        --- @return agentic.acp.RequestPermission
+        local function make_request(tool_call_id, kind, option_kinds)
+            local options = {}
+            for _, option_kind in ipairs(option_kinds) do
+                table.insert(options, {
+                    optionId = option_kind:gsub("_", "-"),
+                    name = option_kind,
+                    kind = option_kind,
+                })
+            end
+            return {
+                sessionId = "test-session",
+                toolCall = {
+                    toolCallId = tool_call_id,
+                    kind = kind,
+                    rawInput = { file_path = "/some/repo/" .. tool_call_id },
+                },
+                options = options,
+            }
+        end
+
+        local all_options =
+            { "allow_once", "allow_always", "reject_once", "reject_always" }
+
+        it("calls on_decided only once the event loop runs", function()
+            local on_decided = spy.new(function() end)
+            pm.on_decided = on_decided --[[@as function]]
+
+            pm:record_deciders("tc-1", { "grant" })
+
+            assert.spy(on_decided).was.called(0)
+            local scheduled = schedule_stub.calls[#schedule_stub.calls][1]
+            scheduled()
+            assert.spy(on_decided).was.called(1)
+            assert.is_true(on_decided:called_with("tc-1", { "grant" }))
+        end)
+
+        it("take_deciders removes the entry", function()
+            pm:stash_deciders("tc-1", { "skill" })
+            assert.same({ "skill" }, pm:take_deciders("tc-1"))
+            assert.is_nil(pm:take_deciders("tc-1"))
+        end)
+
+        it("records nothing when the verdict has no matching option", function()
+            pm:add_request(
+                make_request("tc-read", "read", { "reject_once" }),
+                function() end
+            )
+            assert.is_nil(pm:take_deciders("tc-read"))
+            pm:_complete_request("reject-once")
+        end)
+
+        for option_kind, decider in pairs({
+            allow_once = "prompt-allow",
+            allow_always = "prompt-allow",
+            reject_once = "prompt-reject",
+            reject_always = "prompt-reject",
+        }) do
+            it("records " .. decider .. " for " .. option_kind, function()
+                pm:add_request(
+                    make_request("tc-edit", "edit", all_options),
+                    function() end
+                )
+                pm:_complete_request((option_kind:gsub("_", "-")))
+                assert.same({ decider }, pm:take_deciders("tc-edit"))
+            end)
+        end
+
+        it("records nothing for a request removed without a choice", function()
+            pm:add_request(
+                make_request("tc-edit", "edit", all_options),
+                function() end
+            )
+            pm:remove_request_by_tool_call_id("tc-edit")
+            assert.is_nil(pm:take_deciders("tc-edit"))
+        end)
+
+        it(
+            "reject all records prompt-reject for the current request only",
+            function()
+                pm:add_request(
+                    make_request("tc-first", "edit", all_options),
+                    function() end
+                )
+                pm:add_request(
+                    make_request("tc-queued", "edit", all_options),
+                    function() end
+                )
+                pm:reject_and_cancel_remaining()
+                assert.same({ "prompt-reject" }, pm:take_deciders("tc-first"))
+                assert.is_nil(pm:take_deciders("tc-queued"))
+            end
+        )
+
+        it("clear forgets stashed deciders", function()
+            pm:stash_deciders("tc-1", { "grant" })
+            pm:clear()
+            assert.is_nil(pm:take_deciders("tc-1"))
         end)
     end)
 end)

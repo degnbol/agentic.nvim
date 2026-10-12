@@ -856,6 +856,36 @@ describe("SessionRestore", function()
             )
         end)
 
+        it("replays what decided a call's permission", function()
+            local write_tool_spy = spy.new(function() end)
+
+            local writer = {
+                write_message = spy.new(function() end),
+                write_message_chunk = spy.new(function() end),
+                write_tool_call_block = write_tool_spy,
+                flush_thought_run = spy.new(function() end),
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "tool_call",
+                        tool_call_id = "t-grep",
+                        kind = "execute",
+                        argument = "grep x f > /tmp/out",
+                        status = "completed",
+                        decided_by = { "read-only", "grant" },
+                    },
+                }
+            )
+
+            assert.same(
+                { "read-only", "grant" },
+                write_tool_spy.calls[1][2].decided_by
+            )
+        end)
+
         it(
             "replays a foldable search tool call without emitting marker lines",
             function()

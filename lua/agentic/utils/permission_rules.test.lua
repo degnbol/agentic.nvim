@@ -4714,4 +4714,120 @@ describe("PermissionRules", function()
             )
         end)
     end)
+
+    describe("decision sources", function()
+        local Config = require("agentic.config")
+        local orig_read_json
+        local orig_auto_approve
+        local orig_use_plugin
+        local orig_use_claude
+        local orig_structured
+
+        before_each(function()
+            orig_read_json = PermissionRules.read_json
+            orig_auto_approve = Config.permissions.auto_approve
+            orig_use_plugin = Config.permissions.use_plugin_defaults
+            orig_use_claude = Config.permissions.use_claude_settings
+            orig_structured = Config.permissions.structured
+            --- @diagnostic disable-next-line: duplicate-set-field
+            PermissionRules.read_json = function(path)
+                if path:find("settings%.json$") then
+                    return {
+                        permissions = {
+                            allow = { "Bash(head *)" },
+                            deny = { "Bash(make deploy*)" },
+                        },
+                    }
+                end
+                return nil
+            end
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = true
+            Config.permissions.auto_approve = "safe_write"
+            Config.permissions.structured = {
+                grep = { read_only = { {} } },
+                sort = { safe_write = { {} } },
+                rm = { deny = { { options = { "f" } } } },
+            }
+            PermissionRules.invalidate_cache()
+        end)
+
+        after_each(function()
+            PermissionRules.read_json = orig_read_json
+            Config.permissions.auto_approve = orig_auto_approve
+            Config.permissions.use_plugin_defaults = orig_use_plugin
+            Config.permissions.use_claude_settings = orig_use_claude
+            Config.permissions.structured = orig_structured
+            PermissionRules.invalidate_cache()
+        end)
+
+        --- The sources `evaluate` reports for `command`, sorted.
+        --- @param command string
+        --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
+        --- @return string[]
+        local function sources_of(command, extra_allow)
+            local _, _, sources = PermissionRules.evaluate(command, extra_allow)
+            local names = vim.tbl_keys(sources)
+            table.sort(names)
+            return names
+        end
+
+        local remembered = { PermissionRules.literal_pattern("wc -l f") }
+
+        local cases = {
+            { "grep x f", { "read_only" } },
+            { "sort -o x f", { "safe_write" } },
+            { "head -5 f", { "glob_allow" } },
+            {
+                "grep x f | sort | head -1 | wc -l f",
+                { "glob_allow", "read_only", "safe_write", "session_allow" },
+            },
+            { "[[ -f a ]]", { "read_only" } },
+            { "x=1", { "read_only" } },
+            { "arr=(a b)", { "read_only" } },
+            { "f() { :; }", { "read_only" } },
+            { "grep x f > /tmp/out", { "read_only" } },
+        }
+        for _, case in ipairs(cases) do
+            it("reports the sources of: " .. case[1], function()
+                assert.same(case[2], sources_of(case[1], remembered))
+            end)
+        end
+
+        it("reports a remembered single command as session_allow", function()
+            assert.same({ "session_allow" }, sources_of("wc -l f", remembered))
+        end)
+
+        it("reports nothing for a command that is not approved", function()
+            assert.same({}, sources_of("grep x f; make deploy"))
+            assert.same({}, sources_of("grep x f; unknown-cmd"))
+        end)
+
+        it("adds a function body's sources only when it is called", function()
+            assert.same({ "read_only" }, sources_of("f() { sort x; }"))
+            assert.same(
+                { "read_only", "safe_write" },
+                sources_of("f() { sort x; }; f")
+            )
+        end)
+
+        it("names the deny that rejects a command", function()
+            assert.same(
+                { true, "deny" },
+                { PermissionRules.should_auto_reject("rm -f x") }
+            )
+            assert.same(
+                { true, "glob_deny" },
+                { PermissionRules.should_auto_reject("make deploy now") }
+            )
+            assert.same(
+                { true, "deny" },
+                { PermissionRules.should_auto_reject("sh -c 'rm -f x'") }
+            )
+            assert.same(
+                { false },
+                { PermissionRules.should_auto_reject("grep x f") }
+            )
+        end)
+    end)
 end)

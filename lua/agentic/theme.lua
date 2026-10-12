@@ -15,6 +15,7 @@ Theme.HL_GROUPS = {
     STATUS_COMPLETED = "AgenticStatusCompleted",
     STATUS_FAILED = "AgenticStatusFailed",
     STATUS_CANCELLED = "AgenticStatusCancelled",
+    FOOTER_NOTE = "AgenticFooterNote",
     CODE_BLOCK_FENCE = "AgenticCodeBlockFence",
 
     HEADING = "AgenticHeading",
@@ -132,6 +133,8 @@ function Theme.setup()
         -- Warn, not Error: the turn was stopped on request, so the call did not
         -- go wrong — it just never got an answer.
         { Theme.HL_GROUPS.STATUS_CANCELLED, { link = "DiagnosticVirtualTextWarn" } },
+        -- Plain, so the note does not compete with the status colour.
+        { Theme.HL_GROUPS.FOOTER_NOTE, { link = "Comment" } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
 
         -- Chat section heading markers (`##` prompt, `###` tool call). Linked

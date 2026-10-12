@@ -29,6 +29,7 @@ local M = {}
 --- @alias agentic.PermAutoApprove "safe_write" | "read_only" | nil
 --- @alias agentic.PermDecision "allow" | "ask" | "deny" | nil
 --- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
+--- @alias agentic.PermAllowKind "read_only" | "safe_write"
 
 --- Composition: a gate's present fields are ANDed; identifiers within one
 --- `options`/`leading_options` list are ORed; gates within a kind-array are ORed.
@@ -592,7 +593,7 @@ end
 --- The allow kinds that approve at the `auto_approve` tier. Deny/ask gates
 --- are unconditional and do not consult this.
 --- @param auto_approve agentic.PermAutoApprove
---- @return agentic.PermKind[]
+--- @return agentic.PermAllowKind[]
 local function eligible_allow_kinds(auto_approve)
     if auto_approve == "safe_write" then
         return { "read_only", "safe_write" }
@@ -692,7 +693,8 @@ end
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @param auto_approve agentic.PermAutoApprove
---- @return agentic.PermDecision
+--- @return agentic.PermDecision decision
+--- @return agentic.PermAllowKind|nil kind Kind of the matching allow gate; nil unless decision is "allow". On several matches the command's own entry wins over `"*"`, then `read_only` over `safe_write`
 function M.decide_leaf(entries, parsed, auto_approve)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
@@ -721,7 +723,7 @@ function M.decide_leaf(entries, parsed, auto_approve)
     for _, e in ipairs(relevant) do
         for _, kind in ipairs(kinds) do
             if any_gate(e[kind], allow) then
-                return "allow"
+                return "allow", kind
             end
         end
     end

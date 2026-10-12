@@ -714,17 +714,26 @@ Execute prompts highlight unapproved command parts:
 ------------------------------------------------------------------------------
 8.2 AUTO-APPROVAL                                   *agentic-permissions-auto*
 
-A tool call runs without a prompt when any of these holds:
+A tool call runs without a prompt when any of these holds. The word after
+each item is what the call's status footer shows (`✔ completed · grant`).
 
 - It is a read-only tool (Read, Grep, Glob) and
-  `auto_approve_read_only_tools` is on.
-- It is a Skill tool call and `auto_approve_skills` is on.
-- It is a shell command every leaf of which matches an allow rule
-  (|agentic-permissions-shell|).
+  `auto_approve_read_only_tools` is on. `read-only`
+- It is a Skill tool call and `auto_approve_skills` is on. `skill`
+- It is a shell command every leaf of which is allowed
+  (|agentic-permissions-shell|), by a `read_only` rule (`read-only`), a
+  `safe_write` rule (`safe-write`), a settings.json `Bash(...)` pattern
+  (`glob-allow`) or a leaf remembered by "Allow always" (`session-allow`).
+  A redirect or `rm` under a granted path adds `grant`.
 - It matches a cached "Allow always" decision
-  (|agentic-permissions-prompt|).
+  (|agentic-permissions-prompt|). `session-allow`
 - It is a recoverable change under a granted path
-  (|agentic-permissions-grant|).
+  (|agentic-permissions-grant|). `grant`
+
+Several words mean each was needed. `deny`, `glob-deny` and `session-reject`
+name what rejected a call. A prompted call shows `prompt-allow` or
+`prompt-reject`. A call with no word was decided by the provider, or was
+cancelled while its prompt was open.
 
 ------------------------------------------------------------------------------
 8.3 GRANTS                                         *agentic-permissions-grant*
@@ -1040,6 +1049,7 @@ Tool call status ~
     AgenticStatusCompleted    |hl-DiagnosticVirtualTextOk|
     AgenticStatusFailed       |hl-DiagnosticVirtualTextError|
     AgenticStatusCancelled    |hl-DiagnosticVirtualTextWarn|
+    AgenticFooterNote         `Comment`
 
 Chat text ~
     AgenticHeading            `@punctuation.special`   Heading markers

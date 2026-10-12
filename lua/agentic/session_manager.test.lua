@@ -669,7 +669,7 @@ describe("agentic.SessionManager", function()
                     set_chat_title = noop,
                     buf_nrs = { chat = 0, input = 0 },
                 },
-                permission_manager = { clear = noop },
+                permission_manager = { clear = noop, drop_deciders = noop },
                 todo_list = { clear = noop },
                 file_list = { clear = noop },
                 code_selection = { clear = noop },
@@ -738,6 +738,62 @@ describe("agentic.SessionManager", function()
 
             assert.equal(1, clear.call_count)
         end)
+
+        it("keeps the saved deciders for the replayed tool calls", function()
+            local session = make_load_session()
+            session.file_activity = { load = function() end }
+            local stashed = {}
+            session.permission_manager.stash_deciders = function(
+                _,
+                id,
+                deciders
+            )
+                stashed[id] = deciders
+            end
+            local read_stub = spy.stub(ChatHistory, "read")
+            read_stub:returns({
+                title = "",
+                messages = {
+                    { type = "user", text = "hi" },
+                    {
+                        type = "tool_call",
+                        tool_call_id = "tc-1",
+                        status = "completed",
+                        decided_by = { "grant" },
+                    },
+                    {
+                        type = "tool_call",
+                        tool_call_id = "tc-2",
+                        status = "completed",
+                    },
+                },
+            })
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            read_stub:revert()
+
+            assert.same({ ["tc-1"] = { "grant" } }, stashed)
+        end)
+
+        for outcome, err in pairs({
+            succeeded = false,
+            failed = { message = "x" },
+        }) do
+            it("drops held deciders once the load has " .. outcome, function()
+                local session = make_load_session()
+                local drop = spy.new(function() end)
+                session.permission_manager.drop_deciders = drop
+                session._fallback_restore_from_local = function() end
+                local notify_stub = spy.stub(Logger, "notify")
+
+                session:_do_load_acp_session("test-session-id", "/tmp")
+                assert.equal(0, drop.call_count)
+                captured_load_cb(nil, err or nil)
+                notify_stub:revert()
+
+                assert.equal(1, drop.call_count)
+            end)
+        end
 
         it("resolves `.` grants against the loaded session's cwd", function()
             local session = make_load_session()
@@ -3618,6 +3674,123 @@ describe("agentic.SessionManager", function()
             local cb = request_edit("tc-2")
             assert.spy(cb).was.called(0)
             assert.is_not_nil(session.permission_manager.current_request)
+        end)
+    end)
+
+    describe("permission deciders", function()
+        local MessageWriter = require("agentic.ui.message_writer")
+        local PermissionManager = require("agentic.ui.permission_manager")
+
+        --- @type integer
+        local bufnr
+        --- @type agentic.SessionManager
+        local session
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local writer = MessageWriter:new(bufnr)
+            local pm = PermissionManager:new(writer, { chat = bufnr })
+            local noop = function() end
+            session = {
+                message_writer = writer,
+                permission_manager = pm,
+                chat_history = ChatHistory:new(),
+                status_indicator = { reposition = noop },
+                _tool_call_owner = {},
+                _agents = {},
+                _loading = false,
+                _agent_of = SessionManager._agent_of,
+                _writer_for = SessionManager._writer_for,
+                _indicator_for = SessionManager._indicator_for,
+                _history_changed = spy.new(noop),
+                _try_record_edit_range = noop,
+                _record_file_op = noop,
+                _track_plan_exit = noop,
+                _on_tool_call = SessionManager._on_tool_call,
+                _on_permission_decided = SessionManager._on_permission_decided,
+            } --[[@as agentic.SessionManager]]
+            pm.on_decided = function(id, deciders)
+                session:_on_permission_decided(id, deciders)
+            end
+        end)
+
+        after_each(function()
+            deferred.revert()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        --- @param id string
+        local function tool_call(id)
+            session:_on_tool_call({
+                tool_call_id = id,
+                kind = "execute",
+                argument = "grep x f",
+                status = "pending",
+            })
+        end
+
+        --- @return string footer The last line of the chat that holds a status
+        local function footer()
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            for i = #lines, 1, -1 do
+                if lines[i]:find("pending") then
+                    return lines[i]
+                end
+            end
+            return ""
+        end
+
+        it("shows deciders recorded before the block arrives", function()
+            session.permission_manager:record_deciders("tc-1", { "read-only" })
+            tool_call("tc-1")
+            deferred.drain()
+
+            assert.truthy(footer():find("pending · read-only", 1, true))
+            assert.same(
+                { "read-only" },
+                session.chat_history.messages[1].decided_by
+            )
+            assert.is_nil(session.permission_manager:take_deciders("tc-1"))
+        end)
+
+        it("updates the footer and history for a later verdict", function()
+            tool_call("tc-1")
+            assert.is_nil(footer():find("·", 1, true))
+
+            session.permission_manager:record_deciders("tc-1", { "grant" })
+            deferred.drain()
+
+            assert.truthy(footer():find("pending · grant", 1, true))
+            assert.same(
+                { "grant" },
+                session.chat_history.messages[1].decided_by
+            )
+        end)
+
+        it(
+            "does not redraw or save a verdict the block already shows",
+            function()
+                session.permission_manager:record_deciders("tc-1", { "grant" })
+                tool_call("tc-1")
+                local save = spy.new(function() end)
+                session._history_changed = save --[[@as function]]
+                deferred.drain()
+
+                assert.equal(0, save.call_count)
+            end
+        )
+
+        it("ignores a verdict that lands after the session ends", function()
+            tool_call("tc-1")
+            session.permission_manager:record_deciders("tc-1", { "grant" })
+            session.destroyed = true
+            deferred.drain()
+
+            assert.is_nil(footer():find("·", 1, true))
+            assert.is_nil(session.chat_history.messages[1].decided_by)
         end)
     end)
 

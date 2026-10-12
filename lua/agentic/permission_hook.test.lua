@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local Deferred = require("tests.helpers.deferred")
 
 local PermissionHook = require("agentic.permission_hook")
 local SessionRegistry = require("agentic.session_registry")
@@ -169,6 +170,72 @@ describe("agentic.permission_hook", function()
             assert.same({}, last_call.diff.old)
             assert.same({ "line 1", "line 2" }, last_call.diff.new)
             assert.is_false(last_call.diff.all)
+        end)
+    end)
+
+    describe("deciders", function()
+        local PermissionManager = require("agentic.ui.permission_manager")
+        local deferred
+        local pm
+        local decided
+
+        before_each(function()
+            deferred = Deferred.capture()
+            decided = {}
+            pm = setmetatable({
+                _deciders = {},
+                decide = function()
+                    return verdict_to_return,
+                        verdict_to_return and { "glob-allow" } or nil
+                end,
+                on_decided = function(id, deciders)
+                    table.insert(decided, { id, deciders })
+                end,
+            }, { __index = PermissionManager })
+            SessionRegistry.session_for_acp_id = function(_)
+                return {
+                    permission_manager = pm,
+                    note_hook_transcript = function() end,
+                }
+            end
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        --- @param tool_use_id string|nil
+        --- @return string verdict
+        local function evaluate(tool_use_id)
+            return PermissionHook.evaluate(encode({
+                session_id = "s1",
+                tool_name = "Bash",
+                tool_input = { command = "make test" },
+                tool_use_id = tool_use_id,
+            }))
+        end
+
+        it("records a decided call against its tool_use_id", function()
+            assert.equal("allow", evaluate("toolu_1"))
+            assert.same({}, decided)
+            assert.same({ "glob-allow" }, pm._deciders.toolu_1)
+
+            deferred.drain()
+            assert.same({ { "toolu_1", { "glob-allow" } } }, decided)
+        end)
+
+        it("records nothing for an undecided call", function()
+            verdict_to_return = nil
+            assert.equal("", evaluate("toolu_1"))
+            deferred.drain()
+            assert.same({}, pm._deciders)
+            assert.same({}, decided)
+        end)
+
+        it("records nothing without a tool_use_id", function()
+            assert.equal("allow", evaluate(nil))
+            deferred.drain()
+            assert.same({}, pm._deciders)
         end)
     end)
 end)

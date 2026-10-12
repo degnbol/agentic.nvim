@@ -13,9 +13,8 @@ versions, plus counts over this project's own transcript history. **Counts drift
 as sessions accumulate — quoted for shape, not as fixtures. Snapshot:
 `claude-agent-acp` 0.66.0, `@anthropic-ai/claude-agent-sdk` 0.3.220, CLI 2.1.220.
 
-Split out of this plan: showing *why* a tool call was permitted →
-`notes/feature-why-permitted.md`. It shares a data source with this work but is a
-separate UI concern.
+Out of scope: showing *why* a tool call was permitted. The status footer's
+decider note does that (`PermissionManager:record_deciders`).
 
 ## Goal
 
@@ -109,8 +108,7 @@ base64s stdin into `permission_hook.lua`, which decodes it at
 **Read the field only — add no work to that script.** It is the one that hangs
 (all three `hook_cancelled` records are `hooks/permission_hook.sh` at 600 s), and
 its verdict computation is wrapped in a `pcall` returning abstain on error, so any
-failure inside it silently changes a permission decision. See
-`notes/feature-why-permitted.md` § "Hard constraint".
+failure inside it silently changes a permission decision.
 
 Prefer this over deriving the path from the cwd slug. Three limits, which shape
 the design rather than being worked around:
@@ -188,7 +186,7 @@ contains the word. Parsed, the classes sum exactly:
 
 | `hookSpecificOutput` | count | agent saw it |
 | --- | --- | --- |
-| `permissionDecision` | 1309 | no — out of scope, see `notes/feature-why-permitted.md` |
+| `permissionDecision` | 1309 | no — out of scope; the status footer's decider note shows it |
 | `additionalContext` | 259 | yes — **duplicates `hook_additional_context`** |
 | `updatedInput` | 49 | no — see `notes/PLAN-updated-input-display.md` |
 | `additionalContext` + `updatedInput` | 9 | partly — **the classes are not disjoint** |

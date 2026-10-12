@@ -1852,7 +1852,8 @@ end
 --- @param bufnr integer
 --- @param footer_line integer 0-indexed footer line number
 --- @param status string Status value (pending, completed, etc.)
-function M.apply_status_footer(bufnr, footer_line, status)
+--- @param note string|nil Text after the status, set off by " · "
+function M.apply_status_footer(bufnr, footer_line, status, note)
     if not vim.api.nvim_buf_is_valid(bufnr) or not status or status == "" then
         return
     end
@@ -1862,7 +1863,7 @@ function M.apply_status_footer(bufnr, footer_line, status)
     if icon and icon ~= "" then
         status_text = string.format(" %s %s ", icon, status)
     end
-    local hl_group = Theme.get_status_hl_group(status)
+    local note_text = note and ("· " .. note .. " ") or ""
 
     local current = vim.api.nvim_buf_get_lines(
         bufnr,
@@ -1871,19 +1872,38 @@ function M.apply_status_footer(bufnr, footer_line, status)
         false
     )[1] or ""
 
+    -- A mark over the replaced text would stretch over the whole new line.
+    vim.api.nvim_buf_clear_namespace(
+        bufnr,
+        NS_STATUS,
+        footer_line,
+        footer_line + 1
+    )
     vim.api.nvim_buf_set_text(
         bufnr,
         footer_line,
         0,
         footer_line,
         #current,
-        { status_text }
+        { status_text .. note_text }
     )
 
     vim.api.nvim_buf_set_extmark(bufnr, NS_STATUS, footer_line, 0, {
         end_col = #status_text,
-        hl_group = hl_group,
+        hl_group = Theme.get_status_hl_group(status),
     })
+    if note then
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            NS_STATUS,
+            footer_line,
+            #status_text,
+            {
+                end_col = #status_text + #note_text,
+                hl_group = Theme.HL_GROUPS.FOOTER_NOTE,
+            }
+        )
+    end
 end
 
 -- ---------------------------------------------------------------------------

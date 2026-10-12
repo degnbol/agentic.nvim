@@ -478,6 +478,9 @@ function SessionManager:new()
         local input = self:_input_of_transcript(anchor)
         return input and { input.bufnr } or {}
     end
+    self.permission_manager.on_decided = function(tool_call_id, deciders)
+        self:_on_permission_decided(tool_call_id, deciders)
+    end
 
     States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
 
@@ -1986,6 +1989,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         parent = self:_task_of(child_id)
     end
 
+    tool_call.decided_by = self.permission_manager:take_deciders(id)
     self:_writer_for(id):write_tool_call_block(tool_call)
     self:_indicator_for(id):reposition()
 
@@ -2001,6 +2005,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         diff = tool_call.diff,
         skill_path = tool_call.skill_path,
         subagent = tool_call.subagent,
+        decided_by = tool_call.decided_by,
         parent_tool_use_id = parent,
     }
     self.chat_history:add_message(tool_msg)
@@ -2013,6 +2018,36 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     self:_try_record_edit_range(tool_call.tool_call_id)
     self:_record_file_op(tool_call.tool_call_id)
     self:_track_plan_exit(tool_call)
+end
+
+--- Show what decided a tool call's permission on its block and keep it in the
+--- history. No-op once the session is destroyed, or while the call has no
+--- block, in which case the deciders stay held in the permission manager.
+--- Also a no-op when the block already shows `deciders`.
+--- @param tool_call_id string
+--- @param deciders agentic.PermissionDecider[]
+function SessionManager:_on_permission_decided(tool_call_id, deciders)
+    if self.destroyed then
+        return
+    end
+    local writer = self:_writer_for(tool_call_id)
+    local tracker = writer.tool_call_blocks[tool_call_id]
+    if not tracker or vim.deep_equal(tracker.decided_by, deciders) then
+        return
+    end
+    self.permission_manager:take_deciders(tool_call_id)
+    writer:update_tool_call_block({
+        tool_call_id = tool_call_id,
+        status = tracker.status,
+        decided_by = deciders,
+    })
+    self.chat_history:update_tool_call(tool_call_id, {
+        type = "tool_call",
+        tool_call_id = tool_call_id,
+        status = tracker.status,
+        decided_by = deciders,
+    })
+    self:_history_changed(self.chat_history)
 end
 
 --- Capture the pre-edit line position for an Edit, using the accumulated
@@ -4082,6 +4117,15 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.file_activity:load(saved_history.file_activity)
         self.chat_history.subagent_messages = saved_history.subagent_messages
         self.chat_history.subagents = saved_history.subagents
+        -- The replay carries no deciders; `_on_tool_call` takes these.
+        for _, msg in ipairs(saved_history.messages) do
+            if msg.type == "tool_call" and msg.decided_by then
+                self.permission_manager:stash_deciders(
+                    msg.tool_call_id --[[@as string]],
+                    msg.decided_by
+                )
+            end
+        end
     end
 
     self.agent:load_session(
@@ -4104,12 +4148,17 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                     )
                     self._restoring = false
                     self._loading = false
+                    -- Held for a replay that will not come; the local
+                    -- fallback reads the deciders from the history.
+                    self.permission_manager:drop_deciders()
                     self:_fallback_restore_from_local(session_id, saved_history)
                     return
                 end
 
                 self._restoring = false
                 self._loading = false
+                -- The replay is over: what it did not take, nothing will.
+                self.permission_manager:drop_deciders()
                 self.status_indicator:stop()
                 -- The replay mirrors what the session file already holds.
                 self.chat_history.dirty = false
