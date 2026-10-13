@@ -10,7 +10,9 @@ describe("SessionRestore", function()
     local Config
 
     --- @type TestStub
-    local chat_history_load_stub
+    local read_json_stub
+    --- @type TestStub
+    local from_data_stub
     --- @type TestStub
     local chat_history_list_stub
     --- @type TestStub
@@ -29,11 +31,13 @@ describe("SessionRestore", function()
             session_id = "session-1",
             title = "First chat",
             timestamp = 1704067200,
+            file_path = "/storage/p/session-1.json",
         },
         {
             session_id = "session-2",
             title = "Second chat",
             timestamp = 1704153600,
+            file_path = "/storage/p/session-2.json",
         },
     }
 
@@ -65,14 +69,18 @@ describe("SessionRestore", function()
     end
 
     local function setup_list_stub(sessions)
-        chat_history_list_stub:invokes(function(callback)
+        chat_history_list_stub:invokes(function(_cwd, callback)
             callback(sessions or test_sessions)
         end)
     end
 
+    --- Make the session file read as `history`, unchanged by `from_data`.
     local function setup_load_stub(history, err)
-        chat_history_load_stub:invokes(function(_sid, callback)
-            callback(history, err)
+        read_json_stub:invokes(function()
+            return history, err
+        end)
+        from_data_stub:invokes(function(data)
+            return data
         end)
     end
 
@@ -105,7 +113,10 @@ describe("SessionRestore", function()
         -- Force builtin picker which uses vim.fn.confirm for conflict dialogue
         Config.session_restore = { picker = "builtin" }
 
-        chat_history_load_stub = spy.stub(ChatHistory, "load")
+        read_json_stub =
+            spy.stub(require("agentic.utils.file_system"), "read_json")
+        from_data_stub = spy.stub(ChatHistory, "from_data")
+        setup_load_stub(mock_history)
         chat_history_list_stub = spy.stub(ChatHistory, "list_sessions")
         session_registry_stub = spy.stub(SessionRegistry, "create")
         target_win_stub = spy.stub(SessionRegistry, "target_win")
@@ -116,7 +127,8 @@ describe("SessionRestore", function()
     end)
 
     after_each(function()
-        chat_history_load_stub:revert()
+        read_json_stub:revert()
+        from_data_stub:revert()
         chat_history_list_stub:revert()
         session_registry_stub:revert()
         target_win_stub:revert()
@@ -149,12 +161,14 @@ describe("SessionRestore", function()
                     session_id = "s1",
                     title = "With count",
                     timestamp = 1704067200,
+                    file_path = "/storage/p/s1.json",
                     prompt_count = 5,
                 },
                 {
                     session_id = "s2",
                     title = "No count",
                     timestamp = 1704067200,
+                    file_path = "/storage/p/s2.json",
                 },
             })
             assert.equal(5, items[1].prompt_count)
@@ -167,6 +181,7 @@ describe("SessionRestore", function()
                     session_id = "s1",
                     title = "First line\nSecond line\nThird",
                     timestamp = 1704067200,
+                    file_path = "/storage/p/s1.json",
                 },
             })
             assert.is_nil(items[1].display:find("\n"))
@@ -342,6 +357,35 @@ describe("SessionRestore", function()
             assert.spy(mock_session.widget.reveal).was.called(1)
             assert.equal(TARGET_WIN, mock_session.widget.reveal.calls[1][2])
         end)
+
+        it("reads the item's file", function()
+            local mock_session = create_mock_session()
+            setup_list_stub()
+            setup_load_stub(mock_history)
+            builtin_show_stub:invokes(function(picker_items, on_select)
+                on_select(picker_items[1])
+            end)
+
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
+
+            assert.same(
+                { "/storage/p/session-1.json", n = 1 },
+                read_json_stub.calls[1]
+            )
+            assert.spy(mock_session.restore_from_history).was.called(1)
+        end)
+    end)
+
+    describe("list", function()
+        it("lists the project folder of the editor cwd", function()
+            setup_list_stub()
+
+            SessionRestore.list("local", function() end)
+
+            assert.equal(vim.fn.getcwd(), chat_history_list_stub.calls[1][1])
+        end)
     end)
 
     describe("restore with conflict", function()
@@ -394,7 +438,7 @@ describe("SessionRestore", function()
                 mock_session --[[@as agentic.SessionManager]]
             )
 
-            assert.spy(chat_history_load_stub).was.called(0)
+            assert.spy(read_json_stub).was.called(0)
         end)
 
         it(
@@ -446,10 +490,7 @@ describe("SessionRestore", function()
                     new_session.restore_from_history.calls[1][3].reuse_session
                 )
                 assert.spy(new_session.widget.reveal).was.called(1)
-                assert.equal(
-                    TARGET_WIN,
-                    new_session.widget.reveal.calls[1][2]
-                )
+                assert.equal(TARGET_WIN, new_session.widget.reveal.calls[1][2])
             end
         )
 
@@ -527,19 +568,6 @@ describe("SessionRestore", function()
             )
             assert.equal(vim.log.levels.WARN, logger_notify_stub.calls[1][2])
         end)
-
-        it("shows warning on nil history without error", function()
-            local mock_session = create_mock_session()
-            setup_list_stub()
-            setup_load_stub(nil, nil)
-
-            SessionRestore.show_picker(
-                mock_session --[[@as agentic.SessionManager]]
-            )
-
-            assert.spy(logger_notify_stub).was.called(1)
-            assert.truthy(logger_notify_stub.calls[1][1]:match("unknown error"))
-        end)
     end)
 
     describe("restore via load_acp_session", function()
@@ -576,7 +604,7 @@ describe("SessionRestore", function()
             assert.spy(mock_session.load_acp_session).was.called(1)
             assert.equal("session-1", mock_session.load_acp_session.calls[1][2])
             assert.spy(mock_session.restore_from_history).was.called(0)
-            assert.spy(chat_history_load_stub).was.called(0)
+            assert.spy(read_json_stub).was.called(0)
             assert.spy(mock_session.widget.reveal).was.called(1)
             assert.equal(TARGET_WIN, mock_session.widget.reveal.calls[1][2])
         end)
@@ -619,7 +647,7 @@ describe("SessionRestore", function()
 
         it("forwards saved model to load_acp_session", function()
             local mock_session = session_with_load_support()
-            chat_history_list_stub:invokes(function(callback)
+            chat_history_list_stub:invokes(function(_cwd, callback)
                 callback({
                     {
                         session_id = "session-1",
@@ -646,7 +674,7 @@ describe("SessionRestore", function()
             "switches Config.provider and destroys existing session when saved provider differs",
             function()
                 local mock_session = session_with_load_support()
-                chat_history_list_stub:invokes(function(callback)
+                chat_history_list_stub:invokes(function(_cwd, callback)
                     callback({
                         {
                             session_id = "session-1",

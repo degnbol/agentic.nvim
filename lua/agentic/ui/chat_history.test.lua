@@ -16,7 +16,7 @@ describe("ChatHistory", function()
     --- @type TestStub
     local write_file_stub
     --- @type TestStub
-    local read_file_stub
+    local read_from_disk_stub
     --- @type table<string, string>
     local mock_files
 
@@ -36,9 +36,13 @@ describe("ChatHistory", function()
             callback(nil)
         end)
 
-        read_file_stub = spy.stub(FileSystem, "read_file")
-        read_file_stub:invokes(function(path, _, _, callback)
-            callback(mock_files[path])
+        read_from_disk_stub = spy.stub(FileSystem, "read_from_disk")
+        read_from_disk_stub:invokes(function(path)
+            local content = mock_files[path]
+            if not content then
+                return nil, "No such file: " .. path
+            end
+            return vim.split(content, "\n"), nil
         end)
 
         local Config = require("agentic.config")
@@ -55,19 +59,36 @@ describe("ChatHistory", function()
         end
         mkdirp_stub:revert()
         write_file_stub:revert()
-        read_file_stub:revert()
+        read_from_disk_stub:revert()
         local Config = require("agentic.config")
         Config.session_restore.storage_path = original_storage_path
         package.loaded["agentic.ui.chat_history"] = nil
     end)
 
-    --- @param path string|nil
-    local function stub_cwd(path)
-        if cwd_stub then
-            cwd_stub:revert()
-        end
+    --- Make the process cwd `/other`, so a case can show that no path
+    --- comes from it.
+    local function stub_process_cwd()
         cwd_stub = spy.stub(vim.uv, "cwd")
-        cwd_stub:returns(path or TEST_CWD)
+        cwd_stub:returns("/other")
+    end
+
+    --- Make writes land on disk, in a fresh storage folder.
+    local function use_disk()
+        require("agentic.config").session_restore.storage_path =
+            vim.fn.tempname()
+        write_file_stub:invokes(function(path, content, callback)
+            vim.fn.mkdir(vim.fs.dirname(path), "p")
+            vim.fn.writefile(vim.split(content, "\n"), path)
+            callback(nil)
+        end)
+    end
+
+    --- @param session_id string
+    --- @return agentic.ui.ChatHistory
+    local function history_with_id(session_id)
+        local history = ChatHistory:new()
+        history.session_id = session_id
+        return history
     end
 
     describe("get_project_folder", function()
@@ -88,8 +109,7 @@ describe("ChatHistory", function()
             }
 
             for _, tc in ipairs(test_cases) do
-                stub_cwd(tc.path)
-                local folder = ChatHistory.get_project_folder()
+                local folder = ChatHistory.get_project_folder(tc.path)
 
                 assert.truthy(folder:match(tc.pattern))
                 assert.is_nil(folder:match("^_"))
@@ -101,13 +121,16 @@ describe("ChatHistory", function()
         end)
 
         it("produces unique hashes for different paths", function()
-            stub_cwd("/path/one")
-            local folder1 = ChatHistory.get_project_folder()
+            assert.are_not.equal(
+                ChatHistory.get_project_folder("/path/one"),
+                ChatHistory.get_project_folder("/path/two")
+            )
+        end)
 
-            stub_cwd("/path/two")
-            local folder2 = ChatHistory.get_project_folder()
-
-            assert.are_not.equal(folder1, folder2)
+        it("does not depend on the process cwd", function()
+            local before = ChatHistory.get_project_folder(TEST_CWD)
+            stub_process_cwd()
+            assert.equal(before, ChatHistory.get_project_folder(TEST_CWD))
         end)
     end)
 
@@ -115,15 +138,94 @@ describe("ChatHistory", function()
         it(
             "combines storage_path, project_folder, and session_id.json",
             function()
-                stub_cwd()
-                local path = ChatHistory.get_file_path("session-abc")
-                local project_folder = ChatHistory.get_project_folder()
+                local path = ChatHistory.get_file_path("session-abc", TEST_CWD)
+                local project_folder = ChatHistory.get_project_folder(TEST_CWD)
 
                 assert.truthy(path:match("^" .. vim.pesc("/test/storage")))
                 assert.truthy(path:find(project_folder, 1, true))
                 assert.truthy(path:match("session%-abc%.json$"))
             end
         )
+    end)
+
+    describe("find_files", function()
+        before_each(use_disk)
+
+        it("find_files lists every copy, newest first", function()
+            assert.is_nil(history_with_id("sid-m"):save("/project/a"))
+            assert.is_nil(history_with_id("sid-m"):save("/project/b"))
+            assert.is_nil(history_with_id("sid-m"):save("/project/c"))
+            local times = { ["/project/a"] = 2000, ["/project/b"] = 3000 }
+            times["/project/c"] = 1000
+            for cwd, t in pairs(times) do
+                vim.uv.fs_utime(ChatHistory.get_file_path("sid-m", cwd), t, t)
+            end
+
+            assert.same(
+                vim.tbl_map(function(cwd)
+                    return ChatHistory.get_file_path("sid-m", cwd)
+                end, { "/project/b", "/project/a", "/project/c" }),
+                ChatHistory.find_files("sid-m")
+            )
+        end)
+
+        it("finds the file in another project folder", function()
+            assert.is_nil(history_with_id("sid-a"):save("/project/a"))
+
+            assert.equal(
+                ChatHistory.get_file_path("sid-a", "/project/a"),
+                ChatHistory.find_files("sid-a")[1]
+            )
+        end)
+
+        for _, aged in ipairs({ "/project/a", "/project/b" }) do
+            it(
+                "returns the newest file when two folders hold the id, "
+                    .. aged
+                    .. " older",
+                function()
+                    assert.is_nil(history_with_id("sid-2"):save("/project/a"))
+                    assert.is_nil(history_with_id("sid-2"):save("/project/b"))
+                    vim.uv.fs_utime(
+                        ChatHistory.get_file_path("sid-2", aged),
+                        1000,
+                        1000
+                    )
+                    local newer = aged == "/project/a" and "/project/b"
+                        or "/project/a"
+
+                    assert.equal(
+                        ChatHistory.get_file_path("sid-2", newer),
+                        ChatHistory.find_files("sid-2")[1]
+                    )
+                end
+            )
+        end
+
+        it("breaks a same-second tie by nanoseconds", function()
+            assert.is_nil(history_with_id("sid-3"):save("/project/a"))
+            assert.is_nil(history_with_id("sid-3"):save("/project/b"))
+            vim.uv.fs_utime(
+                ChatHistory.get_file_path("sid-3", "/project/a"),
+                1000.2,
+                1000.2
+            )
+            vim.uv.fs_utime(
+                ChatHistory.get_file_path("sid-3", "/project/b"),
+                1000.1,
+                1000.1
+            )
+
+            assert.equal(
+                ChatHistory.get_file_path("sid-3", "/project/a"),
+                ChatHistory.find_files("sid-3")[1]
+            )
+        end)
+
+        it("returns nil for an unknown id", function()
+            assert.is_nil(history_with_id("sid-k"):save("/project/a"))
+            assert.is_nil(ChatHistory.find_files("sid-unknown")[1])
+        end)
     end)
 
     describe("prepend_restored_messages", function()
@@ -444,22 +546,30 @@ describe("ChatHistory", function()
         end)
     end)
 
-    describe("save and load", function()
-        --- @type TestStub
-        local schedule_stub
+    describe("save and read", function()
+        --- The history saved for `session_id` under `TEST_CWD`.
+        --- @param session_id string
+        --- @return agentic.ui.ChatHistory|nil history
+        --- @return string|nil err
+        local function read(session_id)
+            local data, err = FileSystem.read_json(
+                ChatHistory.get_file_path(session_id, TEST_CWD)
+            )
+            return data and ChatHistory.from_data(data), err
+        end
 
-        before_each(function()
-            stub_cwd()
-            -- `load` delivers through vim.schedule; run it inline, as a
-            -- vim.wait for it would let mini.test re-enter sibling cases.
-            schedule_stub = spy.stub(vim, "schedule")
-            schedule_stub:invokes(function(fn)
-                fn()
-            end)
-        end)
+        it("writes to the folder of cwd and records cwd", function()
+            stub_process_cwd()
+            assert.is_nil(history_with_id("sid-cwd"):save(TEST_CWD))
 
-        after_each(function()
-            schedule_stub:revert()
+            local content =
+                mock_files[ChatHistory.get_file_path("sid-cwd", TEST_CWD)]
+            assert.is_not_nil(content)
+            assert.equal(TEST_CWD, vim.json.decode(content).cwd)
+            local other_folder = ChatHistory.get_sessions_folder("/other")
+            for path in pairs(mock_files) do
+                assert.is_nil(path:find(other_folder, 1, true))
+            end
         end)
 
         it("persists and restores ChatHistory instance", function()
@@ -476,10 +586,11 @@ describe("ChatHistory", function()
             original:set_title("Test message")
             assert.is_true(original.dirty)
 
-            assert.is_nil(original:save())
+            assert.is_nil(original:save(TEST_CWD))
             assert.is_false(original.dirty)
 
-            local path = ChatHistory.get_file_path(original.session_id)
+            local path =
+                ChatHistory.get_file_path(original.session_id, TEST_CWD)
             assert.equal(1, mkdirp_stub.call_count)
             assert.equal(1, write_file_stub.call_count)
 
@@ -493,12 +604,7 @@ describe("ChatHistory", function()
             assert.equal("claude-agent-acp", parsed.provider)
             assert.equal("0.66.0", parsed.provider_version)
 
-            local loaded = nil
-            local load_err = nil
-            ChatHistory.load(original.session_id, function(history, err)
-                loaded = history
-                load_err = err
-            end)
+            local loaded, load_err = read(original.session_id)
 
             assert.is_nil(load_err)
             assert.is_not_nil(loaded)
@@ -520,13 +626,9 @@ describe("ChatHistory", function()
                 provider_name = "test-provider",
                 parent_tool_use_id = "task-1",
             })
-            assert.is_nil(original:save())
+            assert.is_nil(original:save(TEST_CWD))
 
-            --- @type agentic.ui.ChatHistory|nil
-            local loaded
-            ChatHistory.load(original.session_id, function(history)
-                loaded = history
-            end)
+            local loaded = read(original.session_id)
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(original.subagent_messages, loaded.subagent_messages)
@@ -536,13 +638,9 @@ describe("ChatHistory", function()
             local original = ChatHistory:new()
             original.session_id = "subagents-roundtrip"
             original:set_subagent_task("child-1", "toolu_1")
-            assert.is_nil(original:save())
+            assert.is_nil(original:save(TEST_CWD))
 
-            --- @type agentic.ui.ChatHistory|nil
-            local loaded
-            ChatHistory.load(original.session_id, function(history)
-                loaded = history
-            end)
+            local loaded = read(original.session_id)
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(
@@ -552,7 +650,7 @@ describe("ChatHistory", function()
         end)
 
         it("loads a file without subagents as empty", function()
-            local path = ChatHistory.get_file_path("older-agents")
+            local path = ChatHistory.get_file_path("older-agents", TEST_CWD)
             mock_files[path] = vim.json.encode({
                 session_id = "older-agents",
                 title = "",
@@ -560,18 +658,14 @@ describe("ChatHistory", function()
                 messages = {},
             })
 
-            --- @type agentic.ui.ChatHistory|nil
-            local loaded
-            ChatHistory.load("older-agents", function(history)
-                loaded = history
-            end)
+            local loaded = read("older-agents")
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same({}, loaded.subagents)
         end)
 
         it("loads a file without subagent_messages as empty", function()
-            local path = ChatHistory.get_file_path("older")
+            local path = ChatHistory.get_file_path("older", TEST_CWD)
             mock_files[path] = vim.json.encode({
                 session_id = "older",
                 title = "",
@@ -579,11 +673,7 @@ describe("ChatHistory", function()
                 messages = {},
             })
 
-            --- @type agentic.ui.ChatHistory|nil
-            local loaded
-            ChatHistory.load("older", function(history)
-                loaded = history
-            end)
+            local loaded = read("older")
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same({}, loaded.subagent_messages)
@@ -600,17 +690,12 @@ describe("ChatHistory", function()
 
             for _, tc in ipairs(test_cases) do
                 if tc.content then
-                    local path = ChatHistory.get_file_path(tc.session_id)
+                    local path =
+                        ChatHistory.get_file_path(tc.session_id, TEST_CWD)
                     mock_files[path] = tc.content
                 end
 
-                local loaded = nil
-                local load_err = nil
-
-                ChatHistory.load(tc.session_id, function(history, err)
-                    loaded = history
-                    load_err = err
-                end)
+                local loaded, load_err = read(tc.session_id)
 
                 assert.is_nil(loaded)
                 assert.is_not_nil(load_err)
@@ -619,29 +704,35 @@ describe("ChatHistory", function()
     end)
 
     describe("list_sessions", function()
-        before_each(function()
-            stub_cwd()
-        end)
+        before_each(use_disk)
 
-        it("returns empty array when no sessions exist", function()
-            local sessions = nil
-
-            ChatHistory.list_sessions(function(result)
+        --- @param cwd string
+        --- @return agentic.ui.ChatHistory.SessionMeta[]
+        local function list(cwd)
+            local sessions = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+            ChatHistory.list_sessions(cwd, function(result)
                 sessions = result
             end)
+            return sessions
+        end
 
-            assert.equal(0, #sessions)
+        it("returns empty array when no sessions exist", function()
+            assert.equal(0, #list(TEST_CWD))
+        end)
+
+        it("returns only the sessions of the folder of cwd", function()
+            assert.is_nil(history_with_id("sid-here"):save(TEST_CWD))
+            assert.is_nil(history_with_id("sid-there"):save("/project/b"))
+
+            assert.same(
+                { "sid-here" },
+                vim.tbl_map(function(s)
+                    return s.session_id
+                end, list(TEST_CWD))
+            )
         end)
 
         it("returns all saved sessions in project folder", function()
-            -- Listing reads the folder from disk, so the writes must land.
-            require("agentic.config").session_restore.storage_path =
-                vim.fn.tempname()
-            write_file_stub:invokes(function(path, content, callback)
-                vim.fn.mkdir(vim.fs.dirname(path), "p")
-                vim.fn.writefile(vim.split(content, "\n"), path)
-                callback(nil)
-            end)
             local session_ids = { "session-1", "session-2" }
 
             for _, id in ipairs(session_ids) do
@@ -654,19 +745,15 @@ describe("ChatHistory", function()
                     provider_name = "test-provider",
                 })
 
-                assert.is_nil(s:save())
+                assert.is_nil(s:save(TEST_CWD))
             end
 
-            local sessions = nil
-
-            ChatHistory.list_sessions(function(result)
-                sessions = result
-            end)
+            local sessions = list(TEST_CWD)
 
             assert.equal(2, #sessions)
 
             local ids = {}
-            for _, s in ipairs(sessions or {}) do
+            for _, s in ipairs(sessions) do
                 ids[s.session_id] = true
             end
             assert.is_true(ids["session-1"])

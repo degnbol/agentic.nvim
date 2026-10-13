@@ -7,11 +7,11 @@ describe("session/load history", function()
     before_each(function()
         child.setup()
         child.lua([[
+require("agentic.config").session_restore.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.persists = 0
 _G.s._persist_history = function() _G.persists = _G.persists + 1 end
-require("agentic.ui.chat_history").read = function() return nil end
 _G.s.agent.agent_capabilities = { loadSession = true }
 _G.s.agent._send_request = function(_, method, _, cb)
     if method == "session/load" then _G.load_cb = cb end

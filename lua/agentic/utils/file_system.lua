@@ -57,6 +57,22 @@ function FileSystem.read_from_disk(abs_path)
     return nil, (open_err or ("Failed to open file: " .. abs_path))
 end
 
+--- Read a JSON file from disk and decode it.
+--- @param abs_path string
+--- @return any|nil value nil when the file cannot be read or decoded
+--- @return string|nil error
+function FileSystem.read_json(abs_path)
+    local lines, read_err = FileSystem.read_from_disk(abs_path)
+    if not lines then
+        return nil, read_err
+    end
+    local ok, value = pcall(vim.json.decode, table.concat(lines, "\n"))
+    if not ok then
+        return nil, "JSON decode error in " .. abs_path .. ": " .. value
+    end
+    return value, nil
+end
+
 --- Read whole lines appended to a file since a byte offset.
 ---
 --- For tailing a file another process appends to: the tail may end mid-line, so

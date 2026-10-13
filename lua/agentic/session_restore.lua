@@ -1,6 +1,7 @@
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
+local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
 
@@ -10,7 +11,7 @@ local SessionRegistry = require("agentic.session_registry")
 --- @field timestamp integer
 --- @field last_activity? integer
 --- @field cwd? string
---- @field file_path? string Full path to session JSON (for cross-project access)
+--- @field file_path string Full path to the session file
 --- @field prompt_count? integer Number of user prompts
 --- @field provider? agentic.UserConfig.ProviderName config key, nil on legacy sessions
 --- @field model? string model id
@@ -109,20 +110,18 @@ local function do_restore(item, current_session, has_conflict)
             session.permission_manager:clear()
         end
 
-        ChatHistory.load(item.session_id, function(history, err)
-            if err or not history then
-                Logger.notify(
-                    "Failed to load session: " .. (err or "unknown error"),
-                    vim.log.levels.WARN
-                )
-                return
-            end
-
+        local data, err = FileSystem.read_json(item.file_path)
+        if not data then
+            Logger.notify(
+                "Failed to load session: " .. err,
+                vim.log.levels.WARN
+            )
+        else
             session:restore_from_history(
-                history,
+                ChatHistory.from_data(data),
                 { reuse_session = not has_conflict }
             )
-        end, item.file_path)
+        end
     end
 
     return session
@@ -287,15 +286,26 @@ end
 
 --- @alias agentic.SessionRestore.Scope "local"|"all"
 
+--- Sessions of `scope`: "local" is the project folder of
+--- `vim.fn.getcwd()`, "all" is every project folder. Calls `callback`
+--- before it returns.
+--- @param scope agentic.SessionRestore.Scope
+--- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
+function SessionRestore.list(scope, callback)
+    if scope == "all" then
+        ChatHistory.list_all_sessions(callback)
+    else
+        ChatHistory.list_sessions(vim.fn.getcwd(), callback)
+    end
+end
+
 --- Show session picker and restore selected session
 --- @param current_session agentic.SessionManager Session to restore into. A new one when it has ended by the time an item is picked
 --- @param scope? agentic.SessionRestore.Scope "local" (default) or "all"
 function SessionRestore.show_picker(current_session, scope)
     scope = scope or "local"
-    local list_fn = scope == "all" and ChatHistory.list_all_sessions
-        or ChatHistory.list_sessions
 
-    list_fn(function(sessions)
+    SessionRestore.list(scope, function(sessions)
         if #sessions == 0 then
             Logger.notify("No saved sessions found", vim.log.levels.INFO)
             return

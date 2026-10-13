@@ -32,19 +32,25 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- `tool_call`.
 --- @alias agentic.ui.ChatHistory.SubagentMessage agentic.ui.ChatHistory.Message
 
---- @class agentic.ui.ChatHistory.SessionMeta
+--- The id, working directory, provider and model of a session.
+--- @class agentic.ui.ChatHistory.SessionRef
 --- @field session_id string
+--- @field cwd? string Working directory of the session. The file is in the project folder of this path. Absent on legacy files
+--- @field provider? agentic.UserConfig.ProviderName config key, absent on pre-2026-04-23 sessions
+--- @field model? string model id used at last save
+
+--- The fields that a session file and its metadata share.
+--- @class agentic.ui.ChatHistory.SessionHeader : agentic.ui.ChatHistory.SessionRef
 --- @field title string
 --- @field timestamp integer
 --- @field last_activity? integer Unix timestamp of most recent save
---- @field cwd? string Working directory the session was created in
---- @field file_path? string Full path to JSON file (set by list_all_sessions)
---- @field prompt_count? integer Number of user prompts in the session
---- @field provider? agentic.UserConfig.ProviderName config key, absent on pre-2026-04-23 sessions
---- @field model? string model id used at last save
 --- @field provider_version? string provider binary version as reported in its ACP initialize response
 
---- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionMeta
+--- @class agentic.ui.ChatHistory.SessionMeta : agentic.ui.ChatHistory.SessionHeader
+--- @field file_path string Full path to the session file
+--- @field prompt_count? integer Number of user prompts in the session
+
+--- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionHeader
 --- @field messages agentic.ui.ChatHistory.Message[]
 --- @field subagent_messages? agentic.ui.ChatHistory.SubagentMessage[] Absent from files written before subagent output was saved
 --- @field subagents? table<string, agentic.ui.ChatHistory.Subagent> Absent from files written before subagents were sessions of their own
@@ -91,35 +97,64 @@ function ChatHistory:new()
     return instance
 end
 
---- Generate the project folder name from CWD
---- Normalizes path by replacing slashes, spaces, and colons with underscores
---- Appends first 8 chars of SHA256 hash for collision resistance
-function ChatHistory.get_project_folder()
-    local cwd = vim.uv.cwd() or ""
-
+--- Project folder name of `cwd`: the path with slashes, whitespace and
+--- colons as underscores and leading underscores dropped, then `_` and the
+--- first 8 hex chars of its SHA256.
+--- @param cwd string
+--- @return string folder
+function ChatHistory.get_project_folder(cwd)
     local normalized = cwd:gsub("[/\\%s:]", "_"):gsub("^_+", "")
     local hash = vim.fn.sha256(cwd):sub(1, 8)
 
     return normalized .. "_" .. hash
 end
 
---- Get the folder path for storing sessions for the current project
+--- Path of the project folder of `cwd`.
+--- @param cwd string
 --- @return string folder_path
-function ChatHistory.get_sessions_folder()
-    local base = Config.session_restore.storage_path
-        or vim.fs.joinpath(vim.fn.stdpath("cache"), "agentic", "sessions")
-    local project_folder = ChatHistory.get_project_folder()
-    return vim.fs.joinpath(base, project_folder)
+function ChatHistory.get_sessions_folder(cwd)
+    return vim.fs.joinpath(
+        ChatHistory.get_base_storage_path(),
+        ChatHistory.get_project_folder(cwd)
+    )
 end
 
---- Generate the full file path for this session's JSON file
+--- Path of the session file of `session_id` in the project folder of `cwd`.
 --- @param session_id string
+--- @param cwd string Working directory of the session
 --- @return string file_path
-function ChatHistory.get_file_path(session_id)
+function ChatHistory.get_file_path(session_id, cwd)
     return vim.fs.joinpath(
-        ChatHistory.get_sessions_folder(),
+        ChatHistory.get_sessions_folder(cwd),
         session_id .. ".json"
     )
+end
+
+--- Paths of the files of `session_id` in all project folders, newest by
+--- mtime first.
+--- @param session_id string
+--- @return string[] file_paths Empty when no folder holds one
+function ChatHistory.find_files(session_id)
+    local base = ChatHistory.get_base_storage_path()
+    local found = {} --- @type { path: string, mtime: uv.fs_stat.result.time }[]
+    for dirname, dir_type in vim.fs.dir(base) do
+        if dir_type == "directory" then
+            local path = vim.fs.joinpath(base, dirname, session_id .. ".json")
+            local stat = vim.uv.fs_stat(path)
+            if stat then
+                table.insert(found, { path = path, mtime = stat.mtime })
+            end
+        end
+    end
+    table.sort(found, function(a, b)
+        if a.mtime.sec ~= b.mtime.sec then
+            return a.mtime.sec > b.mtime.sec
+        end
+        return a.mtime.nsec > b.mtime.nsec
+    end)
+    return vim.tbl_map(function(f)
+        return f.path
+    end, found)
 end
 
 --- The list a message belongs in: `subagent_messages` for one with
@@ -250,15 +285,16 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
     end
 end
 
---- Write the history to its session file, synchronously. Clears `dirty` on
---- success.
+--- Write the history to the session file in the project folder of `cwd`,
+--- synchronously, and record `cwd` in it. Clears `dirty` on success.
+--- @param cwd string Working directory of the session
 --- @return string|nil err Why nothing was written
-function ChatHistory:save()
+function ChatHistory:save(cwd)
     if not self.session_id then
         return "No session_id set"
     end
 
-    local path = ChatHistory.get_file_path(self.session_id)
+    local path = ChatHistory.get_file_path(self.session_id, cwd)
     local dir = vim.fs.dirname(path)
 
     local dir_ok, dir_err = FileSystem.mkdirp(dir)
@@ -272,7 +308,7 @@ function ChatHistory:save()
         title = self.title,
         timestamp = self.timestamp,
         last_activity = os.time(),
-        cwd = vim.uv.cwd(),
+        cwd = cwd,
         provider = self.provider,
         provider_version = self.provider_version,
         model = self.model,
@@ -298,70 +334,24 @@ function ChatHistory:save()
     return err
 end
 
---- Read a session file, synchronously.
---- @param session_id string
---- @param file_path string|nil Override path (for cross-project sessions)
---- @return agentic.ui.ChatHistory|nil history
---- @return string|nil err Why nothing was read
-function ChatHistory.read(session_id, file_path)
-    local path = file_path or ChatHistory.get_file_path(session_id)
-
-    --- @type string|nil
-    local content
-    FileSystem.read_file(path, nil, nil, function(read)
-        content = read
-    end)
-    if not content then
-        return nil, "Failed to read file"
-    end
-
-    local ok, parsed = pcall(vim.json.decode, content)
-    if not ok then
-        Logger.debug("JSON decode failed:", parsed)
-        return nil, "JSON decode error"
-    end
-
-    --- @cast parsed agentic.ui.ChatHistory.StorageData
-
+--- A history holding the contents of a session file.
+--- @param data agentic.ui.ChatHistory.StorageData
+--- @return agentic.ui.ChatHistory history
+function ChatHistory.from_data(data)
     -- Assigned directly: a loaded history mirrors the file, so it is not
     -- dirty.
     local instance = ChatHistory:new()
-    instance.session_id = parsed.session_id
-    instance.timestamp = parsed.timestamp
-    instance.messages = parsed.messages
-    instance.subagent_messages = parsed.subagent_messages or {}
-    instance.subagents = parsed.subagents or {}
-    instance.title = parsed.title or ""
-    instance.provider = parsed.provider
-    instance.provider_version = parsed.provider_version
-    instance.model = parsed.model
-    instance.file_activity = parsed.file_activity
-    return instance, nil
-end
-
---- `read`, delivering its result on the next event-loop tick.
---- @param session_id string
---- @param callback fun(history: agentic.ui.ChatHistory|nil, err: string|nil)
---- @param file_path? string Override path (for cross-project sessions)
-function ChatHistory.load(session_id, callback, file_path)
-    local history, err = ChatHistory.read(session_id, file_path)
-    vim.schedule(function()
-        callback(history, err)
-    end)
-end
-
---- Delete a session file from disk.
---- @param session_id string
---- @return boolean success
---- @return string|nil error
-function ChatHistory.delete_session(session_id)
-    local file_path = ChatHistory.get_file_path(session_id)
-    local ok, err = os.remove(file_path)
-    if not ok then
-        Logger.debug("Failed to delete session file:", file_path, err)
-        return false, err
-    end
-    return true, nil
+    instance.session_id = data.session_id
+    instance.timestamp = data.timestamp
+    instance.messages = data.messages
+    instance.subagent_messages = data.subagent_messages or {}
+    instance.subagents = data.subagents or {}
+    instance.title = data.title or ""
+    instance.provider = data.provider
+    instance.provider_version = data.provider_version
+    instance.model = data.model
+    instance.file_activity = data.file_activity
+    return instance
 end
 
 --- Get the base storage path for all session folders.
@@ -422,10 +412,12 @@ local function read_sessions_from_folder(folder)
     return sessions
 end
 
---- List all sessions for the current project, sorted by last activity descending.
+--- List the sessions of the project folder of `cwd`, by last activity
+--- descending.
+--- @param cwd string
 --- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
-function ChatHistory.list_sessions(callback)
-    local folder = ChatHistory.get_sessions_folder()
+function ChatHistory.list_sessions(cwd, callback)
+    local folder = ChatHistory.get_sessions_folder(cwd)
 
     if vim.fn.isdirectory(folder) == 0 then
         Logger.debug("Session folder does not exist:", folder)
@@ -444,7 +436,6 @@ function ChatHistory.list_sessions(callback)
 end
 
 --- List sessions from ALL projects, sorted by last activity descending.
---- Each session includes cwd and file_path for cross-project access.
 --- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
 function ChatHistory.list_all_sessions(callback)
     local base = ChatHistory.get_base_storage_path()

@@ -4,6 +4,7 @@ local spy = require("tests.helpers.spy")
 
 local AgentModes = require("agentic.acp.agent_modes")
 local ChatHistory = require("agentic.ui.chat_history")
+local FileSystem = require("agentic.utils.file_system")
 local Config = require("agentic.config")
 local Deferred = require("tests.helpers.deferred")
 local Glyphs = require("agentic.glyphs")
@@ -699,17 +700,23 @@ describe("agentic.SessionManager", function()
             } --[[@as agentic.SessionManager]]
         end
 
+        local original_storage_path
+
         before_each(function()
             schedule_stub = spy.stub(vim, "schedule")
             schedule_stub:invokes(function(fn)
                 fn()
             end)
             exec_autocmds_stub = spy.stub(vim.api, "nvim_exec_autocmds")
+            -- A load looks up the saved file in every project folder.
+            original_storage_path = Config.session_restore.storage_path
+            Config.session_restore.storage_path = vim.fn.tempname()
         end)
 
         after_each(function()
             schedule_stub:revert()
             exec_autocmds_stub:revert()
+            Config.session_restore.storage_path = original_storage_path
         end)
 
         it(
@@ -750,7 +757,9 @@ describe("agentic.SessionManager", function()
             )
                 stashed[id] = deciders
             end
-            local read_stub = spy.stub(ChatHistory, "read")
+            local find_stub = spy.stub(ChatHistory, "find_files")
+            find_stub:returns({ "/saved/test-session-id.json" })
+            local read_stub = spy.stub(FileSystem, "read_json")
             read_stub:returns({
                 title = "",
                 messages = {
@@ -770,10 +779,65 @@ describe("agentic.SessionManager", function()
             })
 
             session:_do_load_acp_session("test-session-id", "/tmp")
+            find_stub:revert()
             read_stub:revert()
 
             assert.same({ ["tc-1"] = { "grant" } }, stashed)
+            assert.same(
+                { "/saved/test-session-id.json", n = 1 },
+                read_stub.calls[1]
+            )
         end)
+
+        it("warns when the saved file cannot be read", function()
+            local session = make_load_session()
+            local find_stub = spy.stub(ChatHistory, "find_files")
+            find_stub:returns({ "/saved/test-session-id.json" })
+            local read_stub = spy.stub(FileSystem, "read_json")
+            read_stub:invokes(function(path)
+                return nil, "JSON decode error in " .. path
+            end)
+            local notify_stub = spy.stub(Logger, "notify")
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            find_stub:revert()
+            read_stub:revert()
+            notify_stub:revert()
+
+            assert.equal(1, notify_stub.call_count)
+            local message = notify_stub.calls[1][1]
+            assert.truthy(message:find("/saved/test-session-id.json", 1, true))
+            assert.truthy(message:find("JSON decode error", 1, true))
+            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+        end)
+
+        for _, case in ipairs({
+            { given = nil, expected = "/saved/project" },
+            { given = "/given/project", expected = "/given/project" },
+        }) do
+            it(
+                "takes the cwd "
+                    .. (case.given and "given" or "of the saved file"),
+                function()
+                    local session = make_load_session()
+                    session.file_activity = { load = function() end }
+                    local find_stub = spy.stub(ChatHistory, "find_files")
+                    find_stub:returns({ "/saved/test-session-id.json" })
+                    local read_stub = spy.stub(FileSystem, "read_json")
+                    read_stub:returns({
+                        title = "",
+                        cwd = "/saved/project",
+                        messages = {},
+                    })
+
+                    session:_do_load_acp_session("test-session-id", case.given)
+                    find_stub:revert()
+                    read_stub:revert()
+
+                    assert.equal(case.expected, session._cwd)
+                end
+            )
+        end
 
         for outcome, err in pairs({
             succeeded = false,
@@ -957,6 +1021,49 @@ describe("agentic.SessionManager", function()
                 assert.is_nil(session.agent.subscribers["stale-new-sid-bbb"])
             end
         )
+
+        describe("session cwd after an editor cwd change", function()
+            --- @type TestStub
+            local getcwd_stub
+
+            --- A session at `/project/a` whose editor has moved to `/project/b`.
+            --- @return agentic.SessionManager
+            local function moved_session()
+                local session = make_load_session()
+                session.agent.create_session = function() end
+                session.new_session = SessionManager.new_session
+                session.restart_session = SessionManager.restart_session
+                session._cwd = "/project/a"
+                getcwd_stub = spy.stub(vim.fn, "getcwd")
+                getcwd_stub:returns("/project/b")
+                return session
+            end
+
+            after_each(function()
+                getcwd_stub:revert()
+            end)
+
+            it("new_session takes the editor cwd", function()
+                local session = moved_session()
+                session:new_session()
+                assert.equal("/project/b", session._cwd)
+            end)
+
+            it("new_session in restore mode keeps the session cwd", function()
+                local session = moved_session()
+                session:new_session({ restore_mode = true })
+                assert.equal("/project/a", session._cwd)
+            end)
+
+            it(
+                "restart_session with no messages keeps the session cwd",
+                function()
+                    local session = moved_session()
+                    session:restart_session()
+                    assert.equal("/project/a", session._cwd)
+                end
+            )
+        end)
     end)
 
     describe("_generate_welcome_header", function()
@@ -1738,20 +1845,27 @@ describe("agentic.SessionManager", function()
         local PLAN_EXIT_BLOCK = { kind = "switch_mode", argument = "Normal" }
 
         --- @param block table|nil Tracker for the requesting tool call
+        --- @param new_session fun()|nil Stub for `session.new_session`
         --- @return agentic.acp.RequestPermission request as add_request saw it
-        local function request_for(block)
+        --- @return fun(option_id: string) choose What a pick in the prompt calls
+        local function request_for(block, new_session)
             --- @type agentic.acp.RequestPermission
             local seen
+            --- @type fun(option_id: string)
+            local choose
             --- @type agentic.SessionManager
             local session = {
                 status_indicator = { stop = function() end },
                 message_writer = { tool_call_blocks = { ["tc-plan"] = block } },
                 _agents = {},
                 _tool_call_owner = {},
+                _last_edited_md = "/project/plan.md",
                 _writer_for = SessionManager._writer_for,
+                new_session = new_session,
                 permission_manager = {
-                    add_request = function(_self, request)
+                    add_request = function(_self, request, callback)
                         seen = request
+                        choose = callback
                         return false
                     end,
                 },
@@ -1769,7 +1883,7 @@ describe("agentic.SessionManager", function()
                 },
             }, function() end)
 
-            return seen
+            return seen, choose
         end
 
         it("offers to clear context and implement the plan", function()
@@ -1777,6 +1891,18 @@ describe("agentic.SessionManager", function()
 
             assert.equal(2, #options)
             assert.equal("plan_implement", options[2].kind)
+        end)
+
+        it("implements the plan in the session's cwd", function()
+            local new_session = spy.new(function() end)
+            local request, choose = request_for(PLAN_EXIT_BLOCK, new_session)
+            local deferred = Deferred.capture()
+
+            choose(request.options[2].optionId)
+            deferred.drain()
+            deferred.revert()
+
+            assert.is_true(new_session.calls[1][2].keep_cwd)
         end)
 
         it("leaves other tool calls' options alone", function()
@@ -4350,7 +4476,7 @@ describe("agentic.SessionManager", function()
         end)
 
         describe("/delete", function()
-            local confirm_stub, delete_file_stub, notify_stub
+            local confirm_stub, find_files_stub, delete_file_stub, notify_stub
 
             before_each(function()
                 session._delete_session = SessionManager._delete_session
@@ -4359,13 +4485,16 @@ describe("agentic.SessionManager", function()
                 end
                 session._advance_session_epoch = function() end
                 confirm_stub = spy.stub(vim.fn, "confirm")
-                delete_file_stub = spy.stub(ChatHistory, "delete_session")
+                find_files_stub = spy.stub(ChatHistory, "find_files")
+                find_files_stub:returns({ "/saved/sid.json" })
+                delete_file_stub = spy.stub(os, "remove")
                 delete_file_stub:returns(true)
                 notify_stub = spy.stub(Logger, "notify")
             end)
 
             after_each(function()
                 confirm_stub:revert()
+                find_files_stub:revert()
                 delete_file_stub:revert()
                 notify_stub:revert()
             end)
@@ -4376,9 +4505,66 @@ describe("agentic.SessionManager", function()
                 submit("/delete", { "foo", "bar" })
 
                 assert.equal(1, delete_file_stub.call_count)
+                assert.same(
+                    { "/saved/sid.json", n = 1 },
+                    delete_file_stub.calls[1]
+                )
                 assert.spy(dispatch_spy).was.called(0)
                 assert.equal(0, #queued)
                 assert.is_true(errors[1]:match("^/delete: 2 queued") ~= nil)
+            end)
+
+            it("removes every copy of the session file", function()
+                confirm_stub:returns(1)
+                find_files_stub:returns({ "/a/sid.json", "/b/sid.json" })
+
+                submit("/delete", {})
+
+                assert.same(
+                    { "/a/sid.json", "/b/sid.json" },
+                    vim.tbl_map(function(call)
+                        return call[1]
+                    end, delete_file_stub.calls)
+                )
+            end)
+
+            it("reports a copy that cannot be removed", function()
+                confirm_stub:returns(1)
+                find_files_stub:returns({ "/a/sid.json", "/b/sid.json" })
+                delete_file_stub:invokes(function(path)
+                    if path == "/b/sid.json" then
+                        return false, "Permission denied"
+                    end
+                    return true
+                end)
+                local written = spy.new(function() end)
+                session.message_writer.write_message = written
+                session._finalize_turn = function() end
+
+                submit("/delete", {})
+
+                assert.equal("s-1", session.session_id)
+                local text = written.calls[1][2].content.text
+                assert.truthy(
+                    text:find("/b/sid.json: Permission denied", 1, true)
+                )
+                assert.truthy(text:find("removed 1 of 2 files", 1, true))
+            end)
+
+            it("reports a session with no saved file", function()
+                confirm_stub:returns(1)
+                find_files_stub:returns({})
+                local written = spy.new(function() end)
+                session.message_writer.write_message = written
+                session._finalize_turn = function() end
+
+                submit("/delete", {})
+
+                assert.equal(0, delete_file_stub.call_count)
+                local text = written.calls[1][2].content.text
+                assert.truthy(
+                    text:find("No saved file for this session", 1, true)
+                )
             end)
 
             it("resumes the sequence when declined", function()

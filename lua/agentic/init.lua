@@ -171,7 +171,7 @@ end
 --- session already holds `session_id`, show its chat instead.
 --- @param session_id string
 --- @param cwd? string Original working directory for the session (from JSONL).
----   Falls back to vim.fn.getcwd() if nil.
+---   When nil, the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id saved with the session.
 --- @param mods? vim.api.keyset.cmd_mods Command modifiers. A split or tab modifier shows the chat in a new window.
 function Agentic.load_acp_session(session_id, cwd, model, mods)

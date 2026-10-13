@@ -99,7 +99,7 @@ end
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _pending_load_cwd? string CWD for the deferred session/load
---- @field _cwd string Working directory of the ACP session
+--- @field _cwd string Working directory of the ACP session. Also selects the project folder of its session file
 --- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
 --- @field _budget? agentic.acp.RateLimitInfo Last known subscription rate-limit budget (claude.ai auth only)
@@ -240,7 +240,7 @@ function SessionManager:_persist_history(history)
     end
 
     self:_sync_history_context(history)
-    local save_err = history:save()
+    local save_err = history:save(self._cwd)
     if save_err then
         -- Not a debug-only line: this is the write that makes a conversation
         -- survive a crash, so a failure has to reach whoever would otherwise
@@ -381,7 +381,7 @@ function SessionManager:new()
                 self:_do_load_acp_session(sid, pending_cwd, pending_model)
             elseif not self._restoring then
                 -- Skip auto-new_session if restore_from_history was called
-                self:new_session()
+                self:new_session({ keep_cwd = true })
             end
         end)
     end)
@@ -1857,8 +1857,27 @@ function SessionManager:_delete_session()
     local session_id = self.session_id --[[@as string]]
 
     local function do_delete()
-        local ok, err = ChatHistory.delete_session(session_id)
-        if ok then
+        local paths = ChatHistory.find_files(session_id)
+        local failures = {} --- @type string[]
+        for _, path in ipairs(paths) do
+            local ok, err = os.remove(path)
+            if not ok then
+                table.insert(failures, path .. ": " .. (err or "unknown error"))
+            end
+        end
+        --- @type string|nil
+        local problem
+        if #paths == 0 then
+            problem = "No saved file for this session"
+        elseif #failures > 0 then
+            problem = string.format(
+                "removed %d of %d files; %s",
+                #paths - #failures,
+                #paths,
+                table.concat(failures, "; ")
+            )
+        end
+        if not problem then
             self:_cancel_session()
             -- Deleting is the one transition with no new_session after it, so
             -- nothing else supersedes the callbacks left in flight: a turn
@@ -1873,10 +1892,7 @@ function SessionManager:_delete_session()
         else
             self.message_writer:write_message(
                 ACPPayloads.generate_agent_message(
-                    string.format(
-                        "Failed to delete session: %s",
-                        err or "unknown error"
-                    )
+                    "Failed to delete session: " .. problem
                 )
             )
             self:_finalize_turn()
@@ -2274,6 +2290,7 @@ function SessionManager:_on_request_permission(request, callback)
             -- Defer to avoid re-entrancy with PermissionManager cleanup
             vim.schedule(function()
                 self:new_session({
+                    keep_cwd = true,
                     on_created = function()
                         if plan_path then
                             self:_handle_input_submit(
@@ -3825,7 +3842,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
 end
 
 --- Create a new session, optionally cancelling any existing one
---- @param opts {restore_mode?: boolean, quiet_welcome?: boolean, on_created?: fun()}|nil
+--- @param opts {restore_mode?: boolean, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun()}|nil `keep_cwd` keeps `_cwd` instead of taking the editor cwd. `restore_mode` implies it
 function SessionManager:new_session(opts)
     opts = opts or {}
     local restore_mode = opts.restore_mode or false
@@ -3863,7 +3880,9 @@ function SessionManager:new_session(opts)
     self:_advance_session_epoch()
     local epoch = self._session_epoch
 
-    self._cwd = vim.fn.getcwd()
+    if not (restore_mode or opts.keep_cwd) then
+        self._cwd = vim.fn.getcwd()
+    end
     self.agent:create_session(self._cwd, handlers, function(response, err)
         -- Provider-switch restore: this SessionManager may have been destroyed
         -- (by align_provider_for_restore) while session/new was in flight on
@@ -3990,7 +4009,7 @@ end
 --- until the on_ready callback fires.
 --- @param session_id string Full UUID of the session to load
 --- @param cwd? string Original working directory for the session.
----   Falls back to vim.fn.getcwd() if nil.
+---   When nil, the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id saved with the session, applied after load
 function SessionManager:load_acp_session(session_id, cwd, model)
     if self.agent and self.agent.agent_capabilities then
@@ -4005,9 +4024,29 @@ function SessionManager:load_acp_session(session_id, cwd, model)
     end
 end
 
+--- The contents of the newest saved file of `session_id`. Notifies when a
+--- file exists but cannot be read.
+--- @param session_id string
+--- @return agentic.ui.ChatHistory.StorageData|nil data nil when there is no readable file
+local function read_saved_session(session_id)
+    local path = ChatHistory.find_files(session_id)[1]
+    if not path then
+        return nil
+    end
+    local data, err = FileSystem.read_json(path)
+    if not data then
+        Logger.notify(
+            "Failed to read saved session: " .. err,
+            vim.log.levels.WARN
+        )
+    end
+    return data
+end
+
 --- Internal: actually send session/load after the agent is ready.
 --- @param session_id string
---- @param cwd? string Original working directory for the session.
+--- @param cwd? string Original working directory for the session. When nil,
+---   the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id to reapply after load (queued until options arrive).
 function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- Prevent the constructor's deferred on-ready callback from calling
@@ -4068,7 +4107,10 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.session_id = session_id
     self.chat_history.session_id = session_id
     self.chat_history.timestamp = os.time()
-    self._cwd = cwd or vim.fn.getcwd()
+    local saved_data = read_saved_session(session_id)
+    self._cwd = cwd and FileSystem.canonical_path(cwd)
+        or saved_data and saved_data.cwd
+        or vim.fn.getcwd()
     self:_apply_default_grants()
     vim.api.nvim_exec_autocmds("User", {
         pattern = "AgenticSessionChanged",
@@ -4080,7 +4122,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- The title, file tally and subagent output come from the file, not the
     -- replay. Assigned directly: values read from the file leave the history
     -- clean.
-    local saved_history = ChatHistory.read(session_id)
+    local saved_history = saved_data and ChatHistory.from_data(saved_data)
     if saved_history then
         if saved_history.title ~= "" then
             self.chat_history.title = saved_history.title
@@ -4573,7 +4615,7 @@ function SessionManager:restart_session()
 
     if #saved_history.messages == 0 then
         -- Nothing to restore — just create a fresh session
-        self:new_session()
+        self:new_session({ keep_cwd = true })
         return
     end
 

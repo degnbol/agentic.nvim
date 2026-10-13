@@ -1,4 +1,3 @@
-local ChatHistory = require("agentic.ui.chat_history")
 local Logger = require("agentic.utils.logger")
 local SessionRestore = require("agentic.session_restore")
 
@@ -49,11 +48,8 @@ function M.show(items, on_select, opts)
     --- Reload items after scope change or deletion.
     local function refresh_items()
         local show_cwd = scope == "all"
-        local list_fn = scope == "all" and ChatHistory.list_all_sessions
-            or ChatHistory.list_sessions
 
-        -- list_sessions/list_all_sessions are synchronous under the hood
-        list_fn(function(sessions)
+        SessionRestore.list(scope, function(sessions)
             items =
                 SessionRestore.build_items(sessions, { show_cwd = show_cwd })
         end)
@@ -77,10 +73,8 @@ function M.show(items, on_select, opts)
             return preview_cache[item.session_id]
         end
 
-        local file_path = item.file_path
-            or ChatHistory.get_file_path(item.session_id)
         -- vim.fn.readfile: no API equivalent
-        local content = vim.fn.readfile(file_path)
+        local content = vim.fn.readfile(item.file_path)
         if #content == 0 then
             return "Empty session file"
         end
@@ -131,9 +125,7 @@ function M.show(items, on_select, opts)
                     if not item then
                         return
                     end
-                    local file_path = item.file_path
-                        or ChatHistory.get_file_path(item.session_id)
-                    local ok, err = os.remove(file_path)
+                    local ok, err = os.remove(item.file_path)
                     if ok then
                         for i, it in ipairs(items) do
                             if it.session_id == item.session_id then

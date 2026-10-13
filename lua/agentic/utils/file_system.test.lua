@@ -259,6 +259,35 @@ describe("FileSystem", function()
         end)
     end)
 
+    describe("read_json", function()
+        it("decodes the file", function()
+            local path = vim.fn.tempname()
+            vim.fn.writefile({ '{"a": [1, 2],', '"b": "x"}' }, path)
+
+            assert.same(
+                { { a = { 1, 2 }, b = "x" } },
+                { FileSystem.read_json(path) }
+            )
+        end)
+
+        it("returns an error for a missing file", function()
+            local value, err = FileSystem.read_json(vim.fn.tempname())
+
+            assert.is_nil(value)
+            assert.is_not_nil(err)
+        end)
+
+        it("returns an error naming the file for invalid JSON", function()
+            local path = vim.fn.tempname()
+            vim.fn.writefile({ "not json {{{" }, path)
+
+            local value, err = FileSystem.read_json(path)
+
+            assert.is_nil(value)
+            assert.truthy((err or ""):find(path, 1, true))
+        end)
+    end)
+
     describe("save_to_disk", function()
         it("writes content to file", function()
             local tmp = os.tmpname()

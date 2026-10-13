@@ -49,7 +49,7 @@ Log paths: `.local/agentic_{luals,selene,helptags,test}_output.log`
 
 ## Session cache location
 
-Persisted chat sessions: `~/.cache/nvim/agentic/sessions/<normalized-cwd>_<hash>/<session-id>.json`.
+Persisted chat sessions: `~/.cache/nvim/agentic/sessions/<normalized-session-cwd>_<hash>/<session-id>.json` (the session's own cwd, not the editor's).
 Grep by `"title":"<name>"` to find a session renamed via `/rename` across all projects.
 
 ## Chat-buffer rendering and folding

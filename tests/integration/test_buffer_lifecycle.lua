@@ -63,7 +63,7 @@ _G.s:_history_changed(_G.s.chat_history)
     --- @return boolean
     local function session_file_exists()
         return child.lua_get([[
-vim.uv.fs_stat(require("agentic.ui.chat_history").get_file_path("sid-1")) ~= nil
+vim.uv.fs_stat(require("agentic.ui.chat_history").get_file_path("sid-1", _G.s._cwd)) ~= nil
 ]])
     end
 
@@ -550,7 +550,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
         --- @return string
         local function session_file()
             return child.lua_get([[table.concat(vim.fn.readfile(
-    require("agentic.ui.chat_history").get_file_path("sid-1")
+    require("agentic.ui.chat_history").get_file_path("sid-1", _G.s._cwd)
 ), "\n")]])
         end
 

@@ -327,7 +327,8 @@ _G.saved.subagent_messages = {
     { type = "agent", text = "legacy finding", provider_name = "p",
       parent_tool_use_id = "toolu_old" },
 }
-assert(_G.saved:save() == nil)
+-- The folder that the load at "/tmp" saves to.
+assert(_G.saved:save(vim.uv.fs_realpath("/tmp")) == nil)
 ]])
         child.flush()
     end)
@@ -370,7 +371,7 @@ _G.mid_modified = vim.bo[_G.s.widget.buf_nrs.chat].modified
     or vim.bo[_G.transcript("c1").bufnr].modified
 _G.s:_persist_history(_G.s.chat_history)
 _G.mid_file = table.concat(vim.fn.readfile(
-    require("agentic.ui.chat_history").get_file_path("sid-x")
+    require("agentic.ui.chat_history").get_file_path("sid-x", _G.s._cwd)
 ), "\n")
 ]])
 
@@ -421,11 +422,13 @@ end
 
     it("load then save keeps subagents", function()
         load()
-        child.lua([[assert(_G.s.chat_history:save() == nil)]])
+        child.lua([[assert(_G.s.chat_history:save(_G.s._cwd) == nil)]])
 
         assert.same(
             { c1 = { task_id = "toolu_1" } },
-            child.lua_get([[require("agentic.ui.chat_history").read("sid-x").subagents]])
+            child.lua_get([[require("agentic.utils.file_system").read_json(
+    require("agentic.ui.chat_history").get_file_path("sid-x", _G.s._cwd)
+).subagents]])
         )
     end)
 

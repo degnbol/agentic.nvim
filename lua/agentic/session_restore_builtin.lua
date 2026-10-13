@@ -1,7 +1,6 @@
 --- Fallback session picker using quickfix window (no external deps).
 --- Keymaps: <CR> restore, dd delete, u undo delete, <Tab> toggle scope, q close.
 --- Deletions are deferred — files are removed from disk only when the picker closes.
-local ChatHistory = require("agentic.ui.chat_history")
 local Logger = require("agentic.utils.logger")
 local SessionRestore = require("agentic.session_restore")
 
@@ -65,9 +64,7 @@ local function commit_deletes(pending)
     end
     local deleted, failed = 0, 0
     for _, entry in ipairs(pending) do
-        local fp = entry.item.file_path
-            or ChatHistory.get_file_path(entry.item.session_id)
-        if os.remove(fp) then
+        if os.remove(entry.item.file_path) then
             deleted = deleted + 1
         else
             failed = failed + 1
