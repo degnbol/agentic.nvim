@@ -1088,6 +1088,29 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_get_system_info", function()
+        --- @param shell string|nil
+        --- @return string
+        local function system_info(shell)
+            local session = {
+                agent = {
+                    exec_shell = function()
+                        return shell
+                    end,
+                },
+            } --[[@as agentic.SessionManager]]
+            return SessionManager._get_system_info(session)
+        end
+
+        it("names the agent's shell", function()
+            assert.truthy(system_info("zsh"):find("\n- Shell: zsh\n", 1, true))
+        end)
+
+        it("leaves out the Shell line for an unknown shell", function()
+            assert.is_nil(system_info(nil):find("Shell:", 1, true))
+        end)
+    end)
+
     describe("model announce", function()
         --- @param models table<string, agentic.acp.ConfigOption.Option>
         local function make_session(models)
@@ -3855,8 +3878,14 @@ describe("agentic.SessionManager", function()
                 kind = "execute",
                 argument = "grep x f",
                 status = "pending",
+                shell = "zsh",
             })
         end
+
+        it("records the call's shell in history", function()
+            tool_call("tc-1")
+            assert.equal("zsh", session.chat_history.messages[1].shell)
+        end)
 
         --- @return string footer The last line of the chat that holds a status
         local function footer()

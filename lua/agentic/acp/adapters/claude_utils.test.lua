@@ -54,6 +54,56 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
+    describe("exec_shell", function()
+        local orig_shell
+        local orig_code_shell
+
+        before_each(function()
+            orig_shell = vim.env.SHELL
+            orig_code_shell = vim.env.CLAUDE_CODE_SHELL
+            vim.env.SHELL = nil
+            vim.env.CLAUDE_CODE_SHELL = nil
+        end)
+
+        after_each(function()
+            vim.env.SHELL = orig_shell
+            vim.env.CLAUDE_CODE_SHELL = orig_code_shell
+        end)
+
+        it("prefers CLAUDE_CODE_SHELL over SHELL", function()
+            vim.env.CLAUDE_CODE_SHELL = "/bin/zsh"
+            vim.env.SHELL = "/bin/bash"
+            assert.equal("zsh", ClaudeUtils.exec_shell(nil))
+        end)
+
+        it("falls back to SHELL when no override", function()
+            vim.env.SHELL = "/bin/bash"
+            assert.equal("bash", ClaudeUtils.exec_shell(nil))
+        end)
+
+        it("returns nil for a SHELL naming an unknown shell", function()
+            vim.env.SHELL = "/usr/bin/fish"
+            assert.is_nil(ClaudeUtils.exec_shell(nil))
+        end)
+
+        it("returns nil for a known shell that is not executable", function()
+            vim.env.SHELL = "/nonexistent/bash"
+            assert.is_nil(ClaudeUtils.exec_shell(nil))
+        end)
+
+        it("returns nil when SHELL is unset and no override", function()
+            assert.is_nil(ClaudeUtils.exec_shell({}))
+        end)
+
+        it("reads the provider env over the editor's", function()
+            vim.env.SHELL = "/bin/zsh"
+            assert.equal(
+                "bash",
+                ClaudeUtils.exec_shell({ SHELL = "/bin/bash" })
+            )
+        end)
+    end)
+
     describe("session files", function()
         local session_id = "0b8f5c2e-1111-2222-3333-444455556666"
         --- @type string

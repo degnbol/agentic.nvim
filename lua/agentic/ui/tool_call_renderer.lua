@@ -3,7 +3,6 @@ local ToolCallDiff = require("agentic.ui.tool_call_diff")
 local Ansi = require("agentic.utils.ansi")
 local Config = require("agentic.config")
 local DiffHighlighter = require("agentic.utils.diff_highlighter")
-local ExecShell = require("agentic.utils.exec_shell")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
@@ -405,16 +404,6 @@ function M.safe_fence(body_lines)
         longest = math.max(longest, longest_backtick_run(line))
     end
     return string.rep("`", math.max(3, longest + 1))
-end
-
---- Language label for the execute command fence — the exec shell the provider
---- runs commands in (`ExecShell.resolve`), matching `environment_info`.
---- Cosmetic only. The zsh parser is aliased to "bash", so highlighting is
---- identical regardless of the label, which is only visible at conceallevel=0;
---- "bash" on an unprovable (`nil`) resolve keeps the label from going blank.
---- @return string
-local function shell_lang()
-    return ExecShell.resolve() or "bash"
 end
 
 --- Fence info-string for a shell command. Normally the shell label, but the
@@ -922,9 +911,13 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local head_name = (description and description ~= "")
                 and vim.split(description, "\n", { plain = true })[1]
             or ""
+        -- The shell label is cosmetic: the zsh parser is aliased to "bash", so
+        -- highlighting is identical either way and the label only shows at
+        -- conceallevel=0. "bash" keeps it from going blank on an unknown shell.
         lines = {
             collapsed_header(kind, head_name, wrap_width, true),
-            fence .. shell_fence_lang(argument, shell_lang()),
+            fence
+                .. shell_fence_lang(argument, tool_call_block.shell or "bash"),
         }
         vim.list_extend(lines, cmd_lines)
         table.insert(lines, fence)

@@ -156,13 +156,11 @@ from `rawInput`; see "Edit diffs come from `content[]`".
 Execute tool calls render their command inside a markdown fenced code block
 instead of inline in the header. This lets the markdown treesitter parser inject
 shell syntax highlighting automatically via its built-in injection queries. The
-fence label comes from `shell_lang()` = `ExecShell.resolve()`, the exec shell the
-provider runs commands in (SDK precedence: `$CLAUDE_CODE_SHELL` then `$SHELL`,
-basename bash/zsh and executable — `claude` skill's `references/execute-tool.md`
-§ Shell; `nil` path-search branch renders as `bash`). `resolve()` is the single
-source of truth, shared with `environment_info` and the permissions arithmetic
-gate. The label is cosmetic: the zsh treesitter parser is aliased to `bash` via
-`vim.treesitter.language.register("zsh", "bash")`, so highlighting is identical
+fence label is the block's `shell`, stamped from `ACPClient:exec_shell()` (nil
+by default; the claude adapter overrides it), shared with `environment_info`;
+`nil` renders as `bash`. The label is cosmetic: the zsh treesitter parser is
+aliased to `bash` via `vim.treesitter.language.register("zsh", "bash")`, so
+highlighting is identical
 regardless and the literal word is only visible at conceallevel=0.
 
 Commands are formatted for readability using an external formatter (`shfmt` by
@@ -183,7 +181,7 @@ in a literal-backtick grep). Two consequences the adapter fixes
    seeds the body and accumulates ahead of the output behind a `---` divider
    (see body-accumulation in `update_tool_call_block`). The adapter moves it to
    `ToolCallBase.description`, which the renderer prints as a Comment-highlighted
-   line directly under `### Execute`, above the command fence (see `shell_lang()`).
+   line directly under `### Execute`, above the command fence.
 2. **The bridge's console fence is stripped.** `ClaudeShared.strip_console_fence`
    removes the ` ```console … ``` ` wrapper at the source. Without it `safe_fence`
    widens the outer fence to four backticks around the bridge's inner three,
@@ -215,7 +213,7 @@ is dropped from the body (the description is read from `rawInput.description`).
 All kinds:    "### Read"                   (heading — ### is @punctuation.special, kind is TOOL_KIND)
               "`/tmp/file.txt`"            (argument on next line, TOOL_ARGUMENT highlight)
 Execute:      "### Execute"                (heading only, no argument line)
-              ```zsh                       (code fence, label from $SHELL — treesitter injection)
+              ```zsh                       (code fence, label from `shell` — treesitter injection)
               ls -la /tmp
               ```
 ```

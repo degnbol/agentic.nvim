@@ -196,6 +196,39 @@ function M.config_dir(env)
         or vim.fs.normalize("~/.claude")
 end
 
+local KNOWN_SHELLS = { bash = true, zsh = true }
+
+--- The basename of `path` if it names bash or zsh and `path` is executable.
+--- @param path string|nil
+--- @return "bash"|"zsh"|nil
+local function known_executable_shell(path)
+    if not path or path == "" then
+        return nil
+    end
+    local base = vim.fs.basename(path)
+    if not KNOWN_SHELLS[base] or vim.fn.executable(path) == 0 then
+        return nil
+    end
+    return base
+end
+
+--- The shell the SDK runs commands in: `$CLAUDE_CODE_SHELL`, else `$SHELL`,
+--- each taken only when it names an executable bash or zsh.
+---
+--- Replicates the precedence of the SDK's `findSuitableShell()`
+--- (`src/utils/Shell.ts`, see the `claude` skill's
+--- `references/execute-tool.md` § Shell). Its last branch, a path search
+--- preferring zsh then bash, cannot be proven client-side.
+--- @param env table<string,string>|nil Provider env, overlaid on the editor's environment
+--- @return "bash"|"zsh"|nil shell Nil when the SDK falls through to its path search
+function M.exec_shell(env)
+    local function child_env(key)
+        return env and env[key] or vim.env[key]
+    end
+    return known_executable_shell(child_env("CLAUDE_CODE_SHELL"))
+        or known_executable_shell(child_env("SHELL"))
+end
+
 --- The directory Claude Code keeps a session's side files in,
 --- `<config_dir>/projects/<project>/<session_id>`, whichever project it is
 --- under.

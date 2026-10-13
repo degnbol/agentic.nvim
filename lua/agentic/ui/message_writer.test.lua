@@ -24,8 +24,6 @@ describe("agentic.ui.MessageWriter", function()
     --- @type agentic.UserConfig.Follow|nil
     local original_follow
     local original_tool_call_display
-    local original_shell
-    local original_code_shell
 
     before_each(function()
         -- Re-acquire in case a prior test replaced the module in package.loaded
@@ -34,13 +32,6 @@ describe("agentic.ui.MessageWriter", function()
         original_tool_call_display = vim.deepcopy(Config.tool_call_display)
         -- Disable external formatter for deterministic fallback tests
         Config.tool_call_display.execute_formatter = false
-        -- Pin the shell so the execute fence label is deterministic — the
-        -- renderer resolves it via ExecShell (CLAUDE_CODE_SHELL then $SHELL,
-        -- executable & bash/zsh). Use real, executable paths.
-        original_shell = vim.env.SHELL
-        original_code_shell = vim.env.CLAUDE_CODE_SHELL
-        vim.env.CLAUDE_CODE_SHELL = nil
-        vim.env.SHELL = "/bin/bash"
         MessageWriter = require("agentic.ui.message_writer")
 
         bufnr = vim.api.nvim_create_buf(false, true)
@@ -60,8 +51,6 @@ describe("agentic.ui.MessageWriter", function()
     after_each(function()
         Config.follow = original_follow --- @diagnostic disable-line: assign-type-mismatch
         Config.tool_call_display = original_tool_call_display
-        vim.env.SHELL = original_shell
-        vim.env.CLAUDE_CODE_SHELL = original_code_shell
         if winid and vim.api.nvim_win_is_valid(winid) then
             vim.api.nvim_win_close(winid, true)
         end
@@ -2764,11 +2753,26 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("```", lines[7])
         end)
 
-        it("labels the execute fence with the shell from $SHELL", function()
-            vim.env.SHELL = "/bin/zsh"
+        it("labels the execute fence with the block's shell", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "exec-zsh",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la /tmp",
+                body = { "total 16" },
+                shell = "zsh",
+            }
+
+            local lines, _ = Renderer.prepare_block_lines(block, 80)
+
+            assert.equal("```zsh", lines[2])
+        end)
+
+        it("labels the fence bash without a shell", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-unknown",
                 status = "pending",
                 kind = "execute",
                 argument = "ls -la /tmp",
@@ -2777,7 +2781,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local lines, _ = Renderer.prepare_block_lines(block, 80)
 
-            assert.equal("```zsh", lines[2])
+            assert.equal("```bash", lines[2])
         end)
 
         it(

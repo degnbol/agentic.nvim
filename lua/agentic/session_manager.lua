@@ -13,7 +13,6 @@ local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local DiffJump = require("agentic.ui.diff_jump")
-local ExecShell = require("agentic.utils.exec_shell")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local GrantSafety = require("agentic.utils.grant_safety")
@@ -1988,6 +1987,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         status = tool_call.status,
         argument = tool_call.argument,
         description = tool_call.description,
+        shell = tool_call.shell,
         body = tool_call.body,
         diff = tool_call.diff,
         skill_path = tool_call.skill_path,
@@ -4442,26 +4442,21 @@ function SessionManager:_get_system_info()
     local os_name = vim.uv.os_uname().sysname
     local os_version = vim.uv.os_uname().release
     local os_machine = vim.uv.os_uname().machine
-    -- The exec shell the provider actually runs commands in (bare name, not a
-    -- path), resolved as claude-agent-acp's SDK does; "bash" on an unprovable
-    -- resolve. See ExecShell.resolve / the `claude` skill's execute-tool.md.
-    local shell = ExecShell.resolve() or "bash"
+    local shell = self.agent:exec_shell()
     local neovim_version = tostring(vim.version())
     local today = os.date("%Y-%m-%d")
 
-    local res = string.format(
-        [[
-- Platform: %s-%s-%s
-- Shell: %s
-- Editor: Neovim %s
-- Current date: %s]],
-        os_name,
-        os_version,
-        os_machine,
-        shell,
-        neovim_version,
-        today
-    )
+    local res =
+        string.format("- Platform: %s-%s-%s", os_name, os_version, os_machine)
+    if shell then
+        res = res .. "\n- Shell: " .. shell
+    end
+    res = res
+        .. string.format(
+            "\n- Editor: Neovim %s\n- Current date: %s",
+            neovim_version,
+            today
+        )
 
     local project_root = vim.uv.cwd()
 

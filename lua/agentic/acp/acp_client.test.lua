@@ -27,6 +27,27 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    describe("exec shell", function()
+        it("is unknown by default", function()
+            local client = setmetatable({}, { __index = ACPClient })
+            assert.is_nil(client:exec_shell())
+        end)
+
+        it("stamps the shell on every tool call message", function()
+            local client = setmetatable({}, { __index = ACPClient })
+            function client:exec_shell()
+                return "zsh"
+            end
+            local msg = client:__build_tool_call_message({
+                toolCallId = "tc-1",
+                kind = "read",
+                status = "pending",
+                title = "f.lua",
+            })
+            assert.equal("zsh", msg.shell)
+        end)
+    end)
+
     describe("_build_claude_options", function()
         --- Matcher of each PreToolUse entry in the built options.
         --- @param force_background boolean

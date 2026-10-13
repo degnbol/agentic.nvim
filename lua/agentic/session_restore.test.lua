@@ -924,6 +924,33 @@ describe("SessionRestore", function()
             )
         end)
 
+        it("replays the shell of an execute call", function()
+            local write_tool_spy = spy.new(function() end)
+
+            local writer = {
+                write_message = spy.new(function() end),
+                write_message_chunk = spy.new(function() end),
+                write_tool_call_block = write_tool_spy,
+                flush_thought_run = spy.new(function() end),
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "tool_call",
+                        tool_call_id = "t-exec",
+                        kind = "execute",
+                        argument = "ls",
+                        status = "completed",
+                        shell = "zsh",
+                    },
+                }
+            )
+
+            assert.equal("zsh", write_tool_spy.calls[1][2].shell)
+        end)
+
         it("replays what decided a call's permission", function()
             local write_tool_spy = spy.new(function() end)
 

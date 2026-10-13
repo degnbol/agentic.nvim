@@ -114,7 +114,7 @@ the fence is set per kind:
 
 | Site | Info string | Notes |
 | --- | --- | --- |
-| Execute command (argument fence) | `shell_lang()` — basename of `$SHELL` (e.g. `zsh`), `bash` fallback | Cosmetic; zsh parser is aliased to `bash`, identical highlighting |
+| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback | Cosmetic; zsh parser is aliased to `bash`, identical highlighting |
 | Search command (argument fence) | `bash` | |
 | Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | claude-agent-acp pre-wraps in its own console fence; `prepare_block_lines` unwraps an already-fenced execute body before re-wrapping |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |

@@ -205,6 +205,13 @@ function ACPClient:subagent_id(child_id)
     return child_id, 1
 end
 
+--- The shell the provider's execute tool runs commands in, when the client
+--- can prove it. Reaches only blocks built by the base `__build_tool_call_message`.
+--- @return "bash"|"zsh"|nil
+function ACPClient:exec_shell()
+    return nil
+end
+
 --- The mode a subagent is expected to run in until the provider's record of
 --- its spawn confirms one. Adapters for providers that can force a mode
 --- override this.
@@ -787,6 +794,8 @@ function ACPClient:__build_tool_call_message(update, _session_id)
         body = self:extract_content_body(update),
         -- Read only on the initial tool_call: updates can omit it.
         parent_tool_use_id = self:subagent_task_id(update),
+        -- On every kind, as a later update or the adapter can re-kind a call.
+        shell = self:exec_shell(),
     }
 
     return message

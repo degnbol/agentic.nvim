@@ -394,6 +394,7 @@ function SessionRestore.replay_messages(writer, messages)
                 argument = msg.argument or "",
                 status = msg.status,
                 description = msg.description,
+                shell = msg.shell,
                 body = msg.body,
                 diff = msg.diff,
                 skill_path = msg.skill_path,

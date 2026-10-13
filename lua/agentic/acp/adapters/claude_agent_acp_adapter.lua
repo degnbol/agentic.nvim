@@ -59,6 +59,11 @@ function ClaudeAgentACPAdapter:unsubscribe(session_id)
     ACPClient.unsubscribe(self, session_id)
 end
 
+--- @return "bash"|"zsh"|nil
+function ClaudeAgentACPAdapter:exec_shell()
+    return ClaudeUtils.exec_shell(self.provider_config.env)
+end
+
 --- The SDK's record of a subagent's spawn: its meta file beside the session
 --- transcript. Nil until the file exists.
 --- @param session_id string The root session
