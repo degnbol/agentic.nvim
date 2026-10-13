@@ -65,12 +65,13 @@ local function user_message(text)
     }
 end
 
---- Synthetic usage-limit ACPError matching what claude-agent-acp sends.
+--- Synthetic usage-limit ACPError matching what claude-agent-acp sends:
+--- an internal error (-32603) carrying the API error body as its message.
 --- Only the `message` field is inspected by write_error_message.
 --- @return agentic.acp.ACPError
 local function usage_limit_err()
     return {
-        code = -32000,
+        code = -32603,
         message = '{"type":"error","error":{"type":"usage_limit_error","message":"Claude AI usage limit reached|1800000000"}}',
     }
 end

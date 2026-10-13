@@ -1,6 +1,6 @@
 -- Recovery flows for the session manager:
---   - Re-authentication when the Claude provider returns an auth error.
---   - Server-health backoff before offering reauth.
+--   - Login through the provider's ACP auth methods (/login), offered after an
+--     auth error.
 --   - Conversation-preserving subprocess respawn, after a usage_limit stall or
 --     a re-login the subprocess did not survive.
 --   - Auto-continue retry after usage_limit errors.
@@ -9,12 +9,12 @@
 --   - Return of a refused prompt: its text and context go back to the input,
 --     and everything queued behind it becomes draft.
 -- All functions take the SessionManager (`sm`) as the first argument and
--- read/write its fields (`_reauth_keymap`, `_health_check_timer`,
--- `_retry_*`, `_reauth_job`, `destroyed`, ...). LuaLS treats those
--- underscore-prefixed fields as private to SessionManager; this module is
--- a tightly-coupled helper that legitimately reaches in.
+-- read/write its fields (`_retry_*`, `_session_epoch`, `destroyed`, ...).
+-- LuaLS treats those underscore-prefixed fields as private to SessionManager;
+-- this module is a tightly-coupled helper that legitimately reaches in.
 --- @diagnostic disable: invisible
 
+local ACPClient = require("agentic.acp.acp_client")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
@@ -22,8 +22,13 @@ local Logger = require("agentic.utils.logger")
 
 local M = {}
 
-local function is_claude_provider()
-    return Config.provider == "claude-agent-acp"
+--- The methods of `methods` this client can run.
+--- @param methods agentic.acp.AuthMethod[]
+--- @return agentic.acp.AuthMethod[] runnable
+local function runnable_auth_methods(methods)
+    return vim.tbl_filter(function(method)
+        return ACPClient.auth_method_kind(method) ~= nil
+    end, methods)
 end
 
 --- Surface a successful prompt response with a non-terminal stopReason
@@ -121,177 +126,215 @@ function M.restore_refused_prompt(sm, text, consumed, bufnr)
     end
 end
 
---- Offer re-authentication after a Claude auth error.
---- Checks server health first — if unreachable, polls with exponential
---- backoff until the server is back, then offers the `r` keymap.
+--- Point the user at /login after an auth error, when the agent advertises a
+--- way to log in.
 --- @param sm agentic.SessionManager
-function M.offer_reauth(sm)
-    if not is_claude_provider() then
+function M.offer_login(sm)
+    if #runnable_auth_methods(sm.agent.auth_methods or {}) > 0 then
+        sm.message_writer:write_error_action("Run /login to re-authenticate.")
+    end
+end
+
+--- The auth method to run, from those of `methods` this client can run: the
+--- one `arg` names, else the one `preferred_id` names, else the only one.
+--- @param methods agentic.acp.AuthMethod[] Advertised methods
+--- @param arg string Requested method id, or ""
+--- @param preferred_id string|nil Method id to use when `arg` is ""
+--- @return agentic.acp.AuthMethod|nil method Nil when several fit and none is named, or on a problem
+--- @return string|nil problem Why there is nothing to run: no runnable method, or an `arg` naming none
+function M.resolve_auth_method(methods, arg, preferred_id)
+    local runnable = runnable_auth_methods(methods)
+    if #runnable == 0 then
+        return nil, "No login method this client can run."
+    end
+
+    local wanted_id = arg ~= "" and arg or preferred_id
+    for _, method in ipairs(runnable) do
+        if method.id == wanted_id then
+            return method, nil
+        end
+    end
+
+    if arg ~= "" then
+        local ids = vim.tbl_map(function(method)
+            return method.id
+        end, runnable)
+        return nil,
+            string.format(
+                "No login method '%s'. Available: %s.",
+                arg,
+                table.concat(ids, ", ")
+            )
+    end
+    if #runnable == 1 then
+        return runnable[1], nil
+    end
+    return nil, nil
+end
+
+--- Log in with one of the agent's auth methods, asking with `vim.ui.select`
+--- when several fit and `arg` names none. Writes the problem to the chat when
+--- there is nothing to run.
+--- @param sm agentic.SessionManager
+--- @param arg string Method id, or "" for the configured or only method
+--- @param on_done fun() Called once the login finishes, or at once when nothing runs
+function M.login(sm, arg, on_done)
+    local agent = sm.agent
+    if agent.auth_methods == nil then
+        sm.message_writer:write_error_action(
+            string.format(
+                "%s is not connected yet.",
+                agent.provider_config.name or Config.provider
+            )
+        )
+        on_done()
         return
     end
 
-    M._check_server_then_offer_reauth(sm, 1)
-end
-
---- Set up the [r] keymap to trigger `claude auth login`.
---- @param sm agentic.SessionManager
-function M._set_reauth_keymap(sm)
-    sm.message_writer:write_error_action(
-        "Press [r] to re-authenticate in browser."
+    local method, problem = M.resolve_auth_method(
+        agent.auth_methods,
+        arg,
+        agent.provider_config.auth_method
     )
+    if problem then
+        sm.message_writer:write_error_action(problem)
+        on_done()
+        return
+    end
+    if method then
+        M.run_login(sm, method, on_done)
+        return
+    end
 
-    local chat_bufnr = sm.widget.buf_nrs.chat
-    local lhs = "r"
-
-    vim.keymap.set("n", lhs, function()
-        M.run_reauth(sm)
-    end, { buffer = chat_bufnr, nowait = true })
-
-    sm._reauth_keymap = { bufnr = chat_bufnr, lhs = lhs }
-end
-
---- Health check URL for Claude's API infrastructure.
-local HEALTH_CHECK_URL = "https://api.anthropic.com"
-
---- Check if the Claude server is reachable before offering reauth.
---- If unreachable, retries with exponential backoff (30s, 60s, 120s, ...).
---- When reachable, sets up the [r] keymap so the user can authenticate.
---- @param sm agentic.SessionManager
---- @param attempt number Current attempt number (1-based)
-function M._check_server_then_offer_reauth(sm, attempt)
-    local max_delay_s = 600 -- cap at 10 minutes
-    local base_delay_s = 30
-    local delay_s = math.min(base_delay_s * (2 ^ (attempt - 1)), max_delay_s)
-
-    sm.message_writer:write_error_action(
-        string.format("Checking server health (%s)...", HEALTH_CHECK_URL)
-    )
-
-    vim.system({
-        "curl",
-        "-s",
-        "-o",
-        "/dev/null",
-        "--connect-timeout",
-        "5",
-        HEALTH_CHECK_URL,
-    }, {}, function(result)
-        vim.schedule(function()
-            if sm.destroyed then
-                return
-            end
-
-            if result.code == 0 then
-                -- Server reachable — offer login
-                M._set_reauth_keymap(sm)
-            else
-                -- Server unreachable — schedule retry with backoff
-                sm.message_writer:write_error_action(
-                    string.format(
-                        "Server unreachable. Retrying in %ds... (attempt %d)",
-                        delay_s,
-                        attempt
-                    )
-                )
-
-                M.cancel_health_check_timer(sm)
-                local timer = vim.uv.new_timer()
-                if not timer then
-                    return
-                end
-                sm._health_check_timer = timer
-                timer:start(delay_s * 1000, 0, function()
-                    -- Nil out immediately so cancel_health_check_timer
-                    -- won't call stop/close on an already-closed handle
-                    sm._health_check_timer = nil
-                    timer:stop()
-                    timer:close()
-                    vim.schedule(function()
-                        if sm.destroyed then
-                            return
-                        end
-                        M._check_server_then_offer_reauth(sm, attempt + 1)
-                    end)
-                end)
-            end
-        end)
+    vim.ui.select(runnable_auth_methods(agent.auth_methods), {
+        prompt = "Log in with",
+        --- @param item agentic.acp.AuthMethod
+        format_item = function(item)
+            return item.description and (item.name .. ": " .. item.description)
+                or item.name
+        end,
+    }, function(choice)
+        if choice then
+            M.run_login(sm, choice, on_done)
+        else
+            on_done()
+        end
     end)
 end
 
---- Stop and close the health check backoff timer if active.
---- @param sm agentic.SessionManager
-function M.cancel_health_check_timer(sm)
-    if sm._health_check_timer then
-        sm._health_check_timer:stop()
-        sm._health_check_timer:close()
-        sm._health_check_timer = nil
-    end
-end
-
---- Remove the re-auth keymap if one is active.
---- @param sm agentic.SessionManager
-function M.remove_reauth_keymap(sm)
-    local km = sm._reauth_keymap
-    if not km then
-        return
-    end
-
-    if vim.api.nvim_buf_is_valid(km.bufnr) then
-        pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
-    end
-    sm._reauth_keymap = nil
-end
-
---- Spawn `claude auth login` to re-authenticate via browser OAuth.
---- @param sm agentic.SessionManager
-function M.run_reauth(sm)
-    M.remove_reauth_keymap(sm)
-
-    if sm._reauth_job then
-        Logger.notify("Re-authentication already in progress.")
-        return
-    end
-
-    local auth_type = Config.auth_type or "claudeai"
-    local flag = "--" .. auth_type
-
-    Logger.notify("Opening browser for re-authentication...")
-
-    -- The conversation can be replaced during the OAuth round-trip (`/new`, a
-    -- restore, a provider switch, `/delete`); recovering into the replacement
-    -- would recover the wrong conversation.
-    local epoch = sm._session_epoch
-
-    sm._reauth_job = vim.system(
-        { "claude", "auth", "login", flag },
-        {},
-        function(result)
-            vim.schedule(function()
-                sm._reauth_job = nil
-                if sm.destroyed or epoch ~= sm._session_epoch then
-                    return
-                end
-
-                if result.code == 0 then
-                    M.recover_after_reauth(sm)
-                else
-                    Logger.notify(
-                        "Re-authentication failed. Try running 'claude auth login' manually.",
-                        vim.log.levels.WARN
-                    )
-                end
-            end)
+--- What a failed process said about the failure: the first line of its
+--- stderr, else of its stdout, else the signal or exit code that ended it.
+--- @param result vim.SystemCompleted
+--- @return string reason
+local function failure_reason(result)
+    for _, text in ipairs({ result.stderr, result.stdout }) do
+        local line = vim.trim(text or ""):match("[^\n]+")
+        if line then
+            return line
         end
-    )
+    end
+    if result.signal ~= 0 then
+        return "signal " .. result.signal
+    end
+    return "exit " .. result.code
 end
 
---- Send sigterm to a running reauth job. Used during destroy().
+--- Run one auth method, then recover the session if it succeeded. The login
+--- belongs to the provider subprocess, which sessions on one provider share,
+--- so one runs per client: a running login is stopped first, which lets a
+--- login left waiting on an abandoned browser page be started over.
 --- @param sm agentic.SessionManager
-function M.kill_reauth_job(sm)
-    if sm._reauth_job then
-        sm._reauth_job:kill("sigterm") --- @diagnostic disable-line: undefined-field
-        sm._reauth_job = nil
+--- @param method agentic.acp.AuthMethod An `agent` or `terminal` method
+--- @param on_done fun() Called once the login has finished or been stopped, or at once when it does not start
+function M.run_login(sm, method, on_done)
+    local agent = sm.agent
+    if agent.login_job then
+        M.stop_login(sm)
+        Logger.notify("Stopped the running login.")
     end
+
+    -- The conversation can be replaced during the login (`/new`, a restore, a
+    -- provider switch, `/delete`); recovering into the replacement would
+    -- recover the wrong conversation.
+    local epoch = sm._session_epoch
+    --- This login's `login_job`. Once `stop_login` has cleared it, or another
+    --- login has taken its place, this login's outcome is no longer reported.
+    --- @type vim.SystemObj|table|nil
+    local job
+
+    --- @param ok boolean
+    --- @param reason string|nil Why it failed
+    local function finish(ok, reason)
+        local stopped = agent.login_job ~= job
+        if not stopped then
+            agent.login_job = nil
+        end
+        on_done()
+        if stopped or sm.destroyed or epoch ~= sm._session_epoch then
+            return
+        end
+        if ok then
+            M.recover_after_reauth(sm)
+        else
+            Logger.notify(
+                string.format("Login with %s failed: %s", method.name, reason),
+                vim.log.levels.WARN
+            )
+        end
+    end
+
+    Logger.notify(string.format("Logging in with %s…", method.name))
+
+    if ACPClient.auth_method_kind(method) == "terminal" then
+        -- No pty: a method that needs one to interact (claude-agent-acp's
+        -- `claude-login`, offered over SSH) fails, and its error is reported.
+        local invocation = agent:terminal_auth_invocation(method)
+        local started, result = pcall(
+            vim.system,
+            invocation.cmd,
+            { env = invocation.env, text = true },
+            function(completed)
+                vim.schedule(function()
+                    finish(
+                        completed.code == 0 and completed.signal == 0,
+                        failure_reason(completed)
+                    )
+                end)
+            end
+        )
+        if not started then
+            Logger.notify(
+                string.format("Login with %s failed: %s", method.name, result),
+                vim.log.levels.WARN
+            )
+            on_done()
+            return
+        end
+        job = result
+        agent.login_job = job
+        return
+    end
+
+    -- A fresh table per request, so a stopped request's response cannot pass
+    -- for a later one's.
+    job = {} --[[@as table]]
+    agent.login_job = job
+    agent:authenticate(method.id, function(err)
+        finish(not err, err and err.message)
+    end)
+end
+
+--- Stop the login this session's client is running, including one another
+--- session on the same client started. A terminal method's process is killed.
+--- An `authenticate` request cannot be withdrawn: the agent still answers it,
+--- unreported, and may still be handling it when the next login starts.
+--- @param sm agentic.SessionManager
+function M.stop_login(sm)
+    local job = sm.agent.login_job
+    if job and job.kill then
+        job:kill("sigterm")
+    end
+    sm.agent.login_job = nil
 end
 
 --- Recover the session after a successful re-login.

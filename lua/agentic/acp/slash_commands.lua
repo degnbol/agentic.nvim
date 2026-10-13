@@ -53,6 +53,11 @@ function SlashCommands.setCommands(bufnr, available_commands)
             menu = "Grant edits under a path",
             info = "Auto-approve recoverable edits under a path or glob. `.` is the cwd, `root` its git root, `off` clears every grant; no argument opens a picker",
         },
+        login = {
+            word = "login",
+            menu = "Log in to the provider",
+            info = "Run one of the provider's login methods: /login [method id]. No argument: the configured or only method, else a choice",
+        },
     }
 
     for _, cmd in ipairs(available_commands) do

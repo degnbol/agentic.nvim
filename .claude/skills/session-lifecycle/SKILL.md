@@ -59,8 +59,8 @@ Three race conditions can overwrite `self.session_id` during ACP
   no `new_session` behind it). The `create_session` callback captures the epoch
   at call time and rejects the response if the epoch has advanced (race 2).
   This catches stale responses even after `_restoring` is cleared. Long-running
-  side flows capture it too: `run_reauth` holds the epoch across the browser
-  OAuth round-trip so its callback cannot recover into a replaced conversation.
+  side flows capture it too: `run_login` holds the epoch across the login so
+  its callback cannot recover into a replaced conversation.
 - `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
   is a no-op once it is set. Checked at the top of the `create_session`
   callback for race 3b (epoch/restoring can't catch it because they track the

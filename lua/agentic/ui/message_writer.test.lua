@@ -4409,16 +4409,14 @@ describe("agentic.ui.MessageWriter", function()
                 { "## Error", "", "401 Auth failed", "" }
             )
 
-            writer:write_error_action(
-                "Press [r] to re-authenticate in browser."
-            )
+            writer:write_error_action("Run /login to re-authenticate.")
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
             -- Action text should be appended after existing content
             local found = false
             for _, line in ipairs(lines) do
-                if line == "Press [r] to re-authenticate in browser." then
+                if line == "Run /login to re-authenticate." then
                     found = true
                 end
             end

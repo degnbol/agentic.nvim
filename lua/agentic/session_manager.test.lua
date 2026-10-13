@@ -2,6 +2,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
+local ACPClient = require("agentic.acp.acp_client")
 local AgentModes = require("agentic.acp.agent_modes")
 local ChatHistory = require("agentic.ui.chat_history")
 local FileSystem = require("agentic.utils.file_system")
@@ -9,6 +10,7 @@ local Config = require("agentic.config")
 local Deferred = require("tests.helpers.deferred")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
+local MiniTest = require("mini.test")
 local SessionManager = require("agentic.session_manager")
 local Theme = require("agentic.theme")
 
@@ -257,8 +259,6 @@ describe("agentic.SessionManager", function()
             local Recovery = require("agentic.session_recovery")
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
-                spy.stub(Recovery, "remove_reauth_keymap"),
-                spy.stub(Recovery, "cancel_health_check_timer"),
                 spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
@@ -294,8 +294,6 @@ describe("agentic.SessionManager", function()
                 local Recovery = require("agentic.session_recovery")
                 local SlashCommands = require("agentic.acp.slash_commands")
                 local stubs = {
-                    spy.stub(Recovery, "remove_reauth_keymap"),
-                    spy.stub(Recovery, "cancel_health_check_timer"),
                     spy.stub(Recovery, "cancel_retry_timer"),
                     spy.stub(SlashCommands, "setCommands"),
                 }
@@ -404,8 +402,6 @@ describe("agentic.SessionManager", function()
             local Recovery = require("agentic.session_recovery")
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
-                spy.stub(Recovery, "remove_reauth_keymap"),
-                spy.stub(Recovery, "cancel_health_check_timer"),
                 spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
@@ -444,8 +440,6 @@ describe("agentic.SessionManager", function()
             local Recovery = require("agentic.session_recovery")
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
-                spy.stub(Recovery, "remove_reauth_keymap"),
-                spy.stub(Recovery, "cancel_health_check_timer"),
                 spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
@@ -676,9 +670,7 @@ describe("agentic.SessionManager", function()
                 code_selection = { clear = noop },
                 diagnostics_list = { clear = noop },
                 config_options = { clear = noop },
-                _cancel_health_check_timer = noop,
                 _cancel_retry_timer = noop,
-                _remove_reauth_keymap = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _prompt_pending = 0,
@@ -2401,7 +2393,7 @@ describe("agentic.SessionManager", function()
         local MessageWriter = require("agentic.ui.message_writer")
         local Recovery = require("agentic.session_recovery")
         --- @type TestStub
-        local reauth_stub
+        local login_stub
         --- @type TestStub
         local respawn_stub
         --- @type TestStub
@@ -2413,7 +2405,7 @@ describe("agentic.SessionManager", function()
 
         before_each(function()
             restore_stub = spy.stub(Recovery, "restore_refused_prompt")
-            reauth_stub = spy.stub(Recovery, "offer_reauth")
+            login_stub = spy.stub(Recovery, "offer_login")
             respawn_stub = spy.stub(Recovery, "respawn_preserving_history")
             auto_continue_stub = spy.stub(Recovery, "offer_auto_continue")
             schedule_stub = spy.stub(vim, "schedule")
@@ -2424,7 +2416,7 @@ describe("agentic.SessionManager", function()
 
         after_each(function()
             restore_stub:revert()
-            reauth_stub:revert()
+            login_stub:revert()
             respawn_stub:revert()
             auto_continue_stub:revert()
             schedule_stub:revert()
@@ -3032,21 +3024,44 @@ describe("agentic.SessionManager", function()
             end)
         end)
 
+        it("billing_error offers no login, respawn or auto-continue", function()
+            local session = make_session("billing_error")
+            session:_handle_input_submit("hello")
+            assert.spy(login_stub).was.called(0)
+            assert.spy(respawn_stub).was.called(0)
+            assert.spy(auto_continue_stub).was.called(0)
+        end)
+
+        it("auth required offers login", function()
+            local session = make_session(nil, {
+                code = ACPClient.ERROR_CODES.AUTH_REQUIRED,
+                message = "Authentication required",
+            })
+            session:_handle_input_submit("hello")
+            assert.spy(login_stub).was.called(1)
+            assert.spy(respawn_stub).was.called(0)
+        end)
+
+        -- The code is the signal, not the classification of the message.
         it(
-            "billing_error offers no reauth, respawn or auto-continue",
+            "a transport error classed as authentication offers no login",
             function()
-                local session = make_session("billing_error")
+                local session = make_session("authentication_error", {
+                    code = ACPClient.ERROR_CODES.TRANSPORT_ERROR,
+                    message = "disconnected",
+                })
                 session:_handle_input_submit("hello")
-                assert.spy(reauth_stub).was.called(0)
-                assert.spy(respawn_stub).was.called(0)
-                assert.spy(auto_continue_stub).was.called(0)
+                assert.spy(login_stub).was.called(0)
             end
         )
 
-        it("authentication_error offers reauth", function()
-            local session = make_session("authentication_error")
+        it("auth required with a usage-limit body offers login", function()
+            local session = make_session("usage_limit", {
+                code = ACPClient.ERROR_CODES.AUTH_REQUIRED,
+                message = "Authentication required",
+            })
             session:_handle_input_submit("hello")
-            assert.spy(reauth_stub).was.called(1)
+            assert.spy(login_stub).was.called(1)
             assert.spy(respawn_stub).was.called(0)
         end)
 
@@ -3634,6 +3649,20 @@ describe("agentic.SessionManager", function()
             assert.equal(0, dispatch_spy.call_count)
         end)
 
+        it("dispatches /login to the login flow", function()
+            local Recovery = require("agentic.session_recovery")
+            local login_stub = spy.stub(Recovery, "login")
+            MiniTest.finally(function()
+                login_stub:revert()
+            end)
+
+            session:_handle_input_submit("/login console-login")
+
+            assert.equal("console-login", login_stub.calls[1][2])
+            assert.equal("function", type(login_stub.calls[1][3]))
+            assert.equal(0, dispatch_spy.call_count)
+        end)
+
         -- Local commands need no provider round-trip, so the gate must never
         -- park them: they are how a wedged session gets recovered.
         it("runs local commands mid-turn and before the session", function()
@@ -3772,8 +3801,6 @@ describe("agentic.SessionManager", function()
 
         before_each(function()
             stubs = {
-                spy.stub(Recovery, "remove_reauth_keymap"),
-                spy.stub(Recovery, "cancel_health_check_timer"),
                 spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }

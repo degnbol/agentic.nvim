@@ -1,5 +1,6 @@
 --- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch
 local Logger = require("agentic.utils.logger")
+local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local Deferred = require("tests.helpers.deferred")
 local spy = require("tests.helpers.spy")
@@ -411,7 +412,7 @@ describe("agentic.acp.ACPClient", function()
                     jsonrpc = "2.0",
                     id = 1,
                     error = {
-                        code = -32000,
+                        code = -32603,
                         message = '{"type":"error","error":{"type":"usage_limit_error","message":"Claude AI usage limit reached|1800000000"}}',
                     },
                 })
@@ -518,7 +519,7 @@ describe("agentic.acp.ACPClient", function()
                     jsonrpc = "2.0",
                     id = 1,
                     error = {
-                        code = -32000,
+                        code = -32603,
                         message = '{"type":"error","error":{"type":"usage_limit_error","message":"reset|1800000000"}}',
                     },
                 })
@@ -625,6 +626,162 @@ describe("agentic.acp.ACPClient", function()
 
             assert.is_nil(client.agent_info)
             assert.same({}, client.auth_methods)
+        end)
+    end)
+
+    describe("auth at startup", function()
+        local notify_stub
+        --- @type TestSpy
+        local on_ready
+        --- @type { method: string, params: table }[]
+        local requests
+        --- Answer to `authenticate`; overridden per case.
+        --- @type agentic.acp.ACPError|nil
+        local authenticate_err
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+            authenticate_err = nil
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        --- Connect a client whose agent advertises `methods`.
+        --- @param auth_method string|nil Configured `auth_method`
+        --- @param methods agentic.acp.AuthMethod[]
+        --- @return agentic.acp.ACPClient client
+        local function connect(auth_method, methods)
+            requests = {}
+            on_ready = spy.new(function() end)
+            --- @type agentic.acp.ACPClient
+            local client
+            client = setmetatable({
+                state = "disconnected",
+                callbacks = {},
+                capabilities = {},
+                provider_config = { auth_method = auth_method },
+                _on_ready = on_ready,
+                transport = {
+                    start = function()
+                        client.state = "connected"
+                    end,
+                },
+            }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
+            client._send_request = function(_self, method, params, cb)
+                table.insert(requests, { method = method, params = params })
+                if method == "initialize" then
+                    cb({ protocolVersion = 1, authMethods = methods }, nil)
+                elseif method == "authenticate" then
+                    cb({}, authenticate_err)
+                end
+            end
+            client:_connect()
+            return client
+        end
+
+        --- @return string[] methods
+        local function sent_methods()
+            return vim.tbl_map(function(r)
+                return r.method
+            end, requests)
+        end
+
+        it("declares terminal auth", function()
+            local setup_stub = spy.stub(ACPClient, "_setup_transport")
+            local connect_stub = spy.stub(ACPClient, "_connect")
+            MiniTest.finally(function()
+                setup_stub:revert()
+                connect_stub:revert()
+            end)
+
+            local client = ACPClient:new({ command = "x" }, function() end)
+
+            assert.is_true(client.capabilities.auth.terminal)
+        end)
+
+        it("authenticates a configured agent method", function()
+            local client = connect("key", {
+                { id = "key", name = "Key" },
+                { id = "other", name = "Other", type = "agent" },
+            })
+
+            assert.same({ "initialize", "authenticate" }, sent_methods())
+            assert.equal("key", requests[2].params.methodId)
+            assert.equal("ready", client.state)
+            assert.spy(on_ready).was.called(1)
+        end)
+
+        for label, methods in pairs({
+            terminal = {
+                { id = "login", name = "L", type = "terminal", args = {} },
+            },
+            ["unknown-type"] = {
+                { id = "login", name = "L", type = "env_var" },
+            },
+            unadvertised = { { id = "other", name = "O" } },
+        }) do
+            it("does not act on a " .. label .. " method", function()
+                local client = connect("login", methods)
+
+                assert.same({ "initialize" }, sent_methods())
+                assert.equal("ready", client.state)
+                assert.spy(notify_stub).was.called(0)
+            end)
+        end
+
+        it("goes ready after an authenticate error", function()
+            authenticate_err = { code = -32603, message = "nope" }
+            local client = connect("key", { { id = "key", name = "Key" } })
+
+            assert.equal("ready", client.state)
+            assert.spy(on_ready).was.called(1)
+            assert.spy(notify_stub).was.called(1)
+            assert.truthy(notify_stub.calls[1][1]:find("nope", 1, true))
+            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+        end)
+    end)
+
+    describe("terminal_auth_invocation", function()
+        --- @param provider_config table
+        --- @return agentic.acp.ACPClient
+        local function make_client(provider_config)
+            return setmetatable(
+                { provider_config = provider_config },
+                { __index = ACPClient }
+            )
+        end
+
+        it("appends the method args to the configured command", function()
+            local client =
+                make_client({ command = "agent", args = { "--acp" } })
+
+            local inv = client:terminal_auth_invocation({
+                id = "login",
+                name = "L",
+                type = "terminal",
+                args = { "--cli", "auth", "login" },
+            })
+
+            assert.same({ "agent", "--acp", "--cli", "auth", "login" }, inv.cmd)
+        end)
+
+        it("layers the method env over the provider env", function()
+            local client = make_client({
+                command = "agent",
+                env = { A = "provider", B = "provider" },
+            })
+
+            local inv = client:terminal_auth_invocation({
+                id = "login",
+                name = "L",
+                type = "terminal",
+                env = { B = "method", C = "method" },
+            })
+
+            assert.same({ "agent" }, inv.cmd)
+            assert.same({ A = "provider", B = "method", C = "method" }, inv.env)
         end)
     end)
 

@@ -1485,8 +1485,7 @@ end
 
 --- Hints for known error classes. Keyed by both the Anthropic `error.type`
 --- strings the embedded-JSON path produces and the internal classes the
---- errorKind map resolves to. authentication_error has no hint — re-auth is
---- handled by the caller (provider-specific re-auth flow).
+--- errorKind map resolves to. authentication_error has no hint.
 --- @type table<string, string>
 local error_hints = {
     overloaded_error = "The API is overloaded. Try again in a moment.",
@@ -1558,7 +1557,7 @@ end
 ---   "Internal error: Failed to authenticate. API Error: 401\n
 ---    {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",
 ---    \"message\":\"Invalid authentication credentials\"}}"
---- Output: {"401 Invalid authentication credentials", "", "Try running /login ..."}
+--- Output: {"401 Invalid authentication credentials"}
 --- @param err agentic.acp.ACPError
 --- @return string[] lines
 --- @return string|nil error_type Error class (from errorKind if present, else text)
@@ -1760,7 +1759,7 @@ end
 --- user did, and an error is not that.
 ---
 --- The block stays open — `write_error_action` extends it with whatever the
---- classification leads to (a countdown, a reauth offer), so the error and the
+--- classification leads to (a countdown, a login offer), so the error and the
 --- plugin's response to it read as one region.
 --- @param err agentic.acp.ACPError
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
@@ -1885,8 +1884,8 @@ end
 --- directly follows one.
 ---
 --- Two populations of caller. What an error led to — an auto-continue
---- countdown, a health check, a reauth offer — lands under the error that
---- prompted it and belongs in its region. Standalone plugin notices (a rejected
+--- countdown, a login offer — lands under the error that prompted it and
+--- belongs in its region. Standalone plugin notices (a rejected
 --- `/grant` scope, a truncated queue) reach the same styling with no error
 --- above them, and get no region.
 ---
@@ -1894,7 +1893,7 @@ end
 --- rather than from a boundary call in every other writer: cheaper, and it
 --- cannot be forgotten by the next writer added. It also closes the block
 --- against a write that lands mid-turn, which a turn-boundary reset would miss.
---- @param text string The action hint text (e.g. "Press [r] to re-authenticate")
+--- @param text string The action hint text (e.g. "Run /login to re-authenticate.")
 function MessageWriter:write_error_action(text)
     self:_schedule_follow()
 

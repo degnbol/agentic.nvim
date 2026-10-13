@@ -129,11 +129,12 @@ All options with defaults are in `lua/agentic/config_default.lua`.
       `command`   Binary name or path
       `args`      List of CLI arguments (optional)
       `env`       Environment variables (optional)
-
-                                                   *agentic-config-auth_type*
-`auth_type` string (default: `"claudeai"`)
-    Auth type for Claude CLI re-authentication. One of `"claudeai"`,
-    `"console"`, `"sso"`.
+      `auth_method`
+                  Id of the preferred login method (optional). `/login`
+                  runs it without asking when the provider advertises it.
+                  An `agent`-type method also runs each time the provider
+                  starts. `claude-agent-acp` advertises `claude-ai-login`
+                  (the default, a Claude subscription) and `console-login`.
 
                                                   *agentic-config-todo_tools*
 `todo_tools` boolean (default: true)
@@ -647,6 +648,11 @@ and appear in slash-command completion.
     `/context`         Token-usage readout for the session.
     `/grant [path]`    Grant a path for auto-approval. See
                        |agentic-permissions-grant|.
+    `/login [method]`  Log in with one of the provider's login methods.
+                       Without an argument it runs `auth_method` (see
+                       |agentic-config-acp_providers|) or the only method,
+                       else asks. A login already running is stopped.
+                       Takes the place of a provider's own `/login`.
 
 A command line dispatches as its own prompt; see |agentic-queue|.
 

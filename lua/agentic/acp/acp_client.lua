@@ -65,6 +65,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field agent_capabilities? agentic.acp.AgentCapabilities
 --- @field agent_info? agentic.acp.AgentInfo
 --- @field auth_methods? agentic.acp.AuthMethod[]
+--- @field login_job? vim.SystemObj|table The running login: a terminal method's process, or a token while an authenticate request is out
 --- @field auth_status? agentic.acp.AuthStatus Identity the agent process authenticates with; nil while none is reported, which is distinct from a reported `kind = "none"`
 --- @field callbacks table<number, fun(result: table|nil, err: agentic.acp.ACPError|nil)>
 --- @field transport? agentic.acp.ACPTransportInstance
@@ -82,13 +83,13 @@ ACPClient.__index = ACPClient
 
 --- ACP Error codes
 ACPClient.ERROR_CODES = {
-    TRANSPORT_ERROR = -32000,
-    PROTOCOL_ERROR = -32001,
-    TIMEOUT_ERROR = -32002,
-    AUTH_REQUIRED = -32003,
-    SESSION_NOT_FOUND = -32004,
-    PERMISSION_DENIED = -32005,
-    INVALID_REQUEST = -32006,
+    -- ACP / JSON-RPC codes
+    AUTH_REQUIRED = -32000,
+    INVALID_PARAMS = -32602,
+    INTERNAL_ERROR = -32603,
+    -- Client-side only, never sent: outside the JSON-RPC reserved range
+    TRANSPORT_ERROR = -1,
+    PROTOCOL_ERROR = -2,
 }
 
 --- @private Exposed for tests.
@@ -125,6 +126,7 @@ function ACPClient:new(config, on_ready)
                 writeTextFile = false,
             },
             terminal = false,
+            auth = { terminal = true },
             -- Opt into claude-agent-acp forwarding subagent (Task) assistant
             -- text/thinking as parentToolUseId-tagged notifications (bridge
             -- filters them out for clients that don't advertise this).
@@ -506,7 +508,7 @@ function ACPClient:_send_error(id, message, code)
         return
     end
 
-    code = code or self.ERROR_CODES.TRANSPORT_ERROR
+    code = code or self.ERROR_CODES.INTERNAL_ERROR
     local msg =
         { jsonrpc = "2.0", id = id, error = { code = code, message = message } }
 
@@ -858,7 +860,11 @@ end
 function ACPClient:_handle_fs_read(message_id, params)
     local path = params.path
     if not path then
-        self:_send_error(message_id, "Missing 'path' parameter")
+        self:_send_error(
+            message_id,
+            "Missing 'path' parameter",
+            self.ERROR_CODES.INVALID_PARAMS
+        )
         return
     end
 
@@ -895,7 +901,11 @@ function ACPClient:_handle_fs_write(message_id, params)
     local content = params.content
 
     if not path or not content then
-        self:_send_error(message_id, "Missing 'path' or 'content' parameter")
+        self:_send_error(
+            message_id,
+            "Missing 'path' or 'content' parameter",
+            self.ERROR_CODES.INVALID_PARAMS
+        )
         return
     end
 
@@ -1058,20 +1068,57 @@ function ACPClient:_connect()
         --- @cast result agentic.acp.InitializeResponse
         self:_apply_initialize_result(result)
 
-        -- Check if we need to authenticate
-        local auth_method = self.provider_config.auth_method
-
-        -- FIXIT: auth_method should be validated against available methods from the agent message
-        -- Claude reports auth methods but it returns no-implemented error when trying to authenticate with any method
-        if auth_method then
-            Logger.debug("Authenticating with method ", auth_method)
-            self:_authenticate(auth_method)
-        else
-            Logger.debug("No authentication method found or specified")
+        local function go_ready()
             self:_set_state("ready")
             self._on_ready(self)
         end
+
+        -- No notice for an unadvertised `auth_method`: the advertised set can
+        -- vary by environment (claude-agent-acp's differs over SSH).
+        local startup_method = self:_startup_auth_method()
+        if not startup_method then
+            go_ready()
+            return
+        end
+        self:authenticate(startup_method.id, function(auth_err)
+            if auth_err then
+                Logger.notify(
+                    string.format(
+                        "Authentication with %s failed: %s",
+                        startup_method.name,
+                        auth_err.message
+                    ),
+                    vim.log.levels.WARN
+                )
+            end
+            go_ready()
+        end)
     end)
+end
+
+--- The configured `auth_method`, when the agent advertises it as an `agent`
+--- method, the only kind the client runs unasked.
+--- @return agentic.acp.AuthMethod|nil method
+function ACPClient:_startup_auth_method()
+    local id = self.provider_config.auth_method
+    for _, method in ipairs(self.auth_methods or {}) do
+        if method.id == id and ACPClient.auth_method_kind(method) == "agent" then
+            return method
+        end
+    end
+    return nil
+end
+
+--- How an auth method runs: in the agent through `authenticate`, or in the
+--- client as an interactive process.
+--- @param method agentic.acp.AuthMethod
+--- @return "agent"|"terminal"|nil kind Nil for a type this client does not run
+function ACPClient.auth_method_kind(method)
+    local kind = method.type or "agent"
+    if kind == "agent" or kind == "terminal" then
+        return kind
+    end
+    return nil
 end
 
 --- Record what the agent reported about itself in the initialize response.
@@ -1089,16 +1136,38 @@ function ACPClient:_apply_initialize_result(result)
     self.auth_methods = result.authMethods or {}
 end
 
---- TODO: Authentication is NOT implemented properly yet by the ACP providers, revisit this later
----
+--- Ask the agent to authenticate with one of its `agent` methods.
 --- @param method_id string
-function ACPClient:_authenticate(method_id)
+--- @param callback fun(err: agentic.acp.ACPError|nil)
+function ACPClient:authenticate(method_id, callback)
     self:_send_request("authenticate", {
         methodId = method_id,
-    }, function()
-        self:_set_state("ready")
-        self._on_ready(self)
+    }, function(_result, err)
+        callback(err)
     end)
+end
+
+--- An interactive process that runs a terminal auth method.
+--- @class agentic.acp.TerminalAuthInvocation
+--- @field cmd string[] The provider command, its configured args, then the method's args
+--- @field env table<string, string> Variables to add to nvim's environment: the provider env with the method's env on top
+
+--- How to run a terminal auth method: the configured agent invocation
+--- with the method's args and env added.
+--- @param method agentic.acp.AuthMethod A `terminal` method
+--- @return agentic.acp.TerminalAuthInvocation
+function ACPClient:terminal_auth_invocation(method)
+    local config = self.provider_config
+    local cmd = { config.command }
+    vim.list_extend(cmd, config.args or {})
+    vim.list_extend(cmd, method.args or {})
+
+    --- @type agentic.acp.TerminalAuthInvocation
+    local invocation = {
+        cmd = cmd,
+        env = vim.tbl_extend("force", config.env or {}, method.env or {}),
+    }
+    return invocation
 end
 
 --- @param cwd string Working directory of the session
@@ -1167,10 +1236,10 @@ function ACPClient:load_session(
     if
         not self.agent_capabilities or not self.agent_capabilities.loadSession
     then
-        callback(
-            nil,
-            { code = -1, message = "Agent does not support loading sessions" }
-        )
+        callback(nil, {
+            code = self.ERROR_CODES.PROTOCOL_ERROR,
+            message = "Agent does not support loading sessions",
+        })
         return
     end
 
@@ -1287,6 +1356,7 @@ return ACPClient
 --- @class agentic.acp.ClientCapabilities
 --- @field fs agentic.acp.FileSystemCapability
 --- @field terminal boolean
+--- @field auth { terminal: boolean } `terminal`: the client runs `terminal` auth methods
 --- @field _meta? { ["subagent-transcript"]?: boolean }
 --- @field subagents? table Empty object that opts into native subagent sessions, unstable in the ACP schema
 
@@ -1323,6 +1393,9 @@ return ACPClient
 --- @field id string
 --- @field name string
 --- @field description? string
+--- @field type? string "agent" (also when absent), "terminal", or a type this client does not run
+--- @field args? string[]
+--- @field env? table<string, string>
 
 --- Which credential resolved, as the agent reports it. `kind` follows the
 --- agent's own credential precedence, which need not match how the user
@@ -1670,5 +1743,5 @@ return ACPClient
 --- @field timeout? number Request timeout in milliseconds
 --- @field reconnect? boolean Enable auto-reconnect
 --- @field max_reconnect_attempts? number Maximum reconnection attempts
---- @field auth_method? string Authentication method
+--- @field auth_method? string Preferred auth method id. An `agent` method runs at startup. An advertised method of either type is what `/login` runs without asking.
 --- @field default_mode? string Default mode ID to set on session creation

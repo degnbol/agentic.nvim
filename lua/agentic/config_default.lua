@@ -74,11 +74,6 @@ local ConfigDefault = {
     --- @type agentic.UserConfig.ProviderName
     provider = "claude-agent-acp",
 
-    --- Auth type for Claude CLI re-authentication.
-    --- Used when spawning `claude auth login` after an authentication error.
-    --- @type "claudeai" | "console" | "sso"
-    auth_type = "claudeai",
-
     --- Offer the Claude Code todo/task tools (TaskCreate, TaskUpdate,
     --- TaskList, TaskGet, TodoWrite) to the agent. claude-agent-acp only.
     --- Turns the plan pane on and off: the bridge renders Task* calls as ACP
@@ -108,6 +103,7 @@ local ConfigDefault = {
             name = "Claude Agent ACP",
             command = "claude-agent-acp",
             env = {},
+            auth_method = "claude-ai-login",
         },
 
         ["gemini-acp"] = {

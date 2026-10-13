@@ -4,6 +4,7 @@
 -- When the user switches the provider, the SessionManager should handle the transition smoothly,
 -- ensuring that the new session is properly set up and all the previous messages are sent to the new agent provider without duplicating them in the chat widget
 
+local ACPClient = require("agentic.acp.acp_client")
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
 local Bootstrap = require("agentic.bootstrap")
@@ -104,9 +105,6 @@ end
 --- @field _budget? agentic.acp.RateLimitInfo Last known subscription rate-limit budget (claude.ai auth only)
 --- @field _last_prompt? string
 --- @field destroyed boolean Flag set on destroy() to guard async callbacks
---- @field _reauth_keymap? {bufnr: number, lhs: string} Active re-auth keymap for cleanup
---- @field _reauth_job? table Running claude auth login process (vim.SystemObj)
---- @field _health_check_timer? uv.uv_timer_t Exponential backoff timer for server health checks
 --- @field _pending_bufferless_prompt? string Deferred prompt with no buffer range to tag
 --- @field _draining_queue? boolean A queued block is being taken; guards _drain_queue against re-entry
 --- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
@@ -2904,6 +2902,7 @@ local LOCAL_COMMANDS = {
     context = { takes_arg = false, async = false, session_ending = false },
     rename = { takes_arg = true, async = false, session_ending = false },
     grant = { takes_arg = true, async = true, session_ending = false },
+    login = { takes_arg = true, async = true, session_ending = false },
     delete = { takes_arg = false, async = false, session_ending = true },
 }
 
@@ -2966,6 +2965,8 @@ function SessionManager:_run_local_command(word, arg, on_done)
         self:_rename_session(arg)
     elseif word == "grant" then
         self:_handle_grant_command(arg, on_done)
+    elseif word == "login" then
+        Recovery.login(self, arg, on_done --[[@as fun()]])
     elseif word == "delete" then
         self:_delete_session()
     end
@@ -3752,8 +3753,8 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
                 )
                 self._transient_attempt = 0
             end
-            if error_type == "authentication_error" then
-                Recovery.offer_reauth(self)
+            if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
+                Recovery.offer_login(self)
             elseif error_type == "usage_limit" then
                 -- claude-agent-acp's prompt generator does NOT close on
                 -- RequestError.internalError (acp-agent.js:449-450, 600-609),
@@ -4082,8 +4083,6 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.file_activity:clear()
     end
     self.session_id = nil
-    Recovery.remove_reauth_keymap(self)
-    Recovery.cancel_health_check_timer(self)
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
@@ -4287,8 +4286,6 @@ function SessionManager:_cancel_session()
     end
 
     self.session_id = nil
-    Recovery.remove_reauth_keymap(self)
-    Recovery.cancel_health_check_timer(self)
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
@@ -4520,7 +4517,7 @@ end
 function SessionManager:destroy()
     self.destroyed = true
 
-    Recovery.kill_reauth_job(self)
+    Recovery.stop_login(self)
 
     self:_cancel_session()
     self.widget:destroy()
