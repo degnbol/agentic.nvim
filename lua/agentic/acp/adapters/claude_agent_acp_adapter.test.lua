@@ -16,21 +16,10 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     --- @return agentic.acp.ACPClient
     local function make_adapter(session_roots)
         return setmetatable(
-            {
-                _session_roots = session_roots or {},
-                _children = {},
-                provider_config = {},
-            },
+            { _session_roots = session_roots or {}, _children = {} },
             { __index = ClaudeAgentACPAdapter }
         )
     end
-
-    it("exec_shell reads provider_config.env", function()
-        local adapter = make_adapter()
-        adapter.provider_config =
-            { env = { CLAUDE_CODE_SHELL = "/bin/bash" } }
-        assert.equal("bash", adapter:exec_shell())
-    end)
 
     describe("subagent control", function()
         it("predicts background only under force_background", function()
@@ -486,7 +475,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local adapter = setmetatable({
                 _session_roots = {},
                 _children = {},
-                provider_config = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
                         on_tool_call = function(message)
@@ -1256,7 +1244,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local adapter = setmetatable({
                 _session_roots = {},
                 _children = {},
-                provider_config = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 subscribers = { ["s-1"] = {} },
                 __with_subscriber = function(_self, _session_id, fn)

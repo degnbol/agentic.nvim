@@ -27,6 +27,7 @@ local SkillPath = require("agentic.utils.skill_path")
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 --- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
+--- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
 --- Spawn the bridge with the todo/task tools enabled. The Claude Code CLI
@@ -50,6 +51,9 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
 
     local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
     client._session_dirs = {}
+    -- Resolved here: tool calls are built in the transport's fast callback,
+    -- where reading `vim.env` is forbidden.
+    client._exec_shell = ClaudeUtils.exec_shell(config.env)
     return client
 end
 
@@ -61,7 +65,7 @@ end
 
 --- @return "bash"|"zsh"|nil
 function ClaudeAgentACPAdapter:exec_shell()
-    return ClaudeUtils.exec_shell(self.provider_config.env)
+    return self._exec_shell
 end
 
 --- The SDK's record of a subagent's spawn: its meta file beside the session
