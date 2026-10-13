@@ -173,25 +173,14 @@ function BufHelpers.is_blank_unnamed(bufnr)
     return vim.api.nvim_buf_get_name(bufnr) == ""
         and vim.bo[bufnr].buftype == ""
         and not vim.bo[bufnr].modified
-        and BufHelpers.is_buffer_empty(bufnr)
+        and BufHelpers.is_buffer_blank(bufnr)
 end
 
+--- Whether every line of the buffer is empty or whitespace only.
 --- @param bufnr integer
 --- @return boolean
-function BufHelpers.is_buffer_empty(bufnr)
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-    if #lines == 0 then
-        return true
-    end
-
-    -- Check if buffer contains only whitespace or a single empty line
-    if #lines == 1 and lines[1]:match("^%s*$") then
-        return true
-    end
-
-    -- Check if all lines are whitespace
-    for _, line in ipairs(lines) do
+function BufHelpers.is_buffer_blank(bufnr)
+    for _, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) do
         if line:match("%S") then
             return false
         end
@@ -208,7 +197,7 @@ end
 --- @param lines string[]
 --- @return integer first_row 0-indexed row of lines[1]
 function BufHelpers.append_paragraph(bufnr, lines)
-    if BufHelpers.is_buffer_empty(bufnr) then
+    if BufHelpers.is_buffer_blank(bufnr) then
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         return 0
     end
@@ -227,7 +216,7 @@ end
 --- @param bufnr integer
 --- @param lines string[]
 function BufHelpers.prepend_paragraph(bufnr, lines)
-    if BufHelpers.is_buffer_empty(bufnr) then
+    if BufHelpers.is_buffer_blank(bufnr) then
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         return
     end
@@ -260,7 +249,7 @@ BufHelpers.INSERT_KEYS = { "a", "A", "o", "O", "i", "I", "c", "C", "x", "X" }
 --- text is unsent rather than unwritten.
 --- @param bufnr integer
 function BufHelpers.sync_modified(bufnr)
-    vim.bo[bufnr].modified = not BufHelpers.is_buffer_empty(bufnr)
+    vim.bo[bufnr].modified = not BufHelpers.is_buffer_blank(bufnr)
 end
 
 --- Count the blank (whitespace-only) rows that end a buffer.
@@ -412,7 +401,8 @@ function BufHelpers.show_rows(winid, padding, start_row, end_row)
         local cursor = fold_start(vim.api.nvim_win_get_cursor(winid)[1])
         local inside = cursor >= topline
             and screen_rows(winid, topline, cursor - 1, so + 1) >= so
-            and screen_rows(winid, topline, cursor, height + 1) <= height - so
+            and screen_rows(winid, topline, cursor, height + 1)
+                <= height - so
         --- @type vim.fn.winrestview.dict
         local view = { topline = topline }
         if not inside then
@@ -454,12 +444,9 @@ function BufHelpers.scroll_down(winid, padding, max_topline)
         return false
     end
 
-    local ok, info = pcall(vim.fn.getwininfo, winid)
-    if not ok or not info[1] then
-        return false
-    end
-    local old_topline = info[1].topline
-    local winheight = info[1].height
+    local info = vim.fn.getwininfo(winid)[1]
+    local old_topline = info.topline
+    local winheight = info.height
     local last_line =
         vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
 

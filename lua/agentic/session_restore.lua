@@ -176,21 +176,15 @@ local function restore_with_conflict_check(item, current_session, has_conflict)
     return true
 end
 
---- Shorten a cwd path for display (collapse home dir, keep last 2 components).
+--- Shorten a path for display: the home directory becomes `~`, and a path with
+--- more than 3 components keeps only the last 2 (`~/a/b/c/d` gives `…/c/d`).
 --- @param cwd string
 --- @return string
 local function shorten_cwd(cwd)
-    local home = vim.uv.os_homedir() or ""
-    if home ~= "" and cwd:sub(1, #home) == home then
-        cwd = "~" .. cwd:sub(#home + 1)
-    end
-    -- Keep last 2 path components: ~/a/b/c/d → …/c/d
-    local parts = {}
-    for part in cwd:gmatch("[^/]+") do
-        table.insert(parts, part)
-    end
+    cwd = vim.fn.fnamemodify(cwd, ":~")
+    local parts = vim.split(cwd, "/", { trimempty = true })
     if #parts > 3 then
-        return "…/" .. parts[#parts - 1] .. "/" .. parts[#parts]
+        return "…/" .. table.concat(parts, "/", #parts - 1)
     end
     return cwd
 end
@@ -413,16 +407,6 @@ function SessionRestore.replay_messages(writer, messages)
     -- leave the run buffered until the next turn's first write and render the
     -- restored session's thinking under the new prompt.
     writer:flush_thought_run()
-end
-
---- The stored messages of the agent one Task spawned, in stored order.
---- @param subagent_messages agentic.ui.ChatHistory.SubagentMessage[]
---- @param task_id string The spawning Task's tool call id
---- @return agentic.ui.ChatHistory.SubagentMessage[]
-function SessionRestore.messages_for_task(subagent_messages, task_id)
-    return vim.tbl_filter(function(msg)
-        return msg.parent_tool_use_id == task_id
-    end, subagent_messages)
 end
 
 --- Resolve a session reference to a cached session. Tries session_id prefix

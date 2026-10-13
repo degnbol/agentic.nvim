@@ -1,4 +1,6 @@
+local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Config = require("agentic.config")
+local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.utils.PermissionRules
@@ -140,31 +142,6 @@ function M.extract_bash_patterns(permissions, list_key)
     return out
 end
 
---- Read and decode a JSON file, returning nil on any error.
---- @param path string
---- @return table|nil
-function M.read_json(path)
-    local stat = vim.uv.fs_stat(path)
-    if not stat then
-        return nil
-    end
-    local fd = vim.uv.fs_open(path, "r", 438) -- 0o666
-    if not fd then
-        return nil
-    end
-    local data = vim.uv.fs_read(fd, stat.size, 0)
-    vim.uv.fs_close(fd)
-    if not data then
-        return nil
-    end
-    local ok, result = pcall(vim.json.decode, data)
-    if not ok then
-        Logger.debug("permission_rules: failed to parse JSON:", path, result)
-        return nil
-    end
-    return result
-end
-
 --- Get mtime for a path, or 0 if the file doesn't exist.
 --- @param path string
 --- @return number
@@ -176,12 +153,25 @@ local function get_mtime(path)
     return 0
 end
 
---- Resolve the two settings.json paths.
---- @return string global_path
---- @return string project_path
+--- The decoded JSON file at `path`. Nil when it is missing, or when it exists
+--- but cannot be read or decoded, which warns: its rules then do not apply.
+--- @param path string
+--- @return table|nil
+local function read_json_if_present(path)
+    local data, err = FileSystem.read_json(path)
+    if err and vim.uv.fs_stat(path) then
+        Logger.notify(err, vim.log.levels.WARN)
+    end
+    return data
+end
+
+--- Paths of the global and the project Claude settings.json.
+--- @return string global_path In Claude's config directory for the configured provider's `env`
+--- @return string project_path Relative to the cwd
 function M.settings_paths()
-    local home = vim.uv.os_homedir() or os.getenv("HOME") or ""
-    return home .. "/.claude/settings.json", ".claude/settings.json"
+    local provider = Config.acp_providers[Config.provider]
+    local config_dir = ClaudeUtils.config_dir(provider and provider.env)
+    return config_dir .. "/settings.json", ".claude/settings.json"
 end
 
 --- Check if any settings.json has changed since last load.
@@ -207,7 +197,7 @@ function M.get_settings_patterns(list_key)
         cached_settings_patterns = { allow = {}, deny = {}, ask = {} }
         if Config.permissions.use_claude_settings then
             for _, path in ipairs({ global_path, project_path }) do
-                local settings = M.read_json(path)
+                local settings = read_json_if_present(path)
                 if settings and settings.permissions then
                     for key, patterns in pairs(cached_settings_patterns) do
                         vim.list_extend(
@@ -222,12 +212,14 @@ function M.get_settings_patterns(list_key)
     return cached_settings_patterns[list_key]
 end
 
---- Read additionalDirectories from ~/.claude/settings.json, expanding ~ to
---- the home directory. Returns absolute paths suitable for the Claude SDK.
---- @return string[]
+--- `permissions.additionalDirectories` of the global settings.json, with a
+--- `~` or `~/` home prefix expanded and other entries as written. Skips
+--- entries that are not non-empty strings. Empty when the file is missing or
+--- not valid JSON.
+--- @return string[] dirs
 function M.get_additional_directories()
     local global_path = M.settings_paths()
-    local settings = M.read_json(global_path)
+    local settings = read_json_if_present(global_path)
     if
         not settings
         or not settings.permissions
@@ -236,12 +228,13 @@ function M.get_additional_directories()
         return {}
     end
 
-    local home = vim.uv.os_homedir() or os.getenv("HOME") or ""
     local dirs = {}
     for _, dir in ipairs(settings.permissions.additionalDirectories) do
         if type(dir) == "string" and dir ~= "" then
-            local expanded = dir:gsub("^~/", home .. "/")
-            table.insert(dirs, expanded)
+            if dir == "~" or vim.startswith(dir, "~/") then
+                dir = vim.fs.normalize(dir, { expand_env = false })
+            end
+            table.insert(dirs, dir)
         end
     end
     return dirs
@@ -372,7 +365,7 @@ function M.get_structured_entries()
         cached_plugin_structured_mtime = plugin_mtime
         cached_plugin_structured_entries = {}
         if Config.permissions.use_plugin_defaults then
-            local data = M.read_json(plugin_path)
+            local data = read_json_if_present(plugin_path)
             cached_plugin_structured_entries =
                 normalise_structured_entries(data)
         end

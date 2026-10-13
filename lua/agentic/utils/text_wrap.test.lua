@@ -537,16 +537,13 @@ describe("agentic.utils.TextWrap", function()
             local result = TextWrap.wrap_single_line("hello world", 0)
             assert.same({ "hello world" }, result)
         end)
-    end)
 
-    describe("wrap_single_line_with_offsets", function()
-        it("maps sub-line columns back through an inline math span", function()
-            local line =
-                "start $a + b$ and then more trailing text to wrap here"
-            local sub_lines, offsets =
-                TextWrap.wrap_single_line_with_offsets(line, 20)
+        it("keeps an inline math span on one sub-line", function()
+            local sub_lines = TextWrap.wrap_single_line(
+                "start $a + b$ and then more trailing text to wrap here",
+                20
+            )
             assert.is_true(#sub_lines > 1)
-            -- The math span stays whole on one sub-line.
             local has_span = false
             for _, l in ipairs(sub_lines) do
                 if l:match("%$a %+ b%$") then
@@ -554,16 +551,6 @@ describe("agentic.utils.TextWrap", function()
                 end
             end
             assert.is_true(has_span, "math span was broken across sub-lines")
-            -- Each offset must map its sub-line content (after the added
-            -- continuation indent) back to the matching bytes in the original.
-            for i, l in ipairs(sub_lines) do
-                local content = l:sub(offsets[i].indent_len + 1)
-                local orig = line:sub(
-                    offsets[i].orig_start + 1,
-                    offsets[i].orig_start + #content
-                )
-                assert.equal(content, orig)
-            end
         end)
     end)
 

@@ -868,8 +868,14 @@ local function subscript_reads_value(node, src)
 end
 
 --- `[[ … ]]` operators whose operands zsh evaluates as arithmetic.
-local ARITHMETIC_TEST_OPERATORS =
-    { ["-eq"] = true, ["-ne"] = true, ["-lt"] = true, ["-le"] = true, ["-gt"] = true, ["-ge"] = true }
+local ARITHMETIC_TEST_OPERATORS = {
+    ["-eq"] = true,
+    ["-ne"] = true,
+    ["-lt"] = true,
+    ["-le"] = true,
+    ["-gt"] = true,
+    ["-ge"] = true,
+}
 
 --- True iff `node` is a `[[ … ]]` arithmetic comparison with an operand that
 --- reads a value. `[ … ]` and `test` compare without arithmetic.
@@ -924,7 +930,9 @@ local CODE_RUNNING_SYNTAX = {
     expansion_substring = function(node, src)
         for _, field in ipairs({ "offset", "length" }) do
             local part = node:field(field)[1]
-            if part and reads_value(vim.treesitter.get_node_text(part, src)) then
+            if
+                part and reads_value(vim.treesitter.get_node_text(part, src))
+            then
                 return true
             end
         end
@@ -933,7 +941,8 @@ local CODE_RUNNING_SYNTAX = {
     -- An element's `[key]=` index; the grammar parses it as a glob.
     array = function(node, src)
         for child in node:iter_children() do
-            local key = vim.treesitter.get_node_text(child, src):match("^%[(.-)%]=")
+            local key =
+                vim.treesitter.get_node_text(child, src):match("^%[(.-)%]=")
             if key and reads_value(key) then
                 return true
             end
@@ -955,8 +964,11 @@ local function runs_code_on_expansion(root, src)
         if test and test(node, src) then
             return true
         end
-        return (t == "subscript" or t == "variable_ref" or t:find("^expansion") ~= nil)
-            and subscript_reads_value(node, src)
+        return (
+            t == "subscript"
+            or t == "variable_ref"
+            or t:find("^expansion") ~= nil
+        ) and subscript_reads_value(node, src)
     end)
     return #matches > 0
 end
@@ -1048,7 +1060,9 @@ local function arithmetic_args_read_value(cmd_name, args)
     end
     for i, arg in ipairs(args) do
         local name = arg:match("^%-%a-v(.*)$")
-        if name and index_reads_value(name ~= "" and name or args[i + 1] or "") then
+        if
+            name and index_reads_value(name ~= "" and name or args[i + 1] or "")
+        then
             return true
         end
         local format = arg:match("^%-%a-f(.*)$")
@@ -1478,26 +1492,19 @@ local function inner_source(
     return inner, { sr, sc }, spec.writes or false
 end
 
---- Resolve a path token to a canonical absolute path: tilde/`..` collapsed, a
---- relative path joined against cwd, then symlinks in the parent resolved.
---- Shared so a redirect's write target and a script execution resolve
---- identically — the permission walk's intra-command taint check correlates the
---- two by string equality, which is unsound if they normalise differently. The
---- target itself may not exist yet (a redirect creates it), so only the parent
---- is `fs_realpath`'d: that unifies symlinked roots like `/tmp` → `/private/tmp`
---- (macOS) so `> /tmp/f` and `zsh /private/tmp/f` correlate. Lexical-only
---- `vim.fs.normalize` leaves them distinct and lets the second write slip the
---- taint scan (under-prompt). Degrades to the lexical form when the parent is
---- missing.
+--- Resolve a path token to a canonical absolute path, so two spellings of one
+--- file compare equal as strings. Expands a leading `~` (a `$VAR` is literal
+--- text), joins a relative path to the cwd, collapses `.`/`..`, and resolves symlinks in the
+--- parent directory (on macOS `/tmp/f` gives `/private/tmp/f`). The last
+--- component is kept as written because the file may not exist yet. When the
+--- parent does not exist, the result is the lexical form.
 --- @param path string
 --- @return string
 local function resolve_against_cwd(path)
-    if path:sub(1, 1) ~= "/" and path:sub(1, 1) ~= "~" then
-        path = (vim.uv.cwd() or "") .. "/" .. path
-    end
-    path = vim.fs.normalize(path)
+    path = vim.fs.normalize(vim.fs.abspath(path), { expand_env = false })
     local real_parent = vim.uv.fs_realpath(vim.fs.dirname(path))
-    return real_parent and real_parent .. "/" .. vim.fs.basename(path) or path
+    return real_parent and vim.fs.joinpath(real_parent, vim.fs.basename(path))
+        or path
 end
 
 --- Resolve the on-disk script a command would execute for the two non-`-c`
@@ -1605,8 +1612,8 @@ local function heredoc_targets(root, src)
     return targets
 end
 
---- The directory a shell is in after `cd` with the given operands. No
---- normalisation (`/a/../b` stays as is, `~` stays unexpanded).
+--- The directory a shell is in after `cd` with the given operands. No `..`
+--- or `~` resolution (`/a/../b` stays as is, `~` stays unexpanded).
 --- @param cwd string|false|nil directory before the `cd`: nil = the caller's
 ---        cwd, false = unknown
 --- @param args string[] the `cd` operands
@@ -1626,7 +1633,7 @@ local function cwd_after_cd(cwd, args, args_dynamic)
     if cwd == false then
         return false
     end
-    return cwd .. "/" .. dir
+    return vim.fs.joinpath(cwd, dir)
 end
 
 --- Join each run of byte-adjacent argument nodes into one shell word. The

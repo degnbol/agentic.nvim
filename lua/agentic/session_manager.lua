@@ -772,10 +772,7 @@ function SessionManager:_replay_transcript(child_id)
     transcript:restart(block and block.subagent)
     SessionRestore.replay_messages(
         transcript.writer,
-        SessionRestore.messages_for_task(
-            self.chat_history.subagent_messages,
-            self:_task_of(child_id)
-        )
+        self.chat_history:messages_for_task(self:_task_of(child_id))
     )
     transcript.status_indicator:reposition()
     self:_sync_modified(self.chat_history)
@@ -1678,7 +1675,7 @@ function SessionManager:_add_grant(input, quiet)
     local scope = GrantSafety.compile_scope(pattern, input)
     local added = self.permission_manager:add_grant_scope(scope)
 
-    if not GrantSafety.root_exists(scope) then
+    if not vim.uv.fs_stat(scope.root) then
         Logger.notify(
             string.format("/grant: %s does not exist yet", scope.root),
             vim.log.levels.WARN,
@@ -3390,7 +3387,7 @@ function SessionManager:_warn_unadvertised_command(text)
     if not word then
         return
     end
-    local commands = States.getSlashCommandsForBuffer(self.widget.buf_nrs.input)
+    local commands = States.getSlashCommands(self.widget.buf_nrs.input)
     if #commands == 0 then
         return
     end

@@ -40,29 +40,12 @@ function DiagnosticsList:new(bufnr, on_change)
     return instance
 end
 
---- Add a diagnostic to the list if not already present
---- @param diagnostic agentic.ui.DiagnosticsList.Diagnostic|nil
---- @return boolean success
+--- Add a diagnostic to the list if not already present. A diagnostic is
+--- present when one has the same buffer, position, message, severity, source
+--- and code.
+--- @param diagnostic agentic.ui.DiagnosticsList.Diagnostic
+--- @return boolean added
 function DiagnosticsList:_add_no_render(diagnostic)
-    if not diagnostic or not diagnostic.bufnr then
-        return false
-    end
-
-    local file_path = diagnostic.file_path
-    if type(file_path) ~= "string" then
-        file_path = ""
-    end
-
-    if file_path == "" and vim.api.nvim_buf_is_valid(diagnostic.bufnr) then
-        file_path = vim.api.nvim_buf_get_name(diagnostic.bufnr)
-    end
-
-    if type(file_path) ~= "string" then
-        file_path = ""
-    end
-    diagnostic.file_path = file_path
-
-    -- Check for duplicates
     for _, existing in ipairs(self._diagnostics) do
         if
             existing.bufnr == diagnostic.bufnr
@@ -81,19 +64,7 @@ function DiagnosticsList:_add_no_render(diagnostic)
     return true
 end
 
---- Add a diagnostic to the list if not already present
---- @param diagnostic agentic.ui.DiagnosticsList.Diagnostic|nil
---- @return boolean success
-function DiagnosticsList:add(diagnostic)
-    if not self:_add_no_render(diagnostic) then
-        return false
-    end
-
-    self:render()
-    return true
-end
-
---- Add multiple diagnostics at once
+--- Add the diagnostics not already present, then render once if any were added
 --- @param diagnostics agentic.ui.DiagnosticsList.Diagnostic[]
 --- @return integer count Number of diagnostics added
 function DiagnosticsList:add_many(diagnostics)
@@ -136,68 +107,31 @@ function DiagnosticsList:is_empty()
     return #self._diagnostics == 0
 end
 
---- Get diagnostics for a specific buffer
---- @param bufnr integer|nil If nil, uses current buffer
---- @param opts vim.diagnostic.GetOpts|nil Options passed to vim.diagnostic.get()
---- @return agentic.ui.DiagnosticsList.Diagnostic[] diagnostics Converted diagnostics
-function DiagnosticsList.get_buffer_diagnostics(bufnr, opts)
-    bufnr = bufnr or vim.api.nvim_get_current_buf()
-    opts = opts or {}
-
-    --- @type vim.Diagnostic[]
-    local vim_diagnostics = vim.diagnostic.get(bufnr, opts)
+--- The diagnostics of a buffer, each with the buffer's file path.
+--- @param bufnr integer
+--- @return agentic.ui.DiagnosticsList.Diagnostic[] diagnostics
+function DiagnosticsList.get_buffer_diagnostics(bufnr)
     local file_path = vim.api.nvim_buf_get_name(bufnr)
-
-    --- @type agentic.ui.DiagnosticsList.Diagnostic[]
-    local diagnostics = {}
-
-    for _, d in ipairs(vim_diagnostics) do
-        --- @type agentic.ui.DiagnosticsList.Diagnostic
-        local diagnostic = vim.tbl_extend("force", d, { file_path = file_path }) --[[@as agentic.ui.DiagnosticsList.Diagnostic]]
-        table.insert(diagnostics, diagnostic)
-    end
-
-    return diagnostics
+    return vim.tbl_map(function(d)
+        return vim.tbl_extend("force", d, { file_path = file_path })
+    end, vim.diagnostic.get(bufnr))
 end
 
---- Get diagnostics at the cursor line
---- @param bufnr integer|nil If nil, uses current buffer
---- @param opts vim.diagnostic.GetOpts|nil Options passed to vim.diagnostic.get()
---- @return agentic.ui.DiagnosticsList.Diagnostic[] diagnostics Diagnostics at the cursor line
-function DiagnosticsList.get_diagnostics_at_cursor(bufnr, opts)
-    bufnr = bufnr or vim.api.nvim_get_current_buf()
-    opts = opts or {}
-
+--- The diagnostics of a buffer that span the cursor line of the first window
+--- in the current tabpage that shows it, each with the buffer's file path.
+--- Empty when no such window exists.
+--- @param bufnr integer
+--- @return agentic.ui.DiagnosticsList.Diagnostic[] diagnostics
+function DiagnosticsList.get_diagnostics_at_cursor(bufnr)
     local winid = vim.fn.bufwinid(bufnr)
     if winid == -1 then
-        local current_winid = vim.api.nvim_get_current_win()
-        if vim.api.nvim_win_get_buf(current_winid) ~= bufnr then
-            return {}
-        end
-        winid = current_winid
+        return {}
     end
 
-    local cursor_pos = vim.api.nvim_win_get_cursor(winid)
-    local cursor_line = cursor_pos[1] - 1 -- Convert to 0-indexed
-
-    --- @type vim.Diagnostic[]
-    local vim_diagnostics = vim.diagnostic.get(bufnr, opts)
-    local file_path = vim.api.nvim_buf_get_name(bufnr)
-
-    --- @type agentic.ui.DiagnosticsList.Diagnostic[]
-    local diagnostics = {}
-
-    for _, d in ipairs(vim_diagnostics) do
-        local end_lnum = d.end_lnum or d.lnum
-        if cursor_line >= d.lnum and cursor_line <= end_lnum then
-            --- @type agentic.ui.DiagnosticsList.Diagnostic
-            local diagnostic =
-                vim.tbl_extend("force", d, { file_path = file_path }) --[[@as agentic.ui.DiagnosticsList.Diagnostic]]
-            table.insert(diagnostics, diagnostic)
-        end
-    end
-
-    return diagnostics
+    local cursor_line = vim.api.nvim_win_get_cursor(winid)[1] - 1
+    return vim.tbl_filter(function(d)
+        return cursor_line >= d.lnum and cursor_line <= (d.end_lnum or d.lnum)
+    end, DiagnosticsList.get_buffer_diagnostics(bufnr))
 end
 
 --- Write the diagnostics into the buffer and report the change.

@@ -1,3 +1,4 @@
+local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -72,7 +73,7 @@ describe("ChatHistory", function()
         cwd_stub:returns("/other")
     end
 
-    --- Make writes land on disk, in a fresh storage folder.
+    --- Make writes and reads use the disk, in a fresh storage folder.
     local function use_disk()
         require("agentic.config").session_restore.storage_path =
             vim.fn.tempname()
@@ -81,6 +82,7 @@ describe("ChatHistory", function()
             vim.fn.writefile(vim.split(content, "\n"), path)
             callback(nil)
         end)
+        read_from_disk_stub:revert()
     end
 
     --- @param session_id string
@@ -295,6 +297,38 @@ describe("ChatHistory", function()
             assert.equal(
                 "toolu_1",
                 history.subagent_messages[1].parent_tool_use_id
+            )
+        end)
+
+        it("messages_for_task keeps one agent's messages, in order", function()
+            local history = ChatHistory:new()
+            history.subagent_messages = {
+                {
+                    type = "agent",
+                    text = "a1",
+                    provider_name = "p",
+                    parent_tool_use_id = "a",
+                },
+                {
+                    type = "agent",
+                    text = "b1",
+                    provider_name = "p",
+                    parent_tool_use_id = "b",
+                },
+                {
+                    type = "tool_call",
+                    tool_call_id = "a-tool",
+                    kind = "read",
+                    status = "completed",
+                    parent_tool_use_id = "a",
+                },
+            }
+
+            assert.same(
+                { "a1", "a-tool" },
+                vim.tbl_map(function(msg)
+                    return msg.text or msg.tool_call_id
+                end, history:messages_for_task("a"))
             )
         end)
 
@@ -758,6 +792,27 @@ describe("ChatHistory", function()
             end
             assert.is_true(ids["session-1"])
             assert.is_true(ids["session-2"])
+        end)
+
+        it("skips an unreadable file with one warning naming it", function()
+            assert.is_nil(history_with_id("sid-valid"):save(TEST_CWD))
+            local corrupt_path = ChatHistory.get_file_path("sid-bad", TEST_CWD)
+            vim.fn.writefile({ "not valid json {{{" }, corrupt_path)
+            local Logger = require("agentic.utils.logger")
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+
+            local sessions = list(TEST_CWD)
+
+            assert.equal(1, #sessions)
+            assert.equal("sid-valid", sessions[1].session_id)
+            assert.equal(1, notify_stub.call_count)
+            assert.truthy(
+                notify_stub.calls[1][1]:find(corrupt_path, 1, true)
+            )
+            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
         end)
     end)
 end)

@@ -1,4 +1,5 @@
---- Treesitter helpers for reconstructing syntactic context.
+--- Treesitter helpers: the language of a file, and syntactic context for a
+--- snippet of one.
 ---
 --- `highlight_map_in_context` parses a snippet "as if" it were spliced into
 --- a real file, so captures that depend on structural context (strings,
@@ -10,6 +11,18 @@
 local M = {}
 
 local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
+
+--- Treesitter language of a file, detected from its name, else from
+--- `contents` when the name alone does not decide it (e.g. an extensionless
+--- zsh `#compdef` completion). The result is the parser registered for the
+--- filetype (e.g. `bash` for `sh`).
+--- @param file_path string
+--- @param contents string[]|nil Body lines
+--- @return string language Empty when no filetype matches
+function M.language_for_path(file_path, contents)
+    local ft = vim.filetype.match({ filename = file_path, contents = contents })
+    return ft and vim.treesitter.language.get_lang(ft) or ""
+end
 
 --- Parse `new_lines` spliced into the surrounding file content, then extract
 --- highlight captures for just the new_lines rows. The result maps

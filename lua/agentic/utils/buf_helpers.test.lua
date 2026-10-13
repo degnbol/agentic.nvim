@@ -70,12 +70,12 @@ describe("BufHelpers", function()
         end)
     end)
 
-    describe("is_buffer_empty", function()
+    describe("is_buffer_blank", function()
         it("should return true for buffer with single empty line", function()
             local bufnr = vim.api.nvim_create_buf(false, true)
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
 
-            assert.is_true(BufHelpers.is_buffer_empty(bufnr))
+            assert.is_true(BufHelpers.is_buffer_blank(bufnr))
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
@@ -83,7 +83,7 @@ describe("BufHelpers", function()
             local bufnr = vim.api.nvim_create_buf(false, true)
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "  \t  " })
 
-            assert.is_true(BufHelpers.is_buffer_empty(bufnr))
+            assert.is_true(BufHelpers.is_buffer_blank(bufnr))
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
@@ -97,7 +97,7 @@ describe("BufHelpers", function()
                 { "   ", "\t", "", "  \t  " }
             )
 
-            assert.is_true(BufHelpers.is_buffer_empty(bufnr))
+            assert.is_true(BufHelpers.is_buffer_blank(bufnr))
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
@@ -105,7 +105,7 @@ describe("BufHelpers", function()
             local bufnr = vim.api.nvim_create_buf(false, true)
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "hello" })
 
-            assert.is_false(BufHelpers.is_buffer_empty(bufnr))
+            assert.is_false(BufHelpers.is_buffer_blank(bufnr))
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
@@ -119,7 +119,7 @@ describe("BufHelpers", function()
                 { "   ", "", "text", "  " }
             )
 
-            assert.is_false(BufHelpers.is_buffer_empty(bufnr))
+            assert.is_false(BufHelpers.is_buffer_blank(bufnr))
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
     end)

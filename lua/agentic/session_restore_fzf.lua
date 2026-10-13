@@ -1,3 +1,4 @@
+local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local SessionRestore = require("agentic.session_restore")
 
@@ -73,17 +74,15 @@ function M.show(items, on_select, opts)
             return preview_cache[item.session_id]
         end
 
-        -- vim.fn.readfile: no API equivalent
-        local content = vim.fn.readfile(item.file_path)
-        if #content == 0 then
-            return "Empty session file"
+        local data, err = FileSystem.read_json(item.file_path)
+        if err then
+            return "Failed to read session: " .. err
         end
-        local ok, parsed = pcall(vim.json.decode, table.concat(content, "\n"))
-        if not ok or not parsed or not parsed.messages then
+        if not data or not data.messages then
             return "Failed to parse session"
         end
 
-        local lines = SessionRestore.format_preview(parsed.messages)
+        local lines = SessionRestore.format_preview(data.messages)
         local result = table.concat(lines, "\n")
         preview_cache[item.session_id] = result
         return result

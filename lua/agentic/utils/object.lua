@@ -10,13 +10,12 @@ local function can_merge(value)
         and (vim.tbl_isempty(value) or not vim.islist(value))
 end
 
---- Recursively merge each source into `target`, mutating it in place. Lists
---- replace, as in `vim.tbl_deep_extend`.
---- Kept over `vim.tbl_deep_extend`: every module holds a reference to the one
---- `Config` table, so the merge must mutate it — `tbl_deep_extend` returns a
---- new table and would force a copy-back loop that is this function again.
+--- Recursively merge each source into `target` in place, later sources
+--- winning. Lists and non-table values replace, as in `vim.tbl_deep_extend`,
+--- which returns a new table instead of mutating `target`.
 --- @param target table
 --- @param ... table
+--- @return table target
 function M.deep_merge_into(target, ...)
     for _, source in ipairs({ ... }) do
         for k, v in pairs(source) do
@@ -28,20 +27,6 @@ function M.deep_merge_into(target, ...)
         end
     end
     return target
-end
-
---- @param config agentic.UserConfig
---- @param user_config agentic.UserConfig
---- @return agentic.UserConfig Config the static Config table with user's config merged into it
-function M.merge_config(config, user_config)
-    local default_keys = config and config.keymaps or {}
-    local user_keys = user_config and user_config.keymaps or {}
-
-    local merged = M.deep_merge_into(config, user_config)
-
-    merged.keymaps = vim.tbl_deep_extend("force", default_keys, user_keys)
-
-    return merged
 end
 
 return M

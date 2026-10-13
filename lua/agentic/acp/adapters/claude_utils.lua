@@ -1,3 +1,5 @@
+local FileSystem = require("agentic.utils.file_system")
+
 --- Constants and helpers for the Claude ACP adapter (claude_agent_acp).
 local M = {}
 
@@ -228,16 +230,9 @@ function M.subagent_meta(session_dir, agent_id)
         "subagents",
         "agent-" .. agent_id .. ".meta.json"
     )
-    local file = io.open(path, "r")
-    if not file then
-        return nil
-    end
-    local content = file:read("*a")
-    file:close()
-    local ok, decoded = pcall(vim.json.decode, content)
+    local decoded = FileSystem.read_json(path)
     if
-        not ok
-        or type(decoded) ~= "table"
+        type(decoded) ~= "table"
         or type(decoded.agentType) ~= "string"
         or type(decoded.requestShape) ~= "string"
         or type(decoded.toolUseId) ~= "string"

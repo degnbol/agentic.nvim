@@ -240,7 +240,8 @@ end
 function Agentic.setup(opts)
     -- make sure invalid user config doesn't crash setup and leave things half-initialized
     local ok, err = pcall(function()
-        Object.merge_config(Config, opts or {})
+        -- In place: every module holds a reference to this one Config table.
+        Object.deep_merge_into(Config, opts or {})
     end)
 
     if not ok then

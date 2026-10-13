@@ -195,6 +195,15 @@ function ChatHistory:set_subagent_task(child_id, task_id)
     self.dirty = true
 end
 
+--- The stored messages of the agent one Task spawned, in stored order.
+--- @param task_id string The spawning Task's tool call id
+--- @return agentic.ui.ChatHistory.SubagentMessage[]
+function ChatHistory:messages_for_task(task_id)
+    return vim.tbl_filter(function(msg)
+        return msg.parent_tool_use_id == task_id
+    end, self.subagent_messages)
+end
+
 --- Append text to the same agent's last message (same `parent_tool_use_id`)
 --- when it has the same type, or add a new message.
 --- @param msg { type: "agent"|"thought", text: string, provider_name: string, parent_tool_use_id?: string }
@@ -262,8 +271,7 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                 type = "text",
                 text = string.format(
                     "Subagent %s%q: %s",
-                    subagent.agent_type and (subagent.agent_type .. " ")
-                        or "",
+                    subagent.agent_type and (subagent.agent_type .. " ") or "",
                     subagent.label or "Agent",
                     msg.status
                 ),
@@ -367,49 +375,54 @@ end
 
 --- Read session metadata from all JSON files in a folder.
 --- @param folder string
---- @return agentic.ui.ChatHistory.SessionMeta[]
+--- @return agentic.ui.ChatHistory.SessionMeta[] sessions
+--- @return string[] errors One per file that could not be read or decoded
 local function read_sessions_from_folder(folder)
     local sessions = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+    local errors = {} --- @type string[]
 
     for filename, file_type in vim.fs.dir(folder) do
         if file_type == "file" and filename:match("%.json$") then
             local file_path = vim.fs.joinpath(folder, filename)
-            local content = vim.fn.readfile(file_path)
-            if #content > 0 then
-                local ok, parsed =
-                    pcall(vim.json.decode, table.concat(content, "\n"))
-                if ok and parsed then
-                    local prompt_count = 0
-                    if parsed.messages then
-                        for _, msg in ipairs(parsed.messages) do
-                            if msg.type == "user" then
-                                prompt_count = prompt_count + 1
-                            end
+            local parsed, err = FileSystem.read_json(file_path)
+            if parsed then
+                local prompt_count = 0
+                if parsed.messages then
+                    for _, msg in ipairs(parsed.messages) do
+                        if msg.type == "user" then
+                            prompt_count = prompt_count + 1
                         end
                     end
-                    table.insert(sessions, {
-                        session_id = filename:gsub("%.json$", ""),
-                        title = parsed.title or "",
-                        timestamp = parsed.timestamp or 0,
-                        last_activity = parsed.last_activity,
-                        cwd = parsed.cwd,
-                        file_path = file_path,
-                        prompt_count = prompt_count,
-                        provider = parsed.provider,
-                        model = parsed.model,
-                    })
-                else
-                    Logger.debug(
-                        "Failed to parse session file:",
-                        file_path,
-                        parsed
-                    )
                 end
+                table.insert(sessions, {
+                    session_id = filename:gsub("%.json$", ""),
+                    title = parsed.title or "",
+                    timestamp = parsed.timestamp or 0,
+                    last_activity = parsed.last_activity,
+                    cwd = parsed.cwd,
+                    file_path = file_path,
+                    prompt_count = prompt_count,
+                    provider = parsed.provider,
+                    model = parsed.model,
+                })
+            else
+                table.insert(errors, err)
             end
         end
     end
 
-    return sessions
+    return sessions, errors
+end
+
+--- Warn once about every session file that could not be listed.
+--- @param errors string[]
+local function warn_unreadable(errors)
+    if #errors > 0 then
+        Logger.notify(
+            "Unreadable session files:\n" .. table.concat(errors, "\n"),
+            vim.log.levels.WARN
+        )
+    end
 end
 
 --- List the sessions of the project folder of `cwd`, by last activity
@@ -425,7 +438,8 @@ function ChatHistory.list_sessions(cwd, callback)
         return
     end
 
-    local sessions = read_sessions_from_folder(folder)
+    local sessions, errors = read_sessions_from_folder(folder)
+    warn_unreadable(errors)
 
     table.sort(sessions, function(a, b)
         return (a.last_activity or a.timestamp)
@@ -447,14 +461,17 @@ function ChatHistory.list_all_sessions(callback)
     end
 
     local all_sessions = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+    local all_errors = {} --- @type string[]
 
     for dirname, dir_type in vim.fs.dir(base) do
         if dir_type == "directory" then
-            local folder = vim.fs.joinpath(base, dirname)
-            local sessions = read_sessions_from_folder(folder)
+            local sessions, errors =
+                read_sessions_from_folder(vim.fs.joinpath(base, dirname))
             vim.list_extend(all_sessions, sessions)
+            vim.list_extend(all_errors, errors)
         end
     end
+    warn_unreadable(all_errors)
 
     table.sort(all_sessions, function(a, b)
         return (a.last_activity or a.timestamp)

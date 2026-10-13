@@ -30,7 +30,7 @@ target overlaps the post-Read modification actually clobber.
 | `stat_snapshot` / `stat_unchanged` | `trust_safety.lua:368–399` | Capture and compare mtime_sec/nsec/size — generic external-change detector |
 | `find_subsequence` / `find_unique_subsequence` | `trust_safety.lua:171–250` | Locate target lines in a file |
 | `edit_target_range` | `trust_safety.lua:340–362` | Resolve an Edit's `diff.old` to a line range in the current file |
-| `range_overlaps` / `any_overlap` | `trust_safety.lua:203–227` | Range arithmetic |
+| `range_overlaps` | `trust_safety.lua:203–227` | Range arithmetic |
 | `_try_record_edit_range` | `session_manager.lua:779` | Pattern for hooking `_on_tool_call` and stashing per-tool state on `PermissionManager` |
 | `_check_trust` | `permission_manager.lua:208` | Per-tool gate run before approval UI; new check inserts here |
 | `_pending_edits` / `_edit_records` table | `permission_manager.lua` | Storage shape to mirror for `_read_snapshots` |
@@ -110,7 +110,7 @@ finalised lines into `_read_snapshots`, same shape as
    - Compute `edit_target_range(diff, current_lines)`. For Write
      `diff.all` → range is whole file.
    - Diff `snapshot.lines` vs `current_lines` to find changed line
-     ranges (use `vim.diff` with `result_type = "indices"`).
+     ranges (use `vim.text.diff` with `result_type = "indices"`).
    - If any changed range overlaps `edit_target_range` → unsafe with
      reason naming the first overlapping line.
 4. **Wire `_check_stale_read` into `_try_auto_approve`** — return
@@ -125,7 +125,7 @@ finalised lines into `_read_snapshots`, same shape as
 
 ## Residual open questions
 
-1. **Diff granularity for the reason message.** `vim.diff` returns line
+1. **Diff granularity for the reason message.** `vim.text.diff` returns line
    ranges; reporting "line N changed since last Read" is fine. For
    multi-hunk changes, name the first overlapping hunk only or list
    all?

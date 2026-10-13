@@ -212,7 +212,11 @@ describe("agentic.ui.PermissionManager", function()
                 sessionId = "test-session",
                 toolCall = { toolCallId = tool_call_id, kind = "edit" },
                 options = {
-                    { optionId = "allow-once", name = "Allow", kind = "allow_once" },
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
                 },
             }, cb --[[@as function]])
             return cb
@@ -259,8 +263,7 @@ describe("agentic.ui.PermissionManager", function()
 
         --- @return boolean
         local function key_mapped()
-            return vim.fn.maparg("<localLeader>1", "n", false, true).buffer
-                == 1
+            return vim.fn.maparg("<localLeader>1", "n", false, true).buffer == 1
         end
 
         before_each(function()
@@ -314,35 +317,42 @@ describe("agentic.ui.PermissionManager", function()
             vim.api.nvim_buf_delete(companion, { force = true })
         end)
 
-        it("report a request with no float in the current tab once, and its end", function()
-            pm:clear()
-            visible_stub:returns(false)
-            local reports = {}
-            pm.on_hidden = function()
-                table.insert(reports, "hidden")
-            end
-            pm.on_hidden_resolved = function()
-                table.insert(reports, "resolved")
-            end
-            pm:add_request({
-                sessionId = "test-session",
-                toolCall = { toolCallId = "tc-hidden", kind = "edit" },
-                options = {
-                    { optionId = "allow-once", name = "Allow", kind = "allow_once" },
-                },
-            }, function() end)
-            pm:refresh_float()
-            visible_stub:returns(true)
-            pm:refresh_float()
-            visible_stub:returns(false)
-            pm:refresh_float()
+        it(
+            "report a request with no float in the current tab once, and its end",
+            function()
+                pm:clear()
+                visible_stub:returns(false)
+                local reports = {}
+                pm.on_hidden = function()
+                    table.insert(reports, "hidden")
+                end
+                pm.on_hidden_resolved = function()
+                    table.insert(reports, "resolved")
+                end
+                pm:add_request({
+                    sessionId = "test-session",
+                    toolCall = { toolCallId = "tc-hidden", kind = "edit" },
+                    options = {
+                        {
+                            optionId = "allow-once",
+                            name = "Allow",
+                            kind = "allow_once",
+                        },
+                    },
+                }, function() end)
+                pm:refresh_float()
+                visible_stub:returns(true)
+                pm:refresh_float()
+                visible_stub:returns(false)
+                pm:refresh_float()
 
-            pm:_complete_request("allow-once")
-            pm.on_hidden = nil
-            pm.on_hidden_resolved = nil
+                pm:_complete_request("allow-once")
+                pm.on_hidden = nil
+                pm.on_hidden_resolved = nil
 
-            assert.same({ "hidden", "resolved" }, reports)
-        end)
+                assert.same({ "hidden", "resolved" }, reports)
+            end
+        )
 
         it("unbind and stop following on resolve", function()
             pm:_complete_request("allow-once")
@@ -1711,10 +1721,8 @@ describe("agentic.ui.PermissionManager", function()
     describe("auto-reject deny commands", function()
         local Config = require("agentic.config")
         local PermissionRules = require("agentic.utils.permission_rules")
-        local orig_read_json
-        local orig_auto_approve
-        local orig_use_plugin
-        local orig_use_claude
+        --- @type agentic.UserConfig.Permissions
+        local saved_permissions
 
         --- @param command string
         --- @param tool_call_id string
@@ -1742,29 +1750,17 @@ describe("agentic.ui.PermissionManager", function()
             }
         end
 
+        -- Only the bundled rules decide: the user's settings.json is off.
         before_each(function()
-            orig_read_json = PermissionRules.read_json
-            --- @diagnostic disable-next-line: duplicate-set-field
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return nil
-                end
-                return orig_read_json(path)
-            end
-            orig_auto_approve = Config.permissions.auto_approve
-            orig_use_plugin = Config.permissions.use_plugin_defaults
-            orig_use_claude = Config.permissions.use_claude_settings
+            saved_permissions = vim.deepcopy(Config.permissions)
             Config.permissions.auto_approve = "safe_write"
             Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = true
+            Config.permissions.use_claude_settings = false
             PermissionRules.invalidate_cache()
         end)
 
         after_each(function()
-            PermissionRules.read_json = orig_read_json
-            Config.permissions.auto_approve = orig_auto_approve
-            Config.permissions.use_plugin_defaults = orig_use_plugin
-            Config.permissions.use_claude_settings = orig_use_claude
+            Config.permissions = saved_permissions
             PermissionRules.invalidate_cache()
         end)
 

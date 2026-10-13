@@ -228,21 +228,6 @@ function Theme.setup()
     })
 end
 
---- Treesitter injection name for a path's markdown code fence, via neovim's
---- own filetype engine. `vim.filetype.match` returns the filetype (`sh`);
---- `get_lang` converts it to the parser/injection name (`bash`) the fence
---- needs. Returns "" for unrecognised files (e.g. extensionless).
---- @param file_path string
---- @param contents string[]|nil Body lines, used as a fallback when the
----        filename alone doesn't resolve a type (e.g. extensionless files
----        whose type is content-defined, like zsh `#compdef` completions).
----        Filename/extension still wins; contents only fills the gap.
---- @return string language
-function Theme.get_language_from_path(file_path, contents)
-    local ft = vim.filetype.match({ filename = file_path, contents = contents })
-    return ft and vim.treesitter.language.get_lang(ft) or ""
-end
-
 --- @param status string
 --- @return string hl_group
 function Theme.get_status_hl_group(status)

@@ -9,6 +9,58 @@ local function has_parser(lang)
 end
 
 describe("Treesitter", function()
+    describe("language_for_path", function()
+        it("maps a known extension to its parser name", function()
+            assert.equal(Treesitter.language_for_path("foo.py"), "python")
+        end)
+
+        it("passes through extensions whose name is the parser name", function()
+            assert.equal(Treesitter.language_for_path("foo.lua"), "lua")
+            assert.equal(Treesitter.language_for_path("foo.md"), "markdown")
+        end)
+
+        it("detects special filenames with no extension", function()
+            assert.equal(Treesitter.language_for_path("justfile"), "just")
+        end)
+
+        it("returns empty string for an unrecognised file", function()
+            assert.equal(Treesitter.language_for_path("script_no_ext"), "")
+        end)
+
+        -- A filetype whose parser name differs from it (sh -> bash) resolves
+        -- only via a registered filetype<->parser mapping, which nvim-treesitter
+        -- installs but bare Neovim does not. Register it here to prove the
+        -- function honours registrations rather than a hand-rolled table.
+        it("honours a registered filetype-to-parser mapping", function()
+            vim.treesitter.language.register("bash", "sh")
+            assert.equal(Treesitter.language_for_path("foo.sh"), "bash")
+        end)
+
+        it(
+            "falls back to contents for content-defined extensionless files",
+            function()
+                assert.equal(
+                    Treesitter.language_for_path(
+                        "_brew",
+                        { "#compdef brew", "local x" }
+                    ),
+                    "zsh"
+                )
+            end
+        )
+
+        it("still returns empty when contents are omitted", function()
+            assert.equal(Treesitter.language_for_path("_brew"), "")
+        end)
+
+        it("prefers extension over a misleading content line", function()
+            assert.equal(
+                Treesitter.language_for_path("foo.lua", { "#compdef x" }),
+                "lua"
+            )
+        end)
+    end)
+
     describe("highlight_map_in_context", function()
         it("returns nil when no parser is installed", function()
             local map = Treesitter.highlight_map_in_context(

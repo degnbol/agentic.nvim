@@ -291,7 +291,7 @@ end
 --- @param home integer The window the stack hangs below
 --- @param panel agentic.ui.ChatWidget.StackPanel
 function WidgetLayout.sync_panel(win_nrs, buf_nrs, home, panel)
-    if BufHelpers.is_buffer_empty(buf_nrs[panel]) then
+    if BufHelpers.is_buffer_blank(buf_nrs[panel]) then
         WidgetLayout.close_panel(win_nrs, buf_nrs, panel)
     elseif WidgetLayout.panel_win(win_nrs, buf_nrs, panel) then
         WidgetLayout.resize_panel(win_nrs, buf_nrs, panel)

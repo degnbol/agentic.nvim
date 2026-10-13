@@ -1,5 +1,4 @@
 local Logger = require("agentic.utils.logger")
-local uv = vim.uv or vim.loop
 
 --- @alias agentic.acp.TransportType "stdio" | "tcp" | "websocket"
 
@@ -63,9 +62,9 @@ function M.create_stdio_transport(config, callbacks)
     function transport:start()
         callbacks.on_state_change("connecting")
 
-        local stdin = uv.new_pipe(false)
-        local stdout = uv.new_pipe(false)
-        local stderr = uv.new_pipe(false)
+        local stdin = vim.uv.new_pipe(false)
+        local stdout = vim.uv.new_pipe(false)
+        local stderr = vim.uv.new_pipe(false)
 
         if not stdin or not stdout or not stderr then
             callbacks.on_state_change("error")
@@ -109,7 +108,7 @@ function M.create_stdio_transport(config, callbacks)
         end
 
         --- @diagnostic disable-next-line: missing-fields
-        local handle, pid = uv.spawn(config.command, {
+        local handle, pid = vim.uv.spawn(config.command, {
             args = args,
             env = final_env,
             stdio = { stdin, stdout, stderr },

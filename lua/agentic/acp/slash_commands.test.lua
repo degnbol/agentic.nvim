@@ -40,7 +40,7 @@ describe("agentic.acp.SlashCommands", function()
 
             SlashCommands.setCommands(bufnr, commands_mock)
 
-            local commands = States.getSlashCommands()
+            local commands = States.getSlashCommands(0)
             local map = by_name(commands)
 
             -- Provider commands present
@@ -69,7 +69,7 @@ describe("agentic.acp.SlashCommands", function()
 
             SlashCommands.setCommands(bufnr, commands_mock)
 
-            local commands = States.getSlashCommands()
+            local commands = States.getSlashCommands(0)
             local map = by_name(commands)
 
             -- Provider descriptions win over builtins
@@ -100,7 +100,7 @@ describe("agentic.acp.SlashCommands", function()
 
             SlashCommands.setCommands(bufnr, commands_mock)
 
-            local commands = States.getSlashCommands()
+            local commands = States.getSlashCommands(0)
 
             for _, cmd in ipairs(commands) do
                 assert.is_false(cmd.word:match("%s") ~= nil)
@@ -119,7 +119,7 @@ describe("agentic.acp.SlashCommands", function()
 
             ---@diagnostic disable-next-line: param-type-mismatch
             SlashCommands.setCommands(bufnr, commands_mock)
-            local commands = States.getSlashCommands()
+            local commands = States.getSlashCommands(0)
 
             -- valid + 6 builtins (context, new, clear, rename, delete, grant)
             assert.equal(7, #commands)
@@ -143,9 +143,9 @@ describe("agentic.acp.SlashCommands", function()
             SlashCommands.setCommands(bufnr, commands1)
             SlashCommands.setCommands(bufnr2, commands2)
 
-            local commands_buf1 = States.getSlashCommands()
+            local commands_buf1 = States.getSlashCommands(0)
             vim.api.nvim_set_current_buf(bufnr2)
-            local commands_buf2 = States.getSlashCommands()
+            local commands_buf2 = States.getSlashCommands(0)
 
             local map1 = by_name(commands_buf1)
             local map2 = by_name(commands_buf2)

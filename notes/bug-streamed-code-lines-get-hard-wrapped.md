@@ -32,7 +32,7 @@ if wrap_width > 0 and #tail > wrap_width then
     local wrapped = TextWrap.wrap_single_line(tail, wrap_width)
 ```
 
-`wrap_single_line_with_offsets` (`text_wrap.lua:338-350`) skips fence
+`wrap_single_line` (`text_wrap.lua:296-308`) skips fence
 *delimiter* lines (`^%s*```) but nothing tells it that a line is fence
 *content*. The two sites that do track fence state are no help here:
 

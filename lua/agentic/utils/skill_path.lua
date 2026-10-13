@@ -20,15 +20,20 @@ local CONTAINERS = { ".claude/skills", ".agents/skills" }
 --- under several spellings (a symlinked config directory, a repository reached
 --- both directly and through a symlink). Each survivor keeps the spelling it
 --- was given, which is the one worth displaying.
---- @param cwd string
---- @param extra_dirs string[] Roots to consider after the ancestor chain
+--- @param cwd string Absolute
+--- @param extra_dirs string[] Roots to consider after the ancestor chain; a relative one is relative to `cwd`
 --- @return string[] roots
 function SkillPath.roots(cwd, extra_dirs)
     local candidates = { cwd }
     for dir in vim.fs.parents(cwd) do
         table.insert(candidates, dir)
     end
-    vim.list_extend(candidates, extra_dirs)
+    for _, dir in ipairs(extra_dirs) do
+        table.insert(
+            candidates,
+            vim.startswith(dir, "/") and dir or vim.fs.joinpath(cwd, dir)
+        )
+    end
     table.insert(candidates, vim.uv.os_homedir())
 
     --- @type string[]

@@ -42,10 +42,7 @@ local function get_slash_completions(bufnr, line_text, cursor_col, cursor_line)
     local slash_col = cursor_col - slash_byte_pos
 
     -- Read from specific buffer, not vim.b[0], to be robust in LSP context
-    local commands = States.getSlashCommandsForBuffer(bufnr)
-    if #commands == 0 then
-        return {}
-    end
+    local commands = States.getSlashCommands(bufnr)
 
     --- @type table[]
     local items = {}
@@ -94,10 +91,7 @@ local function get_slash_word_completions(
 
     local word_col = cursor_col - #word
 
-    local commands = States.getSlashCommandsForBuffer(bufnr)
-    if #commands == 0 then
-        return {}
-    end
+    local commands = States.getSlashCommands(bufnr)
 
     --- @type table[]
     local items = {}

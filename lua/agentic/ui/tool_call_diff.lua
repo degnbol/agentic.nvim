@@ -29,12 +29,6 @@ local M = {}
 local TextMatcher = require("agentic.utils.text_matcher")
 local FileSystem = require("agentic.utils.file_system")
 
--- vim.diff was renamed to vim.text.diff (identical signature, just namespace move)
--- Fallback needed for backward compatibility with Neovim < 0.12
---- @type fun(a: string, b: string, opts: table): integer[][]
---- @diagnostic disable-next-line: deprecated
-local diff_fn = vim.text and vim.text.diff or vim.diff
-
 --- @param lines string[]
 --- @return boolean is_empty
 function M.is_empty_lines(lines)
@@ -150,7 +144,8 @@ local function hunk_to_block(diff_block, hunk)
     return result
 end
 
---- Minimize diff blocks by removing unchanged lines using vim.diff
+--- Split each diff block into blocks of its changed lines only. Drops blocks
+--- with no change. The result is sorted by `start_line`.
 --- @param diff_blocks agentic.ui.ToolCallDiff.DiffBlock[]
 --- @return agentic.ui.ToolCallDiff.DiffBlock[]
 function M.minimize_diff_blocks(diff_blocks)
@@ -167,18 +162,18 @@ function M.minimize_diff_blocks(diff_blocks)
                 -- Fast path for single-line blocks
                 table.insert(minimized, diff_block)
             else
-                local patch = diff_fn(old_string, new_string, {
+                local patch = vim.text.diff(old_string, new_string, {
                     algorithm = "histogram",
                     result_type = "indices",
                     ctxlen = 0,
-                })
+                }) --[[@as integer[][] ]]
 
                 if #patch > 0 then
                     for _, hunk in ipairs(patch) do
                         table.insert(minimized, hunk_to_block(diff_block, hunk))
                     end
                 else
-                    -- Edge case: vim.diff returns empty patch but strings differ
+                    -- Edge case: vim.text.diff returns empty patch but strings differ
                     table.insert(minimized, diff_block)
                 end
             end
@@ -264,11 +259,11 @@ function M.filter_unchanged_lines(old_lines, new_lines)
         return result
     end
 
-    local patch = diff_fn(old_string, new_string, {
+    local patch = vim.text.diff(old_string, new_string, {
         algorithm = "histogram",
         result_type = "indices",
         ctxlen = 0,
-    })
+    }) --[[@as integer[][] ]]
 
     for _, hunk in ipairs(patch) do
         local start_a, count_a, start_b, count_b = unpack(hunk)

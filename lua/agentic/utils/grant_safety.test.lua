@@ -629,7 +629,6 @@ describe("agentic.utils.grant_safety", function()
 
         it("a nonexistent root compiles", function()
             local scope = compile("/nonexistent-agentic-root/sub")
-            assert.is_false(GrantSafety.root_exists(scope))
             assert.is_true(
                 GrantSafety.scope_contains(
                     scope,

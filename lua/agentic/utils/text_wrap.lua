@@ -4,24 +4,15 @@
 --- @class agentic.utils.TextWrap
 local M = {}
 
---- @class agentic.utils.TextWrap.Offset
---- @field orig_start integer 0-indexed byte position in the original line
----   where this sub-line's content (after the continuation indent) starts.
---- @field indent_len integer Number of leading indent bytes in the sub-line
----   that do NOT correspond to bytes in the original (added by the wrapper
----   on continuation lines). Always 0 for the first sub-line.
-
---- Wrap a single line of prose at word boundaries.
---- Preserves leading whitespace and list markers on continuation lines.
---- Returns sub-lines plus offset metadata so callers can map sub-line
---- local byte columns back to the original unwrapped line.
+--- Wrap a single line of prose at word boundaries. Continuation lines are
+--- indented to align after the line's leading whitespace and list or quote
+--- marker.
 --- @param line string
 --- @param width integer
 --- @return string[] sub_lines
---- @return agentic.utils.TextWrap.Offset[] offsets
 local function wrap_line(line, width)
     if #line <= width then
-        return { line }, { { orig_start = 0, indent_len = 0 } }
+        return { line }
     end
 
     -- Detect leading prefix (whitespace + optional list marker) for continuation
@@ -31,14 +22,11 @@ local function wrap_line(line, width)
         or line:match("^(%s+)") -- plain indent
         or ""
     local continuation_indent = string.rep(" ", #prefix)
-    local indent_len = #continuation_indent
 
-    -- Walk words with byte positions so we can map sub-lines back to the
-    -- original. gmatch gives us words but not positions; find in a loop does.
     -- Inline code spans (`...`) and inline math (`$...$`) are kept as a single
     -- word even when they contain spaces — a wrap must never fall inside
     -- backticks or dollar-math.
-    local words = {} ---@type { text: string, start: integer }[]
+    local words = {} ---@type string[]
     local len = #line
     local pos = 1
     while pos <= len do
@@ -69,45 +57,28 @@ local function wrap_line(line, width)
                 i = i + 1
             end
         end
-        words[#words + 1] = { text = line:sub(s, i - 1), start = s - 1 }
+        words[#words + 1] = line:sub(s, i - 1)
         pos = i
     end
 
     local result = {}
-    local offsets = {}
     local current = ""
-    local current_orig_start = 0
-    local current_indent = 0
-    local first = true
 
-    for _, w in ipairs(words) do
+    for _, word in ipairs(words) do
         if current == "" then
-            current = (first and "" or continuation_indent) .. w.text
-            current_orig_start = w.start
-            current_indent = first and 0 or indent_len
-        elseif #current + 1 + #w.text <= width then
-            current = current .. " " .. w.text
+            current = (#result == 0 and "" or continuation_indent) .. word
+        elseif #current + 1 + #word <= width then
+            current = current .. " " .. word
         else
             result[#result + 1] = current
-            offsets[#offsets + 1] = {
-                orig_start = current_orig_start,
-                indent_len = current_indent,
-            }
-            first = false
-            current = continuation_indent .. w.text
-            current_orig_start = w.start
-            current_indent = indent_len
+            current = continuation_indent .. word
         end
     end
     if current ~= "" then
         result[#result + 1] = current
-        offsets[#offsets + 1] = {
-            orig_start = current_orig_start,
-            indent_len = current_indent,
-        }
     end
 
-    return result, offsets
+    return result
 end
 
 --- Check if a line is a markdown table row (starts with optional whitespace then `|`).
@@ -318,33 +289,20 @@ local function format_table(table_lines)
 end
 
 --- Wrap a single prose line at word boundaries.
---- Returns the original line unchanged (in a table) if it fits within width,
---- is blank, or looks like a code fence / table row.
+--- Returns the line unchanged if it fits within `width` (or `width` is not
+--- positive), is blank, or looks like a code fence, table row or heading.
 --- @param line string
 --- @param width integer
 --- @return string[]
 function M.wrap_single_line(line, width)
-    local sub_lines = M.wrap_single_line_with_offsets(line, width)
-    return sub_lines
-end
-
---- Same as `wrap_single_line` but also returns byte-offset metadata for each
---- sub-line, enabling callers to map sub-line local columns back to positions
---- in the original unwrapped line (for per-sub-line diff highlighting).
---- @param line string
---- @param width integer
---- @return string[] sub_lines
---- @return agentic.utils.TextWrap.Offset[] offsets
-function M.wrap_single_line_with_offsets(line, width)
     if
         width <= 0
-        or #line <= width
         or line:match("^%s*$")
         or line:match("^%s*```")
         or is_table_line(line)
         or is_heading(line)
     then
-        return { line }, { { orig_start = 0, indent_len = 0 } }
+        return { line }
     end
     return wrap_line(line, width)
 end

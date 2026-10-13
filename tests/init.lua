@@ -43,6 +43,10 @@ for entry in vim.gsplit(rtp, ",", { plain = true }) do
 end
 vim.api.nvim_set_option_value("runtimepath", table.concat(cleaned, ","), {})
 
+-- A nonexistent Claude config dir, so no test reads the user's settings.json
+-- or Claude's `projects/`. Child neovims inherit it.
+vim.env.CLAUDE_CONFIG_DIR = vim.fn.tempname()
+
 local MiniTest = require("mini.test")
 
 MiniTest.setup({

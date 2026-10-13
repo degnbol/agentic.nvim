@@ -66,6 +66,12 @@ describe("SkillPath", function()
             assert.equal(index_of(roots, real), 1)
             assert.is_nil(index_of(roots, link))
         end)
+
+        it("resolves a relative extra against cwd", function()
+            local roots = SkillPath.roots(dir, { "sub" })
+
+            assert.is_not_nil(index_of(roots, vim.fs.joinpath(dir, "sub")))
+        end)
     end)
 
     describe("find", function()

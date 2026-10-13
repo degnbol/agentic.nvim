@@ -1070,7 +1070,7 @@ function MessageWriter:_decorate_collapsed_region(
     -- Same measure `collapsed_region_lines` folds on: a one-row body has no
     -- fence, and so no fold to close.
     if body_end > body_start then
-        self:_close_fold(body_start)
+        self:_queue_fold(body_start, false)
     end
 end
 
@@ -1798,7 +1798,7 @@ function MessageWriter:write_error_message(err)
         -- would later span it and move its NS_ERROR extmarks.
         self:_end_prose_run(bufnr)
 
-        local was_empty = BufHelpers.is_buffer_empty(bufnr)
+        local was_empty = BufHelpers.is_buffer_blank(bufnr)
         self:_append_lines(all_lines)
 
         local end_row = vim.api.nvim_buf_line_count(bufnr) - 1
@@ -2160,7 +2160,7 @@ function MessageWriter:write_message_chunk(update, starts_response)
         -- Rows rather than leading newlines, so the run starts on its text.
         if
             not run_open
-            and not BufHelpers.is_buffer_empty(bufnr)
+            and not BufHelpers.is_buffer_blank(bufnr)
             and BufHelpers.trailing_blank_rows(bufnr, 1) == 0
         then
             self:_append_lines({ "", "" })
@@ -2292,7 +2292,7 @@ end
 --- @param lines string[]
 --- @return nil
 function MessageWriter:_append_lines(lines)
-    local start_line = BufHelpers.is_buffer_empty(self.bufnr) and 0 or -1
+    local start_line = BufHelpers.is_buffer_blank(self.bufnr) and 0 or -1
 
     local success, err = pcall(
         vim.api.nvim_buf_set_lines,
@@ -2540,12 +2540,6 @@ local function apply_fold(winid, row, open)
             string.format("%d%s", row + 1, open and "foldopen" or "foldclose")
         )
     end)
-end
-
---- See _queue_fold.
---- @param anchor_row integer
-function MessageWriter:_close_fold(anchor_row)
-    self:_queue_fold(anchor_row, false)
 end
 
 --- Hold the pending fold ops until the user leaves insert mode, then retry.
@@ -3127,20 +3121,9 @@ function MessageWriter:update_tool_call_block(tool_call_block)
 end
 
 --- @private
---- @param err agentic.acp.ACPError
---- @return string[] lines
---- @return string|nil error_type
---- @return number|nil reset_epoch
-function MessageWriter._format_error_lines(err)
-    return format_error_lines(err)
-end
+MessageWriter._format_error_lines = format_error_lines
 
 --- @private
---- @param time_str string
---- @param tz string
---- @return number|nil epoch
-function MessageWriter._parse_reset_time(time_str, tz)
-    return parse_reset_time(time_str, tz)
-end
+MessageWriter._parse_reset_time = parse_reset_time
 
 return MessageWriter

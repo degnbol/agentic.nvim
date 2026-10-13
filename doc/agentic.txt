@@ -800,7 +800,9 @@ binary-dir prefix, then checked against two layers:
   option clustering (`sort -uo out`), GNU abbreviation (`sort --out=x`)
   and glued arguments (`sort -oFILE`) are matched.
 - Claude's settings: the `Bash(...)` entries of the `allow`, `deny` and
-  `ask` lists in `~/.claude/settings.json` and `.claude/settings.json`.
+  `ask` lists in `settings.json` in Claude's config directory
+  (`CLAUDE_CONFIG_DIR` from the provider's `env` or the environment, else
+  `~/.claude`) and in `.claude/settings.json`.
 
 A leaf auto-approves when a layer allows it and no layer denies or asks.
 `deny` rejects the command immediately, with no prompt and no execution;

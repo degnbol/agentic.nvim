@@ -290,7 +290,7 @@ writer:_own_edit(function(bufnr)
     vim.list_extend(block, { "```", "end" })
     vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, block)
 end)
-writer:_close_fold(first_body)
+writer:_queue_fold(first_body, false)
 ]])
         settle()
 

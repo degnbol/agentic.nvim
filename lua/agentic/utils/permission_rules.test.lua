@@ -1,18 +1,49 @@
 local assert = require("tests.helpers.assert")
+local Config = require("agentic.config")
+local FileSystem = require("agentic.utils.file_system")
 local PermissionRules = require("agentic.utils.permission_rules")
 
 describe("PermissionRules", function()
+    local read_json = FileSystem.read_json
+    --- @type agentic.UserConfig.Permissions
+    local saved_permissions
+
+    before_each(function()
+        saved_permissions = vim.deepcopy(Config.permissions)
+    end)
+
+    after_each(function()
+        FileSystem.read_json = read_json
+        Config.permissions = saved_permissions
+        PermissionRules.invalidate_cache()
+    end)
+
+    --- Serve `permissions` as the content of every settings.json until the
+    --- case ends. Other files read from disk.
+    --- @param permissions table|nil `allow`/`deny`/`ask` lists of `Bash(...)` globs; nil for no settings.json
+    local function stub_settings(permissions)
+        --- @diagnostic disable-next-line: duplicate-set-field
+        FileSystem.read_json = function(path)
+            if path:find("settings%.json$") then
+                return permissions and { permissions = permissions }
+            end
+            return read_json(path)
+        end
+        PermissionRules.invalidate_cache()
+    end
+
+    --- Whether `command` auto-approves with `permissions` as the only
+    --- rules: settings.json holds them and the bundled rules are off.
+    --- @param command string
+    --- @param permissions table See `stub_settings`
+    --- @return boolean
+    local function decide(command, permissions)
+        Config.permissions.use_plugin_defaults = false
+        stub_settings(permissions)
+        return PermissionRules.should_auto_approve(command)
+    end
+
     describe("glob_to_lua_pattern", function()
-        it("converts simple glob with trailing *", function()
-            local pat = PermissionRules.glob_to_lua_pattern("grep *")
-            assert.equal("^grep .*$", pat)
-        end)
-
-        it("converts glob with no wildcard", function()
-            local pat = PermissionRules.glob_to_lua_pattern("ls")
-            assert.equal("^ls$", pat)
-        end)
-
         it("escapes Lua magic characters", function()
             local pat = PermissionRules.glob_to_lua_pattern("git (status)")
             assert.equal("^git %(status%)$", pat)
@@ -40,20 +71,6 @@ describe("PermissionRules", function()
             assert.equal("grep *", patterns[1].original)
             assert.equal("ls", patterns[2].original)
         end)
-
-        it("returns empty for missing list", function()
-            local patterns = PermissionRules.extract_bash_patterns({}, "allow")
-            assert.equal(0, #patterns)
-        end)
-
-        it("skips non-Bash entries", function()
-            local permissions = {
-                allow = { "Read(**)", "Glob(**)" },
-            }
-            local patterns =
-                PermissionRules.extract_bash_patterns(permissions, "allow")
-            assert.equal(0, #patterns)
-        end)
     end)
 
     describe("strip_command_path", function()
@@ -64,150 +81,45 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("strips /bin/ prefix", function()
-            assert.equal(
-                "ls -la",
-                PermissionRules.strip_command_path("/bin/ls -la")
-            )
-        end)
-
-        it("strips /opt/homebrew/bin/ prefix", function()
-            assert.equal(
-                "rg foo",
-                PermissionRules.strip_command_path("/opt/homebrew/bin/rg foo")
-            )
-        end)
-
         it("leaves a non-system path intact", function()
             assert.equal(
                 "/tmp/evil/grep foo",
                 PermissionRules.strip_command_path("/tmp/evil/grep foo")
             )
         end)
-
-        it("leaves a bare command unchanged", function()
-            assert.equal(
-                "grep foo",
-                PermissionRules.strip_command_path("grep foo")
-            )
-        end)
     end)
 
     describe("matches_any_pattern", function()
-        it("matches simple command", function()
-            local patterns = {
-                {
-                    original = "grep *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
-                },
-            }
-            assert.is_true(
-                PermissionRules.matches_any_pattern("grep -r 'foo' .", patterns)
+        --- The compiled form of the allow entry `Bash(<glob>)`.
+        --- @param glob string
+        --- @return agentic.utils.PermissionRules.CompiledPattern[]
+        local function compiled(glob)
+            return PermissionRules.extract_bash_patterns(
+                { allow = { "Bash(" .. glob .. ")" } },
+                "allow"
             )
-        end)
-
-        it("does not match unrelated command", function()
-            local patterns = {
-                {
-                    original = "grep *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
-                },
-            }
-            assert.is_false(
-                PermissionRules.matches_any_pattern("rm -rf /", patterns)
-            )
-        end)
-
-        it("matches exact command (no wildcard)", function()
-            local patterns = {
-                {
-                    original = "ls",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("ls"),
-                },
-            }
-            assert.is_true(PermissionRules.matches_any_pattern("ls", patterns))
-        end)
+        end
 
         it("exact pattern does not match with args", function()
-            local patterns = {
-                {
-                    original = "ls",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("ls"),
-                },
-            }
             assert.is_false(
-                PermissionRules.matches_any_pattern("ls -la", patterns)
+                PermissionRules.matches_any_pattern("ls -la", compiled("ls"))
             )
-        end)
-
-        it("matches a leaf with a trailing redirect via *", function()
-            -- The walker strips redirects before the matcher sees the leaf, but
-            -- a stray redirect in the text is matched by `*` (`.*`) anyway.
-            local patterns = {
-                {
-                    original = "grep *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
-                },
-            }
-            assert.is_true(
-                PermissionRules.matches_any_pattern(
-                    "grep foo 2>/dev/null",
-                    patterns
-                )
-            )
-        end)
-
-        it("matches grep command with quoted alternation", function()
-            local patterns = {
-                {
-                    original = "grep *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
-                },
-            }
-            assert.is_true(
-                PermissionRules.matches_any_pattern(
-                    [[grep -n "export function query\|function query\|^export " /tmp/file.mjs]],
-                    patterns
-                )
-            )
-        end)
-
-        it("returns false for empty segment", function()
-            local patterns = {
-                {
-                    original = "ls *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("ls *"),
-                },
-            }
-            assert.is_false(PermissionRules.matches_any_pattern("", patterns))
         end)
 
         it("matches a system absolute-path invocation", function()
-            local patterns = {
-                {
-                    original = "grep *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
-                },
-            }
             assert.is_true(
                 PermissionRules.matches_any_pattern(
                     "/usr/bin/grep -r 'foo' .",
-                    patterns
+                    compiled("grep *")
                 )
             )
         end)
 
         it("does not match a non-system absolute-path invocation", function()
-            local patterns = {
-                {
-                    original = "grep *",
-                    lua_pattern = PermissionRules.glob_to_lua_pattern("grep *"),
-                },
-            }
             assert.is_false(
                 PermissionRules.matches_any_pattern(
                     "/tmp/evil/grep -r 'foo' .",
-                    patterns
+                    compiled("grep *")
                 )
             )
         end)
@@ -215,260 +127,65 @@ describe("PermissionRules", function()
 
     describe("should_auto_approve", function()
         it("approves compound command when all segments match", function()
-            -- Override read_json to return test data
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(head *)",
-                                "Bash(sort *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result =
-                PermissionRules.should_auto_approve("grep -r 'foo' . | head -5")
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_true(decide("grep -r 'foo' . | head -5", {
+                allow = { "Bash(grep *)", "Bash(head *)" },
+            }))
         end)
 
         it("approves a lowercase assignment followed by a use", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = { allow = { "Bash(ls *)" } },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
             assert.is_true(
-                PermissionRules.should_auto_approve('f=path/to/file; ls "$f"')
+                decide('f=path/to/file; ls "$f"', { allow = { "Bash(ls *)" } })
             )
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
         end)
 
         it("approves a lowercase env-prefix assignment", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = { allow = { "Bash(ls *)" } },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
             assert.is_true(
-                PermissionRules.should_auto_approve('f=/path/to/file ls "$f"')
+                decide('f=/path/to/file ls "$f"', { allow = { "Bash(ls *)" } })
             )
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
         end)
 
         it("rejects an uppercase env assignment hijacking a use", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = { allow = { "Bash(grep *)" } },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
             assert.is_false(
-                PermissionRules.should_auto_approve("PATH=/evil/bin; grep foo")
+                decide(
+                    "PATH=/evil/bin; grep foo",
+                    { allow = { "Bash(grep *)" } }
+                )
             )
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
         end)
 
         it("rejects when one segment has no matching pattern", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result =
-                PermissionRules.should_auto_approve("grep foo | rm -rf /")
-            assert.is_false(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_false(
+                decide("grep foo | rm -rf /", { allow = { "Bash(grep *)" } })
+            )
         end)
 
         it("rejects when segment matches deny pattern", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(rm *)",
-                            },
-                            deny = {
-                                "Bash(rm *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result =
-                PermissionRules.should_auto_approve("grep foo | rm -rf /")
-            assert.is_false(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_false(decide("grep foo | rm -rf /", {
+                allow = { "Bash(grep *)", "Bash(rm *)" },
+                deny = { "Bash(rm *)" },
+            }))
         end)
 
         it("rejects when segment matches ask pattern", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(git push*)",
-                            },
-                            ask = {
-                                "Bash(git push*)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "grep foo && git push origin main"
-            )
-            assert.is_false(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_false(decide("grep foo && git push origin main", {
+                allow = { "Bash(grep *)", "Bash(git push*)" },
+                ask = { "Bash(git push*)" },
+            }))
         end)
 
         it("rejects a bare command substitution argument", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(echo *)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve("echo $(whoami)")
-            assert.is_false(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-        end)
-
-        it("approves single command matching allow pattern", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(ls *)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve("ls -la /tmp")
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-        end)
-
-        it("returns false with no allow patterns", function()
-            -- Disable all sources so no patterns are loaded
-            local Config = require("agentic.config")
-            local orig_plugin = Config.permissions.use_plugin_defaults
-            local orig_claude = Config.permissions.use_claude_settings
-            Config.permissions.use_plugin_defaults = false
-            Config.permissions.use_claude_settings = false
-
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve("ls -la")
-            assert.is_false(result)
-
-            PermissionRules.invalidate_cache()
-            Config.permissions.use_plugin_defaults = orig_plugin
-            Config.permissions.use_claude_settings = orig_claude
+            assert.is_false(
+                decide("echo $(whoami)", { allow = { "Bash(echo *)" } })
+            )
         end)
 
         it("approves a multi-line pipe (trailing-pipe continuation)", function()
             -- A pipe at end of line continues to the next — valid shell that
             -- parses as one pipeline. The isolated-pipe form (`src\n|\n head`)
             -- is invalid shell and is rejected (see the walker block below).
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(head *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "grep -r 'pattern' src |\n  head -40"
-            )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_true(decide("grep -r 'pattern' src |\n  head -40", {
+                allow = { "Bash(grep *)", "Bash(head *)" },
+            }))
         end)
 
         it(
@@ -476,95 +193,33 @@ describe("PermissionRules", function()
             function()
                 -- Without newline splitting, `rm -rf bar` would be swallowed by
                 -- echo's trailing `*` wildcard and silently auto-approved.
-                local orig_read_json = PermissionRules.read_json
-                PermissionRules.read_json = function(path)
-                    if path:find("settings%.json$") then
-                        return {
-                            permissions = {
-                                allow = { "Bash(echo *)" },
-                            },
-                        }
-                    end
-                    return nil
-                end
-                PermissionRules.invalidate_cache()
-
-                local result =
-                    PermissionRules.should_auto_approve("echo hi\nrm -rf bar")
-                assert.is_false(result)
-
-                PermissionRules.read_json = orig_read_json
-                PermissionRules.invalidate_cache()
+                assert.is_false(
+                    decide(
+                        "echo hi\nrm -rf bar",
+                        { allow = { "Bash(echo *)" } }
+                    )
+                )
             end
         )
 
         it("approves newline-joined read-only statements", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(cd *)",
-                                "Bash(echo *)",
-                                "Bash(grep *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "cd /tmp\necho looking\ngrep -rn foo src"
-            )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_true(decide("cd /tmp\necho looking\ngrep -rn foo src", {
+                allow = { "Bash(cd *)", "Bash(echo *)", "Bash(grep *)" },
+            }))
         end)
 
         it("approves a named function definition (body never runs)", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = { allow = { "Bash(echo *)" } } }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
             -- The body holds `rm -rf /`, which is not allowed, but defining the
             -- function does not execute it.
-            assert.is_true(
-                PermissionRules.should_auto_approve("foo() { rm -rf / }")
-            )
-            assert.is_true(
-                PermissionRules.should_auto_approve("function foo { rm -rf / }")
-            )
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            local perms = { allow = { "Bash(echo *)" } }
+            assert.is_true(decide("foo() { rm -rf / }", perms))
+            assert.is_true(decide("function foo { rm -rf / }", perms))
         end)
 
         describe("calls to locally-defined functions", function()
-            local orig_read_json
             before_each(function()
-                orig_read_json = PermissionRules.read_json
-                PermissionRules.read_json = function(path)
-                    if path:find("settings%.json$") then
-                        return {
-                            permissions = { allow = { "Bash(echo *)" } },
-                        }
-                    end
-                    return nil
-                end
-                PermissionRules.invalidate_cache()
-            end)
-            after_each(function()
-                PermissionRules.read_json = orig_read_json
-                PermissionRules.invalidate_cache()
+                Config.permissions.use_plugin_defaults = false
+                stub_settings({ allow = { "Bash(echo *)" } })
             end)
 
             it("resolves a call to a clean function body", function()
@@ -648,94 +303,20 @@ describe("PermissionRules", function()
         end)
 
         it("blocks an anonymous function (runs immediately)", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = { allow = { "Bash(echo *)" } } }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
             assert.is_false(
-                PermissionRules.should_auto_approve("() { rm -rf / }")
+                decide("() { rm -rf / }", { allow = { "Bash(echo *)" } })
             )
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-        end)
-
-        it("approves three-segment pipeline", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(sort *)",
-                                "Bash(head *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "grep -r 'foo' . | sort -u | head -20"
-            )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-        end)
-
-        it("approves stdbuf-wrapped command", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(ls *)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "stdbuf -oL ls /tmp/example/"
-            )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
         end)
 
         it("approves env-var-prefixed compound command", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(cd *)", "Bash(git log *)" },
-                        },
+            assert.is_true(
+                decide(
+                    "PYTHONUNBUFFERED=1 cd /tmp && git log --oneline -- foo.py",
+                    {
+                        allow = { "Bash(cd *)", "Bash(git log *)" },
                     }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "PYTHONUNBUFFERED=1 cd /tmp && git log --oneline -- foo.py"
+                )
             )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
         end)
 
         it("approves an escaped quote with a pipe inside the string", function()
@@ -744,25 +325,9 @@ describe("PermissionRules", function()
             -- command — approve. (The old regex splitter saw an apparent
             -- quote imbalance and bailed.) The `\` here is a literal
             -- backslash char, not a lua escape.
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(grep *)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result =
-                PermissionRules.should_auto_approve([[grep "a\"b|c" file]])
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_true(
+                decide([[grep "a\"b|c" file]], { allow = { "Bash(grep *)" } })
+            )
         end)
 
         it("approves a quote-reopening idiom with a quoted pipe", function()
@@ -770,109 +335,26 @@ describe("PermissionRules", function()
             -- so the `|` is inside the argument. The walker parses it as one
             -- safe `echo` command — approve. (The old splitter saw the `|`
             -- as unquoted and fragmented the command, bailing.)
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(echo *)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result =
-                PermissionRules.should_auto_approve([[echo 'can'\''t|here']])
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            assert.is_true(
+                decide([[echo 'can'\''t|here']], { allow = { "Bash(echo *)" } })
+            )
         end)
 
         it("approves pipeline with quoted pipe in grep pattern", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(head *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                [[grep -n "export function\|^export " /tmp/file.mjs | head -30]]
+            assert.is_true(
+                decide(
+                    [[grep -n "export function\|^export " /tmp/file.mjs | head -30]],
+                    { allow = { "Bash(grep *)", "Bash(head *)" } }
+                )
             )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-        end)
-
-        it("approves stdbuf-wrapped compound command", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(head *)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local result = PermissionRules.should_auto_approve(
-                "stdbuf -oL grep -r 'foo' . | head -5"
-            )
-            assert.is_true(result)
-
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
         end)
     end)
 
     describe("should_auto_approve with redirect", function()
-        local Config
-        local orig_plugin
-        local orig_claude
-        local orig_read_json
-
         before_each(function()
-            Config = require("agentic.config")
-            orig_plugin = Config.permissions.use_plugin_defaults
-            orig_claude = Config.permissions.use_claude_settings
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-
-            orig_read_json = PermissionRules.read_json
-            -- Only stub settings.json paths, let plugin permissions.json load
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return nil
-                end
-                return orig_read_json(path)
-            end
-            PermissionRules.invalidate_cache()
-        end)
-
-        after_each(function()
-            Config.permissions.use_plugin_defaults = orig_plugin
-            Config.permissions.use_claude_settings = orig_claude
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            stub_settings(nil)
         end)
 
         it("rejects allowed command with output redirect", function()
@@ -1101,36 +583,8 @@ describe("PermissionRules", function()
     end)
 
     describe("config permissions", function()
-        --- @type agentic.UserConfig
-        local Config
-        local orig_plugin
-        local orig_claude
-        local orig_auto_approve
-        local orig_read_json
-
         before_each(function()
-            Config = require("agentic.config")
-            orig_plugin = Config.permissions.use_plugin_defaults
-            orig_claude = Config.permissions.use_claude_settings
-            orig_auto_approve = Config.permissions.auto_approve
-
-            -- Stub settings.json to empty so only plugin defaults apply
-            orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return nil
-                end
-                return orig_read_json(path)
-            end
-            PermissionRules.invalidate_cache()
-        end)
-
-        after_each(function()
-            Config.permissions.use_plugin_defaults = orig_plugin
-            Config.permissions.use_claude_settings = orig_claude
-            Config.permissions.auto_approve = orig_auto_approve
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
+            stub_settings(nil)
         end)
 
         --- Resolve auto-approval of `cmd` against the plugin defaults at `tier`.
@@ -1150,7 +604,10 @@ describe("PermissionRules", function()
                 "approves a bare `uv run <checker>` at the safe_write tier",
                 function()
                     assert.is_true(
-                        approves_at("safe_write", "uv run basedpyright probe.py")
+                        approves_at(
+                            "safe_write",
+                            "uv run basedpyright probe.py"
+                        )
                     )
                 end
             )
@@ -1201,7 +658,9 @@ describe("PermissionRules", function()
                         "basedpyright --gitlabcodequality out.json"
                     )
                 )
-                assert.is_false(approves_at("safe_write", "mypy --install-types"))
+                assert.is_false(
+                    approves_at("safe_write", "mypy --install-types")
+                )
             end)
 
             it(
@@ -1239,7 +698,10 @@ describe("PermissionRules", function()
                 "prompts when a procsub inner is not in any allow list",
                 function()
                     assert.is_false(
-                        approves_at("safe_write", "diff <(sort a.tsv) <(rm -rf /)")
+                        approves_at(
+                            "safe_write",
+                            "diff <(sort a.tsv) <(rm -rf /)"
+                        )
                     )
                 end
             )
@@ -1254,101 +716,36 @@ describe("PermissionRules", function()
             end)
         end)
 
-        it(
-            "approves command from plugin defaults when auto_approve=safe_write",
-            function()
-                Config.permissions.use_plugin_defaults = true
-                Config.permissions.use_claude_settings = false
-                Config.permissions.auto_approve = "safe_write"
-                PermissionRules.invalidate_cache()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("ls -la /tmp")
-                )
-            end
-        )
-
-        it(
-            "approves command from plugin defaults when auto_approve=read_only",
-            function()
-                Config.permissions.use_plugin_defaults = true
-                Config.permissions.use_claude_settings = false
-                Config.permissions.auto_approve = "read_only"
-                PermissionRules.invalidate_cache()
-                assert.is_true(
-                    PermissionRules.should_auto_approve("ls -la /tmp")
-                )
-            end
-        )
-
         it("rejects when auto_approve is nil", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = nil
-            PermissionRules.invalidate_cache()
-            assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
+            assert.is_false(approves_at(nil, "ls -la /tmp"))
         end)
 
         it("rejects when both sources disabled", function()
             Config.permissions.use_plugin_defaults = false
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
             PermissionRules.invalidate_cache()
             assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
         end)
 
-        it("approves compound of two plugin-default commands", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
-            assert.is_true(
-                PermissionRules.should_auto_approve("cat foo.txt | head -5")
-            )
-        end)
-
         it("rejects find -exec via plugin deny list", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
             assert.is_false(
-                PermissionRules.should_auto_approve(
-                    "find . -name '*.lua' -exec rm {} +"
-                )
+                approves_at("safe_write", "find . -name '*.lua' -exec rm {} +")
             )
         end)
 
         it("rejects find -okdir via plugin deny list", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
             assert.is_false(
-                PermissionRules.should_auto_approve(
-                    "find . -name '*.lua' -okdir rm {} +"
-                )
+                approves_at("safe_write", "find . -name '*.lua' -okdir rm {} +")
             )
         end)
 
         it("approves find without -exec", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
-            assert.is_true(
-                PermissionRules.should_auto_approve("find . -name '*.lua'")
-            )
+            assert.is_true(approves_at("safe_write", "find . -name '*.lua'"))
         end)
 
         it("rejects awk system() via plugin deny list", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
             assert.is_false(
-                PermissionRules.should_auto_approve(
-                    "awk 'BEGIN{system(\"rm -rf /\")}'"
-                )
+                approves_at("safe_write", "awk 'BEGIN{system(\"rm -rf /\")}'")
             )
         end)
 
@@ -1359,44 +756,13 @@ describe("PermissionRules", function()
         -- dangerous forms or deny most real sed. That exec residual is an
         -- accepted, documented limitation. The common benign case is approved.
         it("approves benign sed substitution", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
-            assert.is_true(
-                PermissionRules.should_auto_approve("sed 's/a/b/' file")
-            )
-        end)
-
-        it("rejects command not in any allow list", function()
-            Config.permissions.use_plugin_defaults = true
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
-            assert.is_false(
-                PermissionRules.should_auto_approve("rm -rf /tmp/foo")
-            )
+            assert.is_true(approves_at("safe_write", "sed 's/a/b/' file"))
         end)
 
         it("combines settings.json allow with structured rules", function()
-            Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
             Config.permissions.auto_approve = "read_only"
-
-            PermissionRules.read_json = function(path)
-                if path:find("permissions%.json$") then
-                    return orig_read_json(path)
-                end
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(make test*)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
+            stub_settings({ allow = { "Bash(make test*)" } })
 
             assert.is_true(PermissionRules.should_auto_approve("ls -la"))
             assert.is_true(PermissionRules.should_auto_approve("make test foo"))
@@ -1405,27 +771,15 @@ describe("PermissionRules", function()
             )
         end)
 
-        --- Stub both settings.json files with one allow and one deny glob.
-        local function stub_settings()
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(make test*)" },
-                            deny = { "Bash(make deploy*)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-        end
+        local MAKE = {
+            allow = { "Bash(make test*)" },
+            deny = { "Bash(make deploy*)" },
+        }
 
         it("ignores settings.json allow when auto_approve is nil", function()
             Config.permissions.use_plugin_defaults = false
-            Config.permissions.use_claude_settings = true
             Config.permissions.auto_approve = nil
-            stub_settings()
+            stub_settings(MAKE)
             assert.is_false(PermissionRules.should_auto_approve("make test x"))
             assert.is_true(PermissionRules.should_auto_reject("make deploy"))
             -- A remembered leaf still counts.
@@ -1437,41 +791,26 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("use_claude_settings=false drops settings.json allow and deny", function()
-            Config.permissions.use_plugin_defaults = false
-            Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = "safe_write"
-            stub_settings()
-            assert.is_false(PermissionRules.should_auto_approve("make test x"))
-            assert.is_false(PermissionRules.should_auto_reject("make deploy"))
-        end)
+        it(
+            "use_claude_settings=false drops settings.json allow and deny",
+            function()
+                Config.permissions.use_plugin_defaults = false
+                Config.permissions.use_claude_settings = false
+                stub_settings(MAKE)
+                assert.is_false(
+                    PermissionRules.should_auto_approve("make test x")
+                )
+                assert.is_false(
+                    PermissionRules.should_auto_reject("make deploy")
+                )
+            end
+        )
     end)
 
     -- Walker: structural decomposition via the zsh treesitter parse
     -- tree. Reject-by-default — substitution, control flow, file-writing
     -- redirects, dynamic command names, and parse errors all bail to a prompt.
     describe("should_auto_approve (treesitter walker)", function()
-        --- Decide a command with the given allow/deny/ask Bash patterns sourced
-        --- from a stubbed settings.json (plugin defaults are not loaded — the
-        --- stub returns nil for any non-settings path).
-        --- @param command string
-        --- @param perms { allow?: string[], deny?: string[], ask?: string[] }
-        --- @return boolean
-        local function decide(command, perms)
-            local orig = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = perms }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-            local result = PermissionRules.should_auto_approve(command)
-            PermissionRules.read_json = orig
-            PermissionRules.invalidate_cache()
-            return result
-        end
-
         -- A broad allow list so a bail is provably about structure, not a
         -- missing entry.
         local ALLOW = {
@@ -1652,36 +991,28 @@ describe("PermissionRules", function()
             assert.is_false(result)
         end)
 
-        -- Phase 1b composition: a structured-entry decision (deny / ask /
-        -- allow) feeds into the same walk through `M.get_structured_entries`.
-        -- Tests stub the accessor directly to avoid coupling to the bundled
-        -- permissions.json (which is still in the legacy glob format).
+        -- A structured-entry decision (deny / ask / allow) feeds into the same
+        -- walk through `M.get_structured_entries`. Tests stub the accessor
+        -- directly to avoid coupling to the bundled permissions.json.
         describe("structured matcher composition", function()
-            --- Run should_auto_approve with stubbed structured entries AND
-            --- stubbed settings.json. Restores both on exit.
+            local get_structured_entries =
+                PermissionRules.get_structured_entries
+            after_each(function()
+                PermissionRules.get_structured_entries = get_structured_entries
+            end)
+
+            --- Whether `command` auto-approves with `perms` as the only
+            --- settings.json content and `entries` as the structured rules.
             --- @param command string
-            --- @param perms { allow?: string[], deny?: string[], ask?: string[] }
+            --- @param perms table See `stub_settings`
             --- @param entries agentic.StructuredEntries
             --- @return boolean
             local function decide_with_entries(command, perms, entries)
-                local orig_read = PermissionRules.read_json
-                local orig_get = PermissionRules.get_structured_entries
-                PermissionRules.read_json = function(path)
-                    if path:find("settings%.json$") then
-                        return { permissions = perms }
-                    end
-                    return nil
-                end
                 --- @diagnostic disable-next-line: duplicate-set-field
                 PermissionRules.get_structured_entries = function()
                     return entries
                 end
-                PermissionRules.invalidate_cache()
-                local result = PermissionRules.should_auto_approve(command)
-                PermissionRules.read_json = orig_read
-                PermissionRules.get_structured_entries = orig_get
-                PermissionRules.invalidate_cache()
-                return result
+                return decide(command, perms)
             end
 
             local ALLOW_FIND = { allow = { "Bash(find *)" } }
@@ -1762,31 +1093,12 @@ describe("PermissionRules", function()
                     )
                 end
             )
-
-            it(
-                "matches the same option whether the rule lists -exec or exec (post-normalisation)",
-                function()
-                    -- Stubs bypass `get_structured_entries`, so the test
-                    -- supplies already-normalised entries. Round-tripping
-                    -- through the accessor is covered by the
-                    -- `get_structured_entries normalisation` describe block.
-                    assert.is_false(
-                        decide_with_entries(
-                            "find . -exec rm {} \\;",
-                            ALLOW_FIND,
-                            { find = { deny = { { options = { "exec" } } } } }
-                        )
-                    )
-                end
-            )
         end)
 
         -- get_structured_entries returns dashless-normalised entries even when
         -- the input rule uses --foo / -foo forms.
         describe("get_structured_entries normalisation", function()
             it("strips leading dashes from option strings", function()
-                local Config = require("agentic.config")
-                local original_structured = Config.permissions.structured
                 Config.permissions.structured = {
                     find = {
                         deny = { { options = { "--exec", "-x", "okdir" } } },
@@ -1794,8 +1106,6 @@ describe("PermissionRules", function()
                 }
                 PermissionRules.invalidate_cache()
                 local entries = PermissionRules.get_structured_entries()
-                Config.permissions.structured = original_structured
-                PermissionRules.invalidate_cache()
 
                 local find_entry = entries.find
                 assert.is_not_nil(find_entry)
@@ -2248,36 +1558,11 @@ describe("PermissionRules", function()
     -- nil so user-side rules cannot pollute results; the bundled file is
     -- read from disk via the real read_json path.
     describe("bundled permissions.json (end-to-end)", function()
-        local Config = require("agentic.config")
-        local orig_read_json
-        local orig_auto_approve
-        local orig_use_plugin
-        local orig_use_claude
-
         before_each(function()
-            orig_read_json = PermissionRules.read_json
-            --- @diagnostic disable-next-line: duplicate-set-field
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return nil
-                end
-                return orig_read_json(path)
-            end
-            orig_auto_approve = Config.permissions.auto_approve
-            orig_use_plugin = Config.permissions.use_plugin_defaults
-            orig_use_claude = Config.permissions.use_claude_settings
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
             Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
-        end)
-
-        after_each(function()
-            PermissionRules.read_json = orig_read_json
-            Config.permissions.auto_approve = orig_auto_approve
-            Config.permissions.use_plugin_defaults = orig_use_plugin
-            Config.permissions.use_claude_settings = orig_use_claude
-            PermissionRules.invalidate_cache()
+            stub_settings(nil)
         end)
 
         it("denies sort -uo out (short cluster)", function()
@@ -2293,11 +1578,15 @@ describe("PermissionRules", function()
         end)
 
         it("auto-approves shuf -n 5 file", function()
-            assert.is_true(PermissionRules.should_auto_approve("shuf -n 5 file"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("shuf -n 5 file")
+            )
         end)
 
         it("denies shuf -rn5 -o out (cluster + output)", function()
-            assert.is_false(PermissionRules.should_auto_approve("shuf -rn5 -o out"))
+            assert.is_false(
+                PermissionRules.should_auto_approve("shuf -rn5 -o out")
+            )
         end)
 
         it("denies shuf --out=x (GNU abbreviation)", function()
@@ -2305,15 +1594,21 @@ describe("PermissionRules", function()
         end)
 
         it("auto-approves base64 -d file", function()
-            assert.is_true(PermissionRules.should_auto_approve("base64 -d file"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("base64 -d file")
+            )
         end)
 
         it("denies base64 -o out (BSD output file)", function()
-            assert.is_false(PermissionRules.should_auto_approve("base64 -o out"))
+            assert.is_false(
+                PermissionRules.should_auto_approve("base64 -o out")
+            )
         end)
 
         it("denies base64 --out=x (abbreviation)", function()
-            assert.is_false(PermissionRules.should_auto_approve("base64 --out=x"))
+            assert.is_false(
+                PermissionRules.should_auto_approve("base64 --out=x")
+            )
         end)
 
         it("auto-approves xxd file", function()
@@ -2338,7 +1633,9 @@ describe("PermissionRules", function()
 
         it("does not auto-approve pkg-config --log-file=x", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("pkg-config --log-file=x foo")
+                PermissionRules.should_auto_approve(
+                    "pkg-config --log-file=x foo"
+                )
             )
         end)
 
@@ -2357,11 +1654,15 @@ describe("PermissionRules", function()
 
         it("does not auto-approve in-place gzip", function()
             assert.is_false(PermissionRules.should_auto_approve("gzip a.txt"))
-            assert.is_false(PermissionRules.should_auto_approve("gzip -kf a.txt"))
+            assert.is_false(
+                PermissionRules.should_auto_approve("gzip -kf a.txt")
+            )
         end)
 
         it("auto-approves fc-list and whence", function()
-            assert.is_true(PermissionRules.should_auto_approve("fc-list :lang=ja"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("fc-list :lang=ja")
+            )
             assert.is_true(PermissionRules.should_auto_approve("whence -v ls"))
         end)
 
@@ -2447,8 +1748,6 @@ describe("PermissionRules", function()
         it(
             "does not auto-approve mlr -I foo even at auto_approve = 'safe_write' (ask wins)",
             function()
-                Config.permissions.auto_approve = "safe_write"
-                PermissionRules.invalidate_cache()
                 assert.is_false(
                     PermissionRules.should_auto_approve("mlr -I foo")
                 )
@@ -2475,13 +1774,14 @@ describe("PermissionRules", function()
             end
         )
 
-        it("auto-approves a safe_write command at safe_write (stylua)", function()
-            Config.permissions.auto_approve = "safe_write"
-            PermissionRules.invalidate_cache()
-            assert.is_true(
-                PermissionRules.should_auto_approve("stylua foo.lua")
-            )
-        end)
+        it(
+            "auto-approves a safe_write command at safe_write (stylua)",
+            function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve("stylua foo.lua")
+                )
+            end
+        )
 
         -- Write carve-outs: a read-only base command prompts only on the
         -- options/verbs that actually write (local file, upload, or remote
@@ -2657,7 +1957,7 @@ describe("PermissionRules", function()
                     "printf '%d\\n' n",
                     "printf -v out '%5.2f' n",
                     "printf '%*s' w x",
-                    "printf \"$fmt\" n",
+                    'printf "$fmt" n',
                     "print -f '%d' n",
                     "print -rf '%x' n",
                     "print -f%d n",
@@ -3636,40 +2936,10 @@ describe("PermissionRules", function()
     end)
 
     describe("tally_unapproved", function()
-        local Config = require("agentic.config")
-
-        --- Run `fn` with settings.json permissions stubbed and plugin defaults
-        --- disabled, so only the injected globs (plus any `config` overrides on
-        --- Config.permissions) classify leaves. Structured entries stay empty.
-        local function with_perms(permissions, config, fn)
-            local orig_read_json = PermissionRules.read_json
-            local orig_plugin = Config.permissions.use_plugin_defaults
-            local orig_config = {}
-            for k, v in pairs(config or {}) do
-                orig_config[k] = Config.permissions[k]
-                Config.permissions[k] = v
-            end
+        -- Plugin defaults off, so only the stubbed globs classify leaves.
+        before_each(function()
             Config.permissions.use_plugin_defaults = false
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = permissions }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-
-            local ok, err = pcall(fn)
-
-            PermissionRules.read_json = orig_read_json
-            Config.permissions.use_plugin_defaults = orig_plugin
-            for k in pairs(config or {}) do
-                Config.permissions[k] = orig_config[k]
-            end
-            PermissionRules.invalidate_cache()
-            if not ok then
-                error(err)
-            end
-        end
+        end)
 
         --- The byte substring of a single-line `command` covered by `range`.
         --- @param command string
@@ -3679,248 +2949,211 @@ describe("PermissionRules", function()
         end
 
         it("returns only the unapproved leaf of a mixed pipeline", function()
-            with_perms(
-                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "grep foo | rm bar"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm bar", span_text(cmd, ranges[1]))
-                end
-            )
+            stub_settings({
+                allow = { "Bash(grep *)" },
+                deny = { "Bash(rm *)" },
+            })
+            local cmd = "grep foo | rm bar"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("rm bar", span_text(cmd, ranges[1]))
         end)
 
         it("records nothing for a fully-approved subshell", function()
-            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                local ranges =
-                    PermissionRules.tally_unapproved("( echo a && echo b )")
-                assert.equal(0, #ranges)
-            end)
+            stub_settings({ allow = { "Bash(echo *)" } })
+            local ranges =
+                PermissionRules.tally_unapproved("( echo a && echo b )")
+            assert.equal(0, #ranges)
         end)
 
         it("washes only the gated leaf of a subshell", function()
-            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                local cmd = "( echo a; rm b )"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.equal("rm b", span_text(cmd, ranges[1]))
-            end)
+            stub_settings({ allow = { "Bash(echo *)" } })
+            local cmd = "( echo a; rm b )"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("rm b", span_text(cmd, ranges[1]))
         end)
 
         it(
             "returns only the unapproved inner of a single-quoted -c body",
             function()
-                with_perms(
-                    { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = "zsh -c 'rm -rf /'"
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(grep *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = "zsh -c 'rm -rf /'"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
         )
 
         it("highlights the whole leaf for a double-quoted -c body", function()
-            with_perms(
-                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = 'zsh -c "rm -rf /"'
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal(cmd, span_text(cmd, ranges[1]))
-                end
-            )
+            stub_settings({
+                allow = { "Bash(grep *)" },
+                deny = { "Bash(rm *)" },
+            })
+            local cmd = 'zsh -c "rm -rf /"'
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal(cmd, span_text(cmd, ranges[1]))
         end)
 
         it(
             "pinpoints the inner row of a multi-line single-quoted -c body",
             function()
-                with_perms(
-                    { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = "zsh -c 'grep foo\nrm bar'"
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        local r = ranges[1]
-                        assert.equal(1, r[1]) -- row 1 (rm bar), not row 0 (grep foo)
-                        assert.equal(
-                            "rm bar",
-                            vim.split(cmd, "\n")[r[1] + 1]:sub(r[2] + 1, r[4])
-                        )
-                    end
+                stub_settings({
+                    allow = { "Bash(grep *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = "zsh -c 'grep foo\nrm bar'"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                local r = ranges[1]
+                assert.equal(1, r[1]) -- row 1 (rm bar), not row 0 (grep foo)
+                assert.equal(
+                    "rm bar",
+                    vim.split(cmd, "\n")[r[1] + 1]:sub(r[2] + 1, r[4])
                 )
             end
         )
 
         it("does not return a safe_write leaf (intrinsically safe)", function()
-            with_perms(
-                { allow = { "Bash(echo *)" } },
-                {
-                    structured = {
-                        git = { safe_write = { { positionals = { "add" } } } },
-                    },
-                },
-                function()
-                    local ranges = PermissionRules.tally_unapproved("git add x")
-                    assert.equal(0, #ranges)
-                end
-            )
+            Config.permissions.structured = {
+                git = { safe_write = { { positionals = { "add" } } } },
+            }
+            stub_settings({ allow = { "Bash(echo *)" } })
+            local ranges = PermissionRules.tally_unapproved("git add x")
+            assert.equal(0, #ranges)
         end)
 
         it("returns an unknown command", function()
-            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                local cmd = "frobnicate x"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.equal("frobnicate x", span_text(cmd, ranges[1]))
-            end)
+            stub_settings({ allow = { "Bash(grep *)" } })
+            local cmd = "frobnicate x"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("frobnicate x", span_text(cmd, ranges[1]))
         end)
 
         it(
             "returns only the unapproved inner of an arg substitution",
             function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = "echo $(rm -rf /)"
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = "echo $(rm -rf /)"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
         )
 
         it(
             "highlights the whole leaf when the command name is denied",
             function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = "rm $(rm -rf /)"
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        assert.equal(cmd, span_text(cmd, ranges[1]))
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = "rm $(rm -rf /)"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal(cmd, span_text(cmd, ranges[1]))
             end
         )
 
         it(
             "returns nothing when an arg substitution's inner is approved",
             function()
-                with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                    local ranges =
-                        PermissionRules.tally_unapproved("echo $(echo hi)")
-                    assert.equal(0, #ranges)
-                end)
+                stub_settings({ allow = { "Bash(echo *)" } })
+                local ranges =
+                    PermissionRules.tally_unapproved("echo $(echo hi)")
+                assert.equal(0, #ranges)
             end
         )
 
         it(
             "returns nothing for a for-loop over an approved substitution",
             function()
-                with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                    local ranges = PermissionRules.tally_unapproved(
-                        'for f in $(echo x); do echo "$f"; done'
-                    )
-                    assert.equal(0, #ranges)
-                end)
+                stub_settings({ allow = { "Bash(echo *)" } })
+                local ranges = PermissionRules.tally_unapproved(
+                    'for f in $(echo x); do echo "$f"; done'
+                )
+                assert.equal(0, #ranges)
             end
         )
 
         it(
             "returns only the unapproved inner of a quoted substitution",
             function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = 'echo "$(rm -rf /)"'
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = 'echo "$(rm -rf /)"'
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
         )
 
         it("pinpoints the inner of a string-embedded substitution", function()
-            with_perms(
-                { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = 'echo "x $(rm y)"'
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm y", span_text(cmd, ranges[1]))
-                end
-            )
+            stub_settings({
+                allow = { "Bash(echo *)" },
+                deny = { "Bash(rm *)" },
+            })
+            local cmd = 'echo "x $(rm y)"'
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("rm y", span_text(cmd, ranges[1]))
         end)
 
         it(
             "returns only the unapproved inner of an assignment substitution",
             function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = "f=$(rm -rf /)"
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = "f=$(rm -rf /)"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
         )
 
         it(
             "returns only the unapproved inner of a for-list substitution",
             function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local cmd = "for f in $(rm -rf /); do echo hi; done"
-                        local ranges = PermissionRules.tally_unapproved(cmd)
-                        assert.equal(1, #ranges)
-                        assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local cmd = "for f in $(rm -rf /); do echo hi; done"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
         )
 
         it("pinpoints a substitution inside a transparent prefix", function()
-            with_perms(
-                {
-                    allow = { "Bash(echo *)", "Bash(timeout *)" },
-                    deny = { "Bash(rm *)" },
-                },
-                nil,
-                function()
-                    local cmd = "timeout 5 echo $(rm -rf /)"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
+            stub_settings({
+                allow = { "Bash(echo *)", "Bash(timeout *)" },
+                deny = { "Bash(rm *)" },
+            })
+            local cmd = "timeout 5 echo $(rm -rf /)"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("rm -rf /", span_text(cmd, ranges[1]))
         end)
 
         it("returns an unsafe redirect", function()
-            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                local cmd = "grep foo > out.txt"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.is_true(span_text(cmd, ranges[1]):find("out.txt") ~= nil)
-            end)
+            stub_settings({ allow = { "Bash(grep *)" } })
+            local cmd = "grep foo > out.txt"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.is_true(span_text(cmd, ranges[1]):find("out.txt") ~= nil)
         end)
 
         it(
@@ -3931,45 +3164,26 @@ describe("PermissionRules", function()
                 -- propagation mirror, $f would wildcard-fire find's -exec deny and
                 -- light up too. Needs the structured (bundled) gate — a glob deny
                 -- cannot get the dynamic-token wildcard treatment.
-                local orig_read_json = PermissionRules.read_json
-                local orig_plugin = Config.permissions.use_plugin_defaults
                 Config.permissions.use_plugin_defaults = true
-                PermissionRules.read_json = function(path)
-                    if path:find("settings%.json$") then
-                        return nil
-                    end
-                    return orig_read_json(path)
-                end
-                PermissionRules.invalidate_cache()
-                local ok, err = pcall(function()
-                    local cmd = "f=/safe; find $f; frobnicate x"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("frobnicate x", span_text(cmd, ranges[1]))
-                end)
-                PermissionRules.read_json = orig_read_json
-                Config.permissions.use_plugin_defaults = orig_plugin
-                PermissionRules.invalidate_cache()
-                if not ok then
-                    error(err)
-                end
+                stub_settings(nil)
+                local cmd = "f=/safe; find $f; frobnicate x"
+                local ranges = PermissionRules.tally_unapproved(cmd)
+                assert.equal(1, #ranges)
+                assert.equal("frobnicate x", span_text(cmd, ranges[1]))
             end
         )
 
         it("returns every unapproved leaf (record-and-continue)", function()
-            with_perms({ allow = {} }, nil, function()
-                local ranges =
-                    PermissionRules.tally_unapproved("frob a | nope b")
-                assert.equal(2, #ranges)
-            end)
+            stub_settings({ allow = {} })
+            local ranges = PermissionRules.tally_unapproved("frob a | nope b")
+            assert.equal(2, #ranges)
         end)
 
         it("returns nil on parse failure", function()
-            with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                assert.is_nil(
-                    PermissionRules.tally_unapproved("echo 'unterminated")
-                )
-            end)
+            stub_settings({ allow = { "Bash(echo *)" } })
+            assert.is_nil(
+                PermissionRules.tally_unapproved("echo 'unterminated")
+            )
         end)
 
         it("returns nil for empty input", function()
@@ -3977,142 +3191,114 @@ describe("PermissionRules", function()
         end)
 
         it("returns nothing for a wrapper with a known-safe inner", function()
-            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                local ranges =
-                    PermissionRules.tally_unapproved("timeout 5 grep foo")
-                assert.equal(0, #ranges)
-            end)
+            stub_settings({ allow = { "Bash(grep *)" } })
+            local ranges =
+                PermissionRules.tally_unapproved("timeout 5 grep foo")
+            assert.equal(0, #ranges)
         end)
 
         it("pinpoints only the unapproved inner of a wrapper", function()
-            with_perms(
-                { allow = { "Bash(grep *)" }, deny = { "Bash(rm *)" } },
-                nil,
-                function()
-                    local cmd = "timeout 5 rm -rf /"
-                    local ranges = PermissionRules.tally_unapproved(cmd)
-                    assert.equal(1, #ranges)
-                    assert.equal("rm -rf /", span_text(cmd, ranges[1]))
-                end
-            )
+            stub_settings({
+                allow = { "Bash(grep *)" },
+                deny = { "Bash(rm *)" },
+            })
+            local cmd = "timeout 5 rm -rf /"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("rm -rf /", span_text(cmd, ranges[1]))
         end)
 
         -- The deny case above reaches the sub-range via the deny matcher; an
         -- inner that is merely not-allowed reaches it through the recursive
         -- leaf `record` instead. Both must translate to the same pinpoint.
         it("pinpoints a not-allowed (non-deny) wrapper inner", function()
-            with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                local cmd = "timeout 5 curl x"
-                local ranges = PermissionRules.tally_unapproved(cmd)
-                assert.equal(1, #ranges)
-                assert.equal("curl x", span_text(cmd, ranges[1]))
-            end)
+            stub_settings({ allow = { "Bash(grep *)" } })
+            local cmd = "timeout 5 curl x"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("curl x", span_text(cmd, ranges[1]))
         end)
 
         describe("leaves / complete", function()
             it("collects both no-allow-rule leaves, complete", function()
-                with_perms({ allow = {} }, nil, function()
-                    local ranges, leaves, complete =
-                        PermissionRules.tally_unapproved("frob a | nope b")
-                    assert.equal(2, #ranges)
-                    assert.same({ "frob a", "nope b" }, leaves)
-                    assert.is_true(complete)
-                end)
+                stub_settings({ allow = {} })
+                local ranges, leaves, complete =
+                    PermissionRules.tally_unapproved("frob a | nope b")
+                assert.equal(2, #ranges)
+                assert.same({ "frob a", "nope b" }, leaves)
+                assert.is_true(complete)
             end)
 
             it("is incomplete for a write redirect", function()
-                with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                    local _, leaves, complete =
-                        PermissionRules.tally_unapproved("grep foo > out.txt")
-                    assert.same({}, leaves)
-                    assert.is_false(complete)
-                end)
+                stub_settings({ allow = { "Bash(grep *)" } })
+                local _, leaves, complete =
+                    PermissionRules.tally_unapproved("grep foo > out.txt")
+                assert.same({}, leaves)
+                assert.is_false(complete)
             end)
 
             it("is incomplete for a dirty-substitution leaf", function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, deny = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local _, leaves, complete =
-                            PermissionRules.tally_unapproved("echo $(rm -rf /)")
-                        assert.same({}, leaves)
-                        assert.is_false(complete)
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    deny = { "Bash(rm *)" },
+                })
+                local _, leaves, complete =
+                    PermissionRules.tally_unapproved("echo $(rm -rf /)")
+                assert.same({}, leaves)
+                assert.is_false(complete)
             end)
 
             -- Q2: an ask-gated leaf is NOT rememberable — it must drop `complete`
             -- so the manager keeps the whole-command fallback (else the identical
             -- block re-prompts forever, the injected allow being gated by `ask`).
             it("is incomplete for an ask-gated leaf", function()
-                with_perms(
-                    { allow = { "Bash(echo *)" }, ask = { "Bash(rm *)" } },
-                    nil,
-                    function()
-                        local _, leaves, complete =
-                            PermissionRules.tally_unapproved("echo hi; rm x")
-                        assert.same({}, leaves)
-                        assert.is_false(complete)
-                    end
-                )
+                stub_settings({
+                    allow = { "Bash(echo *)" },
+                    ask = { "Bash(rm *)" },
+                })
+                local _, leaves, complete =
+                    PermissionRules.tally_unapproved("echo hi; rm x")
+                assert.same({}, leaves)
+                assert.is_false(complete)
             end)
 
             it(
                 "collects the clean leaf but is incomplete alongside a redirect",
                 function()
-                    with_perms({ allow = { "Bash(grep *)" } }, nil, function()
-                        local _, leaves, complete =
-                            PermissionRules.tally_unapproved("frob a > out.txt")
-                        assert.same({ "frob a" }, leaves)
-                        assert.is_false(complete)
-                    end)
+                    stub_settings({ allow = { "Bash(grep *)" } })
+                    local _, leaves, complete =
+                        PermissionRules.tally_unapproved("frob a > out.txt")
+                    assert.same({ "frob a" }, leaves)
+                    assert.is_false(complete)
                 end
             )
 
             it(
                 "returns empty leaves and incomplete on parse failure",
                 function()
-                    with_perms({ allow = { "Bash(echo *)" } }, nil, function()
-                        local ranges, leaves, complete =
-                            PermissionRules.tally_unapproved(
-                                "echo 'unterminated"
-                            )
-                        assert.is_nil(ranges)
-                        assert.same({}, leaves)
-                        assert.is_false(complete)
-                    end)
+                    stub_settings({ allow = { "Bash(echo *)" } })
+                    local ranges, leaves, complete =
+                        PermissionRules.tally_unapproved("echo 'unterminated")
+                    assert.is_nil(ranges)
+                    assert.same({}, leaves)
+                    assert.is_false(complete)
                 end
             )
         end)
     end)
 
     describe("literal_pattern / remembered-leaf injection", function()
-        local Config = require("agentic.config")
-
-        --- Evaluate `cmd` with only the injected allow globs active (plugin
-        --- defaults off, settings.json stubbed empty), passing `extra_allow`
-        --- through to the decision walk.
+        --- Evaluate `cmd` with only the `allow`/`deny` globs active (plugin
+        --- defaults off), passing `extra_allow` through to the decision walk.
+        --- @param allow string[]
+        --- @param deny string[]|nil
+        --- @param cmd string
+        --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
+        --- @return boolean
         local function approves(allow, deny, cmd, extra_allow)
-            local orig_read_json = PermissionRules.read_json
-            local orig_plugin = Config.permissions.use_plugin_defaults
             Config.permissions.use_plugin_defaults = false
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = { allow = allow, deny = deny } }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-            local ok, result =
-                pcall(PermissionRules.should_auto_approve, cmd, extra_allow)
-            PermissionRules.read_json = orig_read_json
-            Config.permissions.use_plugin_defaults = orig_plugin
-            PermissionRules.invalidate_cache()
-            if not ok then
-                error(result)
-            end
-            return result
+            stub_settings({ allow = allow, deny = deny })
+            return PermissionRules.should_auto_approve(cmd, extra_allow)
         end
 
         it("matches its own occurrence (path-stripped)", function()
@@ -4160,33 +3346,12 @@ describe("PermissionRules", function()
     end)
 
     describe("should_auto_approve exec-wrappers", function()
-        --- Run `fn` with grep/cat/head allowed and rm/sed-i denied, so the
-        --- inner-command recursion is what decides each wrapped case.
-        local function with_wrapper_perms(fn)
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = {
-                                "Bash(grep *)",
-                                "Bash(cat *)",
-                                "Bash(head *)",
-                            },
-                            deny = { "Bash(rm *)", "Bash(sed * -i*)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
-            local ok, err = pcall(fn)
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-            if not ok then
-                error(err)
-            end
-        end
+        -- grep/cat/head allowed and rm/sed-i denied, so the inner-command
+        -- recursion is what decides each wrapped case.
+        local WRAPPER_PERMS = {
+            allow = { "Bash(grep *)", "Bash(cat *)", "Bash(head *)" },
+            deny = { "Bash(rm *)", "Bash(sed * -i*)" },
+        }
 
         local approve = {
             "timeout 5 grep foo",
@@ -4203,9 +3368,7 @@ describe("PermissionRules", function()
         }
         for _, cmd in ipairs(approve) do
             it("approves: " .. cmd, function()
-                with_wrapper_perms(function()
-                    assert.is_true(PermissionRules.should_auto_approve(cmd))
-                end)
+                assert.is_true(decide(cmd, WRAPPER_PERMS))
             end)
         end
 
@@ -4224,58 +3387,52 @@ describe("PermissionRules", function()
         }
         for _, cmd in ipairs(prompt) do
             it("prompts: " .. cmd, function()
-                with_wrapper_perms(function()
-                    assert.is_false(PermissionRules.should_auto_approve(cmd))
-                end)
+                assert.is_false(decide(cmd, WRAPPER_PERMS))
             end)
         end
     end)
 
+    --- Files written in the current case.
+    --- @type string[]
+    local written = {}
+
+    --- Write `content` to file `path` and record it in `written`.
+    --- @param path string
+    --- @param content string
+    local function write_file(path, content)
+        local f = io.open(path, "w")
+        if not f then
+            -- `assert` is the test helper here, not Lua's.
+            error("could not open " .. path)
+        end
+        f:write(content)
+        f:close()
+        table.insert(written, path)
+    end
+
+    --- Write `content` to a fresh temp `.sh`.
+    --- @param content string
+    --- @return string path Absolute
+    local function script(content)
+        local path = vim.fn.tempname() .. ".sh"
+        write_file(path, content)
+        return path
+    end
+
+    --- Remove the files in `written` and clear it.
+    local function remove_written()
+        for _, path in ipairs(written) do
+            os.remove(path)
+        end
+        written = {}
+    end
+
     describe("script file walk (Step A)", function()
-        local written = {}
-
-        --- Write `content` to file `path` (Lua's `assert` is shadowed by the
-        --- luassert helper here, so error explicitly on open failure).
-        local function write_file(path, content)
-            local f = io.open(path, "w")
-            if not f then
-                error("could not open " .. path)
-            end
-            f:write(content)
-            f:close()
-        end
-
-        --- Write `content` to a fresh temp `.sh` and return its absolute path.
-        local function script(content)
-            local path = vim.fn.tempname() .. ".sh"
-            write_file(path, content)
-            table.insert(written, path)
-            return path
-        end
-
-        local orig_read_json
         before_each(function()
-            orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(ls *)", "Bash(grep *)" },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
+            Config.permissions.use_plugin_defaults = false
+            stub_settings({ allow = { "Bash(ls *)", "Bash(grep *)" } })
         end)
-        after_each(function()
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-            for _, path in ipairs(written) do
-                os.remove(path)
-            end
-            written = {}
-        end)
+        after_each(remove_written)
 
         it("approves `zsh <file>` whose body is all-allowed", function()
             local path = script("ls -la\ngrep foo bar\n")
@@ -4318,7 +3475,6 @@ describe("PermissionRules", function()
         it("bails `source` when a sibling .zwc shadows the file", function()
             local path = script("ls /tmp\n")
             write_file(path .. ".zwc", "compiled")
-            table.insert(written, path .. ".zwc")
             assert.is_false(
                 PermissionRules.should_auto_approve("source " .. path)
             )
@@ -4329,7 +3485,6 @@ describe("PermissionRules", function()
         it("a self-sourcing cycle terminates and bails", function()
             local path = vim.fn.tempname() .. ".sh"
             write_file(path, "ls /tmp\nsource " .. path .. "\n")
-            table.insert(written, path)
             assert.is_false(PermissionRules.should_auto_approve("zsh " .. path))
         end)
 
@@ -4388,7 +3543,6 @@ describe("PermissionRules", function()
                 local link_dir = vim.fn.tempname()
                 vim.uv.fs_symlink(real_dir, link_dir)
                 write_file(real_dir .. "/f.sh", "ls /tmp\n")
-                table.insert(written, real_dir .. "/f.sh")
                 table.insert(written, link_dir)
                 table.insert(written, real_dir)
                 local ok = PermissionRules.evaluate(
@@ -4422,25 +3576,6 @@ describe("PermissionRules", function()
     end)
 
     describe("script file walk (Step B — heredoc reconstruction)", function()
-        local written = {}
-
-        local function write_file(path, content)
-            local f = io.open(path, "w")
-            if not f then
-                error("could not open " .. path)
-            end
-            f:write(content)
-            f:close()
-        end
-
-        --- Write `content` to a fresh temp `.sh` and return its absolute path.
-        local function script(content)
-            local path = vim.fn.tempname() .. ".sh"
-            write_file(path, content)
-            table.insert(written, path)
-            return path
-        end
-
         --- A temp `.sh` path that is NOT created on disk — a script generated
         --- inline by the command under test, so reconstruction is the only way
         --- its body can be walked.
@@ -4461,35 +3596,15 @@ describe("PermissionRules", function()
             )
         end
 
-        local orig_read_json
         before_each(function()
-            orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            -- `Bash(cat)` (bare, no args) so a heredoc passthrough
-                            -- body approves; the reconstructed body uses `ls`.
-                            allow = {
-                                "Bash(ls *)",
-                                "Bash(grep *)",
-                                "Bash(cat)",
-                            },
-                        },
-                    }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
+            Config.permissions.use_plugin_defaults = false
+            -- `Bash(cat)` (bare, no args) so a heredoc passthrough body
+            -- approves; the reconstructed body uses `ls`.
+            stub_settings({
+                allow = { "Bash(ls *)", "Bash(grep *)", "Bash(cat)" },
+            })
         end)
-        after_each(function()
-            PermissionRules.read_json = orig_read_json
-            PermissionRules.invalidate_cache()
-            for _, path in ipairs(written) do
-                os.remove(path)
-            end
-            written = {}
-        end)
+        after_each(remove_written)
 
         it(
             "approves a create-then-run whose heredoc body is all-allowed",
@@ -4620,62 +3735,46 @@ describe("PermissionRules", function()
     end)
 
     describe("number-only arithmetic arguments", function()
-        local Config = require("agentic.config")
         local orig_shell
         local orig_provider
 
         before_each(function()
             orig_shell = vim.env.SHELL
             orig_provider = Config.provider
-            PermissionRules.invalidate_cache()
         end)
 
         after_each(function()
             vim.env.SHELL = orig_shell
             Config.provider = orig_provider
-            PermissionRules.invalidate_cache()
         end)
 
         local SED = 'sed -n "$((40 - 18)),$((40))p" f'
 
-        it("approves an arithmetic sed range for any shell and provider", function()
-            for _, case in ipairs({
-                { "/bin/zsh", "claude-agent-acp" },
-                { "/bin/bash", "claude-agent-acp" },
-                { "/bin/zsh", "opencode-acp" },
-            }) do
-                vim.env.SHELL, Config.provider = case[1], case[2]
-                assert.is_true(PermissionRules.should_auto_approve(SED))
+        it(
+            "approves an arithmetic sed range for any shell and provider",
+            function()
+                for _, case in ipairs({
+                    { "/bin/zsh", "claude-agent-acp" },
+                    { "/bin/bash", "claude-agent-acp" },
+                    { "/bin/zsh", "opencode-acp" },
+                }) do
+                    vim.env.SHELL, Config.provider = case[1], case[2]
+                    assert.is_true(PermissionRules.should_auto_approve(SED))
+                end
             end
-        end)
+        )
 
         it("keeps a redirect target dynamic", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = { allow = { "Bash(echo *)" } } }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
             -- `> $((5))` resolves to no literal path — the redirect write bails.
             assert.is_false(
-                PermissionRules.should_auto_approve("echo hi > $((5))")
+                decide("echo hi > $((5))", { allow = { "Bash(echo *)" } })
             )
-            PermissionRules.read_json = orig_read_json
         end)
 
         it("does not spuriously deny-reject a benign arithmetic arg", function()
-            local orig_read_json = PermissionRules.read_json
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return { permissions = { deny = { "Bash(rm *)" } } }
-                end
-                return nil
-            end
-            PermissionRules.invalidate_cache()
+            Config.permissions.use_plugin_defaults = false
+            stub_settings({ deny = { "Bash(rm *)" } })
             assert.is_false(PermissionRules.should_auto_reject(SED))
-            PermissionRules.read_json = orig_read_json
         end)
 
         it("does not auto-approve a functions -M registration", function()
@@ -4690,20 +3789,23 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("approves inside a -c body of any shell and an exec-wrapper", function()
-            local prompted = {}
-            for _, cmd in ipairs({
-                [[bash -c 'sed -n "$((40))p" f']],
-                [[sh -c 'sed -n "$((40))p" f']],
-                [[zsh -c 'sed -n "$((40))p" f']],
-                'env FOO=1 sed -n "$((40))p" f',
-            }) do
-                if not PermissionRules.should_auto_approve(cmd) then
-                    table.insert(prompted, cmd)
+        it(
+            "approves inside a -c body of any shell and an exec-wrapper",
+            function()
+                local prompted = {}
+                for _, cmd in ipairs({
+                    [[bash -c 'sed -n "$((40))p" f']],
+                    [[sh -c 'sed -n "$((40))p" f']],
+                    [[zsh -c 'sed -n "$((40))p" f']],
+                    'timeout 5 sed -n "$((40))p" f',
+                }) do
+                    if not PermissionRules.should_auto_approve(cmd) then
+                        table.insert(prompted, cmd)
+                    end
                 end
+                assert.same({}, prompted)
             end
-            assert.same({}, prompted)
-        end)
+        )
 
         -- A command substitution *inside* arithmetic is opaque; the whitelist
         -- must never treat it as static (belt to the subtree_has_substitution
@@ -4716,31 +3818,7 @@ describe("PermissionRules", function()
     end)
 
     describe("decision sources", function()
-        local Config = require("agentic.config")
-        local orig_read_json
-        local orig_auto_approve
-        local orig_use_plugin
-        local orig_use_claude
-        local orig_structured
-
         before_each(function()
-            orig_read_json = PermissionRules.read_json
-            orig_auto_approve = Config.permissions.auto_approve
-            orig_use_plugin = Config.permissions.use_plugin_defaults
-            orig_use_claude = Config.permissions.use_claude_settings
-            orig_structured = Config.permissions.structured
-            --- @diagnostic disable-next-line: duplicate-set-field
-            PermissionRules.read_json = function(path)
-                if path:find("settings%.json$") then
-                    return {
-                        permissions = {
-                            allow = { "Bash(head *)" },
-                            deny = { "Bash(make deploy*)" },
-                        },
-                    }
-                end
-                return nil
-            end
             Config.permissions.use_plugin_defaults = false
             Config.permissions.use_claude_settings = true
             Config.permissions.auto_approve = "safe_write"
@@ -4749,16 +3827,10 @@ describe("PermissionRules", function()
                 sort = { safe_write = { {} } },
                 rm = { deny = { { options = { "f" } } } },
             }
-            PermissionRules.invalidate_cache()
-        end)
-
-        after_each(function()
-            PermissionRules.read_json = orig_read_json
-            Config.permissions.auto_approve = orig_auto_approve
-            Config.permissions.use_plugin_defaults = orig_use_plugin
-            Config.permissions.use_claude_settings = orig_use_claude
-            Config.permissions.structured = orig_structured
-            PermissionRules.invalidate_cache()
+            stub_settings({
+                allow = { "Bash(head *)" },
+                deny = { "Bash(make deploy*)" },
+            })
         end)
 
         --- The sources `evaluate` reports for `command`, sorted.

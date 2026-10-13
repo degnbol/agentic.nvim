@@ -58,88 +58,6 @@ describe("agentic.ui.DiagnosticsList", function()
         end
     end)
 
-    describe("add and get_diagnostics", function()
-        it("adds diagnostic and retrieves it", function()
-            local diagnostic = create_diagnostic()
-
-            local success = diagnostics_list:add(diagnostic)
-
-            assert.is_true(success)
-
-            local diagnostics = diagnostics_list:get_diagnostics()
-            assert.equal(1, #diagnostics)
-            assert.equal(diagnostic.message, diagnostics[1].message)
-            assert.spy(on_change_spy).was.called(1)
-        end)
-
-        it("does not add nil diagnostic", function()
-            local success = diagnostics_list:add(nil)
-
-            assert.is_false(success)
-            assert.is_true(diagnostics_list:is_empty())
-            assert.spy(on_change_spy).was.called(0)
-        end)
-
-        it("does not add diagnostic without bufnr", function()
-            local diagnostic = create_diagnostic()
-            diagnostic.bufnr = nil
-
-            local success = diagnostics_list:add(diagnostic)
-
-            assert.is_false(success)
-            assert.is_true(diagnostics_list:is_empty())
-        end)
-
-        it("does not add duplicate diagnostic", function()
-            local diagnostic = create_diagnostic()
-
-            diagnostics_list:add(diagnostic)
-            diagnostics_list:add(diagnostic)
-
-            local diagnostics = diagnostics_list:get_diagnostics()
-            assert.equal(1, #diagnostics)
-            assert.spy(on_change_spy).was.called(1)
-        end)
-
-        it("adds diagnostics with different locations", function()
-            local diagnostic1 =
-                create_diagnostic({ lnum = 10, message = "Error 1" })
-            local diagnostic2 =
-                create_diagnostic({ lnum = 20, message = "Error 2" })
-
-            diagnostics_list:add(diagnostic1)
-            diagnostics_list:add(diagnostic2)
-
-            local diagnostics = diagnostics_list:get_diagnostics()
-            assert.equal(2, #diagnostics)
-            assert.spy(on_change_spy).was.called(2)
-        end)
-
-        it("adds diagnostics with same line but different messages", function()
-            local diagnostic1 = create_diagnostic({ message = "Error 1" })
-            local diagnostic2 = create_diagnostic({ message = "Error 2" })
-
-            diagnostics_list:add(diagnostic1)
-            diagnostics_list:add(diagnostic2)
-
-            local diagnostics = diagnostics_list:get_diagnostics()
-            assert.equal(2, #diagnostics)
-        end)
-
-        it("returns deep copy of diagnostics", function()
-            local diagnostic = create_diagnostic()
-
-            diagnostics_list:add(diagnostic)
-
-            local diagnostics1 = diagnostics_list:get_diagnostics()
-            local diagnostics2 = diagnostics_list:get_diagnostics()
-
-            diagnostics1[1].message = "modified"
-
-            assert.equal(diagnostic.message, diagnostics2[1].message)
-        end)
-    end)
-
     describe("add_many", function()
         it("adds multiple diagnostics at once", function()
             local diagnostics = {
@@ -175,6 +93,38 @@ describe("agentic.ui.DiagnosticsList", function()
             assert.equal(2, count)
             assert.equal(2, #diagnostics_list:get_diagnostics())
         end)
+
+        it("does not add a diagnostic already in the list", function()
+            local diagnostic = create_diagnostic()
+
+            diagnostics_list:add_many({ diagnostic })
+
+            assert.equal(0, diagnostics_list:add_many({ diagnostic }))
+            assert.equal(1, #diagnostics_list:get_diagnostics())
+            assert.spy(on_change_spy).was.called(1)
+        end)
+
+        it("adds diagnostics with same line but different messages", function()
+            diagnostics_list:add_many({
+                create_diagnostic({ message = "Error 1" }),
+                create_diagnostic({ message = "Error 2" }),
+            })
+
+            assert.equal(2, #diagnostics_list:get_diagnostics())
+        end)
+
+        it("returns deep copy of diagnostics", function()
+            local diagnostic = create_diagnostic()
+
+            diagnostics_list:add_many({ diagnostic })
+
+            local diagnostics1 = diagnostics_list:get_diagnostics()
+            local diagnostics2 = diagnostics_list:get_diagnostics()
+
+            diagnostics1[1].message = "modified"
+
+            assert.equal(diagnostic.message, diagnostics2[1].message)
+        end)
     end)
 
     describe("is_empty", function()
@@ -183,7 +133,7 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("returns false when diagnostics exist", function()
-            diagnostics_list:add(create_diagnostic())
+            diagnostics_list:add_many({ create_diagnostic() })
 
             assert.is_false(diagnostics_list:is_empty())
         end)
@@ -191,8 +141,8 @@ describe("agentic.ui.DiagnosticsList", function()
 
     describe("clear", function()
         it("removes all diagnostics", function()
-            diagnostics_list:add(create_diagnostic({ lnum = 10 }))
-            diagnostics_list:add(create_diagnostic({ lnum = 20 }))
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
             assert.is_false(diagnostics_list:is_empty())
 
             diagnostics_list:clear()
@@ -203,7 +153,7 @@ describe("agentic.ui.DiagnosticsList", function()
 
         it("clears buffer content", function()
             local lines_before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            diagnostics_list:add(create_diagnostic())
+            diagnostics_list:add_many({ create_diagnostic() })
             local lines_after_add =
                 vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.is_not.same(lines_before, lines_after_add)
@@ -222,8 +172,8 @@ describe("agentic.ui.DiagnosticsList", function()
             local diagnostic1 = create_diagnostic({ lnum = 10 })
             local diagnostic2 = create_diagnostic({ lnum = 20 })
 
-            diagnostics_list:add(diagnostic1)
-            diagnostics_list:add(diagnostic2)
+            diagnostics_list:add_many({ diagnostic1 })
+            diagnostics_list:add_many({ diagnostic2 })
 
             assert.equal(2, #diagnostics_list:get_diagnostics())
 
@@ -236,8 +186,8 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("does not remove at invalid index (too small)", function()
-            diagnostics_list:add(create_diagnostic({ lnum = 10 }))
-            diagnostics_list:add(create_diagnostic({ lnum = 20 }))
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
 
             diagnostics_list:remove_at(0)
 
@@ -246,8 +196,8 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("does not remove at invalid index (too large)", function()
-            diagnostics_list:add(create_diagnostic({ lnum = 10 }))
-            diagnostics_list:add(create_diagnostic({ lnum = 20 }))
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
 
             diagnostics_list:remove_at(3)
 
@@ -265,7 +215,7 @@ describe("agentic.ui.DiagnosticsList", function()
                 file_path = "/path/to/test.lua",
             })
 
-            diagnostics_list:add(diagnostic)
+            diagnostics_list:add_many({ diagnostic })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
@@ -274,12 +224,12 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("renders multiple diagnostics", function()
-            diagnostics_list:add(
-                create_diagnostic({ lnum = 10, message = "Error 1" })
-            )
-            diagnostics_list:add(
-                create_diagnostic({ lnum = 20, message = "Error 2" })
-            )
+            diagnostics_list:add_many({
+                create_diagnostic({ lnum = 10, message = "Error 1" }),
+            })
+            diagnostics_list:add_many({
+                create_diagnostic({ lnum = 20, message = "Error 2" }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(2, #lines)
@@ -288,10 +238,12 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("includes severity emoji", function()
-            diagnostics_list:add(create_diagnostic({
-                severity = vim.diagnostic.severity.WARN,
-                message = "Warning message",
-            }))
+            diagnostics_list:add_many({
+                create_diagnostic({
+                    severity = vim.diagnostic.severity.WARN,
+                    message = "Warning message",
+                }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.truthy(lines[1]:find("Warning message", 1, true))
@@ -299,9 +251,11 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("escapes newline in the middle of message", function()
-            diagnostics_list:add(create_diagnostic({
-                message = "Line one\nLine two",
-            }))
+            diagnostics_list:add_many({
+                create_diagnostic({
+                    message = "Line one\nLine two",
+                }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
@@ -309,9 +263,11 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("escapes trailing newline in message", function()
-            diagnostics_list:add(create_diagnostic({
-                message = "Trailing newline\n",
-            }))
+            diagnostics_list:add_many({
+                create_diagnostic({
+                    message = "Trailing newline\n",
+                }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
@@ -319,11 +275,13 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("includes file location", function()
-            diagnostics_list:add(create_diagnostic({
-                lnum = 10,
-                col = 5,
-                file_path = "/path/to/test.lua",
-            }))
+            diagnostics_list:add_many({
+                create_diagnostic({
+                    lnum = 10,
+                    col = 5,
+                    file_path = "/path/to/test.lua",
+                }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.truthy(lines[1]:find(":11:6", 1, true)) -- lnum+1, col+1
@@ -332,10 +290,12 @@ describe("agentic.ui.DiagnosticsList", function()
         it("truncates long lines with ellipsis to fit window width", function()
             vim.api.nvim_win_set_width(winid, 40)
 
-            diagnostics_list:add(create_diagnostic({
-                message = "A very long diagnostic message that should definitely be truncated to fit",
-                file_path = "/short.lua",
-            }))
+            diagnostics_list:add_many({
+                create_diagnostic({
+                    message = "A very long diagnostic message that should definitely be truncated to fit",
+                    file_path = "/short.lua",
+                }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
@@ -344,10 +304,12 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("does not truncate when line fits within window width", function()
-            diagnostics_list:add(create_diagnostic({
-                message = "Short msg",
-                file_path = "/short.lua",
-            }))
+            diagnostics_list:add_many({
+                create_diagnostic({
+                    message = "Short msg",
+                    file_path = "/short.lua",
+                }),
+            })
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(1, #lines)
@@ -356,8 +318,8 @@ describe("agentic.ui.DiagnosticsList", function()
         end)
 
         it("updates buffer after removal", function()
-            diagnostics_list:add(create_diagnostic({ lnum = 10 }))
-            diagnostics_list:add(create_diagnostic({ lnum = 20 }))
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
+            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
 
             local lines_before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal(2, #lines_before)

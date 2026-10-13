@@ -149,6 +149,32 @@ describe("SessionRestore", function()
             assert.equal("session-1", items[1].session_id)
         end)
 
+        it("shows a shortened cwd when asked", function()
+            local home = vim.uv.os_homedir() --[[@as string]]
+            local cases = {
+                { home .. "/a/b/c/d", "…/c/d" },
+                { home .. "/a/b", "~/a/b" },
+                { home, "~" },
+                { "/x/y", "/x/y" },
+                { home .. "x/y", home .. "x/y" },
+            }
+            for _, case in ipairs(cases) do
+                local items = SessionRestore.build_items({
+                    {
+                        session_id = "s",
+                        title = "t",
+                        timestamp = 0,
+                        file_path = "/s.json",
+                        cwd = case[1],
+                    },
+                }, { show_cwd = true })
+                assert.truthy(
+                    vim.endswith(items[1].display, "[" .. case[2] .. "]"),
+                    items[1].display
+                )
+            end
+        end)
+
         it("uses (no title) for missing titles", function()
             --- @diagnostic disable-next-line: missing-fields
             local items = SessionRestore.build_items({ { session_id = "s1" } })
@@ -984,28 +1010,5 @@ describe("SessionRestore", function()
                 vim.api.nvim_buf_delete(bufnr, { force = true })
             end
         )
-    end)
-
-    describe("messages_for_task", function()
-        it("keeps one agent's messages, in stored order", function()
-            local messages = SessionRestore.messages_for_task({
-                { type = "agent", text = "a1", parent_tool_use_id = "a" },
-                { type = "agent", text = "b1", parent_tool_use_id = "b" },
-                {
-                    type = "tool_call",
-                    tool_call_id = "a-tool",
-                    kind = "read",
-                    status = "completed",
-                    parent_tool_use_id = "a",
-                },
-            }, "a")
-
-            assert.same(
-                { "a1", "a-tool" },
-                vim.tbl_map(function(msg)
-                    return msg.text or msg.tool_call_id
-                end, messages)
-            )
-        end)
     end)
 end)

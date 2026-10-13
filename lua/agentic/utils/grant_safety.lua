@@ -175,12 +175,6 @@ function M.compile_scope(pattern, display)
     return scope
 end
 
---- @param scope agentic.utils.GrantSafety.Scope
---- @return boolean
-function M.root_exists(scope)
-    return vim.uv.fs_stat(scope.root) ~= nil
-end
-
 --- True iff `path` is in the scope: some form's pattern matches it, and every
 --- hidden segment of it below that form's root is named by the pattern (see
 --- `compile_scope`).
@@ -320,18 +314,6 @@ end
 --- @return boolean
 function M.range_within(inner, outer)
     return inner[1] >= outer[1] and inner[2] <= outer[2]
-end
-
---- @param target agentic.utils.GrantSafety.Range
---- @param ranges agentic.utils.GrantSafety.Range[]
---- @return boolean
-function M.any_overlap(target, ranges)
-    for _, r in ipairs(ranges) do
-        if M.range_overlaps(target, r) then
-            return true
-        end
-    end
-    return false
 end
 
 --- Locate `target_lines` as a contiguous subsequence in `file_lines`, but

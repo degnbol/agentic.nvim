@@ -234,7 +234,8 @@ handling.
    per layer:
    - Bundled `lua/agentic/permissions.json` (when
      `Config.permissions.use_plugin_defaults`) — structured entries only.
-   - `~/.claude/settings.json` and `.claude/settings.json` (when
+   - `settings.json` in Claude's config dir (`PermissionRules.settings_paths`)
+     and `.claude/settings.json` (when
      `Config.permissions.use_claude_settings`) — glob patterns.
      Mtime-cached.
    - `Config.permissions.structured` — structured entries.

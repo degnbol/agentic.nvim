@@ -1151,7 +1151,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- Contents inform the type only when the filename can't (extensionless
         -- files like zsh `#compdef` completions); the file's own head beats
         -- the diff's.
-        local lang = Theme.get_language_from_path(
+        local lang = Treesitter.language_for_path(
             argument,
             #source_lines > 0 and source_lines or tool_call_block.diff.new
         ):gsub("%-fold$", "")

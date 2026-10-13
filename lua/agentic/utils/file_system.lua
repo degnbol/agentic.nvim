@@ -202,32 +202,6 @@ function FileSystem.write_file(abs_path, content, callback)
     callback(err or ("Failed to write file: " .. abs_path))
 end
 
---- @param abs_path string
---- @param line integer|nil
---- @param limit integer|nil
---- @param callback fun(content: string|nil)
-function FileSystem.read_file(abs_path, line, limit, callback)
-    local lines_or_nil, err = FileSystem.read_from_buffer_or_disk(abs_path)
-    local lines = lines_or_nil or {}
-
-    if err ~= nil then
-        Logger.notify(
-            "Agent file read error: " .. err,
-            vim.log.levels.ERROR,
-            { title = " Read file error" }
-        )
-        callback(nil)
-        return
-    end
-
-    if line ~= nil and limit ~= nil then
-        lines = vim.list_slice(lines, line, line + limit)
-    end
-
-    local content = table.concat(lines, "\n")
-    callback(content)
-end
-
 --- @param path string
 --- @return string the base64-encoded content of the file or an empty string otherwise
 function FileSystem.read_file_base64(path)

@@ -101,7 +101,7 @@ function M.check()
         "Most of the ACP providers require Node.js and a package manager to run, so you'll need at least one installed."
     )
 
-    if ACPHealth.is_node_installed() then
+    if ACPHealth.is_command_available("node") then
         vim_health.ok("node: installed")
     else
         vim_health.error("node: not found")
@@ -109,8 +109,7 @@ function M.check()
 
     local managers = { "pnpm", "bun", "yarn", "npm" }
     for _, name in ipairs(managers) do
-        local check_fn = ACPHealth["is_" .. name .. "_installed"]
-        if check_fn and check_fn() then
+        if ACPHealth.is_command_available(name) then
             if name == "npm" then
                 vim_health.ok(
                     string.format(

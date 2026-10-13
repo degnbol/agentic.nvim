@@ -58,18 +58,10 @@ function M.setSlashCommands(bufnr, items)
     safe_set(vim.b, bufnr, "agentic_slash_commands", items)
 end
 
---- Retrieve slash commands for the current buffer, we assume it's the correct one
---- as it can only be triggered in insert mode
---- @return agentic.acp.SlashCommand[]
-function M.getSlashCommands()
-    return safe_get(vim.b, 0, "agentic_slash_commands") or {}
-end
-
---- Retrieve slash commands for a specific buffer (used by LSP handler where
---- vim.b[0] may not reliably point to the input buffer).
+--- Slash commands stored on `bufnr`.
 --- @param bufnr integer
 --- @return agentic.acp.SlashCommand[]
-function M.getSlashCommandsForBuffer(bufnr)
+function M.getSlashCommands(bufnr)
     return safe_get(vim.b, bufnr, "agentic_slash_commands") or {}
 end
 

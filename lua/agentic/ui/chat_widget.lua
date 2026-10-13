@@ -586,9 +586,6 @@ function ChatWidget:_send_line()
     local er = sr + count - 1
     local lines =
         vim.api.nvim_buf_get_lines(self.buf_nrs.input, sr, er + 1, false)
-    if #lines == 0 then
-        return
-    end
     local text = table.concat(lines, "\n")
     if not text:match("%S") then
         return
@@ -1502,12 +1499,6 @@ end
 function ChatWidget:setup_panel_buf(bufnr, panel)
     self:_apply_buf_opts(bufnr, panel)
     self:_bind_buf_keymaps(panel, bufnr)
-end
-
---- `setup_panel_buf` for one of the widget's own panel buffers.
---- @param panel agentic.ui.ChatWidget.PanelNames
-function ChatWidget:apply_buf_state(panel)
-    self:setup_panel_buf(self.buf_nrs[panel], panel)
 end
 
 --- Set a panel's header context and render it.

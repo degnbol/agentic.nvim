@@ -127,7 +127,7 @@ describe("object utils", function()
             }
 
             local merged_config =
-                Object.merge_config(default_config, user_config)
+                Object.deep_merge_into(default_config, user_config)
 
             assert.same(expected_merged_config, merged_config)
 
@@ -144,7 +144,7 @@ describe("object utils", function()
             keymaps = { prompts = { ["<localLeader>y"] = "Go ahead." } },
         }
 
-        local merged = Object.merge_config(default_config, user_config)
+        local merged = Object.deep_merge_into(default_config, user_config)
 
         assert.same({
             ["<localLeader>c"] = "Continue",
@@ -160,38 +160,8 @@ describe("object utils", function()
             keymaps = { prompts = { ["<localLeader>c"] = vim.NIL } },
         }
 
-        local merged = Object.merge_config(default_config, user_config)
+        local merged = Object.deep_merge_into(default_config, user_config)
 
         assert.is_true(merged.keymaps.prompts["<localLeader>c"] == vim.NIL)
-    end)
-
-    describe("handles nil gracefully", function()
-        it("handles nil for keymaps", function()
-            local default_config = {
-                option1 = true,
-                keymaps = {
-                    widget = {
-                        close = "q",
-                    },
-                },
-            }
-            local user_config = {
-                option1 = false,
-                keymaps = nil,
-            }
-
-            local expected_merged_config = {
-                option1 = false,
-                keymaps = {
-                    widget = {
-                        close = "q",
-                    },
-                },
-            }
-
-            local merged_config =
-                Object.merge_config(default_config, user_config)
-            assert.same(expected_merged_config, merged_config)
-        end)
     end)
 end)

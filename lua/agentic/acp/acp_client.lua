@@ -1249,37 +1249,24 @@ function ACPClient:set_model(session_id, model_id, callback)
     self:_send_request("session/set_model", params, callback)
 end
 
---- Stops current generation/tool execution, keeps session active for the next prompt
+--- Send `session/cancel` for the session. The session stays subscribed and
+--- can take the next prompt.
 --- @param session_id string
 function ACPClient:stop_generation(session_id)
-    if not session_id then
-        return
-    end
-
     self:_send_notification("session/cancel", {
         sessionId = session_id,
     })
 end
 
---- Cancels and destroys session (cleanup)
---- Either to create a new session or if the tabpage is closed
+--- Unsubscribe the session, then send `session/cancel` for it. Updates that
+--- the cancel provokes are not delivered.
 --- @param session_id string
 function ACPClient:cancel_session(session_id)
-    if not session_id then
-        return
-    end
-
-    -- remove subscriber first to avoid handling any further messages
     self:unsubscribe(session_id)
 
     self:_send_notification("session/cancel", {
         sessionId = session_id,
     })
-end
-
---- @return boolean
-function ACPClient:is_connected()
-    return self.state ~= "disconnected" and self.state ~= "error"
 end
 
 return ACPClient
