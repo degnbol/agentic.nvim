@@ -16,7 +16,8 @@ read from code.
   `<session-id>:replay-subagent:<toolu-id>` (`acp-agent.js`, `replaySessionHistory`).
   Live, the child id is the SDK task id.
 - `_open_agent` makes the block and the `subagents` entry under the replay id.
-  The record lookup (`agent:subagent_id`) misses that id, so the block's
+  The record lookup (`_read_agent_record` → `agent:subagent_record`, a meta
+  file named by the agent id) misses that id, so the block's
   `subagent` info has no `agent_type`, a predicted mode and `confirmed = false`.
 - While `_loading`, the subagent gates in `_on_session_update` and
   `_on_tool_call` return before `_note_agent_task`. So the replay id never gets

@@ -1,6 +1,6 @@
 # Bug: a long code line inside a streamed prose fence is hard-wrapped into two
 
-Found reviewing the fence-balancing work. Line numbers are against `3f548f7`.
+Line numbers are against `cc07515` + working tree.
 
 ## Symptom
 
@@ -20,7 +20,7 @@ then `" delta, epsilon)\n"`, then the closing fence.
 
 ## Mechanism
 
-`MessageWriter:write_message_chunk` (`:973-995`) wraps the last buffer line
+`MessageWriter:write_message_chunk` (`message_writer.lua:2253-2275`) wraps the last buffer line
 immediately when it overflows, so the user sees wrapping during streaming
 rather than after the line completes. It has no notion of fences:
 
@@ -32,7 +32,7 @@ if wrap_width > 0 and #tail > wrap_width then
     local wrapped = TextWrap.wrap_single_line(tail, wrap_width)
 ```
 
-`wrap_single_line_with_offsets` (`text_wrap.lua:336-348`) skips fence
+`wrap_single_line_with_offsets` (`text_wrap.lua:338-350`) skips fence
 *delimiter* lines (`^%s*```) but nothing tells it that a line is fence
 *content*. The two sites that do track fence state are no help here:
 
@@ -55,7 +55,9 @@ tokens differently. Any code line longer than the wrap width will hit it for
 some token split.
 
 Only prose fences are affected. Tool-call command and body fences are built by
-`prepare_block_lines` and never go through the streaming tail wrap.
+`prepare_block_lines` and never go through the streaming tail wrap. The tail
+wrap also does not know `$$` display math, which `wrap_prose` passes through,
+so a long math line can break the same way.
 
 ## Fix sketch
 
@@ -63,6 +65,7 @@ Gate the tail wrap on fence state. The state is already computable from the
 reflow region: `TextWrap.unclosed_fence` over `_chunk_start_line ..` the tail,
 which after the marker clamp is guaranteed to start outside a fence — so a
 non-nil result means the tail is inside a fence and must be left alone.
+`unclosed_fence` does not track `$$`, so the gate needs a math check too.
 
 Cheaper alternative if that scan proves too hot per chunk: track the open fence
 on the writer as chunks land, resetting it wherever `_chunk_start_line` resets.

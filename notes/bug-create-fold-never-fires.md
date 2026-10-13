@@ -1,80 +1,97 @@
-# Bug: `create_max_lines` never folds a created file
+# Bug: `create_max_lines` folds a created file only on the streaming path
 
-Found reviewing `47f46a3` + `e3c0710`. Line numbers are against `50ed666`;
-`message_writer.lua` has uncommitted changes from unrelated work in flight, so
-anchor on the named symbols there.
+Line numbers against `cc07515` + working tree.
 
 ## Mechanism
 
-`is_create` at `tool_call_renderer.lua:755-756` requires `#source_lines == 0`,
-i.e. *the target file could not be read*, and fold state is applied only at
-final status (both `is_final_status` gates in `MessageWriter`). By then a
-successful create is on disk, so the collapse never fires. Verified by headless
-render:
+`prepare_block_lines` sets `is_create` (`tool_call_renderer.lua:894-895`) from
+`#source_lines == 0` and an empty `diff.old`, i.e. from whether the target file
+can be read *at render time*. `_render_block_fold` (`message_writer.lua:2498`)
+stores the resulting state in `fold_open`, and the status-only branch of
+`update_tool_call_block` replays it at final status
+(`message_writer.lua:2949-2951`). So the result depends on the disk state when
+the diff first renders:
 
 | when the diff first renders | outcome |
 | --- | --- |
-| streaming (`pending` → `completed`) | status-only branch of `update_tool_call_block` returns before the fold block; never reached |
-| diff arrives on the `completed` update | re-renders, but the file exists → `fold_open = true` |
-| restore from session history | file exists → `fold_open = true` |
-| file unreadable at final status | `fold_open = false` — the `argument == ""` pathology, which is not a create |
+| non-final status, file not yet written | collapses at final status (correct) |
+| diff arrives on the `completed` update | file exists → `fold_state = "open"` |
+| restore from session history | file exists → `fold_state = "open"` |
+| file unreadable, or an existing 0-byte file | `is_create = true` — not a create |
 
-`e3c0710` added the `#source_lines == 0` clause to stop a large Write over an
-existing file from folding (Write sends no `old_string`, so the previous
-`diff.old`-only test called it a create). That removed the false positive and the
-true positive together.
+The `#source_lines == 0` clause stops a large Write over an existing file from
+folding (Write sends no `old_string`, so an empty `diff.old` alone does not
+identify a create). Disk state after the edit cannot separate a create from a
+Write over an existing file, and `kind` cannot either.
 
-Nothing at final render substitutes for the missing fact: `kind` doesn't
-separate a create from a Write over an existing file. So record existence before
-the edit lands, persist it, and read it at render.
+`file_created` (set by `hook_patch_facts`, `claude_agent_acp_adapter.lua:505`)
+is exact but does not solve this: only the Claude adapter sets it, it arrives
+after the tool runs (after the first render), and the history payloads do not
+persist it.
 
-## 1. Record it where pre-edit facts are already recorded
+So record existence before the edit lands and before the first render, persist
+it, and read it at render.
 
-`_try_record_edit_range` (`session_manager.lua:1028`) exists for exactly this
-shape of problem — it is called from both `_on_tool_call` (`:1009`) and
-`_on_tool_call_update`, works off the merged tracker rather than a partial
-update, is idempotent, and skips `completed`/`failed` because disk is post-edit
-by then. Mirror it: a sibling that sets
-`tracker.file_existed_before = vim.uv.fs_stat(path) ~= nil` on the first call
-that has a path and a non-final status.
+## 1. Record it before the first render
 
-`fs_stat`, not a read: existence is the question, and a directory, an unreadable
-file and a 0-byte file all count as existing.
+Pre-edit facts are recorded in `_try_record_edit_range`
+(`session_manager.lua:2040`). It skips `completed`/`failed` (disk is post-edit)
+and `self._loading` (the session/load replay sends past edits as `pending`
+while disk is post-edit). The new recorder needs the same two skips.
 
-Guard `argument ~= ""` explicitly — `fnamemodify("", ":p")` is the cwd, so an
-empty argument would stat the working directory and record "existed".
-(`_try_record_edit_range` itself guards only `not tracker.argument`, at `:1051`;
-harmless there because `read_from_disk` rejects a directory, but don't copy it.)
+It must run *before* the writer call, not after it like
+`_try_record_edit_range` (`:1992`, `:2458`). `_render_block_fold` fixes
+`fold_open` at the first render, and the status-only branch only replays it. A
+flag set after that render has no effect on the streaming path.
+
+- `_on_tool_call` (`:1948`): set `tool_call.file_existed_before` before
+  `write_tool_call_block` at `:1967`.
+- `_on_tool_call_update`: set it on `tool_call_update` before
+  `writer:update_tool_call_block` at `:2456`, only when the tracker does not
+  have it yet. Take the path from `tool_call_update.argument or
+  tracker.argument`. `tbl_deep_extend` in `update_tool_call_block` merges the
+  field into the tracker.
+
+Value: `vim.uv.fs_stat(path) ~= nil`. Use `fs_stat`, not a read: existence is
+the question, and a directory, an unreadable file and a 0-byte file all count
+as existing.
+
+Guard `argument ~= ""` explicitly. `fnamemodify("", ":p")` is the cwd, so an
+empty argument stats the working directory and records "existed".
+(`_try_record_edit_range` guards only `not tracker.argument`. That is harmless
+there because `read_from_disk` rejects a directory, but do not copy it.)
 
 ## 2. Persist it
 
-History payloads are built field-by-field (`session_manager.lua:996-1005` and
-`:1256-1262`), so the flag has to be added to both, plus
-`@field file_existed_before? boolean` on `agentic.ui.MessageWriter.ToolCallBase`
-(`message_writer.lua:79-89`). Skipping this leaves the restore path — where the
-old behaviour was most visible — still broken.
+History payloads are built field by field (`session_manager.lua:1971-1984` in
+`_on_tool_call`, `:2462-2473` in `_on_tool_call_update`). Add the flag to both,
+and add `@field file_existed_before? boolean` to
+`agentic.ui.MessageWriter.ToolCallBase` (`message_writer.lua:104`). Without
+this, the restore path stays broken.
 
 ## 3. Read the flag at render
 
-`is_create = tool_call_block.file_existed_before == false`, replacing the
-`#source_lines == 0` + empty-`diff.old` pair. `== false` rather than `not …`:
-nil means "never observed pre-edit" (a diff that first arrived at completion),
-which must not collapse.
+`is_create = tool_call_block.file_existed_before == false`, in place of the
+`#source_lines == 0` + empty-`diff.old` pair. Use `== false`, not `not …`: nil
+means "not observed before the edit" (a diff that first arrived at
+completion), which must not collapse.
 
-## 4. Apply the fold on the frozen path
-
-Even with a correct flag a streaming create never folds, because
-`update_tool_call_block`'s status-only branch returns before the fold block.
-Store the render's `fold_anchor` offset on the tracker and apply fold state from
-that branch once the status is final.
+A diff that first arrives on the `completed` update re-renders with a final
+status, so `_render_block_fold` queues the close directly. No change to the
+status-only branch is necessary.
 
 ## Tests
 
-- Rewrite the three `describe("create collapse")` cases
-  (`tool_call_renderer.test.lua:381-420`) to set `file_existed_before` instead of
-  relying on `read_stub` returning nil. As written they assert a state production
-  never reaches.
+- `tool_call_renderer.test.lua`, `describe("create collapse")` (`:1014`): set
+  `file_existed_before` in `fold_state_for` instead of depending on
+  `read_stub` returning nil. Add a case: `file_existed_before = true` with an
+  empty `diff.old` and a large `diff.new` stays `open`.
+- `message_writer.test.lua`: "closes a large created file only when it
+  completes" (`:5156`) and "keeps a fold the user opened through a repeated
+  completion" (`:5197`) depend on their `/tmp` paths not existing. Set
+  `file_existed_before = false` on the block. Add a case: a block written with
+  `status = "completed"` and `file_existed_before = false` (the restore shape)
+  folds closed.
 - `session_manager`: the flag is `false` for an absent path, `true` for an
-  existing one, and unset for an empty `argument`.
-- `message_writer`: a `completed` status-only update on a create block whose diff
-  exceeds `create_max_lines` closes the fold.
+  existing one, unset for an empty `argument`, unset during `_loading`, and set
+  on the message before the writer receives it.

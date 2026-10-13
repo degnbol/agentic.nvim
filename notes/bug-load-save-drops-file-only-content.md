@@ -4,9 +4,11 @@ Found in code review of `89fae9e`. Mechanism read from code.
 
 ## Mechanism
 
-`_do_load_acp_session` starts from an empty `ChatHistory:new()`. The load
-callback copies only `title` and `file_activity` from the session file; the
-messages come from the provider's replay. The first change after the load
+`_do_load_acp_session` starts from an empty `ChatHistory:new()`. From the
+session file it copies only `title`, `file_activity`, `subagents` and
+`subagent_messages`, and it stashes each tool call's `decided_by` for the
+replayed call to take. The messages come from the provider's replay. The
+first change after the load
 saves the whole history (`ChatHistory:save`), so the file is rewritten from
 the replay. Anything the file held that the replay does not carry is lost:
 
