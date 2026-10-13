@@ -4,6 +4,51 @@ Release strategy and versioning: see [`RELEASING.md`](RELEASING.md). The
 path to `v0.1.0` is to drive the Bugs section below to empty (or "Known
 minor").
 
+## Plan order
+
+Plans in `notes/`. Within a track, each plan needs the ones above it.
+Tracks are independent unless a note says otherwise.
+
+**Session restore**
+1. [`PLAN-panel-edit-target.md`](notes/PLAN-panel-edit-target.md)
+2. [`PLAN-history-session-cwd.md`](notes/PLAN-history-session-cwd.md)
+3. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md) and
+   [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md), first or
+   together with 4. Both are also in the adapter track below.
+4. [`PLAN-per-session-provider.md`](notes/PLAN-per-session-provider.md)
+5. [`PLAN-restore-picker.md`](notes/PLAN-restore-picker.md) and
+   [`PLAN-unify-history-restore.md`](notes/PLAN-unify-history-restore.md),
+   one commit (if split: unify first)
+6. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
+7. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md), which also needs
+   `PLAN-hooks_in_chat.md`
+
+**Hooks in chat**
+1. [`PLAN-hooks_in_chat.md`](notes/PLAN-hooks_in_chat.md). Either order with
+   `PLAN-adapter-hook-records.md`.
+
+**Claude code behind the adapter:** the order is in
+[§ Claude-specific code behind the adapter](#claude-specific-code-behind-the-adapter).
+
+**Executed code**
+1. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)
+2. [`PLAN-executed-code.md`](notes/PLAN-executed-code.md)
+
+**Submit steps:** [`PLAN-submit-steps.md`](notes/PLAN-submit-steps.md) depends
+on `PLAN-command-keeps-context-panels.md`, which is not in `notes/`. Check
+whether it has landed.
+
+**Auto mode**
+1. [`PLAN-auto-mode-integration.md`](notes/PLAN-auto-mode-integration.md)
+   (phase 1 done)
+2. [`PLAN-auto-mode-fix.md`](notes/PLAN-auto-mode-fix.md), which extends it
+
+**No ordering:**
+[`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
+[`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold),
+[`PLAN-terminal-streaming.md`](notes/PLAN-terminal-streaming.md),
+[`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md).
+
 ## Bugs
 
 ### File viewer listener

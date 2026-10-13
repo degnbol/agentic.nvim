@@ -456,11 +456,11 @@ end
 --- Reduce the Edit/Write PostToolUse-hook `tool_call_update` to the two facts
 --- only it carries, or nil when `update` is not that notification.
 ---
---- The bridge registers a PostToolUse hook for Edit and Write and emits an
---- extra `tool_call_update` built from the tool response's `structuredPatch`
---- (`tools.js` `toolUpdateFromDiffToolResponse`). It carries no `status` and no
---- `rawInput`, so the shape-based guard in `__handle_tool_call_update` would
---- otherwise drop it.
+--- The bridge's PostToolUse hook emits an extra `tool_call_update` for every
+--- tool, carrying the whole tool response in `_meta.claudeCode.toolResponse`
+--- (`tool-calls/renderer.js` `hookResult`). Only Edit and Write responses hold
+--- a `structuredPatch`. The update carries no `status` and no `rawInput`, so
+--- the shape-based guard in `__handle_tool_call_update` would otherwise drop it.
 ---
 --- Its `content[]` is deliberately ignored. `update_tool_call_block` merges
 --- partials with `tbl_deep_extend("force", …)`, which merges list-valued
