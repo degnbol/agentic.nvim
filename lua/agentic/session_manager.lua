@@ -4427,7 +4427,7 @@ function SessionManager:_get_system_info()
     local project_root = vim.uv.cwd()
 
     local git_root = vim.fs.root(project_root or 0, ".git")
-    if git_root then
+    if git_root and vim.fn.executable("git") == 1 then
         project_root = git_root
         res = res .. "\n- This is a Git repository."
 

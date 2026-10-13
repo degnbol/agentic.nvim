@@ -108,11 +108,14 @@ describe("FilePicker:scan_files", function()
             system_stub:invokes(function(_cmd)
                 -- First call returns empty (simulates failure)
                 -- Second call returns files (simulates success)
-                local stdout = system_stub.call_count == 1 and ""
-                    or "file1.lua\nfile2.lua\nfile3.lua\n"
+                local failed = system_stub.call_count == 1
                 return {
                     wait = function()
-                        return { code = 0, stdout = stdout }
+                        return {
+                            code = failed and 1 or 0,
+                            stdout = failed and ""
+                                or "file1.lua\nfile2.lua\nfile3.lua\n",
+                        }
                     end,
                 }
             end)

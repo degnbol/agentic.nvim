@@ -499,7 +499,7 @@ local ConfigDefault = {
         structured = {},
         highlight_unapproved = true,
         tmp_cleanup = true,
-        default_grant = { "/tmp", "$TMPDIR" },
+        default_grant = { "/tmp", "$TMPDIR", ".", "root" },
     },
 
     --- Auto-approve recoverable file mutations under the paths granted with
