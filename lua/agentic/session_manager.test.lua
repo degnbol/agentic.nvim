@@ -1855,15 +1855,18 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("plan exit", function()
-        -- The block the claude adapter mints for ExitPlanMode. The option is
-        -- offered off the tracker, never off the permission request.
-        local PLAN_EXIT_BLOCK = { kind = "switch_mode", argument = "Normal" }
+        -- The option is offered off the tracker, never off the permission
+        -- request.
+        local PLAN_EXIT_BLOCK =
+            { kind = "switch_mode", argument = "Normal", exits_plan = true }
 
         --- @param block table|nil Tracker for the requesting tool call
         --- @param new_session fun()|nil Stub for `session.new_session`
+        --- @param plan_file string|nil The plan file the request names
         --- @return agentic.acp.RequestPermission request as add_request saw it
         --- @return fun(option_id: string) choose What a pick in the prompt calls
-        local function request_for(block, new_session)
+        --- @return agentic.SessionManager session
+        local function request_for(block, new_session, plan_file)
             --- @type agentic.acp.RequestPermission
             local seen
             --- @type fun(option_id: string)
@@ -1872,10 +1875,16 @@ describe("agentic.SessionManager", function()
             local session = {
                 status_indicator = { stop = function() end },
                 message_writer = { tool_call_blocks = { ["tc-plan"] = block } },
+                agent = {
+                    plan_file = function(_self, request)
+                        return request.toolCall.rawInput.planFilePath
+                    end,
+                },
                 _agents = {},
                 _tool_call_owner = {},
                 _last_edited_md = "/project/plan.md",
                 _writer_for = SessionManager._writer_for,
+                _handle_input_submit = spy.new(function() end),
                 new_session = new_session,
                 permission_manager = {
                     add_request = function(_self, request, callback)
@@ -1888,7 +1897,11 @@ describe("agentic.SessionManager", function()
 
             SessionManager._on_request_permission(session, {
                 sessionId = "s-1",
-                toolCall = { toolCallId = "tc-plan", kind = "switch_mode" },
+                toolCall = {
+                    toolCallId = "tc-plan",
+                    kind = "switch_mode",
+                    rawInput = { planFilePath = plan_file },
+                },
                 options = {
                     {
                         optionId = "allow-once",
@@ -1898,7 +1911,25 @@ describe("agentic.SessionManager", function()
                 },
             }, function() end)
 
-            return seen, choose
+            return seen, choose, session
+        end
+
+        --- Pick the plan-implement option and run the fresh session's
+        --- `on_created`.
+        --- @param plan_file string|nil
+        --- @return string|nil prompt What the fresh session was sent
+        local function implement(plan_file)
+            local new_session = spy.new(function() end)
+            local request, choose, session =
+                request_for(PLAN_EXIT_BLOCK, new_session, plan_file)
+            local deferred = Deferred.capture()
+            choose(request.options[2].optionId)
+            deferred.drain()
+            deferred.revert()
+
+            new_session.calls[1][2].on_created()
+            local submit = session._handle_input_submit --[[@as TestSpy]]
+            return submit.calls[1] and submit.calls[1][2]
         end
 
         it("offers to clear context and implement the plan", function()
@@ -1920,8 +1951,31 @@ describe("agentic.SessionManager", function()
             assert.is_true(new_session.calls[1][2].keep_cwd)
         end)
 
+        it("uses the plan file the agent reports", function()
+            assert.equal(
+                "Initiate work on plan: /plans/agent.md",
+                implement("/plans/agent.md")
+            )
+        end)
+
+        it("falls back to the last edited markdown file", function()
+            assert.equal(
+                "Initiate work on plan: /project/plan.md",
+                implement(nil)
+            )
+        end)
+
         it("leaves other tool calls' options alone", function()
             local options = request_for({ kind = "edit" }).options
+
+            assert.equal(1, #options)
+        end)
+
+        it("leaves a switch_mode call without exits_plan alone", function()
+            local options = request_for({
+                kind = "switch_mode",
+                argument = "Normal",
+            }).options
 
             assert.equal(1, #options)
         end)
@@ -3884,7 +3938,6 @@ describe("agentic.SessionManager", function()
                 _history_changed = spy.new(noop),
                 _try_record_edit_range = noop,
                 _record_file_op = noop,
-                _track_plan_exit = noop,
                 _on_tool_call = SessionManager._on_tool_call,
                 _on_permission_decided = SessionManager._on_permission_decided,
             } --[[@as agentic.SessionManager]]

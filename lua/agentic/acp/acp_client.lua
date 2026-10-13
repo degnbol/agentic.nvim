@@ -214,6 +214,13 @@ function ACPClient:exec_shell()
     return nil
 end
 
+--- The plan file a permission request asks approval for.
+--- @param _request agentic.acp.RequestPermission
+--- @return string|nil path Absolute path; nil when the request names none
+function ACPClient:plan_file(_request)
+    return nil
+end
+
 --- The mode a subagent is expected to run in until the provider's record of
 --- its spawn confirms one. Adapters for providers that can force a mode
 --- override this.

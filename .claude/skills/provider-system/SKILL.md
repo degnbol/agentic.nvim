@@ -243,6 +243,11 @@ Override when the provider sends data in non-standard fields (e.g. `rawInput`,
 permission request), or skips events (Gemini doesn't send cancel updates on
 rejection).
 
+An adapter whose provider has a plan mode sets `exits_plan` on the block of the
+call that leaves it, and overrides `plan_file(request)` (default nil) to name
+the plan file; `SessionManager` then offers "Clear context & implement plan"
+on that call's permission request.
+
 `__build_tool_call_message` and `__build_tool_call_update` take the session id
 as a trailing argument, for overrides needing session-scoped state — currently
 `session_roots(session_id)`, the directories a skill name resolves against.

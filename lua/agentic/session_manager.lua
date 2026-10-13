@@ -344,8 +344,6 @@ function SessionManager:new()
         destroyed = false,
         --- @type string|nil Smart path of the most recently edited .md file (plan candidate)
         _last_edited_md = nil,
-        --- @type boolean Set when Plan→Normal mode switch detected; cleared after turn ends
-        _plan_exit_pending = false,
         _retry_attempt = 0,
         _reauth_live_retry = false,
         _transient_attempt = 0,
@@ -2002,7 +2000,6 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
 
     self:_try_record_edit_range(tool_call.tool_call_id)
     self:_record_file_op(tool_call.tool_call_id)
-    self:_track_plan_exit(tool_call)
 end
 
 --- Show what decided a tool call's permission on its block and keep it in the
@@ -2180,58 +2177,12 @@ function SessionManager:toggle_file_activity()
     end)
 end
 
---- Detect Plan→Normal mode switch so the turn-end callback can offer
---- context clearing and plan implementation.
---- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
-function SessionManager:_track_plan_exit(tool_call)
-    if
-        AcpKind.normalise(tool_call.kind) == "switch_mode"
-        and tool_call.argument == "Normal"
-    then
-        self._plan_exit_pending = true
-    end
-end
-
---- Find the most recently modified .md file in ~/.claude/plans/.
---- Returns the path if modified within the last 5 minutes, nil otherwise.
---- @return string|nil
-local function find_recent_plan_file()
-    local plans_dir = vim.fn.expand("~/.claude/plans")
-    local best_path, best_mtime = nil, 0
-    local cutoff = os.time() - 300 -- 5 minutes
-
-    local handle = vim.uv.fs_scandir(plans_dir)
-    if not handle then
-        return nil
-    end
-
-    while true do
-        local name, type = vim.uv.fs_scandir_next(handle)
-        if not name then
-            break
-        end
-        if type == "file" and name:match("%.md$") then
-            local full = vim.fs.joinpath(plans_dir, name)
-            local stat = vim.uv.fs_stat(full)
-            if stat and stat.mtime.sec > best_mtime then
-                best_mtime = stat.mtime.sec
-                best_path = full
-            end
-        end
-    end
-
-    if best_path and best_mtime >= cutoff then
-        return best_path
-    end
-    return nil
-end
-
 local PLAN_IMPLEMENT_ID = "__plan_implement__"
 
 --- Queue a permission request with the permission manager. When the request
 --- waits for the user (not auto-approved), signal attention and fire the
 --- `on_permission_request` hook.
---- For ExitPlanMode permissions, injects a "Clear context & implement plan"
+--- For a tool call marked `exits_plan`, injects a "Clear context & implement plan"
 --- option that accepts the plan, cancels the session, and starts a fresh
 --- session with the plan file as the initial prompt.
 --- @param request agentic.acp.RequestPermission
@@ -2248,14 +2199,9 @@ function SessionManager:_on_request_permission(request, callback)
         self.status_indicator:stop()
     end
 
-    -- Detect ExitPlanMode permission via the tracked tool call block
     local tracker =
         self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
-    local is_plan_exit = tracker
-        and AcpKind.normalise(tracker.kind) == "switch_mode"
-        and tracker.argument == "Normal"
-
-    if is_plan_exit then
+    if tracker and tracker.exits_plan then
         -- Inject "Clear context & implement plan" option.
         -- It sorts first (priority 0 in PermissionManager).
         table.insert(request.options, {
@@ -2279,8 +2225,9 @@ function SessionManager:_on_request_permission(request, callback)
             end
             callback(accept_id)
 
-            -- Discover the plan file before cancelling (clears tracking state)
-            local plan_path = self._last_edited_md or find_recent_plan_file()
+            -- Before `new_session`, whose cancel clears `_last_edited_md`
+            local plan_path = self.agent:plan_file(request)
+                or self._last_edited_md
 
             -- Defer to avoid re-entrancy with PermissionManager cleanup
             vim.schedule(function()
@@ -4088,7 +4035,6 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
-    self._plan_exit_pending = false
     self:_reset_subagents()
     self.chat_history = ChatHistory:new()
     self:_sync_modified(self.chat_history)
@@ -4291,7 +4237,6 @@ function SessionManager:_cancel_session()
     self.permission_manager:clear()
     SlashCommands.setCommands(self.widget.buf_nrs.input, {})
     self._last_edited_md = nil
-    self._plan_exit_pending = false
     self:_reset_subagents()
 
     self.chat_history = ChatHistory:new()

@@ -619,6 +619,84 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.is_nil(calls[1].body)
         end)
 
+        describe("exits_plan", function()
+            --- @param tool_name string
+            --- @return agentic.ui.MessageWriter.ToolCallBlock
+            local function mode_switch_call(tool_name)
+                local adapter, calls = make_capturing_adapter()
+                adapter:__handle_tool_call("s-1", {
+                    sessionUpdate = "tool_call",
+                    toolCallId = "tc-mode",
+                    kind = "switch_mode",
+                    status = "pending",
+                    _meta = { claudeCode = { toolName = tool_name } },
+                })
+                return calls[1]
+            end
+
+            it("marks ExitPlanMode", function()
+                assert.is_true(mode_switch_call("ExitPlanMode").exits_plan)
+            end)
+
+            it("leaves the other mode switches unmarked", function()
+                assert.is_nil(mode_switch_call("EnterWorktree").exits_plan)
+                assert.is_nil(mode_switch_call("EnterPlanMode").exits_plan)
+            end)
+
+            it("marks an ExitPlanMode update", function()
+                local msg = make_adapter():__build_tool_call_update({
+                    toolCallId = "tc-plan",
+                    kind = "switch_mode",
+                    status = "pending",
+                    rawInput = { plan = "the plan" },
+                    _meta = { claudeCode = { toolName = "ExitPlanMode" } },
+                })
+
+                assert.is_true(msg.exits_plan)
+            end)
+
+            it("leaves an EnterWorktree update unmarked", function()
+                local msg = make_adapter():__build_tool_call_update({
+                    toolCallId = "tc-wt",
+                    kind = "switch_mode",
+                    status = "pending",
+                    rawInput = { name = "wt" },
+                    _meta = { claudeCode = { toolName = "EnterWorktree" } },
+                })
+
+                assert.equal("Normal", msg.argument)
+                assert.is_nil(msg.exits_plan)
+            end)
+        end)
+
+        describe("plan_file", function()
+            --- @param raw_input table|nil
+            --- @return string|nil
+            local function plan_file(raw_input)
+                return make_adapter():plan_file({
+                    sessionId = "s-1",
+                    toolCall = { toolCallId = "tc-plan", rawInput = raw_input },
+                    options = {},
+                })
+            end
+
+            it("reads an absolute planFilePath", function()
+                assert.equal(
+                    "/plans/p.md",
+                    plan_file({ planFilePath = "/plans/p.md" })
+                )
+            end)
+
+            it("ignores a relative planFilePath", function()
+                assert.is_nil(plan_file({ planFilePath = "plans/p.md" }))
+            end)
+
+            it("returns nil when the request names none", function()
+                assert.is_nil(plan_file({}))
+                assert.is_nil(plan_file(nil))
+            end)
+        end)
+
         -- The bridge has no formatter for SlashCommand, so its title is the
         -- bare tool name — the glyph's job, not the head's.
         it("clears the SlashCommand title until the command lands", function()

@@ -193,11 +193,6 @@ A usage limit without a reset clause renders as a raw error naming the org
 monthly spend limit:
 [`notes/bug-error-classification-structured-errorkind.md`](notes/bug-error-classification-structured-errorkind.md).
 
-### `_plan_exit_pending` is write-only
-
-[`notes/refactor-dead-plan-exit-pending.md`](notes/refactor-dead-plan-exit-pending.md);
-resolved by [`notes/PLAN-adapter-plan-exit.md`](notes/PLAN-adapter-plan-exit.md).
-
 ### `ExitWorktree` renders as an unrecognised tool
 
 `ClaudeUtils.MODE_SWITCH_TOOLS` (`claude_utils.lua:6-10`) maps `EnterPlanMode`,
@@ -224,11 +219,9 @@ the result of plan 2.
 1. [`PLAN-subagent-seam-fixes.md`](notes/PLAN-subagent-seam-fixes.md)
 2. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
 3. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
-4. [`PLAN-adapter-plan-exit.md`](notes/PLAN-adapter-plan-exit.md). Also
-   resolves `_plan_exit_pending` above.
-5. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
-6. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md)
-7. [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md)
+4. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
+5. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md)
+6. [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md)
 
 ## Feature ideas
 

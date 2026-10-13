@@ -28,6 +28,15 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    it("names no plan file by default", function()
+        local client = setmetatable({}, { __index = ACPClient })
+        assert.is_nil(client:plan_file({
+            sessionId = "s-1",
+            toolCall = { toolCallId = "tc-1" },
+            options = {},
+        }))
+    end)
+
     describe("exec shell", function()
         it("is unknown by default", function()
             local client = setmetatable({}, { __index = ACPClient })

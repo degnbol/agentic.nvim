@@ -19,6 +19,7 @@ local SkillPath = require("agentic.utils.skill_path")
 --- @field reason? string Why a ScheduleWakeup picked its delay
 --- @field task_id? string Background task a TaskStop/TaskOutput acts on
 --- @field cron? string Schedule expression of a CronCreate
+--- @field planFilePath? string Plan file of an ExitPlanMode, on its permission request only
 
 --- claude-agent-acp sends rawInput/title/kind on tool_call_update, not just tool_call
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
@@ -55,6 +56,20 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
     -- where reading `vim.env` is forbidden.
     client._exec_shell = ClaudeUtils.exec_shell(config.env)
     return client
+end
+
+--- The CLI adds `planFilePath` to ExitPlanMode's input just before the
+--- permission check. The bridge forwards it on the tool call only to clients
+--- that declare the AIR `planFile` capability, which this one does not, so the
+--- request's `rawInput` is the one place it arrives.
+--- @param request agentic.acp.RequestPermission
+--- @return string|nil
+function ClaudeAgentACPAdapter:plan_file(request)
+    local path = vim.tbl_get(request, "toolCall", "rawInput", "planFilePath")
+    if type(path) == "string" and vim.fn.isabsolutepath(path) == 1 then
+        return path
+    end
+    return nil
 end
 
 --- @param session_id string
@@ -178,8 +193,8 @@ end
 function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
     -- The provider disagrees with itself on `kind` here (EnterPlanMode is
     -- "other", ExitPlanMode "switch_mode"), so the tool name decides alone.
-    local mode_label =
-        ClaudeUtils.MODE_SWITCH_TOOLS[ClaudeUtils.tool_name(update)]
+    local tool_name = ClaudeUtils.tool_name(update)
+    local mode_label = ClaudeUtils.MODE_SWITCH_TOOLS[tool_name]
     if mode_label then
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local message = {
@@ -187,6 +202,7 @@ function ClaudeAgentACPAdapter:__handle_tool_call(session_id, update)
             kind = "switch_mode",
             status = update.status,
             argument = mode_label,
+            exits_plan = tool_name == "ExitPlanMode" or nil,
         }
 
         self:__with_subscriber(session_id, function(subscriber)
@@ -348,6 +364,7 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
     elseif mode_label then
         message.kind = "switch_mode"
         message.argument = mode_label
+        message.exits_plan = tool_name == "ExitPlanMode" or nil
         return
     end
 
