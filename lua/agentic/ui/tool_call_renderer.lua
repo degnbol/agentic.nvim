@@ -752,18 +752,19 @@ local function try_external_formatter(cmd)
         return nil
     end
 
-    -- Use vim.fn.system (NOT vim.system():wait()) because the latter
-    -- processes the event loop while waiting, allowing re-entrant ACP
-    -- callbacks to fire mid-render and corrupt buffer state.
-    local output =
-        vim.fn.system({ formatter, "-ln", "bash", "-i", "2", "-ci" }, cmd)
+    -- `wait` runs no `vim.schedule` callbacks, so the `vim.schedule`-deferred
+    -- ACP handlers cannot re-enter this render.
+    local result = vim.system(
+        { formatter, "-ln", "bash", "-i", "2", "-ci" },
+        { stdin = cmd, text = true }
+    ):wait()
 
-    if vim.v.shell_error ~= 0 or not output or output == "" then
+    if result.code ~= 0 or not result.stdout or result.stdout == "" then
         return nil
     end
 
     -- shfmt adds a trailing newline
-    local formatted = output:gsub("%s+$", "")
+    local formatted = result.stdout:gsub("%s+$", "")
     return formatted
 end
 

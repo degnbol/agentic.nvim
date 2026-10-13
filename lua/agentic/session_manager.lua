@@ -4431,26 +4431,43 @@ function SessionManager:_get_system_info()
         project_root = git_root
         res = res .. "\n- This is a Git repository."
 
-        local branch =
-            vim.fn.system("git rev-parse --abbrev-ref HEAD"):gsub("\n", "")
-        if vim.v.shell_error == 0 and branch ~= "" then
-            res = res .. string.format("\n- Current branch: %s", branch)
+        -- Started together so the wait is the slowest command, not the sum.
+        local branch_job = vim.system(
+            { "git", "rev-parse", "--abbrev-ref", "HEAD" },
+            { text = true }
+        )
+        local changed_job =
+            vim.system({ "git", "status", "--porcelain" }, { text = true })
+        local commits_job = vim.system({
+            "git",
+            "log",
+            "-3",
+            "--oneline",
+            "--format=%h (%ar) %an: %s",
+        }, { text = true })
+
+        local branch = branch_job:wait()
+        if branch.code == 0 and vim.trim(branch.stdout) ~= "" then
+            res = res
+                .. string.format(
+                    "\n- Current branch: %s",
+                    vim.trim(branch.stdout)
+                )
         end
 
-        local changed = vim.fn.system("git status --porcelain"):gsub("\n$", "")
-        if vim.v.shell_error == 0 and changed ~= "" then
-            local files = vim.split(changed, "\n")
+        local changed = changed_job:wait()
+        local files = vim.split(changed.stdout or "", "\n", { trimempty = true })
+        if changed.code == 0 and #files > 0 then
             res = res .. "\n- Changed files:"
             for _, file in ipairs(files) do
                 res = res .. "\n  - " .. file
             end
         end
 
-        local commits = vim.fn
-            .system("git log -3 --oneline --format='%h (%ar) %an: %s'")
-            :gsub("\n$", "")
-        if vim.v.shell_error == 0 and commits ~= "" then
-            local commit_lines = vim.split(commits, "\n")
+        local commits = commits_job:wait()
+        local commit_lines =
+            vim.split(commits.stdout or "", "\n", { trimempty = true })
+        if commits.code == 0 and #commit_lines > 0 then
             res = res .. "\n- Recent commits:"
             for _, commit in ipairs(commit_lines) do
                 res = res .. "\n  - " .. commit

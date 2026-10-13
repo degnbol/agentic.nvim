@@ -1533,10 +1533,11 @@ end
 --- @return number|nil epoch
 local function parse_reset_time(time_str, tz)
     -- Use GNU date to parse the time in the given timezone
-    local cmd =
-        string.format("TZ=%s date -d 'today %s' +%%s 2>/dev/null", tz, time_str)
-    local result = vim.fn.system(cmd)
-    local epoch = tonumber(vim.trim(result))
+    local result = vim.system(
+        { "date", "-d", "today " .. time_str, "+%s" },
+        { env = { TZ = tz }, text = true }
+    ):wait()
+    local epoch = tonumber(vim.trim(result.stdout or ""))
     if not epoch then
         return nil
     end

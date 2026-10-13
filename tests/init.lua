@@ -6,20 +6,20 @@ local mini_path = deps_path .. "/mini.nvim"
 if not vim.uv.fs_stat(mini_path) then
     vim.fn.mkdir(deps_path, "p")
 
-    local output = vim.fn.system({
+    local result = vim.system({
         "git",
         "clone",
         "--depth=1",
         "https://github.com/echasnovski/mini.nvim",
         mini_path,
-    })
+    }, { text = true }):wait()
 
-    if vim.v.shell_error ~= 0 then
+    if result.code ~= 0 then
         error(
             string.format(
                 "Failed to clone mini.nvim (exit code: %d):\n%s",
-                vim.v.shell_error,
-                output
+                result.code,
+                result.stderr
             )
         )
     end

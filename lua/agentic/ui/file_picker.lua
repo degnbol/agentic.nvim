@@ -89,19 +89,19 @@ function FilePicker:scan_files()
         Logger.debug("[FilePicker] Trying command:", vim.inspect(cmd_parts))
         local start_time = vim.uv.hrtime()
 
-        local output = vim.fn.system(cmd_parts)
+        local result = vim.system(cmd_parts, { text = true }):wait()
         local elapsed = (vim.uv.hrtime() - start_time) / 1e6
 
         Logger.debug(
             string.format(
                 "[FilePicker] Command completed in %.2fms, exit_code: %d",
                 elapsed,
-                vim.v.shell_error
+                result.code
             )
         )
 
-        if vim.v.shell_error == 0 and output ~= "" then
-            local files, truncated = self:_parse_file_output(output)
+        if result.code == 0 and result.stdout and result.stdout ~= "" then
+            local files, truncated = self:_parse_file_output(result.stdout)
             if truncated then
                 Logger.debug(
                     string.format(

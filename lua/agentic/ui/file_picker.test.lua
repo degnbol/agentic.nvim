@@ -104,15 +104,17 @@ describe("FilePicker:scan_files", function()
             FilePicker.CMD_FD[1] = "echo"
             FilePicker.CMD_GIT[1] = "echo"
 
-            system_stub = spy.stub(vim.fn, "system")
+            system_stub = spy.stub(vim, "system")
             system_stub:invokes(function(_cmd)
                 -- First call returns empty (simulates failure)
                 -- Second call returns files (simulates success)
-                if system_stub.call_count == 1 then
-                    return ""
-                else
-                    return "file1.lua\nfile2.lua\nfile3.lua\n"
-                end
+                local stdout = system_stub.call_count == 1 and ""
+                    or "file1.lua\nfile2.lua\nfile3.lua\n"
+                return {
+                    wait = function()
+                        return { code = 0, stdout = stdout }
+                    end,
+                }
             end)
 
             local files = picker:scan_files()
