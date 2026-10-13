@@ -261,6 +261,65 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
         )
     end)
 
+    --- Open `:Agentic` and focus its input window in normal mode.
+    --- @return integer home The chat's home window
+    local function open_into_input()
+        open()
+        local home = child.lua_get("_G.s.widget:home_win()")
+        child.type_keys("i")
+        child.flush()
+        child.type_keys("<Esc>")
+        child.flush()
+        assert.equal("AgenticInput", child.lua_get("vim.bo.filetype"))
+        return home
+    end
+
+    --- Whether any window shows `bufnr`.
+    --- @param bufnr integer
+    --- @return boolean
+    local function is_shown(bufnr)
+        return #child.fn.win_findbuf(bufnr) > 0
+    end
+
+    it("new_session from the input shows the chat in the home", function()
+        local home = open_into_input()
+        child.lua([[
+table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
+]])
+        local old_chat = child.lua_get("_G.s.widget.buf_nrs.chat")
+        local old_input = child.lua_get("_G.s.widget.buf_nrs.input")
+
+        child.new_session()
+
+        local new_chat = child.lua_get(
+            [[require("agentic.session_registry").owner_of_buf(0).widget.buf_nrs.chat]]
+        )
+        assert.equal(new_chat, child.api.nvim_win_get_buf(home))
+        assert.equal(home, child.api.nvim_get_current_win())
+        assert.is_false(is_shown(old_chat))
+        assert.is_false(is_shown(old_input))
+        assert.equal(2, live_sessions())
+    end)
+
+    it("new_session from the input of an unused session destroys it", function()
+        open_into_input()
+        local old_id = child.lua_get("_G.s.id")
+        local old_chat = child.lua_get("_G.s.widget.buf_nrs.chat")
+        local old_input = child.lua_get("_G.s.widget.buf_nrs.input")
+
+        child.new_session()
+
+        assert.equal(1, live_sessions())
+        assert.are_not.equal(
+            old_id,
+            child.lua_get(
+                [[require("agentic.session_registry").owner_of_buf(0).id]]
+            )
+        )
+        assert.is_false(is_shown(old_chat))
+        assert.is_false(is_shown(old_input))
+    end)
+
     it("add_file goes to the session entered last", function()
         child.cmd("edit tests/init.lua")
         local source_win = child.api.nvim_get_current_win()

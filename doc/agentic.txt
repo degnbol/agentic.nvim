@@ -444,7 +444,10 @@ agentic.setup({opts})
                                                               *agentic.open()*
 agentic.open({opts})
     Show the session's chat: focus a window in the current tabpage that
-    shows it, else show it in the current window. Optional `opts` table:
+    shows it, else show it in the current window. From an input or a
+    widget panel, show it instead in the chat window of that buffer's
+    session, else in a split above the current window. Optional `opts`
+    table:
       `mods`                 |:command-modifiers| as in |nvim_cmd()|. With a
                              split or tab modifier the chat opens in a new
                              window, and its panels move there.

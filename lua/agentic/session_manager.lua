@@ -190,32 +190,6 @@ function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     )
 end
 
---- The window an "edit" open replaces: the current one, unless it shows an
---- input buffer or a widget panel other than the chat. Then the chat's home
---- window if it is in the current tabpage, else any window there showing the
---- chat. Nil when there is none.
---- @return integer|nil
-function SessionManager:_edit_target_win()
-    local current = vim.api.nvim_get_current_win()
-    local bufnr = vim.api.nvim_win_get_buf(current)
-    local is_panel = bufnr ~= self.widget.buf_nrs.chat
-        and vim.list_contains(vim.tbl_values(self.widget.buf_nrs), bufnr)
-    if not is_panel and vim.bo[bufnr].filetype ~= "AgenticInput" then
-        return current
-    end
-    local tab = vim.api.nvim_get_current_tabpage()
-    local home = self.widget:home_win()
-    if home and vim.api.nvim_win_get_tabpage(home) == tab then
-        return home
-    end
-    for _, winid in ipairs(vim.fn.win_findbuf(self.widget.buf_nrs.chat)) do
-        if vim.api.nvim_win_get_tabpage(winid) == tab then
-            return winid
-        end
-    end
-    return nil
-end
-
 --- Generate the welcome header for a new session
 --- @param session_id string|nil
 --- @return string header
@@ -464,7 +438,7 @@ function SessionManager:new()
         end
     end
     self.permission_manager.open_anchor = function(bufnr, how)
-        return WidgetLayout.open_buf(bufnr, how, self:_edit_target_win())
+        return WidgetLayout.open_buf(bufnr, how, self.widget:target_win())
     end
     self.permission_manager.proxy_tool_call = function(anchor)
         for child_id, subagent in pairs(self._agents) do

@@ -10,17 +10,16 @@ Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
 **Session restore**
-1. [`PLAN-panel-edit-target.md`](notes/PLAN-panel-edit-target.md)
-2. [`PLAN-history-session-cwd.md`](notes/PLAN-history-session-cwd.md)
-3. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md) and
+1. [`PLAN-history-session-cwd.md`](notes/PLAN-history-session-cwd.md)
+2. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md) and
    [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md), first or
-   together with 4. Both are also in the adapter track below.
-4. [`PLAN-per-session-provider.md`](notes/PLAN-per-session-provider.md)
-5. [`PLAN-restore-picker.md`](notes/PLAN-restore-picker.md) and
+   together with 3. Both are also in the adapter track below.
+3. [`PLAN-per-session-provider.md`](notes/PLAN-per-session-provider.md)
+4. [`PLAN-restore-picker.md`](notes/PLAN-restore-picker.md) and
    [`PLAN-unify-history-restore.md`](notes/PLAN-unify-history-restore.md),
    one commit (if split: unify first)
-6. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
-7. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md), which also needs
+5. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
+6. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md), which also needs
    `PLAN-hooks_in_chat.md`
 
 **Hooks in chat**

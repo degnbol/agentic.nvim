@@ -32,6 +32,17 @@ function SessionRegistry.current()
     return owner or (id and SessionRegistry.by_id[id])
 end
 
+--- The window to show a chat in: the `ChatWidget:target_win()` of the
+--- current buffer's live owner, else the current window.
+--- @return integer|nil winid
+function SessionRegistry.target_win()
+    local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
+    if owner then
+        return owner.widget:target_win()
+    end
+    return vim.api.nvim_get_current_win()
+end
+
 --- Create, register and activate a new session. Nil when no provider is
 --- configured or creation fails.
 --- @return agentic.SessionManager|nil

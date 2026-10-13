@@ -308,6 +308,60 @@ describe("agentic.SessionRegistry", function()
         end)
     end)
 
+    describe("target_win", function()
+        local previous_buf
+        local bufnr
+
+        before_each(function()
+            previous_buf = vim.api.nvim_get_current_buf()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_set_current_buf(bufnr)
+        end)
+
+        after_each(function()
+            vim.api.nvim_set_current_buf(previous_buf)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        --- Register a mock session whose widget targets `winid`, owning `bufnr`.
+        --- @param winid integer|nil
+        --- @return table session
+        local function install_owner(winid)
+            local session = install()
+            session.widget = {
+                target_win = function()
+                    return winid
+                end,
+            }
+            vim.b[bufnr].agentic_session_id = session.id
+            return session
+        end
+
+        it("is the current window for a non-Agentic buffer", function()
+            assert.equal(
+                vim.api.nvim_get_current_win(),
+                SessionRegistry.target_win()
+            )
+        end)
+
+        it("is the current window when the owner is destroyed", function()
+            SessionRegistry.destroy(install_owner(nil))
+
+            assert.equal(
+                vim.api.nvim_get_current_win(),
+                SessionRegistry.target_win()
+            )
+        end)
+
+        it("is the owner's widget target", function()
+            install_owner(nil)
+            assert.is_nil(SessionRegistry.target_win())
+
+            install_owner(4242)
+            assert.equal(4242, SessionRegistry.target_win())
+        end)
+    end)
+
     describe("select_provider", function()
         --- @type table[]|nil
         local captured_items

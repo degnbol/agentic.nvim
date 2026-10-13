@@ -37,7 +37,9 @@ end
 --- window (`:sbuffer`) that becomes its home: the panels of the previous home
 --- close, and the non-empty content panels open at the new one. Else focus a
 --- window in the current tabpage that shows the chat, the home window first,
---- or show the chat in the current window.
+--- or show the chat in the current window. From an input or a widget panel,
+--- show it instead in the chat window of that buffer's session in the current
+--- tabpage, else in a split above the current window.
 ---
 --- With `opts.query`, resume the saved session it matches
 --- (`resolve_session`, then `load_acp_session`) instead. No match: emits a
@@ -66,7 +68,7 @@ function Agentic.open(opts)
     if opts.auto_add_to_context ~= false then
         session:add_selection_or_file_to_session()
     end
-    session.widget:show(opts.mods)
+    session.widget:show(opts.mods, SessionRegistry.target_win())
 end
 
 --- Add the current visual selection to the Chat context
@@ -160,7 +162,7 @@ function Agentic.new_session(opts)
         if opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()
         end
-        session.widget:show(opts.mods)
+        session.widget:show(opts.mods, SessionRegistry.target_win())
     end
 end
 
@@ -175,7 +177,7 @@ end
 function Agentic.load_acp_session(session_id, cwd, model, mods)
     local open_session = SessionRegistry.session_for_acp_id(session_id)
     if open_session then
-        open_session.widget:show(mods)
+        open_session.widget:show(mods, SessionRegistry.target_win())
         return
     end
     if Config.session_restore.cd_on_load and cwd then
@@ -189,7 +191,7 @@ function Agentic.load_acp_session(session_id, cwd, model, mods)
         return
     end
     session:load_acp_session(session_id, cwd, model)
-    session.widget:show(mods)
+    session.widget:show(mods, SessionRegistry.target_win())
 end
 
 --- Resolve a session reference (session_id prefix or exact title) to a

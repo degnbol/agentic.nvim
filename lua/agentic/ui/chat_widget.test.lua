@@ -521,6 +521,136 @@ describe("agentic.ui.ChatWidget", function()
                 assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.code))
                 assert.is_nil(widget.win_nrs.input)
             end)
+
+            describe("target_win", function()
+                it("is the current window for a plain window", function()
+                    show(widget)
+                    vim.cmd("vsplit | enew")
+
+                    assert.equal(
+                        vim.api.nvim_get_current_win(),
+                        widget:target_win()
+                    )
+                end)
+
+                it("is the current window for the chat", function()
+                    local home = show(widget)
+                    vim.cmd("split")
+
+                    local current = vim.api.nvim_get_current_win()
+                    assert.are_not.equal(home, current)
+                    assert.equal(current, widget:target_win())
+                end)
+
+                it("is the home from the input panel", function()
+                    local home = show(widget)
+                    vim.api.nvim_set_current_win(widget:input_win())
+
+                    assert.equal(home, widget:target_win())
+                end)
+
+                it("is the home from a content panel", function()
+                    fill_buffer(widget, "code", { "line1" })
+                    local home = show(widget)
+                    vim.api.nvim_set_current_win(widget.win_nrs.code)
+
+                    assert.equal(home, widget:target_win())
+                end)
+
+                it(
+                    "is nil from an input below a plain window without the chat",
+                    function()
+                        vim.api.nvim_set_current_win(widget:input_win())
+
+                        assert.is_nil(widget:target_win())
+                    end
+                )
+            end)
+
+            describe("show_in", function()
+                it(
+                    "returns false and keeps the buffer of a 'winfixbuf' window",
+                    function()
+                        local notify_stub = spy.stub(Logger, "notify")
+                        MiniTest.finally(function()
+                            notify_stub:revert()
+                        end)
+                        local winid = vim.api.nvim_get_current_win()
+                        local bufnr = vim.api.nvim_get_current_buf()
+                        vim.wo[winid].winfixbuf = true
+
+                        assert.is_false(widget:show_in(winid))
+                        assert.equal(bufnr, vim.api.nvim_win_get_buf(winid))
+                        assert.spy(notify_stub).was.called(1)
+                    end
+                )
+
+                it("returns true when the chat shows", function()
+                    local winid = vim.api.nvim_get_current_win()
+
+                    assert.is_true(widget:show_in(winid))
+                    assert.equal(
+                        widget.buf_nrs.chat,
+                        vim.api.nvim_win_get_buf(winid)
+                    )
+                end)
+            end)
+
+            describe("reveal", function()
+                it("shows the chat in the target, home, focused", function()
+                    local target = vim.api.nvim_get_current_win()
+                    vim.cmd("vsplit")
+                    local current = vim.api.nvim_get_current_win()
+
+                    widget:reveal(target)
+
+                    assert.equal(
+                        widget.buf_nrs.chat,
+                        vim.api.nvim_win_get_buf(target)
+                    )
+                    assert.equal(target, widget:home_win())
+                    assert.equal(target, vim.api.nvim_get_current_win())
+                    assert.are_not.equal(
+                        widget.buf_nrs.chat,
+                        vim.api.nvim_win_get_buf(current)
+                    )
+                end)
+
+                it("keeps focus when the target refuses the chat", function()
+                    local notify_stub = spy.stub(Logger, "notify")
+                    MiniTest.finally(function()
+                        notify_stub:revert()
+                    end)
+                    local target = vim.api.nvim_get_current_win()
+                    vim.cmd("vsplit")
+                    local current = vim.api.nvim_get_current_win()
+                    vim.wo[target].winfixbuf = true
+
+                    widget:reveal(target)
+
+                    assert.equal(current, vim.api.nvim_get_current_win())
+                    assert.is_nil(widget:home_win())
+                end)
+
+                it("without a target, opens the home above the input", function()
+                    local input_win = widget:input_win()
+                    vim.api.nvim_set_current_win(input_win)
+
+                    widget:reveal(nil)
+
+                    local home = widget:home_win()
+                    assert.equal(home, vim.api.nvim_get_current_win())
+                    assert.equal(
+                        widget.buf_nrs.chat,
+                        vim.api.nvim_win_get_buf(home)
+                    )
+                    assert.equal(
+                        widget.buf_nrs.input,
+                        vim.api.nvim_win_get_buf(input_win)
+                    )
+                    assert.is_true(row_of(home) < row_of(input_win))
+                end)
+            end)
         end)
 
         describe("activity panel", function()

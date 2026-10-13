@@ -135,7 +135,7 @@ end
 local function restore_here(item, current_session, has_conflict)
     local session = do_restore(item, current_session, has_conflict)
     if session then
-        session.widget:reveal()
+        session.widget:reveal(SessionRegistry.target_win())
     end
 end
 
@@ -311,7 +311,7 @@ function SessionRestore.show_picker(current_session, scope)
             local open_session =
                 SessionRegistry.session_for_acp_id(item.session_id)
             if open_session then
-                open_session.widget:reveal()
+                open_session.widget:reveal(SessionRegistry.target_win())
                 return true
             end
             -- The picker does not block, so the session can end before a pick.

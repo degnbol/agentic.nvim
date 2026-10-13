@@ -151,8 +151,10 @@ end
 --- make `winid` home unless it floats, closing the panels of a previous home,
 --- and sync the content panels. Deletes the buffer the chat replaces when it
 --- is blank and unnamed (`BufHelpers.is_blank_unnamed`) and no other window
---- shows it. Notifies when the window refuses the buffer (`'winfixbuf'`).
+--- shows it. Notifies and returns false when the window refuses the buffer
+--- (`'winfixbuf'`).
 --- @param winid integer
+--- @return boolean shown
 function ChatWidget:show_in(winid)
     local replaced = vim.api.nvim_win_get_buf(winid)
     -- With autocmds: the chat's BufWinEnter sets its window options and
@@ -165,7 +167,7 @@ function ChatWidget:show_in(winid)
             vim.log.levels.ERROR,
             { title = "Agentic" }
         )
-        return
+        return false
     end
     if
         replaced ~= self.buf_nrs.chat
@@ -177,6 +179,40 @@ function ChatWidget:show_in(winid)
         vim.api.nvim_buf_delete(replaced, {})
     end
     self:_adopt_home(winid)
+    return true
+end
+
+--- The window to show the chat in: the current window, unless it shows an
+--- input of any session (filetype `AgenticInput`) or a panel of this widget
+--- other than the chat. Then the home window in this tabpage, else a window
+--- in this tabpage that shows the chat, else nil.
+--- @return integer|nil winid
+function ChatWidget:target_win()
+    local current = vim.api.nvim_get_current_win()
+    local bufnr = vim.api.nvim_win_get_buf(current)
+    local is_panel = bufnr ~= self.buf_nrs.chat
+        and vim.list_contains(vim.tbl_values(self.buf_nrs), bufnr)
+    if not is_panel and vim.bo[bufnr].filetype ~= "AgenticInput" then
+        return current
+    end
+    return self:_chat_win_in_tab()
+end
+
+--- The home window when it is in the current tabpage, else a window there
+--- that shows the chat. Nil when the current tabpage shows no chat.
+--- @return integer|nil winid
+function ChatWidget:_chat_win_in_tab()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local home = self:home_win()
+    if home and vim.api.nvim_win_get_tabpage(home) == tab then
+        return home
+    end
+    for _, winid in ipairs(vim.fn.win_findbuf(self.buf_nrs.chat)) do
+        if vim.api.nvim_win_get_tabpage(winid) == tab then
+            return winid
+        end
+    end
+    return nil
 end
 
 --- The home window when it is in the current tabpage, else a window there
@@ -206,21 +242,25 @@ function ChatWidget:_home_in_tab()
     return nil
 end
 
---- Focus a window in the current tabpage showing the chat, the home window
---- first. Without one, show the chat in the current window and make it home.
-function ChatWidget:reveal()
-    local tab = vim.api.nvim_get_current_tabpage()
-    local home = self:home_win()
-    --- @type integer[]
-    local winids = home and { home } or {}
-    vim.list_extend(winids, vim.fn.win_findbuf(self.buf_nrs.chat))
-    for _, winid in ipairs(winids) do
-        if vim.api.nvim_win_get_tabpage(winid) == tab then
-            vim.api.nvim_set_current_win(winid)
-            return
-        end
+--- Focus a window in the current tabpage that shows the chat, the home
+--- window first. Without one, show the chat in `target_win` and focus it.
+--- Nil `target_win`: show it in a new split above the current window.
+--- @param target_win integer|nil
+function ChatWidget:reveal(target_win)
+    local shown = self:_chat_win_in_tab()
+    if shown then
+        vim.api.nvim_set_current_win(shown)
+    elseif not target_win then
+        -- Not `:sbuffer`: 'switchbuf' could send it to another tabpage.
+        local above = vim.api.nvim_open_win(
+            self.buf_nrs.chat,
+            true,
+            { split = "above", win = 0 }
+        )
+        self:show_in(above)
+    elseif self:show_in(target_win) then
+        vim.api.nvim_set_current_win(target_win)
     end
-    self:show_in(vim.api.nvim_get_current_win())
 end
 
 --- Whether command modifiers open a new window: a split or tab modifier.
@@ -237,11 +277,12 @@ local function opens_window(mods)
 end
 
 --- Show the chat. With a split or tab modifier in `mods`, in a new window
---- (`:sbuffer`) that becomes home, else as `reveal`.
+--- (`:sbuffer`) that becomes home, else as `reveal(target_win)`.
 --- @param mods vim.api.keyset.cmd_mods|nil
-function ChatWidget:show(mods)
+--- @param target_win integer|nil
+function ChatWidget:show(mods, target_win)
     if not opens_window(mods) then
-        self:reveal()
+        self:reveal(target_win)
         return
     end
     vim.cmd.sbuffer({ args = { self.buf_nrs.chat }, mods = mods })

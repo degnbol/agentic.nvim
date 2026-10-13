@@ -19,6 +19,10 @@ describe("SessionRestore", function()
     local logger_notify_stub
     --- @type TestStub
     local vim_fn_confirm_stub
+    --- @type TestStub
+    local target_win_stub
+    --- What `SessionRegistry.target_win()` returns in every case.
+    local TARGET_WIN = 4242
 
     local test_sessions = {
         {
@@ -104,6 +108,8 @@ describe("SessionRestore", function()
         chat_history_load_stub = spy.stub(ChatHistory, "load")
         chat_history_list_stub = spy.stub(ChatHistory, "list_sessions")
         session_registry_stub = spy.stub(SessionRegistry, "create")
+        target_win_stub = spy.stub(SessionRegistry, "target_win")
+        target_win_stub:returns(TARGET_WIN)
         logger_notify_stub = spy.stub(Logger, "notify")
         vim_fn_confirm_stub = spy.stub(vim.fn, "confirm")
         vim_fn_confirm_stub:returns(0) -- default: cancel (no choice)
@@ -113,6 +119,7 @@ describe("SessionRestore", function()
         chat_history_load_stub:revert()
         chat_history_list_stub:revert()
         session_registry_stub:revert()
+        target_win_stub:revert()
         logger_notify_stub:revert()
         vim_fn_confirm_stub:revert()
 
@@ -302,6 +309,7 @@ describe("SessionRestore", function()
 
             assert.equal("session-1", open_stub.calls[1][1])
             assert.spy(open_session.widget.reveal).was.called(1)
+            assert.equal(TARGET_WIN, open_session.widget.reveal.calls[1][2])
             assert.spy(vim_fn_confirm_stub).was.called(0)
             assert.spy(session_registry_stub).was.called(0)
             assert.spy(mock_session.restore_from_history).was.called(0)
@@ -332,6 +340,7 @@ describe("SessionRestore", function()
             assert.equal(mock_history, restore_call[2])
             assert.is_true(restore_call[3].reuse_session)
             assert.spy(mock_session.widget.reveal).was.called(1)
+            assert.equal(TARGET_WIN, mock_session.widget.reveal.calls[1][2])
         end)
     end)
 
@@ -437,6 +446,10 @@ describe("SessionRestore", function()
                     new_session.restore_from_history.calls[1][3].reuse_session
                 )
                 assert.spy(new_session.widget.reveal).was.called(1)
+                assert.equal(
+                    TARGET_WIN,
+                    new_session.widget.reveal.calls[1][2]
+                )
             end
         )
 
@@ -565,6 +578,7 @@ describe("SessionRestore", function()
             assert.spy(mock_session.restore_from_history).was.called(0)
             assert.spy(chat_history_load_stub).was.called(0)
             assert.spy(mock_session.widget.reveal).was.called(1)
+            assert.equal(TARGET_WIN, mock_session.widget.reveal.calls[1][2])
         end)
 
         it(
