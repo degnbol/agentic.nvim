@@ -67,7 +67,7 @@ Glyphs.KIND = {
 
 --- The kind carries no identity worth showing. Two populations reach it, and
 --- the gutter cannot separate them: `other`, which the protocol defines and
---- `KNOWN_ACP_KINDS` accepts — the Claude bridge kinds a large share of its
+--- `AcpKind.PROTOCOL_KINDS` accepts — the Claude bridge kinds a large share of its
 --- tools that way — and kinds no adapter recognises at all. A gear therefore
 --- does *not* imply the "unknown ACP tool call kind" warning fired.
 Glyphs.KIND_DEFAULT = "󰒓"

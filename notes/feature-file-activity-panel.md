@@ -138,20 +138,17 @@ same one.
 
 ### Hook sites
 
-Mirror `_try_record_edit_range`: invoke from **both** `_on_tool_call`
-(`session_manager.lua:1011`) and `_on_tool_call_update`
-(`session_manager.lua:1252`), bailing on terminal status where the
-observation must be pre-edit. For claude-agent-acp, top-level tool calls
-arrive at phase 1 with **empty `rawInput`** — no `file_path` — so
-anything written as "capture at phase 1" simply never fires for the main
-case. (Confirmed by `notes/bug-chat-history-drops-tool-call-enrichment.md`,
-where the persisted phase-1 `argument` is `""` for every non-subagent
-call.)
+Mirror `_try_record_edit_range`: invoke from **both**
+`SessionManager:_on_tool_call` and `SessionManager:_on_tool_call_update`,
+bailing on terminal status where the observation must be pre-edit. For
+claude-agent-acp, top-level tool calls arrive at phase 1 with **empty
+`rawInput`** — no `file_path` — so anything written as "capture at phase
+1" simply never fires for the main case.
 
-The terminal-status append belongs in the existing block at
-`session_manager.lua:1307-1333`, which already resolves `tracker` and
-gates on `FILE_MUTATING_KINDS[kind_key(tracker.kind)]`
-(`session_manager.lua:26-32`). Reuse that table rather than introducing a
+The terminal-status append belongs in the existing block in
+`SessionManager:_on_tool_call_update`, which already resolves `tracker` and
+gates on `FILE_MUTATING_KINDS[AcpKind.normalise(tracker.kind)]`. Reuse that
+table rather than introducing a
 parallel kind set. Only `status == "completed"` appends; `failed` (which
 includes permission rejection) must not.
 

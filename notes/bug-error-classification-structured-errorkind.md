@@ -13,7 +13,8 @@ You've hit your org's monthly spend limit · run /usage-credits to ask your admi
 
 The text names why extra usage cannot cover the overflow (org spend cap). It
 does not always name the limit that rejected the request. That limit can be a
-subscription window (`TODO.md` § "Queue": "It is not the monthly limit").
+subscription window, so the user sees "monthly spend limit" when the monthly
+limit is not what was hit.
 
 ## Mechanism
 

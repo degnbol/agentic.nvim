@@ -54,6 +54,8 @@ whether it has landed.
 
 The panel that shows edited files in the current session needs to be toggled off and on again to reveal that some files have been deleted.
 Can we get it to listen for the files it lists to see if they get deleted, and then remove them from the panel?
+The current check runs once per toggle by design:
+[`notes/feature-file-activity-panel.md`](notes/feature-file-activity-panel.md) § "Reversion".
 
 ### `<Plug>(agentic-send)` in visual mode adds to context instead of sending
 
@@ -67,11 +69,9 @@ as a prompt) and is correct as written; fix the mapping, not the help.
 
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
 
-- **Content-only claude updates may be dropped**:
-  `ClaudeAgentACPAdapter:__handle_tool_call_update` returns early on an update
-  with no `status` and empty `rawInput`. The bridge now leaves out fields that
-  did not change, so an update carrying only new `content` would never render.
-  Unverified whether the bridge sends such updates.
+- **Content-only claude updates are dropped**: see
+  [`notes/feature-file-activity-panel.md`](notes/feature-file-activity-panel.md)
+  § "Prerequisite: an adapter fix this feature depends on".
 
 - **Cancel sweep misses errored turns**: it keys on `stopReason == "cancelled"`,
   so an errored turn strands the same footers. A provider that never answers at
@@ -182,16 +182,6 @@ to all ACPs.
   reappearing for opencode. Audit claude-specific fixes for ones that should
   have been general across adapters.
 
-- **Capitalised kinds may warn on every tool call**: the unknown-kind notify
-  (`acp_client.lua:492`) tests the raw `update.kind` against
-  `AcpKind.PROTOCOL_KINDS`, whose keys are the protocol's lowercase spelling. If
-  opencode capitalises kinds — as the `provider-system` skill and
-  `session_manager.test.lua:1784` both say — then every tool call raises
-  "Unknown ACP tool call kind: Read". Unverified, and this adapter's own
-  `update.kind == "other"` / `== "execute"` comparisons (`:151`, `:162`) only
-  work on lowercase, so measure what actually arrives before normalising the
-  lookup.
-
 - **Hide `todowrite` tool call from chat**: not strictly a bug — opencode's
   `todowrite` tool call already renders cleanly after mapping `title ==
   "todowrite"` to `kind = "todowrite"` and stripping the body in
@@ -200,25 +190,14 @@ to all ACPs.
 
 ### Queue
 
-When the usage limits are reached momentarily, chat shows:
-
-```markdown
-You've hit your org's monthly spend limit · run /usage-credits to ask your
-admin for a higher limit
-### Error
-
-Internal error: You've hit your org's monthly spend limit · run /usage-credits to ask your admin for a higher limit
-```
-
-It is a wrong message. It is not the monthly limit, I don't understand why it says that.
+A usage limit without a reset clause renders as a raw error naming the org
+monthly spend limit:
+[`notes/bug-error-classification-structured-errorkind.md`](notes/bug-error-classification-structured-errorkind.md).
 
 ### `_plan_exit_pending` is write-only
 
-`session_manager.lua` initialises it at `:214`, writes `true` at `:1223` and
-resets it at `:2950` and `:3133`. Nothing reads it, and the turn-end callback
-its docstring promises does not exist — so either the callback is the missing
-work, or the flag is dead state to delete. Decide which; it was masked until
-recently by the plan-exit detection never firing at all.
+[`notes/refactor-dead-plan-exit-pending.md`](notes/refactor-dead-plan-exit-pending.md);
+resolved by [`notes/PLAN-adapter-plan-exit.md`](notes/PLAN-adapter-plan-exit.md).
 
 ### `ExitWorktree` renders as an unrecognised tool
 
@@ -230,16 +209,8 @@ why it was flagged rather than fixed with the rest of the family.
 
 ### `allow_always` caches on kinds its own table cannot match
 
-`_build_cache_key` normalises the kind (`permission_manager.lua:169`) before
-looking it up in `CACHE_KEY_FIELDS` (`:193`), but four of that table's rows are
-spelled CamelCase — `WebSearch`, `SlashCommand`, `SubAgent`, `Skill` — so they
-never match. Those four fall to the hybrid path instead, keying on the whole
-`rawInput` minus `CACHE_NOISE_FIELDS`. Safe but under-caching, never over: the
-key is narrower than intended, so "always allow this subagent type" behaves as
-"always allow this exact prompt" and the next call prompts again. Lowercasing
-them is not a typo fix: it moves those kinds to a field-scoped key, which
-changes what one allow-always or reject-always decision covers. Decide the
-scoping, then fix.
+Four CamelCase rows of `CACHE_KEY_FIELDS` never match. Mechanism and the
+scoping decision: [`notes/refactor-acp-kind-normalisation.md`](notes/refactor-acp-kind-normalisation.md) §1d.
 
 ## Refactors
 
@@ -414,12 +385,10 @@ screen so we can read it.
   also lets the user terminate stuck procs without dropping to a
   shell.
 
-- **Edited files window**: the original agentic.nvim had a window listing
-  edited files; removed to save screen space. Could reinstate with `:q`
-  closing and a `<localLeader>` keymap to reopen. Improved version: use
-  the line-range edit tracking (claude-owned vs other) we already have per
-  file. A quickfix menu could work (multiple entries per file for multiple
-  edits) but conflicts with resume's quickfix use.
+- **Edited line ranges in the file activity panel**: v1 lists files only.
+  Show the line ranges per file (claude-owned vs other); deferred in
+  [`notes/feature-file-activity-panel.md`](notes/feature-file-activity-panel.md).
+  A quickfix list of edits conflicts with resume's quickfix use.
 
 - **Persistent undo integration**: opening a file in neovim allows for undo
   via the persistent undo file. Optionally integrate so a user can step
@@ -469,7 +438,8 @@ screen so we can read it.
   session with a different model, and even a different provider, on
   purpose?
 
-- Consider benefits of supporting https://pi.dev/ and using it instead of opencode for the liteLLM models.
+- Consider benefits of supporting https://pi.dev/ and using it instead of opencode for the liteLLM models:
+  [`notes/pi-support.md`](notes/pi-support.md).
 
 ### Permissions
 
@@ -719,22 +689,8 @@ Is there any pre-existing tool, etc., that can check safety of a python snippet 
 
 ## Auto-/login
 
-The bare `Failed to authenticate. API Error: 401` this section was written
-against no longer happens. `SessionManager` branches on the bridge's structured
-`authentication_error`, and `Recovery.offer_reauth` runs a server-health
-backoff, binds `[r]` and spawns `claude auth login`.
-
-What is left is the in-protocol path. The bridge advertises `claude-ai-login`,
-`console-login` and `claude-login` as ACP auth methods, gated on a
-`clientCapabilities.auth.terminal` capability the plugin does not advertise —
-which is why `authMethods` is empty in every observed `initialize` result.
-Advertising it would move re-authentication from shelling out to the CLI into
-the session the error arrived on. Worth weighing against the shell-out, which
-already works.
-
-## Shortcuts queue
-
-<localleader>C etc. should queue-send, instead of interrupt send.
+In-protocol (ACP terminal) auth instead of the `claude auth login` shell-out:
+[`notes/PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md) § Non-goals.
 
 
 ## grant git rm

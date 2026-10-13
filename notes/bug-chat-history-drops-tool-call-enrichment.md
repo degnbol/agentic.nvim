@@ -53,7 +53,7 @@ The `{ type = "tool_call", tool_call_id = id }` wrapper is dead weight:
 `update_tool_call` only ever merges into a record that already carries both keys
 (added by the add site), and `id` is `tool_call_update.tool_call_id` by
 construction (`:2443`). The pass-through also persists `file_created` and
-`hunk_ranges`; both are harmless in the record.
+`hunk_ranges`. See the open question.
 
 **Add site** (`session_manager.lua:1971-1985`) — call a whitelist in `ChatHistory`,
 `tool_call_record(block)`, returning `type` plus all `ToolCallBase` fields. Keep
@@ -114,6 +114,17 @@ Beware asserting that a persisted `body` equals the rendered body: `tbl_deep_ext
 replaces a list-valued key wholesale, whereas `update_tool_call_block` appends
 previous + `---` + new (`message_writer.lua:2845-2855`). The divergence is out of
 scope here.
+
+## Open question
+
+The `hunk_ranges` docstring (`message_writer.lua:116`) says the range survives
+a session restore. Today no history payload persists it, so the docstring is
+false. Decide which is wrong:
+
+- Persist it. The update pass-through does so, and the replay site must then
+  pass it to the block. Test 1 gains a `hunk_ranges` case.
+- Do not persist it. Correct the docstring, and keep the pass-through from
+  writing it (and `file_created`) to the record.
 
 ## Not addressed
 

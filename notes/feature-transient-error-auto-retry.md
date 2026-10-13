@@ -47,10 +47,8 @@ Every `server_error` observed in that history:
 | 1 | `API Error: Response stalled mid-stream. The response above may be incomplete.` |
 | 1 | `API Error: Unable to connect to API (ENOTFOUND)` |
 
-This resolves risk 2 in
-[`bug-error-classification-structured-errorkind.md`](bug-error-classification-structured-errorkind.md)
-("`server_error` left unmapped") — though see the retryability decision below
-for why it stays unmapped in `error_kind_class` regardless.
+`server_error` is unmapped in `error_kind_class`; see the retryability
+decision below for why it stays unmapped.
 
 Current display path: `error_kind_class` (`message_writer.lua:442`) has no
 `server_error` entry, so `format_error_lines` finds no mapped kind, no embedded
@@ -150,8 +148,8 @@ Cost: `err.data.errorKind` is then read in two places for two purposes. That is
 the right split — display classification and retry policy are independent axes —
 but worth a comment at each site.
 
-No text heuristics, per the errorKind-first principle in
-`bug-error-classification-structured-errorkind.md`. A bridge that omits
+No text heuristics, per the errorKind-first principle in the
+`provider-system` skill § "Error classification keys on `err.data.errorKind`". A bridge that omits
 `err.data` silently never retries; see open questions.
 
 ### 529 Overloaded is retried too, uselessly, and that is accepted
@@ -348,11 +346,10 @@ Resolved:
   is the mechanism a manual `continue` relies on. If the claim no longer holds,
   the respawn is paying a subprocess kill plus a Path B history re-prefix for
   nothing. This plan deliberately does not respawn.
-- **`error_kind_class`'s `billing_error` entry may be dead.** The org spend
-  limit arrives as errorKind `rate_limit` in all 27 occurrences in the
-  transcript history, with no `billing_error` anywhere. Relevant to Phase B
-  decision 1 in
-  [`bug-error-classification-structured-errorkind.md`](bug-error-classification-structured-errorkind.md).
+- **Spend limits arrive as `rate_limit`.** That kind is unmapped, and a plain
+  429 shares it. Open decision 1 in
+  [`bug-error-classification-structured-errorkind.md`](bug-error-classification-structured-errorkind.md)
+  covers both.
 - **`api_retry` is dropped by the bridge** (`acp-agent.js:2202`,
   `// Todo: process via status api`). Forwarding it would let the plugin show
   retry progress instead of a silent stall. Upstream feature request; nothing
