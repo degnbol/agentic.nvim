@@ -650,4 +650,164 @@ describe("ShellParse.extract_commands", function()
             assert.is_true(ShellParse.token_is_dynamic(node, false))
         end)
     end)
+
+    describe("is_safe_var_name", function()
+        it("rejects names that change execution", function()
+            local safe = {}
+            for _, name in ipairs({
+                "path",
+                "path[1]",
+                "functions",
+                "options",
+                "mapfile",
+                "http_proxy",
+                "npm_config_x",
+                "chpwd_functions",
+                "_JAVA_OPTIONS",
+                "PATH",
+            }) do
+                if ShellParse.is_safe_var_name(name) then
+                    table.insert(safe, name)
+                end
+            end
+            assert.same({}, safe)
+        end)
+
+        it("accepts scratch names", function()
+            local unsafe = {}
+            for _, name in ipairs({
+                "f",
+                "dir",
+                "X",
+                "out_file",
+                "outDir",
+                "x[1]",
+                "LANG",
+            }) do
+                if not ShellParse.is_safe_var_name(name) then
+                    table.insert(unsafe, name)
+                end
+            end
+            assert.same({}, unsafe)
+        end)
+    end)
+
+    describe("builtin_bind_targets", function()
+        it("names printf -v targets", function()
+            assert.same(
+                { "a", "b" },
+                ShellParse.builtin_bind_targets(
+                    "printf",
+                    { "-v", "a", "-vb", "%s", "x" },
+                    { false, false, false, false, false }
+                )
+            )
+        end)
+
+        it("names every read operand", function()
+            assert.same(
+                { "a", "b" },
+                ShellParse.builtin_bind_targets(
+                    "read",
+                    { "-A", "a", "b" },
+                    { false, false, false }
+                )
+            )
+        end)
+
+        it("skips read option values", function()
+            local cases = {
+                { { "-t", "5", "line" }, { "line" } },
+                { { "-r", "-d", "", "f" }, { "f" } },
+                { { "-rd:", "a" }, { "a" } },
+                { { "-u", "3", "line" }, { "line" } },
+                -- zsh binds a non-number after `-t` as a name.
+                { { "-t", "path" }, { "path" } },
+            }
+            for _, case in ipairs(cases) do
+                assert.same(
+                    case[2],
+                    ShellParse.builtin_bind_targets(
+                        "read",
+                        case[1],
+                        vim.tbl_map(function()
+                            return false
+                        end, case[1])
+                    )
+                )
+            end
+        end)
+
+        it("names print -v targets past other options", function()
+            assert.same(
+                { "path" },
+                ShellParse.builtin_bind_targets(
+                    "print",
+                    { "-f", "%s", "-v", "path", "x" },
+                    { false, false, false, false, false }
+                )
+            )
+        end)
+
+        it("strips a read prompt", function()
+            assert.same(
+                { "x" },
+                ShellParse.builtin_bind_targets("read", { "x?p" }, { false })
+            )
+        end)
+
+        it("returns nil for a dynamic target", function()
+            assert.is_nil(
+                ShellParse.builtin_bind_targets("read", { "$x" }, { true })
+            )
+            assert.is_nil(
+                ShellParse.builtin_bind_targets(
+                    "printf",
+                    { "-v", "$x", "%s" },
+                    { false, true, false }
+                )
+            )
+        end)
+
+        it(
+            "returns nil for a dynamic word in printf option position",
+            function()
+                assert.is_nil(
+                    ShellParse.builtin_bind_targets(
+                        "printf",
+                        { "$x", "path", "y" },
+                        { true, false, false }
+                    )
+                )
+            end
+        )
+
+        it("returns no targets for other commands", function()
+            assert.same(
+                {},
+                ShellParse.builtin_bind_targets("echo", { "$x" }, { true })
+            )
+        end)
+    end)
+
+    describe("assigning expansions", function()
+        it("fail the parse", function()
+            local parsed = {}
+            for _, cmd in ipairs({
+                "echo ${x::=y}",
+                ": ${x:=y}",
+                "echo ${x=y}",
+                "echo ${(A)x::=y}",
+            }) do
+                if ShellParse.parse_zsh(cmd) then
+                    table.insert(parsed, cmd)
+                end
+            end
+            assert.same({}, parsed)
+        end)
+
+        it("leave non-assigning defaults parseable", function()
+            assert.is_not_nil(ShellParse.parse_zsh("echo ${x:-y} ${x+y}"))
+        end)
+    end)
 end)

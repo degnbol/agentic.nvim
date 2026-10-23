@@ -10,14 +10,15 @@
 --- there is exactly one implementation of each.
 ---
 --- No `Config`/runtime requires (only `vim.treesitter` and the pure-Lua
---- `zsh_parse_guard`) so it loads under `nvim -u NONE` with just the plugin on
---- the runtimepath.
+--- `zsh_parse_guard` and `zsh_special_params`) so it loads under `nvim -u NONE`
+--- with just the plugin on the runtimepath.
 ---
 --- Node-type names are pinned to the installed tree-sitter-zsh grammar (verified
 --- 2026-06-18). They can drift across grammar versions — re-verify with a
 --- parse-tree dump after upgrading the parser.
 
 local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
+local ZshSpecialParams = require("agentic.utils.zsh_special_params")
 
 local M = {}
 
@@ -60,18 +61,55 @@ local function is_safe_env_name(name)
     return name:match("^LC_[A-Z_]+$") ~= nil
 end
 
---- Whether a variable name is inert data rather than an execution-influencing
---- env var. The hijacking vars (PATH, LD_PRELOAD, DYLD_INSERT_LIBRARIES, IFS,
---- BASH_ENV, PYTHONPATH) are uppercase by convention, so a name starting with
---- a lowercase letter or underscore cannot be one and is safe to strip or
---- treat as data. A single uppercase letter (`A`..`Z`) is also safe: every
---- execution-hijacking env var in the threat model (PATH, LD_*, DYLD_*, IFS,
---- ENV, BASH_ENV, CDPATH, PYTHON*, ...) is multi-character, so no single
---- letter can hijack.
+--- Lua patterns for lowercase env names that programs read: `*_proxy`
+--- redirects curl/git/pip traffic, `npm_config_*` rewrites npm config.
+local ENV_READ_PATTERNS = { "_proxy$", "^npm_config_" }
+
+--- zsh hook arrays: zsh calls every function they name.
+local ZSH_HOOK_ARRAYS = {
+    chpwd_functions = true,
+    periodic_functions = true,
+    precmd_functions = true,
+    preexec_functions = true,
+    zshaddhistory_functions = true,
+    zshexit_functions = true,
+}
+
+--- Whether a variable name is inert by convention: a single uppercase letter,
+--- or a name that starts lowercase after leading underscores and is not a zsh
+--- special parameter, a zsh hook array, or an env name that programs read.
+--- Other uppercase names are the conventional env hijackers (`PATH`,
+--- `LD_PRELOAD`), all multi-character. Lowercase zsh specials (`path`,
+--- `functions`) drive execution too.
 --- @param name string
 --- @return boolean
 local function is_inert_var_name(name)
-    return name:match("^[a-z_]") ~= nil or name:match("^[A-Z]$") ~= nil
+    if name:match("^[A-Z]$") then
+        return true
+    end
+    if
+        not name:match("^_*[a-z]")
+        or ZshSpecialParams[name]
+        or ZSH_HOOK_ARRAYS[name]
+    then
+        return false
+    end
+    for _, pattern in ipairs(ENV_READ_PATTERNS) do
+        if name:find(pattern) then
+            return false
+        end
+    end
+    return true
+end
+
+--- Whether binding `name` cannot change execution: a behaviour-only env name
+--- (`LANG`, `LC_*`, `TERM`) or a name that is inert by convention. A subscript
+--- (`x[1]`) binds an element of its base parameter, so the base is judged.
+--- @param name string parameter name, optionally subscripted
+--- @return boolean
+function M.is_safe_var_name(name)
+    local base = name:match("^[^%[]*")
+    return is_safe_env_name(base) or is_inert_var_name(base)
 end
 
 -- ── Command-path normalisation ───────────────────────────────────────────────
@@ -178,20 +216,15 @@ local function subtree_has_substitution(node)
     return false
 end
 
---- Whether a `variable_assignment`'s name is safe to ignore as inert data.
---- Uppercase execution hijackers (`PATH`, `LD_PRELOAD`, `BASH_ENV`,
---- `PYTHONPATH`, …) are not — a poisoned var set before a use changes which
---- binary the next command runs.
+--- Whether a `variable_assignment` node binds a name that cannot change
+--- execution (`M.is_safe_var_name`). False for a node without a name.
 --- @param va TSNode
 --- @param src string
 --- @return boolean
 local function safe_assignment_name(va, src)
     local name_node = va:field("name")[1]
-    if not name_node then
-        return false
-    end
-    local name = vim.treesitter.get_node_text(name_node, src)
-    return is_safe_env_name(name) or is_inert_var_name(name)
+    return name_node ~= nil
+        and M.is_safe_var_name(vim.treesitter.get_node_text(name_node, src))
 end
 
 -- ── Token extraction ─────────────────────────────────────────────────────────
@@ -902,12 +935,13 @@ local function comparison_reads_value(node, src)
     return arithmetic and reads
 end
 
---- Per node type, the test for syntax that makes zsh run code while it expands
---- a word (zshexpn(1) § Parameter Expansion Flags, § Glob Qualifiers). Flag and
+--- Per node type, the test for syntax that makes zsh run code, or assign a
+--- parameter, while it expands a word (zshexpn(1) § Parameter Expansion,
+--- § Parameter Expansion Flags, § Glob Qualifiers). Flag and
 --- qualifier patterns match the whole text, arguments included, so a delimiter
 --- character can only add a false positive, never hide a flag.
 --- @type table<string, fun(node: TSNode, src: string): boolean>
-local CODE_RUNNING_SYNTAX = {
+local SIDE_EFFECT_SYNTAX = {
     -- `e` re-expands the value, `P` reads it as a parameter name (whose
     -- subscript runs substitutions), `#`/`l`/`r`/`I` evaluate arithmetic, and
     -- `%` prompt-expands, which runs substitutions under PROMPT_SUBST.
@@ -950,17 +984,29 @@ local CODE_RUNNING_SYNTAX = {
         return false
     end,
     binary_expression = comparison_reads_value,
+    -- `=`, `:=` and `::=` assign the parameter, and the name may be one that
+    -- changes execution (`${path::=…}`).
+    expansion_default = function(node)
+        for child in node:iter_children() do
+            local t = child:type()
+            if t == "=" or t == ":=" or t == "::=" then
+                return true
+            end
+        end
+        return false
+    end,
 }
 
---- True iff the tree runs code while it expands a word: a node that fails its
---- `CODE_RUNNING_SYNTAX` test, or a subscript that reads a value.
+--- True iff expanding a word in the tree has a side effect (zsh runs code or
+--- assigns a parameter): a node that fails its `SIDE_EFFECT_SYNTAX` test, or a
+--- subscript that reads a value.
 --- @param root TSNode
 --- @param src string
 --- @return boolean
-local function runs_code_on_expansion(root, src)
+local function expansion_has_side_effect(root, src)
     local matches = node_ranges(root, function(node)
         local t = node:type()
-        local test = CODE_RUNNING_SYNTAX[t]
+        local test = SIDE_EFFECT_SYNTAX[t]
         if test and test(node, src) then
             return true
         end
@@ -1022,6 +1068,145 @@ local function format_takes_arithmetic(format)
     return false
 end
 
+--- Split printf's leading `-v NAME` / `-vNAME` options from its operands.
+--- @param args string[] printf's arguments
+--- @return string[] targets the `-v` names, in order; `""` for a trailing
+---   bare `-v`
+--- @return integer i_operand index of the first word after the options (a
+---   `--` or the format), `#args + 1` when there is none
+local function printf_options(args)
+    local targets, i = {}, 1
+    while args[i] and args[i]:match("^%-v") do
+        local name = args[i]:sub(3)
+        if name == "" then
+            i = i + 1
+            name = args[i] or ""
+        end
+        table.insert(targets, name)
+        i = i + 1
+    end
+    return targets, i
+end
+
+--- True iff any of the first `n` words is dynamic.
+--- @param args_dynamic boolean[] per word: true for a word that expands at runtime
+--- @param n integer
+--- @return boolean
+local function any_dynamic(args_dynamic, n)
+    for i = 1, n do
+        if args_dynamic[i] then
+            return true
+        end
+    end
+    return false
+end
+
+--- Option letters of zsh's `print` and `read` that take a value (zshbuiltins(1)):
+--- `"value"` takes the rest of the word, else the next word; `"number"` takes
+--- attached digits, else a next word of digits only.
+--- @type table<string, table<string, "value"|"number">>
+local BUILTIN_VALUE_OPTIONS = {
+    print = {
+        C = "value",
+        f = "value",
+        u = "value",
+        v = "value",
+        x = "value",
+        X = "value",
+    },
+    read = { d = "value", u = "value", k = "number", t = "number" },
+}
+
+--- Parse the leading option words of a zsh builtin. Options end at a `--` or
+--- `-` word (consumed) or at the first word not starting with `-`.
+--- @param args string[] the builtin's arguments
+--- @param spec table<string, "value"|"number"> value-taking option letters
+---   (see `BUILTIN_VALUE_OPTIONS`)
+--- @return table<string, string[]> values per `"value"` letter, in order
+--- @return integer i_operand index of the first operand, `#args + 1` when
+---   there is none
+--- @return boolean terminated true when a `--` or `-` word ended the options
+local function builtin_options(args, spec)
+    local values, i = {}, 1
+    while args[i] do
+        local word = args[i]
+        if not word:match("^%-") then
+            return values, i, false
+        end
+        i = i + 1
+        if word == "--" or word == "-" then
+            return values, i, true
+        end
+        local j = 2
+        while j <= #word do
+            local letter = word:sub(j, j)
+            if spec[letter] == "value" then
+                local value = word:sub(j + 1)
+                if value == "" and args[i] then
+                    value = args[i]
+                    i = i + 1
+                end
+                values[letter] = values[letter] or {}
+                table.insert(values[letter], value)
+                j = #word
+            elseif spec[letter] == "number" then
+                local digits = word:match("^%d*", j + 1)
+                j = j + #digits
+                if
+                    digits == ""
+                    and j == #word
+                    and (args[i] or ""):match("^%d+$")
+                then
+                    i = i + 1
+                end
+            end
+            j = j + 1
+        end
+    end
+    return values, i, false
+end
+
+--- The parameter names a `printf`, `print` or `read` call binds by argument:
+--- each `-v` name of printf and print, and each operand of read with any
+--- `?prompt` suffix stripped. Read's implicit `REPLY`/`reply` are not included.
+--- @param cmd_name string path-stripped command name
+--- @param args string[] delivered words, dynamic ones as raw text
+--- @param args_dynamic boolean[] parallel to `args`: true for a word that
+---   expands at runtime
+--- @return string[]|nil targets `{}` for any other command; nil when a word
+---   that may be a target, or may expand to an option, is dynamic
+function M.builtin_bind_targets(cmd_name, args, args_dynamic)
+    if cmd_name == "printf" then
+        local targets, i_operand = printf_options(args)
+        if any_dynamic(args_dynamic, i_operand) then
+            return nil
+        end
+        return targets
+    end
+    local spec = BUILTIN_VALUE_OPTIONS[cmd_name]
+    if not spec then
+        return {}
+    end
+    local values, i_operand, terminated = builtin_options(args, spec)
+    if cmd_name == "print" then
+        -- An unterminated first operand may expand to an option.
+        if
+            any_dynamic(args_dynamic, terminated and i_operand - 1 or i_operand)
+        then
+            return nil
+        end
+        return values.v or {}
+    end
+    if any_dynamic(args_dynamic, #args) then
+        return nil
+    end
+    local targets = {}
+    for i = i_operand, #args do
+        table.insert(targets, (args[i]:gsub("%?.*", "")))
+    end
+    return targets
+end
+
 --- True iff an argument that `cmd_name` evaluates as arithmetic reads a value
 --- (see `reads_value`). Checks every argument of `ARITHMETIC_ARG_BUILTINS`
 --- (`shift`, `return`, `exit`, `logout`, `break`, `continue`); for `printf`
@@ -1036,17 +1221,11 @@ local function arithmetic_args_read_value(cmd_name, args)
         return any_reads_value(args, 1)
     end
     if cmd_name == "printf" then
-        local i = 1
-        while args[i] and args[i]:match("^%-v") do
-            local name = args[i]:sub(3)
-            if name == "" then
-                i = i + 1
-                name = args[i] or ""
-            end
+        local targets, i = printf_options(args)
+        for _, name in ipairs(targets) do
             if index_reads_value(name) then
                 return true
             end
-            i = i + 1
         end
         if args[i] == "--" then
             i = i + 1
@@ -1114,7 +1293,7 @@ local function parse_zsh(src)
             return nil
         end
     end
-    if runs_code_on_expansion(root, src) then
+    if expansion_has_side_effect(root, src) then
         return nil
     end
     return root

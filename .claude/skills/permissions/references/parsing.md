@@ -103,7 +103,7 @@ walk applies the same test to the arguments of builtins that evaluate them
 (`shift`, `return`, `exit`, `logout`, `break`, `continue`; for `printf`/`print`
 the subscript of a `-v` target and the arguments after a format with any
 directive but `%s`/`%b`/`%c`/`%q`, a `*` width or a `$`). Rules per node type:
-`CODE_RUNNING_SYNTAX` in `shell_parse.lua`.
+`SIDE_EFFECT_SYNTAX` in `shell_parse.lua`.
 
 **Static arithmetic** — an `arithmetic_expansion` that passes the parse
 (`$((40))`, `"$((40))p"`, `-$((5))`) is *static* at argument position, in
@@ -160,7 +160,8 @@ handling.
    failure, any error node, or syntax the grammar parses differently from zsh
    (a hidden backtick substitution, a line continuation inside a word), or a
    parameter flag / glob qualifier that runs code (`${(e)x}`, `*(+cmd)`,
-   `${~x}`; `CODE_RUNNING_SYNTAX` in `shell_parse.lua`) → prompt. The zsh parser is a
+   `${~x}`) or an assigning default (`${x::=y}`; `SIDE_EFFECT_SYNTAX` in
+   `shell_parse.lua`) → prompt. The zsh parser is a
    hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
    builtins (`eval`/`source`/`.`). A **transparent prefix** is not a leaf:
@@ -223,8 +224,8 @@ handling.
    process substitution outside argument position, case value/pattern, a quoted
    `"$(…)"` for-list item, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
-   FD duplication (`2>&1`) are safe; any other file redirect bails. Env
-   prefixes that hijack execution (`PATH=`, `LD_*`, `BASH_ENV`) bail.
+   FD duplication (`2>&1`) are safe; any other file redirect bails. An env
+   prefix whose name fails `is_safe_var_name` bails.
 4. **Extract** each safe leaf — the command name and quote-stripped arg
    tokens, minus redirects and env-prefixes. The leaf goes to the glob
    matcher as a joined string; the tokenised form (`{cmd_name, args}`)

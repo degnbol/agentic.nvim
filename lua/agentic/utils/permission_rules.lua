@@ -36,15 +36,33 @@ local NESTED_MAX_DEPTH = ShellParse.NESTED_MAX_DEPTH
 M.strip_command_path = ShellParse.strip_command_path
 
 --- True iff a builtin call must prompt whatever the rules say: a code-taking
---- builtin (`eval`, or `source`/`.` whose file does not resolve), or a builtin
---- that evaluates an argument as arithmetic that reads a value.
+--- builtin (`eval`, or `source`/`.` whose file does not resolve), a builtin
+--- that evaluates an argument as arithmetic that reads a value, or a
+--- `printf -v`/`read` call whose target or option words are dynamic or bind a
+--- name that can change execution (`read path`).
 --- @param cmd_name string path-stripped command name
 --- @param args string[] delivered words, dynamic ones as raw text
+--- @param args_dynamic boolean[] parallel to `args`: true for a runtime-expanding word
 --- @param script_path string|nil resolved file of a script execution
 --- @return boolean
-local function refuses_builtin(cmd_name, args, script_path)
-    return (CODE_TAKING_BUILTINS[cmd_name] and not script_path)
+local function refuses_builtin(cmd_name, args, args_dynamic, script_path)
+    if
+        (CODE_TAKING_BUILTINS[cmd_name] and not script_path)
         or ShellParse.arithmetic_args_read_value(cmd_name, args)
+    then
+        return true
+    end
+    local targets =
+        ShellParse.builtin_bind_targets(cmd_name, args, args_dynamic)
+    if not targets then
+        return true
+    end
+    for _, name in ipairs(targets) do
+        if not ShellParse.is_safe_var_name(name) then
+            return true
+        end
+    end
+    return false
 end
 
 --- @alias agentic.utils.PermissionRules.Origin agentic.utils.ShellParse.Origin
@@ -603,6 +621,10 @@ local STATEMENT_CONTAINER = {
     negated_command = true,
 }
 
+--- Forward declaration: `collect_bindings` uses it before its definition.
+--- @type fun(node: TSNode, src: string, ctx: any, known: table<string, string>|nil, inner_check: fun(subst: TSNode, src: string, ctx: any): boolean): string[]|nil, TSNode[]|nil, boolean[]|nil, TSNode|nil
+local extract_args
+
 --- Collect the variable names a control-flow sibling could rebind in the
 --- enclosing sequence (the capable grade), accumulating them into `targets`.
 --- Returns `false` to signal *clear-all* — the construct contains a binding
@@ -618,9 +640,9 @@ local STATEMENT_CONTAINER = {
 --- cleanly-enumerable; any unmodelled node type returns `false`. The scan
 --- recurses only into statement positions (so `while read x; …` clears via the
 --- recursed condition while `case $x in …` skips the matched value), stops at
---- `SCOPE_BOUNDARY` nodes (inner bindings sealed in a child shell), and mirrors
---- `update_known`'s per-command logic (`printf -v` enumerates its target, other
---- namespace-mutating builtins clear-all) so the two stay consistent.
+--- `SCOPE_BOUNDARY` nodes (inner bindings sealed in a child shell).
+--- `printf -v` enumerates its target; other namespace-mutating builtins
+--- clear-all.
 --- @param node TSNode
 --- @param src string
 --- @param targets table<string, boolean>
@@ -695,23 +717,30 @@ local function collect_bindings(node, src, targets)
     elseif t == "command" then
         local name = command_leaf_name(node, src)
         if name == "printf" then
-            -- Mirrors update_known: `-v NAME` rebinds NAME. Enumerate a literal
-            -- NAME; a dynamic / missing target → clear-all.
-            local want_name = false
-            for arg in node:iter_children() do
-                local at = vim.treesitter.get_node_text(arg, src)
-                if want_name then
-                    if at:match("^[%w_]+$") then
-                        targets[at] = true
-                        want_name = false
-                    else
-                        return false
-                    end
-                elseif at == "-v" then
-                    want_name = true
+            -- `-v NAME` rebinds NAME. Enumerate plain NAMEs; a dynamic or
+            -- subscripted target → clear-all. Substitutions are vetted where
+            -- the command itself is walked, so here every one passes.
+            local args, _, args_dynamic = extract_args(
+                node,
+                src,
+                nil,
+                nil,
+                function()
+                    return true
                 end
+            )
+            local names = args
+                and ShellParse.builtin_bind_targets(name, args, args_dynamic)
+            if not names then
+                return false
             end
-            return not want_name
+            for _, n in ipairs(names) do
+                if not n:match("^[%w_]+$") then
+                    return false
+                end
+                targets[n] = true
+            end
+            return true
         elseif not name or NAMESPACE_MUTATING[name] then
             return false
         end
@@ -730,8 +759,8 @@ end
 --- straight-line child, left to right. The rule is inverted from enumerating
 --- what rebinds: a child *preserves* `known` only when provably inert, and
 --- everything else drops only the binding(s) it could touch. A pure-literal
---- `variable_assignment` records `known[name]=lit`; a non-literal one drops
---- just that name. Every other child is handed to `collect_bindings` (the
+--- `variable_assignment` records `known[name]=lit`; a non-literal, subscripted
+--- (`f[1]=…`) or appending (`f+=…`) one drops just that name. Every other child is handed to `collect_bindings` (the
 --- capable grade): a plain command or a binding-free control-flow construct
 --- drops nothing (`f=…; if c; then :; fi; find $f` keeps `f`), one that binds
 --- enumerable names (`printf -v g`, an `if`-body assignment, a `for` loop var)
@@ -749,8 +778,14 @@ local function update_known(known, child, src)
         if not name then
             return
         end
+        -- `f[1]=…` and `f+=…` change `$f` to a value other than the literal.
+        local partial = name_node:type() == "subscript"
+            or vim.iter(child:iter_children()):any(function(c)
+                return c:type() == "+="
+            end)
+        name = name:match("^[^%[]*")
         local value = child:field("value")[1]
-        local lit = value and pure_literal_token(value, src)
+        local lit = not partial and value and pure_literal_token(value, src)
         if lit and is_safe_literal(lit) then
             known[name] = lit
         else
@@ -836,7 +871,7 @@ end
 --- @return TSNode[]|nil arg_nodes
 --- @return boolean[]|nil args_dynamic
 --- @return TSNode|nil name_node
-local function extract_args(node, src, ctx, known, inner_check)
+function extract_args(node, src, ctx, known, inner_check)
     local name_node
     --- @type string[]
     local args = {}
@@ -1030,7 +1065,14 @@ local function walk_command(node, src, ctx, known, funcs)
     -- `source`/`.` out of the unconditional code-taking bail only when the file
     -- resolves (`eval`, and an unresolved `source`, still bail).
     local script_path = script_file_source(cmd_name, args, args_dynamic)
-    if refuses_builtin(cmd_name, args, script_path) then
+    if
+        refuses_builtin(
+            cmd_name,
+            args,
+            args_dynamic --[[@as boolean[] ]],
+            script_path
+        )
+    then
         return false
     end
 
@@ -1508,8 +1550,9 @@ local function walk_assignment(node, src, ctx)
     return true
 end
 
---- Walk a `for_statement`. When every list item is a splitting-proof literal and
---- the loop var is a plain name, unroll: walk the body once per value with
+--- Walk a `for_statement`. A loop var that can change execution
+--- (`for path in …`) bails. When every list item is a splitting-proof literal
+--- and the loop var is a plain name, unroll: walk the body once per value with
 --- the var pre-bound, so a gated body command (`find -exec`) is checked against
 --- each concrete value and the loop approves iff every value approves. A
 --- non-literal list (substitution / glob / expansion) or a value count over the
@@ -1538,13 +1581,13 @@ local function walk_for(node, src, ctx)
             end
         end
     end
-    if not body then
+    if not (body and var_name and ShellParse.is_safe_var_name(var_name)) then
         return false
     end
 
     -- unroll a fully-literal list with a plain loop var, bounded by budget.
     local budget = ctx.for_budget or FOR_UNROLL_CAP
-    if var_name and var_name:match("^[%w_]+$") and #items > 0 then
+    if var_name:match("^[%w_]+$") and #items > 0 then
         --- @type string[]
         local values = {}
         local all_literal = true
@@ -1901,7 +1944,14 @@ local function command_known_safe(node, src, ctx, known, funcs)
     -- Mirror of walk_command: a non-`-c` script execution lifts source/. out of
     -- the code-taking bail when the file resolves; the recursion below tallies it.
     local script_path = script_file_source(cmd_name, args, args_dynamic)
-    if refuses_builtin(cmd_name, args, script_path) then
+    if
+        refuses_builtin(
+            cmd_name,
+            args,
+            args_dynamic --[[@as boolean[] ]],
+            script_path
+        )
+    then
         return false
     end
 
@@ -2117,7 +2167,8 @@ local function tally_redirected(node, src, ctx, ranges)
     end
 end
 
---- Tally a `for_statement`. Mirrors `walk_for`: a fully-literal list with a plain
+--- Tally a `for_statement`. Mirrors `walk_for`: a loop var that can change
+--- execution records the whole loop; a fully-literal list with a plain
 --- loop var unrolls the body once per value, so a body command highlighted
 --- for one binding but not another is caught; ranges are deduped across values
 --- (one binding highlighting a span is enough). Otherwise the list items record
@@ -2144,8 +2195,13 @@ local function tally_for(node, src, ctx, ranges)
         end
     end
 
+    if not (var_name and ShellParse.is_safe_var_name(var_name)) then
+        record(ranges, node)
+        return
+    end
+
     local budget = ctx.for_budget or FOR_UNROLL_CAP
-    if body and var_name and var_name:match("^[%w_]+$") and #items > 0 then
+    if body and var_name:match("^[%w_]+$") and #items > 0 then
         --- @type string[]
         local values = {}
         local all_literal = true
@@ -2272,7 +2328,9 @@ function tally_walk(node, src, ctx, ranges)
         tally_redirected(node, src, ctx, ranges)
     elseif t == "variable_assignment" then
         local value = node:field("value")[1]
-        if value then
+        if not safe_assignment_name(node, src) then
+            record(ranges, node)
+        elseif value then
             record_substitutions(value, src, ctx, ranges)
         end
     elseif t == "for_statement" then

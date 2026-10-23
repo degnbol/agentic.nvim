@@ -1999,6 +1999,82 @@ describe("PermissionRules", function()
             end)
         end)
 
+        describe("binding a name that changes execution", function()
+            it("prompts at every binding site", function()
+                local approved = {}
+                for _, cmd in ipairs({
+                    "path=/tmp/evil; ls",
+                    "path+=(/tmp/evil); ls",
+                    "path[1]=/tmp/evil; ls",
+                    "path[1,0]=/tmp/evil; ls",
+                    "path=/tmp/evil ls",
+                    "functions=(ls 'echo PWNED'); ls",
+                    "commands=(ls /tmp/evil/ls); ls",
+                    "options=(shwordsplit on); ls",
+                    "mapfile=(/tmp/x hi)",
+                    "http_proxy=http://evil curl https://x",
+                    "npm_config_registry=http://evil; ls",
+                    "chpwd_functions=(f); ls",
+                    "_JAVA_OPTIONS=-Dx=y; ls",
+                    "for path in /tmp/evil; do ls; done",
+                    "for path in /tmp/*; do ls; done",
+                    "printf -v path %s /tmp/evil; ls",
+                    "printf -v 'path[1]' %s /tmp/evil; ls",
+                    "printf -v $x %s /tmp/evil; ls",
+                    "read path < f; ls",
+                    "echo /tmp/evil | read path; ls",
+                    "read -A path < f; ls",
+                    "read path <<EOF\n/tmp/evil\nEOF\nls",
+                    "read 'path?prompt' < f; ls",
+                    "read $x < f; ls",
+                    "echo ${path::=/tmp/evil}; ls",
+                    ": ${path:=/tmp/evil}; ls",
+                    "x=${path::=/tmp/evil}; ls",
+                    'echo "${path::=/tmp/evil}"; ls',
+                    "echo ${(A)path::=/tmp/evil}; ls",
+                    "f=/safe; : ${f::=-delete}; find . $f",
+                }) do
+                    if PermissionRules.should_auto_approve(cmd) then
+                        table.insert(approved, cmd)
+                    end
+                end
+                assert.same({}, approved)
+            end)
+
+            it("approves scratch bindings", function()
+                local prompted = {}
+                for _, cmd in ipairs({
+                    "f=/safe; find $f",
+                    "outDir=/safe; ls $outDir",
+                    "for f in a b; do cat $f; done",
+                    "printf -v s %s x",
+                    "read line < f",
+                    "read -t 5 line < f",
+                    "read -r -d '' f < x",
+                    "read -u 3 line",
+                    "read -rd: a b < f",
+                }) do
+                    if not PermissionRules.should_auto_approve(cmd) then
+                        table.insert(prompted, cmd)
+                    end
+                end
+                assert.same({}, prompted)
+            end)
+
+            -- A dynamic word where an option may stand can expand to `-vNAME`.
+            it("prompts on a dynamic printf format", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve('printf "$x\\n"')
+                )
+            end)
+
+            it("prompts on print -v under a user allow", function()
+                assert.is_false(decide("print -f %s -v path /tmp/evil; ls", {
+                    allow = { "Bash(print *)", "Bash(ls)" },
+                }))
+            end)
+        end)
+
         -- An inline `<shell> -c '<literal body>'` is re-parsed and walked
         -- recursively (the body is verbatim in rawInput, no file read), so it
         -- approves iff the body approves — instead of firing the `c`-flag ask.
@@ -2375,6 +2451,20 @@ describe("PermissionRules", function()
         -- value no longer wildcard-fires a gate — while the literal feeds the
         -- SAME gates, and any non-inert sibling clears the binding (over-prompt).
         describe("constant-literal propagation", function()
+            it("prompts when a subscript or append rebinds the var", function()
+                local approved = {}
+                for _, cmd in ipairs({
+                    "f=/x; f[1,-1]=-delete; find . $f",
+                    "f=/x; f[1]=-delete; find . $f",
+                    "f=-; f+=delete; find . $f",
+                }) do
+                    if PermissionRules.should_auto_approve(cmd) then
+                        table.insert(approved, cmd)
+                    end
+                end
+                assert.same({}, approved)
+            end)
+
             it(
                 "approves f=/safe/dir; find $f (benign value recovered)",
                 function()
@@ -2957,6 +3047,22 @@ describe("PermissionRules", function()
             local ranges = PermissionRules.tally_unapproved(cmd)
             assert.equal(1, #ranges)
             assert.equal("rm bar", span_text(cmd, ranges[1]))
+        end)
+
+        it("records an assignment to a live name", function()
+            stub_settings({ allow = { "Bash(ls *)", "Bash(ls)" } })
+            local cmd = "PATH=/x; ls"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("PATH=/x", span_text(cmd, ranges[1]))
+        end)
+
+        it("records a for loop over a live name", function()
+            stub_settings({ allow = { "Bash(ls *)", "Bash(ls)" } })
+            local cmd = "for path in /x; do ls; done"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal(cmd, span_text(cmd, ranges[1]))
         end)
 
         it("records nothing for a fully-approved subshell", function()
