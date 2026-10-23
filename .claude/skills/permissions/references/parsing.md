@@ -168,8 +168,8 @@ handling.
    `inner_source` slices out its inner command and re-walks that on its own
    merits (mis-slice fails closed → prompt). These are a fixed allowlist — a
    shell `-c <body>` (`zsh`/`bash`/`sh`/`dash`) and the exec-wrappers `timeout`,
-   `time`, `stdbuf`, `uv run`, `xargs`. `xargs` additionally appends a trailing
-   dynamic stdin token, so a gated inner (`xargs sort` → `-o`) prompts while
+   `time`, `stdbuf`, `uv run`, `xargs`, bare `command`. `xargs` additionally
+   appends a trailing dynamic stdin token, so a gated inner (`xargs sort` → `-o`) prompts while
    read-only inners approve. `extract_commands` also unwraps `uv run` with its
    code-injecting options (it reports what runs); the permission walk does
    not. Anonymous separators
@@ -192,10 +192,19 @@ handling.
    later `command` whose name matches a recorded entry approves regardless of
    its call arguments — the body was vetted for arbitrary args, though a
    side-effecting argument substitution (`foo $(rm x)`) is still walked and
-   bails. A redefinition with an unsafe body un-records the name; a call before
-   the definition, or to one defined in a different sequence (a nested `if`
-   body, a subshell), still bails. An **anonymous** function (`() { … }`, no
-   `name` field) executes immediately and bails. A brace group `{ …; }` is the
+   bails. A call before the definition, or to one defined in a different
+   sequence, matches no record and is judged as the command of that name. A
+   definition with an unsafe body adds every name to a **shadowed** set shared
+   by every nested walk of the command; a call to a shadowed name bails in any
+   scope or order, even after a clean redefinition. A redirect on the
+   definition (`f() { … } > x`) counts as unsafe unless it is a safe form
+   (`> /dev/null`, `2>&1`, `<`): zsh applies it at every call. The walk re-runs until the
+   set stops growing, so a clean body that calls a name shadowed later still
+   bails. Names match the command word as written (`/bin/ls` does not call
+   `ls()`). A definition zsh calls without a call site (hook functions,
+   `TRAP*`, `command_not_found_handler`, `zsh_directory_name`) bails, and so
+   does an **anonymous** function (`() { … }`, no `name` field), which executes
+   immediately. A brace group `{ …; }` is the
    same `compound_statement` node and walks like a `list`.
    A bare `command_substitution` (`$(…)` / backticks) in **argument**,
    **for-list**, or **assignment-value/array-element** position recurses

@@ -148,6 +148,9 @@ it).
   string mixing `$var`/arithmetic with text (`"x$y$(ls)"`), process
   substitution outside argument position, case value/pattern, or redirect target
   still bails (see [references/parsing.md](references/parsing.md)).
+- **No call to an unsafe function.** A name the command may define with an
+  unsafe body prompts at every call, in any scope or order; defining a
+  function zsh calls by itself (hooks, `TRAP*`) prompts.
 - **Redirects classified structurally.** `> /dev/null` and FD
   duplication (`2>&1`) are safe; any other file redirect bails. This runs
   regardless of whether the command would succeed — a failing command's redirect

@@ -442,7 +442,33 @@ end
 --- kind, a settings.json allow pattern, or a session-remembered leaf.
 --- @alias agentic.utils.PermissionRules.Source agentic.PermAllowKind|"glob_allow"|"session_allow"
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer }
+--- Function names that some definition in the command gives an unsafe body.
+--- The set spans the whole command, not one sequence, so a call to a member is
+--- unsafe whatever its scope or order relative to the definition.
+--- @alias agentic.utils.PermissionRules.Shadowed table<string, true>
+
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
+
+--- Run `walk_once` until a run adds no name to the shadowed set, or a run
+--- reports its result final. A run judges each call against the names shadowed
+--- so far, so a definition later in the command (`f() { cat; }; cat() { rm x;
+--- }; f`) is seen only by the next run. The set only grows and is bounded by
+--- the defined names, so this ends.
+--- @generic T
+--- @param walk_once fun(shadowed: agentic.utils.PermissionRules.Shadowed): T, boolean|nil
+---        returns its result, and true when a larger shadowed set cannot change it
+--- @return T result of the last run
+local function walk_until_shadowed_settles(walk_once)
+    --- @type agentic.utils.PermissionRules.Shadowed
+    local shadowed = {}
+    while true do
+        local n_shadowed = vim.tbl_count(shadowed)
+        local result, final = walk_once(shadowed)
+        if final or vim.tbl_count(shadowed) == n_shadowed then
+            return result
+        end
+    end
+end
 
 --- Maximum number of body walks a literal for-loop may unroll into. Nested
 --- literal loops multiply, so the budget is divided down each level; a loop whose
@@ -1038,7 +1064,9 @@ end
 --- a bare `$name` bound in it resolves to its literal and becomes a static token.
 --- `funcs` (optional) maps each function name defined and body-walked clean
 --- earlier in the sequence to the sources its body needed; a call to one
---- approves regardless of its args and adds those sources.
+--- approves regardless of its args and adds those sources. A call to a name in
+--- `ctx.shadowed` bails. Both match the command word as written, as zsh's
+--- function lookup does: `/bin/ls` does not call a function `ls`.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
@@ -1048,7 +1076,7 @@ end
 local function walk_command(node, src, ctx, known, funcs)
     local args, arg_nodes, args_dynamic, name_node =
         extract_args(node, src, ctx, known, walk_substitution_inner)
-    if not args then
+    if not (args and args_dynamic) then
         return false
     end
 
@@ -1071,7 +1099,7 @@ local function walk_command(node, src, ctx, known, funcs)
             args,
             args_dynamic --[[@as boolean[] ]],
             script_path
-        )
+        ) or ctx.shadowed[name]
     then
         return false
     end
@@ -1153,8 +1181,8 @@ local function walk_command(node, src, ctx, known, funcs)
     -- so the body is safe for ANY call arguments — the call needs no re-vetting
     -- of how the function uses them. The arguments were still walked above (a
     -- side-effecting `foo $(rm x)` already bailed on the substitution).
-    if funcs and funcs[cmd_name] then
-        for source in pairs(funcs[cmd_name]) do
+    if funcs and funcs[name] then
+        for source in pairs(funcs[name]) do
             ctx.sources[source] = true
         end
         return true
@@ -1267,26 +1295,38 @@ local function walk_command(node, src, ctx, known, funcs)
     return source ~= nil
 end
 
---- Walk a named `function_definition` in sequence context. Defining a named
---- function never runs its body, so the definition always approves; the body's
---- cleanliness only decides whether a later *call* resolves. Body-walk it as a
---- fresh sequence (every `$var`/positional dynamic, no inherited `known` literals
---- or `funcs`); record the name in `funcs`, with the sources the body needed,
---- iff it walks clean. A redefinition with an unsafe body must *un-record* the
---- name — otherwise a stale safe record would approve a call that now runs the rebound (unsafe) body. An anonymous
---- `() { … }` executes immediately and is left to the dispatcher's fail-closed
---- branch.
+--- Whether every redirect a node carries in its `redirect` field is a safe
+--- form (`redirect_is_safe`). True for a node with none.
+--- @param node TSNode
+--- @param src string
+--- @return boolean
+local function redirects_safe(node, src)
+    return vim.iter(node:field("redirect")):all(function(r)
+        return r:type() == "file_redirect" and redirect_is_safe(r, src)
+    end)
+end
+
+--- Walk a `function_definition`. Defining a named function never runs its
+--- body, so the definition approves; the body's cleanliness only decides how a
+--- later *call* resolves. Body-walk it as a fresh sequence (every
+--- `$var`/positional dynamic, no inherited `known` literals or `funcs`). A
+--- clean body records every name in `funcs`, with the sources the body needed;
+--- an unsafe body adds every name to `ctx.shadowed`. A redirect on the
+--- definition (`f() { … } > x`) that is not a safe form counts as unsafe: zsh
+--- applies it at every call, expanding its target then. Either way adds
+--- `read_only` to `ctx.sources`. Bails on an anonymous `() { … }` (it runs
+--- immediately), a name that is not a plain word, and a name zsh calls on its
+--- own (`ShellParse.runs_without_call`).
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @param funcs table<string, table<agentic.utils.PermissionRules.Source, true>>
 --- @return boolean
 local function walk_function_definition(node, src, ctx, funcs)
-    local name_node = node:field("name")[1]
-    if not name_node then
+    local names = ShellParse.function_names(node, src)
+    if not names or vim.iter(names):any(ShellParse.runs_without_call) then
         return false
     end
-    local name = vim.treesitter.get_node_text(name_node, src)
     local body = node:field("body")[1]
     -- Defining a function never runs its body, so any file-mutating effect in
     -- it must NOT leak into the outer command's effects. Walk with a throwaway
@@ -1300,9 +1340,17 @@ local function walk_function_definition(node, src, ctx, funcs)
         ctx,
         { effects = body_effects, written = {}, sources = body_sources }
     )
-    funcs[name] = (body and walk(body, src, body_ctx) and #body_effects == 0)
-            and body_sources
-        or nil
+    local clean = body ~= nil
+        and redirects_safe(node, src)
+        and walk(body, src, body_ctx)
+        and #body_effects == 0
+    for _, name in ipairs(names) do
+        if clean then
+            funcs[name] = body_sources
+        else
+            ctx.shadowed[name] = true
+        end
+    end
     ctx.sources.read_only = true
     return true
 end
@@ -1314,7 +1362,8 @@ end
 --- function definition records a body-walked-clean name, and a later `command`
 --- resolves bare `$name` references and recorded calls against them. Both are
 --- sequence-local — nested blocks reached via `walk(child)` start fresh, so
---- neither a binding nor a function name leaks across sequences.
+--- neither a binding nor a clean function record leaks across sequences (an
+--- unsafe definition's names do, through `ctx.shadowed`).
 ---
 --- `seed` (optional) pre-binds names in the constant environment — a for-loop
 --- unrolls its body once per literal value by calling this with `{ [loopvar] =
@@ -1748,16 +1797,10 @@ function walk(node, src, ctx)
         -- `until` also parses to `while_statement` in the pinned zsh grammar.
         return walk_while(node, src, ctx)
     elseif t == "function_definition" then
-        -- Reached outside a sequence (rare): defining a *named* function never
-        -- runs its body, so it approves without a body-walk; an anonymous
-        -- (`() { … }`, no `name`) executes immediately and fails closed. The
-        -- body-walk-and-record happens in `walk_sequence` (the common path),
-        -- which has the `funcs` table; here there is none to record into.
-        if node:field("name")[1] == nil then
-            return false
-        end
-        ctx.sources.read_only = true
-        return true
+        -- Reached outside a sequence (a pipeline stage): there is no
+        -- sequence function table, so a clean record is dropped
+        -- and a later call is judged as the command of that name.
+        return walk_function_definition(node, src, ctx, {})
     end
     -- Any unknown future node type stays rejected (fail-closed).
     return false
@@ -1780,7 +1823,7 @@ end
 -- decision, so a `safe_write` like `git add` never lights up even at the
 -- read_only tier.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer }
+--- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -1929,7 +1972,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
             return substitution_inner_collect(subst, s, c, subst_ranges)
         end
     )
-    if not args then
+    if not (args and args_dynamic) then
         return false
     end
 
@@ -1950,7 +1993,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
             args,
             args_dynamic --[[@as boolean[] ]],
             script_path
-        )
+        ) or ctx.shadowed[name]
     then
         return false
     end
@@ -1969,7 +2012,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
 
     -- a call to a function recorded earlier in this sequence is known-safe
     -- (mirrors walk_command — body vetted at definition time for any args).
-    if funcs and funcs[cmd_name] then
+    if funcs and funcs[name] then
         return true
     end
 
@@ -2080,6 +2123,47 @@ local function tally_children(node, src, ctx, ranges)
     end
 end
 
+--- Tally a `function_definition`. The body is not run, so no range inside it
+--- is recorded. A clean body records every name in `funcs`, an unsafe one (or
+--- a definition with an unsafe redirect, see `walk_function_definition`) adds every
+--- name to `ctx.shadowed`. An anonymous definition, a name that is not a
+--- plain word, or a name zsh calls on its own records the whole range.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+--- @param funcs table<string, boolean>
+local function tally_function_definition(node, src, ctx, ranges, funcs)
+    local names = ShellParse.function_names(node, src)
+    if not names or vim.iter(names):any(ShellParse.runs_without_call) then
+        record(ranges, node)
+        return
+    end
+    local body = node:field("body")[1]
+    --- @type agentic.utils.PermissionRules.Range[]
+    local body_ranges = {}
+    if body then
+        -- Fresh `leaves`: a definition is not run, so its body leaves are not
+        -- rememberable execution positions.
+        tally_walk(
+            body,
+            src,
+            vim.tbl_extend("force", ctx, { leaves = {} }),
+            body_ranges
+        )
+    end
+    local clean = body ~= nil
+        and redirects_safe(node, src)
+        and #body_ranges == 0
+    for _, name in ipairs(names) do
+        if clean then
+            funcs[name] = true
+        else
+            ctx.shadowed[name] = true
+        end
+    end
+end
+
 --- Tally a straight-line sequence, threading the constant environment so a
 --- command whose only "unapproved" token is a resolved benign `$var` is not
 --- highlighted (mirrors `walk_sequence`). `seed` (optional) pre-binds names,
@@ -2114,30 +2198,7 @@ local function tally_sequence(node, src, ctx, ranges, seed)
                     end
                 end
             elseif t == "function_definition" then
-                -- Mirror walk_function_definition: a named definition is not run
-                -- (body not highlighted); record the name if the body tallies
-                -- clean. An anonymous function runs immediately, so highlight it.
-                local name_node = child:field("name")[1]
-                if name_node then
-                    local name = vim.treesitter.get_node_text(name_node, src)
-                    local body = child:field("body")[1]
-                    --- @type agentic.utils.PermissionRules.Range[]
-                    local body_ranges = {}
-                    if body then
-                        -- Fresh `leaves`: a definition is not run, so its body
-                        -- leaves are not rememberable execution positions.
-                        tally_walk(
-                            body,
-                            src,
-                            vim.tbl_extend("force", ctx, { leaves = {} }),
-                            body_ranges
-                        )
-                    end
-                    -- Record on clean, un-record on unsafe redefinition.
-                    funcs[name] = (body and #body_ranges == 0) or nil
-                else
-                    record(ranges, child)
-                end
+                tally_function_definition(child, src, ctx, ranges, funcs)
             else
                 tally_walk(child, src, ctx, ranges)
             end
@@ -2338,11 +2399,7 @@ function tally_walk(node, src, ctx, ranges)
     elseif t == "while_statement" then
         tally_while(node, src, ctx, ranges)
     elseif t == "function_definition" then
-        -- Mirror `walk`: a named definition is approved (body not run), so it
-        -- records nothing; an anonymous function runs immediately and records.
-        if node:field("name")[1] == nil then
-            record(ranges, node)
-        end
+        tally_function_definition(node, src, ctx, ranges, {})
     else
         -- A bare substitution statement or any unknown/unmodelled node:
         -- highlight it. The decision walk fails closed here, so the prompt
@@ -2387,23 +2444,31 @@ function M.tally_unapproved(command)
         return nil, {}, false
     end
 
-    --- @type agentic.utils.PermissionRules.TallyCtx
-    local ctx = {
-        allow = M.get_settings_patterns("allow"),
-        deny = M.get_settings_patterns("deny"),
-        ask = M.get_settings_patterns("ask"),
-        structured_entries = M.get_structured_entries(),
-        depth = 0,
-        leaves = {},
-        for_budget = FOR_UNROLL_CAP,
-    }
-    --- @type agentic.utils.PermissionRules.Range[]
-    local ranges = {}
-    tally_walk(root, command, ctx, ranges)
+    local allow = M.get_settings_patterns("allow")
+    local deny = M.get_settings_patterns("deny")
+    local ask = M.get_settings_patterns("ask")
+    local structured_entries = M.get_structured_entries()
+    local run = walk_until_shadowed_settles(function(shadowed)
+        --- @type agentic.utils.PermissionRules.TallyCtx
+        local ctx = {
+            allow = allow,
+            deny = deny,
+            ask = ask,
+            structured_entries = structured_entries,
+            depth = 0,
+            leaves = {},
+            for_budget = FOR_UNROLL_CAP,
+            shadowed = shadowed,
+        }
+        --- @type agentic.utils.PermissionRules.Range[]
+        local ranges = {}
+        tally_walk(root, command, ctx, ranges)
+        return { ranges = ranges, leaves = ctx.leaves }
+    end)
     -- Each clean leaf records exactly one range and collects one signature;
     -- every other unapproved part records ≥1 range and no signature. So the
     -- counts match iff every unapproved part was a rememberable leaf.
-    return ranges, ctx.leaves, #ctx.leaves == #ranges
+    return run.ranges, run.leaves, #run.leaves == #run.ranges
 end
 
 -- ── Reject walk (deny rules reject immediately, no prompt) ───────────────────
@@ -2627,25 +2692,30 @@ function M.evaluate(command, extra_allow)
         return false, {}, {}
     end
 
-    --- @type agentic.utils.PermissionRules.Effect[]
-    local effects = {}
-    --- @type table<agentic.utils.PermissionRules.Source, true>
-    local sources = {}
-    local ok = walk(root, command, {
-        allow_settings = allow_settings,
-        allow_remembered = allow_remembered,
-        sources = sources,
-        deny = M.get_settings_patterns("deny"),
-        ask = M.get_settings_patterns("ask"),
-        structured_entries = structured_entries,
-        auto_approve = Config.permissions.auto_approve,
-        depth = 0,
-        effects = effects,
-        written = {},
-        for_budget = FOR_UNROLL_CAP,
-    })
+    local deny = M.get_settings_patterns("deny")
+    local ask = M.get_settings_patterns("ask")
+    local run = walk_until_shadowed_settles(function(shadowed)
+        --- @type agentic.utils.PermissionRules.WalkCtx
+        local ctx = {
+            allow_settings = allow_settings,
+            allow_remembered = allow_remembered,
+            sources = {},
+            deny = deny,
+            ask = ask,
+            structured_entries = structured_entries,
+            auto_approve = Config.permissions.auto_approve,
+            depth = 0,
+            effects = {},
+            written = {},
+            for_budget = FOR_UNROLL_CAP,
+            shadowed = shadowed,
+        }
+        local ok = walk(root, command, ctx)
+        -- More shadowed names only turn approvals into bails.
+        return { ok = ok, ctx = ctx }, not ok
+    end)
     -- Leaves before a failing one have already added their sources.
-    return ok, effects, ok and sources or {}
+    return run.ok, run.ctx.effects, run.ok and run.ctx.sources or {}
 end
 
 --- Whether a command auto-approves on its own, with no grant scope. True iff it

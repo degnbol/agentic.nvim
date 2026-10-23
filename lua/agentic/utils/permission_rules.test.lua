@@ -260,13 +260,26 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("records on redefinition to a clean body", function()
-                assert.is_true(
+            it("keeps prompting after redefinition to a clean body", function()
+                assert.is_false(
                     PermissionRules.should_auto_approve(
                         "foo() { rm -rf / }; foo() { echo hi }; foo"
                     )
                 )
             end)
+
+            it(
+                "does not resolve a path call to a bare-named function",
+                function()
+                    -- zsh looks functions up by the word as written, so
+                    -- `/bin/foo` runs the external binary.
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            "foo() { echo hi }; /bin/foo"
+                        )
+                    )
+                end
+            )
 
             it("bails on a call before its definition", function()
                 -- Left-to-right: `foo` is not yet recorded at the call site.
@@ -292,7 +305,7 @@ describe("PermissionRules", function()
                 function()
                     -- funcs is per-sequence (same scoping as the per-sequence `known`): the
                     -- `if` body is a fresh sequence, so a parent definition does not
-                    -- resolve there. Accepted residual — over-prompts, never under.
+                    -- resolve there.
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "foo() { echo hi }; if true; then foo; fi"
@@ -3532,6 +3545,133 @@ describe("PermissionRules", function()
         end
         written = {}
     end
+
+    describe("function shadowing", function()
+        before_each(function()
+            Config.permissions.use_plugin_defaults = true
+            stub_settings(nil)
+        end)
+        after_each(remove_written)
+
+        local UNSAFE = "{ rm -rf /tmp/x; }"
+
+        for _, cmd in ipairs({
+            "ls",
+            "cat foo",
+            "true",
+            "false",
+            "cd /tmp",
+            "ag foo",
+            "echo ~[foo]",
+            "ls | head",
+            "echo $(ls)",
+            "(ls)",
+            "time ls",
+            "/bin/ls",
+        }) do
+            it("approves the call site alone: " .. cmd, function()
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        local prompts = {
+            "ls() " .. UNSAFE .. "; ls",
+            "cat() " .. UNSAFE .. "; cat foo",
+            -- called by zsh with no call site
+            "zshexit() " .. UNSAFE .. "; true",
+            "TRAPEXIT() " .. UNSAFE,
+            "TRAPEXIT() { echo hi; }",
+            "TRAPZERR() " .. UNSAFE .. "; false",
+            "TRAPDEBUG() " .. UNSAFE .. "; true",
+            "chpwd() " .. UNSAFE .. "; cd /tmp",
+            "command_not_found_handler() " .. UNSAFE .. "; ag foo",
+            "zsh_directory_name() " .. UNSAFE .. "; echo ~[foo]",
+            -- call in another scope
+            "ls() " .. UNSAFE .. "; ls | head",
+            "ls() " .. UNSAFE .. "; ls > /dev/null",
+            "ls() " .. UNSAFE .. "; echo $(ls)",
+            "ls() " .. UNSAFE .. "; (ls)",
+            "ls() " .. UNSAFE .. "; if true; then ls; fi",
+            "ls() " .. UNSAFE .. "; for i in a b; do ls; done",
+            "ls() " .. UNSAFE .. "; time ls",
+            -- definition in another scope
+            "if true; then ls() " .. UNSAFE .. "; fi; ls",
+            "true && ls() " .. UNSAFE .. "; ls",
+            "{ ls() " .. UNSAFE .. "; }; ls",
+            "for i in a; do ls() " .. UNSAFE .. "; done; ls",
+            "case a in a) ls() " .. UNSAFE .. ";; esac; ls",
+            "true | ls() " .. UNSAFE .. "; ls",
+            "ls() " .. UNSAFE .. " > /dev/null; ls",
+            "f() { ls() " .. UNSAFE .. "; }; f; ls",
+            -- the definition is sealed in the subshell; shadowing is shared
+            -- across scopes, so this over-prompts
+            "(ls() " .. UNSAFE .. "); ls",
+            -- multi-name and spelled names
+            "function ls cat " .. UNSAFE .. "; cat foo",
+            "l\\s() " .. UNSAFE .. "; ls",
+            "/bin/ls() " .. UNSAFE .. "; /bin/ls",
+            -- a definition as a pipeline stage, or with a redirect
+            "true | TRAPEXIT() " .. UNSAFE,
+            "TRAPEXIT() " .. UNSAFE .. " > /dev/null",
+            -- zsh applies a definition's redirect at every call
+            "ls() { echo; } > /tmp/a; ls",
+            "ls() { echo; } > $f; ls",
+            "ls() { echo; } > $(rm x); ls",
+            -- a clean body that calls a name shadowed later in the command
+            "ls() { cat; }; cat() " .. UNSAFE .. "; ls",
+            -- `command` runs the external name, judged on its own rules
+            "command rm x",
+            "command -p ls",
+        }
+        for _, cmd in ipairs(prompts) do
+            it("prompts: " .. cmd, function()
+                assert.is_false(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        it("prompts for a definition in a sourced script", function()
+            local path = script("ls() " .. UNSAFE .. "\n")
+            assert.is_true(
+                PermissionRules.should_auto_approve("source " .. path)
+            )
+            assert.is_false(
+                PermissionRules.should_auto_approve("source " .. path .. "; ls")
+            )
+        end)
+
+        for _, cmd in ipairs({
+            "f() { ls; }; f",
+            "ls() { echo hi; }; ls",
+            "ls() { echo; } > /tmp/a",
+            "ls() { echo; } > /dev/null; ls",
+            "ls() { echo; } 2>&1; ls",
+            "f() { cat; } < /etc/passwd; f",
+            "ls() { command ls -1; }; ls",
+            "command ls",
+            "command -v ls",
+        }) do
+            it("approves: " .. cmd, function()
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        it("tallies a shadowed call as unrememberable", function()
+            local cmd = "ls() " .. UNSAFE .. "; ls"
+            local ranges, leaves, complete =
+                PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal("ls", cmd:sub(ranges[1][2] + 1, ranges[1][4]))
+            assert.same({}, leaves)
+            assert.is_false(complete)
+        end)
+
+        it("tallies a definition zsh calls without a call site", function()
+            local cmd = "TRAPEXIT() { echo hi; }"
+            local ranges = PermissionRules.tally_unapproved(cmd)
+            assert.equal(1, #ranges)
+            assert.equal(cmd, cmd:sub(ranges[1][2] + 1, ranges[1][4]))
+        end)
+    end)
 
     describe("script file walk (Step A)", function()
         before_each(function()

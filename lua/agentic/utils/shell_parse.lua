@@ -65,15 +65,36 @@ end
 --- redirects curl/git/pip traffic, `npm_config_*` rewrites npm config.
 local ENV_READ_PATTERNS = { "_proxy$", "^npm_config_" }
 
---- zsh hook arrays: zsh calls every function they name.
-local ZSH_HOOK_ARRAYS = {
-    chpwd_functions = true,
-    periodic_functions = true,
-    precmd_functions = true,
-    preexec_functions = true,
-    zshaddhistory_functions = true,
-    zshexit_functions = true,
+--- zsh hook functions: zsh calls each by name on its event. `precmd`,
+--- `preexec`, `periodic` and `zshaddhistory` do not fire under `zsh -c`, but
+--- the shell mode a command runs in is not known here.
+local ZSH_HOOK_FUNCTIONS = {
+    chpwd = true,
+    periodic = true,
+    precmd = true,
+    preexec = true,
+    zshaddhistory = true,
+    zshexit = true,
 }
+
+--- zsh hook arrays: zsh calls every function they name.
+--- @type table<string, true>
+local ZSH_HOOK_ARRAYS = {}
+for hook in pairs(ZSH_HOOK_FUNCTIONS) do
+    ZSH_HOOK_ARRAYS[hook .. "_functions"] = true
+end
+
+--- Whether zsh calls a function of this name with no call site in the
+--- command: a hook function, a `TRAP*` signal trap,
+--- `command_not_found_handler`, or `zsh_directory_name` (`~[…]` expansion).
+--- @param name string function name
+--- @return boolean
+function M.runs_without_call(name)
+    return ZSH_HOOK_FUNCTIONS[name] ~= nil
+        or name == "command_not_found_handler"
+        or name == "zsh_directory_name"
+        or vim.startswith(name, "TRAP")
+end
 
 --- Whether a variable name is inert by convention: a single uppercase letter,
 --- or a name that starts lowercase after leading underscores and is not a zsh
@@ -520,6 +541,27 @@ local function command_name_text(command_name, src)
         return nil
     end
     return literal_token(inner, src)
+end
+
+--- Every name a `function_definition` defines (`function a b { … }` defines
+--- two), unescaped (`l\s() …` defines `ls`).
+--- @param node TSNode a `function_definition`
+--- @param src string
+--- @return string[]|nil names nil for an anonymous function or a name that is
+---         not a plain word
+function M.function_names(node, src)
+    local name_nodes = node:field("name")
+    if #name_nodes == 0 then
+        return nil
+    end
+    local names = {}
+    for _, n in ipairs(name_nodes) do
+        if n:type() ~= "word" then
+            return nil
+        end
+        table.insert(names, pure_literal_token(n, src))
+    end
+    return names
 end
 
 -- ── Redirects ────────────────────────────────────────────────────────────────
@@ -1411,9 +1453,9 @@ end
 --- Transparency is a per-wrapper property, not a category — recursing into any
 --- launcher is unsound. Other launchers are deliberately NOT here: `env` and
 --- `nohup` can set an execution-hijacking var (`PATH`, `LD_PRELOAD`) or write
---- `nohup.out`; `command`/`builtin`/`exec` alter `PATH`/the shell process;
---- `parallel` runs a command per input (its own `{}` DSL, remote exec via
---- `--sshlogin`). It is left to match no allow rule (so it prompts) rather than
+--- `nohup.out`; `command -p` changes `PATH` (bare `command` is a wrapper);
+--- `builtin`/`exec` alter the shell process; `parallel` runs a command per
+--- input (its own `{}` DSL, remote exec via `--sshlogin`). It is left to match no allow rule (so it prompts) rather than
 --- recursed — and must NOT be given a blanket read-only entry in `permissions.json`,
 --- which would auto-approve whatever it launches without the matcher inspecting it.
 ---
@@ -1455,6 +1497,9 @@ local EXEC_WRAPPERS = {
             "^%-%-error=",
         },
     },
+    -- COMMAND — bare only, so `-p`/`-v`/`-V` bail. It runs the external
+    -- COMMAND (not a function or builtin) with the same PATH.
+    command = {},
     -- run COMMAND — bare only (no option lists → any dash token bails); env
     -- sync is a recoverable write, so it needs the safe_write level (`writes`).
     uv = { subcommand = "run", writes = true },

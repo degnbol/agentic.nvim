@@ -663,6 +663,7 @@ describe("ShellParse.extract_commands", function()
                 "http_proxy",
                 "npm_config_x",
                 "chpwd_functions",
+                "zshexit_functions",
                 "_JAVA_OPTIONS",
                 "PATH",
             }) do
@@ -808,6 +809,55 @@ describe("ShellParse.extract_commands", function()
 
         it("leave non-assigning defaults parseable", function()
             assert.is_not_nil(ShellParse.parse_zsh("echo ${x:-y} ${x+y}"))
+        end)
+    end)
+
+    describe("function_names", function()
+        --- @param src string a single function definition
+        --- @return string[]|nil
+        local function names_of(src)
+            local root = ShellParse.parse_zsh(src) --[[@as TSNode]]
+            return ShellParse.function_names(
+                root:named_child(0) --[[@as TSNode]],
+                src
+            )
+        end
+
+        it("returns every name of a multi-name definition", function()
+            assert.same({ "ls", "cat" }, names_of("function ls cat { :; }"))
+        end)
+
+        it("removes quoting like a command word", function()
+            assert.same({ "ls" }, names_of("l\\s() { :; }"))
+        end)
+
+        it("keeps a path name as written", function()
+            assert.same({ "/bin/ls" }, names_of("/bin/ls() { :; }"))
+        end)
+
+        it("returns nil for an anonymous function", function()
+            assert.is_nil(names_of("() { :; }"))
+        end)
+    end)
+
+    describe("runs_without_call", function()
+        it("is true for names zsh calls on its own", function()
+            for _, name in ipairs({
+                "chpwd",
+                "zshexit",
+                "precmd",
+                "TRAPEXIT",
+                "TRAPZERR",
+                "command_not_found_handler",
+                "zsh_directory_name",
+            }) do
+                assert.is_true(ShellParse.runs_without_call(name))
+            end
+        end)
+
+        it("is false for other names", function()
+            assert.is_false(ShellParse.runs_without_call("ls"))
+            assert.is_false(ShellParse.runs_without_call("chpwd_functions"))
         end)
     end)
 end)
