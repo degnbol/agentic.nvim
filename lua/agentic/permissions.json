@@ -160,8 +160,21 @@
     ],
     "ask": [
       { "positionals": ["branch"],
-        "options":     ["d", "D", "m", "M", "c", "C",
-                        "delete", "move", "copy"] },
+        "options":     ["d", "D", "m", "M", "c", "C", "f", "u",
+                        "delete", "move", "copy", "force",
+                        "set-upstream-to", "unset-upstream",
+                        "edit-description"] },
+      { "positionals": ["branch", "*"] },
+      { "positionals": ["tag", "*"] },
+      { "positionals": ["remote", "add"] },
+      { "positionals": ["remote", "remove"] },
+      { "positionals": ["remote", "rm"] },
+      { "positionals": ["remote", "rename"] },
+      { "positionals": ["remote", "set-url"] },
+      { "positionals": ["remote", "set-head"] },
+      { "positionals": ["remote", "set-branches"] },
+      { "positionals": ["remote", "prune"] },
+      { "positionals": ["remote", "update"] },
       { "positionals": ["config", "set"] },
       { "positionals": ["config", "unset"] },
       { "positionals": ["config", "edit"] },
@@ -441,7 +454,7 @@
       { "options": ["Q"] },
       { "leading_options": ["S"], "options": ["i", "s"] }
     ],
-    "ask":       [{ "options": ["R", "U", "D", "F", "T"] }]
+    "ask":       [{ "options": ["R", "U", "D", "F", "T", "y", "w"] }]
   },
 
   "pip": {

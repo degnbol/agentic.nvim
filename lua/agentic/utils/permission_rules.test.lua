@@ -1817,6 +1817,16 @@ describe("PermissionRules", function()
             -- writes `luac.out` / the second operand
             "luac -l f.lua",
             "luajit -bl f.lua out.txt",
+            -- ref, remote and package-database writes
+            "git branch -f x y",
+            "git branch newb",
+            "git branch -u origin/main",
+            "git branch --unset-upstream",
+            "git tag v9",
+            "git tag -d v9",
+            "git remote add x https://example.com/x.git",
+            "git remote set-url origin https://example.com/x.git",
+            "pacman -Sy -i foo",
             -- GNU tar writes or runs these
             "tar -tvf x.tar --index-file=/tmp/idx",
             "tar -tf x.tar --info-script=s.sh",
@@ -1829,6 +1839,13 @@ describe("PermissionRules", function()
 
         for _, cmd in ipairs({
             "git config -f x --get a.b",
+            "git branch",
+            "git branch -a -vv",
+            "git branch --show-current",
+            "git tag",
+            "git tag -l",
+            "git remote -v",
+            "git remote get-url origin",
             "zsh -n s.sh",
             "luajit -bl f.lua",
             "tar -tvf x.tar",
