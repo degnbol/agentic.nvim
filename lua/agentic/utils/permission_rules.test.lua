@@ -1803,9 +1803,38 @@ describe("PermissionRules", function()
             "zsh -help ./s.sh",
             "./deploy.sh --help",
             "/tmp/deploy.sh --help",
+            -- `let` evaluates its arguments as arithmetic
+            "let --help 'x[$(touch /tmp/f)]'",
+            -- a quoted expansion is a dynamic command name
+            '"$x" --help',
+            '"${x}" ls',
+            -- config writes
+            "git config -f .git/config alias.zz '!touch /tmp/f'",
+            "git config --comment c --get core.fsmonitor 'touch /tmp/f'",
+            -- exec turned back on after `-n`
+            "zsh -n +n s.sh",
+            "zsh -n -o exec s.sh",
+            -- writes `luac.out` / the second operand
+            "luac -l f.lua",
+            "luajit -bl f.lua out.txt",
+            -- GNU tar writes or runs these
+            "tar -tvf x.tar --index-file=/tmp/idx",
+            "tar -tf x.tar --info-script=s.sh",
+            "tar -tf x.tar -F s.sh",
         }) do
             it("does not auto-approve: " .. cmd, function()
                 assert.is_false(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        for _, cmd in ipairs({
+            "git config -f x --get a.b",
+            "zsh -n s.sh",
+            "luajit -bl f.lua",
+            "tar -tvf x.tar",
+        }) do
+            it("auto-approves: " .. cmd, function()
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
             end)
         end
 
@@ -1989,9 +2018,9 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("auto-approves luac -l foo.lua", function()
+        it("auto-approves luac -p -l foo.lua (-p skips luac.out)", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("luac -l foo.lua")
+                PermissionRules.should_auto_approve("luac -p -l foo.lua")
             )
         end)
 

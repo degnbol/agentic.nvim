@@ -63,7 +63,9 @@
                     "delete",
                     "I", "use-compress-program",
                     "to-command", "checkpoint-action",
-                    "rmt-command", "rsh-command"] }
+                    "rmt-command", "rsh-command",
+                    "index-file", "volno-file",
+                    "F", "info-script", "new-volume-script"] }
     ]
   },
 
@@ -152,8 +154,6 @@
       { "positionals": ["grep"] },
       { "positionals": ["config"], "options": ["get"] },
       { "positionals": ["config"], "options": ["list"] },
-      { "positionals": ["config"], "options": ["f", "get"] },
-      { "positionals": ["config"], "options": ["f", "list"] },
       { "positionals": ["config", "get"] },
       { "positionals": ["config", "list"] },
       { "positionals": ["stash", "list"] }
@@ -169,7 +169,8 @@
       { "positionals": ["config", "rename-section"] },
       { "positionals": ["config"],
         "options":     ["unset", "unset-all", "add", "replace-all",
-                        "remove-section", "rename-section", "edit", "e"] },
+                        "remove-section", "rename-section", "edit", "e",
+                        "comment"] },
       { "positionals": ["stash", "drop"] },
       { "positionals": ["stash", "clear"] },
       { "positionals": ["stash", "pop"] },
@@ -318,12 +319,13 @@
   "xdg-mime": { "read_only": [{ "positionals": ["query"] }] },
 
   "luac": {
-    "read_only": [{ "options": ["l"] }],
+    "read_only": [{ "leading_options": ["p"], "options": ["l"] }],
     "ask":       [{ "options": ["o"] }]
   },
   "luajit": {
     "read_only": [{ "leading_options": ["h"] },
-                  { "leading_options": ["b"], "options": ["l"] }]
+                  { "leading_options": ["b"], "options": ["l"] }],
+    "ask":       [{ "leading_options": ["b"], "positionals": ["*", "*"] }]
   },
   "typst": {
     "read_only":  [{ "positionals": ["query"] }],
@@ -753,7 +755,8 @@
 
   "zsh": {
     "read_only": [{ "options": ["n"] }],
-    "ask":       [{ "options": ["c", "i", "s", "f"] }]
+    "ask":       [{ "options": ["c", "i", "s", "f", "o", "exec"] },
+                  { "positionals": ["+*"] }]
   },
 
   "rm": {

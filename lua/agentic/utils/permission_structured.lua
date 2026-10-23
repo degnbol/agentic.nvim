@@ -189,7 +189,7 @@ end
 --- end-of-options sentinels.
 --- @param token string
 --- @return string[]
-function M.allow_option_candidates(token)
+function M.option_identifiers(token)
     if token:sub(1, 2) == "--" then
         local name = token:sub(3):match("^[^=]+")
         return name and { name } or {}
@@ -544,7 +544,7 @@ local function allow_parse(words, dynamic, cmd)
             options_ended = true
             i = i + 1
         elseif not options_ended and is_flag(w) and not dynamic[i] then
-            local cands = M.allow_option_candidates(w)
+            local cands = M.option_identifiers(w)
             vim.list_extend(p.flag_cands, cands)
             if #p.stream == 0 then
                 vim.list_extend(p.leading_cands, cands)
@@ -707,39 +707,44 @@ local function build_exist_ctx(words, dynamic)
     return ctx
 end
 
---- Collect the cmd entry plus the `"*"` wildcard entry, skipping absent or
---- `vim.NIL` values. Built explicitly (not via a `{a, b}` literal) so a nil
---- cmd entry does not truncate ipairs and silently drop the wildcard after it.
+--- The entries at `keys`, in order, skipping absent or `vim.NIL` values. Built
+--- explicitly (not via a `{a, b}` literal of entries) so an absent entry does
+--- not truncate ipairs and silently drop the ones after it.
+--- @param entries agentic.StructuredEntries
+--- @param keys string[]
+--- @return agentic.StructuredCmdEntry[]
+local function entries_at(entries, keys)
+    --- @type agentic.StructuredCmdEntry[]
+    local present = {}
+    for _, key in ipairs(keys) do
+        local entry = entries[key]
+        if entry ~= nil and entry ~= vim.NIL then
+            table.insert(present, entry)
+        end
+    end
+    return present
+end
+
+--- The cmd entry plus the `"*"` wildcard entry (see `entries_at`).
 --- @param entries agentic.StructuredEntries
 --- @param cmd_name string
 --- @return agentic.StructuredCmdEntry[]
 local function relevant_entries(entries, cmd_name)
-    --- @type agentic.StructuredCmdEntry[]
-    local relevant = {}
-    for _, e in ipairs({ cmd_name, "*" }) do
-        local entry = entries[e]
-        if entry ~= nil and entry ~= vim.NIL then
-            table.insert(relevant, entry)
-        end
-    end
-    return relevant
+    return entries_at(entries, { cmd_name, "*" })
 end
 
 --- The entries whose allow gates apply to `cmd_name`: its own entry and the
---- `"*"` wildcard, skipping absent or `vim.NIL` values. A path-named command
---- (`./deploy.sh`) gets no wildcard: its gates assume a program that parses
---- options, which a script may not.
+--- `"*"` wildcard (see `entries_at`). A path-named command (`./deploy.sh`)
+--- gets no wildcard: its gates assume a program that parses options, which a
+--- script may not.
 --- @param entries agentic.StructuredEntries
 --- @param cmd_name string
 --- @return agentic.StructuredCmdEntry[]
 local function allow_entries(entries, cmd_name)
-    local relevant = relevant_entries(entries, cmd_name)
     if cmd_name:find("/", 1, true) then
-        return vim.tbl_filter(function(e)
-            return e ~= entries["*"]
-        end, relevant)
+        return entries_at(entries, { cmd_name })
     end
-    return relevant
+    return relevant_entries(entries, cmd_name)
 end
 
 --- Resolve the structured decision for one parsed leaf. Looks up the cmd entry

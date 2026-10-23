@@ -160,18 +160,18 @@ describe("PermissionStructured", function()
         end)
     end)
 
-    describe("allow_option_candidates", function()
+    describe("option_identifiers", function()
         it("gives the letters of a short cluster", function()
             assert.same(
                 { "u", "o" },
-                PermissionStructured.allow_option_candidates("-uo")
+                PermissionStructured.option_identifiers("-uo")
             )
         end)
 
         it("gives the name of a long flag without its value", function()
             assert.same(
                 { "output" },
-                PermissionStructured.allow_option_candidates("--output=x")
+                PermissionStructured.option_identifiers("--output=x")
             )
         end)
 
@@ -179,7 +179,7 @@ describe("PermissionStructured", function()
             for _, token in ipairs({ "-", "--", "file" }) do
                 assert.same(
                     {},
-                    PermissionStructured.allow_option_candidates(token)
+                    PermissionStructured.option_identifiers(token)
                 )
             end
         end)
@@ -239,6 +239,26 @@ describe("PermissionStructured", function()
                 "safe_write"
             )
             assert.equal("safe_write", kind)
+        end)
+
+        it("applies the wildcard's deny but not its allow to a path", function()
+            local entries = {
+                ["*"] = {
+                    read_only = { { options = { "help" } } },
+                    deny = { { options = { "nuke" } } },
+                },
+            }
+            local function decide(args)
+                return (
+                    PermissionStructured.decide_leaf(
+                        entries,
+                        parsed("./s.sh", args),
+                        "safe_write"
+                    )
+                )
+            end
+            assert.is_nil(decide({ "--help" }))
+            assert.equal("deny", decide({ "--nuke" }))
         end)
 
         it("reports no kind for a deny", function()

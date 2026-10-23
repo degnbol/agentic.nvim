@@ -521,7 +521,8 @@ end
 --- Extract the literal command name from a `command_name` node, normalising
 --- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
 --- deny pattern). Returns nil to bail on a dynamic name — a substitution,
---- expansion, arithmetic, or an interpolated `concatenation`. A literal
+--- expansion, arithmetic, glob, or a `string`/`concatenation` carrying one
+--- (`"$x"`). A literal
 --- concatenation in command-name position (e.g. `gr"e"p`) joins to its
 --- concatenated text via `literal_token`.
 --- @param command_name TSNode
@@ -537,7 +538,7 @@ local function command_name_text(command_name, src)
     -- no allow pattern → prompt) but `extract_commands` does not — a
     -- `$VAR`-named record matches no block rule, a silent miss. So drop it here
     -- and both consumers get nil. ponytail: lazy bail, not var propagation.
-    if DYNAMIC_NAME_TYPES[inner:type()] then
+    if DYNAMIC_NAME_TYPES[inner:type()] or token_is_dynamic(inner) then
         return nil
     end
     return literal_token(inner, src)
@@ -1069,6 +1070,7 @@ local ARITHMETIC_ARG_BUILTINS = {
     logout = true,
     ["break"] = true,
     continue = true,
+    let = true,
 }
 
 --- True iff any of `args` from index `first` on reads a value.
@@ -1251,7 +1253,7 @@ end
 
 --- True iff an argument that `cmd_name` evaluates as arithmetic reads a value
 --- (see `reads_value`). Checks every argument of `ARITHMETIC_ARG_BUILTINS`
---- (`shift`, `return`, `exit`, `logout`, `break`, `continue`); for `printf`
+--- (`shift`, `return`, `exit`, `logout`, `break`, `continue`, `let`); for `printf`
 --- and `print`, the subscript of a `-v` target name and the arguments after a
 --- format that takes arithmetic. `print` options are found in every word,
 --- attached values included, so an unmodelled option can only add a check.
