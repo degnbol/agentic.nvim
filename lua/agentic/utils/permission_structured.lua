@@ -48,6 +48,8 @@ local M = {}
 ---        global whose danger is position-specific — git's `-c x.y=z` (a code
 ---        channel) is dangerous before the subcommand but inert after it, and a
 ---        trailing token like the `$ref` in `git log $ref` can never inject it.
+---        On allow, for a mode flag that counts only before the operand
+---        (`command -v`).
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
 --- `read_only` approves at either auto_approve tier, `safe_write` only at
@@ -496,7 +498,8 @@ end
 --- The single deterministic parse used for ALLOW matching: each flag absorbs
 --- its following plain word iff it is bare AND a known `value_taking_options`
 --- value-taker for `cmd` (inline-value and unlisted flags absorb 0). `--` ends
---- the option region. No wildcarding — allow stays concrete.
+--- the option region. No wildcarding — allow stays concrete: a dynamic dash
+--- word may expand to `-` or `--`, so it is a dynamic positional, not a flag.
 --- @param words string[]
 --- @param dynamic boolean[]
 --- @param cmd string
@@ -517,7 +520,7 @@ local function allow_parse(words, dynamic, cmd)
         if not options_ended and w == "--" then
             options_ended = true
             i = i + 1
-        elseif not options_ended and is_flag(w) then
+        elseif not options_ended and is_flag(w) and not dynamic[i] then
             local cands = M.extract_option_candidates(w)
             vim.list_extend(p.flag_cands, cands)
             if #p.stream == 0 then
@@ -566,8 +569,8 @@ local function allow_positionals_match(patterns, parse)
 end
 
 --- Evaluate a gate against the single allow parse. Absent fields are wildcards.
---- `leading_options` (not carried by bundled allow gates) is matched concretely
---- against the leading flags — no wildcarding, since allow must stay concrete.
+--- `leading_options` is matched concretely against the leading flags — no
+--- wildcarding, since allow must stay concrete.
 --- @param gate agentic.PermGate
 --- @param parse agentic.PermStructured.AllowParse
 --- @return boolean

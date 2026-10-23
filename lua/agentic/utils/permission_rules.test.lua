@@ -2147,6 +2147,58 @@ describe("PermissionRules", function()
             )
         end)
 
+        -- A dynamic dash word satisfies no allow option gate: zsh runs
+        -- `gzip -$c f` as `gzip - f`, compressing `f` in place.
+        it("prompts on gzip -$c f, approves gzip -c f", function()
+            assert.is_false(PermissionRules.should_auto_approve("gzip -$c f"))
+            assert.is_false(PermissionRules.should_auto_approve("gzip -c$x f"))
+            assert.is_true(PermissionRules.should_auto_approve("gzip -c f"))
+        end)
+
+        -- `-$x` may expand to `-` or `--` and shift the subcommand.
+        it("prompts on git -$x log", function()
+            assert.is_false(PermissionRules.should_auto_approve("git -$x log"))
+        end)
+
+        -- `command` is an exec-wrapper; a leading dash token falls back to
+        -- its entry, where `-v`/`-V` count only before the command name.
+        describe("command", function()
+            for _, cmd in ipairs({
+                "command ls",
+                "command -v ls",
+                "command -V ls",
+                "command -pv ls",
+                "command -p -v ls",
+                "command -v rm -rf",
+                "command -v -- ls",
+                -- zsh reads an unknown option letter as the program name
+                -- (`-vx`, `--v`); running it needs a dash-named program,
+                -- whose write prompts
+                "command -vx ls",
+                "command --v ls",
+            }) do
+                it("approves: " .. cmd, function()
+                    assert.is_true(PermissionRules.should_auto_approve(cmd))
+                end)
+            end
+
+            for _, cmd in ipairs({
+                "command rm x",
+                "command -p ls",
+                "command -p rm -rf /tmp/x -v",
+                "command -p eval 'touch /tmp/f' -v",
+                "command eval 'touch /tmp/f' -v",
+                "command source ./x.sh -v",
+                "command -${v:-p} rm -rf /tmp/x",
+                "command -$v rm -rf /tmp/x",
+                "command -- -v ls",
+            }) do
+                it("prompts: " .. cmd, function()
+                    assert.is_false(PermissionRules.should_auto_approve(cmd))
+                end)
+            end
+        end)
+
         -- Use-site gate fix: a dynamic token (`$var`, unquoted glob, quoted
         -- expansion) acts as a wildcard for the structured ask/deny gates, so a
         -- gated command cannot launder a payload past them through an opaque
@@ -2972,6 +3024,9 @@ describe("PermissionRules", function()
                 "echo $(find . -delete)", -- deny leaf in a substitution
                 "( find . -delete )", -- deny leaf inside a subshell
                 "timeout 5 rm -f x", -- deny survives a transparent wrapper
+                -- deny survives bare `command`
+                "command rm -rf /tmp/x -v",
+                "command find . -delete -v",
             }
             for _, cmd in ipairs(rejected) do
                 it("rejects: " .. cmd, function()
@@ -3619,9 +3674,6 @@ describe("PermissionRules", function()
             "ls() { echo; } > $(rm x); ls",
             -- a clean body that calls a name shadowed later in the command
             "ls() { cat; }; cat() " .. UNSAFE .. "; ls",
-            -- `command` runs the external name, judged on its own rules
-            "command rm x",
-            "command -p ls",
         }
         for _, cmd in ipairs(prompts) do
             it("prompts: " .. cmd, function()
@@ -3647,8 +3699,6 @@ describe("PermissionRules", function()
             "ls() { echo; } 2>&1; ls",
             "f() { cat; } < /etc/passwd; f",
             "ls() { command ls -1; }; ls",
-            "command ls",
-            "command -v ls",
         }) do
             it("approves: " .. cmd, function()
                 assert.is_true(PermissionRules.should_auto_approve(cmd))

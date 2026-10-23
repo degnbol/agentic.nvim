@@ -40,7 +40,8 @@ A gate field matching a flag only in the leading region (before the first
 positional), for a code channel whose danger is position-specific: git's
 leading `-c core.pager=!cmd` runs code before the subcommand, but `git log -c`
 is the harmless combined-diff flag and a trailing `$ref` can never inject a
-leading flag.
+leading flag. On allow, it gates a mode flag that counts only before the
+operand: `command -v` is a lookup only there.
 
 ## Token expansion: resolve statically, else dynamic
 

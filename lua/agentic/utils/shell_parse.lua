@@ -1453,7 +1453,8 @@ end
 --- Transparency is a per-wrapper property, not a category — recursing into any
 --- launcher is unsound. Other launchers are deliberately NOT here: `env` and
 --- `nohup` can set an execution-hijacking var (`PATH`, `LD_PRELOAD`) or write
---- `nohup.out`; `command -p` changes `PATH` (bare `command` is a wrapper);
+--- `nohup.out`; `command -p` is not unwrapped, though it only swaps `PATH` for a
+--- default one (bare `command` is a wrapper);
 --- `builtin`/`exec` alter the shell process; `parallel` runs a command per
 --- input (its own `{}` DSL, remote exec via `--sshlogin`). It is left to match no allow rule (so it prompts) rather than
 --- recursed — and must NOT be given a blanket read-only entry in `permissions.json`,

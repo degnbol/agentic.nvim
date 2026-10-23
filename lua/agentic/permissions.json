@@ -31,7 +31,7 @@
   "dirname":   { "read_only": [{}] },
   "basename":  { "read_only": [{}] },
 
-  "command":   { "read_only": [{ "options": ["v", "V"] }] },
+  "command":   { "read_only": [{ "leading_options": ["v", "V"] }] },
 
   "cat":       { "read_only": [{}] },
   "head":      { "read_only": [{}] },
