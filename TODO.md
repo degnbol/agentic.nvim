@@ -10,16 +10,18 @@ Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
 **Session restore**
-1. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md) and
-   [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md), first or
-   together with 2. Both are also in the adapter track below.
-2. [`PLAN-per-session-provider.md`](notes/PLAN-per-session-provider.md)
-3. [`PLAN-restore-picker.md`](notes/PLAN-restore-picker.md) and
+1. [`PLAN-per-session-provider.md`](notes/PLAN-per-session-provider.md)
+2. [`PLAN-restore-picker.md`](notes/PLAN-restore-picker.md) and
    [`PLAN-unify-history-restore.md`](notes/PLAN-unify-history-restore.md),
    one commit (if split: unify first)
+3. [`PLAN-session-manager-dedup.md`](notes/PLAN-session-manager-dedup.md),
+   which also needs `PLAN-usage-limit-queue.md`. Needs only to come before 4;
+   it can land earlier.
 4. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
 5. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md), which also needs
    `PLAN-hooks_in_chat.md`
+6. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md), which also
+   needs `PLAN-subagent-seam-fixes.md`
 
 **Hooks in chat**
 1. [`PLAN-hooks_in_chat.md`](notes/PLAN-hooks_in_chat.md). Either order with
@@ -29,12 +31,19 @@ Tracks are independent unless a note says otherwise.
 [§ Claude-specific code behind the adapter](#claude-specific-code-behind-the-adapter).
 
 **Executed code**
-1. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)
-2. [`PLAN-executed-code.md`](notes/PLAN-executed-code.md)
+1. [`PLAN-permission-walker-dedup.md`](notes/PLAN-permission-walker-dedup.md)
+2. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)
+3. [`PLAN-executed-code.md`](notes/PLAN-executed-code.md)
 
-**Submit steps:** [`PLAN-submit-steps.md`](notes/PLAN-submit-steps.md) depends
-on `PLAN-command-keeps-context-panels.md`, which is not in `notes/`. Check
-whether it has landed.
+**Tool call rendering**
+1. [`PLAN-json-body-format.md`](notes/PLAN-json-body-format.md)
+2. [`PLAN-tool-block-layout.md`](notes/PLAN-tool-block-layout.md)
+
+**Input and queue:** either order.
+[`PLAN-chat-widget-dedup.md`](notes/PLAN-chat-widget-dedup.md),
+[`PLAN-usage-limit-queue.md`](notes/PLAN-usage-limit-queue.md). The second
+needs the fix in
+[`bug-respawn-invalidates-shared-client.md`](notes/bug-respawn-invalidates-shared-client.md).
 
 **Auto mode**
 1. [`PLAN-auto-mode-integration.md`](notes/PLAN-auto-mode-integration.md)
@@ -42,6 +51,8 @@ whether it has landed.
 2. [`PLAN-auto-mode-fix.md`](notes/PLAN-auto-mode-fix.md), which extends it
 
 **No ordering:**
+[`PLAN-split-modules.md`](notes/PLAN-split-modules.md),
+[`PLAN-context-list-panels.md`](notes/PLAN-context-list-panels.md),
 [`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold),
 [`PLAN-terminal-streaming.md`](notes/PLAN-terminal-streaming.md),
@@ -189,6 +200,10 @@ to all ACPs.
 
 ### Queue
 
+A partial send of a charwise range can cut a multibyte character or drop the
+last character:
+[`notes/bug-partial-send-char-range.md`](notes/bug-partial-send-char-range.md).
+
 A usage limit without a reset clause renders as a raw error naming the org
 monthly spend limit:
 [`notes/bug-error-classification-structured-errorkind.md`](notes/bug-error-classification-structured-errorkind.md).
@@ -220,8 +235,6 @@ the result of plan 2.
 2. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
 3. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
 4. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
-5. [`PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md)
-6. [`PLAN-adapter-exec-shell.md`](notes/PLAN-adapter-exec-shell.md)
 
 ## Feature ideas
 
@@ -678,12 +691,6 @@ Maybe some way of streaming the run. We can of course do the native `<C-w>gf` on
 Consider if it would be a huge unrealistic endevour to extend the auto-allow system from zsh to other languages.
 python injected code snippets are common, and for me so are lua through headless nvim.
 Is there any pre-existing tool, etc., that can check safety of a python snippet so we don't have to write checks for every possible command or function?
-
-## Auto-/login
-
-In-protocol (ACP terminal) auth instead of the `claude auth login` shell-out:
-[`notes/PLAN-adapter-reauth.md`](notes/PLAN-adapter-reauth.md) § Non-goals.
-
 
 ## grant git rm
 
