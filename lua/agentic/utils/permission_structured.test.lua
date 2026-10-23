@@ -160,6 +160,58 @@ describe("PermissionStructured", function()
         end)
     end)
 
+    describe("allow_option_candidates", function()
+        it("gives the letters of a short cluster", function()
+            assert.same(
+                { "u", "o" },
+                PermissionStructured.allow_option_candidates("-uo")
+            )
+        end)
+
+        it("gives the name of a long flag without its value", function()
+            assert.same(
+                { "output" },
+                PermissionStructured.allow_option_candidates("--output=x")
+            )
+        end)
+
+        it("gives nothing for `-`, `--` or a positional", function()
+            for _, token in ipairs({ "-", "--", "file" }) do
+                assert.same(
+                    {},
+                    PermissionStructured.allow_option_candidates(token)
+                )
+            end
+        end)
+    end)
+
+    -- Allow gates match an identifier exactly: no abbreviation, and a
+    -- multi-letter identifier names only `--id`.
+    describe("exact allow matching (via decide_leaf)", function()
+        local entries = {
+            ["*"] = { read_only = { { leading_options = { "help" } } } },
+        }
+        local function decide(cmd, args)
+            return (
+                PermissionStructured.decide_leaf(
+                    entries,
+                    parsed(cmd, args),
+                    "safe_write"
+                )
+            )
+        end
+
+        it("allows the exact long flag", function()
+            assert.equal("allow", decide("foo", { "--help" }))
+        end)
+
+        for _, flag in ipairs({ "--he", "-help", "-he", "-h" }) do
+            it("does not allow " .. flag, function()
+                assert.is_nil(decide("foo", { flag }))
+            end)
+        end
+    end)
+
     -- ------------------------------------------------------------------
     -- Positional matching — exercised via decide_leaf since the public
     -- API matches positionals inside a gate, not as a standalone helper.

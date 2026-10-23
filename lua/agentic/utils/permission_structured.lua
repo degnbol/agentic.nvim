@@ -37,7 +37,10 @@ local M = {}
 --- `leading_options` — listing both in one `options` array matches either.
 --- @class agentic.PermGate
 --- @field options?     string[] -- flag identifiers (dashless), matched
----        order-free over every flag anywhere in the command.
+---        order-free over every flag anywhere in the command: a letter for a
+---        short option (`o`, also inside a cluster `-uo`), a name for a long
+---        option (`output` for `--output`). Deny/ask also match an
+---        abbreviation; allow matches only the exact identifier.
 --- @field positionals? string[] -- per element literal or glob, matched
 ---        contiguously from the subcommand (stream index 1).
 --- @field leading_options? string[] -- like `options`, but matched only against
@@ -177,6 +180,26 @@ function M.extract_option_candidates(token)
     end
     if not seen[body] then
         table.insert(out, body)
+    end
+    return out
+end
+
+--- The exact flag identifiers of a single token: `--name[=value]` gives
+--- `name`; `-abc` gives each letter. Returns `{}` for positionals and
+--- end-of-options sentinels.
+--- @param token string
+--- @return string[]
+function M.allow_option_candidates(token)
+    if token:sub(1, 2) == "--" then
+        local name = token:sub(3):match("^[^=]+")
+        return name and { name } or {}
+    end
+    if token:sub(1, 1) ~= "-" then
+        return {}
+    end
+    local out = {}
+    for ch in token:sub(2):gmatch(".") do
+        table.insert(out, ch)
     end
     return out
 end
@@ -521,7 +544,7 @@ local function allow_parse(words, dynamic, cmd)
             options_ended = true
             i = i + 1
         elseif not options_ended and is_flag(w) and not dynamic[i] then
-            local cands = M.extract_option_candidates(w)
+            local cands = M.allow_option_candidates(w)
             vim.list_extend(p.flag_cands, cands)
             if #p.stream == 0 then
                 vim.list_extend(p.leading_cands, cands)
@@ -568,20 +591,33 @@ local function allow_positionals_match(patterns, parse)
     return true
 end
 
+--- True iff the two lists share an element.
+--- @param a string[]
+--- @param b string[]
+--- @return boolean
+local function intersects(a, b)
+    for _, x in ipairs(a) do
+        if vim.tbl_contains(b, x) then
+            return true
+        end
+    end
+    return false
+end
+
 --- Evaluate a gate against the single allow parse. Absent fields are wildcards.
---- `leading_options` is matched concretely against the leading flags — no
---- wildcarding, since allow must stay concrete.
+--- Option identifiers match exactly — no abbreviation, no wildcarding, since
+--- allow must stay concrete.
 --- @param gate agentic.PermGate
 --- @param parse agentic.PermStructured.AllowParse
 --- @return boolean
 local function gate_matches_allow(gate, parse)
     if gate.options ~= nil then
-        if not M.match_options(parse.flag_cands, gate.options) then
+        if not intersects(parse.flag_cands, gate.options) then
             return false
         end
     end
     if gate.leading_options ~= nil then
-        if not M.match_options(parse.leading_cands, gate.leading_options) then
+        if not intersects(parse.leading_cands, gate.leading_options) then
             return false
         end
     end
@@ -689,10 +725,28 @@ local function relevant_entries(entries, cmd_name)
     return relevant
 end
 
+--- The entries whose allow gates apply to `cmd_name`: its own entry and the
+--- `"*"` wildcard, skipping absent or `vim.NIL` values. A path-named command
+--- (`./deploy.sh`) gets no wildcard: its gates assume a program that parses
+--- options, which a script may not.
+--- @param entries agentic.StructuredEntries
+--- @param cmd_name string
+--- @return agentic.StructuredCmdEntry[]
+local function allow_entries(entries, cmd_name)
+    local relevant = relevant_entries(entries, cmd_name)
+    if cmd_name:find("/", 1, true) then
+        return vim.tbl_filter(function(e)
+            return e ~= entries["*"]
+        end, relevant)
+    end
+    return relevant
+end
+
 --- Resolve the structured decision for one parsed leaf. Looks up the cmd entry
 --- and the `"*"` wildcard entry (either may be absent or `vim.NIL`) and
 --- resolves deny > ask > allow across both. Allow gates are restricted to the
---- kind set eligible under `auto_approve` (see `eligible_allow_kinds`).
+--- kind set eligible under `auto_approve` (see `eligible_allow_kinds`), and a
+--- path-named command (`./deploy.sh`) gets no `"*"` allow gates.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @param auto_approve agentic.PermAutoApprove
@@ -723,7 +777,7 @@ function M.decide_leaf(entries, parsed, auto_approve)
         return gate_matches_allow(gate, parse)
     end
     local kinds = eligible_allow_kinds(auto_approve)
-    for _, e in ipairs(relevant) do
+    for _, e in ipairs(allow_entries(entries, parsed.cmd_name)) do
         for _, kind in ipairs(kinds) do
             if any_gate(e[kind], allow) then
                 return "allow", kind
@@ -745,7 +799,8 @@ end
 --- which of the four gate kinds match — the highlight layer needs the
 --- intrinsic category ("is this known-safe") not "was this auto-approved", so
 --- a `safe_write` like `git add` reads as safe even at the `read_only` tier.
---- deny/ask use existential matching; read_only/safe_write use the allow parse.
+--- deny/ask use existential matching; read_only/safe_write use the allow parse,
+--- with no `"*"` gates for a path-named command.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @return agentic.PermClassification
@@ -773,6 +828,8 @@ function M.classify_leaf(entries, parsed)
         if any_gate(e.ask, exist) then
             result.ask = true
         end
+    end
+    for _, e in ipairs(allow_entries(entries, parsed.cmd_name)) do
         if any_gate(e.read_only, allow) then
             result.read_only = true
         end

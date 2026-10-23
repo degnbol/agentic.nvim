@@ -1670,6 +1670,21 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve("gzip -kf a.txt")
             )
+            -- `-Sc` is suffix `c`, not `-S -c`: gzip writes `a.txtc`
+            assert.is_false(
+                PermissionRules.should_auto_approve("gzip -Sc a.txt")
+            )
+        end)
+
+        it("auto-approves pacman -Si/-Ss as the cluster S + i/s", function()
+            assert.is_true(PermissionRules.should_auto_approve("pacman -Si x"))
+            assert.is_true(PermissionRules.should_auto_approve("pacman -Ss x"))
+            assert.is_false(PermissionRules.should_auto_approve("pacman -S x"))
+        end)
+
+        it("auto-approves pip3 list and launchctl list", function()
+            assert.is_true(PermissionRules.should_auto_approve("pip3 list"))
+            assert.is_true(PermissionRules.should_auto_approve("launchctl list"))
         end)
 
         it("auto-approves fc-list and whence", function()
@@ -1757,6 +1772,42 @@ describe("PermissionRules", function()
         it("auto-approves ls --help", function()
             assert.is_true(PermissionRules.should_auto_approve("ls --help"))
         end)
+
+        -- The `*` entry: `--help`/`--version` count only before the first
+        -- operand. After it, a launcher passes them to the launched program.
+        -- Only the exact long token counts: `sh -ve` and `zsh -help` are
+        -- short-option clusters that run the script, and `--ver` may
+        -- abbreviate `--verbose`. A path-named script may parse no options.
+        for _, cmd in ipairs({
+            "foo --version",
+            "foo -x --help",
+            "sudo --help rm -rf /tmp/x",
+        }) do
+            it("auto-approves: " .. cmd, function()
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        for _, cmd in ipairs({
+            "sudo rm -rf /tmp/x --help",
+            "builtin eval 'touch /tmp/f' --help",
+            "env sh -c 'touch /tmp/f' --help",
+            "command -p touch /tmp/f --help",
+            "mkdir d --help",
+            "cp list.txt ~/.zshrc",
+            "tee list.txt",
+            "foo -- --help",
+            "foo --ver x",
+            "foo -version x",
+            "sh -ve ./s.sh",
+            "zsh -help ./s.sh",
+            "./deploy.sh --help",
+            "/tmp/deploy.sh --help",
+        }) do
+            it("does not auto-approve: " .. cmd, function()
+                assert.is_false(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
 
         it(
             "does not auto-approve mlr -I foo even at auto_approve = 'safe_write' (ask wins)",

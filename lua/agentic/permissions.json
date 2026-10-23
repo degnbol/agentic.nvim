@@ -1,9 +1,6 @@
 {
   "*": {
-    "read_only": [
-      { "options": ["help", "version"] },
-      { "positionals": ["list*"] }
-    ]
+    "read_only": [{ "leading_options": ["help", "version"] }]
   },
 
   "ls":        { "read_only": [{}] },
@@ -38,8 +35,14 @@
   "tail":      { "read_only": [{}] },
   "less":      { "read_only": [{}] },
   "zless":     { "read_only": [{}] },
-  "gzip":      { "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }] },
-  "gunzip":    { "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }] },
+  "gzip": {
+    "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }],
+    "ask":       [{ "options": ["S", "suffix"] }]
+  },
+  "gunzip": {
+    "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }],
+    "ask":       [{ "options": ["S", "suffix"] }]
+  },
   "gzcat":     { "read_only": [{}] },
   "bzcat":     { "read_only": [{}] },
   "xzcat":     { "read_only": [{}] },
@@ -282,6 +285,7 @@
     "ask":       [{ "options": ["w", "d", "c"] }]
   },
   "log": { "read_only": [{ "positionals": ["show"] }] },
+  "launchctl": { "read_only": [{ "positionals": ["list"] }] },
 
   "sed": {
     "read_only": [{}],
@@ -431,11 +435,20 @@
   },
 
   "pacman": {
-    "read_only": [{ "options": ["Q", "Si", "Ss"] }],
+    "read_only": [
+      { "options": ["Q"] },
+      { "leading_options": ["S"], "options": ["i", "s"] }
+    ],
     "ask":       [{ "options": ["R", "U", "D", "F", "T"] }]
   },
 
   "pip": {
+    "read_only": [
+      { "positionals": ["list"] },
+      { "positionals": ["show"] }
+    ]
+  },
+  "pip3": {
     "read_only": [
       { "positionals": ["list"] },
       { "positionals": ["show"] }

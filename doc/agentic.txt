@@ -821,9 +821,13 @@ counts unless `auto_approve` is nil.
 Structured rules are a cmd-keyed table. Each command maps to up to four
 gate-kind arrays, `read_only`, `safe_write`, `ask` and `deny`, and each
 gate constrains `options` (literal flag identifiers) and/or `positionals`
-(literal or glob, matched in order). `permissions.structured` is deep-merged
-over the bundled defaults: a cmd key replaces that command's bundled
-kind-arrays wholesale, and `vim.NIL` disables the bundled entry. >lua
+(literal or glob, matched in order). An identifier is a letter for a short
+option (`o`, also inside a cluster `-uo`) or a name for a long option
+(`output` for `--output`). `ask` and `deny` also match an abbreviation
+(`--out`); `read_only` and `safe_write` match only the exact identifier.
+`permissions.structured` is deep-merged over the bundled defaults: a cmd key
+replaces that command's bundled kind-arrays wholesale, and `vim.NIL`
+disables the bundled entry. >lua
     require("agentic").setup({
         permissions = {
             structured = {
