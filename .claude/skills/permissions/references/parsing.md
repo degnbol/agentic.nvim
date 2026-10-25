@@ -31,8 +31,10 @@ directions read that ambiguity differently:
 So `git -C /repo log` auto-approves (`-C` absorbs `/repo`, subcommand `log`),
 while `git -C push log`, `git -p push`, and `git --new-global val push` all
 prompt — the took-0 parse exposes `push`. Every dash-token is stripped to the
-option fields; only `-` (stdin/stdout sentinel) and the words after `--` are
-positionals.
+option fields; only `-` (stdin/stdout sentinel) and the words after a `--`
+that ends options are positionals. For deny/ask, a `--` directly after a flag
+may be its value, so options continue: `tar -tf -- --use-compress-program=x`
+exposes `use-compress-program`.
 
 ## `leading_options`
 

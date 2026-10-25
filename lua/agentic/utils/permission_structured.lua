@@ -10,8 +10,8 @@ local PermissionRules = require("agentic.utils.permission_rules")
 --- redirects / env-prefixes / substitution; this module trusts that input shape.
 ---
 --- The matcher carries no getopt arity table for soundness. Each leading
---- dash-word can absorb 0 or 1 following plain word, and the two directions
---- read that ambiguity differently:
+--- dash-word can absorb 0 or 1 following plain word (for deny/ask, also a `--`
+--- as its value), and the two directions read that ambiguity differently:
 ---   * deny/ask are EXISTENTIAL — a gate fires if *any* absorption parse (plus
 ---     dynamic-token wildcarding) exposes the gated subcommand/option. Owns
 ---     soundness; an over-match only over-prompts.
@@ -74,8 +74,9 @@ local M = {}
 --- @class agentic.ParsedLeaf
 --- @field cmd_name string    after strip_command_path / wrapper strip
 --- @field args     string[]  ordered word list, quote-stripped,
----        env-prefix/redirect-excluded. `--` is the literal end-of-options
----        sentinel; `-` is a positional (stdin/stdout). No role tagging.
+---        env-prefix/redirect-excluded. `--` is the end-of-options sentinel,
+---        or the value of a flag before it; `-` is a positional
+---        (stdin/stdout). No role tagging.
 --- @field args_dynamic? boolean[] parallel to `args`: token expands at runtime
 ---        (variable/glob/quoted-expansion) so its value is unknown. Absent =
 ---        all-static (back-compat for direct callers).
@@ -238,20 +239,42 @@ function M.match_options(candidates, rule_options)
 end
 
 --- A dash-token that acts as an option in the getopt sense — excludes the `-`
---- stdin/stdout sentinel and the `--` end-of-options marker, both positionals
---- (or, for `--`, a region terminator) rather than flags.
+--- stdin/stdout sentinel and `--`, which is a region terminator or a value.
 --- @param word string
 --- @return boolean
 local function is_flag(word)
     return word:sub(1, 1) == "-" and word ~= "-" and word ~= "--"
 end
 
---- A non-flag word: a plain word or the `-` sentinel. `--` is excluded (it is
---- the option-region terminator, neither flag nor positional).
+--- A non-flag word: a plain word or the `-` sentinel. `--` is excluded (a
+--- region terminator or a value, never a positional).
 --- @param word string
 --- @return boolean
 local function is_plain(word)
     return word ~= "--" and not is_flag(word)
+end
+
+--- Whether a word can be the value of the flag before it: a plain word, or
+--- `--` when `dashdash_value` is set.
+--- @param word string
+--- @param dashdash_value boolean
+--- @return boolean
+local function absorbs_value(word, dashdash_value)
+    return is_plain(word) or (dashdash_value and word == "--")
+end
+
+--- Whether `words[i]` ends the option region in every parse: it is `--` and,
+--- when `dashdash_value` is set, does not directly follow a flag (which may
+--- take it as its value).
+--- @param words string[]
+--- @param i integer
+--- @param dashdash_value boolean
+--- @return boolean
+local function ends_options(words, i, dashdash_value)
+    if words[i] ~= "--" then
+        return false
+    end
+    return not (dashdash_value and i > 1 and is_flag(words[i - 1]))
 end
 
 --- Whether a flag carries its value inline (`--opt=val`, or a glued short
@@ -266,16 +289,16 @@ local function has_inline_value(flag)
     return #flag > 2
 end
 
---- Option-identifier candidates from every flag in the command (stopping at
---- `--`, after which dash-words are positionals). A flag is a flag in every
---- absorption parse, so this is parse-independent — feeds the order-free
---- `options` gate field.
+--- Option-identifier candidates from every dash-word that is a flag in some
+--- absorption parse: every flag before the first `--` that ends options in
+--- every parse.
 --- @param words string[]
+--- @param dashdash_value boolean `--` may be the value of the flag before it
 --- @return string[]
-local function flag_candidates(words)
+local function flag_candidates(words, dashdash_value)
     local cands = {}
-    for _, w in ipairs(words) do
-        if w == "--" then
+    for i, w in ipairs(words) do
+        if ends_options(words, i, dashdash_value) then
             break
         end
         if is_flag(w) then
@@ -290,14 +313,16 @@ end
 ---     in some parse
 ---   leading_flag_idx — indices of flags that precede the first positional
 ---     in some parse
---- Each leading flag absorbs 0 or 1 of the immediately-following plain word; the
---- DFS explores both. The walk stops at each plain word (a first-positional
---- candidate), so a post-subcommand flag never enters leading_flag_idx. A `--`
---- ends the option region — the following word is the subcommand.
+--- Each leading flag absorbs 0 or 1 immediately-following plain word (or `--`
+--- when `dashdash_value` is set); the DFS explores both. The walk stops at each
+--- plain word (a first-positional candidate), so a post-subcommand flag never
+--- enters leading_flag_idx. A `--` the walk reaches unabsorbed ends the option
+--- region — the following word is the subcommand.
 --- @param words string[]
+--- @param dashdash_value boolean `--` may be the value of the flag before it
 --- @return table<integer, boolean> subcommand_idx
 --- @return table<integer, boolean> leading_flag_idx
-local function prefix_walk(words)
+local function prefix_walk(words, dashdash_value)
     local n = #words
     local subcommand_idx, leading_flag_idx, seen = {}, {}, {}
     local stack = { 1 }
@@ -313,8 +338,8 @@ local function prefix_walk(words)
             elseif is_flag(w) then
                 leading_flag_idx[i] = true
                 table.insert(stack, i + 1) -- absorb 0
-                if i + 1 <= n and is_plain(words[i + 1]) then
-                    table.insert(stack, i + 2) -- absorb 1 (plain word only)
+                if i + 1 <= n and absorbs_value(words[i + 1], dashdash_value) then
+                    table.insert(stack, i + 2) -- absorb 1
                 end
             else
                 subcommand_idx[i] = true
@@ -372,18 +397,23 @@ local function some_first_positional_matches(
     return false
 end
 
---- Number of flags that could absorb a following plain word — the branching
---- factor of the parse enumeration. Used only to cap multi-element matching.
+--- Number of flags that could absorb a following word — the branching factor
+--- of the parse enumeration. Used only to cap multi-element matching.
 --- @param words string[]
+--- @param dashdash_value boolean `--` may be the value of the flag before it
 --- @return integer
-local function absorbable_flag_count(words)
+local function absorbable_flag_count(words, dashdash_value)
     local n, count = #words, 0
     for i = 1, n do
         local w = words[i]
-        if w == "--" then
+        if ends_options(words, i, dashdash_value) then
             break
         end
-        if is_flag(w) and i + 1 <= n and is_plain(words[i + 1]) then
+        if
+            is_flag(w)
+            and i + 1 <= n
+            and absorbs_value(words[i + 1], dashdash_value)
+        then
             count = count + 1
         end
     end
@@ -394,12 +424,15 @@ end
 --- positional stream match `patterns` contiguously from the subcommand
 --- (stream index 1)? Trailing stream tokens are allowed; a dynamic stream word
 --- wildcards its element and every later one. DFS over each flag's 0/1
---- absorption of the following plain word; a flag never enters the stream.
+--- absorption of the following plain word (or `--` when `dashdash_value` is
+--- set); a flag never enters the stream. A `--` reached unabsorbed ends the
+--- option region.
 --- @param patterns string[]
 --- @param words string[]
 --- @param dynamic boolean[]
+--- @param dashdash_value boolean `--` may be the value of the flag before it
 --- @return boolean
-local function some_stream_matches(patterns, words, dynamic)
+local function some_stream_matches(patterns, words, dynamic, dashdash_value)
     local n = #patterns
     local nw = #words
 
@@ -433,7 +466,9 @@ local function some_stream_matches(patterns, words, dynamic)
             if rec(i + 1, pos) then -- absorb 0
                 return true
             end
-            if i + 1 <= nw and is_plain(words[i + 1]) then
+            if
+                i + 1 <= nw and absorbs_value(words[i + 1], dashdash_value)
+            then
                 return rec(i + 2, pos) -- absorb 1
             end
             return false
@@ -455,6 +490,7 @@ end
 --- @class agentic.PermStructured.ExistCtx
 --- @field words string[]
 --- @field dynamic boolean[]
+--- @field dashdash_value boolean `--` may be the value of the flag before it
 --- @field has_dynamic boolean
 --- @field flag_cands string[]
 --- @field leading_cands string[]
@@ -503,9 +539,19 @@ local function gate_matches_existential(gate, ctx)
             then
                 return false
             end
-        elseif absorbable_flag_count(ctx.words) > MULTI_ELEMENT_FLAG_CAP then
+        elseif
+            absorbable_flag_count(ctx.words, ctx.dashdash_value)
+            > MULTI_ELEMENT_FLAG_CAP
+        then
             return true -- enumeration cap: over-prompt rather than blow up
-        elseif not some_stream_matches(patterns, ctx.words, ctx.dynamic) then
+        elseif
+            not some_stream_matches(
+                patterns,
+                ctx.words,
+                ctx.dynamic,
+                ctx.dashdash_value
+            )
+        then
             return false
         end
     end
@@ -678,12 +724,12 @@ local function any_gate(gates, predicate)
     return false
 end
 
---- Build the existential-match context shared by `decide_leaf` and
---- `classify_leaf` from a leaf's word list and dynamic mask.
+--- Build the existential-match context from a leaf's word list and dynamic mask.
 --- @param words string[]
 --- @param dynamic boolean[]
+--- @param dashdash_value boolean `--` may be the value of the flag before it
 --- @return agentic.PermStructured.ExistCtx
-local function build_exist_ctx(words, dynamic)
+local function build_exist_ctx(words, dynamic, dashdash_value)
     local has_dynamic = false
     for _, d in ipairs(dynamic) do
         if d then
@@ -692,13 +738,14 @@ local function build_exist_ctx(words, dynamic)
         end
     end
 
-    local subcommand_idx, leading_flag_idx = prefix_walk(words)
+    local subcommand_idx, leading_flag_idx = prefix_walk(words, dashdash_value)
     --- @type agentic.PermStructured.ExistCtx
     local ctx = {
         words = words,
         dynamic = dynamic,
+        dashdash_value = dashdash_value,
         has_dynamic = has_dynamic,
-        flag_cands = flag_candidates(words),
+        flag_cands = flag_candidates(words, dashdash_value),
         leading_cands = candidates_at(words, leading_flag_idx),
         leading_dynamic = any_dynamic(subcommand_idx, dynamic)
             or any_dynamic(leading_flag_idx, dynamic),
@@ -760,7 +807,7 @@ end
 function M.decide_leaf(entries, parsed, auto_approve)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
-    local ctx = build_exist_ctx(words, dynamic)
+    local ctx = build_exist_ctx(words, dynamic, true)
     local relevant = relevant_entries(entries, parsed.cmd_name)
 
     local function exist(gate)
@@ -812,7 +859,7 @@ end
 function M.classify_leaf(entries, parsed)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
-    local ctx = build_exist_ctx(words, dynamic)
+    local ctx = build_exist_ctx(words, dynamic, true)
     local parse = allow_parse(words, dynamic, parsed.cmd_name)
     local relevant = relevant_entries(entries, parsed.cmd_name)
 
@@ -851,14 +898,15 @@ end
 --- dynamic tokens so a laundered payload (`rm $flags x`) escalates to a prompt:
 --- the reject pass runs first and its fallback is a hard reject with no prompt,
 --- so a maybe-deny must fall through to the approve walk (where the dynamic token
---- withholds approval and prompts) rather than hard-reject here. Concreteness is
---- obtained by handing `build_exist_ctx` an empty dynamic mask, so every helper
---- treats all tokens as static — no parallel matcher needed.
+--- withholds approval and prompts) rather than hard-reject here. For the same
+--- reason `--` stays the end of options even directly after a flag: a deny that
+--- matches only when that `--` is the flag's value does not reject, because
+--- `rm -r -- -f` removes a file named `-f`.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @return boolean
 function M.deny_leaf(entries, parsed)
-    local ctx = build_exist_ctx(parsed.args, {})
+    local ctx = build_exist_ctx(parsed.args, {}, false)
     local relevant = relevant_entries(entries, parsed.cmd_name)
     local function exist(gate)
         return gate_matches_existential(gate, ctx)

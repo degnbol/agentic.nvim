@@ -189,7 +189,9 @@ Deny additionally **short-circuits to a rejection**: a separate existential pass
 executed leaf matches a concrete deny gate. Ask only *withholds approval* (the
 command still prompts). The deny pass is **concrete-only**: a dynamic token
 (`$var`, glob) does NOT satisfy a deny gate there, so `rm $flags x` falls through
-to the approve walk and prompts, while `rm -f x` rejects. A parse failure returns
+to the approve walk and prompts, while `rm -f x` rejects. It also reads every
+`--` as the end of options, so a deny match that depends on `--` being a value
+prompts instead of rejecting. A parse failure returns
 false (prompt, not reject) — unparseable commands fail closed to a prompt, never
 a silent reject.
 

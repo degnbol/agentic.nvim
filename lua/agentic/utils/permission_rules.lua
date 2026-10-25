@@ -2483,8 +2483,9 @@ end
 -- Deny matching is CONCRETE-ONLY (see `PermissionStructured.deny_leaf`): a
 -- dynamic token never satisfies a deny gate, so `rm $flags x` is not rejected —
 -- it falls through to the approve walk, which wildcards the dynamic token,
--- withholds approval, and prompts. Net: concrete deny rejects,
--- laundered/uncertain deny prompts.
+-- withholds approval, and prompts. The deny pass also keeps `--` as the end of
+-- options, even where the approve walk reads it as a flag's value. Net:
+-- concrete deny rejects, laundered/uncertain deny prompts.
 
 --- @alias agentic.utils.PermissionRules.RejectCtx { deny: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer }
 

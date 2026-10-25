@@ -1057,6 +1057,124 @@ describe("PermissionStructured", function()
             )
             assert.equal("ask", decision)
         end)
+
+        describe("`--` as the value of the flag before it", function()
+            local tar_entry = {
+                tar = {
+                    read_only = { { options = { "t" } } },
+                    ask = { { options = { "use-compress-program" } } },
+                },
+            }
+
+            it("asks an option after `-tf --`", function()
+                local decision = PermissionStructured.decide_leaf(
+                    tar_entry,
+                    parsed(
+                        "tar",
+                        { "-tf", "--", "--use-compress-program=./p.sh" }
+                    ),
+                    "safe_write"
+                )
+                assert.equal("ask", decision)
+            end)
+
+            it("ends options at a second `--`", function()
+                local decision = PermissionStructured.decide_leaf(
+                    tar_entry,
+                    parsed(
+                        "tar",
+                        { "-tf", "--", "--", "--use-compress-program=./p.sh" }
+                    ),
+                    "safe_write"
+                )
+                assert.equal("allow", decision)
+            end)
+
+            it("asks an option after a dynamic word and `--`", function()
+                --- @type agentic.ParsedLeaf
+                local leaf = {
+                    cmd_name = "tar",
+                    args = { "$o", "--", "--use-compress-program=./p.sh" },
+                    args_dynamic = { true, false, false },
+                }
+                assert.equal(
+                    "ask",
+                    PermissionStructured.decide_leaf(
+                        tar_entry,
+                        leaf,
+                        "safe_write"
+                    )
+                )
+            end)
+
+            it("asks a subcommand after `--attr-source -- -p`", function()
+                local decision = PermissionStructured.decide_leaf(
+                    git_entry,
+                    parsed("git", { "--attr-source", "--", "-p", "push" }),
+                    "safe_write"
+                )
+                assert.equal("ask", decision)
+            end)
+
+            it("asks a multi-element subcommand after `-c -- -p`", function()
+                local entries = {
+                    git = { ask = { { positionals = { "remote", "add" } } } },
+                }
+                local decision = PermissionStructured.decide_leaf(
+                    entries,
+                    parsed("git", { "-c", "--", "-p", "remote", "add" }),
+                    "safe_write"
+                )
+                assert.equal("ask", decision)
+            end)
+
+            it("asks a leading option after `-c --`", function()
+                local entries =
+                    { git = { ask = { { leading_options = { "p" } } } } }
+                local decision = PermissionStructured.decide_leaf(
+                    entries,
+                    parsed("git", { "-c", "--", "-p", "push" }),
+                    "safe_write"
+                )
+                assert.equal("ask", decision)
+            end)
+
+            local rm_force = { rm = { deny = { { options = { "f" } } } } }
+
+            it("prompts on a deny after `-r --` without rejecting", function()
+                local leaf = parsed("rm", { "-r", "--", "-f" })
+                assert.equal(
+                    "deny",
+                    PermissionStructured.decide_leaf(
+                        rm_force,
+                        leaf,
+                        "safe_write"
+                    )
+                )
+                assert.is_false(PermissionStructured.deny_leaf(rm_force, leaf))
+            end)
+
+            for _, args in ipairs({
+                { "--", "-f" },
+                { "x", "--", "-f" },
+                { "-a", "--", "--", "-f" },
+            }) do
+                it(
+                    "ends options at a `--` not after a flag: "
+                        .. table.concat(args, " "),
+                    function()
+                        assert.is_not.equal(
+                            "deny",
+                            PermissionStructured.decide_leaf(
+                                rm_force,
+                                parsed("rm", args),
+                                "safe_write"
+                            )
+                        )
+                    end
+                )
+            end
+        end)
     end)
 
     -- ------------------------------------------------------------------
@@ -1101,6 +1219,17 @@ describe("PermissionStructured", function()
                 parsed("foo", { "run", "--force" })
             )
             assert.is_true(c.deny)
+            assert.is_true(c.ask)
+        end)
+
+        it("reports ask for an option after a flag's `--` value", function()
+            local entries = {
+                tar = { ask = { { options = { "use-compress-program" } } } },
+            }
+            local c = PermissionStructured.classify_leaf(
+                entries,
+                parsed("tar", { "-tf", "--", "--use-compress-program=./p.sh" })
+            )
             assert.is_true(c.ask)
         end)
 

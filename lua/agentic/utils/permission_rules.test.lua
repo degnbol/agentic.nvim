@@ -1831,11 +1831,30 @@ describe("PermissionRules", function()
             "tar -tvf x.tar --index-file=/tmp/idx",
             "tar -tf x.tar --info-script=s.sh",
             "tar -tf x.tar -F s.sh",
+            -- `--` is the archive name; the option after it still runs
+            "tar -tf -- --use-compress-program=./prog.sh",
         }) do
             it("does not auto-approve: " .. cmd, function()
                 assert.is_false(PermissionRules.should_auto_approve(cmd))
             end)
         end
+
+        it("a broad allow does not cover a subcommand after `-- -p`", function()
+            stub_settings({ allow = { "Bash(git *)" } })
+            assert.is_false(
+                PermissionRules.should_auto_approve(
+                    "git --attr-source -- -p push"
+                )
+            )
+        end)
+
+        it("prompts rather than rejects an ask after a flag's `--`", function()
+            assert.is_false(
+                PermissionRules.should_auto_reject(
+                    "tar -tf -- --use-compress-program=./prog.sh"
+                )
+            )
+        end)
 
         for _, cmd in ipairs({
             "git config -f x --get a.b",
