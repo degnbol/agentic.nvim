@@ -96,6 +96,29 @@ describe("PermissionStructured", function()
             local cands = PermissionStructured.extract_option_candidates("")
             assert.same({}, cands)
         end)
+
+        describe("a token holding whitespace", function()
+            for _, case in ipairs({
+                { "-5 minutes", { "5" } },
+                { "-ab c", { "a", "b", "ab" } },
+                { "--foo bar", { "foo" } },
+                { "-p -i", { "p", "i" } },
+                { "--message=fix -s x", { "message" } },
+                { "- x", {} },
+                { "-- foo", {} },
+                { "-\t5", {} },
+                { "x -s", {} },
+                { "--=x -s", {} },
+                { "-a --b=c -s", { "a", "b" } },
+            }) do
+                it(("reads only dash segments: %q"):format(case[1]), function()
+                    assert.same(
+                        case[2],
+                        PermissionStructured.extract_option_candidates(case[1])
+                    )
+                end)
+            end
+        end)
     end)
 
     -- ------------------------------------------------------------------
@@ -1315,6 +1338,45 @@ describe("PermissionStructured", function()
                         parsed("rm", { "-f", "x" })
                     )
                 )
+            end)
+        end)
+
+        describe("a dash word holding whitespace", function()
+            local date_set = {
+                date = {
+                    read_only = { {} },
+                    deny = { { options = { "s", "set" } } },
+                },
+            }
+            --- @type agentic.ParsedLeaf
+            local relative_date = {
+                cmd_name = "date",
+                args = { "-d", "-5 minutes", "+%s" },
+                args_dynamic = {},
+            }
+
+            it("does not read letters after the whitespace", function()
+                assert.is_false(
+                    PermissionStructured.deny_leaf(date_set, relative_date)
+                )
+            end)
+
+            it("approves at read_only", function()
+                local decision, kind = PermissionStructured.decide_leaf(
+                    date_set,
+                    relative_date,
+                    "read_only"
+                )
+                assert.equal("allow", decision)
+                assert.equal("read_only", kind)
+            end)
+
+            it("still rejects a concrete -s", function()
+                assert.is_true(PermissionStructured.deny_leaf(date_set, {
+                    cmd_name = "date",
+                    args = { "-s", "12:00" },
+                    args_dynamic = {},
+                }))
             end)
         end)
     end)

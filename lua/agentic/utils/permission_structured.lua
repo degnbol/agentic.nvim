@@ -10,7 +10,7 @@ local PermissionRules = require("agentic.utils.permission_rules")
 --- redirects / env-prefixes / substitution; this module trusts that input shape.
 ---
 --- The matcher carries no getopt arity table for soundness. Each leading
---- dash-word can absorb 0 or 1 following plain word (for deny/ask, also a `--`
+--- dash word can absorb 0 or 1 following plain word (for deny/ask, also a `--`
 --- as its value), and the two directions read that ambiguity differently:
 ---   * deny/ask are EXISTENTIAL — a gate fires if *any* absorption parse (plus
 ---     dynamic-token wildcarding) exposes the gated subcommand/option. Owns
@@ -126,28 +126,21 @@ local value_taking_options = {
 --- that only over-prompts, never an unsound approval.
 local MULTI_ELEMENT_FLAG_CAP = 24
 
---- Build the set of option-identifier candidates for a single token. The output
---- is over-approximate: extra candidates can only widen a deny/ask match, never
---- miss a real one. Returns `{}` for positionals and end-of-options sentinels.
---- @param token string
+--- Option-identifier candidates of one dash word with no whitespace:
+--- letters and the one-dash long name for `-abc`, the name for
+--- `--name[=value]`. Returns `{}` for `-` and `--`.
+--- @param word string
 --- @return string[]
-function M.extract_option_candidates(token)
-    if token == "" then
-        return {}
-    end
-    if token:sub(1, 1) ~= "-" then
-        return {}
-    end
-
+local function dash_word_candidates(word)
     -- Long-only =value strip: only fires for `--`-prefixed tokens. Short
     -- tokens keep their full body, so `-=x` stays a short cluster. A
     -- `=` at position 3 (`--=value`) strips to just `--`, which the
     -- sentinel check then rejects.
-    local head = token
-    if token:sub(1, 2) == "--" then
-        local eq = token:find("=", 1, true)
+    local head = word
+    if word:sub(1, 2) == "--" then
+        local eq = word:find("=", 1, true)
         if eq and eq >= 3 then
-            head = token:sub(1, eq - 1)
+            head = word:sub(1, eq - 1)
         end
     end
 
@@ -181,6 +174,38 @@ function M.extract_option_candidates(token)
     end
     if not seen[body] then
         table.insert(out, body)
+    end
+    return out
+end
+
+--- Build the set of option-identifier candidates for a single token. The
+--- output is over-approximate: extra candidates can only widen a deny/ask
+--- match, never miss a real one. Each whitespace-separated segment that
+--- starts with `-` is read as its own dash word, since perl parses `-p -i`
+--- in one word as two switches. Other segments, and all segments after a
+--- `--name=value` segment, are dropped: getopt exits at the whitespace or
+--- has already taken it as a value. Returns `{}` for positionals and for
+--- dash words with no dash segment that has a body (`-`, `--`, `- x`).
+--- @param token string
+--- @return string[]
+function M.extract_option_candidates(token)
+    if token:sub(1, 1) ~= "-" then
+        return {}
+    end
+    local seen = {}
+    local out = {}
+    for segment in token:gmatch("%S+") do
+        if segment:sub(1, 1) == "-" then
+            for _, cand in ipairs(dash_word_candidates(segment)) do
+                if not seen[cand] then
+                    seen[cand] = true
+                    table.insert(out, cand)
+                end
+            end
+            if segment:sub(1, 2) == "--" and segment:find("=", 3, true) then
+                break
+            end
+        end
     end
     return out
 end
@@ -289,7 +314,7 @@ local function has_inline_value(flag)
     return #flag > 2
 end
 
---- Option-identifier candidates from every dash-word that is a flag in some
+--- Option-identifier candidates from every dash word that is a flag in some
 --- absorption parse: every flag before the first `--` that ends options in
 --- every parse.
 --- @param words string[]

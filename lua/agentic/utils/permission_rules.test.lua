@@ -583,7 +583,7 @@ describe("PermissionRules", function()
         end)
 
         it(
-            "evaluate: rm -- treats a trailing dash-word as an operand",
+            "evaluate: rm -- treats a trailing dash word as an operand",
             function()
                 local ok, effects = PermissionRules.evaluate("rm -- -weird")
                 assert.is_true(ok)
@@ -1588,6 +1588,22 @@ describe("PermissionRules", function()
 
         it("denies sort -oFILE (glued arg)", function()
             assert.is_false(PermissionRules.should_auto_approve("sort -oFILE"))
+        end)
+
+        it("approves date with a relative -d value", function()
+            local cmd = "date -d '-5 minutes' +%s"
+            assert.is_false(PermissionRules.should_auto_reject(cmd))
+            assert.is_true(PermissionRules.should_auto_approve(cmd))
+        end)
+
+        it("rejects date -s", function()
+            assert.is_true(PermissionRules.should_auto_reject("date -s 12:00"))
+        end)
+
+        it("prompts for a dynamic dash word holding whitespace", function()
+            local cmd = "rm -${x:- f} y"
+            assert.is_false(PermissionRules.should_auto_reject(cmd))
+            assert.is_false(PermissionRules.should_auto_approve(cmd))
         end)
 
         it("auto-approves shuf -n 5 file", function()

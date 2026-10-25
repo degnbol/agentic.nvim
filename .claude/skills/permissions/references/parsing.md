@@ -9,12 +9,17 @@ extra candidates can only widen a match, never miss one. This is why the
 structured layer beats globs against option clustering and GNU abbreviation
 (`sort -uo out`, `sort --out=x`, `sort -oFILE` all evade `Bash(sort * -o *)`).
 
+A token is split at whitespace. Each segment that starts with `-` is read
+as its own dash word (perl reads `-p -i` in one word as two switches). The
+other segments, and a `--name=value`'s value, are dropped (getopt exits at
+the whitespace or has already taken it as a value).
+
 ## Arity — absorption parses
 
 **Arity is matched, not guessed.** The walker emits an ordered word list
 (`{cmd_name, args}`, each arg tagged only with whether it expands at runtime);
 no role/arity tagging. The matcher carries no per-command getopt table — each
-leading dash-word may absorb 0 or 1 following plain word, and the two
+leading dash word may absorb 0 or 1 following plain word, and the two
 directions read that ambiguity differently:
 
 - *deny/ask are existential* — a gate fires if **any** absorption parse exposes
