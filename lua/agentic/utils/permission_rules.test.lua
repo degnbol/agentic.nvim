@@ -2,6 +2,7 @@ local assert = require("tests.helpers.assert")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local PermissionRules = require("agentic.utils.permission_rules")
+local spy = require("tests.helpers.spy")
 
 describe("PermissionRules", function()
     local read_json = FileSystem.read_json
@@ -994,13 +995,12 @@ describe("PermissionRules", function()
         end)
 
         it("returns false when the zsh parser is unavailable", function()
-            local orig = vim.treesitter.get_string_parser
-            --- @diagnostic disable-next-line: duplicate-set-field
-            vim.treesitter.get_string_parser = function()
+            local parser_stub = spy.stub(vim.treesitter, "get_string_parser")
+            parser_stub:invokes(function()
                 error("no zsh parser")
-            end
+            end)
             local result = decide("ls -la", ALLOW)
-            vim.treesitter.get_string_parser = orig
+            parser_stub:revert()
             assert.is_false(result)
         end)
 
