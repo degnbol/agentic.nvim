@@ -28,7 +28,10 @@
   "dirname":   { "read_only": [{}] },
   "basename":  { "read_only": [{}] },
 
-  "command":   { "read_only": [{ "leading_options": ["v", "V"] }] },
+  "command": {
+    "read_only": [{ "leading_options": ["v", "V"] }],
+    "arity":     { "": { "booleans": ["-p", "-v"] } }
+  },
 
   "cat":       { "read_only": [{}] },
   "head":      { "read_only": [{}] },
@@ -37,11 +40,11 @@
   "zless":     { "read_only": [{}] },
   "gzip": {
     "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }],
-    "ask":       [{ "options": ["S", "suffix"] }]
+    "arity":     { "*": { "takers": ["-S", "--suffix"], "booleans": ["-d"] } }
   },
   "gunzip": {
     "read_only": [{ "options": ["c", "stdout", "to-stdout", "t", "test", "l", "list"] }],
-    "ask":       [{ "options": ["S", "suffix"] }]
+    "arity":     { "*": { "takers": ["-S", "--suffix"], "booleans": ["-d"] } }
   },
   "gzcat":     { "read_only": [{}] },
   "bzcat":     { "read_only": [{}] },
@@ -66,7 +69,8 @@
                     "rmt-command", "rsh-command",
                     "index-file", "volno-file",
                     "F", "info-script", "new-volume-script"] }
-    ]
+    ],
+    "arity": { "*": { "booleans": ["-v"] } }
   },
 
   "cd":        { "read_only": [{}] },
@@ -182,8 +186,7 @@
       { "positionals": ["config", "rename-section"] },
       { "positionals": ["config"],
         "options":     ["unset", "unset-all", "add", "replace-all",
-                        "remove-section", "rename-section", "edit", "e",
-                        "comment"] },
+                        "remove-section", "rename-section", "edit", "e"] },
       { "positionals": ["stash", "drop"] },
       { "positionals": ["stash", "clear"] },
       { "positionals": ["stash", "pop"] },
@@ -192,7 +195,15 @@
       { "positionals": ["push"] },
       { "positionals": ["commit"] },
       { "leading_options": ["c", "config-env"] }
-    ]
+    ],
+    "arity": {
+      "": {
+        "takers":   ["-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                     "--super-prefix", "--attr-source"],
+        "booleans": ["--no-pager"]
+      },
+      "config": { "booleans": ["--global"] }
+    }
   },
 
   "sort": {
@@ -219,7 +230,8 @@
   "sqlite3": {
     "read_only": [
       { "options": ["readonly"], "leading_options": ["safe"] }
-    ]
+    ],
+    "arity": { "*": { "booleans": ["--safe", "--readonly"] } }
   },
 
   "xmllint": { "read_only": [{}] },
@@ -333,12 +345,14 @@
 
   "luac": {
     "read_only": [{ "leading_options": ["p"], "options": ["l"] }],
-    "ask":       [{ "options": ["o"] }]
+    "ask":       [{ "options": ["o"] }],
+    "arity":     { "*": { "booleans": ["-p", "-l"] } }
   },
   "luajit": {
     "read_only": [{ "leading_options": ["h"] },
                   { "leading_options": ["b"], "options": ["l"] }],
-    "ask":       [{ "leading_options": ["b"], "positionals": ["*", "*"] }]
+    "ask":       [{ "leading_options": ["b"], "positionals": ["*", "*"] }],
+    "arity":     { "*": { "booleans": ["-b"] } }
   },
   "typst": {
     "read_only":  [{ "positionals": ["query"] }],
@@ -454,7 +468,8 @@
       { "options": ["Q"] },
       { "leading_options": ["S"], "options": ["i", "s"] }
     ],
-    "ask":       [{ "options": ["R", "U", "D", "F", "T", "y", "w"] }]
+    "ask":       [{ "options": ["R", "U", "D", "F", "T", "y", "w"] }],
+    "arity":     { "": { "booleans": ["-S"] } }
   },
 
   "pip": {
@@ -648,7 +663,8 @@
       { "positionals": ["api"],
         "options":     ["X", "method", "f", "F", "input", "hostname"] },
       { "positionals": ["issue", "create"] }
-    ]
+    ],
+    "arity": { "*": { "takers": ["-R", "--repo", "--hostname"] } }
   },
 
   "aws": {
@@ -658,7 +674,14 @@
       { "positionals": ["*", "describe-*"] },
       { "positionals": ["*", "list-*"] },
       { "positionals": ["*", "head-*"] }
-    ]
+    ],
+    "arity": {
+      "*": {
+        "takers": ["--region", "--profile", "--endpoint-url", "--output",
+                   "--cli-binary-format", "--ca-bundle",
+                   "--cli-read-timeout", "--cli-connect-timeout"]
+      }
+    }
   },
 
   "kitty": {
@@ -764,7 +787,10 @@
   },
 
   "flyte":    { "read_only": [{ "positionals": ["get"] }] },
-  "flytectl": { "read_only": [{ "positionals": ["get"] }] },
+  "flytectl": {
+    "read_only": [{ "positionals": ["get"] }],
+    "arity":     { "*": { "takers": ["--config", "--admin-endpoint"] } }
+  },
 
   "zsh": {
     "read_only": [{ "options": ["n"] }],

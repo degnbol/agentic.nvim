@@ -1,6 +1,8 @@
 local assert = require("tests.helpers.assert")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
+local Logger = require("agentic.utils.logger")
+local MiniTest = require("mini.test")
 local PermissionRules = require("agentic.utils.permission_rules")
 local spy = require("tests.helpers.spy")
 
@@ -1127,6 +1129,67 @@ describe("PermissionRules", function()
                     find_entry and find_entry.deny[1].options
                 )
             end)
+
+            it("keeps arity tokens literal and drops other shapes", function()
+                local notify = spy.stub(Logger, "notify")
+                MiniTest.finally(function()
+                    notify:revert()
+                end)
+                --- @type table
+                local malformed = {
+                    foo = {
+                        arity = {
+                            [""] = {
+                                takers = { "-C", 1, "C", "-cmd", "--a=b" },
+                                other = { "-x" },
+                            },
+                            config = { booleans = "--global" },
+                            bad = "x",
+                        },
+                    },
+                    ["*"] = { arity = { [""] = { takers = { "-C" } } } },
+                }
+                Config.permissions.structured = malformed
+                PermissionRules.invalidate_cache()
+                local entries = PermissionRules.get_structured_entries()
+
+                local foo, wildcard = entries.foo, entries["*"]
+                assert.same({
+                    [""] = { takers = { "-C" } },
+                    config = { booleans = {} },
+                }, foo and foo.arity)
+                assert.is_nil(wildcard and wildcard.arity)
+                assert.equal(5, notify.call_count)
+            end)
+
+            describe("over the bundled arity", function()
+                --- The merged git arity under `user` as the user's git entry.
+                --- @param user table
+                --- @return agentic.PermArity
+                local function git_arity(user)
+                    Config.permissions.use_plugin_defaults = true
+                    Config.permissions.structured = { git = user }
+                    PermissionRules.invalidate_cache()
+                    local git = PermissionRules.get_structured_entries().git
+                    return git and git.arity or {}
+                end
+
+                it("keeps it under a user entry without arity", function()
+                    local arity = git_arity({
+                        read_only = { { positionals = { "log" } } },
+                    })
+                    assert.same({ "--no-pager" }, arity[""].booleans)
+                end)
+
+                it("replaces only the lists the user gives", function()
+                    local arity = git_arity({
+                        arity = { [""] = { takers = {} } },
+                    })
+                    assert.same({}, arity[""].takers)
+                    assert.same({ "--no-pager" }, arity[""].booleans)
+                    assert.same({ "--global" }, arity.config.booleans)
+                end)
+            end)
         end)
 
         -- Phase 2: assignment-position command substitution and loops.
@@ -1796,7 +1859,6 @@ describe("PermissionRules", function()
         -- abbreviate `--verbose`. A path-named script may parse no options.
         for _, cmd in ipairs({
             "foo --version",
-            "foo -x --help",
             "sudo --help rm -rf /tmp/x",
         }) do
             it("auto-approves: " .. cmd, function()
@@ -1813,6 +1875,8 @@ describe("PermissionRules", function()
             "cp list.txt ~/.zshrc",
             "tee list.txt",
             "foo -- --help",
+            -- `-x` may take `--help` as its value
+            "foo -x --help",
             "foo --ver x",
             "foo -version x",
             "sh -ve ./s.sh",
@@ -1826,7 +1890,7 @@ describe("PermissionRules", function()
             '"${x}" ls',
             -- config writes
             "git config -f .git/config alias.zz '!touch /tmp/f'",
-            "git config --comment c --get core.fsmonitor 'touch /tmp/f'",
+            "git config --comment --get core.fsmonitor 'touch /tmp/f'",
             -- exec turned back on after `-n`
             "zsh -n +n s.sh",
             "zsh -n -o exec s.sh",
@@ -2574,8 +2638,8 @@ describe("PermissionRules", function()
         end)
 
         -- Correction step: deny/ask branch each leading flag's 0/1 absorption
-        -- existentially (no getopt arity table), allow resolves a single parse
-        -- via value_options. git's gates are subcommand-keyed, so a leading
+        -- existentially (no getopt arity table), allow must hold in every
+        -- parse. git's gates are subcommand-keyed, so a leading
         -- flag that shifts the subcommand in the took-0 parse exposes it.
         describe("absorption matching", function()
             it(
@@ -2616,7 +2680,7 @@ describe("PermissionRules", function()
             )
 
             it(
-                "prompts on git --foo ci log (single-parse allow: unknown subcommand)",
+                "prompts on git --foo ci log (universal allow: unknown subcommand)",
                 function()
                     assert.is_false(
                         PermissionRules.should_auto_approve("git --foo ci log")
@@ -2641,6 +2705,47 @@ describe("PermissionRules", function()
                     )
                 end
             )
+        end)
+
+        -- Allow holds in every parse: an option without an arity hint may
+        -- or may not take the next word.
+        describe("arity of unknown options on allow", function()
+            for _, cmd in ipairs({
+                "git config --file --get a.b v",
+                "git config --fil --get a.b v",
+                "git --attr-source log init x",
+                "git --attr-source -C init log",
+                "sqlite3 --safe -cmd --readonly db q",
+                "cp -S --help a b",
+                "touch -r --help new",
+                "tar -ft x.tar",
+                "gzip -dS -c x-c",
+                "gzip $x f -c",
+                "command -x foo -v",
+            }) do
+                it("prompts on " .. cmd, function()
+                    assert.is_false(PermissionRules.should_auto_approve(cmd))
+                end)
+            end
+
+            for _, cmd in ipairs({
+                "git config --file x --get a.b",
+                "gzip -S .z -c f",
+                "cp --help",
+                "tar -tf x.tar",
+                "git --no-pager log",
+                "gzip -dc a.gz",
+                "aws ec2 --region x describe-y",
+                "gh pr -R o/r view 12",
+                "luac -p -l x.lua",
+                "luac -l -p x.lua",
+                "sqlite3 --readonly --safe db q",
+                "pacman -Si foo",
+            }) do
+                it("auto-approves " .. cmd, function()
+                    assert.is_true(PermissionRules.should_auto_approve(cmd))
+                end)
+            end
         end)
 
         -- a `$var` bound to a splitting-proof literal earlier in the same

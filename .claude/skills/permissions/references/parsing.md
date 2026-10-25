@@ -18,23 +18,21 @@ the whitespace or has already taken it as a value).
 
 **Arity is matched, not guessed.** The walker emits an ordered word list
 (`{cmd_name, args}`, each arg tagged only with whether it expands at runtime);
-no role/arity tagging. The matcher carries no per-command getopt table — each
-leading dash word may absorb 0 or 1 following plain word, and the two
-directions read that ambiguity differently:
+no role/arity tagging. A dash word may or may not take the next word as its
+value, and the two directions read that ambiguity dually:
 
 - *deny/ask are existential* — a gate fires if **any** absorption parse exposes
   the gated subcommand/option. A linear prefix-walk collects the possible
   first-positional (subcommand) indices; the rare multi-element positional gate
-  enumerates parses (bounded). Owns soundness — an over-match only over-prompts.
-- *allow is a single parse* — a leading flag absorbs its next word iff it is a
-  known value-taker (`value_taking_options`, a fail-safe optimisation; an unlisted flag
-  absorbs 0, only over-prompting). Convenience only: the existential pass has
-  already cleared every parse. Single-parse — *not* existential — keeps an
-  unknown subcommand → prompt, so a leading bare flag cannot launder a dangerous
-  subcommand to a read-only alternate parse.
+  enumerates parses (bounded). An over-match only over-prompts.
+- *allow is universal* — a gate must hold in **every** parse: an option counts
+  only if no parse takes it as a value, a positional element only if every
+  parse's stream matches. An entry's `arity` hints (`takers`/`booleans` per
+  scope: `""` before the first positional, a literal first positional, `"*"`)
+  cut parses; an absent hint only adds a prompt, a present one is trusted.
 
-So `git -C /repo log` auto-approves (`-C` absorbs `/repo`, subcommand `log`),
-while `git -C push log`, `git -p push`, and `git --new-global val push` all
+So `git -C /repo log` auto-approves (`-C` is a hinted taker), while
+`git -C push log`, `git -p push`, and `git --new-global val push` all
 prompt — the took-0 parse exposes `push`. Every dash-token is stripped to the
 option fields; only `-` (stdin/stdout sentinel) and the words after a `--`
 that ends options are positionals. For deny/ask, a `--` directly after a flag
@@ -48,7 +46,8 @@ positional), for a code channel whose danger is position-specific: git's
 leading `-c core.pager=!cmd` runs code before the subcommand, but `git log -c`
 is the harmless combined-diff flag and a trailing `$ref` can never inject a
 leading flag. On allow, it gates a mode flag that counts only before the
-operand: `command -v` is a lookup only there.
+operand (`command -v` is a lookup only there); it must precede the first
+positional in every parse.
 
 ## Token expansion: resolve statically, else dynamic
 

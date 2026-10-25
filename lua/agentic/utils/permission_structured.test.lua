@@ -183,28 +183,135 @@ describe("PermissionStructured", function()
         end)
     end)
 
-    describe("option_identifiers", function()
-        it("gives the letters of a short cluster", function()
-            assert.same(
-                { "u", "o" },
-                PermissionStructured.option_identifiers("-uo")
+    -- Allow holds in every parse: an option of unknown arity may or may
+    -- not take the next word, and `arity` hints cut the parses.
+    describe("universal allow reading (via decide_leaf)", function()
+        --- @param entries agentic.StructuredEntries
+        --- @param cmd string
+        --- @param args string[]
+        --- @param dynamic boolean[]|nil
+        --- @return agentic.PermDecision
+        local function decide(entries, cmd, args, dynamic)
+            local leaf = parsed(cmd, args)
+            leaf.args_dynamic = dynamic
+            return (
+                PermissionStructured.decide_leaf(entries, leaf, "safe_write")
             )
+        end
+
+        --- @param arity agentic.PermArity|nil
+        --- @return agentic.StructuredEntries
+        local function with_c(arity)
+            return {
+                foo = { read_only = { { options = { "c" } } }, arity = arity },
+            }
+        end
+
+        it("reads a taker with letters after it as taking none", function()
+            local entries = with_c({ ["*"] = { takers = { "-C" } } })
+            assert.equal("allow", decide(entries, "foo", { "-Cfoo", "-c" }))
         end)
 
-        it("gives the name of a long flag without its value", function()
-            assert.same(
-                { "output" },
-                PermissionStructured.option_identifiers("--output=x")
-            )
+        it("lets an unknown option take the next word", function()
+            assert.is_nil(decide(with_c(nil), "foo", { "-x", "-c" }))
         end)
 
-        it("gives nothing for `-`, `--` or a positional", function()
-            for _, token in ipairs({ "-", "--", "file" }) do
-                assert.same(
-                    {},
-                    PermissionStructured.option_identifiers(token)
+        it("reads a cluster per its hinted letters", function()
+            local entries = with_c({
+                ["*"] = { booleans = { "-d" }, takers = { "-S" } },
+            })
+            assert.is_nil(decide(entries, "foo", { "-dS", "-c", "x" }))
+            assert.equal(
+                "allow",
+                decide(entries, "foo", { "-S", "-k", "-c", "f" })
+            )
+            assert.is_nil(decide(with_c(nil), "foo", { "-S", "-k", "-c", "f" }))
+        end)
+
+        it("drops a token hinted as both kinds", function()
+            local entries = with_c({
+                [""] = { takers = { "-x" } },
+                ["*"] = { booleans = { "-x" } },
+            })
+            assert.is_nil(decide(entries, "foo", { "-x", "-c" }))
+        end)
+
+        it("reads `--name=value` as taking no next word", function()
+            assert.equal(
+                "allow",
+                decide(with_c(nil), "foo", { "--file=x", "-c" })
+            )
+            assert.is_nil(decide(with_c(nil), "foo", { "--file", "-c" }))
+        end)
+
+        it("reads a word holding whitespace letter by letter", function()
+            local entries = with_c({ ["*"] = { takers = { "-C" } } })
+            assert.equal("allow", decide(entries, "foo", { "-C foo", "-c" }))
+            assert.is_nil(decide(with_c(nil), "foo", { "-d -c", "-c" }))
+        end)
+
+        it("matches every gate after a taker that is the last word", function()
+            -- getopt errors, so the parse ends: no condition on it is left.
+            local entries = {
+                git = {
+                    read_only = { { positionals = { "log" } } },
+                    arity = { [""] = { takers = { "-C" } } },
+                },
+            }
+            assert.equal("allow", decide(entries, "git", { "-C" }))
+        end)
+
+        it("lets an unknown option take `--`", function()
+            local entries =
+                { foo = { read_only = { { positionals = { "log" } } } } }
+            assert.is_nil(decide(entries, "foo", { "-x", "--", "-p", "log" }))
+            assert.equal("allow", decide(entries, "foo", { "-x", "--", "log" }))
+        end)
+
+        it("matches no positional at or after a dynamic word", function()
+            local entries = {
+                aws = {
+                    read_only = { { positionals = { "*", "describe-*" } } },
+                    arity = { ["*"] = { takers = { "--region" } } },
+                },
+            }
+            assert.is_nil(
+                decide(
+                    entries,
+                    "aws",
+                    { "--region", "$x", "ec2", "describe-x" },
+                    { false, true, false, false }
                 )
-            end
+            )
+            assert.is_nil(
+                decide(entries, "aws", { "$x", "describe-a" }, { true, false })
+            )
+        end)
+
+        it("applies a positional scope only after that positional", function()
+            local entries = {
+                git = {
+                    read_only = {
+                        { positionals = { "config" }, options = { "get" } },
+                    },
+                    arity = { config = { takers = { "--file" } } },
+                },
+            }
+            assert.equal(
+                "allow",
+                decide(entries, "git", { "config", "--file", "x", "--get" })
+            )
+            assert.is_nil(
+                decide(entries, "git", { "--file", "x", "config", "--get" })
+            )
+        end)
+
+        it("reads unknown arity for a command with no entry", function()
+            local entries = {
+                ["*"] = { read_only = { { leading_options = { "help" } } } },
+            }
+            assert.equal("allow", decide(entries, "cp", { "--help" }))
+            assert.is_nil(decide(entries, "cp", { "-S", "--help", "a", "b" }))
         end)
     end)
 
@@ -361,6 +468,7 @@ describe("PermissionStructured", function()
                         read_only = {
                             { positionals = { "config" }, options = { "get" } },
                         },
+                        arity = { [""] = { takers = { "-C" } } },
                     },
                 }
                 local decision = PermissionStructured.decide_leaf(
@@ -701,6 +809,7 @@ describe("PermissionStructured", function()
                     read_only = {
                         { positionals = { "config" }, options = { "get" } },
                     },
+                    arity = { [""] = { takers = { "-C" } } },
                 },
             }
             local decision = PermissionStructured.decide_leaf(
@@ -838,6 +947,7 @@ describe("PermissionStructured", function()
             git = {
                 read_only = { { positionals = { "log" } } },
                 ask = { { positionals = { "branch" } } },
+                arity = { [""] = { takers = { "-C" } } },
             },
         }
 
@@ -971,8 +1081,8 @@ describe("PermissionStructured", function()
     -- ------------------------------------------------------------------
     -- Absorption matching (correction step): no getopt arity table for
     -- deny/ask. Each leading flag absorbs 0 or 1 following plain word; deny/ask
-    -- match existentially over the parses, allow over the single value_options
-    -- parse. git's gates are 100% positional[1] (subcommand) keyed, so a flag
+    -- match existentially over the parses, allow universally (cut by `arity`
+    -- hints). git's gates are 100% positional[1] (subcommand) keyed, so a flag
     -- that shifts the subcommand in the took-0 parse exposes it.
     -- ------------------------------------------------------------------
     describe("absorption matching", function()
@@ -988,6 +1098,7 @@ describe("PermissionStructured", function()
                     { positionals = { "commit" } },
                     { leading_options = { "c", "config-env" } },
                 },
+                arity = { [""] = { takers = { "-C" } } },
             },
         }
 
@@ -1043,12 +1154,12 @@ describe("PermissionStructured", function()
         )
 
         it(
-            "prompts `git --foo ci log` (single-parse allow: unknown subcommand ci)",
+            "prompts `git --foo ci log` (universal allow: unknown subcommand ci)",
             function()
                 -- A leading bare flag could launder a true subcommand to a
-                -- read-only alternate parse under existential allow; single-parse
-                -- allow defaults --foo to absorb-0, so the subcommand is `ci`
-                -- (∉ read_only) and falls through to a prompt.
+                -- read-only alternate parse under existential allow; the
+                -- parse where --foo takes nothing has subcommand `ci`
+                -- (∉ read_only), so allow fails and it falls through.
                 local decision = PermissionStructured.decide_leaf(
                     git_entry,
                     parsed("git", { "--foo", "ci", "log" }),
@@ -1058,9 +1169,15 @@ describe("PermissionStructured", function()
             end
         )
 
-        it("allows `xargs -0 ls` (unlisted leading flag absorbs 0)", function()
+        it("allows `xargs -0 ls` (hinted boolean absorbs 0)", function()
+            local entries = {
+                xargs = {
+                    read_only = { { positionals = { "ls" } } },
+                    arity = { [""] = { booleans = { "-0" } } },
+                },
+            }
             local decision = PermissionStructured.decide_leaf(
-                { xargs = { read_only = { { positionals = { "ls" } } } } },
+                entries,
                 parsed("xargs", { "-0", "ls" }),
                 "safe_write"
             )

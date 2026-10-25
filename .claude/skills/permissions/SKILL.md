@@ -108,9 +108,8 @@ safety does not require knowing a command's valid call signature, and a
 malformed command that fails at runtime fails safely — its redirects and
 env-prefixes are still classified structurally (below), separately from the
 command itself. Modelling call signatures would be scope creep that buys no
-safety. (`value_taking_options` on the allow path is a fail-safe convenience to cut
-over-prompts — an unlisted flag over-prompts, never under-guards — not a
-correctness model.)
+safety. Allow holds in every parse; an entry's `arity` hints cut parses — an
+absent hint over-prompts, a present one is trusted.
 
 **Classify by un-redirected effect.** A command that only prints to stdout is
 `read_only` (writing via pipe/redirect is caught structurally by the walker);
@@ -170,8 +169,7 @@ it).
   [references/parsing.md](references/parsing.md) § Token expansion).
 - **Over-approximation is sound for deny/ask.** Option presence is
   over-approximated per token — extra candidates can only widen a deny/ask
-  match, never miss one. Allow uses a single parse, so an unknown subcommand
-  still prompts.
+  match, never miss one. Allow holds in every parse.
 
 **Composition per leaf:**
 `approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR

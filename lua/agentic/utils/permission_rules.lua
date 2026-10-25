@@ -327,10 +327,85 @@ local function normalise_gate(gate)
     return g
 end
 
+--- Whether `token` is an option token the matcher reads: a short letter
+--- `-x` or a long name `--name`.
+--- @param token any
+--- @return boolean
+local function is_arity_token(token)
+    return type(token) == "string"
+        and (token:match("^%-[^%-%s]$") or token:match("^%-%-[^=%s]+$"))
+            ~= nil
+end
+
+--- Warn that an arity list element of `cmd` is ignored.
+--- @param cmd string
+--- @param element any
+local function warn_arity_element(cmd, element)
+    Logger.notify(
+        "Structured permission arity of "
+            .. cmd
+            .. ": ignoring "
+            .. vim.inspect(element)
+            .. ', not a list of "-x" or "--name" tokens',
+        vim.log.levels.WARN,
+        { title = "Agentic" }
+    )
+end
+
+--- The valid tokens of an arity list, warning about each other element.
+--- @param list any
+--- @param cmd string command whose entry holds the list, for the warning
+--- @return string[]|nil tokens nil when `list` is nil; `{}` when it is not
+---         a table
+local function arity_tokens(list, cmd)
+    if list == nil then
+        return nil
+    end
+    if type(list) ~= "table" then
+        warn_arity_element(cmd, list)
+        return {}
+    end
+    local tokens = {}
+    for _, element in ipairs(list) do
+        if is_arity_token(element) then
+            table.insert(tokens, element)
+        else
+            warn_arity_element(cmd, element)
+        end
+    end
+    return tokens
+end
+
+--- Deep-copy an arity table, dropping malformed parts. Tokens stay literal,
+--- not dashless: the dashes say whether a token is a short letter or a
+--- long name.
+--- @param arity any
+--- @param cmd string command whose entry holds `arity`, for warnings
+--- @return agentic.PermArity|nil arity the string scope keys with a table
+---         value, each with the valid tokens of `takers`/`booleans`. nil
+---         when `arity` is not a table.
+local function normalise_arity(arity, cmd)
+    if type(arity) ~= "table" then
+        return nil
+    end
+    --- @type agentic.PermArity
+    local out = {}
+    for scope, hints in pairs(arity) do
+        if type(scope) == "string" and type(hints) == "table" then
+            out[scope] = {
+                takers = arity_tokens(hints.takers, cmd),
+                booleans = arity_tokens(hints.booleans, cmd),
+            }
+        end
+    end
+    return out
+end
+
 --- Deep-copy a cmd-keyed structured-entries table, normalising every option
 --- string to the dashless form. A `vim.NIL` value (the user's "disable a
 --- bundled cmd" marker) is preserved so it survives the merge in
---- `get_structured_entries`. The output is owned by the caller (safe to
+--- `get_structured_entries`. `arity` is dropped on `"*"`: an unknown
+--- command's arity is unknowable. The output is owned by the caller (safe to
 --- mutate) so this caches the normalised view rather than mutating the input.
 --- @param entries any
 --- @return agentic.StructuredEntries
@@ -357,6 +432,9 @@ local function normalise_structured_entries(entries)
                         end
                         copy[kind] = arr
                     end
+                end
+                if cmd ~= "*" then
+                    copy.arity = normalise_arity(entry.arity, cmd)
                 end
                 out[cmd] = copy
             end

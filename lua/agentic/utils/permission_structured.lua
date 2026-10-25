@@ -9,15 +9,15 @@ local PermissionRules = require("agentic.utils.permission_rules")
 --- already quote-stripped tokens, joined literal concatenations, and excluded
 --- redirects / env-prefixes / substitution; this module trusts that input shape.
 ---
---- The matcher carries no getopt arity table for soundness. Each leading
---- dash word can absorb 0 or 1 following plain word (for deny/ask, also a `--`
---- as its value), and the two directions read that ambiguity differently:
+--- The matcher needs no getopt arity table for soundness. A dash word may or
+--- may not take the next word as its value, and the two directions read that
+--- ambiguity dually:
 ---   * deny/ask are EXISTENTIAL — a gate fires if *any* absorption parse (plus
----     dynamic-token wildcarding) exposes the gated subcommand/option. Owns
----     soundness; an over-match only over-prompts.
----   * allow is a SINGLE list-resolved parse — a leading flag absorbs its next
----     word iff it is a known `value_taking_options` value-taker. Convenience only:
----     the existential pass has already cleared every parse before allow runs.
+---     dynamic-token wildcarding) exposes the gated subcommand/option. An
+---     over-match only over-prompts.
+---   * allow is UNIVERSAL — a gate approves only if it holds in *every* parse.
+---     An entry's `arity` hints cut the parses. An absent hint never
+---     under-guards (it only adds a prompt). A present one is trusted.
 ---
 --- See the `permissions` project skill § "Compound Bash commands" for the
 --- cross-file overview; this module's functions are the authoritative algorithm.
@@ -40,7 +40,8 @@ local M = {}
 ---        order-free over every flag anywhere in the command: a letter for a
 ---        short option (`o`, also inside a cluster `-uo`), a name for a long
 ---        option (`output` for `--output`). Deny/ask also match an
----        abbreviation; allow matches only the exact identifier.
+---        abbreviation; allow matches only the exact identifier of a word
+---        that is an option in every parse.
 --- @field positionals? string[] -- per element literal or glob, matched
 ---        contiguously from the subcommand (stream index 1).
 --- @field leading_options? string[] -- like `options`, but matched only against
@@ -52,7 +53,8 @@ local M = {}
 ---        channel) is dangerous before the subcommand but inert after it, and a
 ---        trailing token like the `$ref` in `git log $ref` can never inject it.
 ---        On allow, for a mode flag that counts only before the operand
----        (`command -v`).
+---        (`command -v`): the word must precede the first positional in
+---        every parse.
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
 --- `read_only` approves at either auto_approve tier, `safe_write` only at
@@ -64,6 +66,22 @@ local M = {}
 --- @field safe_write? agentic.PermGate[]
 --- @field ask?        agentic.PermGate[]
 --- @field deny?       agentic.PermGate[]
+--- @field arity?      agentic.PermArity
+
+--- Arity hints of one scope, as literal tokens (`-C`, `--file`; a short
+--- letter is written `-x` and also applies inside a cluster, so it asserts
+--- that the command clusters). A hint outside scope `""` also asserts that the
+--- command reads the token as an option after a positional.
+--- @class agentic.PermArityScope
+--- @field takers?   string[] -- take the next word as their value
+--- @field booleans? string[] -- take no value
+
+--- Scope key: `""` = before the first positional; a literal first
+--- positional (`config`) = after it; `"*"` = every scope.
+--- @alias agentic.PermArity table<string, agentic.PermArityScope>
+
+--- @alias agentic.PermArityKind "taker" | "boolean"
+--- @alias agentic.PermTakesNext "always" | "never" | "maybe"
 
 --- Cmd-keyed table (`"*"` is the literal wildcard key). A `vim.NIL` value is
 --- treated as "no entry" so a user can disable a bundled cmd via
@@ -80,43 +98,6 @@ local M = {}
 --- @field args_dynamic? boolean[] parallel to `args`: token expands at runtime
 ---        (variable/glob/quoted-expansion) so its value is unknown. Absent =
 ---        all-static (back-compat for direct callers).
-
---- Leading flags that consume the following word as their argument. Used by the
---- ALLOW single-parse only (deny/ask branch arity existentially, so they need
---- no table — see the module doc). A fail-safe optimisation: an unlisted leading
---- flag absorbs nothing, which only constrains allow (over-prompts), never an
---- unsound approval. Keyed by the full flag token (`-C`, `--region`).
---- @type table<string, table<string, true>>
-local value_taking_options = {
-    git = {
-        ["-C"] = true,
-        ["-c"] = true,
-        ["--git-dir"] = true,
-        ["--work-tree"] = true,
-        ["--namespace"] = true,
-        ["--exec-path"] = true,
-        ["--super-prefix"] = true,
-    },
-    gh = {
-        ["-R"] = true,
-        ["--repo"] = true,
-        ["--hostname"] = true,
-    },
-    aws = {
-        ["--region"] = true,
-        ["--profile"] = true,
-        ["--endpoint-url"] = true,
-        ["--output"] = true,
-        ["--cli-binary-format"] = true,
-        ["--ca-bundle"] = true,
-        ["--cli-read-timeout"] = true,
-        ["--cli-connect-timeout"] = true,
-    },
-    flytectl = {
-        ["--config"] = true,
-        ["--admin-endpoint"] = true,
-    },
-}
 
 -- ponytail: fixed cap, raise it if a legitimate command ever trips it.
 --- Multi-element-positional existential matching enumerates absorption parses
@@ -210,26 +191,6 @@ function M.extract_option_candidates(token)
     return out
 end
 
---- The exact flag identifiers of a single token: `--name[=value]` gives
---- `name`; `-abc` gives each letter. Returns `{}` for positionals and
---- end-of-options sentinels.
---- @param token string
---- @return string[]
-function M.option_identifiers(token)
-    if token:sub(1, 2) == "--" then
-        local name = token:sub(3):match("^[^=]+")
-        return name and { name } or {}
-    end
-    if token:sub(1, 1) ~= "-" then
-        return {}
-    end
-    local out = {}
-    for ch in token:sub(2):gmatch(".") do
-        table.insert(out, ch)
-    end
-    return out
-end
-
 --- Letter-vs-long-name aware prefix match. A candidate of length 1 must equal
 --- the rule option exactly; a multi-char candidate matches when it is a
 --- (possibly improper) prefix of the rule option. GNU long-option abbreviation
@@ -300,18 +261,6 @@ local function ends_options(words, i, dashdash_value)
         return false
     end
     return not (dashdash_value and i > 1 and is_flag(words[i - 1]))
-end
-
---- Whether a flag carries its value inline (`--opt=val`, or a glued short
---- cluster `-Cval`/`-uo`), so it absorbs no following word in the allow parse.
---- A bare flag (`-C`, `--opt`) does not.
---- @param flag string
---- @return boolean
-local function has_inline_value(flag)
-    if flag:sub(1, 2) == "--" then
-        return flag:find("=", 1, true) ~= nil
-    end
-    return #flag > 2
 end
 
 --- Option-identifier candidates from every dash word that is a flag in some
@@ -583,83 +532,306 @@ local function gate_matches_existential(gate, ctx)
     return true
 end
 
---- @class agentic.PermStructured.AllowParse
---- @field stream string[]          positional stream (subcommand at index 1)
---- @field stream_dynamic boolean[] parallel to `stream`
---- @field flag_cands string[]      candidates from every flag
---- @field leading_cands string[]   candidates from flags before the subcommand
-
---- The single deterministic parse used for ALLOW matching: each flag absorbs
---- its following plain word iff it is bare AND a known `value_taking_options`
---- value-taker for `cmd` (inline-value and unlisted flags absorb 0). `--` ends
---- the option region. No wildcarding — allow stays concrete: a dynamic dash
---- word may expand to `-` or `--`, so it is a dynamic positional, not a flag.
---- @param words string[]
---- @param dynamic boolean[]
---- @param cmd string
---- @return agentic.PermStructured.AllowParse
-local function allow_parse(words, dynamic, cmd)
-    local takers = value_taking_options[cmd] or {}
-    --- @type agentic.PermStructured.AllowParse
-    local p = {
-        stream = {},
-        stream_dynamic = {},
-        flag_cands = {},
-        leading_cands = {},
-    }
-    local options_ended = false
-    local i, n = 1, #words
-    while i <= n do
-        local w = words[i]
-        if not options_ended and w == "--" then
-            options_ended = true
-            i = i + 1
-        elseif not options_ended and is_flag(w) and not dynamic[i] then
-            local cands = M.option_identifiers(w)
-            vim.list_extend(p.flag_cands, cands)
-            if #p.stream == 0 then
-                vim.list_extend(p.leading_cands, cands)
+--- Hinted arity of each option token in a scope.
+--- @param arity agentic.PermArity|nil hints of one command
+--- @param scope string scope key, read together with `"*"`
+--- @return table<string, agentic.PermArityKind> kind per literal token. A
+---         token listed as both kinds is absent (unknown).
+local function arity_kinds(arity, scope)
+    --- @type table<string, agentic.PermArityKind|false>
+    local listed = {}
+    for _, key in ipairs({ scope, "*" }) do
+        local hints = arity and arity[key] or {}
+        for kind, tokens in pairs({
+            taker = hints.takers or {},
+            boolean = hints.booleans or {},
+        }) do
+            for _, token in ipairs(tokens) do
+                local prev = listed[token]
+                listed[token] = (prev == nil or prev == kind) and kind or false
             end
-            if
-                not has_inline_value(w)
-                and takers[w]
-                and i + 1 <= n
-                and is_plain(words[i + 1])
-            then
-                i = i + 2 -- absorb the value word
-            else
-                i = i + 1
-            end
-        else
-            table.insert(p.stream, w)
-            table.insert(p.stream_dynamic, dynamic[i] or false)
-            i = i + 1
         end
     end
-    return p
+    --- @type table<string, agentic.PermArityKind>
+    local kinds = {}
+    for token, kind in pairs(listed) do
+        if kind then
+            kinds[token] = kind
+        end
+    end
+    return kinds
 end
 
---- Single-parse positional match for ALLOW. Each pattern matches the stream
---- token at the same index (trailing stream tokens allowed). A dynamic stream
---- word is a concrete unknown — it satisfies a `*` element but never a literal.
---- @param patterns string[]
---- @param parse agentic.PermStructured.AllowParse
---- @return boolean
-local function allow_positionals_match(patterns, parse)
-    for k, pat in ipairs(patterns) do
-        local w = parse.stream[k]
-        if w == nil then
-            return false
+--- Whether an option word takes the next word as its value.
+--- @param word string a dash word other than `-` and `--`
+--- @param kinds table<string, agentic.PermArityKind> hinted kind per token
+--- @return agentic.PermTakesNext takes `"never"` for `--x=v`. A bare
+---         `--x` follows its hinted kind, else `"maybe"`. A cluster `-abc`
+---         follows its first letter that is not a hinted boolean: a taker
+---         gives `"always"` as the last letter, else `"never"` (the rest is
+---         its value). An unhinted letter gives `"maybe"`. All hinted
+---         booleans give `"never"`.
+local function option_takes_next(word, kinds)
+    if word:sub(1, 2) == "--" then
+        if word:find("=", 3, true) then
+            return "never"
         end
-        if parse.stream_dynamic[k] then
-            if pat ~= "*" then
-                return false
-            end
-        elseif not w:match(PermissionRules.glob_to_lua_pattern(pat)) then
-            return false
+        local kind = kinds[word]
+        if kind == nil then
+            return "maybe"
+        end
+        return kind == "taker" and "always" or "never"
+    end
+    local letters = word:sub(2)
+    for i = 1, #letters do
+        local kind = kinds["-" .. letters:sub(i, i)]
+        if kind == "taker" then
+            return i == #letters and "always" or "never"
+        end
+        if kind ~= "boolean" then
+            return "maybe"
         end
     end
-    return true
+    return "never"
+end
+
+--- Identifiers an option word carries in every cluster reading. Only the
+--- text before its first whitespace counts.
+--- @param word string a dash word
+--- @param kinds table<string, agentic.PermArityKind> hinted kind per token
+--- @return string[] ids `name` for `--name[=v]`. For `-abc`, the letters up
+---         to and including the first that is not a hinted boolean (a later
+---         letter may be its value).
+local function sure_identifiers(word, kinds)
+    local head = word:match("^%S*")
+    if head:sub(1, 2) == "--" then
+        local name = head:sub(3):match("^[^=]+")
+        return name and { name } or {}
+    end
+    local ids = {}
+    for letter in head:sub(2):gmatch(".") do
+        table.insert(ids, letter)
+        if kinds["-" .. letter] ~= "boolean" then
+            break
+        end
+    end
+    return ids
+end
+
+--- The scope class of a parse after it reads a positional.
+--- @param scope string scope class before `positional`. `""` before the
+---        first positional.
+--- @param positional string
+--- @param arity agentic.PermArity|nil hints of the command
+--- @return string scope `scope` when it is not `""`. Else `positional` when
+---         `arity` has it as a key, else `"*"` (only every-scope hints apply).
+local function scope_after(scope, positional, arity)
+    if scope ~= "" then
+        return scope
+    end
+    if positional ~= "" and arity and arity[positional] then
+        return positional
+    end
+    return "*"
+end
+
+--- Whether `word` is a positional in a parse.
+--- @param word string
+--- @param open boolean options have not ended in the parse
+--- @return boolean
+local function is_positional(word, open)
+    return not open or is_plain(word)
+end
+
+--- One parse, at a word boundary.
+--- @class agentic.PermStructured.ParseState
+--- @field i integer index of the next word
+--- @field scope string scope class: `""` before the first positional, else
+---        the arity key that applies after it
+--- @field open boolean options not yet ended
+
+--- Key that is equal for two states at the same word index iff the rest of
+--- their parses are the same.
+--- @param state agentic.PermStructured.ParseState
+--- @return string key of `scope` and `open`
+local function state_key(state)
+    return (state.open and "+" or "-") .. state.scope
+end
+
+--- Every parse of one word list, for universal matching.
+--- @class agentic.PermStructured.ForallCtx
+--- @field words        string[]
+--- @field n_static     integer number of words before the first dynamic one
+--- @field arity?       agentic.PermArity
+--- @field kinds        table<string, table<string, agentic.PermArityKind>> hinted kind per token, per scope class, filled lazily
+--- @field sure_flags   string[] identifiers that are options in every parse
+--- @field sure_leading string[] those also before every parse's first positional
+
+--- Hinted kind per token in a scope class. Caches into `ctx.kinds`.
+--- @param ctx agentic.PermStructured.ForallCtx
+--- @param scope string
+--- @return table<string, agentic.PermArityKind>
+local function kinds_in(ctx, scope)
+    local kinds = ctx.kinds[scope]
+    if kinds == nil then
+        kinds = arity_kinds(ctx.arity, scope)
+        ctx.kinds[scope] = kinds
+    end
+    return kinds
+end
+
+--- The states one parse step over the word at `state.i` leads to: past a
+--- positional (which may set the scope class), past `--` (closing options),
+--- or past an option word without and/or with its value, per its hinted
+--- arity. A taker that is the last word leads nowhere (getopt errors), so
+--- every condition on the rest of that parse holds vacuously.
+--- @param ctx agentic.PermStructured.ForallCtx
+--- @param state agentic.PermStructured.ParseState at a static word
+--- @return agentic.PermStructured.ParseState[] states
+local function parse_steps(ctx, state)
+    local i, word = state.i, ctx.words[state.i]
+    if is_positional(word, state.open) then
+        local scope = scope_after(state.scope, word, ctx.arity)
+        return { { i = i + 1, scope = scope, open = state.open } }
+    end
+    if word == "--" then
+        return { { i = i + 1, scope = state.scope, open = false } }
+    end
+    local takes = option_takes_next(word, kinds_in(ctx, state.scope))
+    --- @type agentic.PermStructured.ParseState[]
+    local states = {}
+    if takes ~= "always" then
+        table.insert(states, { i = i + 1, scope = state.scope, open = true })
+    end
+    if takes ~= "never" and i < #ctx.words then
+        table.insert(states, { i = i + 2, scope = state.scope, open = true })
+    end
+    return states
+end
+
+--- Intersection of lists.
+--- @param lists string[][] non-empty
+--- @return string[] elements of `lists[1]` in every list, in their order
+local function intersection(lists)
+    return vim.iter(lists[1])
+        :filter(function(id)
+            return vim.iter(lists):all(function(list)
+                return vim.tbl_contains(list, id)
+            end)
+        end)
+        :totable()
+end
+
+--- Context over every parse of a word list, with the identifiers that are
+--- options in every parse. A word contributes when no parse takes it as a
+--- value, every parse that reaches it has options open, and no dynamic word
+--- comes before it (one may expand to an option, `--`, or several words).
+--- Its identifiers are those it carries in every cluster reading, in every
+--- scope class it is reached in.
+--- @param words string[]
+--- @param dynamic boolean[] parallel to `words`: expands at runtime
+--- @param arity agentic.PermArity|nil hints of the command
+--- @return agentic.PermStructured.ForallCtx
+local function build_forall_ctx(words, dynamic, arity)
+    local n_static = #words
+    for i = 1, #words do
+        if dynamic[i] then
+            n_static = i - 1
+            break
+        end
+    end
+    --- @type agentic.PermStructured.ForallCtx
+    local ctx = {
+        words = words,
+        n_static = n_static,
+        arity = arity,
+        kinds = {},
+        sure_flags = {},
+        sure_leading = {},
+    }
+    --- @type agentic.PermStructured.ParseState
+    local start = { i = 1, scope = "", open = true }
+    --- @type table<integer, table<string, agentic.PermStructured.ParseState>>
+    local reached = { { [state_key(start)] = start } }
+    --- @type table<integer, true>
+    local absorbed = {}
+    for i = 1, n_static do
+        local states = vim.tbl_values(reached[i] or {})
+        local options_word = #states > 0
+            and not absorbed[i]
+            and is_flag(words[i])
+            and vim.iter(states):all(function(s)
+                return s.open
+            end)
+        if options_word then
+            local ids = intersection(vim.tbl_map(function(s)
+                return sure_identifiers(words[i], kinds_in(ctx, s.scope))
+            end, states))
+            vim.list_extend(ctx.sure_flags, ids)
+            if
+                vim.iter(states):all(function(s)
+                    return s.scope == ""
+                end)
+            then
+                vim.list_extend(ctx.sure_leading, ids)
+            end
+        end
+        for _, state in ipairs(states) do
+            for _, next_state in ipairs(parse_steps(ctx, state)) do
+                if next_state.i == i + 2 then
+                    absorbed[i + 1] = true
+                end
+                reached[next_state.i] = reached[next_state.i] or {}
+                reached[next_state.i][state_key(next_state)] = next_state
+            end
+        end
+    end
+    return ctx
+end
+
+--- Whether the positional stream of every parse matches `patterns`
+--- contiguously from the first positional, trailing words allowed. A parse
+--- fails when it reaches the end, reaches a dynamic word, or takes one as a
+--- value, with elements left.
+--- @param patterns string[] one glob per element
+--- @param ctx agentic.PermStructured.ForallCtx
+--- @return boolean
+local function every_stream_matches(patterns, ctx)
+    local lua_patterns =
+        vim.tbl_map(PermissionRules.glob_to_lua_pattern, patterns)
+    --- @type table<string, boolean>
+    local memo = {}
+
+    --- @param state agentic.PermStructured.ParseState
+    --- @param pos integer index into `patterns`
+    --- @return boolean
+    local function holds(state, pos)
+        if pos > #patterns then
+            return true
+        end
+        -- Past the static words: at the end, or at or past a dynamic word
+        -- (every parse beyond it reached it or took it as a value).
+        local i = state.i
+        if i > ctx.n_static then
+            return false
+        end
+        local key = i .. ":" .. pos .. ":" .. state_key(state)
+        if memo[key] == nil then
+            local word = ctx.words[i]
+            local positional = is_positional(word, state.open)
+            if positional and not word:match(lua_patterns[pos]) then
+                memo[key] = false
+            else
+                local next_pos = positional and pos + 1 or pos
+                memo[key] = vim.iter(parse_steps(ctx, state)):all(function(s)
+                    return holds(s, next_pos)
+                end)
+            end
+        end
+        return memo[key]
+    end
+
+    return holds({ i = 1, scope = "", open = true }, 1)
 end
 
 --- True iff the two lists share an element.
@@ -675,27 +847,23 @@ local function intersects(a, b)
     return false
 end
 
---- Evaluate a gate against the single allow parse. Absent fields are wildcards.
---- Option identifiers match exactly — no abbreviation, no wildcarding, since
---- allow must stay concrete.
+--- Whether `gate` holds in every parse of `ctx`. Absent fields are
+--- wildcards. Option identifiers match exactly (no abbreviation).
 --- @param gate agentic.PermGate
---- @param parse agentic.PermStructured.AllowParse
+--- @param ctx agentic.PermStructured.ForallCtx
 --- @return boolean
-local function gate_matches_allow(gate, parse)
-    if gate.options ~= nil then
-        if not intersects(parse.flag_cands, gate.options) then
-            return false
-        end
+local function gate_matches_universal(gate, ctx)
+    if gate.options ~= nil and not intersects(ctx.sure_flags, gate.options) then
+        return false
     end
-    if gate.leading_options ~= nil then
-        if not intersects(parse.leading_cands, gate.leading_options) then
-            return false
-        end
+    if
+        gate.leading_options ~= nil
+        and not intersects(ctx.sure_leading, gate.leading_options)
+    then
+        return false
     end
     if gate.positionals ~= nil and #gate.positionals > 0 then
-        if not allow_positionals_match(gate.positionals, parse) then
-            return false
-        end
+        return every_stream_matches(gate.positionals, ctx)
     end
     return true
 end
@@ -797,6 +965,15 @@ local function entries_at(entries, keys)
     return present
 end
 
+--- The arity hints of `cmd_name`'s own entry, never of the `"*"` entry.
+--- @param entries agentic.StructuredEntries
+--- @param cmd_name string
+--- @return agentic.PermArity|nil arity nil when the entry or its hints are absent
+local function arity_of(entries, cmd_name)
+    local entry = entries_at(entries, { cmd_name })[1]
+    return entry and entry.arity
+end
+
 --- The cmd entry plus the `"*"` wildcard entry (see `entries_at`).
 --- @param entries agentic.StructuredEntries
 --- @param cmd_name string
@@ -849,9 +1026,10 @@ function M.decide_leaf(entries, parsed, auto_approve)
         end
     end
 
-    local parse = allow_parse(words, dynamic, parsed.cmd_name)
+    local forall =
+        build_forall_ctx(words, dynamic, arity_of(entries, parsed.cmd_name))
     local function allow(gate)
-        return gate_matches_allow(gate, parse)
+        return gate_matches_universal(gate, forall)
     end
     local kinds = eligible_allow_kinds(auto_approve)
     for _, e in ipairs(allow_entries(entries, parsed.cmd_name)) do
@@ -876,8 +1054,8 @@ end
 --- which of the four gate kinds match — the highlight layer needs the
 --- intrinsic category ("is this known-safe") not "was this auto-approved", so
 --- a `safe_write` like `git add` reads as safe even at the `read_only` tier.
---- deny/ask use existential matching; read_only/safe_write use the allow parse,
---- with no `"*"` gates for a path-named command.
+--- deny/ask use existential matching; read_only/safe_write universal
+--- matching, with no `"*"` gates for a path-named command.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @return agentic.PermClassification
@@ -885,14 +1063,15 @@ function M.classify_leaf(entries, parsed)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
     local ctx = build_exist_ctx(words, dynamic, true)
-    local parse = allow_parse(words, dynamic, parsed.cmd_name)
+    local forall =
+        build_forall_ctx(words, dynamic, arity_of(entries, parsed.cmd_name))
     local relevant = relevant_entries(entries, parsed.cmd_name)
 
     local function exist(gate)
         return gate_matches_existential(gate, ctx)
     end
     local function allow(gate)
-        return gate_matches_allow(gate, parse)
+        return gate_matches_universal(gate, forall)
     end
 
     --- @type agentic.PermClassification
