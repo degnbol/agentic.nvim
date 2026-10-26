@@ -20,8 +20,7 @@ Tracks are independent unless a note says otherwise.
 4. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
 5. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md), which also needs
    `PLAN-hooks_in_chat.md`
-6. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md), which also
-   needs `PLAN-subagent-seam-fixes.md`
+6. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
 
 **Hooks in chat**
 1. [`PLAN-hooks_in_chat.md`](notes/PLAN-hooks_in_chat.md). Either order with
@@ -228,13 +227,12 @@ scoping decision: [`notes/refactor-acp-kind-normalisation.md`](notes/refactor-ac
 General modules still hold claude-agent-acp knowledge. Each plan moves one part
 behind a neutral `ACPClient` default that `ClaudeAgentACPAdapter` overrides. No
 plan needs another to land first. The order below only avoids conflicts:
-plans 2 and 3 both change `create_session`/`load_session`, and plan 3 wraps
-the result of plan 2.
+plans 1 and 2 both change `create_session`/`load_session`, and plan 2 wraps
+the result of plan 1.
 
-1. [`PLAN-subagent-seam-fixes.md`](notes/PLAN-subagent-seam-fixes.md)
-2. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
-3. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
-4. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
+1. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
+2. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
+3. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
 
 ## Feature ideas
 
