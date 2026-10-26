@@ -60,6 +60,7 @@ end
 --- @field task_id? string Background task a TaskStop/TaskOutput acts on
 --- @field cron? string Schedule expression of a CronCreate
 --- @field planFilePath? string Plan file of an ExitPlanMode, on its permission request only
+--- @field command_description? string Bash `description` under the name the CLI also accepts
 
 --- claude-agent-acp sends rawInput/title/kind on tool_call_update, not just tool_call
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
@@ -236,7 +237,8 @@ end
 --- @param message agentic.ui.MessageWriter.ToolCallBase
 --- @param raw_input agentic.acp.ClaudeAgentRawInput|nil
 local function lift_execute_description(message, raw_input)
-    local desc = raw_input and raw_input.description
+    local desc = raw_input
+        and (raw_input.description or raw_input.command_description)
     local stripped, was_fenced = ClaudeUtils.strip_console_fence(message.body)
     if was_fenced then
         message.body = stripped

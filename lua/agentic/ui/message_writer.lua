@@ -2659,7 +2659,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
     -- A tool call ends the current prose run, and with it the prose pin.
     self:_release_prose_pin()
 
-    -- Mode-switch tool calls (EnterPlanMode, ExitPlanMode, EnterWorktree)
+    -- Mode-switch tool calls (EnterPlanMode, ExitPlanMode)
     -- carry internal instructions in their body — strip it so only the
     -- compact header renders (e.g. "Switch Mode `EnterPlanMode`").
     -- TodoWrite body is the raw JSON request — hide it since the todo window

@@ -8,7 +8,6 @@ local M = {}
 M.MODE_SWITCH_TOOLS = {
     EnterPlanMode = "Plan",
     ExitPlanMode = "Normal",
-    EnterWorktree = "Normal",
 }
 
 --- claude-agent-acp's per-notification metadata, or an empty table when the
@@ -339,16 +338,16 @@ function M.rewrite_grep_to_rg(argument)
 end
 
 --- SDK placeholder titles emitted before tool input has finished streaming.
---- The bridge (`@agentclientprotocol/claude-agent-acp` tools.js
---- `toolInfoFromToolUse`) returns these literals when the relevant input
---- field is still undefined. We swap them for an empty string so the
+--- The bridge (`@agentclientprotocol/claude-agent-acp`
+--- `tool-calls/reporters/*.js`) returns these literals when the relevant
+--- input field is still undefined. We swap them for an empty string so the
 --- rendered block shows a blank placeholder line until the actual argument
 --- arrives in a later tool_call_update.
 M.PLACEHOLDER_TITLES = {
     Terminal = true, -- Bash with no command
     Task = true, -- Task with no description
     ["Read File"] = true, -- Read with no file_path
-    Write = true, -- Write with no file_path
+    ["Preparing file…"] = true, -- Write with no file_path
     Edit = true, -- Edit with no file_path
     grep = true, -- Grep with no flags/pattern
     Find = true, -- Glob with no pattern/path

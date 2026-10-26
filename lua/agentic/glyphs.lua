@@ -46,8 +46,8 @@ Glyphs.KIND = {
     subagent = "󰚩",
     skill = "󰗚",
     todowrite = "󰝖",
-    -- Both plan-mode tools and EnterWorktree arrive as this one kind; the head
-    -- text ("Plan" / "Normal") is what tells them apart.
+    -- Both plan-mode tools arrive as this one kind; the head text ("Plan" /
+    -- "Normal") is what tells them apart.
     switch_mode = "󰍍",
     -- The toolbox is what a tool search searches; the magnifier is spent on
     -- `search`, and the head carries the query either way.

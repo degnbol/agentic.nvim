@@ -636,8 +636,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 assert.is_true(mode_switch_call("ExitPlanMode").exits_plan)
             end)
 
-            it("leaves the other mode switches unmarked", function()
-                assert.is_nil(mode_switch_call("EnterWorktree").exits_plan)
+            it("leaves EnterPlanMode unmarked", function()
                 assert.is_nil(mode_switch_call("EnterPlanMode").exits_plan)
             end)
 
@@ -653,18 +652,18 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 assert.is_true(msg.exits_plan)
             end)
 
-            it("leaves an EnterWorktree update unmarked", function()
-                local msg = make_adapter():__build_tool_call_update({
-                    toolCallId = "tc-wt",
-                    kind = "switch_mode",
-                    status = "pending",
-                    rawInput = { name = "wt" },
-                    _meta = { claudeCode = { toolName = "EnterWorktree" } },
-                })
+        end)
 
-                assert.equal("Normal", msg.argument)
-                assert.is_nil(msg.exits_plan)
-            end)
+        it("shows EnterWorktree as its own call, not a mode switch", function()
+            local msg = make_adapter():__build_tool_call_update({
+                toolCallId = "tc-wt",
+                kind = "switch_mode",
+                status = "pending",
+                rawInput = { name = "wt" },
+                _meta = { claudeCode = { toolName = "EnterWorktree" } },
+            })
+
+            assert.is_not.equal("Normal", msg.argument)
         end)
 
         describe("plan_file", function()
@@ -1461,6 +1460,25 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             })
 
             assert.equal("ls", tracker.argument)
+            assert.equal("List files", tracker.description)
+        end)
+
+        it("lifts a Bash command_description", function()
+            local adapter, tracker = make_tracking_adapter()
+            send(adapter, {
+                sessionUpdate = "tool_call",
+                kind = "execute",
+                title = "Terminal",
+                status = "pending",
+                rawInput = {},
+                _meta = meta("Bash"),
+            })
+            send(adapter, {
+                sessionUpdate = "tool_call_update",
+                rawInput = { command = "ls", command_description = "List files" },
+                _meta = meta("Bash"),
+            })
+
             assert.equal("List files", tracker.description)
         end)
 
