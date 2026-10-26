@@ -828,7 +828,7 @@ function SessionManager:_restore_transcripts()
             self._agents[child_id] = {
                 transcript = transcript,
                 open = false,
-                record_read =true,
+                record_read = true,
             }
             if block then
                 block.argument = vim.api.nvim_buf_get_name(transcript.bufnr)
@@ -881,7 +881,7 @@ end
 --- The subagent an update belongs to: the one whose child session sent it,
 --- else the one its Task tag names. Nil for the main agent's.
 --- @param source_session_id string|nil
---- @param task_id string|nil The update's `parentToolUseId`
+--- @param task_id string|nil Id of the tool use the update is tagged with, nil when untagged
 --- @return string|nil child_id
 function SessionManager:_agent_of(source_session_id, task_id)
     if source_session_id and self._agents[source_session_id] then
@@ -892,7 +892,7 @@ end
 
 --- Record a subagent's Task id from an update's tag, while none is known.
 --- @param child_id string
---- @param task_id string|nil The update's `parentToolUseId`
+--- @param task_id string|nil Id of the tool use that spawned the subagent, nil when untagged
 function SessionManager:_note_agent_task(child_id, task_id)
     if task_id and not self._agent_by_task[task_id] then
         self._agent_by_task[task_id] = child_id
@@ -1005,7 +1005,7 @@ function SessionManager:_open_agent(child_id, name, task)
     self._agents[child_id] = {
         transcript = transcript,
         open = not self._loading,
-        record_read =false,
+        record_read = false,
     }
 
     --- @type agentic.ui.MessageWriter.ToolCallBlock

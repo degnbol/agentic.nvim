@@ -4997,6 +4997,9 @@ describe("agentic.SessionManager", function()
         local main_write
         --- @type TestSpy
         local subagent_write
+        --- Task id each update is tagged with.
+        --- @type table<agentic.acp.AgentMessageChunk, string>
+        local tags = {}
 
         before_each(function()
             main_write = spy.new(function() end)
@@ -5013,14 +5016,12 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_message_chunk = main_write },
                 status_indicator = { start = function() end },
                 chat_history = ChatHistory:new(),
-                agent = setmetatable(
-                    { provider_config = { name = "test-provider" } },
-                    {
-                        __index = require(
-                            "agentic.acp.adapters.claude_agent_acp_adapter"
-                        ),
-                    }
-                ),
+                agent = {
+                    provider_config = { name = "test-provider" },
+                    subagent_task_id = function(_, update)
+                        return tags[update]
+                    end,
+                },
                 widget = { buf_nrs = {} },
                 _prompt_pending = 1,
                 _agents = {
@@ -5035,21 +5036,17 @@ describe("agentic.SessionManager", function()
 
         --- @param message_id string|vim.NIL
         --- @param text string
-        --- @param parent_tool_use_id string|nil Tags the chunk as subagent content
+        --- @param task_id string|nil Tags the chunk as subagent content
         --- @return agentic.acp.AgentMessageChunk
-        local function chunk(message_id, text, parent_tool_use_id)
-            return {
+        local function chunk(message_id, text, task_id)
+            --- @type agentic.acp.AgentMessageChunk
+            local update = {
                 sessionUpdate = "agent_message_chunk",
                 content = { type = "text", text = text },
                 messageId = message_id,
-                _meta = parent_tool_use_id
-                        and {
-                            claudeCode = {
-                                parentToolUseId = parent_tool_use_id,
-                            },
-                        }
-                    or nil,
             }
+            tags[update] = task_id
+            return update
         end
 
         --- `{ text, starts_response }` of each call a writer received.
