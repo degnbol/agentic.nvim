@@ -1052,6 +1052,34 @@ describe("agentic.SessionManager", function()
             end
         )
 
+        it("keeps the create response of a restore from history", function()
+            local session = make_load_session()
+            --- @type fun(result: table|nil, err: table|nil)|nil
+            local captured_create_cb
+            session.agent.create_session = function(_self, _cwd, _handlers, cb)
+                captured_create_cb = cb
+            end
+            session.new_session = SessionManager.new_session
+            session.config_options.set_initial_mode = function() end
+            session.agent.provider_config = {}
+            local created = false
+
+            -- restore_from_history sets _restoring, then creates
+            session._restoring = true
+            session:new_session({
+                restore_mode = true,
+                quiet_welcome = true,
+                on_created = function()
+                    created = true
+                end,
+            })
+            assert.is_not_nil(captured_create_cb)
+            captured_create_cb({ sessionId = "restored-sid" }, nil)
+
+            assert.equal("restored-sid", session.session_id)
+            assert.is_true(created)
+        end)
+
         describe("session cwd after an editor cwd change", function()
             --- @type TestStub
             local getcwd_stub

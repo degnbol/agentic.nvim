@@ -3796,8 +3796,7 @@ function SessionManager:new_session(opts)
 
     -- Preserve the user-selected model across /new and /clear. The provider's
     -- session/new response carries its default configOptions, which would
-    -- otherwise revert the model to the provider default. Restore flows have
-    -- their own model-restore path, so skip there.
+    -- otherwise revert the model to the provider default.
     local preserved_model
     if not restore_mode and self.config_options then
         local co = self.config_options
@@ -3852,15 +3851,13 @@ function SessionManager:new_session(opts)
         -- A session load (or another new_session) may have started while
         -- this create was in flight. The epoch counter detects this: if the
         -- epoch has advanced, this response is stale and must be discarded.
-        -- The _restoring check is kept as a belt-and-braces guard for the
-        -- window between _do_load setting _restoring and incrementing epoch.
         --
         -- Only remove the subscriber — do NOT send session/cancel. Sending
         -- cancel for the stale session while session/load is active or just
         -- completed can confuse providers (observed: claude-agent-acp drops
         -- loaded session context when a cancel arrives for a different session
         -- around the same time).
-        if self._restoring or epoch ~= self._session_epoch then
+        if epoch ~= self._session_epoch then
             self.agent:unsubscribe(response.sessionId)
             return
         end
@@ -3927,7 +3924,6 @@ function SessionManager:new_session(opts)
                 -- default) is being switched in asynchronously via the flush
                 -- above; name it here so the marker shows the model the
                 -- session will actually use, not the transient default.
-                -- Skipped on restore (incline already shows the model).
                 if not restore_mode then
                     local co = self.config_options
                     self:announce_model_loaded(

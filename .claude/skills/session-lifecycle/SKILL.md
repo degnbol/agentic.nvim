@@ -52,13 +52,12 @@ Three race conditions can overwrite `self.session_id` during ACP
 
 **Guards:**
 
-- `_restoring` flag — prevents the deferred on-ready callback (race 1) and
-  catches in-flight create callbacks while load is active.
+- `_restoring` flag — prevents the deferred on-ready callback (race 1).
 - `_session_epoch` counter — monotonically incremented by `new_session()`,
   `_do_load_acp_session` and `_delete_session` (which ends a conversation with
   no `new_session` behind it). The `create_session` callback captures the epoch
   at call time and rejects the response if the epoch has advanced (race 2).
-  This catches stale responses even after `_restoring` is cleared. Long-running
+  Long-running
   side flows capture it too: `run_login` holds the epoch across the login so
   its callback cannot recover into a replaced conversation.
 - `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
