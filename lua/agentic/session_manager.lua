@@ -136,27 +136,11 @@ end
 function SessionManager:_notify_attention(badge, skip_badge)
     local is_chat_focused = vim.api.nvim_get_current_buf()
         == self.widget.buf_nrs.chat
-
-    if skip_badge then
-        if not is_chat_focused then
-            SessionManager._ring_bell()
-        end
-        return
-    end
-
-    local following = self.message_writer:any_following()
-
-    if is_chat_focused then
-        -- Focused on chat: badge if no chat window follows, no bell (can't dismiss easily)
-        if not following then
-            self.widget:set_badge(badge)
-        end
-    else
-        -- Not focused on chat: bell + badge
+    if not is_chat_focused then
         SessionManager._ring_bell()
-        if not following then
-            self.widget:set_badge(badge)
-        end
+    end
+    if not skip_badge and not self.message_writer:any_following() then
+        self.widget:set_badge(badge)
     end
 end
 
@@ -204,24 +188,15 @@ end
 --- caller holding an earlier history is not necessarily writing back.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_sync_history_context(history)
-    if self.file_activity then
-        history.file_activity = self.file_activity:serialize()
-    end
+    history.file_activity = self.file_activity:serialize()
     history.provider = Config.provider
     -- Guarded: a provider that reports no agentInfo, or whose initialize is
     -- still in flight, must not erase the version a restored session recorded.
-    local agent_info = self.agent and self.agent.agent_info
+    local agent_info = self.agent.agent_info
     if agent_info then
         history.provider_version = agent_info.version
     end
-    local opts = self.config_options
-    if opts then
-        history.model = (opts.model and opts.model.currentValue)
-            or (
-                opts.legacy_agent_models
-                and opts.legacy_agent_models.current_model_id
-            )
-    end
+    history.model = self.config_options:current_model_id()
 end
 
 --- Sync the session context onto `history` and write it to disk. A history
@@ -1349,6 +1324,62 @@ function SessionManager:_chunk_agent(update, source_session_id)
     return child_id, self:_transcript_for(child_id)
 end
 
+--- Write an agent's message or thought chunk to the chat, or to the
+--- transcript of the subagent that sent it, and append its text to the
+--- history. A message chunk that opens a new response loses its leading
+--- newlines, and is dropped if no text is left. A thought chunk is written
+--- as sent. While a session loads, subagent chunks are ignored.
+--- @param update agentic.acp.AgentMessageChunk|agentic.acp.AgentThoughtChunk
+--- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
+function SessionManager:_on_agent_chunk(update, source_session_id)
+    if
+        self._loading
+        and self:_agent_of(
+            source_session_id,
+            self.agent:subagent_task_id(update)
+        )
+    then
+        return
+    end
+    local is_message = update.sessionUpdate == "agent_message_chunk"
+    local child_id, transcript = self:_chunk_agent(update, source_session_id)
+    local chunk, starts_response = update, nil
+    if is_message then
+        local filtered
+        filtered, starts_response = filter_chunk(
+            transcript and transcript.response_boundary
+                or self._response_boundary,
+            update --[[@as agentic.acp.AgentMessageChunk]]
+        )
+        if not filtered then
+            return
+        end
+        chunk = filtered
+    end
+    if transcript then
+        transcript.writer:write_message_chunk(chunk, starts_response)
+        transcript.status_indicator:reposition()
+    else
+        self.message_writer:write_message_chunk(chunk, starts_response)
+        self.status_indicator:start(is_message and "generating" or "thinking")
+    end
+    if chunk.content and chunk.content.text then
+        self.chat_history:append_agent_text({
+            type = is_message and "agent" or "thought",
+            text = chunk.content.text,
+            provider_name = self.agent.provider_config.name,
+            parent_tool_use_id = child_id and self:_task_of(child_id),
+        }, starts_response)
+        -- Subagent text is never written per chunk, even outside a turn
+        -- (see `_on_tool_call_update`).
+        if child_id then
+            self:_sync_modified(self.chat_history)
+        else
+            self:_history_changed(self.chat_history)
+        end
+    end
+end
+
 --- @param update agentic.acp.SessionUpdateMessage
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
 function SessionManager:_on_session_update(update, source_session_id)
@@ -1358,68 +1389,11 @@ function SessionManager:_on_session_update(update, source_session_id)
         if Config.windows.todos.display then
             self.todo_list:render(update.entries)
         end
-    elseif update.sessionUpdate == "agent_message_chunk" then
-        if self._loading and self:_agent_of(source_session_id, self.agent:subagent_task_id(update)) then
-            return
-        end
-        local child_id, transcript =
-            self:_chunk_agent(update, source_session_id)
-        local chunk, starts_response = filter_chunk(
-            transcript and transcript.response_boundary
-                or self._response_boundary,
-            update
-        )
-        if not chunk then
-            return
-        end
-        if transcript then
-            transcript.writer:write_message_chunk(chunk, starts_response)
-            transcript.status_indicator:reposition()
-        else
-            self.message_writer:write_message_chunk(chunk, starts_response)
-            self.status_indicator:start("generating")
-        end
-        if chunk.content and chunk.content.text then
-            self.chat_history:append_agent_text({
-                type = "agent",
-                text = chunk.content.text,
-                provider_name = self.agent.provider_config.name,
-                parent_tool_use_id = child_id and self:_task_of(child_id),
-            }, starts_response)
-            -- Subagent text is never written per chunk, even outside a turn
-            -- (see `_on_tool_call_update`).
-            if child_id then
-                self:_sync_modified(self.chat_history)
-            else
-                self:_history_changed(self.chat_history)
-            end
-        end
-    elseif update.sessionUpdate == "agent_thought_chunk" then
-        if self._loading and self:_agent_of(source_session_id, self.agent:subagent_task_id(update)) then
-            return
-        end
-        local child_id, transcript =
-            self:_chunk_agent(update, source_session_id)
-        if transcript then
-            transcript.writer:write_message_chunk(update)
-            transcript.status_indicator:reposition()
-        else
-            self.message_writer:write_message_chunk(update)
-            self.status_indicator:start("thinking")
-        end
-        if update.content and update.content.text then
-            self.chat_history:append_agent_text({
-                type = "thought",
-                text = update.content.text,
-                provider_name = self.agent.provider_config.name,
-                parent_tool_use_id = child_id and self:_task_of(child_id),
-            })
-            if child_id then
-                self:_sync_modified(self.chat_history)
-            else
-                self:_history_changed(self.chat_history)
-            end
-        end
+    elseif
+        update.sessionUpdate == "agent_message_chunk"
+        or update.sessionUpdate == "agent_thought_chunk"
+    then
+        self:_on_agent_chunk(update, source_session_id)
     elseif update.sessionUpdate == "subagent_spawned" then
         self:_open_agent(
             update.subagentSessionId,
@@ -2447,11 +2421,9 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- can overwhelm the event loop and crash neovim.
     if tool_call_update.status == "completed" then
         local tracker = writer.tool_call_blocks[id]
-        if
-            tracker
-            and tracker.kind
-            and FILE_MUTATING_KINDS[AcpKind.normalise(tracker.kind)]
-        then
+        local mutates_file = tracker ~= nil
+            and FILE_MUTATING_KINDS[AcpKind.normalise(tracker.kind)] == true
+        if mutates_file then
             if not self._checktime_scheduled then
                 self._checktime_scheduled = true
                 vim.schedule(function()
@@ -2468,8 +2440,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         -- Use tracker.argument (accumulated from all updates) — the completed
         -- update itself rarely carries the argument field.
         if
-            tracker
-            and FILE_MUTATING_KINDS[AcpKind.normalise(tracker.kind)]
+            mutates_file
             and tracker.argument
             and tracker.argument:match("%.md$")
         then
@@ -2510,42 +2481,15 @@ end
 ---   header, since the configured `default_mode` at session start arrives
 ---   through this same callback and is not a user switch.
 function SessionManager:_handle_mode_change(mode_id, is_legacy, opts)
-    if not self.session_id then
-        return
-    end
-
-    local function callback(result, err)
-        if err then
-            Logger.notify(
-                string.format(
-                    "Failed to change mode to '%s': %s",
-                    mode_id,
-                    err.message
-                ),
-                vim.log.levels.ERROR
-            )
-        else
-            -- needed for backward compatibility
+    self:_set_session_option("mode", mode_id, is_legacy, function()
+        if is_legacy then
             self.config_options.legacy_agent_modes.current_mode_id = mode_id
-
-            if result and result.configOptions then
-                Logger.debug("received result after setting mode")
-                self:_handle_new_config_options(result.configOptions)
-            end
-
-            self:_update_chat_header()
-
-            if opts and opts.as_notice then
-                self:_notice_mode_switched(mode_id)
-            end
         end
-    end
-
-    if is_legacy then
-        self.agent:set_mode(self.session_id, mode_id, callback)
-    else
-        self.agent:set_config_option(self.session_id, "mode", mode_id, callback)
-    end
+        self:_update_chat_header()
+        if opts and opts.as_notice then
+            self:_notice_mode_switched(mode_id)
+        end
+    end)
 end
 
 --- Send the newly selected model to the agent
@@ -2557,43 +2501,66 @@ end
 ---   flush (restore, `/new`, `/clear`) arrives through this same callback and is
 ---   not a user switch.
 function SessionManager:_handle_model_change(model_id, is_legacy, opts)
+    self:_set_session_option("model", model_id, is_legacy, function()
+        if is_legacy then
+            self.config_options.legacy_agent_models.current_model_id = model_id
+        end
+        if opts and opts.as_notice then
+            self:_notice_model_switched(model_id)
+        else
+            self:announce_model_loaded(model_id)
+        end
+    end)
+end
+
+--- Set the session's mode or model on the provider. On success, apply the
+--- config options the provider returns, then call `on_set`. On failure,
+--- notify. A no-op without a session.
+--- @param category "mode"|"model"
+--- @param value_id string
+--- @param is_legacy boolean|nil Send `session/set_mode` or `session/set_model` instead of `session/set_config_option`
+--- @param on_set fun()
+function SessionManager:_set_session_option(
+    category,
+    value_id,
+    is_legacy,
+    on_set
+)
     if not self.session_id then
         return
     end
 
-    local callback = function(result, err)
+    local function callback(result, err)
         if err then
             Logger.notify(
                 string.format(
-                    "Failed to change model to '%s': %s",
-                    model_id,
+                    "Failed to change %s to '%s': %s",
+                    category,
+                    value_id,
                     err.message
                 ),
                 vim.log.levels.ERROR
             )
-        else
-            if result and result.configOptions then
-                Logger.debug("received result after setting model")
-                self:_handle_new_config_options(result.configOptions)
-            end
-
-            if opts and opts.as_notice then
-                self:_notice_model_switched(model_id)
-            else
-                self:announce_model_loaded(model_id)
-            end
+            return
         end
+        if result and result.configOptions then
+            Logger.debug("received result after setting " .. category)
+            self:_handle_new_config_options(result.configOptions)
+        end
+        on_set()
     end
 
-    if is_legacy then
-        self.agent:set_model(self.session_id, model_id, callback)
-    else
+    if not is_legacy then
         self.agent:set_config_option(
             self.session_id,
-            "model",
-            model_id,
+            category,
+            value_id,
             callback
         )
+    elseif category == "mode" then
+        self.agent:set_mode(self.session_id, value_id, callback)
+    else
+        self.agent:set_model(self.session_id, value_id, callback)
     end
 end
 
@@ -2640,9 +2607,7 @@ function SessionManager:_update_chat_header()
 
     -- Mode — only show non-default modes (e.g. "Plan").
     -- Hidden IDs: "default" (claude-agent-acp), "build" (opencode-acp).
-    local mode_id = self.config_options.mode
-            and self.config_options.mode.currentValue
-        or self.config_options.legacy_agent_modes.current_mode_id
+    local mode_id = self.config_options:current_mode_id()
     if mode_id and mode_id ~= "default" and mode_id ~= "build" then
         local mode_name = self.config_options:get_mode_name(mode_id) or mode_id
         mode_name = mode_name:gsub(" Mode$", "")
@@ -3786,16 +3751,8 @@ function SessionManager:new_session(opts)
     -- session/new response carries its default configOptions, which would
     -- otherwise revert the model to the provider default.
     local preserved_model
-    if not restore_mode and self.config_options then
-        local co = self.config_options
-        preserved_model = (co.model and co.model.currentValue)
-            or (
-                co.legacy_agent_models
-                and co.legacy_agent_models.current_model_id
-            )
-    end
-
     if not restore_mode then
+        preserved_model = self.config_options:current_model_id()
         self:_cancel_session()
     end
 
@@ -3836,9 +3793,8 @@ function SessionManager:new_session(opts)
             return
         end
 
-        -- A session load (or another new_session) may have started while
-        -- this create was in flight. The epoch counter detects this: if the
-        -- epoch has advanced, this response is stale and must be discarded.
+        -- A load or another new_session started while this create was in
+        -- flight (race 2 of the session-lifecycle skill).
         --
         -- Only remove the subscriber — do NOT send session/cancel. Sending
         -- cancel for the stale session while session/load is active or just
@@ -3913,11 +3869,9 @@ function SessionManager:new_session(opts)
                 -- above; name it here so the marker shows the model the
                 -- session will actually use, not the transient default.
                 if not restore_mode then
-                    local co = self.config_options
                     self:announce_model_loaded(
                         preserved_model
-                            or (co.model and co.model.currentValue)
-                            or co.legacy_agent_models.current_model_id
+                            or self.config_options:current_model_id()
                     )
                 end
             end
@@ -3978,20 +3932,10 @@ end
 ---   the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id to reapply after load (queued until options arrive).
 function SessionManager:_do_load_acp_session(session_id, cwd, model)
-    -- Prevent the constructor's deferred on-ready callback from calling
-    -- new_session() after we've already started loading.  When the agent
-    -- instance is already initialised, get_instance() fires on_ready
-    -- synchronously (which vim.schedule's the inner callback), then the
-    -- caller invokes load_acp_session() before the scheduled callback runs.
-    -- Without this flag the deferred callback sees _pending_load_session_id
-    -- = nil, _restoring = false and creates a fresh session that overwrites
-    -- the loaded one — destroying all restored context.
+    -- Races 1 and 2 of the session-lifecycle skill: `_restoring` stops the
+    -- constructor's deferred new_session, the epoch rejects an in-flight one.
     self._restoring = true
     self._loading = true
-
-    -- Invalidate any in-flight create_session callback. The epoch check in
-    -- the create_session callback (new_session) rejects stale responses
-    -- even after _restoring is cleared by the load completion handler.
     self:_advance_session_epoch()
 
     -- Clean up the old session's UI state and subscriber, but do NOT send
@@ -4002,31 +3946,8 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     if self.session_id then
         -- Remove subscriber to stop routing stale notifications
         self.agent:unsubscribe(self.session_id)
-        self:clear_chat()
-        self.todo_list:clear()
-        self.file_list:clear()
-        self.code_selection:clear()
-        self.diagnostics_list:clear()
-        self.config_options:clear()
-        -- Loading a saved session replaces the conversation in this tab, so the
-        -- outgoing one's tally must not bleed into it. The incoming session's
-        -- own log is restored from its file below.
-        self.file_activity:clear()
     end
-    self.session_id = nil
-    Recovery.cancel_retry_timer(self)
-    self._transient_attempt = 0
-    self.permission_manager:clear()
-    SlashCommands.setCommands(self.widget.buf_nrs.input, {})
-    self._last_edited_md = nil
-    self:_reset_subagents()
-    self.chat_history = ChatHistory:new()
-    self:_sync_modified(self.chat_history)
-    -- Fresh reader: a path and offset from the outgoing session would read the
-    -- wrong file at the wrong position.
-    self._hook_records = HookRecordReader:new()
-    self.widget:set_chat_title(nil)
-    self._history_to_send = nil
+    self:_reset_conversation()
 
     self.status_indicator:start("busy")
 
@@ -4118,21 +4039,13 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 end
 
                 local opts = self.config_options
-                if model and opts and opts.set_pending_initial_model then
+                if model then
                     opts:set_pending_initial_model(model)
                 end
 
-                local provider_label = self.agent
-                        and self.agent.provider_config
-                        and self.agent.provider_config.name
+                local provider_label = self.agent.provider_config.name
                     or Config.provider
-                local model_label = model
-                    or (opts and opts.model and opts.model.currentValue)
-                    or (
-                        opts
-                        and opts.legacy_agent_models
-                        and opts.legacy_agent_models.current_model_id
-                    )
+                local model_label = model or opts:current_model_id()
                 self.message_writer:write_notice({
                     glyph = Glyphs.RESUME,
                     title = session_id:sub(1, 8),
@@ -4190,25 +4103,26 @@ function SessionManager:clear_chat()
     self:_reset_subagents()
 end
 
-function SessionManager:_cancel_session()
+--- Return the session to an empty conversation with no ACP session. Sends
+--- nothing to the provider. With a session, also clears the chat, the
+--- context panels, the config options and the file tally, and ends a
+--- running turn. Without one, keeps the context the user added before the
+--- first session. Leaves the rate-limit budget and the load gate as they are.
+function SessionManager:_reset_conversation()
     if self.session_id then
-        -- only cancel and clear content if there was an session
-        -- Otherwise, it clears selections and files when opening for the first time
-        self.agent:cancel_session(self.session_id)
         self:clear_chat()
         self.todo_list:clear()
         self.file_list:clear()
         self.code_selection:clear()
         self.diagnostics_list:clear()
         self.config_options:clear()
-        -- The only reset that starts a new conversation. Ctrl-C, a provider
-        -- switch and both restore paths all continue the same one, so they
-        -- leave the tally alone.
+        -- The tally belongs to the conversation. A load restores the
+        -- incoming one from its file.
         self.file_activity:clear()
 
         -- Tearing down a live session ends any in-flight turn. Reset the
-        -- generating flag and stop the indicator so /clear (or delete/restart)
-        -- mid-turn doesn't leave is_generating stale-true or a spinner
+        -- generating flag and stop the indicator so a reset mid-turn doesn't
+        -- leave is_generating stale-true or a spinner
         -- running. Only reachable with a session — is_generating is set true
         -- only after the session is ready.
         self.is_generating = false
@@ -4231,6 +4145,17 @@ function SessionManager:_cancel_session()
     self._title_user_set = false -- Fresh session: allow provider auto-summary again
     self.widget:set_chat_title(nil) -- Reset buffer name to default
     self._history_to_send = nil
+    self._usage = nil
+    self:_update_chat_header()
+end
+
+--- Cancel the ACP session on the provider and reset the conversation like
+--- `_reset_conversation`. Also clears the rate-limit budget, the usage limit,
+--- a held prompt with no buffer range, and the load gate.
+function SessionManager:_cancel_session()
+    if self.session_id then
+        self.agent:cancel_session(self.session_id)
+    end
     self._pending_bufferless_prompt = nil
     -- Every gate state is per-session, so /new recovers a wedged one. /new is
     -- exempt from the gate precisely so it stays reachable to do this. The
@@ -4238,8 +4163,8 @@ function SessionManager:_cancel_session()
     -- also covers the restore paths that never reach here.
     self._usage_reset_epoch = nil
     self._loading = false
-    self._usage = nil
     self._budget = nil
+    self:_reset_conversation()
 end
 
 --- Switch to a different ACP provider while preserving chat UI and history.

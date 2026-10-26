@@ -410,8 +410,7 @@ function FileActivity:load(data)
     self:render()
 end
 
---- Drop the whole tally. Only a new conversation warrants this — a cancelled
---- turn, a provider switch or a resumed session all continue the same one.
+--- Drop the whole tally.
 function FileActivity:clear()
     self._ops = {}
     self._recorded = {}

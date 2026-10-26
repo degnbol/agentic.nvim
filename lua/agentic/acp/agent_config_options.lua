@@ -133,6 +133,22 @@ function AgentConfigOptions:set_legacy_models(models_info)
     end
 end
 
+--- The model the session runs: the `model` config option's value, else
+--- the legacy model id.
+--- @return string|nil model_id
+function AgentConfigOptions:current_model_id()
+    return self.model and self.model.currentValue
+        or self.legacy_agent_models.current_model_id
+end
+
+--- The mode the session runs: the `mode` config option's value, else
+--- the legacy mode id.
+--- @return string|nil mode_id
+function AgentConfigOptions:current_mode_id()
+    return self.mode and self.mode.currentValue
+        or self.legacy_agent_modes.current_mode_id
+end
+
 --- Queue a model id to apply once configOptions (or legacy models) become
 --- available. Used by session restore to reapply the saved model.
 --- @param model_id string
@@ -152,10 +168,7 @@ function AgentConfigOptions:_flush_pending_initial_model()
         return
     end
 
-    local current = (self.model and self.model.currentValue)
-        or self.legacy_agent_models.current_model_id
-
-    if current == model_id then
+    if self:current_model_id() == model_id then
         self._pending_initial_model = nil
         return
     end
@@ -181,8 +194,7 @@ function AgentConfigOptions:set_initial_mode(target_mode, handle_mode_change)
         return
     end
 
-    local current = self.mode and self.mode.currentValue
-        or self.legacy_agent_modes.current_mode_id
+    local current = self:current_mode_id()
 
     if self:get_mode(target_mode) ~= nil then
         if target_mode ~= current then
