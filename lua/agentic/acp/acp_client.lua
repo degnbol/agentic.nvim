@@ -1,51 +1,10 @@
 local AcpKind = require("agentic.utils.acp_kind")
-local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
 local SkillPath = require("agentic.utils.skill_path")
 local ToolCallKinds = require("agentic.acp.tool_call_kinds")
 local transport_module = require("agentic.acp.acp_transport")
-
--- Absolute path to plugin_root/hooks. This file is
--- lua/agentic/acp/acp_client.lua, so :h:h:h:h is the plugin root.
-local HOOKS_DIR = vim.fn.fnamemodify(
-    debug.getinfo(1, "S").source:sub(2),
-    ":h:h:h:h"
-) .. "/hooks"
-local PERMISSION_HOOK = vim.fn.shellescape(HOOKS_DIR .. "/permission_hook.sh")
--- `--clean`: `-l` alone still sources the user's init.lua. `nvim` from PATH,
--- not `vim.v.progpath`: a package upgrade can remove that versioned path while
--- the editor still runs.
-local SUBAGENT_HOOK = "nvim --clean -l "
-    .. vim.fn.shellescape(HOOKS_DIR .. "/subagent_hook.lua")
-
---- Build the `_meta.claudeCode.options` blob shared by session/new and
---- session/load. Includes the inline PreToolUse permission hook (flag-tier
---- settings, nothing written to disk) so the deterministic ladder gates
---- auto-mode's classifier. Claude-only namespace — other bridges ignore it.
---- @param additional_dirs string[]
---- @param force_background boolean Add an Agent hook that runs every subagent in the background
---- @return table
-local function build_claude_options(additional_dirs, force_background)
-    local pre_tool_use = {
-        {
-            matcher = "Bash|Write|Edit",
-            hooks = { { type = "command", command = PERMISSION_HOOK } },
-        },
-    }
-    if force_background then
-        table.insert(pre_tool_use, {
-            matcher = "Agent",
-            hooks = { { type = "command", command = SUBAGENT_HOOK } },
-        })
-    end
-
-    return {
-        additionalDirectories = additional_dirs,
-        settings = { hooks = { PreToolUse = pre_tool_use } },
-    }
-end
 
 --[[
 CRITICAL: Type annotations in this file are essential for Lua Language Server support.
@@ -91,9 +50,6 @@ ACPClient.ERROR_CODES = {
     TRANSPORT_ERROR = -1,
     PROTOCOL_ERROR = -2,
 }
-
---- @private Exposed for tests.
-ACPClient._build_claude_options = build_claude_options
 
 --- Set up a child adapter class with proper ACPClient inheritance chain.
 --- Returns a new class table with __index set for method lookup.
@@ -211,6 +167,25 @@ end
 --- can prove it. Reaches only blocks built by the base `__build_tool_call_message`.
 --- @return "bash"|"zsh"|nil
 function ACPClient:exec_shell()
+    return nil
+end
+
+--- Whether to show the provider's rate-limit budget in the chat header.
+--- @return boolean
+function ACPClient:budget_display()
+    return false
+end
+
+--- Whether to send "continue" once a usage limit resets.
+--- @return boolean
+function ACPClient:auto_continue_on_usage_limit()
+    return false
+end
+
+--- Provider-specific `_meta` for session/new and session/load.
+--- @param _additional_dirs string[] Directories the session may reach beyond its cwd
+--- @return table|nil meta
+function ACPClient:session_meta(_additional_dirs)
     return nil
 end
 
@@ -1186,14 +1161,7 @@ function ACPClient:create_session(cwd, handlers, callback)
     self:_send_request("session/new", {
         cwd = cwd,
         mcpServers = {},
-        _meta = {
-            claudeCode = {
-                options = build_claude_options(
-                    additional_dirs,
-                    Config.subagents.force_background
-                ),
-            },
-        },
+        _meta = self:session_meta(additional_dirs),
     }, function(result, err)
         if err then
             Logger.notify(
@@ -1262,14 +1230,7 @@ function ACPClient:load_session(
         sessionId = session_id,
         cwd = cwd,
         mcpServers = mcp_servers or {},
-        _meta = {
-            claudeCode = {
-                options = build_claude_options(
-                    additional_dirs,
-                    Config.subagents.force_background
-                ),
-            },
-        },
+        _meta = self:session_meta(additional_dirs),
     }, function(result, err)
         self._loading_sessions[session_id] = nil
         callback(result, err)

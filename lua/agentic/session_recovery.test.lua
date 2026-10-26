@@ -92,6 +92,23 @@ describe("agentic.session_recovery", function()
 
             assert.spy(submit_spy).was.called(0)
         end)
+
+        it("is not offered when the agent does not auto-continue", function()
+            local write_spy = spy.new(function() end)
+            local session = session_with(false)
+            session._retry_attempt = 0
+            session.agent = {
+                auto_continue_on_usage_limit = function()
+                    return false
+                end,
+            }
+            session.message_writer = { write_error_action = write_spy }
+
+            Recovery.offer_auto_continue(session, os.time() + 600)
+
+            assert.spy(write_spy).was.called(0)
+            assert.equal(0, session._retry_attempt)
+        end)
     end)
 
     describe("resolve_auth_method", function()

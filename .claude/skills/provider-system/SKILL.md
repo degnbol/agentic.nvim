@@ -248,6 +248,11 @@ call that leaves it, and overrides `plan_file(request)` (default nil) to name
 the plan file; `SessionManager` then offers "Clear context & implement plan"
 on that call's permission request.
 
+Provider-only settings are read through overrides, never from shared code:
+`session_meta(additional_dirs)` (the `_meta` of session/new and session/load,
+default nil), `budget_display()` and `auto_continue_on_usage_limit()` (default
+false).
+
 `__build_tool_call_message` and `__build_tool_call_update` take the session id
 as a trailing argument, for overrides needing session-scoped state — currently
 `session_roots(session_id)`, the directories a skill name resolves against.

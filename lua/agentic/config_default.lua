@@ -74,23 +74,6 @@ local ConfigDefault = {
     --- @type agentic.UserConfig.ProviderName
     provider = "claude-agent-acp",
 
-    --- Offer the Claude Code todo/task tools (TaskCreate, TaskUpdate,
-    --- TaskList, TaskGet, TodoWrite) to the agent. claude-agent-acp only.
-    --- Turns the plan pane on and off: the bridge renders Task* calls as ACP
-    --- `plan` updates rather than tool calls, and nothing else writes there.
-    todo_tools = true,
-
-    --- @class agentic.UserConfig.Subagents
-    --- @field force_background boolean Run every Agent (Task) spawn in the background, whatever the model passes for `run_in_background`. claude-agent-acp only.
-    subagents = {
-        force_background = false,
-    },
-
-    --- Auto-continue after usage limit errors.
-    --- When the provider reports "out of extra usage · resets Xpm", schedules
-    --- a timer to send "continue" once the reset time arrives.
-    auto_continue_on_usage_limit = true,
-
     --- Auto-retry after transient server errors.
     --- When a turn dies mid-stream (connection closed, API unreachable,
     --- overloaded), resend "continue" immediately, up to 3 times. Nothing is
@@ -104,7 +87,32 @@ local ConfigDefault = {
             command = "claude-agent-acp",
             env = {},
             auth_method = "claude-ai-login",
-        },
+
+            --- Offer the Claude Code todo/task tools (TaskCreate, TaskUpdate,
+            --- TaskList, TaskGet, TodoWrite) to the agent.
+            --- Turns the plan pane on and off: the bridge renders Task* calls
+            --- as ACP `plan` updates rather than tool calls, and nothing else
+            --- writes there.
+            todo_tools = true,
+
+            --- @class agentic.UserConfig.Subagents
+            --- @field force_background boolean Run every Agent (Task) spawn in the background, whatever the model passes for `run_in_background`.
+            subagents = {
+                force_background = false,
+            },
+
+            --- Show the claude.ai subscription rate-limit budget in the chat
+            --- header (binding window utilisation + reset countdown, warns
+            --- when the current pace overshoots the window). Only populated
+            --- under claude.ai subscription auth. Set false to hide.
+            budget_display = true,
+
+            --- Auto-continue after usage limit errors.
+            --- When the provider reports "out of extra usage · resets Xpm",
+            --- schedules a timer to send "continue" once the reset time
+            --- arrives.
+            auto_continue_on_usage_limit = true,
+        } --[[@as agentic.acp.ClaudeProviderConfig]],
 
         ["gemini-acp"] = {
             name = "Gemini ACP",
@@ -419,12 +427,6 @@ local ConfigDefault = {
     --- (title + context). Disable if using an external plugin (e.g.
     --- incline.nvim) that renders its own per-window labels.
     winbar = true,
-
-    --- Show the claude.ai subscription rate-limit budget in the chat header
-    --- (binding window utilisation + reset countdown, warns when the current
-    --- pace overshoots the window). Only populated under claude.ai
-    --- subscription auth. Set false to hide.
-    budget_display = true,
 
     --- Customize window headers for each panel in the chat widget.
     --- Each header can be either:

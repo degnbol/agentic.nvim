@@ -9,7 +9,7 @@ local Child = require("tests.helpers.child")
 local SETUP = [[
 local Config = require("agentic.config")
 Config.session_restore.storage_path = vim.fn.tempname()
-Config.subagents.force_background = true
+Config.acp_providers["claude-agent-acp"].subagents.force_background = true
 Config.keymaps.prompt.submit = "<F5>"
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
@@ -131,7 +131,7 @@ describe("subagents", function()
         it("a " .. mode .. " spawn opens no window", function()
             child.lua(string.format(
                 [[
-require("agentic.config").subagents.force_background = %s
+_G.s.agent.provider_config.subagents.force_background = %s
 _G.spawn("c1")
 ]],
                 tostring(background)
@@ -151,7 +151,7 @@ _G.spawn("c1")
 
     it("a record confirming background gives the input then", function()
         child.lua([[
-require("agentic.config").subagents.force_background = false
+_G.s.agent.provider_config.subagents.force_background = false
 _G.spawn("c1")
 _G.write_meta("c1", "background")
 _G.read_record("c1")
@@ -162,7 +162,7 @@ _G.read_record("c1")
 
     it("a record confirming background after the agent ended gives no input", function()
         child.lua([[
-require("agentic.config").subagents.force_background = false
+_G.s.agent.provider_config.subagents.force_background = false
 _G.spawn("c1")
 _G.state("c1", "completed")
 _G.write_meta("c1", "background")
@@ -451,7 +451,7 @@ _G.press(_G.transcript("c1").bufnr, "a")
 
     it("in a blocking transcript go to the main input", function()
         child.lua([[
-require("agentic.config").subagents.force_background = false
+_G.s.agent.provider_config.subagents.force_background = false
 _G.spawn("c1")
 _G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")

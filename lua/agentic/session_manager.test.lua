@@ -611,6 +611,44 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_update_chat_header: budget", function()
+        --- Header context rendered for a session with a five-hour budget.
+        --- @param budget_display boolean What the agent answers for `budget_display`
+        --- @return string|nil context
+        local function header_context(budget_display)
+            local render_header_spy = spy.new(function() end)
+            local session = {
+                config_options = {
+                    legacy_agent_modes = AgentModes:new(),
+                },
+                agent = {
+                    budget_display = function()
+                        return budget_display
+                    end,
+                },
+                widget = { render_header = render_header_spy },
+                _budget = {
+                    rateLimitType = "five_hour",
+                    resetsAt = os.time() + 3600,
+                },
+                _budget_status = SessionManager._budget_status,
+                _update_chat_header = SessionManager._update_chat_header,
+            } --[[@as agentic.SessionManager]]
+
+            session:_update_chat_header()
+
+            return render_header_spy.calls[1][3]
+        end
+
+        it("shows the budget when the agent displays it", function()
+            assert.is_not_nil(header_context(true):find("5h", 1, true))
+        end)
+
+        it("leaves the budget out when the agent does not", function()
+            assert.is_nil(header_context(false))
+        end)
+    end)
+
     describe("_do_load_acp_session: _restoring flag", function()
         --- @type TestStub
         local schedule_stub

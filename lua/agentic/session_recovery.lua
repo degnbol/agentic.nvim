@@ -470,7 +470,7 @@ end
 --- @param sm agentic.SessionManager
 --- @param reset_epoch number Epoch seconds when usage resets
 function M.offer_auto_continue(sm, reset_epoch)
-    if not Config.auto_continue_on_usage_limit then
+    if not sm.agent:auto_continue_on_usage_limit() then
         return
     end
 

@@ -13,25 +13,23 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     end)
 
     --- @param session_roots? table<string, string[]>
-    --- @return agentic.acp.ACPClient
+    --- @return agentic.acp.ClaudeAgentACPAdapter
     local function make_adapter(session_roots)
-        return setmetatable(
-            { _session_roots = session_roots or {}, _children = {} },
-            { __index = ClaudeAgentACPAdapter }
-        )
+        return setmetatable({
+            _session_roots = session_roots or {},
+            _children = {},
+            provider_config = { subagents = { force_background = false } },
+        }, { __index = ClaudeAgentACPAdapter })
     end
 
     describe("subagent control", function()
         it("predicts background only under force_background", function()
-            local Config = require("agentic.config")
-            local original = Config.subagents.force_background
             local adapter = make_adapter()
 
-            Config.subagents.force_background = true
+            adapter.provider_config.subagents.force_background = true
             assert.equal("background", adapter:subagent_predicted_mode())
-            Config.subagents.force_background = false
+            adapter.provider_config.subagents.force_background = false
             assert.equal("blocking", adapter:subagent_predicted_mode())
-            Config.subagents.force_background = original
         end)
 
         it("gives the TaskStop and SendMessage instructions", function()
@@ -1241,23 +1239,75 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
+    it("reads budget display and auto-continue from the provider config", function()
+        local adapter = make_adapter()
+        adapter.provider_config.budget_display = true
+        adapter.provider_config.auto_continue_on_usage_limit = false
+
+        assert.is_true(adapter:budget_display())
+        assert.is_false(adapter:auto_continue_on_usage_limit())
+    end)
+
+    describe("session_meta", function()
+        --- Matcher of each PreToolUse entry in the session meta.
+        --- @param force_background boolean
+        --- @return string[] matchers
+        local function pre_tool_use_matchers(force_background)
+            local adapter = make_adapter()
+            adapter.provider_config.subagents.force_background =
+                force_background
+            local options = adapter:session_meta({}).claudeCode.options
+            return vim.tbl_map(function(entry)
+                return entry.matcher
+            end, options.settings.hooks.PreToolUse)
+        end
+
+        it("passes the additional directories", function()
+            local meta = make_adapter():session_meta({ "/extra" })
+            assert.same(
+                { "/extra" },
+                meta.claudeCode.options.additionalDirectories
+            )
+        end)
+
+        it("registers the Agent hook only with force_background", function()
+            assert.is_true(
+                vim.list_contains(pre_tool_use_matchers(true), "Agent")
+            )
+            assert.is_false(
+                vim.list_contains(pre_tool_use_matchers(false), "Agent")
+            )
+        end)
+
+        it("registers hook commands that run in sh", function()
+            local adapter = make_adapter()
+            adapter.provider_config.subagents.force_background = true
+            local entries =
+                adapter:session_meta({}).claudeCode.options.settings.hooks.PreToolUse
+            local event = vim.json.encode({ tool_input = { prompt = "p" } })
+
+            for _, entry in ipairs(entries) do
+                local result = vim.system(
+                    { "sh", "-c", entry.hooks[1].command },
+                    { stdin = event, text = true, env = { AGENTIC_SOCK = "" } }
+                ):wait()
+
+                assert.equal(0, result.code)
+                if entry.matcher == "Agent" then
+                    local output = vim.json.decode(result.stdout)
+                    assert.is_true(
+                        output.hookSpecificOutput.updatedInput.run_in_background
+                    )
+                end
+            end
+        end)
+    end)
+
     describe("new", function()
-        local Config
-        local original_todo_tools
-
-        before_each(function()
-            Config = require("agentic.config")
-            original_todo_tools = Config.todo_tools
-        end)
-
-        after_each(function()
-            Config.todo_tools = original_todo_tools
-        end)
-
         --- Construct through a subclass that stubs out the subprocess, and
         --- report the provider config the transport would have spawned with.
-        --- @param provider_config agentic.acp.ACPProviderConfig
-        --- @return agentic.acp.ACPProviderConfig
+        --- @param provider_config agentic.acp.ClaudeProviderConfig
+        --- @return agentic.acp.ClaudeProviderConfig
         local function spawn_config(provider_config)
             local captured
             local Stub = setmetatable({}, { __index = ClaudeAgentACPAdapter })
@@ -1272,28 +1322,44 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end
 
         it("enables the todo tools in the provider env", function()
-            Config.todo_tools = true
-
-            local config = spawn_config({ command = "claude-agent-acp" })
+            local config = spawn_config({
+                command = "claude-agent-acp",
+                todo_tools = true,
+            })
 
             assert.equal("1", config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
         end)
 
         it("leaves the env alone when the todo tools are off", function()
-            Config.todo_tools = false
-
-            local config =
-                spawn_config({ command = "claude-agent-acp", env = {} })
+            local config = spawn_config({
+                command = "claude-agent-acp",
+                env = {},
+                todo_tools = false,
+            })
 
             assert.is_nil(config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
         end)
 
-        it("yields to an explicit env entry", function()
-            Config.todo_tools = true
+        for _, todo_tools in ipairs({ true, false }) do
+            it("keeps a copy of the config, todo_tools " .. tostring(todo_tools), function()
+                local provider_config = {
+                    command = "claude-agent-acp",
+                    todo_tools = todo_tools,
+                    subagents = { force_background = false },
+                }
 
+                local config = spawn_config(provider_config)
+                provider_config.subagents.force_background = true
+
+                assert.is_false(config.subagents.force_background)
+            end)
+        end
+
+        it("yields to an explicit env entry", function()
             local config = spawn_config({
                 command = "claude-agent-acp",
                 env = { CLAUDE_CODE_ENABLE_TODO_TOOLS = "0" },
+                todo_tools = true,
             })
 
             assert.equal("0", config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)

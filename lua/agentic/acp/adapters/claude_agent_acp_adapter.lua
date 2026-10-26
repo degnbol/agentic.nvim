@@ -1,8 +1,48 @@
 local ACPClient = require("agentic.acp.acp_client")
-local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local SkillPath = require("agentic.utils.skill_path")
+
+local HOOKS_DIR = vim.fs.root(debug.getinfo(1, "S").source:sub(2), "hooks")
+    .. "/hooks"
+local PERMISSION_HOOK = vim.fn.shellescape(HOOKS_DIR .. "/permission_hook.sh")
+-- `--clean`: `-l` alone still sources the user's init.lua. `nvim` from PATH,
+-- not `vim.v.progpath`: a package upgrade can remove that versioned path while
+-- the editor still runs.
+local SUBAGENT_HOOK = "nvim --clean -l "
+    .. vim.fn.shellescape(HOOKS_DIR .. "/subagent_hook.lua")
+
+--- Build the `_meta.claudeCode.options` of a session. Includes the inline
+--- PreToolUse permission hook (flag-tier settings, nothing written to disk)
+--- so the deterministic ladder gates auto-mode's classifier.
+--- @param additional_dirs string[] Directories the session may reach beyond its cwd
+--- @param force_background boolean Add an Agent hook that runs every subagent in the background
+--- @return table options
+local function build_claude_options(additional_dirs, force_background)
+    local pre_tool_use = {
+        {
+            matcher = "Bash|Write|Edit",
+            hooks = { { type = "command", command = PERMISSION_HOOK } },
+        },
+    }
+    if force_background then
+        table.insert(pre_tool_use, {
+            matcher = "Agent",
+            hooks = { { type = "command", command = SUBAGENT_HOOK } },
+        })
+    end
+
+    return {
+        additionalDirectories = additional_dirs,
+        settings = { hooks = { PreToolUse = pre_tool_use } },
+    }
+end
+
+--- @class agentic.acp.ClaudeProviderConfig : agentic.acp.ACPProviderConfig
+--- @field todo_tools boolean
+--- @field subagents agentic.UserConfig.Subagents
+--- @field budget_display boolean
+--- @field auto_continue_on_usage_limit boolean
 
 --- @class agentic.acp.ClaudeAgentRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -27,27 +67,31 @@ local SkillPath = require("agentic.utils.skill_path")
 --- @field title? string
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
+--- @field provider_config agentic.acp.ClaudeProviderConfig
 --- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
 --- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
---- Spawn the bridge with the todo/task tools enabled. The Claude Code CLI
---- withholds them from Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and newer models
---- unless `CLAUDE_CODE_ENABLE_TODO_TOOLS` is set (TaskCreate's `isEnabled`, and
---- the CHANGELOG entry naming the same variable). The bridge turns Task* calls
+--- Spawn the bridge with a copy of `config`, so edits to the config table
+--- reach the next spawn, not this instance. With `todo_tools` set, the
+--- todo/task tools are enabled: the Claude Code CLI withholds them from
+--- Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and newer models unless
+--- `CLAUDE_CODE_ENABLE_TODO_TOOLS` is set (TaskCreate's `isEnabled`, and the
+--- CHANGELOG entry naming the same variable). The bridge turns Task* calls
 --- into ACP `plan` updates, so without the flag `SessionManager` receives no
 --- `plan` and the todos split stays empty.
---- An explicit `acp_providers` env entry wins over the flag.
---- @param config agentic.acp.ACPProviderConfig
+--- An explicit `env` entry wins over `todo_tools`.
+--- @param config agentic.acp.ClaudeProviderConfig
 --- @param on_ready fun(client: agentic.acp.ACPClient)
 --- @return agentic.acp.ACPClient
 function ClaudeAgentACPAdapter:new(config, on_ready)
-    if Config.todo_tools then
+    config = vim.deepcopy(config)
+    if config.todo_tools then
         config = vim.tbl_deep_extend(
             "force",
             { env = { CLAUDE_CODE_ENABLE_TODO_TOOLS = "1" } },
             config
-        )
+        ) --[[@as agentic.acp.ClaudeProviderConfig]]
     end
 
     local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
@@ -70,6 +114,29 @@ function ClaudeAgentACPAdapter:plan_file(request)
         return path
     end
     return nil
+end
+
+--- @return boolean
+function ClaudeAgentACPAdapter:budget_display()
+    return self.provider_config.budget_display
+end
+
+--- @return boolean
+function ClaudeAgentACPAdapter:auto_continue_on_usage_limit()
+    return self.provider_config.auto_continue_on_usage_limit
+end
+
+--- @param additional_dirs string[]
+--- @return table meta
+function ClaudeAgentACPAdapter:session_meta(additional_dirs)
+    return {
+        claudeCode = {
+            options = build_claude_options(
+                additional_dirs,
+                self.provider_config.subagents.force_background
+            ),
+        },
+    }
 end
 
 --- @param session_id string
@@ -132,10 +199,11 @@ function ClaudeAgentACPAdapter:subagent_id(child_id)
     return ClaudeUtils.agent_id(child_id)
 end
 
---- `Config.subagents.force_background` runs every spawn in the background.
+--- "background" when the provider config sets `subagents.force_background`.
 --- @return "background"|"blocking"
 function ClaudeAgentACPAdapter:subagent_predicted_mode()
-    return Config.subagents.force_background and "background" or "blocking"
+    return self.provider_config.subagents.force_background and "background"
+        or "blocking"
 end
 
 --- @param agent_id string

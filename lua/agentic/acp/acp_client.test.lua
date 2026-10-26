@@ -15,16 +15,12 @@ describe("agentic.acp.ACPClient", function()
     end)
 
     describe("subagent defaults", function()
-        it("predict blocking and give no instructions, under force_background", function()
-            local Config = require("agentic.config")
-            local original = Config.subagents.force_background
-            Config.subagents.force_background = true
+        it("predict blocking and give no instructions", function()
             local client = setmetatable({}, { __index = ACPClient })
 
             assert.equal("blocking", client:subagent_predicted_mode())
             assert.is_nil(client:subagent_stop_instruction("a1", "x"))
             assert.is_nil(client:subagent_message_instruction("a1", "x", "m"))
-            Config.subagents.force_background = original
         end)
     end)
 
@@ -55,49 +51,6 @@ describe("agentic.acp.ACPClient", function()
                 title = "f.lua",
             })
             assert.equal("zsh", msg.shell)
-        end)
-    end)
-
-    describe("_build_claude_options", function()
-        --- Matcher of each PreToolUse entry in the built options.
-        --- @param force_background boolean
-        --- @return string[] matchers
-        local function pre_tool_use_matchers(force_background)
-            local options =
-                ACPClient._build_claude_options({}, force_background)
-            return vim.tbl_map(function(entry)
-                return entry.matcher
-            end, options.settings.hooks.PreToolUse)
-        end
-
-        it("registers the Agent hook only with force_background", function()
-            assert.is_true(
-                vim.list_contains(pre_tool_use_matchers(true), "Agent")
-            )
-            assert.is_false(
-                vim.list_contains(pre_tool_use_matchers(false), "Agent")
-            )
-        end)
-
-        it("registers hook commands that run in sh", function()
-            local entries =
-                ACPClient._build_claude_options({}, true).settings.hooks.PreToolUse
-            local event = vim.json.encode({ tool_input = { prompt = "p" } })
-
-            for _, entry in ipairs(entries) do
-                local result = vim.system(
-                    { "sh", "-c", entry.hooks[1].command },
-                    { stdin = event, text = true, env = { AGENTIC_SOCK = "" } }
-                ):wait()
-
-                assert.equal(0, result.code)
-                if entry.matcher == "Agent" then
-                    local output = vim.json.decode(result.stdout)
-                    assert.is_true(
-                        output.hookSpecificOutput.updatedInput.run_in_background
-                    )
-                end
-            end
         end)
     end)
 
@@ -926,6 +879,59 @@ describe("agentic.acp.ACPClient", function()
             })
             assert.is_nil(msg.failure_reason)
         end)
+    end)
+
+    describe("session_meta", function()
+        --- Params of each request a client sends, given its `session_meta`.
+        --- @param meta table|nil What the client's `session_meta` returns, or nil for the default
+        --- @return agentic.acp.ACPClient client
+        --- @return table<string, table> params Request method -> params
+        local function make_client(meta)
+            local params = {}
+            local client = setmetatable({
+                subscribers = {},
+                _children = {},
+                _loading_sessions = {},
+                _session_roots = {},
+                agent_capabilities = { loadSession = true },
+                _send_request = function(_this, method, p)
+                    params[method] = p
+                end,
+            }, { __index = ACPClient })
+            if meta then
+                client.session_meta = function()
+                    return meta
+                end
+            end
+            return client, params
+        end
+
+        it("is nil by default, so no _meta is sent", function()
+            local client, params = make_client(nil)
+
+            client:create_session("/proj", {}, function() end)
+            client:load_session("s-1", "/proj", nil, {}, function() end)
+
+            assert.is_nil(params["session/new"]._meta)
+            assert.is_nil(params["session/load"]._meta)
+        end)
+
+        it("is sent on session/new and session/load", function()
+            local meta = { vendor = { x = 1 } }
+            local client, params = make_client(meta)
+
+            client:create_session("/proj", {}, function() end)
+            client:load_session("s-1", "/proj", nil, {}, function() end)
+
+            assert.equal(meta, params["session/new"]._meta)
+            assert.equal(meta, params["session/load"]._meta)
+        end)
+    end)
+
+    it("neither displays a budget nor auto-continues by default", function()
+        local client = setmetatable({}, { __index = ACPClient })
+        assert.is_false(client:budget_display())
+        assert.is_false(client:auto_continue_on_usage_limit())
     end)
 
     describe("session roots", function()

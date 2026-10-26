@@ -136,20 +136,31 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                   starts. `claude-agent-acp` advertises `claude-ai-login`
                   (the default, a Claude subscription) and `console-login`.
 
+    The `claude-agent-acp` entry also has the fields below.
+
                                                   *agentic-config-todo_tools*
 `todo_tools` boolean (default: true)
-    Offer the `claude-agent-acp` agent the Claude Code todo/task tools
-    (TaskCreate, TaskUpdate, TaskList, TaskGet, TodoWrite), by setting
-    `CLAUDE_CODE_ENABLE_TODO_TOOLS` in the provider environment. These tools
-    fill the todos split. An `env` entry for that variable in
-    |agentic-config-acp_providers| takes precedence.
+    Offer the agent the Claude Code todo/task tools (TaskCreate, TaskUpdate,
+    TaskList, TaskGet, TodoWrite). These tools fill the todos split.
 
                                                    *agentic-config-subagents*
 `subagents` table (default: `{ force_background = false }`)
-    `force_background` runs every `claude-agent-acp` subagent (Task) in the
-    background, whatever the model passes for `run_in_background`.
-    Background subagents have no Agent or LSP tool. An `Agent` PreToolUse
-    hook of your own that rewrites the tool input can undo this.
+    `force_background` runs every subagent (Task) in the background, whatever
+    the model passes for `run_in_background`. Background subagents have no
+    Agent or LSP tool. An `Agent` PreToolUse hook of your own that rewrites
+    the tool input can undo this.
+
+                                              *agentic-config-budget_display*
+`budget_display` boolean (default: true)
+    Show the claude.ai subscription rate-limit budget in the chat header:
+    the binding window ("5h" five-hour or "wk" weekly), the time until it
+    resets, and the utilisation percentage when available. Only shown
+    under claude.ai subscription auth.
+
+                                *agentic-config-auto_continue_on_usage_limit*
+`auto_continue_on_usage_limit` boolean (default: true)
+    When the provider reports a usage limit with a reset time, schedule
+    a timer to send "continue" automatically.
 
 ------------------------------------------------------------------------------
 4.2 WINDOWS                                           *agentic-config-windows*
@@ -356,11 +367,6 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 ------------------------------------------------------------------------------
 4.9 MISCELLANEOUS                                        *agentic-config-misc*
 
-                                *agentic-config-auto_continue_on_usage_limit*
-`auto_continue_on_usage_limit` boolean (default: true)
-    When the provider reports a usage limit with a reset time, schedule
-    a timer to send "continue" automatically.
-
                                *agentic-config-auto_retry_on_transient_error*
 `auto_retry_on_transient_error` boolean (default: true)
     When a turn ends in a transient server error (connection closed
@@ -374,13 +380,6 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                                       *agentic-config-winbar*
 `winbar` boolean (default: true)
     Set 'winbar' on widget windows to the full header text.
-
-                                              *agentic-config-budget_display*
-`budget_display` boolean (default: true)
-    Show the claude.ai subscription rate-limit budget in the chat header:
-    the binding window ("5h" five-hour or "wk" weekly), the time until it
-    resets, and the utilisation percentage when available. Only shown
-    under claude.ai subscription auth.
 
                                                      *agentic-config-headers*
 `headers` table

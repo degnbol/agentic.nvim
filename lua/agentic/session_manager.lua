@@ -2690,7 +2690,7 @@ function SessionManager:_update_chat_header()
     -- warning; it doubles as ⚠ when we can't compute overshoot ourselves.
     -- (b.overageStatus == "rejected" just means no overage credits — ignored.)
     local b = self._budget
-    if Config.budget_display and b then
+    if b and self.agent:budget_display() then
         local util, overshoot, resets = self:_budget_status()
         if resets then
             local label = b.rateLimitType == "five_hour" and "5h" or "wk"
