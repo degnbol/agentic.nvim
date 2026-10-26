@@ -1,32 +1,10 @@
 --- @class agentic.utils.TextMatcher
 local M = {}
 
---- @param str string The string to trim
---- @param opts { prefix?: string, suffix?: string }|nil Optional table with prefix and/or suffix to remove
---- @return string trimmed
-local function trim(str, opts)
-    local res = str
-
-    if not opts then
-        return res
-    end
-
-    if opts.suffix then
-        -- Check length first to avoid invalid string index
-        if #res >= #opts.suffix then
-            if res:sub(#res - #opts.suffix + 1) == opts.suffix then
-                res = res:sub(1, #res - #opts.suffix)
-            end
-        end
-    end
-
-    if opts.prefix then
-        if res:sub(1, #opts.prefix) == opts.prefix then
-            res = res:sub(#opts.prefix + 1)
-        end
-    end
-
-    return res
+--- @param str string
+--- @return string trimmed `str` without trailing whitespace
+local function trim_trailing(str)
+    return (str:gsub("%s+$", ""))
 end
 
 local function trim_space(text)
@@ -65,7 +43,7 @@ local MATCH_STRATEGIES = {
     end,
 
     function(a, b)
-        return trim(a, { suffix = " \t" }) == trim(b, { suffix = " \t" })
+        return trim_trailing(a) == trim_trailing(b)
     end,
 
     function(a, b)
@@ -141,11 +119,11 @@ local PREFIX_STRATEGIES = {
     },
     {
         compare = function(a, b)
-            return trim(a, { suffix = " \t" }) == trim(b, { suffix = " \t" })
+            return trim_trailing(a) == trim_trailing(b)
         end,
         starts_with = function(file_line, target_line)
-            local trimmed_file = trim(file_line, { suffix = " \t" })
-            local trimmed_target = trim(target_line, { suffix = " \t" })
+            local trimmed_file = trim_trailing(file_line)
+            local trimmed_target = trim_trailing(target_line)
             return trimmed_file:sub(1, #trimmed_target) == trimmed_target
         end,
     },

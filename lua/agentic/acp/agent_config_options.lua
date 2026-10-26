@@ -9,8 +9,6 @@ local Logger = require("agentic.utils.logger")
 --- @class agentic.acp.AgentConfigOptions
 --- @field mode? agentic.acp.ConfigOption
 --- @field model? agentic.acp.ConfigOption
---- Reserved ACP category. claude-agent-acp 0.29.0 does not emit it — see
---- the `provider-system` skill § "`thought_level` ConfigOption not emitted".
 --- @field thought_level? agentic.acp.ConfigOption
 --- @field legacy_agent_modes agentic.acp.AgentModes
 --- @field legacy_agent_models agentic.acp.AgentModels
@@ -183,30 +181,24 @@ function AgentConfigOptions:set_initial_mode(target_mode, handle_mode_change)
         return
     end
 
-    local is_legacy = false
-    local can_switch = false
+    local current = self.mode and self.mode.currentValue
+        or self.legacy_agent_modes.current_mode_id
 
     if self:get_mode(target_mode) ~= nil then
-        can_switch = target_mode ~= self.mode.currentValue
-        Logger.debug("Setting initial config mode", target_mode, can_switch)
+        if target_mode ~= current then
+            handle_mode_change(target_mode, false)
+        end
     elseif self.legacy_agent_modes:get_mode(target_mode) ~= nil then
-        is_legacy = true
-        can_switch = target_mode ~= self.legacy_agent_modes.current_mode_id
-        Logger.debug("Setting initial legacy mode", target_mode, can_switch)
-    end
-
-    if can_switch then
-        handle_mode_change(target_mode, is_legacy)
+        if target_mode ~= current then
+            handle_mode_change(target_mode, true)
+        end
     else
-        local current = self.mode and self.mode.currentValue
-            or self.legacy_agent_modes.current_mode_id
-            or "unknown"
         Logger.notify(
             string.format(
                 "Configured default_mode ‘%s’ not available. "
                     .. "Using provider’s default ‘%s’",
                 target_mode,
-                current
+                current or "unknown"
             ),
             vim.log.levels.WARN,
             { title = "Agentic" }

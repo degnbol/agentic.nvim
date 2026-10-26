@@ -30,6 +30,15 @@ describe("agentic.utils.Ansi", function()
             assert.truthy(span[3]:find("^AgenticAnsi_"))
         end)
 
+        it("accepts out-of-range palette and RGB values", function()
+            local result = Ansi.process_lines({
+                "\27[38;5;300mpal\27[0m",
+                "\27[48;2;300;0;999mrgb\27[0m",
+            })
+            assert.equal("pal", result.lines[1])
+            assert.equal("rgb", result.lines[2])
+        end)
+
         it("handles multiple colours on one line", function()
             local result = Ansi.process_lines({ "\27[31mred\27[34mblue\27[0m" })
             assert.equal("redblue", result.lines[1])

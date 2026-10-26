@@ -2,6 +2,18 @@ local TextMatcher = require("agentic.utils.text_matcher")
 local assert = require("tests.helpers.assert")
 
 describe("TextMatcher", function()
+    describe("find_all_matches", function()
+        it("ignores trailing whitespace before ignoring indentation", function()
+            local matches = TextMatcher.find_all_matches(
+                { "  x = 1   ", "x = 1" },
+                { "  x = 1" }
+            )
+
+            assert.equal(1, #matches)
+            assert.equal(1, matches[1].start_line)
+        end)
+    end)
+
     describe("find_all_prefix_boundary_matches", function()
         it(
             "should match when last target line is prefix of file line",

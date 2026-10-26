@@ -1097,7 +1097,7 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
     end
 
     BufHelpers.multi_keymap_set(
-        Config.keymaps.chat and Config.keymaps.chat.prev_prompt or "[[",
+        Config.keymaps.chat.prev_prompt,
         chat_buf,
         function()
             jump_prompt(false)
@@ -1106,7 +1106,7 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
     )
 
     BufHelpers.multi_keymap_set(
-        Config.keymaps.chat and Config.keymaps.chat.next_prompt or "]]",
+        Config.keymaps.chat.next_prompt,
         chat_buf,
         function()
             jump_prompt(true)

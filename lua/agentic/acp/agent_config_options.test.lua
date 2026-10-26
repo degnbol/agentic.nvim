@@ -276,6 +276,7 @@ describe("agentic.acp.AgentConfigOptions", function()
             )
 
             assert.spy(handler).was.called(0)
+            assert.stub(notify_stub).was.called(0)
         end)
 
         it("warns when target is not in any mode source", function()

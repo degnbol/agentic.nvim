@@ -72,8 +72,10 @@ local function apply_sgr(state, params)
     end
 
     local codes = {}
+    -- Capped at 255, the largest palette index or colour component, so a
+    -- malformed code still builds a valid "#rrggbb". No SGR code exceeds it.
     for c in params:gmatch("%d+") do
-        codes[#codes + 1] = tonumber(c)
+        codes[#codes + 1] = math.min(tonumber(c) --[[@as integer]], 255)
     end
 
     local i = 1
