@@ -15,7 +15,8 @@ description:
 ## Two-step system
 
 The ACP provider's SDK runs its own permission check first — settings.json
-allow/deny/ask, working-directory membership, path safety. Only if that
+allow/deny/ask, the claude provider's `allowed_tools` (`--allowedTools`),
+working-directory membership, path safety. Only if that
 returns `ask` does the SDK call `canUseTool`, which the bridge translates
 into `session/request_permission` over ACP. The plugin is **strictly
 downstream**: we can't override what the SDK silently approves or denies,

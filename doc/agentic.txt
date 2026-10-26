@@ -143,6 +143,18 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     Offer the agent the Claude Code todo/task tools (TaskCreate, TaskUpdate,
     TaskList, TaskGet, TodoWrite). These tools fill the todos split.
 
+                                               *agentic-config-allowed_tools*
+`allowed_tools` list
+    (default: `{ "Grep(//dev/null/**)", "Glob(//dev/null/**)" }`)
+    Claude Code permission rules, passed as `--allowedTools`. Naming `Grep`
+    or `Glob`, with or without a scope, gives the agent both tools. Without
+    either, the agent has neither. Naming `TodoWrite` or a `Task*` tool gives
+    the agent the todo tools, whatever |agentic-config-todo_tools| is set to.
+
+    A tool call that a rule here matches bypasses the permission prompt,
+    |agentic-config-auto_approve_kinds| and |agentic-permissions-grant|. The
+    default scope matches no path, so the default rules approve nothing.
+
                                                    *agentic-config-subagents*
 `subagents` table (default: `{ force_background = false }`)
     `force_background` runs every subagent (Task) in the background, whatever

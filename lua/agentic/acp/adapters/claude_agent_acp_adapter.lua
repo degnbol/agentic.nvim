@@ -17,8 +17,13 @@ local SUBAGENT_HOOK = "nvim --clean -l "
 --- so the deterministic ladder gates auto-mode's classifier.
 --- @param additional_dirs string[] Directories the session may reach beyond its cwd
 --- @param force_background boolean Add an Agent hook that runs every subagent in the background
+--- @param allowed_tools string[] Claude Code permission rules, sent as `allowedTools`
 --- @return table options
-local function build_claude_options(additional_dirs, force_background)
+local function build_claude_options(
+    additional_dirs,
+    force_background,
+    allowed_tools
+)
     local pre_tool_use = {
         {
             matcher = "Bash|Write|Edit",
@@ -34,6 +39,7 @@ local function build_claude_options(additional_dirs, force_background)
 
     return {
         additionalDirectories = additional_dirs,
+        allowedTools = allowed_tools,
         settings = { hooks = { PreToolUse = pre_tool_use } },
     }
 end
@@ -43,6 +49,7 @@ end
 --- @field subagents agentic.UserConfig.Subagents
 --- @field budget_display boolean
 --- @field auto_continue_on_usage_limit boolean
+--- @field allowed_tools string[] Claude Code `--allowedTools` permission rules
 
 --- @class agentic.acp.ClaudeAgentRawInput : agentic.acp.RawInput
 --- @field content? string For creating new files instead of new_string
@@ -134,7 +141,8 @@ function ClaudeAgentACPAdapter:session_meta(additional_dirs)
         claudeCode = {
             options = build_claude_options(
                 additional_dirs,
-                self.provider_config.subagents.force_background
+                self.provider_config.subagents.force_background,
+                self.provider_config.allowed_tools
             ),
         },
     }

@@ -95,6 +95,12 @@ local ConfigDefault = {
             --- writes there.
             todo_tools = true,
 
+            --- Claude Code `--allowedTools` permission rules. Naming Grep or Glob
+            --- gives the agent both tools. A matching tool call bypasses the
+            --- permission prompt, `auto_approve_kinds` and `/grant`; the
+            --- default scope matches no path, so it approves nothing.
+            allowed_tools = { "Grep(//dev/null/**)", "Glob(//dev/null/**)" },
+
             --- @class agentic.UserConfig.Subagents
             --- @field force_background boolean Run every Agent (Task) spawn in the background, whatever the model passes for `run_in_background`.
             subagents = {

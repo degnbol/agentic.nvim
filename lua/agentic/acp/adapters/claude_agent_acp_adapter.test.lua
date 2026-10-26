@@ -1269,6 +1269,14 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             )
         end)
 
+        it("passes allowed_tools as allowedTools", function()
+            local adapter = make_adapter()
+            adapter.provider_config.allowed_tools = { "Grep", "Glob" }
+
+            local options = adapter:session_meta({}).claudeCode.options
+            assert.same({ "Grep", "Glob" }, options.allowedTools)
+        end)
+
         it("registers the Agent hook only with force_background", function()
             assert.is_true(
                 vim.list_contains(pre_tool_use_matchers(true), "Agent")

@@ -224,7 +224,7 @@ function M.create_stdio_transport(config, callbacks)
                 -- Only skip logging if matches ignore patterns
                 local should_ignore = false
                 for _, pattern in ipairs(IGNORE_STDERR_PATTERNS) do
-                    if data:match(pattern) then
+                    if data:find(pattern, 1, true) then
                         should_ignore = true
                         break
                     end
