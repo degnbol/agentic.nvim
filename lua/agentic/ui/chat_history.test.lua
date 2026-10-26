@@ -271,6 +271,31 @@ describe("ChatHistory", function()
                 })
             )
         end)
+
+        it("renders a message row with its text, and skips a link row", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "subagent_event",
+                    kind = "sent",
+                    title = "To map UI",
+                    message_id = "toolu_1",
+                    peer_session_id = "child-1",
+                },
+                {
+                    type = "subagent_event",
+                    kind = "received",
+                    title = "From map UI",
+                    body = { "Found it.", "In lib/." },
+                    message_id = "toolu_1:reply",
+                },
+            }, prompt)
+
+            assert.same(
+                { { type = "text", text = "From map UI:\nFound it.\nIn lib/." } },
+                prompt
+            )
+        end)
     end)
 
     describe("message operations", function()

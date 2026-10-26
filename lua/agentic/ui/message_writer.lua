@@ -177,11 +177,13 @@ end
 --- @field _entered_window? integer The window that just became current, whose next view change is the entry and not a motion
 --- @field _user_controlled table<integer, true> Windows in user control, which writes do not scroll; every other window follows. Survives turn boundaries.
 --- @field _has_last_position boolean Whether the last window the buffer left, as no other window showed it, was in user control, and no window has shown the buffer since. False after `new` and `reset`. While false, the `"` mark stays on the last line, and a window that newly shows the buffer opens at the follow target.
+--- @field _next_window_to_user? boolean Set by `hand_next_window_to_user` until the next scheduled callbacks run
 --- @field _newly_shown table<integer, true> Following windows that newly show the buffer, whose next scroll starts from the top: vim restores such a window's cursor from its history after BufWinEnter, possibly below the follow target, and `BufHelpers.scroll_down` never scrolls up. Cleared by that scroll, or when the window goes to user control.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter of a window that shows the buffer again. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _home_window? fun(): integer|nil The window hard wrap measures while it shows the buffer
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
+--- @field _notices table<string, { mark: integer, height: integer }> Notice id -> the heading's mark in NS_USER_ACTIONS, and the number of rows of heading and body
 --- @field _error_block? agentic.ui.MessageWriter.ErrorBlock The `## Error` region still open at the end of the buffer, which `write_error_action` extends. Not per-turn state: the line-count check on `ErrorBlock` is what closes it, and it closes a block against a mid-turn write too, which a turn-boundary reset would miss.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
@@ -197,8 +199,8 @@ MessageWriter.NS_USER_ACTIONS =
 
 --- Forget everything written to the buffer, for a buffer whose text is gone
 --- or about to be rewritten whole: the tool call trackers, any error region
---- left open, the pending fold ops, the per-turn state, and every extmark in
---- the buffer.
+--- left open, the notice ids, the pending fold ops, the per-turn state, and
+--- every extmark in the buffer.
 ---
 --- Emptying or reloading a buffer collapses extmarks onto row 0 rather than
 --- deleting them, so a tracker or mark surviving its text resolves to the top
@@ -211,6 +213,7 @@ function MessageWriter:reset()
     self._error_block = nil
     self._pending_fold_ops = {}
     self._fold_states = {}
+    self._notices = {}
     self._has_last_position = false
     self:reset_turn_state()
     vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
@@ -246,6 +249,7 @@ function MessageWriter:new(bufnr, home_window)
         _newly_shown = {},
         _pending_fold_ops = {},
         _fold_states = {},
+        _notices = {},
     }, self)
 
     -- Listen for the user's scrolls and cursor motions. WinScrolled is not
@@ -389,8 +393,8 @@ function MessageWriter:on_window_leave(winid)
 end
 
 --- Decide the mode of a window that newly shows the buffer. With a last
---- position, it goes to user control and keeps
---- its place, and the buffer's last position is used up. Without one, it
+--- position, or handed to the user (`hand_next_window_to_user`), it goes to
+--- user control and keeps its place, and both are used up. Otherwise it
 --- follows, and the next scroll takes it from the top to the follow target.
 --- With `follow.enabled` off, it goes to the last line instead. Call it
 --- synchronously, before `flush_pending_fold_ops` scrolls the following
@@ -400,8 +404,9 @@ end
 function MessageWriter:on_window_shown(winid)
     -- The view vim's cursor restore leaves is then no motion up.
     self:_own_change(function() end)
-    if self._has_last_position then
+    if self._has_last_position or self._next_window_to_user then
         self._has_last_position = false
+        self._next_window_to_user = false
         self._user_controlled[winid] = true
         return
     end
@@ -411,6 +416,15 @@ function MessageWriter:on_window_shown(winid)
     end
     self._newly_shown[winid] = true
     self:follow_in(winid)
+end
+
+--- Leave a window that newly shows the buffer before the next scheduled
+--- callbacks run in user control where it lands, instead of following.
+function MessageWriter:hand_next_window_to_user()
+    self._next_window_to_user = true
+    vim.schedule(function()
+        self._next_window_to_user = false
+    end)
 end
 
 --- BufWinLeave hook: the buffer leaves its last window. Left in user control,
@@ -1405,6 +1419,7 @@ end
 --- @field body? string[] Already-formatted markdown lines placed under the heading
 --- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
 --- @field mid_turn? boolean True when a turn is running. Decides whether the notice closes the turn — see write_notice.
+--- @field id? string Id to find the notice by. Must be unique per writer
 
 --- Write a glyph-signed heading row that is not part of the agent's stream,
 --- such as the result of a locally-handled command.
@@ -1458,7 +1473,7 @@ function MessageWriter:write_notice(notice)
         -- row 0 rather than appending, so a pre-capture would be off by one.
         local heading_row = vim.api.nvim_buf_line_count(bufnr) - #lines
 
-        vim.api.nvim_buf_set_extmark(
+        local mark = vim.api.nvim_buf_set_extmark(
             bufnr,
             MessageWriter.NS_USER_ACTIONS,
             heading_row,
@@ -1469,6 +1484,10 @@ function MessageWriter:write_notice(notice)
                 sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH_USER,
             }
         )
+        if notice.id then
+            -- The trailing blank belongs to no notice.
+            self._notices[notice.id] = { mark = mark, height = #lines - 1 }
+        end
 
         render_region_rail(bufnr, heading_row, heading_row + #lines - 1)
     end)
@@ -1483,6 +1502,40 @@ function MessageWriter:write_notice(notice)
     if not notice.mid_turn then
         self:finalize_turn()
     end
+end
+
+--- The current 0-indexed row of the heading of the notice written with `id`.
+--- @param id string
+--- @return integer|nil row Nil when no notice has the id
+function MessageWriter:notice_row(id)
+    local notice = self._notices[id]
+    if not notice then
+        return nil
+    end
+    local pos = vim.api.nvim_buf_get_extmark_by_id(
+        self.bufnr,
+        MessageWriter.NS_USER_ACTIONS,
+        notice.mark,
+        {}
+    )
+    return pos[1]
+end
+
+--- The id of the notice whose heading or body covers `row`.
+--- @param row integer 0-indexed
+--- @return string|nil id Nil when no notice with an id covers it
+function MessageWriter:notice_at(row)
+    for id, notice in pairs(self._notices) do
+        local heading_row = self:notice_row(id)
+        if
+            heading_row
+            and row >= heading_row
+            and row < heading_row + notice.height
+        then
+            return id
+        end
+    end
+    return nil
 end
 
 --- Hints for known error classes. Keyed by both the Anthropic `error.type`

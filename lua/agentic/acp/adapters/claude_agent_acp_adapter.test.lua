@@ -873,6 +873,65 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     msg.argument
                 )
             end)
+
+            --- A SendMessage notification whose content is `text`.
+            --- @param text string
+            --- @param status string
+            --- @param toolName string|nil
+            --- @return table
+            local function with_result(text, status, toolName)
+                return {
+                    sessionUpdate = "tool_call",
+                    toolCallId = "tc-msg",
+                    kind = "other",
+                    status = status,
+                    title = "SendMessage",
+                    rawInput = { to = "a1b2", message = "Also lib/." },
+                    content = {
+                        { type = "content", content = { type = "text", text = text } },
+                    },
+                    _meta = { claudeCode = { toolName = toolName or "SendMessage" } },
+                }
+            end
+
+            it("shows only the message of a queued result", function()
+                local adapter, calls = make_capturing_adapter()
+                local result = vim.json.encode({
+                    message = "Message queued for delivery to a1b2 at its next tool round.\nSecond line.",
+                    pin = { id = "a1b2", name = "a1b2", ref = "r1" },
+                    success = true,
+                })
+
+                adapter:__handle_tool_call("s-1", with_result(result, "completed"))
+
+                assert.same({
+                    "Message queued for delivery to a1b2 at its next tool round.",
+                    "Second line.",
+                }, calls[1].body)
+                assert.equal("completed", calls[1].status)
+            end)
+
+            it("fails a call whose result was not delivered", function()
+                local msg = make_adapter():__build_tool_call_update(
+                    with_result(
+                        vim.json.encode({ message = "No such agent.", success = false }),
+                        "completed",
+                        "SubagentHandback"
+                    )
+                )
+
+                assert.same({ "No such agent." }, msg.body)
+                assert.equal("failed", msg.status)
+            end)
+
+            it("leaves a body that is not such an object as it is", function()
+                local msg = make_adapter():__build_tool_call_update(
+                    with_result("Sent.", "completed")
+                )
+
+                assert.same({ "Sent." }, msg.body)
+                assert.equal("completed", msg.status)
+            end)
         end)
 
         describe("the task-control family", function()

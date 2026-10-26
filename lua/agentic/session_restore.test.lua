@@ -234,6 +234,18 @@ describe("SessionRestore", function()
             assert.truthy(vim.tbl_contains(lines, "Response text"))
         end)
 
+        it("formats a message row as a heading over its text", function()
+            local lines = SessionRestore.format_preview({
+                {
+                    type = "subagent_event",
+                    kind = "received",
+                    title = "From map UI",
+                    body = { "Found it." },
+                },
+            })
+            assert.same({ "## From map UI", "Found it.", "" }, lines)
+        end)
+
         it("truncates long thought blocks", function()
             local long_thought =
                 table.concat(vim.fn["repeat"]({ "line" }, 10), "\n")
@@ -809,6 +821,10 @@ describe("SessionRestore", function()
 
     --- @diagnostic disable: missing-fields
     describe("replay_messages", function()
+        local function no_buffer()
+            return nil
+        end
+
         it("replays user and agent messages", function()
             local write_message_spy = spy.new(function() end)
             local write_prompt_spy = spy.new(function() end)
@@ -829,7 +845,8 @@ describe("SessionRestore", function()
                 {
                     { type = "user", text = "Hello" },
                     { type = "agent", text = "Hi there" },
-                }
+                },
+                no_buffer
             )
 
             assert.equal(1, write_prompt_spy.call_count)
@@ -865,7 +882,8 @@ describe("SessionRestore", function()
                         title = "To main agent",
                         parent_tool_use_id = "toolu_1",
                     },
-                }
+                },
+                no_buffer
             )
 
             assert.equal(3, notice_spy.call_count)
@@ -876,6 +894,43 @@ describe("SessionRestore", function()
             assert.equal(Glyphs.KIND.subagent, ended.glyph)
             assert.equal(Glyphs.MESSAGE_RECEIVED, notice_spy.calls[2][2].glyph)
             assert.equal(Glyphs.KIND.sendmessage, notice_spy.calls[3][2].glyph)
+        end)
+
+        it("a link row names the peer's buffer and carries the message id", function()
+            local notice_spy = spy.new(function() end)
+            local writer = {
+                write_notice = notice_spy,
+                flush_thought_run = spy.new(function() end),
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "subagent_event",
+                        kind = "sent",
+                        title = "To finder",
+                        message_id = "toolu_1",
+                        peer_session_id = "c1",
+                    },
+                    {
+                        type = "subagent_event",
+                        kind = "sent",
+                        title = "To gone",
+                        message_id = "toolu_2",
+                        peer_session_id = "c2",
+                    },
+                },
+                function(session_id)
+                    return session_id == "c1" and "agentic://1/subagent/finder"
+                        or nil
+                end
+            )
+
+            local linked = notice_spy.calls[1][2]
+            assert.same({ "agentic://1/subagent/finder" }, linked.body)
+            assert.equal("toolu_1", linked.id)
+            assert.is_nil(notice_spy.calls[2][2].body)
         end)
 
         it("replays thought chunks", function()
@@ -895,7 +950,8 @@ describe("SessionRestore", function()
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     { type = "thought", text = "Thinking..." },
-                }
+                },
+                no_buffer
             )
 
             assert.equal(1, write_chunk_spy.call_count)
@@ -927,7 +983,8 @@ describe("SessionRestore", function()
                         argument = "file.lua",
                         status = "completed",
                     },
-                }
+                },
+                no_buffer
             )
 
             assert.equal(1, write_tool_spy.call_count)
@@ -957,7 +1014,8 @@ describe("SessionRestore", function()
                         status = "completed",
                         skill_path = "/skills/coding/SKILL.md",
                     },
-                }
+                },
+                no_buffer
             )
 
             -- Called with `:`, so the block is the second recorded argument.
@@ -988,7 +1046,8 @@ describe("SessionRestore", function()
                         status = "completed",
                         shell = "zsh",
                     },
-                }
+                },
+                no_buffer
             )
 
             assert.equal("zsh", write_tool_spy.calls[1][2].shell)
@@ -1015,7 +1074,8 @@ describe("SessionRestore", function()
                         status = "completed",
                         decided_by = { "read-only", "grant" },
                     },
-                }
+                },
+                no_buffer
             )
 
             assert.same(
@@ -1055,7 +1115,8 @@ describe("SessionRestore", function()
                             status = "completed",
                             body = body,
                         },
-                    }
+                    },
+                    no_buffer
                 )
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)

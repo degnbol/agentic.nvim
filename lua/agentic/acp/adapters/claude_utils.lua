@@ -185,6 +185,28 @@ function M.tool_head(kind, raw_input, tool_name)
     return build(raw_input, tool_name)
 end
 
+--- The text and outcome of a messaging tool's result (`SendMessage`,
+--- `SubagentHandback`): a JSON object whose `message` is the text for the
+--- reader and whose `success` says whether the message was delivered.
+--- @param body string[]|nil The call's body
+--- @return string[]|nil lines `message` split into lines, nil when the body is not such an object
+--- @return boolean|nil delivered `success`, nil when it is not a boolean
+function M.message_result(body)
+    if not body then
+        return nil, nil
+    end
+    -- Most results are plain text; failing to parse is the common case.
+    local ok, decoded = pcall(vim.json.decode, table.concat(body, "\n"))
+    if not (ok and type(decoded) == "table" and type(decoded.message) == "string") then
+        return nil, nil
+    end
+    local delivered = decoded.success
+    if type(delivered) ~= "boolean" then
+        delivered = nil
+    end
+    return vim.split(decoded.message, "\n", { plain = true }), delivered
+end
+
 --- Claude Code's config directory: `CLAUDE_CONFIG_DIR` from `env`, else from
 --- the environment, else `~/.claude`.
 --- @param env table<string, string|nil>|nil Environment the provider runs with

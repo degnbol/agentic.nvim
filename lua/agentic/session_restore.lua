@@ -275,6 +275,10 @@ function SessionRestore.format_preview(messages)
                 )
             )
             table.insert(lines, "")
+        elseif msg.type == "subagent_event" then
+            table.insert(lines, "## " .. msg.title)
+            vim.list_extend(lines, msg.body or {})
+            table.insert(lines, "")
         end
     end
     return lines
@@ -378,24 +382,39 @@ local GLYPH_OF_SUBAGENT_EVENT = {
     ["end"] = Glyphs.KIND.subagent,
 }
 
---- Write a subagent event as a notice signed with the glyph of its kind.
+--- Write a subagent event as a notice signed with the glyph of its kind, under
+--- its message id. An event with a peer gets the name of the peer's buffer as
+--- its body, or no body while the peer has no buffer.
 --- @param writer agentic.ui.MessageWriter
 --- @param event agentic.ui.ChatHistory.SubagentEvent
 --- @param mid_turn boolean The writer's turn is still running, so the notice must not finalize it
-function SessionRestore.write_subagent_event(writer, event, mid_turn)
+--- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
+function SessionRestore.write_subagent_event(
+    writer,
+    event,
+    mid_turn,
+    buffer_name
+)
+    local body = event.body
+    if event.peer_session_id then
+        local name = buffer_name(event.peer_session_id)
+        body = name and { name }
+    end
     writer:write_notice({
         glyph = GLYPH_OF_SUBAGENT_EVENT[event.kind],
         glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
         title = event.title,
-        body = event.body,
+        body = body,
         mid_turn = mid_turn,
+        id = event.message_id,
     })
 end
 
 --- Replay stored messages to the UI
 --- @param writer agentic.ui.MessageWriter
---- @param messages agentic.ui.ChatHistory.SubagentMessage[]
-function SessionRestore.replay_messages(writer, messages)
+--- @param messages agentic.ui.ChatHistory.Message[]
+--- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
+function SessionRestore.replay_messages(writer, messages, buffer_name)
     for _, msg in ipairs(messages) do
         if msg.type == "user" then
             writer:write_user_prompt(msg.text)
@@ -426,7 +445,7 @@ function SessionRestore.replay_messages(writer, messages)
             }
             writer:write_tool_call_block(tool_block)
         elseif msg.type == "subagent_event" then
-            SessionRestore.write_subagent_event(writer, msg, true)
+            SessionRestore.write_subagent_event(writer, msg, true, buffer_name)
         end
     end
     -- Neither caller finalizes the turn, so a history ending on a thought would

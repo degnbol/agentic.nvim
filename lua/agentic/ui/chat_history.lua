@@ -22,25 +22,23 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field tool_call_id? string
 --- @field type "tool_call"
 --- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's call
+
+--- A row for an event outside an agent's own output: a message the agent sent
+--- or received, or the end of a subagent's run.
+--- @class agentic.ui.ChatHistory.SubagentEvent
+--- @field type "subagent_event"
+--- @field kind "sent"|"received"|"end"
+--- @field title string
+--- @field body? string[]
+--- @field message_id? string The message's id, shared by its rows in the sender's and the recipient's buffer. Absent on an end, and on rows saved before messages were linked
+--- @field peer_session_id? string The session at the message's other end, on a row that names the other row's buffer instead of holding the body
+--- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's row
+
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
 --- | agentic.ui.ChatHistory.AgentMessage
 --- | agentic.ui.ChatHistory.ThoughtMessage
 --- | agentic.ui.ChatHistory.ToolCall
-
---- A row in a subagent's transcript for an event outside its own output: a
---- message it sent or received, or the end of a run.
---- @class agentic.ui.ChatHistory.SubagentEvent
---- @field type "subagent_event"
---- @field kind "sent"|"received"|"end" A message the subagent sent or received, or the end of a run
---- @field title string
---- @field body? string[]
---- @field parent_tool_use_id string
-
---- A message with `parent_tool_use_id` set, of type `agent`, `thought`,
---- `tool_call` or `subagent_event`.
---- @alias agentic.ui.ChatHistory.SubagentMessage
---- | agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.SubagentEvent
 
 --- The id, working directory, provider and model of a session.
@@ -63,7 +61,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionHeader
 --- @field messages agentic.ui.ChatHistory.Message[]
---- @field subagent_messages? agentic.ui.ChatHistory.SubagentMessage[] Absent from files written before subagent output was saved
+--- @field subagent_messages? agentic.ui.ChatHistory.Message[] Absent from files written before subagent output was saved
 --- @field subagents? table<string, agentic.ui.ChatHistory.Subagent> Absent from files written before subagents were sessions of their own
 --- @field file_activity? agentic.ui.FileActivity.Data
 
@@ -76,7 +74,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field session_id? string
 --- @field timestamp integer Unix timestamp when session was created
 --- @field messages agentic.ui.ChatHistory.Message[]
---- @field subagent_messages agentic.ui.ChatHistory.SubagentMessage[] Kept apart from `messages`, which are what a restore sends to the provider, what the picker previews and what the chat replays
+--- @field subagent_messages agentic.ui.ChatHistory.Message[] Kept apart from `messages`, which are what a restore sends to the provider, what the picker previews and what the chat replays
 --- @field subagents table<string, agentic.ui.ChatHistory.Subagent> Child session id -> what the session records about that subagent
 --- @field title string
 --- @field provider? agentic.UserConfig.ProviderName config key
@@ -176,7 +174,7 @@ function ChatHistory:_list_for(msg)
     return msg.parent_tool_use_id and self.subagent_messages or self.messages
 end
 
---- @param msg agentic.ui.ChatHistory.SubagentMessage
+--- @param msg agentic.ui.ChatHistory.Message
 function ChatHistory:add_message(msg)
     table.insert(self:_list_for(msg), msg)
     self.dirty = true
@@ -212,7 +210,7 @@ end
 
 --- The stored messages of the agent one Task spawned, in stored order.
 --- @param task_id string The spawning Task's tool call id
---- @return agentic.ui.ChatHistory.SubagentMessage[]
+--- @return agentic.ui.ChatHistory.Message[]
 function ChatHistory:messages_for_task(task_id)
     return vim.tbl_filter(function(msg)
         return msg.parent_tool_use_id == task_id
@@ -304,6 +302,11 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                     .. table.concat(msg.body, "\n")
             end
             table.insert(prompt, { type = "text", text = tool_text })
+        elseif msg.type == "subagent_event" and msg.body then
+            table.insert(prompt, {
+                type = "text",
+                text = msg.title .. ":\n" .. table.concat(msg.body, "\n"),
+            })
         end
     end
 end

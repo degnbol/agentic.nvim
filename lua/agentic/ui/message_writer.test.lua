@@ -655,6 +655,50 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("## repo", buffer_lines()[2])
             assert.is_false(writer._pending_section_break)
         end)
+
+        it("a notice with an id keeps its row as lines go in above", function()
+            writer:write_notice({ glyph = GLYPH, title = "first" })
+            writer:write_notice({ glyph = GLYPH, title = "second", id = "m1" })
+            assert.equal("## second", buffer_lines()[writer:notice_row("m1") + 1])
+
+            vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { "a", "b" })
+
+            assert.equal("## second", buffer_lines()[writer:notice_row("m1") + 1])
+            assert.is_nil(writer:notice_row("m2"))
+        end)
+
+        it("notice_at names the notice under a heading or body row", function()
+            writer:write_notice({ glyph = GLYPH, title = "plain" })
+            writer:write_notice({
+                glyph = GLYPH,
+                title = "linked",
+                body = { "one", "two" },
+                id = "m1",
+            })
+            writer:write_notice({ glyph = GLYPH, title = "after" })
+
+            local lines = buffer_lines()
+            local function row_of(text)
+                for i, line in ipairs(lines) do
+                    if line == text then
+                        return i - 1
+                    end
+                end
+            end
+            assert.equal("m1", writer:notice_at(row_of("## linked")))
+            assert.equal("m1", writer:notice_at(row_of("two")))
+            assert.is_nil(writer:notice_at(row_of("## plain")))
+            assert.is_nil(writer:notice_at(row_of("## after")))
+        end)
+
+        it("reset forgets the ids", function()
+            writer:write_notice({ glyph = GLYPH, title = "linked", id = "m1" })
+
+            writer:reset()
+
+            assert.is_nil(writer:notice_row("m1"))
+            assert.is_nil(writer:notice_at(0))
+        end)
     end)
 
     describe("thought runs", function()

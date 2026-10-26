@@ -90,6 +90,16 @@ local function create_global_autocmds()
         end,
         desc = "Record the Agentic session whose buffer was entered last",
     })
+
+    -- A tag jump refuses a name that is neither a file nor matched by a
+    -- BufReadCmd pattern (`jumpto_tag` in nvim's tag.c). It does not consult
+    -- buffer-local BufReadCmds, such as those of Agentic buffers.
+    vim.api.nvim_create_autocmd("BufReadCmd", {
+        group = group,
+        pattern = "agentic://*",
+        callback = function() end,
+        desc = "Let tags of Agentic buffers jump",
+    })
 end
 
 --- Wrap `vim.paste` so an image pasted in a session's buffer is added to

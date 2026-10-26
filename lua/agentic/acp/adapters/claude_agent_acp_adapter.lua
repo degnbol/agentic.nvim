@@ -313,6 +313,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
     self:__apply_tool_identity(message, update)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
+    self:__apply_message_result(message)
     -- Top-level execute tool_calls arrive with empty rawInput (input streams
     -- separately), so __apply_raw_input's execute branch is skipped — lift the
     -- description echo out of the body here. Subagent execute carries rawInput
@@ -343,8 +344,31 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     self:__apply_tool_identity(message, update)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
+    self:__apply_message_result(message)
 
     return message
+end
+
+--- Replace the JSON result of a `SendMessage`-kind call with its text, and
+--- mark the call completed or failed by whether the message was delivered.
+--- Any other body is left as it is.
+---
+--- The bridge leaves such a call visible when it queued the message or could
+--- not deliver it, and the raw result carries plumbing fields.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+function ClaudeAgentACPAdapter:__apply_message_result(message)
+    if message.kind ~= "SendMessage" then
+        return
+    end
+    local lines, delivered = ClaudeUtils.message_result(message.body)
+    if not lines then
+        return
+    end
+    message.body = lines
+    if delivered ~= nil then
+        message.status = delivered and "completed" or "failed"
+    end
 end
 
 --- Write a head built by `ClaudeUtils.tool_head`, unless it would erase one an

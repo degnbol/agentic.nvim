@@ -932,7 +932,8 @@ sent from the queue do not. Entering the window, e.g. by a click, and
 resizing it do not change its mode.
 
 A chat or transcript opens following. If the last window that showed it was
-in user control, it opens at the same position, in user control.
+in user control, it opens at the same position, in user control. A |CTRL-]|
+jump that opens it lands on the tag's row, in user control.
 
 While a permission prompt is active, a following window shows the prompting
 tool call instead: centred once, then up to its heading at the top as output
@@ -1036,18 +1037,23 @@ not listed.
 With claude-agent-acp, each subagent has its own transcript: a listed buffer
 named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
-shows its subagent as working while it works. It also has a row for each
-message the subagent sent or received (`From <name>`, `To <name>`) and for
-each end of a run, titled `completed`, `cancelled`, `failed`, `ended`,
-`unknown` or the provider's stop reason. The header shows how the last run
-ended. A resumed subagent continues in the same transcript.
+shows its subagent as working while it works. It also has a row for each end
+of a run, titled `completed`, `cancelled`, `failed`, `ended`, `unknown` or
+the provider's stop reason. The header shows how the last run ended. A
+resumed subagent continues in the same transcript.
+
+A message between agents, the launch prompt included, has a row in the chat
+or transcript of each agent it joins: `From <name>` with the text in the
+recipient's, `To <name>` with the recipient's buffer name in the sender's.
+Each message is a tag named by its id, defined at both rows: |CTRL-]| on
+either row jumps to the other, |CTRL-T| jumps back, and |:tag| or
+|:tselect| with the id lists both.
 
 Each subagent also has a block in the chat, which records its launch:
 
     Line             Content ~
     Heading          `<mode> <type> · <name>`
     Name             The transcript's buffer name
-    Prompt           Folded when longer than one line
     Footer           `completed`
 
 The mode is `Background` or `Blocking`, with a `?` until the SDK's record

@@ -41,7 +41,8 @@ back, and a pin
 that held the view short of the last line (`_pin_held`) puts its window in
 user control when it releases. A window that newly shows the buffer gets its
 mode from `on_window_shown`: following at the follow target without a last
-position (`_has_last_position`), user control with one.
+position (`_has_last_position`), user control with one or when a tag jump
+handed it over (`hand_next_window_to_user`).
 
 ## Write path
 
