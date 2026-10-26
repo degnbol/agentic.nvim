@@ -1053,21 +1053,21 @@ function ChatWidget:_initialize()
     })
 end
 
---- Wire up [[ / ]] navigation between the rows recording a user action in the
---- chat buffer: prompts, and the notices confirming a local command. Those rows
---- are marked with extmarks in NS_USER_ACTIONS at write time (see
+--- Wire up [[ / ]] navigation between the rows of a chat or transcript buffer
+--- written outside the agent's stream: prompts and notices. Those rows are
+--- marked with extmarks in NS_USER_ACTIONS at write time (see
 --- MessageWriter:write_user_prompt and :write_notice); each row's identity sign
 --- rides on the same mark. Navigation reads the marks, so agent-authored `## `
 --- headings are never treated as prompts.
---- @param chat_buf integer The chat buffer
-function ChatWidget:_setup_prompt_navigation(chat_buf)
+--- @param bufnr integer
+function ChatWidget:_setup_prompt_navigation(bufnr)
     --- Row of the nearest user-action marker relative to the cursor.
     --- @param forward boolean true = smallest row > cursor, false = greatest < cursor
     --- @return integer|nil row 0-indexed
     local function adjacent_prompt_row(forward)
         local cur = vim.api.nvim_win_get_cursor(0)[1] - 1
         local marks = vim.api.nvim_buf_get_extmarks(
-            chat_buf,
+            bufnr,
             MessageWriter.NS_USER_ACTIONS,
             0,
             -1,
@@ -1098,7 +1098,7 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
 
     BufHelpers.multi_keymap_set(
         Config.keymaps.chat.prev_prompt,
-        chat_buf,
+        bufnr,
         function()
             jump_prompt(false)
         end,
@@ -1107,7 +1107,7 @@ function ChatWidget:_setup_prompt_navigation(chat_buf)
 
     BufHelpers.multi_keymap_set(
         Config.keymaps.chat.next_prompt,
-        chat_buf,
+        bufnr,
         function()
             jump_prompt(true)
         end,
@@ -1169,7 +1169,7 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
             end,
             { desc = "Agentic: Paste image from clipboard" }
         )
-    elseif panel == "chat" then
+    elseif panel == "chat" or panel == "subagent" then
         self:_setup_prompt_navigation(bufnr)
     end
 

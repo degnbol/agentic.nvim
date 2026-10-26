@@ -7,6 +7,7 @@
 local ACPClient = require("agentic.acp.acp_client")
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
+local AgentConfigOptions = require("agentic.acp.agent_config_options")
 local Bootstrap = require("agentic.bootstrap")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
@@ -18,6 +19,7 @@ local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local GrantSafety = require("agentic.utils.grant_safety")
 local HookRecordReader = require("agentic.hook_record_reader")
+local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
@@ -63,12 +65,16 @@ function P.invoke_hook(hook_name, data)
     end
 end
 
---- A subagent, one child session of the conversation. Its name, prompt, type
+--- A subagent, one child session of the conversation. Its label, prompt, type
 --- and mode are on its block in the main chat.
 --- @class agentic.SessionManager.Agent
 --- @field transcript? agentic.ui.SubagentTranscript Nil once the user wiped it
---- @field open boolean Running, as far as this session manager knows
+--- @field open boolean Working, as far as this session manager knows
 --- @field record_read boolean The provider's record of the spawn has been read
+--- @field parent_session_id? string The session that announced it. Nil for one restored from a file
+--- @field title? string The provider's title for it, the label's fallback
+--- @field description? string The provider's description of its task, the label
+--- @field config_options? agentic.acp.AgentConfigOptions Its own, once the provider reports any
 
 --- @class agentic.SessionManager
 --- @field id integer Monotonic identity, unique for the editor's lifetime. Names the session's buffers
@@ -84,6 +90,7 @@ end
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by agent id (`ACPClient:subagent_id`)
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
+--- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
 --- @field file_list agentic.ui.FileList
 --- @field file_activity agentic.ui.FileActivity
 --- @field code_selection agentic.ui.CodeSelection
@@ -305,7 +312,6 @@ function SessionManager:new()
     local PermissionManager = require("agentic.ui.permission_manager")
     local StatusIndicator = require("agentic.ui.status_indicator")
     local TodoList = require("agentic.ui.todo_list")
-    local AgentConfigOptions = require("agentic.acp.agent_config_options")
 
     last_id = last_id + 1
     self = setmetatable({
@@ -328,6 +334,7 @@ function SessionManager:new()
         _inputs = {},
         _agent_by_task = {},
         _tool_call_owner = {},
+        _seen_messages = {},
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
         _announced_model_id = nil,
@@ -865,12 +872,17 @@ function SessionManager:_agent_of(source_session_id, task_id)
     return task_id and self._agent_by_task[task_id]
 end
 
---- Record a subagent's Task id from an update's tag, while none is known.
+--- Route a tool use's id to a subagent, and record it as the subagent's Task
+--- id while none is known. A resumed subagent's updates carry the id of the
+--- call that resumed it; its record keeps the launch's.
 --- @param child_id string
---- @param task_id string|nil Id of the tool use that spawned the subagent, nil when untagged
+--- @param task_id string|nil Id of a tool use that delegated to the subagent, nil when untagged
 function SessionManager:_note_agent_task(child_id, task_id)
-    if task_id and not self._agent_by_task[task_id] then
-        self._agent_by_task[task_id] = child_id
+    if not task_id or self._agent_by_task[task_id] then
+        return
+    end
+    self._agent_by_task[task_id] = child_id
+    if not vim.tbl_get(self.chat_history.subagents, child_id, "task_id") then
         self.chat_history:set_subagent_task(child_id, task_id)
     end
 end
@@ -922,7 +934,7 @@ end
 --- Apply a change to a subagent's block, in the chat and in the history.
 --- No-op for a subagent without a block.
 --- @param child_id string
---- @param change { status?: agentic.ui.ToolCallStatus, subagent?: agentic.ui.MessageWriter.SubagentInfo }
+--- @param change { subagent?: agentic.ui.MessageWriter.SubagentInfo, body?: string[] }
 function SessionManager:_update_agent_block(child_id, change)
     local block = self:_agent_block(child_id)
     if not block then
@@ -931,8 +943,9 @@ function SessionManager:_update_agent_block(child_id, change)
     --- @type agentic.ui.MessageWriter.ToolCallBase
     local update = {
         tool_call_id = child_id,
-        status = change.status or block.status,
+        status = block.status,
         subagent = change.subagent,
+        body = change.body,
     }
     self.message_writer:update_tool_call_block(update)
     local tool_call = vim.tbl_extend("force", update, { type = "tool_call" }) --[[@as agentic.ui.ChatHistory.ToolCall]]
@@ -940,27 +953,15 @@ function SessionManager:_update_agent_block(child_id, change)
     self:_history_changed(self.chat_history)
 end
 
---- @type table<agentic.acp.SubagentState, agentic.ui.ToolCallStatus>
-local BLOCK_STATUS_OF_STATE = {
-    completed = "completed",
-    failed = "failed",
-    cancelled = "cancelled",
-    disconnected = "failed",
-}
-
---- Start a subagent the provider announced: its block in the main chat, then
---- its transcript and working indicator, and a background one's message
---- input. The transcript of a later generation shows in the windows showing
---- an earlier one. While a session loads, only the block and an unloaded
---- transcript for it to name: the session file holds the agent's output, and
---- its agent is long over.
+--- Start a subagent the provider announced: its block in the main chat,
+--- `completed` from the start since it records the launch only, then its
+--- transcript, closed until the agent reports work. While a session loads,
+--- the transcript is unloaded, so its first load renders the session file's
+--- rows.
 --- @param child_id string
---- @param name string
---- @param task string The prompt
-function SessionManager:_open_agent(child_id, name, task)
-    if self._agents[child_id] then
-        return
-    end
+--- @param label string
+--- @param parent_session_id string The session that announced it
+function SessionManager:_open_agent(child_id, label, parent_session_id)
     if not self.chat_history.subagents[child_id] then
         self.chat_history:set_subagent_task(child_id, nil)
     end
@@ -971,7 +972,7 @@ function SessionManager:_open_agent(child_id, name, task)
 
     --- @type agentic.ui.MessageWriter.SubagentInfo
     local subagent = {
-        label = name,
+        label = label,
         agent_id = (self.agent:subagent_id(child_id)),
         mode = self.agent:subagent_predicted_mode(),
         confirmed = false,
@@ -979,17 +980,17 @@ function SessionManager:_open_agent(child_id, name, task)
     local transcript = self:_new_transcript(child_id, subagent)
     self._agents[child_id] = {
         transcript = transcript,
-        open = not self._loading,
+        open = false,
         record_read = false,
+        parent_session_id = parent_session_id,
     }
 
     --- @type agentic.ui.MessageWriter.ToolCallBlock
     local block = {
         tool_call_id = child_id,
         kind = "SubAgent",
-        status = "in_progress",
+        status = "completed",
         argument = vim.api.nvim_buf_get_name(transcript.bufnr),
-        body = vim.split(task, "\n", { plain = true }),
         subagent = subagent,
     }
     self.message_writer:write_tool_call_block(block)
@@ -999,76 +1000,239 @@ function SessionManager:_open_agent(child_id, name, task)
         kind = block.kind,
         status = block.status,
         argument = block.argument,
-        body = block.body,
         subagent = subagent,
     })
     self:_history_changed(self.chat_history)
 
     if self._loading then
         transcript:unload()
-    else
-        transcript.status_indicator:start("generating")
-        self:_show_generation(child_id)
-        self:_open_input(child_id)
     end
     self:_read_agent_record(child_id)
 end
 
---- Show a subagent's transcript in every window showing a transcript of an
---- earlier generation of the same agent.
+--- Start a closed subagent's work, first or again: its working indicator, a
+--- header without the last run's end, and a background one's message input.
 --- @param child_id string
-function SessionManager:_show_generation(child_id)
-    local agent_id, generation = self.agent:subagent_id(child_id)
-    local bufnr = self._agents[child_id].transcript.bufnr
-    for other_id, agent in pairs(self._agents) do
-        local other_agent_id, other_generation = self.agent:subagent_id(other_id)
-        if
-            other_agent_id == agent_id
-            and other_generation < generation
-            and agent.transcript
-        then
-            for _, winid in ipairs(vim.fn.win_findbuf(agent.transcript.bufnr)) do
-                vim.api.nvim_win_set_buf(winid, bufnr)
+function SessionManager:_start_agent(child_id)
+    self._agents[child_id].open = true
+    local transcript = self:_transcript_for(child_id)
+    transcript.status_indicator:start("generating")
+    transcript:set_context(nil)
+    self:_open_input(child_id)
+end
+
+--- @type table<string, string>
+local END_WORD_OF_STOP_REASON = {
+    end_turn = "completed",
+    cancelled = "cancelled",
+    error = "failed",
+}
+
+--- The word for how a subagent's work ended. An `idle` without a stop reason
+--- ended for a reason the provider does not know, which claims no failure.
+--- @param state agentic.acp.SubagentWorkState
+--- @return string
+local function end_word(state)
+    if state.state ~= "idle" then
+        return state.state
+    end
+    local reason = Json.present(state.stopReason)
+    if not reason then
+        return "ended"
+    end
+    return END_WORD_OF_STOP_REASON[reason] or reason
+end
+
+--- End a subagent's work as `state` reports it: stop its indicator, stamp its
+--- unfinished calls `cancelled` unless it ended its turn, write an end row and
+--- show the end in the header. On an ended agent, only a report with error
+--- text writes a row, holding that text: the provider can report a failure a
+--- second time to add it.
+--- @param child_id string
+--- @param state agentic.acp.SubagentWorkState
+function SessionManager:_end_agent(child_id, state)
+    local agent = self._agents[child_id]
+    local word = end_word(state)
+    local message = Json.present(vim.tbl_get(state, "error", "message"))
+    local body = message and vim.split(message, "\n", { plain = true }) or nil
+    if not agent.open then
+        if body then
+            self:_write_agent_event(child_id, "end", word, body)
+        end
+        return
+    end
+
+    agent.open = false
+    local transcript = self:_transcript_for(child_id)
+    transcript.status_indicator:stop()
+    if word ~= "completed" then
+        self:_stamp_cancelled(transcript.writer)
+    end
+    self:_write_agent_event(child_id, "end", word, body)
+    transcript:set_context(word)
+end
+
+--- End every working subagent as `state`.
+--- @param state agentic.acp.SubagentWorkState
+function SessionManager:_close_agents(state)
+    for child_id, agent in pairs(self._agents) do
+        if agent.open then
+            self:_end_agent(child_id, state)
+        end
+    end
+end
+
+--- Write a row to a subagent's transcript and add it to the history. A row on
+--- a working agent leaves its turn open; on an ended one it ends the run.
+--- @param child_id string
+--- @param kind "sent"|"received"|"end"
+--- @param title string
+--- @param body string[]|nil
+function SessionManager:_write_agent_event(child_id, kind, title, body)
+    -- First: reloading the transcript replays the history, which must not
+    -- hold the row yet.
+    local transcript = self:_transcript_for(child_id)
+    --- @type agentic.ui.ChatHistory.SubagentEvent
+    local event = {
+        type = "subagent_event",
+        kind = kind,
+        title = title,
+        body = body,
+        parent_tool_use_id = self:_task_of(child_id),
+    }
+    SessionRestore.write_subagent_event(
+        transcript.writer,
+        event,
+        self._agents[child_id].open
+    )
+    transcript.status_indicator:reposition()
+    self.chat_history:add_message(event)
+    self:_history_changed(self.chat_history)
+end
+
+--- Apply a `subagent_update`: announce an unknown child, relabel a known one,
+--- then start or end its work. A label is the description, else the title,
+--- else the id addressing the agent. A custom (`_`-prefixed) state neither
+--- starts nor ends it. While a session loads, the work state is left out: the
+--- session file holds the transcript's rows, and the provider reports the
+--- current state again after the load.
+--- @param update agentic.acp.SubagentUpdate
+--- @param source_session_id string The session it arrived on, the child's parent
+function SessionManager:_on_subagent_update(update, source_session_id)
+    local child_id = update.sessionId
+    local agent = self._agents[child_id]
+    local title = agent and agent.title
+    local description = agent and agent.description
+    if update.title ~= nil then
+        title = Json.present(update.title)
+    end
+    if update.description ~= nil then
+        description = Json.present(update.description)
+    end
+    local label = description or title or (self.agent:subagent_id(child_id))
+
+    if not agent then
+        self:_open_agent(child_id, label, source_session_id)
+        agent = self._agents[child_id]
+    elseif update.title ~= nil or update.description ~= nil then
+        local block = self:_agent_block(child_id)
+        if block and block.subagent then
+            local subagent =
+                vim.tbl_extend("force", block.subagent, { label = label }) --[[@as agentic.ui.MessageWriter.SubagentInfo]]
+            self:_update_agent_block(child_id, { subagent = subagent })
+            if agent.transcript then
+                agent.transcript:set_header(subagent)
             end
         end
     end
-end
+    agent.title, agent.description = title, description
+    -- An agent restored from a file has none; the parent never changes.
+    agent.parent_session_id = agent.parent_session_id or source_session_id
 
---- End a running subagent: stop its indicator, stamp its unresolved calls
---- `cancelled` unless it completed, end its writer's runs, set its block's
---- status. A no-op for an unknown or ended one.
---- @param child_id string
---- @param state agentic.acp.SubagentState
-function SessionManager:_close_agent(child_id, state)
-    local agent = self._agents[child_id]
-    if not (agent and agent.open) then
+    local state = Json.present(update.state)
+    if self._loading or not state then
         return
     end
-    agent.open = false
-
-    local transcript = agent.transcript
-    if transcript then
-        transcript.status_indicator:stop()
-        if state ~= "completed" then
-            self:_stamp_cancelled(transcript.writer)
+    if state.state == "running" or state.state == "requires_action" then
+        if not agent.open then
+            self:_start_agent(child_id)
         end
-        transcript.writer:finalize_turn()
-    end
-    self:_update_agent_block(
-        child_id,
-        { status = BLOCK_STATUS_OF_STATE[state] or "failed" }
-    )
-    if transcript then
-        local block = self:_agent_block(child_id)
-        transcript:set_header(block and block.subagent, state)
+    elseif state.state == "idle" or state.state == "unknown" then
+        self:_end_agent(child_id, state)
+    else
+        Logger.debug("Custom subagent state left alone: " .. state.state)
     end
 end
 
---- Close every running subagent as `state`.
---- @param state agentic.acp.SubagentState
-function SessionManager:_close_agents(state)
-    for child_id in pairs(self._agents) do
-        self:_close_agent(child_id, state)
+--- A session's name in a transcript row: `main agent` for the root, a
+--- subagent's label, else the id.
+--- @param session_id string
+--- @return string
+function SessionManager:_session_name(session_id)
+    if session_id == self.session_id then
+        return "main agent"
+    elseif self._agents[session_id] then
+        return self:_agent_label(session_id)
+    end
+    return session_id
+end
+
+--- Show one view of a session message in the transcript of the subagent
+--- whose session it arrived on, as `From <sender>` or `To <recipient>`. A
+--- view on the root is not shown: the main agent's own text covers its side.
+--- An incoming view that does not come from a child of the recipient (a
+--- hand-back, or a nested launch's reply) is a delegation: it gives a block
+--- without a body its text, the launch prompt, and routes its id to the
+--- subagent. While a session loads, no row: the session file holds them.
+--- @param update agentic.acp.SessionMessage
+--- @param source_session_id string The session it arrived on
+function SessionManager:_on_session_message(update, source_session_id)
+    if not self._agents[source_session_id] then
+        return
+    end
+    local key = source_session_id .. ":" .. update.messageId
+    if self._seen_messages[key] then
+        Logger.debug("Session message shown already: " .. key)
+        return
+    end
+    self._seen_messages[key] = true
+
+    local texts = {}
+    for _, block in ipairs(Json.present(update.content) or {}) do
+        if block.type == "text" then
+            table.insert(texts, block.text)
+        end
+    end
+    local lines = vim.split(table.concat(texts), "\n", { plain = true })
+
+    local sender = Json.present(update.senderSessionId)
+    local recipient = Json.present(update.recipientSessionId)
+    local received = recipient == source_session_id
+    local title
+    if received then
+        local from_child = sender
+            and self._agents[sender]
+            and self._agents[sender].parent_session_id == source_session_id
+        if not from_child then
+            local block = self:_agent_block(source_session_id)
+            if block and not block.body then
+                self:_update_agent_block(source_session_id, { body = lines })
+            end
+            self:_note_agent_task(source_session_id, update.messageId)
+        end
+        title = sender and "From " .. self:_session_name(sender) or "Message"
+    else
+        title = recipient and "To " .. self:_session_name(recipient)
+            or "Message"
+    end
+
+    if not self._loading then
+        self:_write_agent_event(
+            source_session_id,
+            received and "received" or "sent",
+            title,
+            lines
+        )
     end
 end
 
@@ -1095,6 +1259,7 @@ function SessionManager:_reset_subagents()
     self._agents = {}
     self._agent_by_task = {}
     self._tool_call_owner = {}
+    self._seen_messages = {}
 end
 
 --- Wipe an agent's message input. Unsent text in it is given back in a
@@ -1290,10 +1455,7 @@ local function filter_chunk(boundary, update)
     if not (content and content.text) then
         return update, false
     end
-    local message_id = update.messageId
-    if message_id == vim.NIL then
-        message_id = nil
-    end
+    local message_id = Json.present(update.messageId)
     --- @cast message_id string|nil
     local text, starts_response = boundary:filter(message_id, content.text)
     if text == "" then
@@ -1394,24 +1556,10 @@ function SessionManager:_on_session_update(update, source_session_id)
         or update.sessionUpdate == "agent_thought_chunk"
     then
         self:_on_agent_chunk(update, source_session_id)
-    elseif update.sessionUpdate == "subagent_spawned" then
-        self:_open_agent(
-            update.subagentSessionId,
-            update.name,
-            update.task
-        )
-    elseif update.sessionUpdate == "subagent_state_update" then
-        local child_id = update.subagentSessionId
-        if self._loading then
-            -- Its agent is long over; only the block reports how it ended.
-            if self._agents[child_id] then
-                self:_update_agent_block(child_id, {
-                    status = BLOCK_STATUS_OF_STATE[update.state] or "failed",
-                })
-            end
-        else
-            self:_close_agent(child_id, update.state)
-        end
+    elseif update.sessionUpdate == "subagent_update" then
+        self:_on_subagent_update(update, source_session_id --[[@as string]])
+    elseif update.sessionUpdate == "session_message" then
+        self:_on_session_message(update, source_session_id --[[@as string]])
     elseif update.sessionUpdate == "user_message_chunk" then
         -- Arrives during session/load replay (ACPClient filters it out in
         -- normal operation). Format as a user heading and write to chat.
@@ -1463,7 +1611,28 @@ function SessionManager:_on_session_update(update, source_session_id)
             self:_update_chat_header()
         end
     elseif update.sessionUpdate == "config_option_update" then
-        self:_handle_new_config_options(update.configOptions)
+        if source_session_id and source_session_id ~= self.session_id then
+            local agent = self._agents[source_session_id]
+            if not agent then
+                Logger.debug(
+                    "Config options of an unknown child session dropped: "
+                        .. source_session_id
+                )
+                return
+            end
+            -- No selector reaches a subagent's options: they are read only.
+            agent.config_options = agent.config_options
+                or AgentConfigOptions:new(
+                    function() end,
+                    function() end,
+                    function()
+                        return false
+                    end
+                )
+            agent.config_options:set_options(update.configOptions)
+        else
+            self:_handle_new_config_options(update.configOptions)
+        end
     elseif update.sessionUpdate == "usage_update" then
         self._usage = {
             used = update.used,
@@ -1906,7 +2075,7 @@ function SessionManager:_build_handlers()
 
         on_disconnect = function()
             if not self.destroyed then
-                self:_close_agents("disconnected")
+                self:_close_agents({ state = "unknown" })
             end
         end,
     }
@@ -2325,19 +2494,15 @@ function SessionManager:_stamp_cancelled(writer)
     end
 end
 
---- Give every tool call left hanging by a cancelled turn a `cancelled` footer,
---- in the chat and in the running subagents' transcripts.
+--- Give every tool call in the chat left hanging by a cancelled turn a
+--- `cancelled` footer. A subagent's calls are left alone: the subagent can
+--- outlive the turn that started it.
 ---
 --- Whether the provider sends a late update for a call it abandoned is
 --- provider-dependent, so without this sweep a block interrupted while pending
 --- keeps that footer for the rest of the session, and after a restore too.
 function SessionManager:_mark_unresolved_tool_calls_cancelled()
     self:_stamp_cancelled(self.message_writer)
-    for _, agent in pairs(self._agents) do
-        if agent.open and agent.transcript then
-            self:_stamp_cancelled(agent.transcript.writer)
-        end
-    end
 end
 
 --- Close out a turn dispatched to the agent: end it in the chat buffer, stamp
@@ -3138,12 +3303,6 @@ function SessionManager:stop_generation()
     self.permission_manager:cancel_requests()
     self.is_generating = false
     self.status_indicator:stop()
-    -- The cancel ends the subagents too, and their state updates close them.
-    for _, agent in pairs(self._agents) do
-        if agent.open and agent.transcript then
-            agent.transcript.status_indicator:stop()
-        end
-    end
 end
 
 --- Dispatch whatever the gate deferred, now that a blocking condition has
@@ -3996,79 +4155,80 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self._cwd,
         {},
         handlers,
+        -- Unscheduled: a response callback runs on the main loop already, and
+        -- this one must run whole before any notification sent after the
+        -- response, each of which is scheduled once.
         function(result, err)
-            vim.schedule(function()
-                if err then
-                    local details = err.data and err.data.details
-                        or err.message
-                        or "Unknown error"
-                    Logger.notify(
-                        string.format(
-                            "session/load failed: %s — falling back to local history",
-                            details
-                        ),
-                        vim.log.levels.WARN
-                    )
-                    self._restoring = false
-                    self._loading = false
-                    -- Held for a replay that will not come; the local
-                    -- fallback reads the deciders from the history.
-                    self.permission_manager:drop_deciders()
-                    self:_fallback_restore_from_local(session_id, saved_history)
-                    return
-                end
-
+            if err then
+                local details = err.data and err.data.details
+                    or err.message
+                    or "Unknown error"
+                Logger.notify(
+                    string.format(
+                        "session/load failed: %s — falling back to local history",
+                        details
+                    ),
+                    vim.log.levels.WARN
+                )
                 self._restoring = false
                 self._loading = false
-                -- The replay is over: what it did not take, nothing will.
+                -- Held for a replay that will not come; the local
+                -- fallback reads the deciders from the history.
                 self.permission_manager:drop_deciders()
-                self.status_indicator:stop()
-                -- The replay mirrors what the session file already holds.
-                self.chat_history.dirty = false
-                self:_sync_modified(self.chat_history)
+                self:_fallback_restore_from_local(session_id, saved_history)
+                return
+            end
 
-                -- After the replay, whose spawns made the transcripts they
-                -- had a block for.
-                self:_restore_transcripts()
+            self._restoring = false
+            self._loading = false
+            -- The replay is over: what it did not take, nothing will.
+            self.permission_manager:drop_deciders()
+            self.status_indicator:stop()
+            -- The replay mirrors what the session file already holds.
+            self.chat_history.dirty = false
+            self:_sync_modified(self.chat_history)
 
-                -- Apply configOptions the provider returned with session/load,
-                -- so the header reflects the restored session's mode/model
-                -- rather than stale state from a pre-switch session.
-                if result and result.configOptions then
-                    self:_handle_new_config_options(result.configOptions)
-                end
+            -- After the replay, whose spawns made the transcripts they
+            -- had a block for.
+            self:_restore_transcripts()
 
-                local opts = self.config_options
-                if model then
-                    opts:set_pending_initial_model(model)
-                end
+            -- Apply configOptions the provider returned with session/load,
+            -- so the header reflects the restored session's mode/model
+            -- rather than stale state from a pre-switch session.
+            if result and result.configOptions then
+                self:_handle_new_config_options(result.configOptions)
+            end
 
-                local provider_label = self.agent.provider_config.name
-                    or Config.provider
-                local model_label = model or opts:current_model_id()
-                self.message_writer:write_notice({
-                    glyph = Glyphs.RESUME,
-                    title = session_id:sub(1, 8),
-                    body = {
-                        string.format(
-                            "Provider: **%s** · Model: **%s**",
-                            provider_label,
-                            model_label or "unknown"
-                        ),
-                    },
-                })
+            local opts = self.config_options
+            if model then
+                opts:set_pending_initial_model(model)
+            end
 
-                -- The only drain on this path: new_session's is skipped by the
-                -- _restoring early return, and restore_from_history does not
-                -- run. Placed after the welcome write, never at the top of the
-                -- callback — the error branch above reaches a drain of its own
-                -- and a top-of-callback one would double-send.
-                --
-                -- set_pending_initial_model applies the saved model
-                -- asynchronously, so a drained turn may run on the provider
-                -- default rather than the session's own model.
-                self:_dispatch_deferred_prompts()
-            end)
+            local provider_label = self.agent.provider_config.name
+                or Config.provider
+            local model_label = model or opts:current_model_id()
+            self.message_writer:write_notice({
+                glyph = Glyphs.RESUME,
+                title = session_id:sub(1, 8),
+                body = {
+                    string.format(
+                        "Provider: **%s** · Model: **%s**",
+                        provider_label,
+                        model_label or "unknown"
+                    ),
+                },
+            })
+
+            -- The only drain on this path: new_session's is skipped by the
+            -- _restoring early return, and restore_from_history does not
+            -- run. Placed after the welcome write, never at the top of the
+            -- callback — the error branch above reaches a drain of its own
+            -- and a top-of-callback one would double-send.
+            --
+            -- set_pending_initial_model applies the saved model
+            -- asynchronously, so a drained turn may run on the provider
+            -- default rather than the session's own model.
+            self:_dispatch_deferred_prompts()
         end
     )
 end

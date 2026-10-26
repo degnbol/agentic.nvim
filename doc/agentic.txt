@@ -75,10 +75,10 @@ This is a fork of carlos-algms/agentic.nvim.
 
 Install claude-agent-acp:
 >
-    pnpm add -g @agentclientprotocol/claude-agent-acp@0.85.1
+    pnpm add -g @agentclientprotocol/claude-agent-acp@0.97.0
 <
 Or download a binary from the releases page. Developed against
-claude-agent-acp 0.85.1.
+claude-agent-acp 0.97.0.
 
 TREESITTER PARSERS                              *agentic-requirements-parsers*
 
@@ -567,8 +567,10 @@ What the queue bindings dispatch, and when, is in |agentic-queue|.
 6.3 CHAT KEYMAPS                                        *agentic-keymaps-chat*
 
     Key    Mode    Description ~
-    `[[`     n       Previous prompt or command notice
-    `]]`     n       Next prompt or command notice
+    `[[`     n       Previous prompt or notice
+    `]]`     n       Next prompt or notice
+
+`[[` and `]]` also move between the rows of a subagent transcript.
 
 |gf|, |CTRL-W_f| and |CTRL-W_gf| open file and buffer names in the chat and
 the subagent transcripts. On `/skill` in the chat, the transcripts, the input
@@ -1034,21 +1036,26 @@ not listed.
 With claude-agent-acp, each subagent has its own transcript: a listed buffer
 named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
-shows its subagent as working until the subagent ends.
+shows its subagent as working while it works. It also has a row for each
+message the subagent sent or received (`From <name>`, `To <name>`) and for
+each end of a run, titled `completed`, `cancelled`, `failed`, `ended`,
+`unknown` or the provider's stop reason. The header shows how the last run
+ended. A resumed subagent continues in the same transcript.
 
-Each subagent also has a block in the chat:
+Each subagent also has a block in the chat, which records its launch:
 
     Line             Content ~
     Heading          `<mode> <type> · <name>`
     Name             The transcript's buffer name
     Prompt           Folded when longer than one line
-    Footer           `in_progress`, `completed`, `failed` or `cancelled`
+    Footer           `completed`
 
 The mode is `Background` or `Blocking`, with a `?` until the SDK's record
 of the spawn confirms it; the type shows once that record is read. |gf|,
 |CTRL-W_f| or |CTRL-W_gf| on the name line opens the transcript.
 
-A cancel, a provider crash and a session switch end every running subagent.
+A provider crash and a session switch end every running subagent. A cancel
+ends the subagents that the provider then reports ended.
 
 A permission prompt from a subagent whose transcript has no window shows on
 the chat (|agentic-permissions-prompt|).
@@ -1056,10 +1063,9 @@ the chat (|agentic-permissions-prompt|).
 An insert key in a background subagent's transcript opens its message input.
 `:w` there sends the text to the subagent through the main agent, as your
 prompt in the chat; `@path` stays text. `<C-c>` in either buffer asks the
-main agent to stop the subagent. A message to a finished subagent resumes it
-in the same windows and input. A blocking subagent has no message input: in
+main agent to stop the subagent. A blocking subagent has no message input: in
 its transcript, insert keys go to the session's input and `<C-c>` stops the
-turn. Restored subagents have no input.
+turn. A restored background subagent gets its input when it runs again.
 
 Transcripts are saved with the session (|agentic-buffers|) and come back on
 load and restore.

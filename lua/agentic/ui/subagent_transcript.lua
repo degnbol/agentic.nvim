@@ -131,15 +131,21 @@ function SubagentTranscript:restart(subagent)
     )
 end
 
---- Show the subagent's heading, and its state once it has one, in the header.
+--- Show the subagent's heading in the header.
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
---- @param state string|nil
-function SubagentTranscript:set_header(subagent, state)
+function SubagentTranscript:set_header(subagent)
     local header = WindowDecoration.get_header(self.bufnr)
     header.title = Glyphs.KIND.subagent
         .. " "
         .. ToolCallRenderer.subagent_heading(subagent)
-    header.context = state
+    WindowDecoration.set_header(self.bufnr, header)
+end
+
+--- Set the header's context text, or clear it with nil.
+--- @param context string|nil
+function SubagentTranscript:set_context(context)
+    local header = WindowDecoration.get_header(self.bufnr)
+    header.context = context
     WindowDecoration.set_header(self.bufnr, header)
 end
 

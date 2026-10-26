@@ -443,10 +443,10 @@ vim.api.nvim_set_current_win(_G.s.widget:input_win())
                 [[
 local id = ...
 _G.h.on_session_update({
-    sessionUpdate = "subagent_spawned",
-    subagentSessionId = id,
-    name = "map",
-    task = "Map it.",
+    sessionUpdate = "subagent_update",
+    sessionId = id,
+    title = "map",
+    state = { state = "running" },
 }, "sid-1")
 _G.sub = _G.s._agents[id].transcript.bufnr
 ]],

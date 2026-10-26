@@ -104,7 +104,7 @@ In a simulation over 234 local sessions, the start-at-first-new-entry rule found
      - `_render_history`: `_restore_transcripts`, `SessionRestore.replay_messages`, `status_indicator:reposition()`. Unify's `on_created` calls it.
      - Neither function sets `_history_to_send`. The provider already holds a loaded conversation.
    - Field `--- @field _replay_hold? { kind: string, args: table }[] Conversation updates of a session/load replay, held until the load completes`. It is set only while `_loading`. Every site that clears `_loading` also clears it: the callback, `_refresh` and `_cancel_session`.
-   - `_build_handlers`: while `_replay_hold` is set, `on_session_update`, `on_tool_call` and `on_tool_call_update` append conversation updates to it and return. Conversation updates are `tool_call`, `tool_call_update`, `user_message_chunk`, `agent_message_chunk`, `agent_thought_chunk`, `subagent_spawned` and `subagent_state_update`. Other session updates (commands, modes, config options, usage, plan) are applied at once, because they are provider state.
+   - `_build_handlers`: while `_replay_hold` is set, `on_session_update`, `on_tool_call` and `on_tool_call_update` append conversation updates to it and return. Conversation updates are `tool_call`, `tool_call_update`, `user_message_chunk`, `agent_message_chunk`, `agent_thought_chunk`, `subagent_update` and `session_message`. Other session updates (commands, modes, config options, usage, plan) are applied at once, because they are provider state.
    - Add
      ```lua
      --- The alignment entry of one held replay update.
@@ -112,7 +112,7 @@ In a simulation over 234 local sessions, the start-at-first-new-entry rule found
      --- @return agentic.ReplayAlign.Entry
      function SessionManager:_replay_entry(held)
      ```
-     - It is main-session only when `source_session_id == self.session_id` and `agent:subagent_task_id(update)` is nil. It does not use `_agents`, because no held `subagent_spawned` has been dispatched yet.
+     - It is main-session only when `source_session_id == self.session_id` and `agent:subagent_task_id(update)` is nil. It does not use `_agents`, because no held `subagent_update` has been dispatched yet.
      - A prompt starts a turn when `PromptBlocks.is_prompt_text` is true and `agent:is_replay_only_prompt` is false.
    - `_do_load_acp_session`:
      - Capture the epoch after `_advance_session_epoch`. The callback returns at once when `_session_epoch` has moved on, for example after `/new`.

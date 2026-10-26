@@ -93,6 +93,10 @@ Glyphs.KIND.think = Glyphs.THINKING
 --- deliver anything, so the reader's question is which script spoke.
 Glyphs.HOOK = "󰛢"
 
+--- Identity of a message a subagent received. A letter against
+--- `KIND.sendmessage`'s send arrow, which marks a message it sent.
+Glyphs.MESSAGE_RECEIVED = "󰇮"
+
 --- Identity of a failure the provider reported for the turn
 --- (`MessageWriter:write_error_message`). A crossed circle rather than the alert
 --- triangle: the triangle reads as a warning, and every region this marks is a

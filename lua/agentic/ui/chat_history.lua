@@ -28,9 +28,20 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- | agentic.ui.ChatHistory.ThoughtMessage
 --- | agentic.ui.ChatHistory.ToolCall
 
---- A message with `parent_tool_use_id` set, of type `agent`, `thought` or
---- `tool_call`.
---- @alias agentic.ui.ChatHistory.SubagentMessage agentic.ui.ChatHistory.Message
+--- A row in a subagent's transcript for an event outside its own output: a
+--- message it sent or received, or the end of a run.
+--- @class agentic.ui.ChatHistory.SubagentEvent
+--- @field type "subagent_event"
+--- @field kind "sent"|"received"|"end" A message the subagent sent or received, or the end of a run
+--- @field title string
+--- @field body? string[]
+--- @field parent_tool_use_id string
+
+--- A message with `parent_tool_use_id` set, of type `agent`, `thought`,
+--- `tool_call` or `subagent_event`.
+--- @alias agentic.ui.ChatHistory.SubagentMessage
+--- | agentic.ui.ChatHistory.Message
+--- | agentic.ui.ChatHistory.SubagentEvent
 
 --- The id, working directory, provider and model of a session.
 --- @class agentic.ui.ChatHistory.SessionRef
@@ -165,7 +176,7 @@ function ChatHistory:_list_for(msg)
     return msg.parent_tool_use_id and self.subagent_messages or self.messages
 end
 
---- @param msg agentic.ui.ChatHistory.Message
+--- @param msg agentic.ui.ChatHistory.SubagentMessage
 function ChatHistory:add_message(msg)
     table.insert(self:_list_for(msg), msg)
     self.dirty = true
@@ -178,16 +189,20 @@ function ChatHistory:set_title(title)
 end
 
 --- Record the Agent tool use that spawned a subagent, replacing any earlier
---- record, and mark the history dirty. Messages stored under the child id,
---- while the Task id was unknown, move to the Task id, so one key holds all
---- of the subagent's messages.
+--- record, and mark the history dirty. Messages stored under the child id or
+--- the earlier record move to the new Task id, so one key holds all of the
+--- subagent's messages.
 --- @param child_id string The subagent's child session id
 --- @param task_id string|nil Nil while unknown
 function ChatHistory:set_subagent_task(child_id, task_id)
+    local previous = vim.tbl_get(self.subagents, child_id, "task_id")
     self.subagents[child_id] = { task_id = task_id }
     if task_id then
         for _, msg in ipairs(self.subagent_messages) do
-            if msg.parent_tool_use_id == child_id then
+            if
+                msg.parent_tool_use_id == child_id
+                or msg.parent_tool_use_id == previous
+            then
                 msg.parent_tool_use_id = task_id
             end
         end

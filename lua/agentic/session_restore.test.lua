@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local Glyphs = require("agentic.glyphs")
 local spy = require("tests.helpers.spy")
 
 describe("SessionRestore", function()
@@ -833,6 +834,48 @@ describe("SessionRestore", function()
 
             assert.equal(1, write_prompt_spy.call_count)
             assert.equal(1, write_message_spy.call_count)
+        end)
+
+        it("replays a subagent event as a notice that never finalizes", function()
+            local notice_spy = spy.new(function() end)
+            local writer = {
+                write_notice = notice_spy,
+                flush_thought_run = spy.new(function() end),
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "subagent_event",
+                        kind = "end",
+                        title = "failed",
+                        body = { "boom" },
+                        parent_tool_use_id = "toolu_1",
+                    },
+                    {
+                        type = "subagent_event",
+                        kind = "received",
+                        title = "From main agent",
+                        parent_tool_use_id = "toolu_1",
+                    },
+                    {
+                        type = "subagent_event",
+                        kind = "sent",
+                        title = "To main agent",
+                        parent_tool_use_id = "toolu_1",
+                    },
+                }
+            )
+
+            assert.equal(3, notice_spy.call_count)
+            local ended = notice_spy.calls[1][2]
+            assert.equal("failed", ended.title)
+            assert.same({ "boom" }, ended.body)
+            assert.is_true(ended.mid_turn)
+            assert.equal(Glyphs.KIND.subagent, ended.glyph)
+            assert.equal(Glyphs.MESSAGE_RECEIVED, notice_spy.calls[2][2].glyph)
+            assert.equal(Glyphs.KIND.sendmessage, notice_spy.calls[3][2].glyph)
         end)
 
         it("replays thought chunks", function()

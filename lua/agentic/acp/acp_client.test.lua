@@ -928,6 +928,21 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    it("answers a load the agent cannot do on a later tick", function()
+        local deferred = Deferred.capture()
+        MiniTest.finally(deferred.revert)
+        local client = setmetatable({}, { __index = ACPClient })
+        local err
+
+        client:load_session("s-1", "/proj", nil, {}, function(_, e)
+            err = e
+        end)
+
+        assert.is_nil(err)
+        deferred.drain()
+        assert.equal(client.ERROR_CODES.PROTOCOL_ERROR, err.code)
+    end)
+
     it("neither displays a budget nor auto-continues by default", function()
         local client = setmetatable({}, { __index = ACPClient })
         assert.is_false(client:budget_display())
@@ -1067,10 +1082,11 @@ describe("agentic.acp.ACPClient", function()
             client:__handle_session_update({
                 sessionId = parent,
                 update = {
-                    sessionUpdate = "subagent_spawned",
-                    subagentSessionId = child,
-                    name = "n",
-                    task = "t",
+                    sessionUpdate = "subagent_update",
+                    sessionId = child,
+                    title = "n",
+                    capabilities = { cancel = {} },
+                    state = { state = "running" },
                 },
             })
         end
@@ -1109,7 +1125,7 @@ describe("agentic.acp.ACPClient", function()
 
             assert.equal(2, #calls)
             assert.equal("root", calls[1][3])
-            assert.equal("subagent_spawned", calls[1][2].sessionUpdate)
+            assert.equal("subagent_update", calls[1][2].sessionUpdate)
             assert.equal("child", calls[2][3])
             assert.equal("hi", calls[2][2].content.text)
         end)
@@ -1200,6 +1216,14 @@ describe("agentic.acp.ACPClient", function()
             client:unsubscribe("root")
 
             assert.same({ ["other-child"] = "other" }, client._children)
+        end)
+
+        it("records no session as its own child", function()
+            local client = make_client({ subscribers = { root = {} } })
+
+            spawn(client, "root", "root")
+
+            assert.same({}, client._children)
         end)
 
         it("records no child of an unsubscribed session", function()

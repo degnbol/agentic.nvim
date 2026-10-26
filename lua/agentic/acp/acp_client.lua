@@ -87,8 +87,8 @@ function ACPClient:new(config, on_ready)
             -- text/thinking as parentToolUseId-tagged notifications (bridge
             -- filters them out for clients that don't advertise this).
             _meta = { ["subagent-transcript"] = true },
-            -- Each subagent becomes a child session with a reported end
-            -- (`subagent_spawned`, `subagent_state_update`).
+            -- Each subagent becomes a child session, announced and tracked by
+            -- `subagent_update`, its messages sent as `session_message`.
             subagents = vim.empty_dict(),
         },
         callbacks = {},
@@ -598,8 +598,12 @@ function ACPClient:__handle_session_update(params)
 
     -- Recorded here rather than by the subscriber: the child's own updates
     -- follow at once, and the subscriber runs a tick later.
-    if session_update_type == "subagent_spawned" and self.subscribers[root] then
-        self._children[update.subagentSessionId] = root
+    if
+        session_update_type == "subagent_update"
+        and update.sessionId ~= session_id
+        and self.subscribers[root]
+    then
+        self._children[update.sessionId] = root
     end
 
     if session_update_type == "user_message_chunk" then
@@ -1211,10 +1215,14 @@ function ACPClient:load_session(
     if
         not self.agent_capabilities or not self.agent_capabilities.loadSession
     then
-        callback(nil, {
-            code = self.ERROR_CODES.PROTOCOL_ERROR,
-            message = "Agent does not support loading sessions",
-        })
+        -- Scheduled like every response callback, so no caller sees its
+        -- callback run before `load_session` returns.
+        vim.schedule(function()
+            callback(nil, {
+                code = self.ERROR_CODES.PROTOCOL_ERROR,
+                message = "Agent does not support loading sessions",
+            })
+        end)
         return
     end
 
@@ -1625,25 +1633,39 @@ return ACPClient
 --- @field title string SDK-maintained title (`/rename`'d or auto-generated)
 --- @field updatedAt? string ISO 8601 timestamp of the session file
 
---- A subagent started as a child session of the session it arrives on.
---- @class agentic.acp.SubagentSpawned
---- @field sessionUpdate "subagent_spawned"
---- @field subagentSessionId string
---- @field name string
---- @field task string
---- @field prompt? string
+--- The work state of a subagent: `running` or `requires_action` while it
+--- works, `idle` once its work ended (no `stopReason` when the reason is not
+--- known), `unknown` when it can no longer be observed. A `_`-prefixed state
+--- is a custom one.
+--- @class agentic.acp.SubagentWorkState
+--- @field state "running"|"requires_action"|"idle"|"unknown"|string
+--- @field stopReason? "end_turn"|"cancelled"|"error"|"max_tokens"|"max_turn_requests"|"refusal"|vim.NIL
+--- @field error? { code: integer, message: string }|vim.NIL
 
---- @alias agentic.acp.SubagentState "completed"|"failed"|"cancelled"|"disconnected"
+--- A child session of the session it arrives on, announced or changed.
+--- Patch semantics: an omitted field keeps its value, `vim.NIL` clears it.
+--- @class agentic.acp.SubagentUpdate
+--- @field sessionUpdate "subagent_update"
+--- @field sessionId string The child session
+--- @field title? string|vim.NIL
+--- @field description? string|vim.NIL
+--- @field capabilities? { cancel?: table }|vim.NIL
+--- @field state? agentic.acp.SubagentWorkState|vim.NIL
 
---- A child session's subagent ended.
---- @class agentic.acp.SubagentStateUpdate
---- @field sessionUpdate "subagent_state_update"
---- @field subagentSessionId string
---- @field state agentic.acp.SubagentState
+--- One view of a message between two sessions: the sender's on the sender's
+--- session, the recipient's on the recipient's.
+--- @class agentic.acp.SessionMessage
+--- @field sessionUpdate "session_message"
+--- @field messageId string
+--- @field senderSessionId? string
+--- @field recipientSessionId? string
+--- @field content? agentic.acp.Content[]|vim.NIL
+--- @field recipientMessageId? string
+--- @field senderMessageId? string
 
 --- @alias agentic.acp.SessionUpdateMessage
---- | agentic.acp.SubagentSpawned
---- | agentic.acp.SubagentStateUpdate
+--- | agentic.acp.SubagentUpdate
+--- | agentic.acp.SessionMessage
 --- | agentic.acp.UserMessageChunk
 --- | agentic.acp.AgentMessageChunk
 --- | agentic.acp.AgentThoughtChunk

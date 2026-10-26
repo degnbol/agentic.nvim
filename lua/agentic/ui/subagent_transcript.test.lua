@@ -210,12 +210,18 @@ describe("agentic.ui.SubagentTranscript", function()
         assert.is_false(vim.api.nvim_buf_is_loaded(transcript.bufnr))
     end)
 
-    it("shows the heading and state in its header", function()
+    it("shows the heading and context in its header, each kept by the other", function()
         local transcript = new_transcript("aa11bb22cc33dd44")
-        transcript:set_header(info, "completed")
+        transcript:set_context("completed")
+        transcript:set_header(info)
 
         local header = vim.b[transcript.bufnr].agentic_header
         assert.is_true(header.title:find("Background? map the UI", 1, true) ~= nil)
         assert.equal("completed", header.context)
+
+        transcript:set_context(nil)
+        header = vim.b[transcript.bufnr].agentic_header
+        assert.is_nil(header.context)
+        assert.is_true(header.title:find("Background? map the UI", 1, true) ~= nil)
     end)
 end)

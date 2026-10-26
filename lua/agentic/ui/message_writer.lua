@@ -1400,23 +1400,24 @@ function MessageWriter:write_user_prompt(text, extra_lines)
 end
 
 --- @class agentic.ui.MessageWriter.Notice
---- @field glyph string Identity glyph for the command, stamped as the heading row's sign (see agentic.glyphs)
+--- @field glyph string Identity glyph, stamped as the heading row's sign (see agentic.glyphs)
 --- @field title string Heading text. Raw, not backtick-wrapped: an underscore or stray backtick in it can corrupt the heading through markdown inline parsing, the same exposure a user prompt's heading already carries.
 --- @field body? string[] Already-formatted markdown lines placed under the heading
 --- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
 --- @field mid_turn? boolean True when a turn is running. Decides whether the notice closes the turn — see write_notice.
 
---- Write the result of a locally-handled command as a glyph-signed heading.
+--- Write a glyph-signed heading row that is not part of the agent's stream,
+--- such as the result of a locally-handled command.
 ---
---- A notice records something the *user* did, so its row carries an identity
---- sign in the same channel as a prompt's own and is navigable with `[[`/`]]`.
---- A notice with a body grows a `│`/`╰─` rail over those rows.
+--- Its row carries an identity sign in the same channel as a prompt's own and
+--- is navigable with `[[`/`]]`. A notice with a body grows a `│`/`╰─` rail
+--- over those rows.
 ---
 --- Always `##`. The heading level says whose row it is, not when it was written
---- (§ "Heading levels" in the `rendering` skill): a notice is a user action, a
---- sibling of the prompts, and `###` would file it among the running turn's
---- tool calls. Mid-turn that costs a breadcrumb — the notice closes the
---- `## prompt` section, so `queries/agentic/context.scm` pins the notice title
+--- (§ "Heading levels" in the `rendering` skill): a notice is a sibling of the
+--- prompts, and `###` would file it among the running turn's tool calls.
+--- Mid-turn that costs a breadcrumb — the notice closes the `## prompt`
+--- section, so `queries/agentic/context.scm` pins the notice title
 --- over the rest of the turn's prose (tool calls still pin their own `###`
 --- head; innermost wins). Accepted: the title is the scope or model that just
 --- changed, which is the more useful thing to see at that point anyway.

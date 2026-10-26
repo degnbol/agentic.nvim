@@ -143,6 +143,7 @@ describe("agentic.SessionManager", function()
                     render_header = render_header_spy,
                     buf_nrs = { chat = test_bufnr },
                 },
+                _agents = {},
                 _on_session_update = SessionManager._on_session_update,
                 _update_chat_header = SessionManager._update_chat_header,
                 _handle_new_config_options = SessionManager._handle_new_config_options,
@@ -3058,19 +3059,19 @@ describe("agentic.SessionManager", function()
                 return sink
             end
 
-            it("stamps the non-final calls in both writers", function()
+            -- A running subagent can outlive the turn, so its own end stamps
+            -- its calls.
+            it("stamps the chat's non-final calls, not a subagent's", function()
                 local sink =
                     turn_over_pending_calls({ stopReason = "cancelled" })
 
                 assert.same({
                     { tool_call_id = "main-pending", status = "cancelled" },
                 }, sink.stamped.main)
-                assert.same({
-                    { tool_call_id = "sub-running", status = "cancelled" },
-                }, sink.stamped.subagent)
+                assert.same({}, sink.stamped.subagent)
             end)
 
-            it("persists both writers' stamps", function()
+            it("persists the chat's stamps", function()
                 local sink =
                     turn_over_pending_calls({ stopReason = "cancelled" })
 
@@ -3083,18 +3084,10 @@ describe("agentic.SessionManager", function()
                             status = "cancelled",
                         },
                     },
-                    {
-                        "sub-running",
-                        {
-                            type = "tool_call",
-                            tool_call_id = "sub-running",
-                            status = "cancelled",
-                        },
-                    },
                 }, sink.history_updates)
                 -- The sweep has to precede the save, or the footer comes back
                 -- from a restore still reading `pending`.
-                assert.equal(2, sink.updates_at_save)
+                assert.equal(1, sink.updates_at_save)
             end)
 
             it("leaves a normally-ended turn's calls alone", function()

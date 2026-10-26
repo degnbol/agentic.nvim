@@ -300,6 +300,43 @@ describe("ChatHistory", function()
             )
         end)
 
+        it("moves a subagent's messages from its earlier Task id", function()
+            local history = ChatHistory:new()
+            history:set_subagent_task("child-1", "child-1:prompt:1")
+            history:add_message({
+                type = "agent",
+                text = "early",
+                provider_name = "p",
+                parent_tool_use_id = "child-1:prompt:1",
+            })
+
+            history:set_subagent_task("child-1", "toolu_1")
+
+            assert.equal(
+                "toolu_1",
+                history.subagent_messages[1].parent_tool_use_id
+            )
+        end)
+
+        it("keeps a subagent event with the subagent's messages", function()
+            local history = ChatHistory:new()
+
+            history:add_message({
+                type = "subagent_event",
+                kind = "end",
+                title = "completed",
+                parent_tool_use_id = "toolu_1",
+            })
+
+            assert.equal(0, #history.messages)
+            assert.same(
+                { "completed" },
+                vim.tbl_map(function(m)
+                    return m.title
+                end, history:messages_for_task("toolu_1"))
+            )
+        end)
+
         it("messages_for_task keeps one agent's messages, in order", function()
             local history = ChatHistory:new()
             history.subagent_messages = {

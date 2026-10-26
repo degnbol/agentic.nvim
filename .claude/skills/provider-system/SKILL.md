@@ -113,8 +113,7 @@ terminal status.
 
 One cleanup pass runs at the turn tail: on `stopReason == "cancelled"`,
 `SessionManager:_mark_unresolved_tool_calls_cancelled` stamps `cancelled` on
-every still-non-final block, in the chat, the running subagents' transcripts
-and history — no provider is
+every still-non-final block in the chat and history — no provider is
 obliged to report back on a call it abandoned. `cancelled` is client-side only;
 the wire enum stays at four values. The sweep selects by current status, not by
 turn, so it assumes sequential turns (claude-agent-acp's `session.turnQueue`).
@@ -395,10 +394,11 @@ that the right `kind` arrived — `display_kind` hides the difference.
 
 The client advertises `clientCapabilities.subagents`: each subagent is a child
 session (global `acp` skill → `references/claude-agent.md` § Native subagent
-sessions). `ACPClient` maps child → root on `subagent_spawned` and passes the
-raw id to the root's subscriber as `source_session_id`. `SessionManager` keeps
-one `SubagentTranscript` per child (`_agents`), opened by `subagent_spawned`,
-ended by `subagent_state_update` or a disconnect, never by a turn's end.
+sessions, RFD form). `ACPClient` maps child → root on `subagent_update` and
+passes the raw id to the root's subscriber as `source_session_id`.
+`SessionManager` keeps one `SubagentTranscript` per child (`_agents`), opened
+by `running`, ended by an end state or a disconnect, never by a
+turn's end; `session_message` views become transcript rows.
 Adapters override `subagent_task_id`, `subagent_id`, `subagent_record`
 (type, mode, Task id; claude reads `agent-<id>.meta.json`) and
 `subagent_predicted_mode`. A background subagent gets a message input only

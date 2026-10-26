@@ -22,7 +22,7 @@ Lines are in `lua/agentic/session_manager.lua` (SM) unless another file is named
   - `lua/agentic/ui/todo_list.test.lua`
   - `tests/integration/test_native_subagents.lua`
   - `tests/integration/test_subagent_inputs.lua`
-- Consumers: `notes/PLAN-rfd-subagents.md` (Changes step 2, the config_option_update table; Open questions) and `notes/feature-thought-level-display.md`.
+- Consumers: `notes/PLAN-rfd-subagents.md` (Step 1 item 2, the config_option_update table) and `notes/feature-thought-level-display.md`.
 - Skills: `session-lifecycle` (header pipeline), `follow` (writes go through `_schedule_follow`/`_own_edit`; attention badges), `rendering`, `provider-system`, `lua-class`.
 - Rule: `.claude/rules/provider-specific.md`.
 
@@ -49,14 +49,14 @@ The header (`vim.b.agentic_header`, rendered by incline) is short on room. This 
 | 10 | Model/mode picker keys | `config_options:bind_keymaps` on every session buffer (SM:546) | Bound on transcripts (SM:740) and message inputs (SM:1213) through the same `_bind_session_keymaps`. They act on the **main** agent's options (`agent_config_options.lua:53-71`). | Same keys, main target |
 | 11 | Header title | Session title or `Agentic Chat`, with glyph U+F0EDE (`chat_widget.lua:1545-1563`) | `Glyphs.KIND.subagent` (U+F06A9) and the heading (`subagent_transcript.lua:137-144`) | No |
 | 12 | Header context | Mode, changed-file count (glyph at SM:2673), `<n>k` tokens, budget (SM:2647-2720) | Nil while running (`subagent_transcript.lua:81`). The raw `SubagentState` string after close (SM:1088). | No |
-| 13 | Header badge | `[idle]` at turn end (SM:3744 → SM:136-161). Bell-only `[?]` for a visible float (SM:2281). `[?]` on `badge_bufnr` for a hidden float (SM:169-171). | `[?]` when its request is hidden (`permission_manager.lua:41`, :912-916). Cleared SM:426-433. No `[idle]`/bell when it ends (`_close_agent` SM:1067-1090). | `[?]` shared, `[idle]` main only |
+| 13 | Header badge | `[idle]` at turn end (SM:3744 → SM:136-161). Bell-only `[?]` for a visible float (SM:2281). `[?]` on `badge_bufnr` for a hidden float (SM:169-171). | `[?]` when its request is hidden (`permission_manager.lua:41`, :912-916). Cleared SM:426-433. No `[idle]`/bell when it ends (`_end_agent`). | `[?]` shared, `[idle]` main only |
 | 14 | Header user customisation | `Config.headers.chat` (`window_decoration.lua:78-83`, `config_default.lua:437-444`) | Keyed `subagent` / `message` (`agentic_window`, `chat_widget.lua:1488`). Absent from defaults. | Same mechanism, separate keys |
 | 15 | Buffer name | `agentic://<id>/chat/<title>` (`chat_widget.lua:1566-1569`) | `agentic://<id>/subagent/<id8>[-gN]-<label>` (`subagent_transcript.lua:36-42`, :56-66) | `WindowDecoration.buffer_name` shared |
 | 16 | User prompt in body | `write_user_prompt` on submit (SM:3570) and in load replay (SM:1467) | The launch prompt is the block body in the main chat (SM:1017). Its `user_message_chunk` is skipped (SM:1449-1454). A message relayed to it shows as the relay instruction in the **main** chat (`_relay` SM:3072-3077 → SM:3570). | No |
 | 17 | Tool call blocks, permission float | `_writer_for`/`_indicator_for` (SM:862-879), `_on_tool_call` (SM:1975), PermissionManager writer lookup (SM:416-422) | Same path | Yes |
 | 18 | Turn end | `_finalize_turn`: `finalize_turn` + `set_turn_usage` footer + hook records (SM:2386-2395) | `writer:finalize_turn()` only (SM:1080). No usage footer. | Partly |
 | 19 | Cancelled stamping | `_mark_unresolved_tool_calls_cancelled` (SM:2372-2380) | `_stamp_cancelled` at close unless completed (SM:1077-1079) | Yes (SM:2343-2364) |
-| 20 | Errors | `write_error_message` in body (SM:3689), `write_error_action` (SM:3695) | End state → block status (SM:969-974, :1082-1085) and header context (SM:1088). Nothing in transcript body. | No |
+| 20 | Errors | `write_error_message` in body (SM:3689), `write_error_action` (SM:3695) | End state → an end row with the error text as its body, and the header context (`_end_agent`). | No |
 | 21 | Todo list | `TodoList` on `widget.buf_nrs.todos` (SM:528-534). `plan` → `todo_list:render` (SM:1357-1360), source ignored. Cleared SM:3000, :4022, :4215, :4324, `session_recovery.lua:429`. | Missing. A `plan` update from a child session would render into the main panel (SM:1357). | No |
 | 22 | Input | `input` panel, `Prompt` with glyph U+F09A8 (`window_decoration.lua:15`) | Background only: `SubagentInput`, `Message to <label>` with the same glyph (`subagent_input.lua:34`, SM:1183-1231). Blocking: the session input (SM:1239-1245). | Glyph shared, code separate |
 | 23 | Stop key | `stop_generation` (SM:3180-3194) | Transcript SM:1274-1285; message input SM:1214-1221 | Separate |
@@ -158,9 +158,9 @@ Provider-specific code: none moves. `subagent_task_id`, `subagent_record` and fr
 2. **Subagent mode.** The main agent's non-default mode is in the header context (SM:2653-2662). The transcript header already carries the title and, after close, the state (`subagent_transcript.lua:137-144`, SM:1088). Should a subagent's mode be shown, and where?
 3. **Subagent todos panel placement and lifetime.** The main todos panel lives in the widget's stack (`config_default.lua:199`), opens on a non-empty render (SM:528-531) and closes when all items are done (SM:3000). Transcripts open in arbitrary windows (`WidgetLayout.open_buf`, SM:435-437). Where does a subagent's todos window open, when does it open and close, and does it outlive the subagent?
 4. **Indicator states.** The main indicator switches between `thinking` and `generating` per chunk kind (SM:1380, :1408). A transcript shows `generating` from spawn to end (SM:1035). Should the transcript follow the main agent's rule?
-5. **End-of-run signals.** The main agent gets `[idle]` and a bell when a turn ends (SM:3744). A subagent's end gives neither (SM:1067-1090), only the block status and the header state. Should a subagent's end signal the same way, and in which buffer? Overlaps `PLAN-rfd-subagents.md` Open question 2.
+5. **End-of-run signals.** The main agent gets `[idle]` and a bell when a turn ends (SM:3744). A subagent's end gives neither (`_end_agent`), only an end row and the header context. Should a subagent's end signal the same way, and in which buffer?
 6. **Info the main chat has and the transcript lacks.** For each, should the transcript show it?
-   - Errors in the body (SM:3689): a subagent's failure appears only as status and header state.
+   - Errors in the body (SM:3689): a subagent's failure appears as an end row and the header context.
    - The per-turn usage footer (SM:2388).
    - An opening date/id line (SM:193): the transcript opens with a `##` heading instead.
 7. **Model line on reload.** The main chat drops the `Loaded` line on `:e` (SM:687-689); the transcript rewrites its heading (SM:767). Should the model line be replayed, in both?

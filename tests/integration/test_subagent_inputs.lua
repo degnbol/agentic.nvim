@@ -37,19 +37,21 @@ _G.update = function(source, update)
 end
 _G.spawn = function(child_id, name)
     _G.update("root", {
-        sessionUpdate = "subagent_spawned",
-        subagentSessionId = child_id,
-        name = name or "find it",
-        task = "Find the files.",
+        sessionUpdate = "subagent_update",
+        sessionId = child_id,
+        description = name or "find it",
+        capabilities = { cancel = {} },
+        state = { state = "running" },
     })
 end
 _G.state = function(child_id, state)
     _G.update("root", {
-        sessionUpdate = "subagent_state_update",
-        subagentSessionId = child_id,
+        sessionUpdate = "subagent_update",
+        sessionId = child_id,
         state = state,
     })
 end
+_G.COMPLETED = { state = "idle", stopReason = "end_turn" }
 _G.chunk = function(source, text)
     _G.update(source, {
         sessionUpdate = "agent_message_chunk",
@@ -164,7 +166,7 @@ _G.read_record("c1")
         child.lua([[
 _G.s.agent.provider_config.subagents.force_background = false
 _G.spawn("c1")
-_G.state("c1", "completed")
+_G.state("c1", _G.COMPLETED)
 _G.write_meta("c1", "background")
 _G.read_record("c1")
 ]])
@@ -202,27 +204,19 @@ _G.spawn("c1")
         assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
     end)
 
-    it("a later generation reuses the input and takes over the windows", function()
+    it("a resumed agent keeps its input and its transcript's windows", function()
         child.lua([[
 _G.spawn("c1")
 _G.old = _G.transcript("c1").bufnr
 _G.show(_G.old)
-vim.cmd("vsplit")
-vim.api.nvim_win_set_buf(0, _G.old)
 _G.first_input = _G.input("c1")
-_G.state("c1", "completed")
-_G.spawn("c1:generation:2")
-_G.new = _G.transcript("c1:generation:2").bufnr
--- The older generation's record, read late, takes nothing back.
-_G.s._agents.c1.record_read = false
-_G.write_meta("c1", "background")
-_G.read_record("c1")
+_G.state("c1", _G.COMPLETED)
+_G.state("c1", { state = "running" })
 ]])
 
-        assert.equal(2, child.lua_get("#vim.api.nvim_list_tabpages()"))
         assert.is_true(child.lua_get([[_G.input("c1") == _G.first_input]]))
-        assert.equal(0, child.lua_get("_G.wins_of(_G.old)"))
-        assert.equal(2, child.lua_get("_G.wins_of(_G.new)"))
+        assert.equal(1, child.lua_get("_G.wins_of(_G.old)"))
+        assert.is_true(child.lua_get([[_G.transcript("c1").bufnr == _G.old]]))
     end)
 
     it("with no window, output lands and <C-c> stops that agent", function()
@@ -257,7 +251,7 @@ _G.press(_G.transcript("c1").bufnr, "<C-c>")
     it("stopping a finished agent notifies and sends nothing", function()
         child.lua([[
 _G.spawn("c1")
-_G.state("c1", "completed")
+_G.state("c1", _G.COMPLETED)
 _G.s:_stop_agent("c1")
 ]])
 

@@ -171,10 +171,10 @@ vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(chat), 0 })
     it("is mapped on a subagent transcript", function()
         child.lua([[
 _G.s:_on_session_update({
-    sessionUpdate = "subagent_spawned",
-    subagentSessionId = "c1",
-    name = "n",
-    task = "t",
+    sessionUpdate = "subagent_update",
+    sessionId = "c1",
+    title = "n",
+    state = { state = "running" },
 }, "root")
 ]])
         local sub = child.lua_get("_G.s._agents.c1.transcript.bufnr")

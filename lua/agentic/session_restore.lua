@@ -2,8 +2,10 @@ local ACPPayloads = require("agentic.acp.acp_payloads")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
+local Theme = require("agentic.theme")
 
 --- @class agentic.SessionRestore.PickerItem
 --- @field display string
@@ -369,9 +371,30 @@ function SessionRestore.show_picker(current_session, scope)
     end)
 end
 
+--- @type table<"sent"|"received"|"end", string>
+local GLYPH_OF_SUBAGENT_EVENT = {
+    sent = Glyphs.KIND.sendmessage,
+    received = Glyphs.MESSAGE_RECEIVED,
+    ["end"] = Glyphs.KIND.subagent,
+}
+
+--- Write a subagent event as a notice signed with the glyph of its kind.
+--- @param writer agentic.ui.MessageWriter
+--- @param event agentic.ui.ChatHistory.SubagentEvent
+--- @param mid_turn boolean The writer's turn is still running, so the notice must not finalize it
+function SessionRestore.write_subagent_event(writer, event, mid_turn)
+    writer:write_notice({
+        glyph = GLYPH_OF_SUBAGENT_EVENT[event.kind],
+        glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
+        title = event.title,
+        body = event.body,
+        mid_turn = mid_turn,
+    })
+end
+
 --- Replay stored messages to the UI
 --- @param writer agentic.ui.MessageWriter
---- @param messages agentic.ui.ChatHistory.Message[]
+--- @param messages agentic.ui.ChatHistory.SubagentMessage[]
 function SessionRestore.replay_messages(writer, messages)
     for _, msg in ipairs(messages) do
         if msg.type == "user" then
@@ -402,6 +425,8 @@ function SessionRestore.replay_messages(writer, messages)
                 decided_by = msg.decided_by,
             }
             writer:write_tool_call_block(tool_block)
+        elseif msg.type == "subagent_event" then
+            SessionRestore.write_subagent_event(writer, msg, true)
         end
     end
     -- Neither caller finalizes the turn, so a history ending on a thought would
