@@ -7,8 +7,8 @@ Status: reviewed
 - `lua/agentic/acp/acp_transport.lua:24` (`IGNORE_STDERR_PATTERNS`)
 - `doc/agentic.txt` (provider fields `:125-137`)
 - Rule: `.claude/rules/provider-specific.md`
-- Uses `permissions.auto_approve_kinds` from `notes/PLAN-permission-settings.md`.
-- Skill: `permissions` (§ "1. Read-only tools")
+- Uses `permissions.auto_approve_kinds` (`lua/agentic/config_default.lua`).
+- Skill: `permissions` (§ "1. Approved kinds")
 - Bundled CLI: `…/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`
 - Bridge 0.97.0: `…/claude-agent-acp/dist/acp-agent.js:8749` (`userProvidedOptions`), `:8868` (spread into the SDK options)
 

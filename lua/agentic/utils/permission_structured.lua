@@ -26,7 +26,7 @@ local M = {}
 
 --- The highest structured allow kind that auto-approves. Every safer kind
 --- approves too.
---- @alias agentic.PermAutoApprove "safe_write" | "read_only" | nil
+--- @alias agentic.PermAutoApproveTier "safe_write" | "read_only" | nil
 --- @alias agentic.PermDecision "allow" | "ask" | "deny" | nil
 --- @alias agentic.PermKind "read_only" | "safe_write" | "ask" | "deny"
 --- @alias agentic.PermAllowKind "read_only" | "safe_write"
@@ -57,7 +57,7 @@ local M = {}
 ---        every parse.
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
---- `read_only` approves at either auto_approve tier, `safe_write` only at
+--- `read_only` approves at either non-nil tier, `safe_write` only at
 --- "safe_write", `ask` withholds approval and prompts, `deny` rejects immediately (no prompt,
 --- the command never runs — see `PermissionRules.should_auto_reject`). Each is an
 --- array of gates.
@@ -868,36 +868,37 @@ local function gate_matches_universal(gate, ctx)
     return true
 end
 
---- The allow kinds that approve at the `auto_approve` tier. Deny/ask gates
+--- The allow kinds that approve at `tier`. Deny/ask gates
 --- are unconditional and do not consult this.
---- @param auto_approve agentic.PermAutoApprove
+--- @param tier agentic.PermAutoApproveTier
 --- @return agentic.PermAllowKind[]
-local function eligible_allow_kinds(auto_approve)
-    if auto_approve == "safe_write" then
+local function eligible_allow_kinds(tier)
+    if tier == "safe_write" then
         return { "read_only", "safe_write" }
     end
-    if auto_approve == "read_only" then
+    if tier == "read_only" then
         return { "read_only" }
     end
     return {}
 end
 
---- Reset `Config.permissions.auto_approve` to nil, with a warning, when it is
---- not an `agentic.PermAutoApprove` value. Any other string is truthy, so it
---- would let settings.json allow patterns count while no structured kind does.
-function M.validate_auto_approve()
-    local auto_approve = Config.permissions.auto_approve
-    if auto_approve == nil or #eligible_allow_kinds(auto_approve) > 0 then
+--- Reset `Config.permissions.auto_approve_tier` to nil, with a warning, when
+--- it is not an `agentic.PermAutoApproveTier` value. Any other string is
+--- truthy, so it would let settings.json allow patterns count while no
+--- structured kind does.
+function M.validate_auto_approve_tier()
+    local tier = Config.permissions.auto_approve_tier
+    if tier == nil or #eligible_allow_kinds(tier) > 0 then
         return
     end
     Logger.notify(
-        'permissions.auto_approve must be "safe_write", "read_only" or nil, got '
-            .. vim.inspect(auto_approve)
+        'permissions.auto_approve_tier must be "safe_write", "read_only" or nil, got '
+            .. vim.inspect(tier)
             .. "; using nil: no allow rule auto-approves.",
         vim.log.levels.WARN,
         { title = "Agentic" }
     )
-    Config.permissions.auto_approve = nil
+    Config.permissions.auto_approve_tier = nil
 end
 
 --- True iff some gate in `gates` matches under `predicate`. A nil or empty
@@ -998,15 +999,15 @@ end
 
 --- Resolve the structured decision for one parsed leaf. Looks up the cmd entry
 --- and the `"*"` wildcard entry (either may be absent or `vim.NIL`) and
---- resolves deny > ask > allow across both. Allow gates are restricted to the
---- kind set eligible under `auto_approve` (see `eligible_allow_kinds`), and a
---- path-named command (`./deploy.sh`) gets no `"*"` allow gates.
+--- resolves deny > ask > allow across both. Allow gates count only for the
+--- kinds `tier` admits, and a path-named command (`./deploy.sh`) gets no `"*"`
+--- allow gates.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
---- @param auto_approve agentic.PermAutoApprove
+--- @param tier agentic.PermAutoApproveTier
 --- @return agentic.PermDecision decision
 --- @return agentic.PermAllowKind|nil kind Kind of the matching allow gate; nil unless decision is "allow". On several matches the command's own entry wins over `"*"`, then `read_only` over `safe_write`
-function M.decide_leaf(entries, parsed, auto_approve)
+function M.decide_leaf(entries, parsed, tier)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
     local ctx = build_exist_ctx(words, dynamic, true)
@@ -1031,7 +1032,7 @@ function M.decide_leaf(entries, parsed, auto_approve)
     local function allow(gate)
         return gate_matches_universal(gate, forall)
     end
-    local kinds = eligible_allow_kinds(auto_approve)
+    local kinds = eligible_allow_kinds(tier)
     for _, e in ipairs(allow_entries(entries, parsed.cmd_name)) do
         for _, kind in ipairs(kinds) do
             if any_gate(e[kind], allow) then
@@ -1049,7 +1050,7 @@ end
 --- @field ask boolean
 --- @field deny boolean
 
---- Category-level classification of a leaf, independent of `auto_approve`.
+--- Category-level classification of a leaf, independent of `auto_approve_tier`.
 --- Where `decide_leaf` resolves a single mode-gated decision, this reports
 --- which of the four gate kinds match — the highlight layer needs the
 --- intrinsic category ("is this known-safe") not "was this auto-approved", so

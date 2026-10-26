@@ -55,21 +55,18 @@ Provider sends "session/request_permission"
 ## Four auto-approval mechanisms
 
 All in `PermissionManager:decide`, in the order its docstring gives; the
-first decision wins. Read-only tools, skills, and grants
-each have a `Config.auto_approve_*` master switch (all default `true`);
-shell command parsing always runs (no switch — see mechanism 2).
+first decision wins. Deny matches and the always-cache run before the kind
+check, so they beat a listed kind.
 
-### 1. Read-only tools (`Config.auto_approve_read_only_tools`)
+### 1. Approved kinds (`Config.permissions.auto_approve_kinds`)
 
-ACP kinds `"read"` and `"search"` (Read, Grep, Glob) approve unconditionally.
-Bypasses the provider's directory sandbox, which otherwise prompts for paths
-outside `additionalDirectories` even for reads.
+Listed kinds (default `read`, `search`, `skill`) approve whatever the path,
+with the kind as decider. Bypasses the provider's directory sandbox, which
+otherwise prompts for paths outside `additionalDirectories` even for reads.
 
-Fallback for the kind check: if `request.toolCall.kind` does not match,
-but the tracker entry from the prior `tool_call` notification has a
-read-only kind, approve anyway. This catches opencode raising
-`external_directory` (kind="other") under the same `toolCallId` as the
-underlying read tool.
+Fallback: if `request.toolCall.kind` is not listed but the tracker kind
+from the prior `tool_call` is, approve anyway. Catches opencode's
+`external_directory` and Claude's Skill requests (both kind="other").
 
 ### 2. Shell command parsing (always on)
 
@@ -81,7 +78,7 @@ whole-string glob cannot see. This runs unconditionally with no master switch:
 the parser only ever turns the provider's SDK `ask` escalations into approvals
 for provably-safe commands or rejections for provably-dangerous ones — both
 strictly better than the prompt you'd get otherwise, with no safety downside
-(the SDK runs its own check underneath). `auto_approve = nil` approves no
+(the SDK runs its own check underneath). `auto_approve_tier = nil` approves no
 shell command; deny/ask still apply. This fills a provider gap: the SDK matches
 the entire command string against each `Bash(...)` pattern, so `grep foo | head -20`
 prompts even when both `Bash(grep *)` and `Bash(head *)` are allowed.
@@ -116,7 +113,7 @@ absent hint over-prompts, a present one is trusted.
 one that mutates disk or executes arbitrary code as its normal action is
 `safe_write`, with write-causing options/subcommands carved out as `ask`/`deny`.
 The kind name encodes the policy — `read_only` approves at either
-`auto_approve` level, `safe_write` only at `"safe_write"`, `ask` and `deny`
+`auto_approve_tier` level, `safe_write` only at `"safe_write"`, `ask` and `deny`
 are both unconditional but differ in outcome: **`ask` withholds approval and prompts; `deny` rejects immediately
 (no prompt, the command never runs)**. Users override via
 `Config.permissions.structured` (deep-merged over the bundled defaults; a cmd
@@ -174,7 +171,7 @@ it).
 **Composition per leaf:**
 `approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR
 structured_deny OR glob_ask OR structured_ask)`. Deny/ask are OR across layers;
-allow is union; the allow set resolves per `Config.permissions.auto_approve`,
+allow is union; the allow set resolves per `Config.permissions.auto_approve_tier`,
 the highest kind that counts (`"safe_write"` = `read_only` ∪ `safe_write`,
 `"read_only"` = `read_only` only, `nil` = none). A settings.json `allow`
 counts at either non-nil level; session allow-always leaves count at every
@@ -198,7 +195,7 @@ a silent reject.
 A command whose write/exec intent is hidden inside an opaque token cannot
 be classified by token-level matching. These are accepted residuals, not
 bugs — the failure mode is auto-approving a write at any non-nil
-`auto_approve`, never bypassing a `deny`/`ask` that *did* match:
+`auto_approve_tier`, never bypassing a `deny`/`ask` that *did* match:
 
 - **`sed`** `e`/`s///e` (exec) and `w`/`W`/`s///w` (write) — the script
   body is opaque (no sed parser/injection). A glob carve-out in the
@@ -271,11 +268,11 @@ structural parts aren't rememberable (`complete = false`), so the
 whole-command `_always_cache` entry is also kept as a fallback. `reject_always`
 stays whole-command.
 
-### 4. Grant scopes (`/grant`, `Config.auto_approve_grant`)
+### 4. Grant scopes (`/grant`)
 
 A per-session **set** of path scopes (`PermissionManager._grant_scopes`):
 `/grant X` adds, `/grant off` clears, the picker toggles.
-`Config.permissions.default_grant` (`/tmp`, `$TMPDIR`) is added silently at
+`Config.permissions.default_grant` (`/tmp`, `$TMPDIR`, `.`, `root`; `{}` for none) is added silently at
 session start (`SessionManager:_apply_default_grants`). Every scope is a path
 or glob compiled by `GrantSafety.compile_scope`; the keywords `.` and `root`
 resolve against the session's ACP cwd in `SessionManager:_resolve_grant_input`.

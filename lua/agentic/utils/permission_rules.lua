@@ -525,7 +525,7 @@ end
 --- unsafe whatever its scope or order relative to the definition.
 --- @alias agentic.utils.PermissionRules.Shadowed table<string, true>
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve: agentic.PermAutoApprove, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve_tier: agentic.PermAutoApproveTier, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
 
 --- Run `walk_once` until a run adds no name to the shadowed set, or a run
 --- reports its result final. A run judges each call against the names shadowed
@@ -1278,7 +1278,7 @@ local function walk_command(node, src, ctx, known, funcs)
     if
         inner
         and ctx.depth < NESTED_MAX_DEPTH
-        and (not writes or ctx.auto_approve == "safe_write")
+        and (not writes or ctx.auto_approve_tier == "safe_write")
     then
         local root = parse_zsh(inner)
         if not root then
@@ -1350,7 +1350,7 @@ local function walk_command(node, src, ctx, known, funcs)
         structured, allow_kind = PermissionStructured.decide_leaf(
             ctx.structured_entries,
             parsed,
-            ctx.auto_approve
+            ctx.auto_approve_tier
         )
         -- In the APPROVE walk deny and ask both collapse to "not approved". The
         -- distinction (deny rejects with no prompt, ask prompts) is enforced
@@ -1897,7 +1897,7 @@ end
 -- continue, vs bail on first).
 --
 -- Classification is CATEGORY-level (`PermissionStructured.classify_leaf` + the
--- settings.json allow/deny/ask globs), not the `auto_approve`-resolved
+-- settings.json allow/deny/ask globs), not the `auto_approve_tier`-resolved
 -- decision, so a `safe_write` like `git add` never lights up even at the
 -- read_only tier.
 
@@ -2749,9 +2749,9 @@ function M.evaluate(command, extra_allow)
         return false, {}, {}
     end
 
-    -- Remembered leaves count even when `auto_approve` is nil, because the
+    -- Remembered leaves count even when `auto_approve_tier` is nil, because the
     -- user approved each one.
-    local allow_settings = Config.permissions.auto_approve
+    local allow_settings = Config.permissions.auto_approve_tier
             and M.get_settings_patterns("allow")
         or {}
     local allow_remembered = extra_allow or {}
@@ -2782,7 +2782,7 @@ function M.evaluate(command, extra_allow)
             deny = deny,
             ask = ask,
             structured_entries = structured_entries,
-            auto_approve = Config.permissions.auto_approve,
+            auto_approve_tier = Config.permissions.auto_approve_tier,
             depth = 0,
             effects = {},
             written = {},

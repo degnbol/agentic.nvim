@@ -257,7 +257,7 @@ handling.
      Mtime-cached.
    - `Config.permissions.structured` — structured entries.
      Recompiled on table-reference change.
-6. **Resolve** the allow list per `Config.permissions.auto_approve` and
+6. **Resolve** the allow list per `Config.permissions.auto_approve_tier` and
 7. **compose** per leaf: SKILL.md § "Composition per leaf".
 
 ## Command-source fallback

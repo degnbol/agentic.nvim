@@ -383,7 +383,7 @@ The ACP schema spells kinds in lowercase (`"read"`, `"search"`, `"execute"`,
 …), and most providers follow that. opencode emits capitalised kinds
 (`"Read"`, `"Search"`) — which still render correctly because
 `tool_call_renderer.display_kind` normalises case for the chat heading,
-but a case-sensitive lookup table (e.g. `READ_ONLY_KINDS["Read"]`) silently
+but a case-sensitive lookup (e.g. of `"Read"` in `auto_approve_kinds`) silently
 misses. The vocabulary itself is `AcpKind.PROTOCOL_KINDS`, which is also how a
 consumer tells a bridge-assigned kind from an adapter-minted one (see
 `ToolCallRenderer.strip_kind_prefix`). Any kind-based dispatch must lowercase

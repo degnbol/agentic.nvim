@@ -1701,13 +1701,9 @@ function SessionManager:_add_grant(input, quiet)
     end
 end
 
---- Grant every `Config.permissions.default_grant` entry, unless
---- `Config.auto_approve_grant` is off. An entry naming an unset env var
---- (`$TMPDIR` on most Linux systems) is skipped.
+--- Grant every `Config.permissions.default_grant` entry. An entry naming an
+--- unset env var (`$TMPDIR` on most Linux systems) is skipped.
 function SessionManager:_apply_default_grants()
-    if not Config.auto_approve_grant then
-        return
-    end
     for _, entry in ipairs(Config.permissions.default_grant) do
         if not vim.fs.normalize(entry):find("%$[%w_]") then
             self:_add_grant(entry, true)
@@ -1813,14 +1809,6 @@ end
 ---   branch here answers it before returning except the picker, which owns it.
 function SessionManager:_handle_grant_command(arg, on_done)
     on_done = on_done or function() end
-
-    if not Config.auto_approve_grant then
-        self.message_writer:write_error_action(
-            "/grant is disabled (Config.auto_approve_grant = false)."
-        )
-        on_done()
-        return
-    end
 
     if arg == "" then
         self:_show_grant_picker(on_done)

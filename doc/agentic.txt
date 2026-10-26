@@ -251,41 +251,37 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 ------------------------------------------------------------------------------
 4.5 PERMISSIONS                                   *agentic-config-permissions*
 
-                                *agentic-config-auto_approve_read_only_tools*
-`auto_approve_read_only_tools` boolean (default: true)
-    Auto-approve read-only tool calls (Read, Grep, Glob) without prompting,
-    regardless of target path.
-
-                                        *agentic-config-auto_approve_skills*
-`auto_approve_skills` boolean (default: true)
-    Auto-approve Skill tool calls without prompting.
-
                                               *agentic-config-permissions-tbl*
 `permissions` table
-    Bash command auto-approval. The rule layers, their precedence and the
+    Tool call auto-approval. The shell rule layers, their precedence and the
     `structured` format are described in |agentic-permissions-shell|.
 
     `use_plugin_defaults`   boolean (default: true)
         Load the bundled rules from `permissions.json`.
     `use_claude_settings`   boolean (default: true)
         Use the `Bash(...)` rules in Claude's settings.json files.
-    `auto_approve`          `"safe_write"` | `"read_only"` | nil
-                            (default: `"safe_write"`)
-        Selects which allow rules auto-approve.
+                                       *agentic-config-auto_approve_kinds*
+    `auto_approve_kinds`    string list
+                            (default: { "read", "search", "skill" })
+        Tool kinds approved without a prompt, whatever the target path. A
+        kind is the one shown in a tool call's heading: a protocol kind or
+        one the adapter adds, such as `skill` or `websearch`. Compared
+        case-insensitively. A shell `deny` rule or a "Reject always"
+        decision still rejects a call of a listed kind.
+    `auto_approve_tier`     "safe_write" | "read_only" | nil
+                            (default: "safe_write")
+        Selects which allow rules auto-approve an execute call.
     `structured`            table (default: {})
         Cmd-keyed rules merged over the bundled rules.
     `highlight_unapproved`  boolean (default: true)
         Enable |AgenticUnapprovedCommand|.
-    `default_grant`         string list (default: { "/tmp", "$TMPDIR" })
-        Paths or globs granted at session start. See
-        |agentic-permissions-grant|.
+    `default_grant`         string list
+                            (default: { "/tmp", "$TMPDIR", ".", "root" })
+        Paths or globs granted at session start. `{}` starts a session
+        without grants. See |agentic-permissions-grant|.
     `tmp_cleanup`           boolean (default: true)
         Auto-approve `rm` of a tmp file redirected to earlier in the same
         command. See |agentic-permissions-grant|.
-
-                                           *agentic-config-auto_approve_grant*
-`auto_approve_grant` boolean (default: true)
-    Enable `/grant` and `default_grant`. See |agentic-permissions-grant|.
 
                                             *agentic-config-permission_float*
 `permission_float` table
@@ -725,9 +721,7 @@ Execute prompts highlight unapproved command parts:
 A tool call runs without a prompt when any of these holds. The word after
 each item is what the call's status footer shows (`✔ completed · grant`).
 
-- It is a read-only tool (Read, Grep, Glob) and
-  `auto_approve_read_only_tools` is on. `read-only`
-- It is a Skill tool call and `auto_approve_skills` is on. `skill`
+- Its kind is in `permissions.auto_approve_kinds`. The kind, such as `read`
 - It is a shell command every leaf of which is allowed
   (|agentic-permissions-shell|), by a `read_only` rule (`read-only`), a
   `safe_write` rule (`safe-write`), a settings.json `Bash(...)` pattern
@@ -781,7 +775,7 @@ command, and `permissions.tmp_cleanup` on.
 A redirect or `rm` target must be an absolute path with no `..` segment.
 
 `permissions.default_grant` is granted at session start. An entry naming an
-unset variable is skipped. `auto_approve_grant = false` disables grants.
+unset variable is skipped.
 
 ------------------------------------------------------------------------------
 8.4 SHELL COMMANDS                                 *agentic-permissions-shell*
@@ -812,10 +806,10 @@ binary-dir prefix, then checked against two layers:
 A leaf auto-approves when a layer allows it and no layer denies or asks.
 `deny` rejects the command immediately, with no prompt and no execution;
 `ask` withholds approval so the command prompts. Which allow rules count
-follows `permissions.auto_approve`, the highest rule kind that counts:
+follows `permissions.auto_approve_tier`, the highest rule kind that counts:
 `"safe_write"` admits `safe_write` and `read_only` rules, `"read_only"`
 admits `read_only` rules, nil admits none. A settings.json `allow` entry
-counts unless `auto_approve` is nil.
+counts unless `auto_approve_tier` is nil.
 
 Structured rules are a cmd-keyed table. Each command maps to up to four
 gate-kind arrays, `read_only`, `safe_write`, `ask` and `deny`, and each

@@ -471,39 +471,25 @@ local ConfigDefault = {
         bell = true,
     },
 
-    --- Auto-approve read-only tool calls (Read, Grep, Glob — ACP kinds "read"
-    --- and "search") without prompting, regardless of target path. These tools
-    --- cannot mutate the filesystem.
-    auto_approve_read_only_tools = true,
-
-    --- Auto-approve Skill tool calls (ACP kind "Skill") without prompting.
-    --- Loading a skill injects a SKILL.md into context — no filesystem
-    --- mutation. Covers users who don't have `Skill` in their settings.json
-    --- allow list, so the provider's SDK escalates it as `ask`.
-    auto_approve_skills = true,
-
     --- @class agentic.UserConfig.Permissions
     --- @field use_plugin_defaults boolean Load the bundled structured rules from permissions.json
     --- @field use_claude_settings boolean Match the Bash(...) allow/deny/ask patterns in the global and project Claude settings.json
-    --- @field auto_approve agentic.PermAutoApprove Which allow rules auto-approve a Bash command. Settings.json allow patterns count under either tier. nil approves none (deny/ask still apply).
+    --- @field auto_approve_kinds string[] ACP tool kinds approved without a prompt, whatever the target path
+    --- @field auto_approve_tier agentic.PermAutoApproveTier Which allow rules auto-approve execute calls. Settings.json allow patterns count under either tier. nil approves none (deny/ask still apply).
     --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
-    --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of the auto_approve switches).
+    --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of `auto_approve_tier`).
     --- @field tmp_cleanup boolean In a granted path under a tmp root, auto-approve a plain `rm` of an untracked tmp file redirected to earlier in the same Bash command.
-    --- @field default_grant string[] Paths or globs granted at session start, as with `/grant`. `$VAR` and `~` expand (an entry naming an unset var is skipped), and a relative entry resolves against the session cwd. Requires `auto_approve_grant`.
+    --- @field default_grant string[] Paths or globs granted at session start, as with `/grant`. `$VAR` and `~` expand (an entry naming an unset var is skipped), and a relative entry resolves against the session cwd. `{}` starts a session without grants.
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
-        auto_approve = "safe_write",
+        auto_approve_kinds = { "read", "search", "skill" },
+        auto_approve_tier = "safe_write",
         structured = {},
         highlight_unapproved = true,
         tmp_cleanup = true,
         default_grant = { "/tmp", "$TMPDIR", ".", "root" },
     },
-
-    --- Auto-approve recoverable file mutations under the paths granted with
-    --- `/grant` (and `permissions.default_grant`), Bash redirect writes and
-    --- `rm` included. When false, `/grant` is disabled.
-    auto_approve_grant = true,
 
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings

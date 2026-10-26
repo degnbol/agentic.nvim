@@ -4236,7 +4236,7 @@ describe("agentic.SessionManager", function()
         --- Resolved temp dir standing in for the session cwd's git root.
         --- @type string
         local repo
-        local orig_auto, orig_defaults
+        local orig_defaults
 
         local SessionManagerModule
 
@@ -4275,9 +4275,7 @@ describe("agentic.SessionManager", function()
             git_root_stub = spy.stub(vim.fs, "root")
             git_root_stub:returns(repo)
 
-            orig_auto = Config.auto_approve_grant
             orig_defaults = Config.permissions.default_grant
-            Config.auto_approve_grant = true
 
             notices = {}
             errors = {}
@@ -4315,7 +4313,6 @@ describe("agentic.SessionManager", function()
             input_stub:revert()
             notify_stub:revert()
             git_root_stub:revert()
-            Config.auto_approve_grant = orig_auto
             Config.permissions.default_grant = orig_defaults
             vim.fs.rm(repo, { recursive = true, force = true })
         end)
@@ -4367,13 +4364,6 @@ describe("agentic.SessionManager", function()
         it("root without a git root errors", function()
             git_root_stub:returns(nil)
             session:_handle_grant_command("root")
-            assert.equal(0, #grant_keys())
-            assert.equal(1, #errors)
-        end)
-
-        it("is rejected when the switch is off", function()
-            Config.auto_approve_grant = false
-            session:_handle_grant_command(".")
             assert.equal(0, #grant_keys())
             assert.equal(1, #errors)
         end)
@@ -4448,13 +4438,6 @@ describe("agentic.SessionManager", function()
                 session:_apply_default_grants()
                 assert.same({ "/nonexistent-agentic-root" }, grant_keys())
                 assert.equal(1, warn_count("does not exist yet"))
-            end)
-
-            it("do nothing when the switch is off", function()
-                Config.auto_approve_grant = false
-                Config.permissions.default_grant = { "/tmp" }
-                session:_apply_default_grants()
-                assert.equal(0, #grant_keys())
             end)
         end)
     end)

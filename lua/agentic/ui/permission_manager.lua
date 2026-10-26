@@ -26,8 +26,9 @@ local PERMISSION_KIND_PRIORITY = {
 }
 
 --- What allowed or rejected a tool call: a rule kind, a remembered decision,
---- a grant, or the user at the prompt.
---- @alias agentic.PermissionDecider "read-only"|"safe-write"|"deny"|"glob-allow"|"glob-deny"|"session-allow"|"session-reject"|"grant"|"skill"|"prompt-allow"|"prompt-reject"
+--- a grant, the user at the prompt, or (any other string) the
+--- `AcpKind.normalise` form of a kind in `auto_approve_kinds`.
+--- @alias agentic.PermissionDecider "read-only"|"safe-write"|"deny"|"glob-allow"|"glob-deny"|"session-allow"|"session-reject"|"grant"|"prompt-allow"|"prompt-reject"|string
 
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Main-chat writer; default when no per-tool-call resolver is set
@@ -91,12 +92,6 @@ function PermissionManager:_writer(tool_call_id)
     end
     return self.message_writer
 end
-
---- ACP tool kinds that are guaranteed read-only (no filesystem mutations).
-local READ_ONLY_KINDS = {
-    read = true,
-    search = true,
-}
 
 --- File-scoped tool kinds where allow_always applies per file path.
 local FILE_SCOPED_KINDS = {
@@ -316,21 +311,31 @@ local function decider_word(source)
     return (source:gsub("_", "-")) --[[@as agentic.PermissionDecider]]
 end
 
+--- Whether `Config.permissions.auto_approve_kinds` lists a kind, compared
+--- case-insensitively.
+--- @param kind_lc string Trimmed, lowercase kind (the `AcpKind.normalise` form)
+--- @return boolean
+local function is_auto_approved_kind(kind_lc)
+    return vim.tbl_contains(Config.permissions.auto_approve_kinds, function(k)
+        return AcpKind.normalise(k) == kind_lc
+    end, { predicate = true })
+end
+
 --- Run the deterministic permission ladder and return its verdict, with **no**
 --- ACP-side effect (no callback, no auto_approve/auto_reject). This is the
 --- single source of truth shared by the `canUseTool` path (`_try_auto_approve`)
 --- and the auto-mode PreToolUse hook RPC.
 ---
 --- Checks in order (the first to decide wins):
---- 1. Read-only tool kinds ("read", "search") — always safe regardless of path.
---- 2. Skill loading ("skill") — injects a SKILL.md into context, no mutation.
---- 3. Compound Bash commands — a concrete `deny` match on any executed leaf
+--- 1. Compound Bash commands: a concrete `deny` match on any executed leaf
 ---    → "deny".
---- 4. allow_always/reject_always client cache, so a cached reject also beats
+--- 2. allow_always/reject_always client cache, so a cached reject also beats
 ---    the checks below.
---- 5. Compound Bash commands — every leaf matching an allow pattern with no
+--- 3. Kinds listed in `Config.permissions.auto_approve_kinds`, whatever the
+---    path → "allow", with the kind as the decider.
+--- 4. Compound Bash commands: every leaf matching an allow pattern with no
 ---    deny/ask, and every file effect clearing the grant scopes → "allow".
---- 6. Grant scopes for file-scoped kinds.
+--- 5. Grant scopes for file-scoped kinds.
 ---
 --- Tracker-free by contract: `kind` and `diff` are passed in (the tracker may
 --- be unpopulated at hook time). `command` is read straight from
@@ -343,14 +348,6 @@ end
 --- @return agentic.PermissionDecider[]|nil deciders What decided the verdict, in display order; nil when there is no verdict
 function PermissionManager:decide(kind, tool_call, diff)
     local kind_lc = AcpKind.normalise(kind)
-
-    if Config.auto_approve_read_only_tools and READ_ONLY_KINDS[kind_lc] then
-        return "allow", { "read-only" }
-    end
-
-    if Config.auto_approve_skills and kind_lc == "skill" then
-        return "allow", { "skill" }
-    end
 
     local command = tool_call.rawInput and tool_call.rawInput.command
     if command then
@@ -368,6 +365,10 @@ function PermissionManager:decide(kind, tool_call, diff)
         elseif cached == "reject" then
             return "deny", { "session-reject" }
         end
+    end
+
+    if is_auto_approved_kind(kind_lc) then
+        return "allow", { kind_lc }
     end
 
     if command then
@@ -388,11 +389,7 @@ function PermissionManager:decide(kind, tool_call, diff)
         end
     end
 
-    if
-        Config.auto_approve_grant
-        and #self._grant_scopes > 0
-        and FILE_SCOPED_KINDS[kind_lc]
-    then
+    if #self._grant_scopes > 0 and FILE_SCOPED_KINDS[kind_lc] then
         if self:_check_grant(kind_lc, tool_call, diff) then
             return "allow", { "grant" }
         end
@@ -415,13 +412,15 @@ function PermissionManager:_try_auto_approve(request, callback)
     end
 
     -- opencode raises `external_directory` with kind="other" before the
-    -- underlying tool's own permission, sharing toolCallId — prefer a
-    -- read-only/skill tracker kind so those still auto-approve.
+    -- underlying tool's own permission, sharing toolCallId. Claude's Skill
+    -- requests also arrive with kind="other"; only the tracker has the minted
+    -- "Skill" kind. Prefer a tracker kind in `auto_approve_kinds` so those
+    -- still auto-approve.
     local tracker =
         self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
     local kind = tool_call.kind
     local tracker_kind_lc = tracker and AcpKind.normalise(tracker.kind) or ""
-    if READ_ONLY_KINDS[tracker_kind_lc] or tracker_kind_lc == "skill" then
+    if is_auto_approved_kind(tracker_kind_lc) then
         kind = tracker.kind
     end
 
@@ -569,10 +568,10 @@ end
 --- Whether every file-mutating effect a Bash command would produce clears
 --- against the active grant scopes. Empty effects → trivially clear (a
 --- command with no concrete writes auto-approves on structural grounds
---- alone). Otherwise `Config.auto_approve_grant` must be on, and every effect
---- path absolute and granted in both its literal and resolved form. A
---- relative path never clears: the Bash tool keeps its cwd between calls and
---- an in-command `cd` moves it, so the file it names is unknown.
+--- alone). Otherwise every effect path must be absolute and granted in both
+--- its literal and resolved form. A relative path never clears: the Bash tool
+--- keeps its cwd between calls and an in-command `cd` moves it, so the file it
+--- names is unknown.
 ---
 --- Each effect must pass `GrantSafety.safe_for_kind`, except a delete of
 --- scratch (`GrantSafety.is_scratch`): it clears only when an earlier write
@@ -588,9 +587,6 @@ end
 function PermissionManager:_bash_effects_clear(effects)
     if #effects == 0 then
         return true
-    end
-    if not Config.auto_approve_grant then
-        return false
     end
     --- Paths written earlier in this same command.
     --- @type table<string, boolean>

@@ -139,9 +139,9 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
-        it("respects config toggle", function()
-            local original = Config.auto_approve_read_only_tools
-            Config.auto_approve_read_only_tools = false
+        it("prompts for a kind not in auto_approve_kinds", function()
+            local original = Config.permissions.auto_approve_kinds
+            Config.permissions.auto_approve_kinds = { "skill" }
 
             local cb = spy.new(function() end)
             pm:add_request(
@@ -151,7 +151,7 @@ describe("agentic.ui.PermissionManager", function()
             assert.spy(cb).was.called(0)
             pm:_complete_request("reject-once")
 
-            Config.auto_approve_read_only_tools = original
+            Config.permissions.auto_approve_kinds = original
         end)
     end)
 
@@ -494,9 +494,22 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_nil(pm.current_request)
         end)
 
-        it("respects config toggle", function()
-            local original = Config.auto_approve_skills
-            Config.auto_approve_skills = false
+        it("auto-approves any listed kind held only by the tracker", function()
+            local original = Config.permissions.auto_approve_kinds
+            Config.permissions.auto_approve_kinds = { "fetch" }
+            local request = make_skill_request()
+            writer.tool_call_blocks["tc-skill"].kind = "fetch"
+
+            local cb = spy.new(function() end)
+            pm:add_request(request, cb --[[@as function]])
+            Config.permissions.auto_approve_kinds = original
+            assert.is_true(cb:called_with("allow-once"))
+            assert.same({ "fetch" }, pm:take_deciders("tc-skill"))
+        end)
+
+        it("prompts when skill is not in auto_approve_kinds", function()
+            local original = Config.permissions.auto_approve_kinds
+            Config.permissions.auto_approve_kinds = { "read", "search" }
 
             local cb = spy.new(function() end)
             pm:add_request(make_skill_request(), cb --[[@as function]])
@@ -504,7 +517,7 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_not_nil(pm.current_request)
             pm:_complete_request("reject-once")
 
-            Config.auto_approve_skills = original
+            Config.permissions.auto_approve_kinds = original
         end)
     end)
 
@@ -1525,20 +1538,6 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_nil(pm._pending_edits["tc-b"])
         end)
 
-        it("respects the auto_approve_grant switch", function()
-            local original = Config.auto_approve_grant
-            Config.auto_approve_grant = false
-            grant(repo)
-
-            local approved = write_approves(repo .. "/new.lua")
-            local cleared = pm:_bash_effects_clear({
-                { kind = "write", path = repo .. "/new.lua" },
-            })
-            Config.auto_approve_grant = original
-            assert.is_false(approved)
-            assert.is_false(cleared)
-        end)
-
         describe("_bash_effects_clear", function()
             --- @param kind "write"|"delete"
             --- @param path string
@@ -1753,7 +1752,7 @@ describe("agentic.ui.PermissionManager", function()
         -- Only the bundled rules decide: the user's settings.json is off.
         before_each(function()
             saved_permissions = vim.deepcopy(Config.permissions)
-            Config.permissions.auto_approve = "safe_write"
+            Config.permissions.auto_approve_tier = "safe_write"
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
             PermissionRules.invalidate_cache()
@@ -1808,10 +1807,43 @@ describe("agentic.ui.PermissionManager", function()
 
         it("allows read-only kinds", function()
             assert.same(
-                { "allow", { "read-only" } },
+                { "allow", { "read" } },
                 { pm:decide("read", { toolCallId = "t" }) }
             )
-            assert.equal("allow", pm:decide("search", { toolCallId = "t" }))
+            assert.same(
+                { "allow", { "search" } },
+                { pm:decide("search", { toolCallId = "t" }) }
+            )
+        end)
+
+        it("allows any kind listed in auto_approve_kinds", function()
+            local original = Config.permissions.auto_approve_kinds
+            Config.permissions.auto_approve_kinds = { "Fetch" }
+            local result = { pm:decide("fetch", { toolCallId = "t" }) }
+            Config.permissions.auto_approve_kinds = original
+            assert.same({ "allow", { "fetch" } }, result)
+        end)
+
+        it("lets deny rules and reject_always beat a listed kind", function()
+            local original = Config.permissions.auto_approve_kinds
+            Config.permissions.auto_approve_kinds = { "execute" }
+            local denied = {
+                pm:decide("execute", {
+                    toolCallId = "t",
+                    rawInput = { command = "rm -rf /" },
+                }),
+            }
+            pm._always_cache["execute:secret"] = "reject"
+            local rejected = {
+                pm:decide("execute", {
+                    toolCallId = "t",
+                    kind = "execute",
+                    rawInput = { command = "secret" },
+                }),
+            }
+            Config.permissions.auto_approve_kinds = original
+            assert.same({ "deny", { "deny" } }, denied)
+            assert.same({ "deny", { "session-reject" } }, rejected)
         end)
 
         it("allows skill loads", function()
@@ -1869,11 +1901,12 @@ describe("agentic.ui.PermissionManager", function()
             })
         end)
 
-        it("read-only auto-approval respects the config toggle", function()
-            local original = Config.auto_approve_read_only_tools
-            Config.auto_approve_read_only_tools = false
-            assert.is_nil(pm:decide("read", { toolCallId = "t" }))
-            Config.auto_approve_read_only_tools = original
+        it("returns nil for a kind not in auto_approve_kinds", function()
+            local original = Config.permissions.auto_approve_kinds
+            Config.permissions.auto_approve_kinds = { "skill" }
+            local result = { pm:decide("read", { toolCallId = "t" }) }
+            Config.permissions.auto_approve_kinds = original
+            assert.same({}, result)
         end)
     end)
 

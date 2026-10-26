@@ -604,13 +604,13 @@ describe("PermissionRules", function()
         end)
 
         --- Resolve auto-approval of `cmd` against the plugin defaults at `tier`.
-        --- @param tier agentic.PermAutoApprove
+        --- @param tier agentic.PermAutoApproveTier
         --- @param cmd string
         --- @return boolean
         local function approves_at(tier, cmd)
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
-            Config.permissions.auto_approve = tier
+            Config.permissions.auto_approve_tier = tier
             PermissionRules.invalidate_cache()
             return PermissionRules.should_auto_approve(cmd)
         end
@@ -777,7 +777,7 @@ describe("PermissionRules", function()
 
         it("combines settings.json allow with structured rules", function()
             Config.permissions.use_claude_settings = true
-            Config.permissions.auto_approve = "read_only"
+            Config.permissions.auto_approve_tier = "read_only"
             stub_settings({ allow = { "Bash(make test*)" } })
 
             assert.is_true(PermissionRules.should_auto_approve("ls -la"))
@@ -792,9 +792,9 @@ describe("PermissionRules", function()
             deny = { "Bash(make deploy*)" },
         }
 
-        it("ignores settings.json allow when auto_approve is nil", function()
+        it("ignores settings.json allow when auto_approve_tier is nil", function()
             Config.permissions.use_plugin_defaults = false
-            Config.permissions.auto_approve = nil
+            Config.permissions.auto_approve_tier = nil
             stub_settings(MAKE)
             assert.is_false(PermissionRules.should_auto_approve("make test x"))
             assert.is_true(PermissionRules.should_auto_reject("make deploy"))
@@ -1637,7 +1637,7 @@ describe("PermissionRules", function()
         before_each(function()
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = true
-            Config.permissions.auto_approve = "safe_write"
+            Config.permissions.auto_approve_tier = "safe_write"
             stub_settings(nil)
         end)
 
@@ -1955,7 +1955,7 @@ describe("PermissionRules", function()
         end
 
         it(
-            "does not auto-approve mlr -I foo even at auto_approve = 'safe_write' (ask wins)",
+            "does not auto-approve mlr -I foo even at auto_approve_tier = 'safe_write' (ask wins)",
             function()
                 assert.is_false(
                     PermissionRules.should_auto_approve("mlr -I foo")
@@ -1966,7 +1966,7 @@ describe("PermissionRules", function()
         it(
             "auto-approves mlr foo at read_only (mlr writes to stdout)",
             function()
-                Config.permissions.auto_approve = "read_only"
+                Config.permissions.auto_approve_tier = "read_only"
                 PermissionRules.invalidate_cache()
                 assert.is_true(PermissionRules.should_auto_approve("mlr foo"))
             end
@@ -1975,7 +1975,7 @@ describe("PermissionRules", function()
         it(
             "does not auto-approve a safe_write command at read_only (stylua)",
             function()
-                Config.permissions.auto_approve = "read_only"
+                Config.permissions.auto_approve_tier = "read_only"
                 PermissionRules.invalidate_cache()
                 assert.is_false(
                     PermissionRules.should_auto_approve("stylua foo.lua")
@@ -4354,7 +4354,7 @@ describe("PermissionRules", function()
         before_each(function()
             Config.permissions.use_plugin_defaults = false
             Config.permissions.use_claude_settings = true
-            Config.permissions.auto_approve = "safe_write"
+            Config.permissions.auto_approve_tier = "safe_write"
             Config.permissions.structured = {
                 grep = { read_only = { {} } },
                 sort = { safe_write = { {} } },

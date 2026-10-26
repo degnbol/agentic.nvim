@@ -251,7 +251,7 @@ function Agentic.setup(opts)
             { title = "Agentic: user config merge error" }
         )
     end
-    PermissionStructured.validate_auto_approve()
+    PermissionStructured.validate_auto_approve_tier()
     WidgetLayout.validate_stack()
 end
 
