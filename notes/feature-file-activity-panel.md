@@ -120,19 +120,16 @@ tabpages must not share a tally.
 
 The defect that disqualifies `_edit_records` (§ near-miss, reason 4) is
 an unspecified lifecycle, so this plan owes an explicit one.
-`PermissionManager:clear()` has five call sites; the tally must react
-differently to them:
 
-| Site | Meaning | Tally |
-| --- | --- | --- |
-| `init.lua:305` | `stop_generation` (Ctrl-C) | **preserve** |
-| `session_manager.lua:2206` | `_do_load_acp_session` | preserve (restored log + dedupe) |
-| `session_manager.lua:2346` | `_cancel_session` (`/new`) | **clear** |
-| `session_manager.lua:2435` | `switch_provider` | preserve |
-| `session_recovery.lua:304` | Path C respawn after usage limit | preserve |
-
-Only `/new` starts a new conversation. Everything else continues the
-same one.
+| Event | Tally |
+| --- | --- |
+| Ctrl-C (`stop_generation`) | **preserve** |
+| `/new` (`_cancel_session`) | **clear** |
+| Load (`_do_load_acp_session`) | **clear**, then the saved log (dedupes the replay) |
+| Restore from history (`restore_from_history`) | **clear**, then the saved log |
+| Restart (`restart_session`) | **clear**, then the same conversation's log |
+| Provider switch (`switch_provider`) | preserve |
+| Respawn after usage limit | preserve |
 
 ## Detection
 

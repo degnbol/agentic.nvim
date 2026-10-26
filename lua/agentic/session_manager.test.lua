@@ -3,6 +3,7 @@ local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
 local ACPClient = require("agentic.acp.acp_client")
+local AgentConfigOptions = require("agentic.acp.agent_config_options")
 local AgentModes = require("agentic.acp.agent_modes")
 local ChatHistory = require("agentic.ui.chat_history")
 local FileSystem = require("agentic.utils.file_system")
@@ -61,6 +62,7 @@ describe("agentic.SessionManager", function()
                 config_options = {
                     legacy_agent_modes = legacy_modes,
                     legacy_agent_models = AgentModels:new(),
+                    current_mode_id = AgentConfigOptions.current_mode_id,
                     get_mode_name = function(_self, mode_id)
                         local mode = legacy_modes:get_mode(mode_id)
                         return mode and mode.name or nil
@@ -124,8 +126,6 @@ describe("agentic.SessionManager", function()
             render_header_spy = spy.new(function() end)
             test_bufnr = vim.api.nvim_create_buf(false, true)
 
-            local AgentConfigOptions =
-                require("agentic.acp.agent_config_options")
             local BufHelpers = require("agentic.utils.buf_helpers")
             local keymap_stub = spy.stub(BufHelpers, "multi_keymap_set")
 
@@ -273,6 +273,8 @@ describe("agentic.SessionManager", function()
                     set_chat_title = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
+                _reset_conversation = SessionManager._reset_conversation,
+                _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
                 _agents = {},
@@ -321,6 +323,8 @@ describe("agentic.SessionManager", function()
                     message_writer = { reset = noop },
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
+                    _reset_conversation = SessionManager._reset_conversation,
+                    _update_chat_header = function() end,
                     _reset_subagents = function() end,
                     _sync_modified = SessionManager._sync_modified,
                     _agents = {},
@@ -337,6 +341,108 @@ describe("agentic.SessionManager", function()
                 end
             end
         )
+    end)
+
+    describe("_reset_conversation", function()
+        local Recovery = require("agentic.session_recovery")
+        local SlashCommands = require("agentic.acp.slash_commands")
+        local noop = function() end
+
+        --- @type TestStub[]
+        local stubs
+
+        before_each(function()
+            stubs = {
+                spy.stub(Recovery, "cancel_retry_timer"),
+                spy.stub(SlashCommands, "setCommands"),
+            }
+        end)
+
+        after_each(function()
+            for _, s in ipairs(stubs) do
+                s:revert()
+            end
+        end)
+
+        --- @param update_chat_header fun(self: agentic.SessionManager)|nil
+        --- @return agentic.SessionManager
+        local function make_session(update_chat_header)
+            return {
+                session_id = "old-sid",
+                permission_manager = { clear = noop },
+                todo_list = { clear = noop },
+                file_list = { clear = noop },
+                code_selection = { clear = noop },
+                diagnostics_list = { clear = noop },
+                config_options = { clear = noop },
+                file_activity = { clear = noop },
+                status_indicator = { stop = spy.new(noop) },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    clear = noop,
+                    set_chat_title = noop,
+                },
+                message_writer = { reset = noop },
+                clear_chat = SessionManager.clear_chat,
+                _reset_conversation = SessionManager._reset_conversation,
+                _update_chat_header = update_chat_header or noop,
+                _reset_subagents = noop,
+                _sync_modified = SessionManager._sync_modified,
+                _agents = {},
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("lets the next conversation take the provider title", function()
+            local session = make_session()
+            session._title_user_set = true
+
+            session:_reset_conversation()
+
+            assert.is_false(session._title_user_set)
+        end)
+
+        it("drops the token count before the header update", function()
+            --- @type table|nil
+            local seen
+            local session = make_session(function(this)
+                seen = {
+                    usage = this._usage,
+                    session_id = this.session_id,
+                    title_user_set = this._title_user_set,
+                    history_to_send = this._history_to_send,
+                }
+            end)
+            session._usage = { used = 1000, size = 200000 }
+            session._title_user_set = true
+            session._history_to_send = {}
+
+            session:_reset_conversation()
+
+            assert.same({ title_user_set = false }, seen)
+        end)
+
+        it("ends a running turn", function()
+            local session = make_session()
+            session.is_generating = true
+
+            session:_reset_conversation()
+
+            assert.is_false(session.is_generating)
+            assert.spy(session.status_indicator.stop).was.called(1)
+        end)
+
+        it("keeps the rate-limit budget and the load gate", function()
+            local session = make_session()
+            local budget = { rateLimitType = "five_hour" }
+            session._budget = budget
+            session._loading = true
+
+            session:_reset_conversation()
+
+            assert.equal(budget, session._budget)
+            assert.is_true(session._loading)
+        end)
     end)
 
     describe("_on_session_update: usage_update budget", function()
@@ -416,6 +522,8 @@ describe("agentic.SessionManager", function()
                     set_chat_title = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
+                _reset_conversation = SessionManager._reset_conversation,
+                _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
                 _agents = {},
@@ -458,6 +566,8 @@ describe("agentic.SessionManager", function()
                     set_chat_title = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
+                _reset_conversation = SessionManager._reset_conversation,
+                _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
                 _agents = {},
@@ -620,6 +730,7 @@ describe("agentic.SessionManager", function()
             local session = {
                 config_options = {
                     legacy_agent_modes = AgentModes:new(),
+                    current_mode_id = AgentConfigOptions.current_mode_id,
                 },
                 agent = {
                     budget_display = function()
@@ -685,10 +796,12 @@ describe("agentic.SessionManager", function()
                     unsubscribe = function(this, session_id)
                         this.subscribers[session_id] = nil
                     end,
+                    provider_config = { name = "Test" },
                 },
                 message_writer = {
                     write_message = noop,
                     write_notice = noop,
+                    reset = noop,
                     tool_call_blocks = {},
                 },
                 status_indicator = { start = noop, stop = noop },
@@ -707,13 +820,21 @@ describe("agentic.SessionManager", function()
                 file_list = { clear = noop },
                 code_selection = { clear = noop },
                 diagnostics_list = { clear = noop },
-                config_options = { clear = noop },
+                config_options = {
+                    clear = noop,
+                    current_model_id = noop,
+                    set_pending_initial_model = noop,
+                },
+                file_activity = { clear = noop, load = noop },
+                clear_chat = SessionManager.clear_chat,
                 _cancel_retry_timer = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _prompt_pending = 0,
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
+                _reset_conversation = SessionManager._reset_conversation,
+                _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _restore_transcripts = noop,
                 _forget_agents = noop,
@@ -774,6 +895,48 @@ describe("agentic.SessionManager", function()
             session:_do_load_acp_session("test-session-id", "/tmp")
 
             assert.equal(1, clear.call_count)
+        end)
+
+        describe("on a live session", function()
+            --- @return agentic.SessionManager
+            local function make_live_session()
+                local session = make_load_session()
+                session.session_id = "old-sid"
+                return session
+            end
+
+            it("holds the load gate after the reset", function()
+                local session = make_live_session()
+
+                session:_do_load_acp_session("test-session-id", "/tmp")
+
+                assert.is_true(session._loading)
+            end)
+
+            it("takes the title of the saved file", function()
+                local session = make_live_session()
+                local find_stub = spy.stub(ChatHistory, "find_files")
+                find_stub:returns({ "/saved/test-session-id.json" })
+                local read_stub = spy.stub(FileSystem, "read_json")
+                read_stub:returns({ title = "Saved title", messages = {} })
+
+                session:_do_load_acp_session("test-session-id", "/tmp")
+                find_stub:revert()
+                read_stub:revert()
+
+                assert.is_true(session._title_user_set)
+                assert.equal("Saved title", session.chat_history.title)
+            end)
+
+            it("keeps the rate-limit budget", function()
+                local session = make_live_session()
+                local budget = { rateLimitType = "five_hour" }
+                session._budget = budget
+
+                session:_do_load_acp_session("test-session-id", "/tmp")
+
+                assert.equal(budget, session._budget)
+            end)
         end)
 
         it("keeps the saved deciders for the replayed tool calls", function()
@@ -1345,6 +1508,7 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_notice = notice_spy },
                 _update_chat_header = function() end,
                 _handle_mode_change = SessionManager._handle_mode_change,
+                _set_session_option = SessionManager._set_session_option,
                 _notice_mode_switched = SessionManager._notice_mode_switched,
             } --[[@as agentic.SessionManager]]
             return session, notice_spy
@@ -1384,6 +1548,63 @@ describe("agentic.SessionManager", function()
             assert.spy(notice_spy).was.called(0)
             assert.spy(notify_stub).was.called(1)
             assert.equal(vim.log.levels.ERROR, notify_stub.calls[1][2])
+        end)
+
+        it("keeps a legacy mode id past the returned options", function()
+            local session = make_session(nil)
+            local legacy_modes = session.config_options.legacy_agent_modes
+            session.agent.set_mode = function(_, _session_id, _mode_id, callback)
+                callback({ configOptions = {} }, nil)
+            end
+            -- As `set_options`, which clears the legacy state.
+            session._handle_new_config_options = function()
+                legacy_modes:clear()
+            end
+
+            session:_handle_mode_change("auto", true)
+
+            assert.equal("auto", legacy_modes.current_mode_id)
+        end)
+
+        it("leaves the legacy mode id on a config option change", function()
+            local session = make_session(nil)
+            session.agent.set_config_option = function(_, _sid, _id, _v, cb)
+                cb({}, nil)
+            end
+
+            session:_handle_mode_change("auto", false)
+
+            assert.equal(
+                "plan",
+                session.config_options.legacy_agent_modes.current_mode_id
+            )
+        end)
+    end)
+
+    describe("_handle_model_change", function()
+        it("records a legacy model change as the current model", function()
+            local AgentModels = require("agentic.acp.agent_models")
+            local legacy_models = AgentModels:new()
+            legacy_models.current_model_id = "old"
+            local session = {
+                session_id = "s",
+                agent = {
+                    set_model = function(_, _session_id, _model_id, callback)
+                        callback({}, nil)
+                    end,
+                },
+                config_options = {
+                    legacy_agent_models = legacy_models,
+                    current_model_id = AgentConfigOptions.current_model_id,
+                },
+                announce_model_loaded = function() end,
+                _handle_model_change = SessionManager._handle_model_change,
+                _set_session_option = SessionManager._set_session_option,
+            } --[[@as agentic.SessionManager]]
+
+            session:_handle_model_change("new", true)
+
+            assert.equal("new", session.config_options:current_model_id())
         end)
     end)
 
@@ -2483,6 +2704,8 @@ describe("agentic.SessionManager", function()
                 _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
                 _notify_attention = SessionManager._notify_attention,
+                file_activity = { serialize = noop },
+                config_options = { current_model_id = noop },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
@@ -2693,6 +2916,8 @@ describe("agentic.SessionManager", function()
                     SessionManager._send_synthetic_prompt(this, text)
                 end,
                 _notify_attention = SessionManager._notify_attention,
+                file_activity = { serialize = noop },
+                config_options = { current_model_id = noop },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
@@ -3941,6 +4166,8 @@ describe("agentic.SessionManager", function()
                 },
                 stop_generation = SessionManager.stop_generation,
                 _cancel_session = SessionManager._cancel_session,
+                _reset_conversation = SessionManager._reset_conversation,
+                _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
                 _agents = {},
@@ -4939,6 +5166,8 @@ describe("agentic.SessionManager", function()
             return {
                 chat_history = { provider_version = recorded_version },
                 agent = { agent_info = agent_info },
+                file_activity = { serialize = function() end },
+                config_options = { current_model_id = function() end },
                 _sync_history_context = SessionManager._sync_history_context,
             } --[[@as agentic.SessionManager]]
         end
@@ -4973,6 +5202,8 @@ describe("agentic.SessionManager", function()
                 },
                 agent = { agent_info = { name = "acp", version = "0.66.0" } },
                 widget = { buf_nrs = {} },
+                file_activity = { serialize = function() end },
+                config_options = { current_model_id = function() end },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _sync_modified = SessionManager._sync_modified,
@@ -5046,6 +5277,8 @@ describe("agentic.SessionManager", function()
         local main_write
         --- @type TestSpy
         local subagent_write
+        --- @type TestSpy
+        local indicator_start
         --- Task id each update is tagged with.
         --- @type table<agentic.acp.AgentMessageChunk, string>
         local tags = {}
@@ -5053,6 +5286,7 @@ describe("agentic.SessionManager", function()
         before_each(function()
             main_write = spy.new(function() end)
             subagent_write = spy.new(function() end)
+            indicator_start = spy.new(function() end)
             -- A running subagent spawned by Task `task`.
             local transcript = {
                 writer = { write_message_chunk = subagent_write },
@@ -5063,7 +5297,7 @@ describe("agentic.SessionManager", function()
             session = setmetatable({
                 _response_boundary = ResponseBoundary:new(),
                 message_writer = { write_message_chunk = main_write },
-                status_indicator = { start = function() end },
+                status_indicator = { start = indicator_start },
                 chat_history = ChatHistory:new(),
                 agent = {
                     provider_config = { name = "test-provider" },
@@ -5146,6 +5380,25 @@ describe("agentic.SessionManager", function()
                 writes(subagent_write)
             )
             assert.equal(1, #session.chat_history.messages)
+        end)
+
+        it("writes a thought chunk unfiltered", function()
+            session:_on_session_update(chunk("X", "answer"))
+            --- @type agentic.acp.AgentThoughtChunk
+            local thought = {
+                sessionUpdate = "agent_thought_chunk",
+                content = { type = "text", text = "\nhm" },
+                messageId = "Y",
+            }
+
+            session:_on_session_update(thought)
+
+            assert.same(
+                { { "answer", false }, { "\nhm", nil } },
+                writes(main_write)
+            )
+            assert.equal("thinking", indicator_start.calls[2][2])
+            assert.equal("thought", session.chat_history.messages[2].type)
         end)
     end)
 end)

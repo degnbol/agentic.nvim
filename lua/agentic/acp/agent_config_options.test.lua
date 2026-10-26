@@ -211,6 +211,32 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
     end)
 
+    describe("current_model_id", function()
+        it("returns the config value, else the legacy id, else nil", function()
+            assert.is_nil(config_options:current_model_id())
+
+            config_options.legacy_agent_models.current_model_id = "legacy"
+            assert.equal("legacy", config_options:current_model_id())
+
+            config_options:set_options({ model_option })
+            config_options.legacy_agent_models.current_model_id = "legacy"
+            assert.equal("claude-sonnet", config_options:current_model_id())
+        end)
+    end)
+
+    describe("current_mode_id", function()
+        it("returns the config value, else the legacy id, else nil", function()
+            assert.is_nil(config_options:current_mode_id())
+
+            config_options.legacy_agent_modes.current_mode_id = "legacy"
+            assert.equal("legacy", config_options:current_mode_id())
+
+            config_options:set_options({ mode_option })
+            config_options.legacy_agent_modes.current_mode_id = "legacy"
+            assert.equal("normal", config_options:current_mode_id())
+        end)
+    end)
+
     describe("set_initial_mode", function()
         --- @type TestStub
         local notify_stub
