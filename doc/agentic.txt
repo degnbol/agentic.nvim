@@ -1184,7 +1184,8 @@ User AgenticHeadersChanged
 <
 
 `debug` prints debug messages, readable with |:messages|. `log` appends them
-to `~/.cache/nvim/agentic_debug.log`. The two are independent.
+to `~/.cache/nvim/agentic_debug.log`; at 10 MB the file moves to
+`agentic_debug.log.1`, replacing the previous one. The two are independent.
 
 ==============================================================================
 vim:tw=78:ft=help:norl:
