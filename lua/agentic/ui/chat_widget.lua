@@ -15,7 +15,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- so a module-level (global) namespace is fine (see session-isolation rules).
 local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
---- @alias agentic.ui.ChatWidget.PanelNames "chat"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"|"message"
+--- @alias agentic.ui.ChatWidget.PanelNames "agent"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"|"message"
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
@@ -100,7 +100,7 @@ function ChatWidget:home_win()
     if
         winid
         and vim.api.nvim_win_is_valid(winid)
-        and vim.api.nvim_win_get_buf(winid) == self.buf_nrs.chat
+        and vim.api.nvim_win_get_buf(winid) == self.buf_nrs.agent
     then
         return winid
     end
@@ -160,7 +160,7 @@ function ChatWidget:show_in(winid)
     -- With autocmds: the chat's BufWinEnter sets its window options and
     -- follow mode.
     local ok, err =
-        pcall(vim.api.nvim_win_set_buf, winid, self.buf_nrs.chat)
+        pcall(vim.api.nvim_win_set_buf, winid, self.buf_nrs.agent)
     if not ok then
         Logger.notify(
             "Cannot show the chat here: " .. tostring(err),
@@ -170,7 +170,7 @@ function ChatWidget:show_in(winid)
         return false
     end
     if
-        replaced ~= self.buf_nrs.chat
+        replaced ~= self.buf_nrs.agent
         -- 'bufhidden=wipe' wipes it as the chat replaces it.
         and vim.api.nvim_buf_is_valid(replaced)
         and BufHelpers.is_blank_unnamed(replaced)
@@ -190,7 +190,7 @@ end
 function ChatWidget:target_win()
     local current = vim.api.nvim_get_current_win()
     local bufnr = vim.api.nvim_win_get_buf(current)
-    local is_panel = bufnr ~= self.buf_nrs.chat
+    local is_panel = bufnr ~= self.buf_nrs.agent
         and vim.list_contains(vim.tbl_values(self.buf_nrs), bufnr)
     if not is_panel and vim.bo[bufnr].filetype ~= "AgenticInput" then
         return current
@@ -207,7 +207,7 @@ function ChatWidget:_chat_win_in_tab()
     if home and vim.api.nvim_win_get_tabpage(home) == tab then
         return home
     end
-    for _, winid in ipairs(vim.fn.win_findbuf(self.buf_nrs.chat)) do
+    for _, winid in ipairs(vim.fn.win_findbuf(self.buf_nrs.agent)) do
         if vim.api.nvim_win_get_tabpage(winid) == tab then
             return winid
         end
@@ -227,10 +227,10 @@ function ChatWidget:_home_in_tab()
     end
     --- @type integer[]
     local winids = { vim.api.nvim_get_current_win() }
-    vim.list_extend(winids, vim.fn.win_findbuf(self.buf_nrs.chat))
+    vim.list_extend(winids, vim.fn.win_findbuf(self.buf_nrs.agent))
     for _, winid in ipairs(winids) do
         if
-            vim.api.nvim_win_get_buf(winid) == self.buf_nrs.chat
+            vim.api.nvim_win_get_buf(winid) == self.buf_nrs.agent
             and vim.api.nvim_win_get_tabpage(winid) == tab
         then
             self:_adopt_home(winid)
@@ -253,7 +253,7 @@ function ChatWidget:reveal(target_win)
     elseif not target_win then
         -- Not `:sbuffer`: 'switchbuf' could send it to another tabpage.
         local above = vim.api.nvim_open_win(
-            self.buf_nrs.chat,
+            self.buf_nrs.agent,
             true,
             { split = "above", win = 0 }
         )
@@ -285,7 +285,7 @@ function ChatWidget:show(mods, target_win)
         self:reveal(target_win)
         return
     end
-    vim.cmd.sbuffer({ args = { self.buf_nrs.chat }, mods = mods })
+    vim.cmd.sbuffer({ args = { self.buf_nrs.agent }, mods = mods })
     self:show_in(vim.api.nvim_get_current_win())
 end
 
@@ -382,7 +382,7 @@ function ChatWidget:destroy()
         self._home_closed_autocmd = nil
     end
     self._home_win = nil
-    local chat = self.buf_nrs.chat
+    local chat = self.buf_nrs.agent
     for name, bufnr in pairs(self.buf_nrs) do
         self.buf_nrs[name] = nil
         if bufnr ~= chat and vim.api.nvim_buf_is_valid(bufnr) then
@@ -544,8 +544,8 @@ function ChatWidget:submit(opts)
     end
     BufHelpers.sync_modified(self.buf_nrs.input)
 
-    if Config.settings.move_cursor_to_chat_on_submit then
-        self:move_cursor_to("chat")
+    if Config.settings.move_cursor_to_agent_on_submit then
+        self:move_cursor_to("agent")
     end
 end
 
@@ -916,14 +916,14 @@ end
 --- @param callback fun()|nil
 function ChatWidget:move_cursor_to(panel, callback)
     vim.schedule(function()
-        local winid = panel == "chat" and self:home_win()
+        local winid = panel == "agent" and self:home_win()
             or self:panel_win(panel)
         if winid then
             vim.api.nvim_set_current_win(winid)
 
             -- Follow owns the chat's view, which a held tool call may keep
             -- short of the bottom.
-            if panel ~= "chat" then
+            if panel ~= "agent" then
                 BufHelpers.scroll_down(winid, 0)
             end
 
@@ -1033,7 +1033,7 @@ function ChatWidget:_initialize()
     self:_bind_keymaps()
     self:_setup_queue()
     self:_attach_input()
-    self:_track_home(self.buf_nrs.chat)
+    self:_track_home(self.buf_nrs.agent)
 
     local input = self.buf_nrs.input
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
@@ -1097,7 +1097,7 @@ function ChatWidget:_setup_prompt_navigation(bufnr)
     end
 
     BufHelpers.multi_keymap_set(
-        Config.keymaps.chat.prev_prompt,
+        Config.keymaps.agent.prev_prompt,
         bufnr,
         function()
             jump_prompt(false)
@@ -1106,7 +1106,7 @@ function ChatWidget:_setup_prompt_navigation(bufnr)
     )
 
     BufHelpers.multi_keymap_set(
-        Config.keymaps.chat.next_prompt,
+        Config.keymaps.agent.next_prompt,
         bufnr,
         function()
             jump_prompt(true)
@@ -1128,7 +1128,7 @@ function ChatWidget:_goto_transcripts_bottom()
         local panel = vim.b[bufnr].agentic_window
         if
             vim.b[bufnr].agentic_session_id == self._owner_id
-            and (panel == "chat" or panel == "subagent")
+            and (panel == "agent" or panel == "subagent")
         then
             self.on_goto_bottom(winid)
         end
@@ -1169,7 +1169,7 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
             end,
             { desc = "Agentic: Paste image from clipboard" }
         )
-    elseif panel == "chat" or panel == "subagent" then
+    elseif panel == "agent" or panel == "subagent" then
         self:_setup_prompt_navigation(bufnr)
     end
 
@@ -1401,7 +1401,7 @@ local function panel_buf_opts(panel)
     --- @type table<agentic.ui.ChatWidget.PanelNames, table<string, any>>
     local panel_opts = {
         -- `acwrite` so `modified` blocks `:qa` while the history is unsaved.
-        chat = { filetype = "AgenticChat", buftype = "acwrite" },
+        agent = { filetype = "AgenticChat", buftype = "acwrite" },
         subagent = { filetype = "AgenticChat", buftype = "acwrite" },
         todos = { filetype = "AgenticTodos" },
         code = { filetype = "AgenticCode" },
@@ -1429,7 +1429,7 @@ end
 function ChatWidget:_create_buf_nrs()
     -- The chat stands for the session: listed so `:ls`, `:bd` and buffer
     -- pickers reach it (`:bd` on an unlisted buffer only unloads it).
-    local chat = self:_create_new_buf("chat", true)
+    local chat = self:_create_new_buf("agent", true)
     local todos = self:_create_new_buf("todos", false)
     local code = self:_create_new_buf("code", false)
     local files = self:_create_new_buf("files", false)
@@ -1446,7 +1446,7 @@ function ChatWidget:_create_buf_nrs()
 
     --- @type agentic.ui.ChatWidget.BufNrs
     local buf_nrs = {
-        chat = chat,
+        agent = chat,
         todos = todos,
         code = code,
         files = files,
@@ -1483,7 +1483,7 @@ end
 --- @param panel agentic.ui.ChatWidget.PanelNames
 function ChatWidget:_apply_buf_opts(bufnr, panel)
     vim.b[bufnr].agentic_session_id = self._owner_id
-    -- The panel the buffer is, so a buffer alone names its header; `chat` and
+    -- The panel the buffer is, so a buffer alone names its header; `agent` and
     -- `subagent` share a filetype.
     vim.b[bufnr].agentic_window = panel
     for key, value in pairs(panel_buf_opts(panel)) do
@@ -1518,7 +1518,7 @@ end
 --- @param badge string|nil Nil clears it
 --- @param bufnr integer|nil The buffer to badge; nil = the chat
 function ChatWidget:set_badge(badge, bufnr)
-    bufnr = bufnr or self.buf_nrs.chat
+    bufnr = bufnr or self.buf_nrs.agent
     -- Nil once the widget is destroyed.
     if not bufnr then
         return
@@ -1533,7 +1533,7 @@ end
 
 --- Clear the chat's `[idle]` badge. A `[?]` stays until its prompt is answered.
 function ChatWidget:clear_idle_badge()
-    local chat = self.buf_nrs.chat
+    local chat = self.buf_nrs.agent
     if chat and WindowDecoration.get_header(chat).badge == "[idle]" then
         self:set_badge(nil)
     end
@@ -1543,7 +1543,7 @@ end
 --- name.
 --- @param title string|nil New title, or nil to reset to default
 function ChatWidget:set_chat_title(title)
-    local chat = self.buf_nrs.chat
+    local chat = self.buf_nrs.agent
     -- Nil once the widget is destroyed.
     if not chat then
         return

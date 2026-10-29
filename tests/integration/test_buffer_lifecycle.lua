@@ -33,7 +33,7 @@ _G.s = require("agentic.session_registry").owner_of_buf(
 )
 _G.s.session_id = "sid-1"
 _G.s.chat_history.session_id = "sid-1"
-_G.chat = _G.s.widget.buf_nrs.chat
+_G.chat = _G.s.widget.buf_nrs.agent
 -- What ACP notifications reach.
 _G.h = _G.s:_build_handlers()
 _G.user_msg = function(text)
@@ -218,10 +218,10 @@ vim.cmd("stopinsert")
         --- The window showing the session's `panel`: the home window for the
         --- chat, the input panel (opened when closed) for the input.
         local wins = {
-            chat = "_G.s.widget:home_win()",
+            agent = "_G.s.widget:home_win()",
             input = "_G.s.widget:input_win()",
         }
-        for _, panel in ipairs({ "chat", "input" }) do
+        for _, panel in ipairs({ "agent", "input" }) do
             it(":q on the " .. panel .. " window keeps the session", function()
                 child.cmd("vsplit")
                 open_session()

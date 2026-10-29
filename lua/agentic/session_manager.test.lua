@@ -73,7 +73,7 @@ describe("agentic.SessionManager", function()
                 },
                 widget = {
                     render_header = render_header_spy,
-                    buf_nrs = { chat = test_bufnr },
+                    buf_nrs = { agent = test_bufnr },
                 },
                 _on_session_update = SessionManager._on_session_update,
                 _update_chat_header = SessionManager._update_chat_header,
@@ -94,7 +94,7 @@ describe("agentic.SessionManager", function()
             )
 
             assert.spy(render_header_spy).was.called(1)
-            assert.equal("chat", render_header_spy.calls[1][2])
+            assert.equal("agent", render_header_spy.calls[1][2])
             assert.equal("Code", render_header_spy.calls[1][3])
 
             assert.spy(notify_stub).was.called(0)
@@ -141,7 +141,7 @@ describe("agentic.SessionManager", function()
                 config_options = config_opts,
                 widget = {
                     render_header = render_header_spy,
-                    buf_nrs = { chat = test_bufnr },
+                    buf_nrs = { agent = test_bufnr },
                 },
                 _agents = {},
                 _on_session_update = SessionManager._on_session_update,
@@ -814,7 +814,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     clear = noop,
                     set_chat_title = noop,
-                    buf_nrs = { chat = 0, input = 0 },
+                    buf_nrs = { agent = 0, input = 0 },
                 },
                 permission_manager = { clear = noop, drop_deciders = noop },
                 todo_list = { clear = noop },
@@ -2679,7 +2679,7 @@ describe("agentic.SessionManager", function()
                     dirty = false,
                 },
                 widget = {
-                    buf_nrs = { chat = 0 },
+                    buf_nrs = { agent = 0 },
                     get_chat_width = function()
                         return 80
                     end,
@@ -2888,7 +2888,7 @@ describe("agentic.SessionManager", function()
                     dirty = false,
                 },
                 widget = {
-                    buf_nrs = { chat = 0 },
+                    buf_nrs = { agent = 0 },
                     get_chat_width = function()
                         return 80
                     end,
@@ -3774,7 +3774,7 @@ describe("agentic.SessionManager", function()
                 _writer_for = SessionManager._writer_for,
                 -- chat not current => unfocused => bell would ring if notified
                 widget = {
-                    buf_nrs = { chat = -1 },
+                    buf_nrs = { agent = -1 },
                 },
                 permission_manager = {
                     add_request = function()
@@ -4239,7 +4239,7 @@ describe("agentic.SessionManager", function()
             }
             bufnr = vim.api.nvim_create_buf(false, true)
             local pm =
-                PermissionManager:new(MessageWriter:new(bufnr), { chat = bufnr })
+                PermissionManager:new(MessageWriter:new(bufnr), { agent = bufnr })
             table.insert(stubs, spy.stub(pm.permission_float, "open"))
             table.insert(stubs, spy.stub(pm.permission_float, "close"))
 
@@ -4303,7 +4303,7 @@ describe("agentic.SessionManager", function()
             deferred = Deferred.capture()
             bufnr = vim.api.nvim_create_buf(false, true)
             local writer = MessageWriter:new(bufnr)
-            local pm = PermissionManager:new(writer, { chat = bufnr })
+            local pm = PermissionManager:new(writer, { agent = bufnr })
             local noop = function() end
             session = {
                 message_writer = writer,

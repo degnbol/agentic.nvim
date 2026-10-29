@@ -17,7 +17,7 @@ describe("agentic.Bootstrap", function()
     local function chat_lang()
         return child.lua_get([[vim.treesitter.get_parser(
             require("agentic.session_registry")
-                .current().widget.buf_nrs.chat
+                .current().widget.buf_nrs.agent
         ):lang()]])
     end
 

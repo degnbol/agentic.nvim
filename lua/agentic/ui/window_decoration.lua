@@ -9,7 +9,7 @@ local WindowDecoration = {}
 
 --- @type agentic.ui.ChatWidget.Headers
 local WINDOW_HEADERS = {
-    chat = {
+    agent = {
         title = "󰻞 Agentic Chat",
     },
     input = { title = "󰦨 Prompt" },

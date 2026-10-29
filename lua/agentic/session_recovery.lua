@@ -520,7 +520,7 @@ function M.offer_auto_continue(sm, reset_epoch)
         )
     )
 
-    local chat_bufnr = sm.widget.buf_nrs.chat
+    local chat_bufnr = sm.widget.buf_nrs.agent
     local lhs = "c"
 
     vim.keymap.set("n", lhs, function()

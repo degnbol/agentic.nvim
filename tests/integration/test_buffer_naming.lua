@@ -13,7 +13,7 @@ describe("Buffer Naming", function()
     end)
 
     --- Gets buffer basename for a panel in the current tabpage
-    --- @param panel string Panel name (chat, input, code, files, todos)
+    --- @param panel string Panel name (agent, input, code, files, todos)
     --- @return string basename
     local function get_panel_basename(panel)
         local bufname = child.lua_get(string.format(
@@ -33,13 +33,13 @@ end)()
     it("the chat name's tail is the session title", function()
         child.cmd("Agentic")
         child.flush()
-        assert.equal("chat", get_panel_basename("chat"))
+        assert.equal("agent", get_panel_basename("agent"))
 
         child.lua([[
 require("agentic.session_registry").current().widget:set_chat_title("fix a/b")
 ]])
 
-        assert.equal("fix a-b", get_panel_basename("chat"))
+        assert.equal("fix a-b", get_panel_basename("agent"))
     end)
 
     it("the attention badge stays out of the name", function()
@@ -49,7 +49,7 @@ require("agentic.session_registry").current().widget:set_chat_title("fix a/b")
 require("agentic.session_registry").current().widget:set_badge("[idle]")
 ]])
 
-        assert.equal("chat", get_panel_basename("chat"))
+        assert.equal("agent", get_panel_basename("agent"))
     end)
 
     it("names are unique across instances", function()

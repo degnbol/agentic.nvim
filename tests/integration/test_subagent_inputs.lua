@@ -337,7 +337,7 @@ _G.s:_relay_to_agent("c1", "hi", { force = false })
         assert.equal("", child.lua_get("_G.s.chat_history.title"))
         assert.truthy(
             child
-                .lua_get("_G.text(_G.s.widget.buf_nrs.chat)")
+                .lua_get("_G.text(_G.s.widget.buf_nrs.agent)")
                 :find("SendMessage", 1, true)
         )
         assert.equal(
@@ -475,11 +475,11 @@ _G.press(_G.transcript("c1").bufnr, "p")
         child.lua([[
 _G.home = _G.s.widget:home_win()
 vim.api.nvim_set_current_win(_G.home)
-_G.press(_G.s.widget.buf_nrs.chat, "i")
+_G.press(_G.s.widget.buf_nrs.agent, "i")
 _G.first = vim.api.nvim_get_current_win()
 vim.cmd("stopinsert")
 vim.api.nvim_set_current_win(_G.home)
-_G.press(_G.s.widget.buf_nrs.chat, "a")
+_G.press(_G.s.widget.buf_nrs.agent, "a")
 ]])
 
         assert.equal(
@@ -498,8 +498,8 @@ _G.press(_G.s.widget.buf_nrs.chat, "a")
         child.lua([[
 vim.cmd("tabnew")
 _G.chat_win = vim.api.nvim_get_current_win()
-vim.api.nvim_win_set_buf(0, _G.s.widget.buf_nrs.chat)
-_G.press(_G.s.widget.buf_nrs.chat, "i")
+vim.api.nvim_win_set_buf(0, _G.s.widget.buf_nrs.agent)
+_G.press(_G.s.widget.buf_nrs.agent, "i")
 _G.input_win = vim.api.nvim_get_current_win()
 ]])
 
@@ -519,8 +519,8 @@ _G.input_win = vim.api.nvim_get_current_win()
         child.lua([[
 vim.fn.setreg('"', "pasted")
 vim.cmd("tabnew")
-vim.api.nvim_win_set_buf(0, _G.s.widget.buf_nrs.chat)
-_G.press(_G.s.widget.buf_nrs.chat, "p")
+vim.api.nvim_win_set_buf(0, _G.s.widget.buf_nrs.agent)
+_G.press(_G.s.widget.buf_nrs.agent, "p")
 ]])
 
         assert.equal(
@@ -627,7 +627,7 @@ end
             child.lua([[_G.request()]])
             child.flush()
             child.lua(
-                [[_G.press(_G.s.widget.buf_nrs.chat, ...)]],
+                [[_G.press(_G.s.widget.buf_nrs.agent, ...)]],
                 { lhs }
             )
             child.flush()
@@ -659,7 +659,7 @@ end
             assert.equal(vim.NIL, child.lua_get("_G.title()"))
             assert.equal(
                 "",
-                child.lua_get([[vim.api.nvim_buf_call(_G.s.widget.buf_nrs.chat, function()
+                child.lua_get([[vim.api.nvim_buf_call(_G.s.widget.buf_nrs.agent, function()
     return vim.fn.maparg("<localLeader>v", "n")
 end)]])
             )
@@ -673,7 +673,7 @@ _G.old = _G.transcript("c1").bufnr
 vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
 ]])
             child.flush()
-            child.lua([[_G.press(_G.s.widget.buf_nrs.chat, "<localLeader>v")]])
+            child.lua([[_G.press(_G.s.widget.buf_nrs.agent, "<localLeader>v")]])
             child.flush()
 
             assert.is_true(child.lua_get("_G.transcript('c1').bufnr ~= _G.old"))
@@ -731,7 +731,7 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
         it("hidden with the chat in another tab, badges the chat", function()
             child.lua([[
 _G.badge = function()
-    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.chat).badge
+    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.agent).badge
 end
 vim.cmd("tabnew")
 _G.request()
@@ -751,7 +751,7 @@ _G.request()
         it("with the chat not shown, badges the chat and shows when :Agentic shows it", function()
             child.lua([[
 _G.badge = function()
-    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.chat).badge
+    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.agent).badge
 end
 -- A message keeps the session alive while its chat is not shown.
 table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
@@ -785,7 +785,7 @@ end
 _G.request()
 ]])
         child.flush()
-        child.lua([[_G.press(_G.s.widget.buf_nrs.chat, "<localLeader>v")]])
+        child.lua([[_G.press(_G.s.widget.buf_nrs.agent, "<localLeader>v")]])
         child.flush()
 
         assert.is_true(child.lua_get([[(function()

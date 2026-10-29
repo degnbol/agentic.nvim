@@ -38,7 +38,7 @@ end
             )
         )
         assert.equal(
-            child.lua_get("_G.s.widget.buf_nrs.chat"),
+            child.lua_get("_G.s.widget.buf_nrs.agent"),
             child.api.nvim_get_current_buf()
         )
         assert.is_true(child.lua_get("_G.load_cb == nil"))

@@ -286,13 +286,13 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
         child.lua([[
 table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
 ]])
-        local old_chat = child.lua_get("_G.s.widget.buf_nrs.chat")
+        local old_chat = child.lua_get("_G.s.widget.buf_nrs.agent")
         local old_input = child.lua_get("_G.s.widget.buf_nrs.input")
 
         child.new_session()
 
         local new_chat = child.lua_get(
-            [[require("agentic.session_registry").owner_of_buf(0).widget.buf_nrs.chat]]
+            [[require("agentic.session_registry").owner_of_buf(0).widget.buf_nrs.agent]]
         )
         assert.equal(new_chat, child.api.nvim_win_get_buf(home))
         assert.equal(home, child.api.nvim_get_current_win())
@@ -304,7 +304,7 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
     it("new_session from the input of an unused session destroys it", function()
         open_into_input()
         local old_id = child.lua_get("_G.s.id")
-        local old_chat = child.lua_get("_G.s.widget.buf_nrs.chat")
+        local old_chat = child.lua_get("_G.s.widget.buf_nrs.agent")
         local old_input = child.lua_get("_G.s.widget.buf_nrs.input")
 
         child.new_session()
@@ -337,7 +337,7 @@ _G.first = require("agentic.session_registry").by_id[...]
         )
         -- Both chats show in this tabpage; enter the first one last.
         child.api.nvim_set_current_win(
-            child.lua_get("vim.fn.win_findbuf(_G.first.widget.buf_nrs.chat)[1]")
+            child.lua_get("vim.fn.win_findbuf(_G.first.widget.buf_nrs.agent)[1]")
         )
         child.api.nvim_set_current_win(source_win)
 

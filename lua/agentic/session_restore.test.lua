@@ -553,7 +553,7 @@ describe("SessionRestore", function()
                 local mock_session = session_with_messages()
                 local new_session = create_mock_session()
                 local chat = vim.api.nvim_create_buf(false, true)
-                new_session.widget.buf_nrs = { chat = chat }
+                new_session.widget.buf_nrs = { agent = chat }
                 new_session.widget.show = require("agentic.ui.chat_widget").show
                 new_session.widget.show_in = spy.new(function() end)
                 setup_list_stub()

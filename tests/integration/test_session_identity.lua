@@ -24,7 +24,7 @@ describe("Session identity", function()
 _G.owner = require("agentic.session_registry").current()
 ]])
         child.cmd("tabnew")
-        child.cmd("buffer " .. child.lua_get("_G.owner.widget.buf_nrs.chat"))
+        child.cmd("buffer " .. child.lua_get("_G.owner.widget.buf_nrs.agent"))
         return owner_tab, child.api.nvim_get_current_tabpage()
     end
 
@@ -62,7 +62,7 @@ _G.owner.stop_generation = function() _G.stopped = true end
         -- The chat stays in the window that already shows it.
         assert.equal(foreign_win, child.api.nvim_get_current_win())
         assert.equal(
-            child.lua_get("_G.owner.widget.buf_nrs.chat"),
+            child.lua_get("_G.owner.widget.buf_nrs.agent"),
             child.api.nvim_get_current_buf()
         )
     end)

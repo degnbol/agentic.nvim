@@ -371,7 +371,7 @@ imperative open/close survives re-layout. Model the new panel on that.
 (`window_decoration.lua:191-203`). A closed panel has no window and no
 header, so a count rendered there is invisible exactly when the panel is
 toggled off — its normal state. Put the count in the chat header instead,
-via `self.widget:render_header("chat", …)`, where `HeaderParts.context`
+via `self.widget:render_header("agent", …)`, where `HeaderParts.context`
 already carries the context percentage and trust state.
 
 ### Naming

@@ -10,7 +10,7 @@ describe("Rendering in any window", function()
         child.flush()
         child.lua([[
 _G.s = require("agentic.session_registry").current()
-_G.chat = _G.s.widget.buf_nrs.chat
+_G.chat = _G.s.widget.buf_nrs.agent
 ]])
     end)
 
@@ -261,7 +261,7 @@ _G.s.widget:show_in(_G.home)
 
     it("a window showing the chat later gets its winbar", function()
         -- The default header functions return nil: no winbar.
-        child.lua([[require("agentic.config").headers.chat = nil]])
+        child.lua([[require("agentic.config").headers.agent = nil]])
         local winid = show_chat_in_new_tab()
         assert.truthy(win_opt(winid, "winbar"):find("Agentic Chat", 1, true))
     end)

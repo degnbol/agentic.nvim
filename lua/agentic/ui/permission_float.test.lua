@@ -81,7 +81,7 @@ describe("agentic.ui.PermissionFloat", function()
             })
 
             writer = MessageWriter:new(chat_bufnr)
-            float = PermissionFloat:new(writer, { chat = chat_bufnr })
+            float = PermissionFloat:new(writer, { agent = chat_bufnr })
         end)
 
         after_each(function()

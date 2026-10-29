@@ -23,7 +23,7 @@ CONTENTS                                                    *agentic-contents*
     6. Keymaps ............................................. |agentic-keymaps|
        6.1 Widget keymaps ........................... |agentic-keymaps-widget|
        6.2 Prompt keymaps ........................... |agentic-keymaps-prompt|
-       6.3 Chat keymaps ............................... |agentic-keymaps-chat|
+       6.3 Agent keymaps ............................. |agentic-keymaps-agent|
        6.4 Permission keymaps ................... |agentic-keymaps-permission|
        6.5 Plug mappings ............................. |agentic-plug-mappings|
     7. Commands ........................................... |agentic-commands|
@@ -195,7 +195,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     past the edge of a window narrower than `min_wrap_width`.
 
     Sub-tables for individual panels:
-      `chat`          `{ win_opts = {} }`
+      `agent`         `{ win_opts = {} }`
       `input`         `{ height = 10, win_opts = {} }`
       `code`          `{ max_height = 15, win_opts = {} }`
       `files`         `{ max_height = 10, win_opts = {} }`
@@ -215,7 +215,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                                   *agentic-config-keymaps-tbl*
 `keymaps` table
-    Keybindings for the `widget`, `prompts`, `prompt`, `chat` and
+    Keybindings for the `widget`, `prompts`, `prompt`, `agent` and
     `permission` scopes. See |agentic-keymaps| for defaults.
     Each value can be:
       - A string (`"<CR>"`)
@@ -361,7 +361,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                                  *agentic-config-settings-tbl*
 `settings` table
-    `move_cursor_to_chat_on_submit`  boolean (default: false)
+    `move_cursor_to_agent_on_submit` boolean (default: false)
         Move focus to the chat window after submitting a prompt.
     `send_register`                  string | nil (default: nil)
         Register to copy the sent text into before a partial send deletes
@@ -564,7 +564,7 @@ Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
 What the queue bindings dispatch, and when, is in |agentic-queue|.
 
 ------------------------------------------------------------------------------
-6.3 CHAT KEYMAPS                                        *agentic-keymaps-chat*
+6.3 AGENT KEYMAPS                                      *agentic-keymaps-agent*
 
     Key    Mode    Description ~
     `[[`     n       Previous prompt or notice
@@ -676,7 +676,7 @@ appear in completion.
 
 `/grant`, `/rename`, `/context`, a model or provider switch and a resumed
 session report back in the chat as a notice heading. `[[` and `]]` stop on
-notices as well as prompts (|agentic-keymaps-chat|).
+notices as well as prompts (|agentic-keymaps-agent|).
 
 ------------------------------------------------------------------------------
 7.4 :AGENTIC                                           *agentic-commands-open*
@@ -901,7 +901,7 @@ without the chat's window, a key that opens a panel (an insert key, `p`,
 first, the chat's window. The panels stack
 below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
 panels open while they list something. The input opens on the first insert
-key (|agentic-keymaps-chat|). `<localLeader>f` toggles the file activity
+key (|agentic-keymaps-agent|). `<localLeader>f` toggles the file activity
 panel.
 
 When the chat's window closes or shows another buffer, its panels close.
@@ -1041,7 +1041,9 @@ shows its subagent as working while it works. It also has a row for each end
 of a run, titled `completed`, `cancelled`, `failed`, `ended`, `unknown` or
 the provider's stop reason, and signed with that status's icon
 (|agentic-config-status_icons|), else 󰈼. The header shows how the last run
-ended. A resumed subagent continues in the same transcript.
+ended. A resumed subagent continues in the same transcript. The main agent's
+buffer is `agentic://<id>/agent`, or `agentic://<id>/agent/<title>` once the
+session has a title.
 
 A message between agents, the launch prompt included, has a row in the chat
 or transcript of each agent it joins. Each row holds the message: its first

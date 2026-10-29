@@ -22,7 +22,7 @@ describe("agentic.ui.WindowDecoration", function()
 
         bufnr = vim.api.nvim_create_buf(false, true)
         vim.b[bufnr].agentic_session_id = 7
-        vim.b[bufnr].agentic_window = "chat"
+        vim.b[bufnr].agentic_window = "agent"
         winid = vim.api.nvim_open_win(bufnr, true, { split = "right", win = 0 })
     end)
 
@@ -39,17 +39,17 @@ describe("agentic.ui.WindowDecoration", function()
     describe("buffer_name", function()
         it("keeps a `/` in the title out of the name's tail", function()
             local name = WindowDecoration.buffer_name(bufnr, "fix a/b")
-            assert.equal("agentic://7/chat/fix a-b", name)
+            assert.equal("agentic://7/agent/fix a-b", name)
             assert.equal("fix a-b", vim.fn.fnamemodify(name, ":t"))
         end)
 
         it("keeps a title apart from a panel's name", function()
             assert.equal(
-                "agentic://7/chat",
+                "agentic://7/agent",
                 WindowDecoration.buffer_name(bufnr)
             )
             assert.equal(
-                "agentic://7/chat/input",
+                "agentic://7/agent/input",
                 WindowDecoration.buffer_name(bufnr, "input")
             )
         end)

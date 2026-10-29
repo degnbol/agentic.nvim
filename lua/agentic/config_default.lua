@@ -46,7 +46,7 @@
 --- @field widget table<string, agentic.UserConfig.KeymapValue>
 --- @field prompts table<string, agentic.UserConfig.PromptSpec>
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
---- @field chat table<string, agentic.UserConfig.KeymapValue>
+--- @field agent table<string, agentic.UserConfig.KeymapValue>
 --- @field permission table<string, string> Key for permission responses by option kind
 --- @field permission_open agentic.UserConfig.Keymaps.PermissionOpen
 
@@ -171,7 +171,7 @@ local ConfigDefault = {
         },
     },
 
-    --- @class agentic.UserConfig.Windows.Chat
+    --- @class agentic.UserConfig.Windows.Agent
     --- @field win_opts? agentic.UserConfig.WinOpts
 
     --- @class agentic.UserConfig.Windows.Input
@@ -208,7 +208,7 @@ local ConfigDefault = {
     --- @field stack agentic.ui.ChatWidget.StackPanel[] Top-to-bottom order of the panels below the chat, each listed once
     --- @field max_wrap_width integer
     --- @field min_wrap_width integer
-    --- @field chat agentic.UserConfig.Windows.Chat
+    --- @field agent agentic.UserConfig.Windows.Agent
     --- @field input agentic.UserConfig.Windows.Input
     --- @field code agentic.UserConfig.Windows.Code
     --- @field files agentic.UserConfig.Windows.Files
@@ -220,7 +220,7 @@ local ConfigDefault = {
         stack = { "todos", "code", "files", "diagnostics", "activity", "input" },
         max_wrap_width = 80,
         min_wrap_width = 40,
-        chat = { win_opts = {} },
+        agent = { win_opts = {} },
         input = { height = 10, win_opts = {} },
         code = { max_height = 15, win_opts = {} },
         files = { max_height = 10, win_opts = {} },
@@ -319,7 +319,7 @@ local ConfigDefault = {
         },
 
         --- Key bindings for the chat buffer
-        chat = {
+        agent = {
             prev_prompt = "[[",
             next_prompt = "]]",
         },
@@ -446,7 +446,7 @@ local ConfigDefault = {
     headers = {
         input = function() end,
         files = function() end,
-        chat = function() end,
+        agent = function() end,
         code = function() end,
         diagnostics = function() end,
         todos = function() end,
@@ -500,14 +500,14 @@ local ConfigDefault = {
 
     --- Control various behaviors and features of the plugin
     --- @class agentic.UserConfig.Settings
-    --- @field move_cursor_to_chat_on_submit boolean
+    --- @field move_cursor_to_agent_on_submit boolean
     --- @field send_register? string
     --- @field write_submit boolean
     settings = {
 
         --- When true, focus moves to the chat window after submitting a
         --- prompt. When false, the input window keeps focus.
-        move_cursor_to_chat_on_submit = false,
+        move_cursor_to_agent_on_submit = false,
 
         --- Register name to copy sent text into before deleting on
         --- partial-send. Nil writes no register.

@@ -144,7 +144,7 @@ end
 --- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
 function SessionManager:_notify_attention(badge, skip_badge)
     local is_chat_focused = vim.api.nvim_get_current_buf()
-        == self.widget.buf_nrs.chat
+        == self.widget.buf_nrs.agent
     if not is_chat_focused then
         SessionManager._ring_bell()
     end
@@ -163,7 +163,7 @@ function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     SessionManager._ring_bell()
     self.widget:set_badge("[?]", badge_bufnr)
     local title = self.chat_history.title
-    local where = anchor_bufnr == self.widget.buf_nrs.chat
+    local where = anchor_bufnr == self.widget.buf_nrs.agent
             and string.format(
                 "its %s buffer",
                 vim.b[anchor_bufnr].agentic_window
@@ -248,7 +248,7 @@ function SessionManager:_sync_modified(history)
     end
     local unsaved = history.dirty and not self._loading
     -- Nil once the widget is destroyed.
-    local chat = self.widget.buf_nrs.chat
+    local chat = self.widget.buf_nrs.agent
     if chat and vim.api.nvim_buf_is_valid(chat) then
         vim.bo[chat].modified = unsaved or self._prompt_pending > 0
     end
@@ -394,8 +394,8 @@ function SessionManager:new()
         end
     end
 
-    self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.chat)
-    self.message_writer = MessageWriter:new(self.widget.buf_nrs.chat, function()
+    self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.agent)
+    self.message_writer = MessageWriter:new(self.widget.buf_nrs.agent, function()
         return self.widget:home_win()
     end)
 
@@ -437,7 +437,7 @@ function SessionManager:new()
         self:_on_permission_decided(tool_call_id, deciders)
     end
 
-    States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.chat)
+    States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.agent)
 
     self.config_options = AgentConfigOptions:new(
         function(mode_id, is_legacy, opts)
@@ -454,7 +454,7 @@ function SessionManager:new()
     for panel, bufnr in pairs(self.widget.buf_nrs) do
         self:_setup_session_buf(
             bufnr,
-            panel == "chat" and self.message_writer or nil
+            panel == "agent" and self.message_writer or nil
         )
     end
 
@@ -689,7 +689,7 @@ end
 --- `bufhidden=wipe` would.
 function SessionManager:_setup_buffer_lifecycle()
     local buf_nrs = self.widget.buf_nrs
-    local chat = buf_nrs.chat
+    local chat = buf_nrs.agent
 
     vim.api.nvim_create_autocmd("BufWriteCmd", {
         buffer = chat,
@@ -760,7 +760,7 @@ end
 --- plus the running turn. What the history does not hold is not rendered
 --- again: notices, errors and the session-start marker.
 function SessionManager:_reload_chat()
-    local chat = self.widget.buf_nrs.chat
+    local chat = self.widget.buf_nrs.agent
     self.message_writer:reset()
     ChatBuffer.start(chat)
     SessionRestore.replay_messages(
@@ -921,7 +921,7 @@ end
 --- @param bufnr integer
 --- @return agentic.ui.MessageWriter|nil
 function SessionManager:_writer_of_buf(bufnr)
-    if bufnr == self.widget.buf_nrs.chat then
+    if bufnr == self.widget.buf_nrs.agent then
         return self.message_writer
     end
     for _, agent in pairs(self._agents) do
@@ -1218,7 +1218,7 @@ end
 function SessionManager:_buffer_name(session_id)
     local agent = self._agents[session_id]
     if not agent then
-        return vim.api.nvim_buf_get_name(self.widget.buf_nrs.chat)
+        return vim.api.nvim_buf_get_name(self.widget.buf_nrs.agent)
     end
     return agent.transcript
         and vim.api.nvim_buf_get_name(agent.transcript.bufnr)
@@ -2950,7 +2950,7 @@ function SessionManager:_update_chat_header()
     end
 
     local context = #parts > 0 and table.concat(parts, " · ") or nil
-    self.widget:render_header("chat", context)
+    self.widget:render_header("agent", context)
 end
 
 --- How a model id reads to a human: its display name and description. Falls

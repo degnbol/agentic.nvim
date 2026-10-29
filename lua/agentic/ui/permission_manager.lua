@@ -64,7 +64,7 @@ function PermissionManager:new(message_writer, buf_nrs, writer_for)
     local instance = setmetatable({
         message_writer = message_writer,
         _writer_for = writer_for,
-        _buf_nrs = buf_nrs or { chat = message_writer.bufnr },
+        _buf_nrs = buf_nrs or { agent = message_writer.bufnr },
         permission_float = PermissionFloat:new(message_writer, buf_nrs),
         queue = {},
         current_request = nil,

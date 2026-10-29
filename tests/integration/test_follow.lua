@@ -10,7 +10,7 @@ describe("Follow", function()
         child.flush()
         child.lua([[
 _G.s = require("agentic.session_registry").current()
-_G.chat = _G.s.widget.buf_nrs.chat
+_G.chat = _G.s.widget.buf_nrs.agent
 _G.win = _G.s.widget:home_win()
 -- The window the tests focus to leave the chat unfocused.
 _G.s.widget:input_win()

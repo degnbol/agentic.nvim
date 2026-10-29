@@ -73,7 +73,7 @@ error("not in the chat: " .. text)
     local function cursor_on_prose(text)
         child.lua(
             [[
-local chat = _G.s.widget.buf_nrs.chat
+local chat = _G.s.widget.buf_nrs.agent
 vim.bo[chat].modifiable = true
 vim.api.nvim_buf_set_lines(chat, -1, -1, false, { ... })
 vim.api.nvim_set_current_win(_G.chat_win)
@@ -163,7 +163,7 @@ vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(chat), 0 })
         assert.is_false(ok)
         assert.is_not_nil(tostring(err):find("E347", 1, true))
         assert.equal(
-            child.lua_get("_G.s.widget.buf_nrs.chat"),
+            child.lua_get("_G.s.widget.buf_nrs.agent"),
             child.api.nvim_get_current_buf()
         )
     end)

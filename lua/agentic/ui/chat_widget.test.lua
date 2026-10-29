@@ -97,7 +97,7 @@ describe("agentic.ui.ChatWidget", function()
         end)
 
         it("creates widget with valid buffer IDs", function()
-            assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.chat))
+            assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.agent))
             assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.input))
             assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.code))
             assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.files))
@@ -110,7 +110,7 @@ describe("agentic.ui.ChatWidget", function()
             local home = show(widget)
 
             assert.equal(home, widget:home_win())
-            assert.equal(widget.buf_nrs.chat, vim.api.nvim_win_get_buf(home))
+            assert.equal(widget.buf_nrs.agent, vim.api.nvim_win_get_buf(home))
             assert.is_nil(widget.win_nrs.input)
             assert.is_nil(widget.win_nrs.code)
             assert.is_nil(widget.win_nrs.files)
@@ -122,7 +122,7 @@ describe("agentic.ui.ChatWidget", function()
             fill_buffer(widget, "code", { "line1" })
             local winid = vim.api.nvim_get_current_win()
 
-            vim.cmd("buffer " .. widget.buf_nrs.chat)
+            vim.cmd("buffer " .. widget.buf_nrs.agent)
 
             assert.equal(winid, widget:home_win())
             assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.code))
@@ -166,7 +166,7 @@ describe("agentic.ui.ChatWidget", function()
 
             widget:show_in(float)
 
-            assert.equal(widget.buf_nrs.chat, vim.api.nvim_win_get_buf(float))
+            assert.equal(widget.buf_nrs.agent, vim.api.nvim_win_get_buf(float))
             assert.is_nil(widget:home_win())
             assert.is_nil(widget.win_nrs.code)
             vim.api.nvim_win_close(float, true)
@@ -476,7 +476,7 @@ describe("agentic.ui.ChatWidget", function()
                 assert.is_false(vim.api.nvim_win_is_valid(input_win))
                 assert.is_true(vim.api.nvim_win_is_valid(other))
                 assert.is_nil(widget:home_win())
-                assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.chat))
+                assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.agent))
             end)
 
             it("a refused :q on the home brings its panels back", function()
@@ -491,7 +491,7 @@ describe("agentic.ui.ChatWidget", function()
                 -- QuitPre without the quit, as when vim refuses it.
                 vim.api.nvim_exec_autocmds(
                     "QuitPre",
-                    { buffer = widget.buf_nrs.chat }
+                    { buffer = widget.buf_nrs.agent }
                 )
                 assert.is_nil(widget.win_nrs.code)
                 assert.is_nil(widget.win_nrs.input)
@@ -514,7 +514,7 @@ describe("agentic.ui.ChatWidget", function()
                 vim.api.nvim_set_current_win(home)
                 vim.api.nvim_exec_autocmds(
                     "QuitPre",
-                    { buffer = widget.buf_nrs.chat }
+                    { buffer = widget.buf_nrs.agent }
                 )
                 deferred.drain()
 
@@ -590,7 +590,7 @@ describe("agentic.ui.ChatWidget", function()
 
                     assert.is_true(widget:show_in(winid))
                     assert.equal(
-                        widget.buf_nrs.chat,
+                        widget.buf_nrs.agent,
                         vim.api.nvim_win_get_buf(winid)
                     )
                 end)
@@ -605,13 +605,13 @@ describe("agentic.ui.ChatWidget", function()
                     widget:reveal(target)
 
                     assert.equal(
-                        widget.buf_nrs.chat,
+                        widget.buf_nrs.agent,
                         vim.api.nvim_win_get_buf(target)
                     )
                     assert.equal(target, widget:home_win())
                     assert.equal(target, vim.api.nvim_get_current_win())
                     assert.are_not.equal(
-                        widget.buf_nrs.chat,
+                        widget.buf_nrs.agent,
                         vim.api.nvim_win_get_buf(current)
                     )
                 end)
@@ -641,7 +641,7 @@ describe("agentic.ui.ChatWidget", function()
                     local home = widget:home_win()
                     assert.equal(home, vim.api.nvim_get_current_win())
                     assert.equal(
-                        widget.buf_nrs.chat,
+                        widget.buf_nrs.agent,
                         vim.api.nvim_win_get_buf(home)
                     )
                     assert.equal(
@@ -663,7 +663,7 @@ describe("agentic.ui.ChatWidget", function()
                     pcall(vim.cmd.tabclose)
                 end)
                 local second = vim.api.nvim_get_current_win()
-                vim.api.nvim_win_set_buf(second, widget.buf_nrs.chat)
+                vim.api.nvim_win_set_buf(second, widget.buf_nrs.agent)
                 assert.equal(first, widget:home_win())
 
                 widget:toggle_activity_window()
@@ -941,7 +941,7 @@ describe("agentic.ui.ChatWidget", function()
 
             assert.is_true(vim.api.nvim_win_is_valid(widget_a.win_nrs.code))
             assert.equal(
-                widget_a.buf_nrs.chat,
+                widget_a.buf_nrs.agent,
                 vim.api.nvim_win_get_buf(widget_a:home_win())
             )
         end)
@@ -1027,7 +1027,7 @@ describe("agentic.ui.ChatWidget", function()
             vim.cmd("tabnew")
             widget = new_widget(spy.new(function() end) --[[@as function]])
             show(widget)
-            writer = MessageWriter:new(widget.buf_nrs.chat)
+            writer = MessageWriter:new(widget.buf_nrs.agent)
         end)
 
         after_each(function()
@@ -1042,7 +1042,7 @@ describe("agentic.ui.ChatWidget", function()
         --- 0-indexed rows carrying a user-action marker.
         local function marker_rows()
             local marks = vim.api.nvim_buf_get_extmarks(
-                widget.buf_nrs.chat,
+                widget.buf_nrs.agent,
                 MessageWriter.NS_USER_ACTIONS,
                 0,
                 -1,
@@ -1074,7 +1074,7 @@ describe("agentic.ui.ChatWidget", function()
             -- agent-authored ## line.
             vim.api.nvim_win_set_cursor(
                 0,
-                { vim.api.nvim_buf_line_count(widget.buf_nrs.chat), 0 }
+                { vim.api.nvim_buf_line_count(widget.buf_nrs.agent), 0 }
             )
             press("[[")
             assert.equal(second, cursor_row())
@@ -1113,7 +1113,7 @@ describe("agentic.ui.ChatWidget", function()
         it("reset() removes region rails", function()
             local function decoration_marks()
                 return vim.api.nvim_buf_get_extmarks(
-                    widget.buf_nrs.chat,
+                    widget.buf_nrs.agent,
                     Renderer.NS_DECORATIONS,
                     0,
                     -1,
@@ -1369,10 +1369,10 @@ describe("agentic.ui.ChatWidget", function()
             end)
 
             it("moves the cursor to the chat when configured", function()
-                local original = Config.settings.move_cursor_to_chat_on_submit
-                Config.settings.move_cursor_to_chat_on_submit = true
+                local original = Config.settings.move_cursor_to_agent_on_submit
+                Config.settings.move_cursor_to_agent_on_submit = true
                 MiniTest.finally(function()
-                    Config.settings.move_cursor_to_chat_on_submit = original
+                    Config.settings.move_cursor_to_agent_on_submit = original
                 end)
                 local deferred = capture_deferred()
                 set_input({ "line1" })
@@ -1791,7 +1791,7 @@ describe("agentic.ui.ChatWidget", function()
                 stage_spy:revert()
             end)
             local keymaps =
-                vim.api.nvim_buf_get_keymap(widget.buf_nrs.chat, "n")
+                vim.api.nvim_buf_get_keymap(widget.buf_nrs.agent, "n")
             local canned = vim.tbl_filter(function(km)
                 return km.desc == "Input prompt: Continue"
             end, keymaps)[1]
