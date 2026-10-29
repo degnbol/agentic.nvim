@@ -173,21 +173,21 @@ describe("native subagent sessions", function()
         assert.equal("completed", child.lua_get([[_G.block("aa11bb22cc33dd44").status]]))
         assert.is_true(child.lua_get([[_G.block("aa11bb22cc33dd44").body == nil]]))
         local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-        assert.truthy(chat:find("## Find the files.\n" .. name, 1, true))
+        assert.truthy(chat:find("## find it\n" .. name, 1, true))
         local transcript = child.lua_get([[_G.ttext("aa11bb22cc33dd44")]])
         assert.truthy(transcript:find("## Blocking? find it", 1, true))
         assert.equal(
             1,
-            count(transcript, "## Find the files.\n" .. child.lua_get("_G.chat_name()"))
+            count(transcript, "## find it\n" .. child.lua_get("_G.chat_name()"))
         )
-        -- Both rows of a launch carry its glyph.
+        -- Both rows of the first delegation carry the task glyph.
         assert.equal(
-            child.lua_get("_G.G.MESSAGE.launch"),
-            child.lua_get([[_G.sign_of("aa11bb22cc33dd44", "Find the files.")]])
+            child.lua_get("_G.G.MESSAGE.task"),
+            child.lua_get([[_G.sign_of("aa11bb22cc33dd44", "find it")]])
         )
         assert.equal(
-            child.lua_get("_G.G.MESSAGE.launch"),
-            child.lua_get([[_G.chat_sign_of("Find the files.")]])
+            child.lua_get("_G.G.MESSAGE.task"),
+            child.lua_get([[_G.chat_sign_of("find it")]])
         )
         assert.is_true(child.lua_get([[_G.s._agents.aa11bb22cc33dd44.open]]))
     end)
@@ -527,7 +527,7 @@ _G.spawn("c1")
 _G.message("toolu_c1", "root", "c1", "Find the files.")
 ]])
 
-        assert.equal(1, count(child.lua_get([[_G.ttext("c1")]]), "## Find the files."))
+        assert.equal(1, count(child.lua_get([[_G.ttext("c1")]]), "## find it"))
     end)
 
     it("a child's chunks and tool calls land in its transcript", function()
@@ -698,7 +698,7 @@ _G.state("c1", { state = "running" })
             child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
         )
         local transcript = child.lua_get([[_G.ttext("c1")]])
-        assert.truthy(transcript:find("## Find the files.", 1, true))
+        assert.truthy(transcript:find("## find it", 1, true))
         assert.truthy(transcript:find("## completed", 1, true))
     end)
 
@@ -836,7 +836,7 @@ vim.cmd("tab sbuffer " .. _G.transcript("c1").bufnr)
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 _G.rows = {}
 for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
-    if line == "## Find the files." or line == "## More." then
+    if line == "## find it" or line == "## More." then
         table.insert(_G.rows, i)
     end
 end
@@ -887,12 +887,12 @@ _G.saved.messages = { {
     body = { "Find it." },
     subagent = { label = "finder", agent_id = "c1", mode = "blocking", confirmed = true },
 }, {
-    type = "session_message", message_id = "toolu_1", kind = "launch", view = "sent",
+    type = "session_message", message_id = "toolu_1", kind = "task", view = "sent",
     sender_session_id = "sid-x", recipient_session_id = "c1", text = "Find it.",
 } }
 _G.saved.subagents = { c1 = { task_id = "toolu_1" } }
 _G.saved.subagent_messages = {
-    { type = "session_message", message_id = "toolu_1", kind = "launch", view = "received",
+    { type = "session_message", message_id = "toolu_1", kind = "task", view = "received",
       sender_session_id = "sid-x", recipient_session_id = "c1", text = "Find it.",
       parent_tool_use_id = "toolu_1" },
     { type = "session_message", message_id = "toolu_h", kind = "result", view = "sent",
@@ -1046,7 +1046,7 @@ _G.load_cb({}, nil)
         load()
 
         -- Never replayed: only the file holds it.
-        assert.equal("result", child.lua_get([[_G.s._message_kinds.toolu_h]]))
+        assert.equal("result", child.lua_get([[_G.s._message_infos.toolu_h.kind]]))
         assert.is_true(child.lua_get([[_G.s._delegated.c1]]))
         assert.is_true(child.lua_get([[_G.s._delegated["sid-x"] == nil]]))
     end)

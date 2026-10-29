@@ -1046,13 +1046,14 @@ buffer is `agentic://<id>/agent`, or `agentic://<id>/agent/<title>` once the
 session has a title.
 
 A message between agents, the launch prompt included, has a row in the chat
-or transcript of each agent it joins. Each row holds the message: its first
-line as the heading, the buffer name of the other end under it, and the rest
-folded closed. The sign gives the kind:
+or transcript of each agent it joins. Each row holds the message: a heading,
+the buffer name of the other end under it, and the rest folded closed. The
+launch prompt is headed by the subagent's description when it has one, any
+other message by its first sentence. The sign gives the kind:
 
     Sign  Kind ~
-    󰚩     Launch: the first message to a subagent
-    󰙓     Task: the first message to a subagent since its last run ended
+    󰙓     Task: the first message to a subagent, or the first since its last
+          run ended
     󰌑     Result: from a subagent to the agent that started it
     󰒊     Any other message, sent
     󰇮     Any other message, received

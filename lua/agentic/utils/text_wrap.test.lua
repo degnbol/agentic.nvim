@@ -676,6 +676,45 @@ describe("agentic.utils.TextWrap", function()
         end)
     end)
 
+    describe("split_sentence", function()
+        --- @param line string
+        --- @return (string|nil)[]
+        local function split(line)
+            return { TextWrap.split_sentence(line) }
+        end
+
+        it("splits at the first sentence end followed by a new sentence", function()
+            assert.same({ "Do it.", "Then check." }, split("Do it. Then check."))
+            assert.same({ "Why?!", "Because." }, split("Why?! Because."))
+        end)
+
+        it("does not split a line with one sentence", function()
+            assert.same({ "Done." }, split("Done."))
+            assert.same({ "Done. " }, split("Done. "))
+        end)
+
+        it("ends no sentence before a lowercase word", function()
+            assert.same({ "Fix e.g. the bug" }, split("Fix e.g. the bug"))
+        end)
+
+        it("ends no sentence inside parentheses or inline code", function()
+            assert.same({ "Done (see a. B.) now.", "Later." }, split("Done (see a. B.) now. Later."))
+            assert.same({ "Run `a. B` now.", "Later." }, split("Run `a. B` now. Later."))
+            assert.same(
+                { "Open (unbalanced.", "Then x." },
+                split("Open (unbalanced. Then x.")
+            )
+        end)
+
+        it("splits off a parenthetical that ends a line with no sentence end", function()
+            assert.same({ "Launched", "(never quote it)" }, split("Launched (never quote it)"))
+            assert.same({ "(a) foo", "(b)" }, split("(a) foo (b)"))
+            assert.same({ "Run all (unit) and report" }, split("Run all (unit) and report"))
+            assert.same({ "(aside)" }, split("(aside)"))
+            assert.same({ "foo(bar)" }, split("foo(bar)"))
+        end)
+    end)
+
     describe("head_and_rest", function()
         it("splits off the first non-blank line and trims blank edges", function()
             local head, rest =

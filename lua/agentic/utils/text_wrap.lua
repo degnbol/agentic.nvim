@@ -429,6 +429,30 @@ function M.head_and_rest(text)
     return lines[i_head], vim.list_slice(lines, i_first, i_last)
 end
 
+--- Split a line into its first sentence and the rest. A sentence ends at a
+--- `.`, `!` or `?` followed by a word that does not start lowercase (so
+--- `e.g. the` does not end one), outside balanced parentheses and inline code.
+--- A line with no sentence end splits before a parenthetical that ends it,
+--- unless that is the whole line.
+--- @param line string
+--- @return string head
+--- @return string|nil tail Nil when the line does not split
+function M.split_sentence(line)
+    local function blank_out(span)
+        return ("_"):rep(#span)
+    end
+    local masked = line:gsub("%b()", blank_out):gsub("`[^`]*`", blank_out)
+    local i_end = masked:find("[.!?]%s+[^%l%s]")
+    if i_end then
+        return line:sub(1, i_end), vim.trim(line:sub(i_end + 1))
+    end
+    local head, parenthetical = line:match("^(.-%S)%s+(%b())%s*$")
+    if head then
+        return head, parenthetical
+    end
+    return line, nil
+end
+
 --- Prepend the newlines `text` needs to start a new paragraph: one blank line
 --- after what precedes it.
 --- @param text string Text that starts a new paragraph

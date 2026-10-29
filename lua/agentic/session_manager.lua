@@ -91,7 +91,7 @@ end
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
 --- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
---- @field _message_kinds table<string, agentic.SessionMessageKind> Kind of each session message by message id, decided at its first view
+--- @field _message_infos table<string, agentic.SessionMessageInfo> Kind and summary of each session message by message id, decided at its first view
 --- @field _delegated table<string, true> Session ids of the subagents a delegation has reached
 --- @field file_list agentic.ui.FileList
 --- @field file_activity agentic.ui.FileActivity
@@ -337,7 +337,7 @@ function SessionManager:new()
         _agent_by_task = {},
         _tool_call_owner = {},
         _seen_messages = {},
-        _message_kinds = {},
+        _message_infos = {},
         _delegated = {},
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
@@ -1278,43 +1278,45 @@ function SessionManager:_on_subagent_update(update, source_session_id)
     end
 end
 
---- Decide the kind of a session message at its first view and record the
---- delegation it makes; later views reuse the kind. Relies on the bridge
---- announcing an agent before any of its views, which sets the
+--- Decide the kind and summary of a session message at its first view and
+--- record the delegation it makes; later views reuse them. Relies on the
+--- bridge announcing an agent before any of its views, which sets the
 --- `parent_session_id` the result rule reads.
 ---
 --- `result` when the sender is a child of the recipient. A message to a
---- subagent delegates to it: `launch` when it is the first delegation to the
---- agent, `task` when the agent's last row in the history is the end of a
---- run, else `message`. Anything else is a `message`.
+--- subagent delegates to it: `task` when it is the first delegation to the
+--- agent or the agent's last row in the history is the end of a run, else
+--- `message`. Anything else is a `message`. The first delegation is the
+--- agent's launch prompt, summarised by the agent's description.
 --- @param message_id string
 --- @param sender string|nil
 --- @param recipient string|nil
---- @return agentic.SessionMessageKind
-function SessionManager:_classify_message(message_id, sender, recipient)
-    local cached = self._message_kinds[message_id]
+--- @return agentic.SessionMessageInfo
+function SessionManager:_message_info(message_id, sender, recipient)
+    local cached = self._message_infos[message_id]
     if cached then
         return cached
     end
-    --- @type agentic.SessionMessageKind
-    local kind = "message"
+    --- @type agentic.SessionMessageInfo
+    local info = { kind = "message" }
     local from = sender and self._agents[sender]
+    local to = recipient and self._agents[recipient]
     if from and recipient and from.parent_session_id == recipient then
-        kind = "result"
-    elseif recipient and self._agents[recipient] then
+        info.kind = "result"
+    elseif recipient and to then
         if not self._delegated[recipient] then
-            kind = "launch"
+            info = { kind = "task", summary = to.description }
         else
             local rows =
                 self.chat_history:messages_for_task(self:_task_of(recipient))
             if vim.tbl_get(rows, #rows, "type") == "subagent_end" then
-                kind = "task"
+                info.kind = "task"
             end
         end
         self._delegated[recipient] = true
     end
-    self._message_kinds[message_id] = kind
-    return kind
+    self._message_infos[message_id] = info
+    return info
 end
 
 --- Show one view of a session message as a row in the buffer of the session
@@ -1345,8 +1347,8 @@ function SessionManager:_on_session_message(update, source_session_id)
     local sender = Json.present(update.senderSessionId)
     local recipient = Json.present(update.recipientSessionId)
     local received = recipient == source_session_id
-    local kind = self:_classify_message(update.messageId, sender, recipient)
-    if received and not on_root and kind ~= "result" then
+    local info = self:_message_info(update.messageId, sender, recipient)
+    if received and not on_root and info.kind ~= "result" then
         self:_note_agent_task(source_session_id, update.messageId)
     end
     if self._loading and not on_root then
@@ -1357,7 +1359,8 @@ function SessionManager:_on_session_message(update, source_session_id)
     local row = {
         type = "session_message",
         message_id = update.messageId,
-        kind = kind,
+        kind = info.kind,
+        summary = info.summary,
         view = received and "received" or "sent",
         sender_session_id = sender,
         recipient_session_id = recipient,
@@ -1390,7 +1393,7 @@ function SessionManager:_reset_subagents()
     self._agent_by_task = {}
     self._tool_call_owner = {}
     self._seen_messages = {}
-    self._message_kinds = {}
+    self._message_infos = {}
     self._delegated = {}
 end
 
@@ -4259,15 +4262,17 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.file_activity:load(saved_history.file_activity)
         self.chat_history.subagent_messages = saved_history.subagent_messages
         self.chat_history.subagents = saved_history.subagents
-        -- The replay's views reuse the saved kinds, and a later delegation to
-        -- an agent the file shows delegated to is no launch.
+        -- Replayed views reuse the saved kinds and summaries, and no later
+        -- message to an agent the file shows delegated to is its first
+        -- delegation.
         for _, list in ipairs({
             saved_history.messages,
             saved_history.subagent_messages,
         }) do
             for _, msg in ipairs(list) do
                 if msg.type == "session_message" then
-                    self._message_kinds[msg.message_id] = msg.kind
+                    self._message_infos[msg.message_id] =
+                        { kind = msg.kind, summary = msg.summary }
                     if msg.kind ~= "result" and msg.recipient_session_id then
                         self._delegated[msg.recipient_session_id] = true
                     end

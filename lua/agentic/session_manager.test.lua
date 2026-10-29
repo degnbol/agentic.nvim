@@ -4097,20 +4097,24 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_classify_message", function()
+    describe("_message_info", function()
         --- A session with the main agent `root`, its child `c1` and that
         --- child's child `c2`, and a sibling `c3` of `c1`.
         local function make_session()
             return {
                 _agents = {
-                    c1 = { open = false, parent_session_id = "root" },
+                    c1 = {
+                        open = false,
+                        parent_session_id = "root",
+                        description = "Find the files",
+                    },
                     c2 = { open = false, parent_session_id = "c1" },
                     c3 = { open = false, parent_session_id = "root" },
                 },
-                _message_kinds = {},
+                _message_infos = {},
                 _delegated = {},
                 chat_history = require("agentic.ui.chat_history"):new(),
-                _classify_message = SessionManager._classify_message,
+                _message_info = SessionManager._message_info,
                 _task_of = SessionManager._task_of,
             } --[[@as agentic.SessionManager]]
         end
@@ -4126,29 +4130,43 @@ describe("agentic.SessionManager", function()
             })
         end
 
-        it("classes the first delegation to an agent a launch", function()
+        it("classes the first delegation to an agent a task", function()
             local session = make_session()
 
-            assert.equal("launch", session:_classify_message("m1", "root", "c1"))
+            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
+        end)
+
+        it("summarises only the first delegation, by the agent's description", function()
+            local session = make_session()
+
+            local first = session:_message_info("m1", "root", "c1")
+            assert.equal("Find the files", first.summary)
+            -- Its second view keeps the summary.
+            assert.equal("Find the files", session:_message_info("m1", "root", "c1").summary)
+
+            add_c1_row(session, "subagent_end")
+            local later = session:_message_info("m2", "root", "c1")
+            assert.equal("task", later.kind)
+            assert.is_nil(later.summary)
         end)
 
         it("classes a later delegation to a working agent a message", function()
             local session = make_session()
-            session:_classify_message("m1", "root", "c1")
+            session:_message_info("m1", "root", "c1")
             add_c1_row(session, "agent")
 
-            assert.equal("message", session:_classify_message("m2", "root", "c1"))
+            assert.equal("message", session:_message_info("m2", "root", "c1").kind)
         end)
 
         it("classes a delegation after an end row a task", function()
             local session = make_session()
-            session:_classify_message("m1", "root", "c1")
+            session:_message_info("m1", "root", "c1")
             add_c1_row(session, "subagent_end")
 
-            assert.equal("task", session:_classify_message("m2", "root", "c1"))
+            assert.equal("task", session:_message_info("m2", "root", "c1").kind)
             -- Its received row now follows the end.
             add_c1_row(session, "session_message")
-            assert.equal("message", session:_classify_message("m3", "root", "c1"))
+            assert.equal("message", session:_message_info("m3", "root", "c1").kind)
         end)
 
         it("classes a delegation after a saved end row a task", function()
@@ -4157,38 +4175,38 @@ describe("agentic.SessionManager", function()
             session._delegated.c1 = true
             add_c1_row(session, "subagent_end")
 
-            assert.equal("task", session:_classify_message("m1", "root", "c1"))
+            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
         end)
 
         it("classes a child's message to its parent a result", function()
             local session = make_session()
 
-            assert.equal("result", session:_classify_message("m1", "c1", "root"))
-            assert.equal("result", session:_classify_message("m2", "c2", "c1"))
+            assert.equal("result", session:_message_info("m1", "c1", "root").kind)
+            assert.equal("result", session:_message_info("m2", "c2", "c1").kind)
             assert.is_nil(session._delegated.root)
         end)
 
         it("classes a message to a sibling a delegation to it", function()
             local session = make_session()
 
-            assert.equal("launch", session:_classify_message("m1", "c1", "c3"))
-            assert.equal("message", session:_classify_message("m2", "c1", "c3"))
+            assert.equal("task", session:_message_info("m1", "c1", "c3").kind)
+            assert.equal("message", session:_message_info("m2", "c1", "c3").kind)
         end)
 
         it("classes a message to an unknown session a message", function()
             local session = make_session()
 
-            assert.equal("message", session:_classify_message("m1", "c1", "x"))
-            assert.equal("message", session:_classify_message("m2", nil, nil))
+            assert.equal("message", session:_message_info("m1", "c1", "x").kind)
+            assert.equal("message", session:_message_info("m2", nil, nil).kind)
         end)
 
         it("reuses the kind decided at the first view", function()
             local session = make_session()
-            assert.equal("launch", session:_classify_message("m1", "root", "c1"))
+            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
 
             -- The second view keeps its kind, where a new message would not.
-            assert.equal("launch", session:_classify_message("m1", "root", "c1"))
-            assert.equal("message", session:_classify_message("m2", "root", "c1"))
+            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
+            assert.equal("message", session:_message_info("m2", "root", "c1").kind)
         end)
     end)
 

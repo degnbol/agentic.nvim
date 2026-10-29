@@ -23,13 +23,17 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field type "tool_call"
 --- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's call
 
---- @alias agentic.SessionMessageKind "launch"|"task"|"message"|"result"
+--- @alias agentic.SessionMessageKind "task"|"message"|"result"
+
+--- How a session message is classified, the same for all its views.
+--- @class agentic.SessionMessageInfo
+--- @field kind agentic.SessionMessageKind
+--- @field summary? string Short label of the message, when there is one
 
 --- One view of a message between two sessions of the conversation.
---- @class agentic.ui.ChatHistory.SessionMessage
+--- @class agentic.ui.ChatHistory.SessionMessage : agentic.SessionMessageInfo
 --- @field type "session_message"
 --- @field message_id string Shared by the message's views
---- @field kind agentic.SessionMessageKind
 --- @field view "sent"|"received" The view on the sender's session, or on the recipient's
 --- @field sender_session_id? string
 --- @field recipient_session_id? string

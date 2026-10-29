@@ -285,7 +285,7 @@ describe("ChatHistory", function()
                 {
                     type = "session_message",
                     message_id = "toolu_1",
-                    kind = "launch",
+                    kind = "task",
                     view = "sent",
                     sender_session_id = "root",
                     recipient_session_id = "child-1",
@@ -304,7 +304,7 @@ describe("ChatHistory", function()
             }, prompt)
 
             assert.same({
-                "Launch sent to map UI:\nMap the UI.",
+                "Task sent to map UI:\nMap the UI.",
                 "Result received from map UI:\nFound it.\nIn lib/.",
             }, vim.list_slice(
                 vim.tbl_map(function(p)

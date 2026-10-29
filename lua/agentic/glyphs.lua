@@ -99,9 +99,8 @@ Glyphs.KIND.subagenthandback = Glyphs.HANDBACK
 
 --- Glyph of a session message row, keyed by the row's kind, or by its view
 --- (`sent`/`received`) for a `message` row.
---- @type table<"launch"|"task"|"result"|"sent"|"received", string>
+--- @type table<"task"|"result"|"sent"|"received", string>
 Glyphs.MESSAGE = {
-    launch = Glyphs.KIND.subagent,
     task = "󰙓",
     result = Glyphs.HANDBACK,
     sent = Glyphs.KIND.sendmessage,

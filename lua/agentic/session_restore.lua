@@ -277,7 +277,7 @@ function SessionRestore.format_preview(messages)
             )
             table.insert(lines, "")
         elseif msg.type == "session_message" then
-            local title, rest = SessionRestore.message_title(msg.text)
+            local title, rest = SessionRestore.message_title(msg.text, msg.summary)
             table.insert(lines, "## " .. title)
             vim.list_extend(lines, rest)
             table.insert(lines, "")
@@ -386,22 +386,42 @@ function SessionRestore.show_picker(current_session, scope)
     end)
 end
 
---- The title of a message's row and the lines under it: the first non-blank
---- line and the rest. A text with no such line is titled `(empty message)`. A
---- first line opening a code fence is no title, so the row is titled
---- `(message)` and the whole text goes under it.
+--- The title of a message's row and the lines under it. A message with a
+--- summary is titled by it, with its whole text under it. Else the title is
+--- the first sentence of the first non-blank line
+--- (`TextWrap.split_sentence`), without heading marks, and the rest of that
+--- line and the text go under it. A text with no such line is titled
+--- `(empty message)`. A first line opening a code fence or holding only
+--- heading marks is no title, so the row is titled `(message)` and the rest
+--- goes under it.
 --- @param text string
+--- @param summary string|nil
 --- @return string title
 --- @return string[] rest
-function SessionRestore.message_title(text)
+function SessionRestore.message_title(text, summary)
     local head, rest = TextWrap.head_and_rest(text)
     if not head then
-        return "(empty message)", {}
+        return summary or "(empty message)", {}
+    end
+    if summary then
+        return summary, vim.split(vim.trim(text), "\n", { plain = true })
     end
     if TextWrap.is_fence_delimiter(head) then
         return "(message)", vim.list_extend({ head }, rest)
     end
-    return head, rest
+    head = head:gsub("^%s*#+%s+", "")
+    if head == "" then
+        return "(message)", rest
+    end
+    local sentence, tail = TextWrap.split_sentence(head)
+    if not tail then
+        return head, rest
+    end
+    local lines = { tail }
+    if #rest > 0 then
+        table.insert(lines, "")
+    end
+    return sentence, vim.list_extend(lines, rest)
 end
 
 --- Write a session message or a subagent end as a notice. A message is signed
@@ -430,7 +450,7 @@ function SessionRestore.write_row(writer, row, mid_turn, buffer_name)
         return
     end
 
-    local title, rest = SessionRestore.message_title(row.text)
+    local title, rest = SessionRestore.message_title(row.text, row.summary)
     local peer = row.view == "sent" and row.recipient_session_id
         or row.sender_session_id
     writer:write_notice({
