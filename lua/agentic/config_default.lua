@@ -467,7 +467,7 @@ local ConfigDefault = {
         execute_max_lines = 25,
         other_max_lines = 25,
         execute_formatter = "shfmt",
-        diff_context_max_lines = 5000,
+        diff_context_max_lines = 10000,
         create_max_lines = 50,
     },
 

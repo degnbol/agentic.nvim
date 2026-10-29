@@ -28,11 +28,9 @@ end
 --- highlight captures for just the new_lines rows. The result maps
 --- 0-indexed row-within-new_lines to a byte-col → capture-name map.
 ---
---- Always parses the whole reconstructed file. Treesitter is fast enough
---- that windowing the parse to a smaller ancestor isn't worth the
---- correctness risk: a too-narrow window can drop the surrounding
---- structure (string opener/closer, injection root) and yield bare-code
---- captures for content that's actually inside a docstring.
+--- Captures include injected languages, also from an injection that opens
+--- above the new_lines rows. Cost scales with the whole file, not with
+--- new_lines.
 ---
 --- @param file_lines string[] Content of the file the snippet lives in
 --- @param lang string Parser language
@@ -69,13 +67,20 @@ function M.highlight_map_in_context(
     if not ok_lang or not lang_tree then
         return nil
     end
-    local trees = lang_tree:parse(true)
-    if not trees or not trees[1] then
-        return nil
-    end
 
     local target_start = #prefix
     local target_end = target_start + #new_lines
+
+    -- The root tree parses the whole source, injections only where their
+    -- region overlaps the range (`:h LanguageTree:parse()`). Do not window
+    -- the source to a smaller ancestor instead: a too-narrow window drops
+    -- the surrounding structure (string opener/closer, injection root) and
+    -- yields bare-code captures for content inside a docstring, and a
+    -- window start at a top-level node needs the root parse it would skip.
+    local trees = lang_tree:parse({ target_start, 0, target_end, 0 })
+    if not trees or not trees[1] then
+        return nil
+    end
 
     --- @type table<integer, table<integer, string>>
     local map = {}

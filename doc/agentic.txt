@@ -253,7 +253,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `execute_formatter`        string | false (default: `"shfmt"`)
         External formatter for execute code blocks. Set to `false` to
         use the built-in operator-splitting fallback only.
-    `diff_context_max_lines`   integer (default: 5000)
+    `diff_context_max_lines`   integer (default: 10000)
         Skip context-aware diff highlighting when the edited file exceeds
         this many lines. 0 disables the feature entirely.
     `create_max_lines`         integer (default: 50)

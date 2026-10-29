@@ -173,5 +173,37 @@ describe("Treesitter", function()
                 )
             end
         )
+
+        it("colours rows inside an injection that opens above them", function()
+            if not has_parser("lua") or not has_parser("vim") then
+                return
+            end
+
+            local file_lines = {
+                "vim.cmd([[",
+                "set number",
+                "placeholder",
+                "]])",
+            }
+
+            local map = Treesitter.highlight_map_in_context(
+                file_lines,
+                "lua",
+                2,
+                3,
+                { "set nowrap" }
+            )
+            assert.is_not_nil(map)
+            --- @cast map -nil
+
+            local vim_caps = vim.tbl_filter(function(cap)
+                return cap:match("%.vim$") ~= nil
+            end, vim.tbl_values(map[0] or {}))
+            assert.is_true(
+                #vim_caps > 0,
+                "expected a capture from the vim injection, got "
+                    .. vim.inspect(map[0])
+            )
+        end)
     end)
 end)
