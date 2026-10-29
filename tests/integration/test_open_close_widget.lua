@@ -344,8 +344,8 @@ _G.first = require("agentic.session_registry").by_id[...]
         child.lua([[require("agentic").add_file()]])
         child.flush()
 
-        assert.equal(1, child.lua_get("#_G.first.file_list:get_files()"))
-        assert.equal(0, child.lua_get("#_G.second.file_list:get_files()"))
+        assert.equal(1, child.lua_get("_G.first.file_list:count()"))
+        assert.equal(0, child.lua_get("_G.second.file_list:count()"))
     end)
 
     it("tabclose destroys only the unused sessions it hides", function()

@@ -65,6 +65,9 @@ describe("SessionRestore", function()
             },
             clear_chat = spy.new(function() end),
             permission_manager = { clear = spy.new(function() end) },
+            file_list = { clear = spy.new(function() end) },
+            code_selection = { clear = spy.new(function() end) },
+            diagnostics_list = { clear = spy.new(function() end) },
             restore_from_history = spy.new(function() end),
             load_acp_session = spy.new(function() end),
         }
@@ -513,6 +516,9 @@ describe("SessionRestore", function()
                 assert.spy(mock_session.agent.cancel_session).was.called(1)
                 assert.spy(mock_session.clear_chat).was.called(1)
                 assert.spy(mock_session.permission_manager.clear).was.called(1)
+                assert.spy(mock_session.file_list.clear).was.called(1)
+                assert.spy(mock_session.code_selection.clear).was.called(1)
+                assert.spy(mock_session.diagnostics_list.clear).was.called(1)
 
                 local restore_call = mock_session.restore_from_history.calls[1]
                 assert.is_false(restore_call[3].reuse_session)

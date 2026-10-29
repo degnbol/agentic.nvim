@@ -13,6 +13,7 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
+local CodeSelection = require("agentic.ui.code_selection")
 local Config = require("agentic.config")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local DiffJump = require("agentic.ui.diff_jump")
@@ -333,7 +334,6 @@ function SessionManager:new()
 
     local AgentInstance = require("agentic.acp.agent_instance")
     local ChatWidget = require("agentic.ui.chat_widget")
-    local CodeSelection = require("agentic.ui.code_selection")
     local FileActivity = require("agentic.ui.file_activity")
     local FileList = require("agentic.ui.file_list")
     local MessageWriter = require("agentic.ui.message_writer")
@@ -484,15 +484,10 @@ function SessionManager:new()
         )
     end
 
-    self.file_list = FileList:new(self.widget.buf_nrs.files, function(file_list)
-        if file_list:is_empty() then
-            self.widget:close_panel("files")
-            self.widget:move_cursor_to("input")
-        else
-            self.widget:render_header("files", tostring(#file_list:get_files()))
-            self.widget:sync_panels()
-        end
-    end)
+    self.file_list = FileList:new(
+        self.widget.buf_nrs.files,
+        self:_context_panel_on_change("files")
+    )
 
     -- Unlike the sibling list panels, an empty tally must not close the window
     -- and a new row must not open it: the panel is a toggle. The callback only
@@ -507,34 +502,12 @@ function SessionManager:new()
 
     self.code_selection = CodeSelection:new(
         self.widget.buf_nrs.code,
-        function(code_selection)
-            if code_selection:is_empty() then
-                self.widget:close_panel("code")
-                self.widget:move_cursor_to("input")
-            else
-                self.widget:render_header(
-                    "code",
-                    tostring(#code_selection:get_selections())
-                )
-                self.widget:sync_panels()
-            end
-        end
+        self:_context_panel_on_change("code")
     )
 
     self.diagnostics_list = DiagnosticsList:new(
         self.widget.buf_nrs.diagnostics,
-        function(diagnostics_list)
-            if diagnostics_list:is_empty() then
-                self.widget:close_panel("diagnostics")
-                self.widget:move_cursor_to("input")
-            else
-                self.widget:render_header(
-                    "diagnostics",
-                    tostring(#diagnostics_list:get_diagnostics())
-                )
-                self.widget:sync_panels()
-            end
-        end
+        self:_context_panel_on_change("diagnostics")
     )
 
     self.todo_list = TodoList:new(self.widget.buf_nrs.todos, function(todo_list)
@@ -548,6 +521,22 @@ function SessionManager:new()
     self:_setup_buffer_lifecycle()
 
     return self
+end
+
+--- A handler that, given a list, closes `panel` and focuses the input when
+--- the list is empty, else shows the item count in the panel's header.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+--- @return fun(list: agentic.ui.ContextList) handler
+function SessionManager:_context_panel_on_change(panel)
+    return function(list)
+        if list:is_empty() then
+            self.widget:close_panel(panel)
+            self.widget:move_cursor_to("input")
+        else
+            self.widget:render_header(panel, tostring(list:count()))
+            self.widget:sync_panels()
+        end
+    end
 end
 
 --- Bind the session's own buffer-local maps (the widget binds its own) to a
@@ -3695,8 +3684,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
             }, "\n"),
         })
 
-        local selections = self.code_selection:get_selections()
-        self.code_selection:clear()
+        local selections = self.code_selection:take() --[[@as agentic.Selection[] ]]
         consumed.selections = selections
 
         for _, selection in ipairs(selections) do
@@ -3734,14 +3722,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
                 table.insert(
                     extra_lines,
-                    string.format(
-                        "```%s %s#L%d-L%d\n%s\n```",
-                        selection.file_type,
-                        selection.file_path,
-                        selection.start_line,
-                        selection.end_line,
-                        table.concat(selection.lines, "\n")
-                    )
+                    table.concat(CodeSelection.fence_rows(selection), "\n")
                 )
             end
         end
@@ -3750,8 +3731,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     if not is_command and not self.file_list:is_empty() then
         table.insert(extra_lines, "\n- **Referenced files**:")
 
-        local files = self.file_list:get_files()
-        self.file_list:clear()
+        local files = self.file_list:take() --[[@as string[] ]]
         consumed.files = files
 
         for _, file_path in ipairs(files) do
@@ -3767,8 +3747,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     if not is_command and not self.diagnostics_list:is_empty() then
         table.insert(extra_lines, "\n- **Diagnostics**:")
 
-        local diagnostics = self.diagnostics_list:get_diagnostics()
-        self.diagnostics_list:clear()
+        local diagnostics = self.diagnostics_list:take() --[[@as agentic.ui.DiagnosticsList.Diagnostic[] ]]
         consumed.diagnostics = diagnostics
 
         local home = self.widget:home_win()

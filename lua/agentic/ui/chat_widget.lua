@@ -332,8 +332,10 @@ function ChatWidget:close_panel(panel)
 end
 
 --- Clears every panel buffer's content without destroying them, except
---- `input` — it holds the user's unsent draft, which is not conversation
---- state and must survive session resets/swaps.
+--- `input` and the `code`, `files` and `diagnostics` panels. `input` holds
+--- the user's unsent draft, which is not conversation state and must survive
+--- session resets/swaps. The other three are written only by their
+--- `ContextList`.
 ---
 --- Leaves the extmarks over the chat text, and a MessageWriter's
 --- tool call trackers — those are the writer's, out of reach from here. Clear
@@ -344,8 +346,9 @@ end
 --- Leaves each buffer's `modified` as it was: clearing the render loses
 --- nothing that its owner has not accounted for.
 function ChatWidget:clear()
+    local kept = { input = true, code = true, files = true, diagnostics = true }
     for name, bufnr in pairs(self.buf_nrs) do
-        if name ~= "input" then
+        if not kept[name] then
             local was_modified = vim.bo[bufnr].modified
             BufHelpers.with_modifiable(bufnr, function()
                 local ok = pcall(

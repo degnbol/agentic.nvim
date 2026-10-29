@@ -3178,19 +3178,17 @@ describe("agentic.SessionManager", function()
                 return session
             end
 
-            --- A context panel that holds `items`, read with `getter`.
-            --- @param getter string
+            --- A context panel that holds `items`.
             --- @param items table[]
             --- @return table
-            local function panel(getter, items)
+            local function panel(items)
                 return {
                     is_empty = function()
                         return false
                     end,
-                    [getter] = function()
+                    take = function()
                         return items
                     end,
-                    clear = function() end,
                 }
             end
 
@@ -3213,11 +3211,9 @@ describe("agentic.SessionManager", function()
                     files = { "/b.lua" },
                     diagnostics = { { message = "d" } },
                 }
-                session.code_selection =
-                    panel("get_selections", context.selections)
-                session.file_list = panel("get_files", context.files)
-                session.diagnostics_list =
-                    panel("get_diagnostics", context.diagnostics)
+                session.code_selection = panel(context.selections)
+                session.file_list = panel(context.files)
+                session.diagnostics_list = panel(context.diagnostics)
                 session.widget.home_win = function() end
                 return session, context
             end

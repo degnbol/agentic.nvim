@@ -34,7 +34,7 @@ end
     local function get_session_diagnostics()
         return child.lua([[
             local session = require("agentic.session_registry").current()
-            return session.diagnostics_list:get_diagnostics()
+            return session.diagnostics_list.__items
         ]])
     end
 

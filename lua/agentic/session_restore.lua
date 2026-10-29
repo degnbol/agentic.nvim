@@ -111,6 +111,9 @@ local function do_restore(item, current_session, has_conflict)
         if has_conflict and session.session_id then
             session.agent:cancel_session(session.session_id)
             session:clear_chat()
+            session.file_list:clear()
+            session.code_selection:clear()
+            session.diagnostics_list:clear()
             session.permission_manager:clear()
         end
 

@@ -1,7 +1,7 @@
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
-local BufHelpers = require("agentic.utils.buf_helpers")
 local TextWrap = require("agentic.utils.text_wrap")
+local ContextList = require("agentic.ui.context_list")
 
 --- Get diagnostic severity icons from config
 --- @return table<number, string> Mapping of severity to icon
@@ -18,27 +18,10 @@ end
 --- @class agentic.ui.DiagnosticsList.Diagnostic : vim.Diagnostic
 --- @field file_path string Full file path
 
---- @class agentic.ui.DiagnosticsList
---- @field _diagnostics agentic.ui.DiagnosticsList.Diagnostic[]
---- @field _bufnr integer the same buffer number as the ChatWidget's diagnostics buffer
---- @field _on_change fun(diagnosticsList: agentic.ui.DiagnosticsList)
-local DiagnosticsList = {}
+--- @class agentic.ui.DiagnosticsList : agentic.ui.ContextList
+--- @field protected __items agentic.ui.DiagnosticsList.Diagnostic[]
+local DiagnosticsList = setmetatable({}, { __index = ContextList })
 DiagnosticsList.__index = DiagnosticsList
-
---- @param bufnr integer The diagnostics buffer number from ChatWidget
---- @param on_change fun(diagnosticsList: agentic.ui.DiagnosticsList) Callback to trigger when diagnostics list changes (e.g., update header)
---- @return agentic.ui.DiagnosticsList
-function DiagnosticsList:new(bufnr, on_change)
-    local instance = setmetatable({
-        _diagnostics = {},
-        _bufnr = bufnr,
-        _on_change = on_change,
-    }, self)
-
-    instance:_setup_keybindings()
-
-    return instance
-end
 
 --- Add a diagnostic to the list if not already present. A diagnostic is
 --- present when one has the same buffer, position, message, severity, source
@@ -46,7 +29,7 @@ end
 --- @param diagnostic agentic.ui.DiagnosticsList.Diagnostic
 --- @return boolean added
 function DiagnosticsList:_add_no_render(diagnostic)
-    for _, existing in ipairs(self._diagnostics) do
+    for _, existing in ipairs(self.__items) do
         if
             existing.bufnr == diagnostic.bufnr
             and existing.lnum == diagnostic.lnum
@@ -60,7 +43,7 @@ function DiagnosticsList:_add_no_render(diagnostic)
         end
     end
 
-    table.insert(self._diagnostics, diagnostic)
+    table.insert(self.__items, diagnostic)
     return true
 end
 
@@ -80,31 +63,6 @@ function DiagnosticsList:add_many(diagnostics)
     end
 
     return count
-end
-
---- @param index integer
-function DiagnosticsList:remove_at(index)
-    if index < 1 or index > #self._diagnostics then
-        return
-    end
-
-    table.remove(self._diagnostics, index)
-    self:render()
-end
-
---- @return agentic.ui.DiagnosticsList.Diagnostic[]
-function DiagnosticsList:get_diagnostics()
-    return vim.deepcopy(self._diagnostics)
-end
-
-function DiagnosticsList:clear()
-    self._diagnostics = {}
-    self:render()
-end
-
---- @return boolean
-function DiagnosticsList:is_empty()
-    return #self._diagnostics == 0
 end
 
 --- The diagnostics of a buffer, each with the buffer's file path.
@@ -134,118 +92,41 @@ function DiagnosticsList.get_diagnostics_at_cursor(bufnr)
     end, DiagnosticsList.get_buffer_diagnostics(bufnr))
 end
 
---- Write the diagnostics into the buffer and report the change.
-function DiagnosticsList:render()
-    local lines = {}
+--- One row: severity icon, location and message, truncated to the width of
+--- the buffer's window, or of the editor when the buffer is not shown.
+--- @protected
+--- @param diagnostic agentic.ui.DiagnosticsList.Diagnostic
+--- @return string[] rows
+function DiagnosticsList:__rows(diagnostic)
     local icons = get_diagnostic_icons()
-
-    local winid = vim.fn.bufwinid(self._bufnr)
+    local winid = vim.fn.bufwinid(self.__bufnr)
     local buf_width = winid ~= -1 and vim.api.nvim_win_get_width(winid)
         or vim.o.columns
 
-    for _, diagnostic in ipairs(self._diagnostics) do
-        local icon = icons[diagnostic.severity]
-            or icons[vim.diagnostic.severity.ERROR]
-        local smart_path = diagnostic.file_path
-        if smart_path == "" then
-            smart_path = string.format("[unnamed:%d]", diagnostic.bufnr)
-        else
-            smart_path = FileSystem.to_smart_path(smart_path)
-        end
-        local location = string.format(
-            "%s:%d:%d",
-            smart_path,
-            diagnostic.lnum + 1,
-            diagnostic.col + 1
-        )
-
-        -- nvim_buf_set_lines rejects embedded newlines in a line item.
-        -- Keep diagnostics single-line by rendering newlines as escaped text.
-        local message = type(diagnostic.message) == "string"
-                and diagnostic.message
-            or tostring(diagnostic.message or "")
-        message = message:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n", "\\n")
-
-        -- Format: ICON path:line:col - message
-        local line = string.format("%s %s - %s", icon, location, message)
-        table.insert(lines, TextWrap.truncate_to_width(line, buf_width))
+    local icon = icons[diagnostic.severity]
+        or icons[vim.diagnostic.severity.ERROR]
+    local smart_path = diagnostic.file_path
+    if smart_path == "" then
+        smart_path = string.format("[unnamed:%d]", diagnostic.bufnr)
+    else
+        smart_path = FileSystem.to_smart_path(smart_path)
     end
+    local location = string.format(
+        "%s:%d:%d",
+        smart_path,
+        diagnostic.lnum + 1,
+        diagnostic.col + 1
+    )
 
-    local did_render = BufHelpers.with_modifiable(self._bufnr, function(bufnr)
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-        return true
-    end)
+    -- nvim_buf_set_lines rejects embedded newlines in a line item.
+    -- Keep diagnostics single-line by rendering newlines as escaped text.
+    local message = type(diagnostic.message) == "string" and diagnostic.message
+        or tostring(diagnostic.message or "")
+    message = message:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n", "\\n")
 
-    if did_render then
-        self._on_change(self)
-    end
-end
-
---- @private
-function DiagnosticsList:_setup_keybindings()
-    BufHelpers.keymap_set(self._bufnr, "n", "d", function()
-        local cursor = vim.api.nvim_win_get_cursor(0)
-        local line = cursor[1]
-
-        local line_content =
-            vim.api.nvim_buf_get_lines(self._bufnr, line - 1, line, false)[1]
-
-        if line_content and line_content:match("%S") then
-            self:remove_at(line)
-        end
-    end, { nowait = true })
-
-    BufHelpers.keymap_set(self._bufnr, "v", "d", function()
-        local start_pos = vim.fn.getpos("v")
-        local end_pos = vim.fn.getpos(".")
-        local start_line = start_pos[2]
-        local end_line = end_pos[2]
-
-        -- Ensure start_line is always smaller than end_line (handle backward selection)
-        if start_line > end_line then
-            start_line, end_line = end_line, start_line
-        end
-
-        --- @type table<integer, true>
-        local indices_to_remove = {}
-        for line = start_line, end_line do
-            local line_content = vim.api.nvim_buf_get_lines(
-                self._bufnr,
-                line - 1,
-                line,
-                false
-            )[1]
-
-            if
-                line_content
-                and line_content:match("%S")
-                and line >= 1
-                and line <= #self._diagnostics
-            then
-                indices_to_remove[line] = true
-            end
-        end
-
-        --- @type integer[]
-        local sorted_indices = {}
-        for index in pairs(indices_to_remove) do
-            table.insert(sorted_indices, index)
-        end
-        table.sort(sorted_indices, function(a, b)
-            return a > b
-        end)
-
-        for _, index in ipairs(sorted_indices) do
-            table.remove(self._diagnostics, index)
-        end
-
-        if #sorted_indices > 0 then
-            self:render()
-        end
-
-        -- Exit visual mode
-        BufHelpers.feed_ESC_key()
-    end, { nowait = true })
+    -- Format: ICON path:line:col - message
+    local line = string.format("%s %s - %s", icon, location, message)
+    return { TextWrap.truncate_to_width(line, buf_width) }
 end
 
 return DiagnosticsList

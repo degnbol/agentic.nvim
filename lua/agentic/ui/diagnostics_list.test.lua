@@ -69,7 +69,7 @@ describe("agentic.ui.DiagnosticsList", function()
             local count = diagnostics_list:add_many(diagnostics)
 
             assert.equal(3, count)
-            assert.equal(3, #diagnostics_list:get_diagnostics())
+            assert.equal(3, diagnostics_list:count())
             assert.spy(on_change_spy).was.called(1)
         end)
 
@@ -91,7 +91,7 @@ describe("agentic.ui.DiagnosticsList", function()
             local count = diagnostics_list:add_many(diagnostics)
 
             assert.equal(2, count)
-            assert.equal(2, #diagnostics_list:get_diagnostics())
+            assert.equal(2, diagnostics_list:count())
         end)
 
         it("does not add a diagnostic already in the list", function()
@@ -100,7 +100,7 @@ describe("agentic.ui.DiagnosticsList", function()
             diagnostics_list:add_many({ diagnostic })
 
             assert.equal(0, diagnostics_list:add_many({ diagnostic }))
-            assert.equal(1, #diagnostics_list:get_diagnostics())
+            assert.equal(1, diagnostics_list:count())
             assert.spy(on_change_spy).was.called(1)
         end)
 
@@ -110,99 +110,7 @@ describe("agentic.ui.DiagnosticsList", function()
                 create_diagnostic({ message = "Error 2" }),
             })
 
-            assert.equal(2, #diagnostics_list:get_diagnostics())
-        end)
-
-        it("returns deep copy of diagnostics", function()
-            local diagnostic = create_diagnostic()
-
-            diagnostics_list:add_many({ diagnostic })
-
-            local diagnostics1 = diagnostics_list:get_diagnostics()
-            local diagnostics2 = diagnostics_list:get_diagnostics()
-
-            diagnostics1[1].message = "modified"
-
-            assert.equal(diagnostic.message, diagnostics2[1].message)
-        end)
-    end)
-
-    describe("is_empty", function()
-        it("returns true when no diagnostics added", function()
-            assert.is_true(diagnostics_list:is_empty())
-        end)
-
-        it("returns false when diagnostics exist", function()
-            diagnostics_list:add_many({ create_diagnostic() })
-
-            assert.is_false(diagnostics_list:is_empty())
-        end)
-    end)
-
-    describe("clear", function()
-        it("removes all diagnostics", function()
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
-            assert.is_false(diagnostics_list:is_empty())
-
-            diagnostics_list:clear()
-
-            assert.is_true(diagnostics_list:is_empty())
-            assert.spy(on_change_spy).was.called(3)
-        end)
-
-        it("clears buffer content", function()
-            local lines_before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            diagnostics_list:add_many({ create_diagnostic() })
-            local lines_after_add =
-                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            assert.is_not.same(lines_before, lines_after_add)
-
-            diagnostics_list:clear()
-
-            local line_count = vim.api.nvim_buf_line_count(bufnr)
-            assert.equal(1, line_count)
-            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            assert.equal("", lines[1])
-        end)
-    end)
-
-    describe("remove_at", function()
-        it("removes diagnostic at valid index", function()
-            local diagnostic1 = create_diagnostic({ lnum = 10 })
-            local diagnostic2 = create_diagnostic({ lnum = 20 })
-
-            diagnostics_list:add_many({ diagnostic1 })
-            diagnostics_list:add_many({ diagnostic2 })
-
-            assert.equal(2, #diagnostics_list:get_diagnostics())
-
-            diagnostics_list:remove_at(1)
-
-            local diagnostics = diagnostics_list:get_diagnostics()
-            assert.equal(1, #diagnostics)
-            assert.equal(diagnostic2.message, diagnostics[1].message)
-            assert.spy(on_change_spy).was.called(3)
-        end)
-
-        it("does not remove at invalid index (too small)", function()
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
-
-            diagnostics_list:remove_at(0)
-
-            assert.equal(2, #diagnostics_list:get_diagnostics())
-            assert.spy(on_change_spy).was.called(2)
-        end)
-
-        it("does not remove at invalid index (too large)", function()
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
-
-            diagnostics_list:remove_at(3)
-
-            assert.equal(2, #diagnostics_list:get_diagnostics())
-            assert.spy(on_change_spy).was.called(2)
+            assert.equal(2, diagnostics_list:count())
         end)
     end)
 
@@ -315,19 +223,6 @@ describe("agentic.ui.DiagnosticsList", function()
             assert.equal(1, #lines)
             assert.truthy(lines[1]:find("Short msg", 1, true))
             assert.is_nil(lines[1]:find("…", 1, true))
-        end)
-
-        it("updates buffer after removal", function()
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 10 }) })
-            diagnostics_list:add_many({ create_diagnostic({ lnum = 20 }) })
-
-            local lines_before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            assert.equal(2, #lines_before)
-
-            diagnostics_list:remove_at(1)
-
-            local lines_after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            assert.equal(1, #lines_after)
         end)
     end)
 

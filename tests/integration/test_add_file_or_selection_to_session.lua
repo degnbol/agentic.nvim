@@ -27,7 +27,7 @@ describe("Add file or selection to session", function()
         local files_list = child.lua([[
             local session = require("agentic.session_registry")
                 .current()
-            return session.file_list:get_files()
+            return session.file_list.__items
         ]])
 
         assert.same({
@@ -47,7 +47,7 @@ describe("Add file or selection to session", function()
         -- Get selections from code_selection
         local selections = child.lua([[
             local session = require("agentic.session_registry").current()
-            return session.code_selection:get_selections()
+            return session.code_selection.__items
         ]])
 
         -- Read actual lines 28-29 from the test file

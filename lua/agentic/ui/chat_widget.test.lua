@@ -1146,6 +1146,33 @@ describe("agentic.ui.ChatWidget", function()
                 vim.api.nvim_buf_get_lines(widget.buf_nrs.input, 0, -1, false)
             )
         end)
+
+        it("clear() leaves the code, files and diagnostics panels", function()
+            for _, panel in ipairs({ "code", "files", "diagnostics" }) do
+                vim.bo[widget.buf_nrs[panel]].modifiable = true
+                vim.api.nvim_buf_set_lines(
+                    widget.buf_nrs[panel],
+                    0,
+                    -1,
+                    false,
+                    { panel }
+                )
+            end
+
+            widget:clear()
+
+            for _, panel in ipairs({ "code", "files", "diagnostics" }) do
+                assert.same(
+                    { panel },
+                    vim.api.nvim_buf_get_lines(
+                        widget.buf_nrs[panel],
+                        0,
+                        -1,
+                        false
+                    )
+                )
+            end
+        end)
     end)
 
     describe("partial_send", function()
