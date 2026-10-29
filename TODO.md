@@ -51,7 +51,7 @@ needs the fix in
 
 **No ordering:**
 [`PLAN-split-modules.md`](notes/PLAN-split-modules.md),
-[`PLAN-context-list-panels.md`](notes/PLAN-context-list-panels.md),
+[`PLAN-conflicting-restore-reset.md`](notes/PLAN-conflicting-restore-reset.md),
 [`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold),
 [`PLAN-terminal-streaming.md`](notes/PLAN-terminal-streaming.md),
