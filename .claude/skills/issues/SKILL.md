@@ -17,7 +17,7 @@ use `io.open` directly:
 
 ```lua
 do
-    local f = io.open("/tmp/agentic_diag.log", "a")
+    local f = io.open(vim.fn.stdpath("log") .. "/agentic_diag.log", "a")
     if f then
         f:write(string.format("%s %s\n", os.date("%H:%M:%S"), msg))
         f:close()
