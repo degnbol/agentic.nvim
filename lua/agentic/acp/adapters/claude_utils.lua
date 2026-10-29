@@ -322,7 +322,7 @@ end
 --- @return string
 function M.task_stop_instruction(agent_id, label)
     return string.format(
-        "Call TaskStop with task_id %s to stop the background subagent %s. Do nothing else.",
+        "Call TaskStop with task_id %s to stop the background subagent %s. Do nothing else. Do not reply nor report back what you did.",
         vim.json.encode(agent_id),
         vim.json.encode(label)
     )
@@ -337,7 +337,7 @@ end
 --- @return string
 function M.send_message_instruction(agent_id, label, message)
     return string.format(
-        "Call SendMessage with to: %s and message: %s, to message the background subagent %s. Send the message verbatim and do nothing else.",
+        "Call SendMessage with to: %s and message: %s, to message the background subagent %s. Send the message verbatim and do nothing else. Do not reply nor report back what you did.",
         vim.json.encode(agent_id),
         vim.json.encode(message),
         vim.json.encode(label)

@@ -6,7 +6,7 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
     describe("task_stop_instruction", function()
         it("names the agent id and label", function()
             assert.equal(
-                'Call TaskStop with task_id "a1b2" to stop the background subagent "Explore auth". Do nothing else.',
+                'Call TaskStop with task_id "a1b2" to stop the background subagent "Explore auth". Do nothing else. Do not reply nor report back what you did.',
                 ClaudeUtils.task_stop_instruction("a1b2", "Explore auth")
             )
         end)
@@ -20,7 +20,7 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
     describe("send_message_instruction", function()
         it("names the agent id, label and message", function()
             assert.equal(
-                'Call SendMessage with to: "a1b2" and message: "focus on tests", to message the background subagent "Explore auth". Send the message verbatim and do nothing else.',
+                'Call SendMessage with to: "a1b2" and message: "focus on tests", to message the background subagent "Explore auth". Send the message verbatim and do nothing else. Do not reply nor report back what you did.',
                 ClaudeUtils.send_message_instruction(
                     "a1b2",
                     "Explore auth",
