@@ -1073,9 +1073,8 @@ describe("SessionRestore", function()
             assert.equal(1, write_tool_spy.call_count)
         end)
 
-        -- The record → block projection is hand-picked field by field, so a
-        -- field the writer never receives is lost on replay alone, with the
-        -- saved session still holding it.
+        -- A field the record → block projection leaves out is lost on replay
+        -- alone, with the saved session still holding it.
         it("replays the SKILL.md path of a skill call", function()
             local write_tool_spy = spy.new(function() end)
 
@@ -1134,6 +1133,39 @@ describe("SessionRestore", function()
             )
 
             assert.equal("zsh", write_tool_spy.calls[1][2].shell)
+        end)
+
+        it("replays a failure reason, read range and search pattern", function()
+            local write_tool_spy = spy.new(function() end)
+
+            local writer = {
+                write_message = spy.new(function() end),
+                write_message_chunk = spy.new(function() end),
+                write_tool_call_block = write_tool_spy,
+                flush_thought_run = spy.new(function() end),
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "tool_call",
+                        tool_call_id = "t-1",
+                        kind = "search",
+                        argument = "rg foo",
+                        status = "failed",
+                        search_pattern = "foo",
+                        read_range = { offset = 1, limit = 2 },
+                        failure_reason = { "denied" },
+                    },
+                },
+                no_buffer
+            )
+
+            local block = write_tool_spy.calls[1][2]
+            assert.equal("foo", block.search_pattern)
+            assert.same({ offset = 1, limit = 2 }, block.read_range)
+            assert.same({ "denied" }, block.failure_reason)
         end)
 
         it("replays what decided a call's permission", function()

@@ -274,6 +274,60 @@ function ChatHistory:update_tool_call(tool_call_id, update)
     end
 end
 
+--- The fields of `agentic.ui.MessageWriter.ToolCallBase`, kept in sync by
+--- hand and compared with the class by a test. The fields `ToolCallBlock`
+--- adds, such as extmark ids and render caches, are left out.
+local TOOL_CALL_FIELDS = {
+    "tool_call_id",
+    "status",
+    "body",
+    "diff",
+    "kind",
+    "argument",
+    "search_pattern",
+    "read_range",
+    "failure_reason",
+    "description",
+    "shell",
+    "exits_plan",
+    "file_created",
+    "hunk_ranges",
+    "skill_path",
+    "subagent",
+    "decided_by",
+}
+
+--- The `TOOL_CALL_FIELDS` of `source`, sharing its values.
+--- @param source table
+--- @return table<string, any>
+local function tool_call_fields(source)
+    local fields = {}
+    for _, key in ipairs(TOOL_CALL_FIELDS) do
+        fields[key] = source[key]
+    end
+    return fields
+end
+
+--- The history record of a tool call or of an update to one, without
+--- rendering state. Shares the tables of `tool_call`.
+--- @param tool_call agentic.ui.MessageWriter.ToolCallBase
+--- @return agentic.ui.ChatHistory.ToolCall record
+function ChatHistory.tool_call_record(tool_call)
+    local record = tool_call_fields(tool_call) --[[@as agentic.ui.ChatHistory.ToolCall]]
+    record.type = "tool_call"
+    return record
+end
+
+--- The tool call block a history record renders as. Shares the tables of
+--- `record`.
+--- @param record agentic.ui.ChatHistory.ToolCall
+--- @return agentic.ui.MessageWriter.ToolCallBlock block
+function ChatHistory.to_tool_call_block(record)
+    local block = tool_call_fields(record) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+    block.argument = block.argument or ""
+    return block
+end
+
 --- The label of a session among `messages`: its SubAgent block's label, else
 --- `main agent`. The block is the `tool_call` whose `tool_call_id` is the
 --- session id.

@@ -701,6 +701,104 @@ describe("ChatHistory", function()
         end)
     end)
 
+    describe("tool call records", function()
+        --- @type agentic.ui.MessageWriter.ToolCallBase
+        local fields = {
+            tool_call_id = "tc-1",
+            status = "failed",
+            body = { "out" },
+            diff = { old = { "a" }, new = { "b" }, all = false },
+            kind = "search",
+            argument = "rg foo",
+            search_pattern = "foo",
+            read_range = { offset = 3, limit = 4 },
+            failure_reason = { "denied" },
+            description = "find foo",
+            shell = "zsh",
+            exits_plan = true,
+            file_created = false,
+            hunk_ranges = { { start_line = 1, end_line = 2 } },
+            skill_path = "/s/SKILL.md",
+            subagent = { label = "a", mode = "blocking", confirmed = true },
+            decided_by = { "grant" },
+        }
+
+        it("keeps every field of a tool call and none of its rendering", function()
+            local block = vim.tbl_extend("force", fields, {
+                extmark_id = 1,
+                decoration_extmark_ids = { 2 },
+                search_matches = {},
+                search_ansi = {},
+                cached_diff_blocks = {},
+                fold_anchor_id = 3,
+            }) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+
+            local record = ChatHistory.tool_call_record(block)
+
+            assert.same(
+                vim.tbl_extend("force", fields, { type = "tool_call" }),
+                record
+            )
+        end)
+
+        -- The kept fields are a hand copy of the `@class`, which nothing else
+        -- ties to it.
+        it("keeps every field ToolCallBase declares", function()
+            local source = vim.api.nvim_get_runtime_file(
+                "lua/agentic/ui/message_writer.lua",
+                false
+            )[1]
+            local declared = {} --- @type string[]
+            local in_class = false
+            for line in io.lines(source) do
+                if line:match("^%-%-%- @class ") then
+                    in_class = line:match(
+                        "^%-%-%- @class agentic%.ui%.MessageWriter%.ToolCallBase$"
+                    ) ~= nil
+                elseif in_class then
+                    local field = line:match("^%-%-%- @field ([%w_]+)")
+                    if not field then
+                        break
+                    end
+                    table.insert(declared, field)
+                end
+            end
+            assert.is_true(#declared > 0)
+
+            local block = {}
+            for _, field in ipairs(declared) do
+                block[field] = true
+            end
+            local record = ChatHistory.tool_call_record(block --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+
+            local kept = vim.tbl_filter(function(field)
+                return record[field] ~= nil
+            end, declared)
+            assert.same(declared, kept)
+        end)
+
+        it("turns a record back into the block it was made from", function()
+            local record = vim.tbl_extend(
+                "force",
+                fields,
+                { type = "tool_call", parent_tool_use_id = "task-1" }
+            ) --[[@as agentic.ui.ChatHistory.ToolCall]]
+
+            assert.same(fields, ChatHistory.to_tool_call_block(record))
+        end)
+
+        it("gives a record without an argument an empty one", function()
+            local block = ChatHistory.to_tool_call_block({
+                type = "tool_call",
+                tool_call_id = "tc-1",
+                kind = "execute",
+                status = "pending",
+            })
+
+            assert.equal("", block.argument)
+        end)
+    end)
+
     describe("save and read", function()
         --- The history saved for `session_id` under `TEST_CWD`.
         --- @param session_id string

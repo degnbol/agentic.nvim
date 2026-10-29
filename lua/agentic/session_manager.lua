@@ -1044,8 +1044,10 @@ function SessionManager:_set_agent_info(child_id, subagent)
         subagent = subagent,
     }
     self.message_writer:update_tool_call_block(update)
-    local tool_call = vim.tbl_extend("force", update, { type = "tool_call" }) --[[@as agentic.ui.ChatHistory.ToolCall]]
-    self.chat_history:update_tool_call(child_id, tool_call)
+    self.chat_history:update_tool_call(
+        child_id,
+        ChatHistory.tool_call_record(update)
+    )
     self:_history_changed(self.chat_history)
 end
 
@@ -1090,14 +1092,7 @@ function SessionManager:_open_agent(child_id, label, parent_session_id)
         subagent = subagent,
     }
     self.message_writer:write_tool_call_block(block)
-    self.chat_history:add_message({
-        type = "tool_call",
-        tool_call_id = child_id,
-        kind = block.kind,
-        status = block.status,
-        argument = block.argument,
-        subagent = subagent,
-    })
+    self.chat_history:add_message(ChatHistory.tool_call_record(block))
     self:_history_changed(self.chat_history)
 
     if self._loading then
@@ -2225,22 +2220,10 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     self:_writer_for(id):write_tool_call_block(tool_call)
     self:_indicator_for(id):reposition()
 
-    --- @type agentic.ui.ChatHistory.ToolCall
-    local tool_msg = {
-        type = "tool_call",
-        tool_call_id = tool_call.tool_call_id,
-        kind = tool_call.kind,
-        status = tool_call.status,
-        argument = tool_call.argument,
-        description = tool_call.description,
-        shell = tool_call.shell,
-        body = tool_call.body,
-        diff = tool_call.diff,
-        skill_path = tool_call.skill_path,
-        subagent = tool_call.subagent,
-        decided_by = tool_call.decided_by,
-        parent_tool_use_id = parent,
-    }
+    -- After the write: the writer drops bodies that must not be kept (a mode
+    -- switch's internal instructions) and the renderer adds `read_range`.
+    local tool_msg = ChatHistory.tool_call_record(tool_call)
+    tool_msg.parent_tool_use_id = parent
     self.chat_history:add_message(tool_msg)
     if parent then
         self:_sync_modified(self.chat_history)
@@ -2268,17 +2251,17 @@ function SessionManager:_on_permission_decided(tool_call_id, deciders)
         return
     end
     self.permission_manager:take_deciders(tool_call_id)
-    writer:update_tool_call_block({
+    --- @type agentic.ui.MessageWriter.ToolCallBase
+    local update = {
         tool_call_id = tool_call_id,
         status = tracker.status,
         decided_by = deciders,
-    })
-    self.chat_history:update_tool_call(tool_call_id, {
-        type = "tool_call",
-        tool_call_id = tool_call_id,
-        status = tracker.status,
-        decided_by = deciders,
-    })
+    }
+    writer:update_tool_call_block(update)
+    self.chat_history:update_tool_call(
+        tool_call_id,
+        ChatHistory.tool_call_record(update)
+    )
     self:_history_changed(self.chat_history)
 end
 
@@ -2606,10 +2589,13 @@ end
 --- @param writer agentic.ui.MessageWriter
 function SessionManager:_stamp_cancelled(writer)
     for _, id in ipairs(stamp_cancelled(writer)) do
-        --- @type agentic.ui.ChatHistory.ToolCall
-        local tool_call =
-            { type = "tool_call", tool_call_id = id, status = "cancelled" }
-        self.chat_history:update_tool_call(id, tool_call)
+        self.chat_history:update_tool_call(
+            id,
+            ChatHistory.tool_call_record({
+                tool_call_id = id,
+                status = "cancelled",
+            })
+        )
     end
 end
 
@@ -2663,19 +2649,10 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     self:_try_record_edit_range(id)
     self:_record_file_op(id)
 
-    --- @type agentic.ui.ChatHistory.ToolCall
-    local tool_call = {
-        type = "tool_call",
-        tool_call_id = id,
-        kind = tool_call_update.kind,
-        status = tool_call_update.status,
-        argument = tool_call_update.argument,
-        description = tool_call_update.description,
-        body = tool_call_update.body,
-        diff = tool_call_update.diff,
-        skill_path = tool_call_update.skill_path,
-    }
-    self.chat_history:update_tool_call(id, tool_call)
+    self.chat_history:update_tool_call(
+        id,
+        ChatHistory.tool_call_record(tool_call_update)
+    )
     -- A subagent can outlive its turn, so outside a turn its output is written
     -- as each of its calls ends, not per update.
     if

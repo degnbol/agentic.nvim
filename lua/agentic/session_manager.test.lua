@@ -4306,7 +4306,7 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("permission deciders", function()
+    describe("tool call handlers", function()
         local MessageWriter = require("agentic.ui.message_writer")
         local PermissionManager = require("agentic.ui.permission_manager")
 
@@ -4327,10 +4327,11 @@ describe("agentic.SessionManager", function()
                 message_writer = writer,
                 permission_manager = pm,
                 chat_history = ChatHistory:new(),
-                status_indicator = { reposition = noop },
+                status_indicator = { reposition = noop, start = noop },
                 _tool_call_owner = {},
                 _agents = {},
                 _loading = false,
+                _drain_hook_records = noop,
                 _agent_of = SessionManager._agent_of,
                 _writer_for = SessionManager._writer_for,
                 _indicator_for = SessionManager._indicator_for,
@@ -4338,6 +4339,7 @@ describe("agentic.SessionManager", function()
                 _try_record_edit_range = noop,
                 _record_file_op = noop,
                 _on_tool_call = SessionManager._on_tool_call,
+                _on_tool_call_update = SessionManager._on_tool_call_update,
                 _on_permission_decided = SessionManager._on_permission_decided,
             } --[[@as agentic.SessionManager]]
             pm.on_decided = function(id, deciders)
@@ -4364,6 +4366,40 @@ describe("agentic.SessionManager", function()
         it("records the call's shell in history", function()
             tool_call("tc-1")
             assert.equal("zsh", session.chat_history.messages[1].shell)
+        end)
+
+        it("records the fields an update adds in history", function()
+            tool_call("tc-1")
+            session:_on_tool_call_update({
+                tool_call_id = "tc-1",
+                status = "failed",
+                search_pattern = "x",
+                failure_reason = { "denied" },
+            })
+
+            local record = session.chat_history.messages[1]
+            assert.equal("x", record.search_pattern)
+            assert.same({ "denied" }, record.failure_reason)
+        end)
+
+        it("keeps recorded fields an update leaves out", function()
+            tool_call("tc-1")
+            session:_on_tool_call_update({
+                tool_call_id = "tc-1",
+                status = "completed",
+            })
+
+            local record = session.chat_history.messages[1]
+            assert.equal("grep x f", record.argument)
+            assert.equal("execute", record.kind)
+            assert.equal("completed", record.status)
+        end)
+
+        it("records no rendering state in history", function()
+            tool_call("tc-1")
+            local record = session.chat_history.messages[1] --[[@as table]]
+            assert.is_nil(record.extmark_id)
+            assert.is_nil(record.decoration_extmark_ids)
         end)
 
         --- @return string footer The last line of the chat that holds a status

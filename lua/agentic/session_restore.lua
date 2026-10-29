@@ -483,21 +483,7 @@ function SessionRestore.replay_messages(writer, messages, buffer_name)
             }
             writer:write_message_chunk(thought_chunk)
         elseif msg.type == "tool_call" then
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local tool_block = {
-                tool_call_id = msg.tool_call_id,
-                kind = msg.kind,
-                argument = msg.argument or "",
-                status = msg.status,
-                description = msg.description,
-                shell = msg.shell,
-                body = msg.body,
-                diff = msg.diff,
-                skill_path = msg.skill_path,
-                subagent = msg.subagent,
-                decided_by = msg.decided_by,
-            }
-            writer:write_tool_call_block(tool_block)
+            writer:write_tool_call_block(ChatHistory.to_tool_call_block(msg))
         elseif msg.type == "session_message" or msg.type == "subagent_end" then
             SessionRestore.write_row(writer, msg, true, buffer_name)
         end
