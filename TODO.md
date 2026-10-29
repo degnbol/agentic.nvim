@@ -24,7 +24,8 @@ Tracks are independent unless a note says otherwise.
 
 **Hooks in chat**
 1. [`PLAN-hooks_in_chat.md`](notes/PLAN-hooks_in_chat.md). Either order with
-   `PLAN-adapter-hook-records.md`.
+   `PLAN-adapter-hook-records.md` and
+   [`PLAN-stop-hook-feedback.md`](notes/PLAN-stop-hook-feedback.md).
 
 **Claude code behind the adapter:** the order is in
 [§ Claude-specific code behind the adapter](#claude-specific-code-behind-the-adapter).
