@@ -226,6 +226,9 @@ end
 --- - absolute if outside the current working directory
 --- - relative to the current working directory
 --- - or uses ~ for home directory
+--- The current working directory itself, and `""`, give `""`.
+--- @param path string
+--- @return string
 function FileSystem.to_smart_path(path)
     return vim.fn.fnamemodify(path, ":p:~:.")
 end

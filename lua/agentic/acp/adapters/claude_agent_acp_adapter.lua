@@ -70,6 +70,9 @@ end
 --- @field cron? string Schedule expression of a CronCreate
 --- @field planFilePath? string Plan file of an ExitPlanMode, on its permission request only
 --- @field command_description? string Bash `description` under the name the CLI also accepts
+--- @field path? string Directory or file a Grep or Glob searches
+--- @field glob? string File filter of a Grep
+--- @field type? string File type filter of a Grep
 
 --- claude-agent-acp sends rawInput/title/kind on tool_call_update, not just tool_call
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
@@ -551,6 +554,9 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
             message.argument = ClaudeUtils.rewrite_grep_to_rg(message.argument)
             if rawInput.pattern then
                 message.search_pattern = rawInput.pattern
+            end
+            if tool_name == "Grep" then
+                message.search_scope = ClaudeUtils.grep_scope(rawInput)
             end
         elseif kind == "execute" then
             lift_execute_description(message, rawInput)

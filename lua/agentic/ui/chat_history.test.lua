@@ -711,6 +711,7 @@ describe("ChatHistory", function()
             kind = "search",
             argument = "rg foo",
             search_pattern = "foo",
+            search_scope = "lua/",
             read_range = { offset = 3, limit = 4 },
             failure_reason = { "denied" },
             description = "find foo",

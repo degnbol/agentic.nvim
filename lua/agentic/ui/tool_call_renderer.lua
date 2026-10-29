@@ -327,11 +327,12 @@ end
 --- name has each word guarded that holds a markdown-special character.
 ---
 --- An empty `name` yields a bare `###` — used before the argument has streamed
---- in, and for execute calls with no model description (the command already
---- shows in the fence below). That is byte-identical to the section-close
---- boundary `write_message_chunk` emits, and has to stay so: both are
---- fence-less and uncaptured by `queries/agentic/context.scm`, so the enclosing
---- `## prompt` keeps the breadcrumb either way.
+--- in, for execute calls with no model description, and for search calls with
+--- no scope (the command already shows in the fence below). That is
+--- byte-identical to the section-close boundary `write_message_chunk` emits,
+--- and has to stay so: both are fence-less and uncaptured by
+--- `queries/agentic/context.scm`, so the enclosing `## prompt` keeps the
+--- breadcrumb either way.
 ---
 --- When `truncate` is set, `name` is clamped to `wrap_width` (or 80 when
 --- soft-wrapping) minus everything the rendered line spends on the frame, and
@@ -925,7 +926,12 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         local cmd_lines = vim.split(argument, "\n", { plain = true })
         local fence = M.safe_fence(cmd_lines)
         lines = {
-            collapsed_header(kind, cmd_lines[1], wrap_width, true),
+            collapsed_header(
+                kind,
+                tool_call_block.search_scope or "",
+                wrap_width,
+                true
+            ),
             fence .. shell_fence_lang(argument, "bash"),
         }
         vim.list_extend(lines, cmd_lines)

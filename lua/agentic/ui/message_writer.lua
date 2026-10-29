@@ -110,6 +110,7 @@ end
 --- @field kind? agentic.acp.ToolKind
 --- @field argument? string
 --- @field search_pattern? string Regex pattern for highlighting matches in search output
+--- @field search_scope? string Where a search looks (path and file filter), rendered as the search block's head
 --- @field read_range? { offset: integer, limit?: integer } Line range for partial reads
 --- @field failure_reason? string[] Error message shown in place of kind-specific body when status == "failed" (e.g. hook-denial reason, tool error). Extracted from rawOutput, so no ``` fences.
 --- @field description? string Model-provided one-line summary of the call (e.g. a Bash command's `description`), rendered as a title line under the header. Distinct from body (the output) and argument (the command).

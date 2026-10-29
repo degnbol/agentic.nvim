@@ -285,6 +285,7 @@ local TOOL_CALL_FIELDS = {
     "kind",
     "argument",
     "search_pattern",
+    "search_scope",
     "read_range",
     "failure_reason",
     "description",
