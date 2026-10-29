@@ -234,13 +234,29 @@ function SessionManager:_persist_history(history)
     self:_sync_modified(history)
 end
 
+--- Whether a turn is in flight or a subagent works.
+--- @param n_pending integer Prompts in flight
+--- @param agents table<string, agentic.SessionManager.Agent>
+--- @return boolean
+local function turn_or_subagent_running(n_pending, agents)
+    if n_pending > 0 then
+        return true
+    end
+    for _, agent in pairs(agents) do
+        if agent.open then
+            return true
+        end
+    end
+    return false
+end
+
 --- Set the `modified` flag of the chat and the transcripts, their only owner.
---- Each is true while `history` is unsaved; the chat's also while a turn is
---- in flight. A running turn counts even once written: quitting would cut it
---- off, so `:qa`, `:wqa` and `:bd` refuse until it ends. A history a
---- session/load is filling is a copy of its file, so it counts as saved. A
---- no-op for any history but the current one, so a callback holding a
---- replaced history cannot touch the flags.
+--- Each is true while `history` is unsaved; the chat's also while a turn or
+--- a subagent works. Running work counts even once written: quitting would
+--- cut it off, so `:qa`, `:wqa` and `:bd` refuse until it ends. A
+--- history a session/load is filling is a copy of its file, so it counts as
+--- saved. A no-op for any history but the current one, so a callback holding
+--- a replaced history cannot touch the flags.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_sync_modified(history)
     if history ~= self.chat_history then
@@ -250,7 +266,8 @@ function SessionManager:_sync_modified(history)
     -- Nil once the widget is destroyed.
     local chat = self.widget.buf_nrs.agent
     if chat and vim.api.nvim_buf_is_valid(chat) then
-        vim.bo[chat].modified = unsaved or self._prompt_pending > 0
+        vim.bo[chat].modified = unsaved
+            or turn_or_subagent_running(self._prompt_pending, self._agents)
     end
     for _, agent in pairs(self._agents) do
         if agent.transcript then
@@ -266,9 +283,17 @@ function SessionManager:_set_prompt_pending(count)
     self:_sync_modified(self.chat_history)
 end
 
+--- Mark a subagent working or not, and with it the chat's `modified` flag.
+--- @param agent agentic.SessionManager.Agent
+--- @param open boolean
+function SessionManager:_set_agent_open(agent, open)
+    agent.open = open
+    self:_sync_modified(self.chat_history)
+end
+
 --- Handle a mutation of `history`. With no turn in flight the change is
---- written at once, so an idle session is never left modified. Mid-turn only
---- the chat's `modified` flag follows it, and the turn-end save writes it.
+--- written at once. Mid-turn only the chat's `modified` flag follows it, and
+--- the turn-end save writes it.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_history_changed(history)
     -- A session/load replay mirrors the file; its end marks the history clean.
@@ -674,9 +699,9 @@ function SessionManager:_write_session()
     self:_persist_history(self.chat_history)
     -- Vim gives no reason when `:wqa` stops on a buffer its write left
     -- modified.
-    if self._prompt_pending > 0 then
+    if turn_or_subagent_running(self._prompt_pending, self._agents) then
         Logger.notify(
-            "History written; the chat stays modified until the running turn ends",
+            "History written; the chat stays modified while a turn or a subagent runs",
             vim.log.levels.WARN
         )
     end
@@ -1105,7 +1130,7 @@ end
 --- header without the last run's end, and a background one's message input.
 --- @param child_id string
 function SessionManager:_start_agent(child_id)
-    self._agents[child_id].open = true
+    self:_set_agent_open(self._agents[child_id], true)
     local transcript = self:_transcript_for(child_id)
     transcript.status_indicator:start("generating")
     transcript:set_context(nil)
@@ -1157,7 +1182,7 @@ function SessionManager:_end_agent(child_id, state)
         return
     end
 
-    agent.open = false
+    self:_set_agent_open(agent, false)
     local transcript = self:_transcript_for(child_id)
     transcript.status_indicator:stop()
     if word ~= "completed" then
@@ -1368,7 +1393,7 @@ end
 --- transcript as they are.
 function SessionManager:_forget_agents()
     for _, agent in pairs(self._agents) do
-        agent.open = false
+        self:_set_agent_open(agent, false)
         if agent.transcript then
             agent.transcript.status_indicator:stop()
         end
@@ -1385,6 +1410,7 @@ function SessionManager:_reset_subagents()
         end
     end
     self._agents = {}
+    self:_sync_modified(self.chat_history)
     self._agent_by_task = {}
     self._tool_call_owner = {}
     self._seen_messages = {}
@@ -1817,6 +1843,8 @@ function SessionManager:_refresh()
     -- submit with no way back, and unwedging that is what this function is for.
     self:_set_prompt_pending(0)
     self._loading = false
+    -- A subagent the provider never reports as ended holds the chat modified.
+    self:_close_agents({ state = "unknown" })
 
     -- Clear per-turn MessageWriter flags that can desynchronise the display.
     -- Cosmetic-only effect mid-turn; essential for recovering from a stuck
@@ -3383,8 +3411,8 @@ end
 --- bring the counter back down. A restore leaves `_cancel_session` unrun.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
-    self:_set_prompt_pending(0)
     self:_forget_agents()
+    self:_set_prompt_pending(0)
     self:_destroy_inputs()
 end
 

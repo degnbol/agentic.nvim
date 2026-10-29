@@ -726,5 +726,120 @@ _G.second_tracker = _G.writer_of(_G.s).tool_call_blocks["c-2"]
                 )
             )
         end)
+
+        describe("while a subagent works", function()
+            --- With no turn pending, start subagent `task-1` and stream a
+            --- chunk from it, leaving the history unsaved.
+            local function start_working()
+                open_session()
+                open_task("task-1")
+                subagent_chunk("first finding", "task-1")
+            end
+
+            --- End subagent `task-1` with an idle update.
+            local function end_working()
+                child.lua([[
+_G.h.on_session_update({
+    sessionUpdate = "subagent_update",
+    sessionId = "task-1",
+    state = { state = "idle", stopReason = "end_turn" },
+}, "sid-1")
+]])
+            end
+
+            describe("chat modified", function()
+                it("is set, also after :w", function()
+                    start_working()
+                    assert.is_true(chat_modified())
+
+                    child.lua(
+                        [[vim.api.nvim_set_current_win(_G.s.widget:home_win())]]
+                    )
+                    child.cmd("write")
+
+                    assert.is_true(chat_modified())
+                    assert.truthy(session_file():find("first finding", 1, true))
+                end)
+
+                for name, run in pairs({
+                    ["an idle update"] = end_working,
+                    ["a disconnect"] = function()
+                        child.lua([[_G.h.on_disconnect()]])
+                    end,
+                    ["clearing the chat"] = function()
+                        child.lua([[_G.s:clear_chat()]])
+                    end,
+                    ["a new session epoch"] = function()
+                        child.lua([[_G.s:_advance_session_epoch()]])
+                    end,
+                    ["a refresh"] = function()
+                        child.lua([[_G.s:_refresh()]])
+                    end,
+                }) do
+                    it("is cleared by " .. name, function()
+                        start_working()
+                        child.lua([[_G.s:_write_session()]])
+                        assert.is_true(chat_modified())
+
+                        run()
+
+                        assert.is_false(chat_modified())
+                    end)
+                end
+            end)
+
+            describe("quitting", function()
+                it(":qa refuses once the history is written", function()
+                    start_working()
+                    child.lua([[_G.s:_write_session()]])
+
+                    local result = child.lua_get([[{ pcall(vim.cmd, "qa") }]])
+
+                    assert.is_false(result[1])
+                    assert.truthy(tostring(result[2]):find("E37"))
+                    assert.is_true(child_alive())
+                end)
+
+                it(
+                    ":bd on the chat refuses once the history is written",
+                    function()
+                        start_working()
+                        child.lua([[_G.s:_write_session()]])
+
+                        local result = child.lua_get(
+                            [[{ pcall(vim.cmd, "bdelete " .. _G.chat) }]]
+                        )
+
+                        assert.is_false(result[1])
+                        assert.truthy(tostring(result[2]):find("E89"))
+                        assert.equal(1, live_sessions())
+                    end
+                )
+
+                it(":wqa writes the history, says why and stays", function()
+                    start_working()
+                    capture_notify()
+
+                    pcall(child.cmd, "wqa")
+                    vim.uv.sleep(100)
+
+                    assert.is_true(child_alive())
+                    assert.truthy(session_file():find("first finding", 1, true))
+                    assert.same({
+                        "History written; the chat stays modified while a turn or a subagent runs",
+                    }, child.lua_get("_G.notes"))
+                end)
+
+                it(":qa quits once an idle update ends it", function()
+                    start_working()
+                    end_working()
+
+                    pcall(child.cmd, "qa")
+                    vim.uv.sleep(100)
+
+                    assert.is_false(child_alive())
+                end)
+            end)
+        end)
     end)
 end)

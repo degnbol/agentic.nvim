@@ -880,10 +880,10 @@ lives as long as its chat buffer, which is listed.
     `:bd` on a transcript  Unloads and unlists it; its agent's output reloads it.
     `:bw` on a transcript  Wipes it; its agent's output makes it again.
 
-The chat is 'modified' while a running turn's history is not yet written. An
-idle session writes its history as it changes, except a subagent's text,
-which is written when one of its tool calls ends, at the next turn's end, or
-on `:w`.
+The chat is 'modified' while its history is not yet written, and while a turn
+or a subagent works. With no turn running, the session writes its history as
+it changes, except a subagent's text, which is written when one of its tool
+calls ends, at the next turn's end, or on `:w`.
 
 Each subagent transcript (|agentic-subagents|) is a listed buffer saved with
 the session. It is 'modified' while the session's history is not yet
