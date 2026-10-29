@@ -380,6 +380,33 @@ describe("agentic.utils.TextWrap", function()
             assert.equal(4, #result)
         end)
 
+        it("aligns a link cell by its shown width", function()
+            local lines = {
+                "| Name | Note |",
+                "|---|---|",
+                "| [docs](https://example.com) | x |",
+                "| plain | y |",
+            }
+            assert.same({
+                "| Name  | Note |",
+                "| ----- | ---- |",
+                "| [docs](https://example.com)  | x    |",
+                "| plain | y    |",
+            }, TextWrap.wrap_prose(lines, 80))
+        end)
+
+        it(
+            "leaves a pipe-led block without a delimiter row unchanged",
+            function()
+                local lines = {
+                    "| a | b |",
+                    "| c |",
+                    "|---|---|",
+                }
+                assert.same(lines, TextWrap.wrap_prose(lines, 80))
+            end
+        )
+
         it("handles table with uneven column counts", function()
             local lines = {
                 "| A | B | C |",
@@ -683,10 +710,16 @@ describe("agentic.utils.TextWrap", function()
             return { TextWrap.split_sentence(line) }
         end
 
-        it("splits at the first sentence end followed by a new sentence", function()
-            assert.same({ "Do it.", "Then check." }, split("Do it. Then check."))
-            assert.same({ "Why?!", "Because." }, split("Why?! Because."))
-        end)
+        it(
+            "splits at the first sentence end followed by a new sentence",
+            function()
+                assert.same(
+                    { "Do it.", "Then check." },
+                    split("Do it. Then check.")
+                )
+                assert.same({ "Why?!", "Because." }, split("Why?! Because."))
+            end
+        )
 
         it("does not split a line with one sentence", function()
             assert.same({ "Done." }, split("Done."))
@@ -698,30 +731,49 @@ describe("agentic.utils.TextWrap", function()
         end)
 
         it("ends no sentence inside parentheses or inline code", function()
-            assert.same({ "Done (see a. B.) now.", "Later." }, split("Done (see a. B.) now. Later."))
-            assert.same({ "Run `a. B` now.", "Later." }, split("Run `a. B` now. Later."))
+            assert.same(
+                { "Done (see a. B.) now.", "Later." },
+                split("Done (see a. B.) now. Later.")
+            )
+            assert.same(
+                { "Run `a. B` now.", "Later." },
+                split("Run `a. B` now. Later.")
+            )
             assert.same(
                 { "Open (unbalanced.", "Then x." },
                 split("Open (unbalanced. Then x.")
             )
         end)
 
-        it("splits off a parenthetical that ends a line with no sentence end", function()
-            assert.same({ "Launched", "(never quote it)" }, split("Launched (never quote it)"))
-            assert.same({ "(a) foo", "(b)" }, split("(a) foo (b)"))
-            assert.same({ "Run all (unit) and report" }, split("Run all (unit) and report"))
-            assert.same({ "(aside)" }, split("(aside)"))
-            assert.same({ "foo(bar)" }, split("foo(bar)"))
-        end)
+        it(
+            "splits off a parenthetical that ends a line with no sentence end",
+            function()
+                assert.same(
+                    { "Launched", "(never quote it)" },
+                    split("Launched (never quote it)")
+                )
+                assert.same({ "(a) foo", "(b)" }, split("(a) foo (b)"))
+                assert.same(
+                    { "Run all (unit) and report" },
+                    split("Run all (unit) and report")
+                )
+                assert.same({ "(aside)" }, split("(aside)"))
+                assert.same({ "foo(bar)" }, split("foo(bar)"))
+            end
+        )
     end)
 
     describe("head_and_rest", function()
-        it("splits off the first non-blank line and trims blank edges", function()
-            local head, rest =
-                TextWrap.head_and_rest("\n  \nTitle\n\nbody 1\n\nbody 2\n\n")
-            assert.equal("Title", head)
-            assert.same({ "body 1", "", "body 2" }, rest)
-        end)
+        it(
+            "splits off the first non-blank line and trims blank edges",
+            function()
+                local head, rest = TextWrap.head_and_rest(
+                    "\n  \nTitle\n\nbody 1\n\nbody 2\n\n"
+                )
+                assert.equal("Title", head)
+                assert.same({ "body 1", "", "body 2" }, rest)
+            end
+        )
 
         it("gives an empty rest for one line", function()
             local head, rest = TextWrap.head_and_rest("Only")

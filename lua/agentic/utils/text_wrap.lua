@@ -1,3 +1,5 @@
+local MarkdownTable = require("agentic.utils.markdown_table")
+
 --- Fitting text to a display width: hard-wrapping prose (code blocks left
 --- untouched), truncating to a column budget, abbreviating a count, and the
 --- fence bookkeeping wrapping needs to know where prose stops.
@@ -176,116 +178,20 @@ local function is_separator_row(cells)
     return #cells > 0
 end
 
---- Build a separator cell of given width preserving alignment markers.
---- @param original string  Original separator cell (e.g. ":---:", "---:", ":---")
---- @param width integer    Target content width (excluding padding spaces)
---- @return string
-local function build_separator_cell(original, width)
-    local left = original:match("^:") and ":" or ""
-    local right = original:match(":$") and ":" or ""
-    local dashes = width - #left - #right
-    if dashes < 1 then
-        dashes = 1
-    end
-    return left .. string.rep("-", dashes) .. right
-end
-
---- Visual width of a table cell accounting for multibyte characters and
---- concealed markdown delimiters. At conceallevel=2 (the chat window default),
---- treesitter conceals emphasis_delimiter and code_span_delimiter nodes, so
---- delimiter characters are visually absent. Strikethrough is special: the
---- `~` chars only conceal for the genuine `~~double~~` case (which parses as
---- a strikethrough nested in another strikethrough); stray single tildes
---- stay visible because the parser pairs them spuriously (`~14 vs ~7`). The
---- nested-only conceal lives in the parent config's
---- `after/queries/markdown_inline/highlights.scm`.
---- @param cell string
---- @return integer
-local function cell_visual_width(cell)
-    -- Strip concealed delimiters to get visual content, then measure.
-    -- Order matters: code spans first (protects content), then longest
-    -- emphasis delimiters before shorter ones to avoid partial matches.
-    local s = cell
-    s = s:gsub("`([^`]+)`", "%1") -- code spans
-    s = s:gsub("%*%*%*(.-)%*%*%*", "%1") -- bold+italic ***
-    s = s:gsub("%*%*(.-)%*%*", "%1") -- bold **
-    s = s:gsub("%*(.-)%*", "%1") -- italic *
-    s = s:gsub("~~(.-)~~", "%1") -- ~~double~~ only
-    return vim.api.nvim_strwidth(s)
-end
-
 --- Format a contiguous block of markdown table lines with aligned columns.
+--- A block whose second row is not a delimiter row is no table to the
+--- markdown parser, and is returned unchanged.
 --- @param table_lines string[]
 --- @return string[]
 local function format_table(table_lines)
-    -- Parse all rows
     local rows = {}
     for _, line in ipairs(table_lines) do
         rows[#rows + 1] = parse_table_row(line)
     end
-
-    -- Find max column count and column widths
-    local num_cols = 0
-    for _, row in ipairs(rows) do
-        if #row > num_cols then
-            num_cols = #row
-        end
-    end
-    if num_cols == 0 then
+    if not (rows[2] and is_separator_row(rows[2])) then
         return table_lines
     end
-
-    local col_widths = {}
-    for c = 1, num_cols do
-        col_widths[c] = 0
-    end
-
-    -- Find separator row index for width calculation (exclude separator dashes from width)
-    local sep_idx = nil
-    for i, row in ipairs(rows) do
-        if is_separator_row(row) then
-            sep_idx = i
-            break
-        end
-    end
-
-    for idx, row in ipairs(rows) do
-        if idx ~= sep_idx then
-            for c = 1, num_cols do
-                local cell = row[c] or ""
-                local vw = cell_visual_width(cell)
-                if vw > col_widths[c] then
-                    col_widths[c] = vw
-                end
-            end
-        end
-    end
-
-    -- Ensure minimum width of 3 for separator dashes
-    for c = 1, num_cols do
-        if col_widths[c] < 3 then
-            col_widths[c] = 3
-        end
-    end
-
-    -- Rebuild each row with padded cells
-    local result = {}
-    for _, row in ipairs(rows) do
-        local parts = {}
-        local is_sep = is_separator_row(row)
-        for c = 1, num_cols do
-            local cell = row[c] or ""
-            if is_sep then
-                parts[#parts + 1] = build_separator_cell(cell, col_widths[c])
-            else
-                parts[#parts + 1] = cell
-                    .. string.rep(" ", col_widths[c] - cell_visual_width(cell))
-            end
-        end
-        result[#result + 1] = "| " .. table.concat(parts, " | ") .. " |"
-    end
-
-    return result
+    return MarkdownTable.lines(rows[1], vim.list_slice(rows, 3), rows[2])
 end
 
 --- Wrap a single prose line at word boundaries.
