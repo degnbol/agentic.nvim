@@ -1697,35 +1697,96 @@ describe("agentic.ui.ChatWidget", function()
             vim.api.nvim_set_current_win(widget:input_win() --[[@as integer]])
         end
 
-        -- Insert mode would type the trailing "X"; normal mode at col 0
-        -- ignores it.
-        it("leaves insert mode", function()
-            map_stage()
+        it("inserts at the cursor in the input in normal mode", function()
+            fill_buffer(widget, "input", { "draft" })
+            vim.api.nvim_set_current_win(widget:input_win() --[[@as integer]])
+            vim.api.nvim_win_set_cursor(0, { 1, 2 })
 
-            press("i" .. vim.keycode("<Plug>(agentic-test-stage)") .. "X")
+            widget:_stage_input("Continue")
 
-            assert.same({ "Continue" }, input_lines(widget))
+            assert.same({ "drContinueaft" }, input_lines(widget))
+            assert.equal("n", vim.api.nvim_get_mode().mode)
         end)
 
-        it("leaves visual mode", function()
+        -- Normal mode would run the trailing "X" as a delete.
+        it("stays in insert mode in the input", function()
+            fill_buffer(widget, "input", { "draft" })
+            map_stage()
+
+            press("A" .. vim.keycode("<Plug>(agentic-test-stage)") .. "X")
+
+            assert.same({ "draftContinueX" }, input_lines(widget))
+        end)
+
+        it("replaces a visual selection in the input", function()
             fill_buffer(widget, "input", { "one", "two" })
             map_stage()
 
             press("ggVj" .. vim.keycode("<Plug>(agentic-test-stage)"))
 
+            assert.same({ "Continue" }, input_lines(widget))
             assert.equal("n", vim.api.nvim_get_mode().mode)
-            assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(0))
         end)
 
-        it("leaves select mode", function()
+        it("replaces a select selection in the input", function()
             fill_buffer(widget, "input", { "one", "two" })
             map_stage()
 
             press("ggVj\7" .. vim.keycode("<Plug>(agentic-test-stage)"))
 
+            assert.same({ "Continue" }, input_lines(widget))
             assert.equal("n", vim.api.nvim_get_mode().mode)
-            assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(0))
         end)
+
+        --- Map `<Plug>(agentic-test-stage)` in insert, visual and select mode
+        --- on the agent buffer to stage "Continue", and focus its window.
+        local function map_stage_on_agent()
+            fill_buffer(widget, "agent", { "one", "two" })
+            vim.keymap.set(
+                { "i", "x", "s" },
+                "<Plug>(agentic-test-stage)",
+                function()
+                    widget:_stage_input("Continue")
+                end,
+                { buffer = widget.buf_nrs.agent }
+            )
+            vim.api.nvim_set_current_win(home)
+        end
+
+        -- Insert mode would type the trailing "X" in the agent buffer;
+        -- normal mode at col 0 of the input ignores it.
+        it("leaves insert mode outside the input", function()
+            map_stage_on_agent()
+
+            press(
+                vim.keycode("<Cmd>startinsert<CR><Plug>(agentic-test-stage)")
+                    .. "X"
+            )
+
+            assert.same(
+                { "one", "two" },
+                vim.api.nvim_buf_get_lines(widget.buf_nrs.agent, 0, -1, false)
+            )
+            assert.same({ "Continue" }, input_lines(widget))
+        end)
+
+        for _, case in ipairs({
+            { name = "visual", keys = "ggVj" },
+            { name = "select", keys = "ggVj\7" },
+        }) do
+            it("leaves " .. case.name .. " mode outside the input", function()
+                map_stage_on_agent()
+
+                press(case.keys .. vim.keycode("<Plug>(agentic-test-stage)"))
+
+                assert.equal("n", vim.api.nvim_get_mode().mode)
+                assert.equal(
+                    widget.buf_nrs.input,
+                    vim.api.nvim_get_current_buf()
+                )
+                assert.same({ "Continue" }, input_lines(widget))
+            end)
+        end
 
         it("adds every line, cursor on the first", function()
             fill_buffer(widget, "input", { "draft" })

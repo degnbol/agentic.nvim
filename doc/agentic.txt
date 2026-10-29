@@ -224,12 +224,14 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                               *agentic-config-keymaps-prompts*
 `keymaps.prompts` table
-    Canned prompts: a key-to-text map applied to every widget buffer. The
-    key puts the text at the end of the input, with a blank line before it
-    when the input has text, and moves the cursor to it in normal mode. Send
-    or queue it with the keys in |agentic-keymaps-prompt|. The default binds
-    `<localLeader>c` to "Continue". A value may be
-    `{ prompt, mode, desc }` for mode and description control. Set a key to
+    Canned prompts: a key-to-text map applied to every widget buffer. In the
+    input, the key inserts the text at the cursor, or in place of a visual
+    selection. Elsewhere it puts the text at the end of the input, with a
+    blank line before it when the input has text, and moves the cursor to it
+    in normal mode. Send or queue it with the keys in
+    |agentic-keymaps-prompt|. The default binds `<localLeader>c` to
+    "Continue". A value may be `{ prompt, mode, desc }` for mode and
+    description control. Set a key to
     `vim.NIL` or `""` to disable an inherited binding; plain `nil` does not
     disable it. >lua
         require("agentic").setup {

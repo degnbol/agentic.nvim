@@ -211,6 +211,51 @@ function BufHelpers.append_paragraph(bufnr, lines)
     return first_row
 end
 
+--- Insert lines in the current window's buffer, before the cursor, or in place
+--- of the selection in visual and select mode (a block's text goes once, at
+--- its top-left corner). The cursor ends on the character after the text, as
+--- `gP` leaves it, and typing continues there in insert mode. A selection
+--- ends in the mode it started from, as an operator does: normal mode, or
+--- insert mode after `i_CTRL-O`. Reads and writes no register.
+--- @param lines string[]
+function BufHelpers.insert_text(lines)
+    if vim.api.nvim_get_mode().mode:match("^[sS\19]") then
+        -- `normal!` in select mode types its keys as text.
+        vim.cmd("normal! \7")
+    end
+    local mode = vim.api.nvim_get_mode().mode:sub(1, 1)
+
+    --- @type integer[] (1,0)-indexed start of the text
+    local pos
+    if mode == "V" then
+        local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+        local first = math.min(vim.fn.line("v"), cursor_row)
+        local last = math.max(vim.fn.line("v"), cursor_row)
+        vim.cmd("normal! \27")
+        -- Not `"_d` and a put: that leaves an extra empty line when the
+        -- selection is the whole buffer.
+        vim.api.nvim_buf_set_lines(0, first - 1, last, false, lines)
+        pos = { first, 0 }
+    elseif mode == "v" or mode == "\22" then
+        local tick = vim.b.changedtick
+        vim.cmd('normal! "_d')
+        -- '[ over the cursor: a delete to the end of the line leaves the
+        -- cursor one character left. A delete of nothing leaves '[ unset or
+        -- stale.
+        pos = vim.b.changedtick == tick and vim.api.nvim_win_get_cursor(0)
+            or vim.api.nvim_buf_get_mark(0, "[")
+        local row = pos[1] - 1
+        vim.api.nvim_buf_set_text(0, row, pos[2], row, pos[2], lines)
+    else
+        vim.api.nvim_put(lines, "c", false, true)
+        return
+    end
+    -- set_lines and set_text, unlike nvim_put, do not move the cursor
+    -- after the text.
+    local end_col = (#lines == 1 and pos[2] or 0) + #lines[#lines]
+    vim.api.nvim_win_set_cursor(0, { pos[1] + #lines - 1, end_col })
+end
+
 --- Add lines to the start of a buffer as a paragraph of their own: they
 --- replace a buffer with no text, and precede a blank line otherwise.
 --- @param bufnr integer

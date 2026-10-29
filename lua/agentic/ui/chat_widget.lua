@@ -1246,13 +1246,19 @@ function ChatWidget:_bind_canned_prompt_keymaps(bufnr)
     end
 end
 
---- Add text to the end of the input as a paragraph of its own, and focus the
---- input in normal mode with the cursor on the text's first line. Leading and
---- trailing empty lines of the text are dropped.
+--- Put text in the input. With the input as the current buffer, the text goes
+--- in at the cursor or replaces the selection. Otherwise it goes at the end of
+--- the input as a paragraph of its own, and the input gets focus in normal
+--- mode with the cursor on the text's first line. Leading and trailing empty
+--- lines of the text are dropped.
 --- @param text string
 function ChatWidget:_stage_input(text)
     local lines = vim.split(text, "\n", { trimempty = true })
     if #lines == 0 then
+        return
+    end
+    if vim.api.nvim_get_current_buf() == self.buf_nrs.input then
+        BufHelpers.insert_text(lines)
         return
     end
     local row = BufHelpers.append_paragraph(self.buf_nrs.input, lines)

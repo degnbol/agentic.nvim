@@ -239,6 +239,197 @@ describe("BufHelpers", function()
         end)
     end)
 
+    describe("insert_text", function()
+        local bufnr
+        local text
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_win_set_buf(0, bufnr)
+            text = { "Cont" }
+            vim.keymap.set(
+                { "n", "i", "x", "s" },
+                "<Plug>(test-insert)",
+                function()
+                    BufHelpers.insert_text(text)
+                end,
+                { buf = bufnr }
+            )
+        end)
+
+        after_each(function()
+            vim.cmd("stopinsert")
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        local function lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- @param keys string
+        local function press(keys)
+            vim.api.nvim_feedkeys(vim.keycode(keys), "x", false)
+        end
+
+        --- Fill the buffer with `original` as its own undo step, press
+        --- `keys` then the insert key, and check the result: `expected`
+        --- text, the cursor at `cursor`, normal mode, the unnamed register
+        --- unchanged, and one `u` back to `original`.
+        --- @param original string[]
+        --- @param keys string
+        --- @param expected string[]
+        --- @param cursor integer[] (1,0)-indexed
+        local function check(original, keys, expected, cursor)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, original)
+            vim.o.undolevels = vim.o.undolevels
+            vim.fn.setreg('"', "kept")
+
+            press(keys .. "<Plug>(test-insert)")
+
+            assert.same(expected, lines())
+            assert.same(cursor, vim.api.nvim_win_get_cursor(0))
+            assert.equal("n", vim.api.nvim_get_mode().mode)
+            assert.equal("kept", vim.fn.getreg('"'))
+            vim.cmd("silent undo")
+            assert.same(original, lines())
+        end
+
+        it("inserts before the cursor in normal mode, as gP", function()
+            check({ "abcd" }, "ll", { "abContcd" }, { 1, 6 })
+        end)
+
+        it("splits the line around multi-line text", function()
+            text = { "x", "y" }
+            check({ "abcd" }, "ll", { "abx", "ycd" }, { 2, 1 })
+        end)
+
+        it("inserts where typing goes in insert mode", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "abcd" })
+            press("lli<Plug>(test-insert)X")
+            assert.same({ "abContXcd" }, lines())
+        end)
+
+        it("inserts at the end of the line in insert mode", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "abcd" })
+            press("A<Plug>(test-insert)X")
+            assert.same({ "abcdContX" }, lines())
+        end)
+
+        it("replaces a forward selection", function()
+            check({ "abcd" }, "lvl", { "aContd" }, { 1, 5 })
+        end)
+
+        it("replaces a backward selection", function()
+            check({ "abcd" }, "llvh", { "aContd" }, { 1, 5 })
+        end)
+
+        it("joins the next line for v$, as v$c", function()
+            check({ "abcd", "ef" }, "lv$", { "aContef" }, { 1, 5 })
+        end)
+
+        it("replaces a selection ending on a multibyte character", function()
+            check({ "aéb" }, "vl", { "Contb" }, { 1, 4 })
+        end)
+
+        it("follows selection=exclusive", function()
+            vim.o.selection = "exclusive"
+            MiniTest.finally(function()
+                vim.o.selection = "inclusive"
+            end)
+            check({ "abcd" }, "lvll", { "aContd" }, { 1, 5 })
+        end)
+
+        it("replaces the lines of a linewise selection", function()
+            check(
+                { "one", "two", "three" },
+                "jV",
+                { "one", "Cont", "three" },
+                { 2, 3 }
+            )
+        end)
+
+        it("replaces the whole buffer with no extra empty line", function()
+            check({ "one", "two" }, "ggVG", { "Cont" }, { 1, 3 })
+        end)
+
+        it("replaces a gh select-mode selection", function()
+            check({ "abcd" }, "lgh", { "aContcd" }, { 1, 5 })
+        end)
+
+        it("replaces a gH select-mode selection", function()
+            check({ "one", "two" }, "gH", { "Cont", "two" }, { 1, 3 })
+        end)
+
+        it("puts the text once at a block's top-left corner", function()
+            check({ "abcd", "efgh" }, "l<C-v>jl", { "aContd", "eh" }, { 1, 5 })
+        end)
+
+        it("puts the text at a backward block's top-left corner", function()
+            check(
+                { "abcd", "efgh" },
+                "jll<C-v>kh",
+                { "aContd", "eh" },
+                { 1, 5 }
+            )
+        end)
+
+        it("puts the text after a block deleted to $", function()
+            check({ "abcd", "ef" }, "l<C-v>j$", { "aCont", "e" }, { 1, 4 })
+        end)
+
+        it("puts the text after v$ on the last line", function()
+            check({ "ab", "cd" }, "jlv$", { "ab", "cCont" }, { 2, 4 })
+        end)
+
+        it("fills an empty buffer from v", function()
+            check({ "" }, "v", { "Cont" }, { 1, 3 })
+        end)
+
+        it("fills an empty buffer from V", function()
+            check({ "" }, "V", { "Cont" }, { 1, 3 })
+        end)
+
+        it("continues insert mode after a selection from i_CTRL-O", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "abcd" })
+            press("li<C-o>vl<Plug>(test-insert)X")
+            assert.same({ "aContXd" }, lines())
+        end)
+
+        it(
+            "continues insert mode after a selection to the end of the line",
+            function()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "abcd" })
+                press("lli<C-o>vl<Plug>(test-insert)X")
+                assert.same({ "abContX" }, lines())
+            end
+        )
+
+        it("continues insert mode after a linewise selection", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "one", "two" })
+            press("i<C-o>V<Plug>(test-insert)X")
+            assert.same({ "ContX", "two" }, lines())
+        end)
+
+        it("joins the undo step of insert mode", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "ab" })
+            vim.o.undolevels = vim.o.undolevels
+
+            press("Ax<Plug>(test-insert)y<Esc>")
+            assert.same({ "abxConty" }, lines())
+            vim.cmd("silent undo")
+
+            assert.same({ "ab" }, lines())
+        end)
+
+        it("inserts at the cursor for v on an empty last line", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "abc", "" })
+            -- Sets '[ on the first line.
+            press("lx")
+
+            check(lines(), "Gv", { "ac", "Cont" }, { 2, 3 })
+        end)
+    end)
+
     describe("prepend_paragraph", function()
         local bufnr
 
