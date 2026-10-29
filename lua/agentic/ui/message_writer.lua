@@ -2642,12 +2642,9 @@ end
 
 --- Hold the pending fold ops until the user leaves insert mode, then retry.
 ---
---- Vim suppresses foldUpdate in insert mode, so a `:foldclose` issued while the
---- user types in the prompt buffer finds no fold and raises E490 — and since
---- the flush drops each op after trying it, the body would stay expanded for
---- good. That is the dominant case for a thought run, which finishes precisely
---- while the user is typing the next prompt. The autocmd is not buffer-scoped:
---- the insert session it waits on is in another buffer.
+--- Vim skips `foldUpdate` in insert mode, so a `:foldclose` issued while the
+--- user types in another buffer finds no fold and raises E490. The autocmd is
+--- not buffer-scoped: the insert session it waits on is in another buffer.
 --- @private
 function MessageWriter:_retry_folds_on_insert_leave()
     if self._fold_retry_armed then
@@ -2658,8 +2655,9 @@ function MessageWriter:_retry_folds_on_insert_leave()
         once = true,
         callback = function()
             self._fold_retry_armed = false
-            -- Scheduled so the fold levels vim recomputes on leaving insert
-            -- are in place before :foldclose looks for one.
+            -- Vim does not recompute expr folds on leaving insert
+            -- (`foldUpdateAfterInsert`), so rows written during insert still
+            -- have no fold here and their ops fail with E490.
             vim.schedule(function()
                 self:flush_pending_fold_ops()
             end)
