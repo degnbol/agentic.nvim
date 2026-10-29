@@ -503,32 +503,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.same({ "--strict" }, msg.body)
         end)
 
-        it("gives a Grep call its search scope", function()
-            local msg = make_adapter():__build_tool_call_update({
-                toolCallId = "tc-grep",
-                kind = "search",
-                status = "in_progress",
-                title = "grep --type=lua foo",
-                rawInput = { pattern = "foo", type = "lua" },
-                _meta = { claudeCode = { toolName = "Grep" } },
-            })
-
-            assert.equal("type lua", msg.search_scope)
-        end)
-
-        it("gives a Glob call no search scope", function()
-            local msg = make_adapter():__build_tool_call_update({
-                toolCallId = "tc-glob",
-                kind = "search",
-                status = "in_progress",
-                title = "Find `lua` `*.lua`",
-                rawInput = { pattern = "*.lua", path = "lua" },
-                _meta = { claudeCode = { toolName = "Glob" } },
-            })
-
-            assert.is_nil(msg.search_scope)
-        end)
-
         it("shows a blank argument until the skill name lands", function()
             local adapter, calls = make_capturing_adapter()
 

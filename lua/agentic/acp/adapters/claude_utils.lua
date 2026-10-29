@@ -358,38 +358,6 @@ function M.rewrite_grep_to_rg(argument)
     return argument
 end
 
---- Where a Grep call searches: its path, glob and `type <name>` filter, each
---- only when set, joined by " · ". Empty when none is set.
----
---- The path is `path` when it is a string, else `file_path`, as `grepPath` in
---- the bridge's `tool-calls/reporters/search.js` reads it. It is shown as
---- `FileSystem.to_smart_path` gives it, or as `.` for the cwd itself. An
---- absent or empty path is left out: Grep then searches the session cwd, which
---- need not be the editor cwd that `.` names.
---- @param raw_input agentic.acp.ClaudeAgentRawInput
---- @return string
-function M.grep_scope(raw_input)
-    local path = raw_input.path
-    if type(path) ~= "string" then
-        path = raw_input.file_path
-    end
-    --- @type string[]
-    local parts = {}
-    if type(path) == "string" and path ~= "" then
-        local smart = FileSystem.to_smart_path(path)
-        table.insert(parts, smart ~= "" and smart or ".")
-    end
-    local glob = nonempty(raw_input, "glob")
-    if glob then
-        table.insert(parts, glob)
-    end
-    local file_type = nonempty(raw_input, "type")
-    if file_type then
-        table.insert(parts, "type " .. file_type)
-    end
-    return table.concat(parts, " · ")
-end
-
 --- SDK placeholder titles emitted before tool input has finished streaming.
 --- The bridge (`@agentclientprotocol/claude-agent-acp`
 --- `tool-calls/reporters/*.js`) returns these literals when the relevant

@@ -328,7 +328,7 @@ end
 ---
 --- An empty `name` yields a bare `###` — used before the argument has streamed
 --- in, for execute calls with no model description, and for search calls with
---- no scope (the command already shows in the fence below). That is
+--- no pattern (the command already shows in the fence below). That is
 --- byte-identical to the section-close boundary `write_message_chunk` emits,
 --- and has to stay so: both are fence-less and uncaptured by
 --- `queries/agentic/context.scm`, so the enclosing `## prompt` keeps the
@@ -928,7 +928,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         lines = {
             collapsed_header(
                 kind,
-                tool_call_block.search_scope or "",
+                tool_call_block.search_pattern or "",
                 wrap_width,
                 true
             ),

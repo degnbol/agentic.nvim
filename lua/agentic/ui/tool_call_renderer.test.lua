@@ -820,42 +820,42 @@ describe("ToolCallRenderer", function()
             assert.is_true(vim.fn.strdisplaywidth(head) <= 20)
         end)
 
-        --- Render a search block for `rg -n foo`, reporting its lines.
-        --- @param search_scope string|nil
+        --- Render a search block for `rg -n foo lua/`, reporting its lines.
+        --- @param search_pattern string|nil
         --- @param wrap_width integer
         --- @return string[] lines
-        local function search_lines(search_scope, wrap_width)
+        local function search_lines(search_pattern, wrap_width)
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "search-heading",
                 status = "completed",
                 kind = "search",
-                argument = "rg -n foo",
-                search_scope = search_scope,
+                argument = "rg -n foo lua/",
+                search_pattern = search_pattern,
             }
             return (Renderer.prepare_block_lines(block, wrap_width))
         end
 
         it("truncates a code kind's name inside its whole guard", function()
-            local head = search_lines(string.rep("dir/", 20), 40)[1]
+            local head = search_lines(string.rep("foo|", 20), 40)[1]
 
             assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
             assert.equal("### `", head:sub(1, #"### `"))
             assert.equal("…`", head:sub(-#"…`"))
         end)
 
-        it("heads a search block with its scope", function()
-            local lines = search_lines("lua/agentic/ · *.lua", 80)
+        it("heads a search block with its pattern", function()
+            local lines = search_lines("foo", 80)
 
-            assert.equal("### `lua/agentic/ · *.lua`", lines[1])
-            assert.equal("rg -n foo", lines[3])
+            assert.equal("### `foo`", lines[1])
+            assert.equal("rg -n foo lua/", lines[3])
         end)
 
-        it("leaves a search block without a scope bare", function()
+        it("leaves a search block without a pattern bare", function()
             local lines = search_lines(nil, 80)
 
             assert.equal("###", lines[1])
-            assert.equal("rg -n foo", lines[3])
+            assert.equal("rg -n foo lua/", lines[3])
         end)
     end)
 
