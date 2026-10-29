@@ -3,9 +3,9 @@
 --- the hook lifecycle events, so the transcript is the only channel carrying
 --- what a hook injected, printed or how it failed.
 ---
---- Pure and stateless: one line in, one record out. Cross-record work — the
---- `parentUuid` join that attributes a body to a script, offsets, session
---- teardown — belongs to `agentic.hook_record_reader`.
+--- Pure and stateless: one line in, zero or more records out. Cross-record
+--- work — the `parentUuid` join that attributes a body to a script, offsets,
+--- session teardown — belongs to `agentic.hook_record_reader`.
 local M = {}
 
 --- @alias agentic.acp.HookRecordGroup
@@ -46,7 +46,12 @@ local NO_STDERR = "Failed with non-blocking status code: No stderr output"
 local function body_lines(content)
     local text = type(content) == "table" and table.concat(content, "\n")
         or content
-    if type(text) ~= "string" or text == "" then
+    if type(text) ~= "string" then
+        return {}
+    end
+    -- A newline ends the last line rather than starting an empty one.
+    text = text:gsub("\n$", "")
+    if text == "" then
         return {}
     end
     return vim.split(text, "\n")
@@ -109,26 +114,12 @@ local function classify(attachment)
     return nil, {}
 end
 
---- Decode one transcript line into a hook record. A line that is not valid JSON
---- still yields a record, in the `verbatim` group: a transcript this decoder
---- cannot read is the thing least safe to drop.
---- @param line string one raw line of the transcript jsonl
---- @return agentic.acp.HookRecord|nil record nil for a line that carries no hook activity
-function M.decode(line)
-    if line:match("^%s*$") then
-        return nil
-    end
-
-    local ok, entry = pcall(vim.json.decode, line)
-    if not ok or type(entry) ~= "table" then
-        --- @type agentic.acp.HookRecord
-        local unparsed = { group = "verbatim", body = { line } }
-        return unparsed
-    end
-
-    -- Every hook record is nested under an attachment; the CLI writes no
-    -- top-level hook envelope. `hookEvent` is what separates them from the
-    -- other attachment kinds (pasted images, file contents).
+--- The hook record a transcript entry carries as its attachment.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.HookRecord|nil record nil when the entry is not a hook attachment
+local function attachment_record(entry)
+    -- `hookEvent` is what separates hook attachments from the other
+    -- attachment kinds (pasted images, file contents).
     local attachment = entry.attachment
     if
         entry.type ~= "attachment"
@@ -154,6 +145,75 @@ function M.decode(line)
         tool_call_id = attachment.toolUseID,
     }
     return record
+end
+
+--- Split a `[<command>]: <text>` entry into its parts.
+--- @param text string
+--- @return string|nil command nil when `text` lacks the prefix
+--- @return string body `text` after the prefix, or all of it
+local function split_command(text)
+    local command, body = text:match("^%[(.-)%]: (.*)$")
+    return command, body or text
+end
+
+--- One `context` record per Stop hook that blocked the turn's end, carrying the
+--- feedback the model receives as its next input. A `hookErrors` entry without
+--- the command prefix is a non-blocking error, which a
+--- `hook_non_blocking_error` attachment already carries, so it yields none.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.HookRecord[] records empty when the entry is not a Stop hook summary
+local function stop_feedback_records(entry)
+    --- @type agentic.acp.HookRecord[]
+    local records = {}
+    if
+        entry.type ~= "system"
+        or entry.subtype ~= "stop_hook_summary"
+        or type(entry.hookErrors) ~= "table"
+    then
+        return records
+    end
+    for _, hook_error in ipairs(entry.hookErrors) do
+        local command, body
+        if type(hook_error) == "string" then
+            command, body = split_command(hook_error)
+        end
+        if command then
+            table.insert(records, {
+                group = "context",
+                body = body_lines(body),
+                timestamp = entry.timestamp,
+                command = command,
+                -- No `uuid`: every hook in the summary shares it, so it names
+                -- no single script's run. No `tool_call_id`: `toolUseID` on
+                -- this entry is not a tool call id.
+            })
+        end
+    end
+    return records
+end
+
+--- Decode one transcript line into hook records. A line that is not valid JSON
+--- still yields a record, in the `verbatim` group: a transcript this decoder
+--- cannot read is the thing least safe to drop.
+--- @param line string one raw line of the transcript jsonl
+--- @return agentic.acp.HookRecord[] records empty for a line that carries no hook activity
+function M.decode(line)
+    if line:match("^%s*$") then
+        return {}
+    end
+
+    local ok, entry = pcall(vim.json.decode, line)
+    if not ok or type(entry) ~= "table" then
+        --- @type agentic.acp.HookRecord
+        local unparsed = { group = "verbatim", body = { line } }
+        return { unparsed }
+    end
+
+    local record = attachment_record(entry)
+    if record then
+        return { record }
+    end
+    return stop_feedback_records(entry)
 end
 
 return M

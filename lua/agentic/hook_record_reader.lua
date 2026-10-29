@@ -99,8 +99,7 @@ function HookRecordReader:drain()
     --- @type agentic.acp.HookRecord[]
     local records = {}
     for _, line in ipairs(lines) do
-        local record = ClaudeHookRecords.decode(line)
-        if record then
+        for _, record in ipairs(ClaudeHookRecords.decode(line)) do
             -- Index before the currency test: a record can be attributed to a
             -- run that started just before this reader did.
             if record.uuid and record.command then

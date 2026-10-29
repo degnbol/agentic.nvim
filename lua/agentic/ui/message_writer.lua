@@ -1325,10 +1325,10 @@ end
 --- Placed under the tool call the hook fired on when `tool_call_id` names one
 --- still in the buffer, so the record reads under that call rather than under
 --- whatever has been written since the hook ran — the transcript gives no
---- signal for when its records reach disk, so no drain trigger can place them
---- by buffer position alone. Appended at the end otherwise: a record from a
---- turn-boundary event names no call, and one whose block was never rendered
---- has nothing to sit under.
+--- signal for when its records reach disk, so a record can arrive after later
+--- output. Appended at the end otherwise: a record from a turn-boundary event
+--- names no call, and one whose block was never rendered has nothing to sit
+--- under.
 ---
 --- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
 --- session shows none of these. Missing work, not a rendering bug.

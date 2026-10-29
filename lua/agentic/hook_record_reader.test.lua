@@ -174,6 +174,24 @@ describe("HookRecordReader", function()
         assert.equal("shell-guard.sh", records[1].script)
     end)
 
+    it("names stop hook feedback after its own command", function()
+        local reader = reader_at(transcript)
+        append({
+            {
+                type = "system",
+                subtype = "stop_hook_summary",
+                uuid = "s-1",
+                timestamp = AFTER,
+                hookErrors = { "[/hooks/review.sh]: two files changed" },
+            },
+        })
+
+        local records = reader:drain()
+
+        assert.equal(1, #records)
+        assert.equal("review.sh", records[1].script)
+    end)
+
     it("leaves the script unnamed when no run produced the body", function()
         local reader = reader_at(transcript)
         append({ injected("c-1", nil, "from a prompt submit hook") })

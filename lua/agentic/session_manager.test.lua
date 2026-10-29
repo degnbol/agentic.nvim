@@ -5502,14 +5502,26 @@ describe("agentic.SessionManager", function()
         local subagent_write
         --- @type TestSpy
         local indicator_start
+        --- @type TestSpy
+        local drain
+        --- `"drain"` per hook record drain and the text of each main-writer
+        --- write, in call order.
+        --- @type string[]
+        local main_calls
         --- Task id each update is tagged with.
         --- @type table<agentic.acp.AgentMessageChunk, string>
         local tags = {}
 
         before_each(function()
-            main_write = spy.new(function() end)
+            main_calls = {}
+            main_write = spy.new(function(_, update)
+                table.insert(main_calls, update.content.text)
+            end)
             subagent_write = spy.new(function() end)
             indicator_start = spy.new(function() end)
+            drain = spy.new(function()
+                table.insert(main_calls, "drain")
+            end)
             -- A running subagent spawned by Task `task`.
             local transcript = {
                 writer = { write_message_chunk = subagent_write },
@@ -5537,6 +5549,7 @@ describe("agentic.SessionManager", function()
                 _transcript_for = function()
                     return transcript
                 end,
+                _drain_hook_records = drain,
             }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
         end)
 
@@ -5603,6 +5616,28 @@ describe("agentic.SessionManager", function()
                 writes(subagent_write)
             )
             assert.equal(1, #session.chat_history.messages)
+        end)
+
+        it("drains hook records before a new response's text", function()
+            session:_on_session_update(chunk("X", "first"))
+            session:_on_session_update(chunk("Y", "reply"))
+
+            assert.same({ "first", "drain", "reply" }, main_calls)
+        end)
+
+        it("does not drain at a subagent's new response", function()
+            session:_on_session_update(chunk("S1", "sub", "task"))
+            session:_on_session_update(chunk("S2", "next", "task"))
+
+            assert.equal(0, drain.call_count)
+        end)
+
+        it("does not drain while the session loads", function()
+            session._loading = true
+            session:_on_session_update(chunk("X", "first"))
+            session:_on_session_update(chunk("Y", "reply"))
+
+            assert.equal(0, drain.call_count)
         end)
 
         it("writes a thought chunk unfiltered", function()

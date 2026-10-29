@@ -1668,6 +1668,12 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         transcript.writer:write_message_chunk(chunk, starts_response)
         transcript.status_indicator:reposition()
     else
+        -- Hook records already in the transcript go above a new response,
+        -- so a reply to Stop hook feedback reads under that feedback. A
+        -- subagent's hooks write to another transcript.
+        if starts_response and not self._loading then
+            self:_drain_hook_records()
+        end
         self.message_writer:write_message_chunk(chunk, starts_response)
         self.status_indicator:start(is_message and "generating" or "thinking")
     end
@@ -2636,10 +2642,10 @@ function SessionManager:_finalize_turn(usage)
     self.message_writer:finalize_turn()
     self.message_writer:set_turn_usage(usage)
     -- Last of the three: a region appended before the footer would move the row
-    -- the footer is stamped on, and this drain is the one that still appends —
-    -- it collects the records naming no tool call. Where an appended region
-    -- falls relative to the prose run does not matter; `_write_collapsed_region`
-    -- brackets the run it ends.
+    -- the footer is stamped on, and this drain still appends the remaining
+    -- records that name no tool call. Where an appended region falls relative
+    -- to the prose run does not matter; `_write_collapsed_region` brackets the
+    -- run it ends.
     self:_drain_hook_records()
 end
 
