@@ -1065,6 +1065,21 @@ describe("ToolCallRenderer", function()
             end)
         end)
 
+        it("gives a created file of one line or none no fold anchor", function()
+            for _, new in ipairs({ { "only line" }, {} }) do
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-create-short",
+                    kind = "create",
+                    argument = "/tmp/foo.lua",
+                    status = "completed",
+                    diff = { old = {}, new = new },
+                }
+                local _, _, _, fold_anchor = Renderer.prepare_block_lines(block, 0)
+                assert.is_nil(fold_anchor)
+            end
+        end)
+
         it(
             "renders execute failure as plain console without red tint",
             function()

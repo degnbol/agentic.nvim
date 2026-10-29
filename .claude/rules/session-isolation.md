@@ -22,7 +22,7 @@ of any tab.
 - Highlight groups defined once globally in `lua/agentic/theme.lua`
 - Keymaps and autocommands must be buffer-local, except where buffer scoping
   misses the trigger (`MessageWriter:new`'s WinScrolled,
-  `MessageWriter:_retry_folds_on_insert_leave`, `PermissionManager:_watch_layout`,
+  `MessageWriter:_rebuild_folds_after_insert`, `PermissionManager:_watch_layout`,
   the `BufEnter` in `bootstrap.lua` that records the last active session, and
   its `agentic://*` BufReadCmd, which tag jumps need)
 - See scoped storage: `vim.b`/`vim.bo`, `vim.w`/`vim.wo`. `vim.t` holds no

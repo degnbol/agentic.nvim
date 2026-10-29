@@ -292,6 +292,27 @@ function BufHelpers.redraw_if_cmdline()
     end
 end
 
+--- Whether neovim is in Insert or Replace mode, where it skips fold updates.
+--- @return boolean
+function BufHelpers.in_insert_mode()
+    return vim.api.nvim_get_mode().mode:match("^[iR]") ~= nil
+end
+
+--- Recompute a window's expression folds now, keeping each fold's open or
+--- closed state. Call outside insert mode, which drops the recompute. Fires
+--- OptionSet for 'foldexpr'.
+--- @param winid integer
+function BufHelpers.recompute_folds(winid)
+    local opts = { win = winid, scope = "local" }
+    local foldexpr = vim.api.nvim_get_option_value("foldexpr", opts)
+    vim.api.nvim_set_option_value("foldexpr", foldexpr, opts)
+    -- Setting 'foldexpr' only marks the folds invalid for a lazy recompute;
+    -- `foldlevel()` runs it at once.
+    vim.api.nvim_win_call(winid, function()
+        vim.fn.foldlevel(1)
+    end)
+end
+
 --- Screen rows of lines `first` through `last` in `winid`, fold-aware.
 --- @param winid integer
 --- @param first integer 1-indexed

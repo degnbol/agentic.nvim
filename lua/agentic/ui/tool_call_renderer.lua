@@ -1165,7 +1165,7 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
         -- fold created after a closed one starts closed.
         table.insert(lines, fence .. lang .. "-difffold")
         -- First body line (fold spans code_fence_content), inserted below.
-        fold_anchor = #lines
+        local body_start = #lines
         -- A created file's diff is the whole file, so collapse large ones
         -- closed; an edit shows only fragments and is never auto-collapsed.
         local create_max = Config.tool_call_display
@@ -1331,6 +1331,10 @@ function M.prepare_block_lines(tool_call_block, wrap_width)
             end
         end
 
+        -- A body of one row or none gets no fold (`Folds.levels`).
+        if #lines - body_start > 1 then
+            fold_anchor = body_start
+        end
         table.insert(lines, fence)
 
         -- A failed edit keeps the diff, folded closed, and appends the reason

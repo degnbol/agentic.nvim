@@ -1662,13 +1662,16 @@ describe("agentic.ui.MessageWriter", function()
             -- freeze the viewport for every write until they leave insert.
             setup_buffer(50, 1)
             writer._pending_fold_ops = { { id = 1, open = false } }
-            writer._fold_retry_armed = true
+            local mode = spy.stub(vim.api, "nvim_get_mode")
+            mode:returns({ mode = "i", blocking = false })
 
             local scroll_spy = spy.on(writer, "_scroll")
             writer:_schedule_follow()
 
             assert.equal(1, scroll_spy.call_count)
             scroll_spy:revert()
+            mode:revert()
+            writer._pending_fold_ops = {}
         end)
 
         it("insert-mode hold scrolls for the write it inherited", function()
@@ -1684,14 +1687,15 @@ describe("agentic.ui.MessageWriter", function()
             writer:flush_pending_fold_ops()
 
             assert.equal(1, scroll_spy.call_count)
-            -- Held, not dropped: InsertLeave still has to close the fold.
+            -- Held, not dropped: the rebuild after insert still has to close
+            -- the fold.
             assert.equal(1, #writer._pending_fold_ops)
-            assert.is_true(writer._fold_retry_armed)
+            assert.is_true(writer._rebuild_armed)
             scroll_spy:revert()
             mode:revert()
             -- Consume the armed autocmd so it cannot fire in a sibling test.
             writer._pending_fold_ops = {}
-            vim.api.nvim_exec_autocmds("InsertLeave", {})
+            vim.api.nvim_exec_autocmds("ModeChanged", {})
         end)
 
         it(
@@ -1702,7 +1706,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 local scroll_spy = spy.on(writer, "_scroll")
                 -- A real fold anchor isn't needed — flush scrolls after draining
-                -- whatever ops are present, missing folds are swallowed.
+                -- whatever ops are present, missing folds included.
                 local id = vim.api.nvim_buf_set_extmark(
                     bufnr,
                     vim.api.nvim_create_namespace("agentic_fold_anchors"),
@@ -1718,6 +1722,45 @@ describe("agentic.ui.MessageWriter", function()
                 scroll_spy:revert()
             end
         )
+
+        it("flush reports the first fold it could not change", function()
+            setup_buffer(50, 1)
+            vim.api.nvim_set_option_value(
+                "foldmethod",
+                "manual",
+                { win = winid, scope = "local" }
+            )
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("21,30fold")
+                vim.cmd("21foldopen")
+            end)
+            local notify = spy.stub(require("agentic.utils.logger"), "notify")
+            local ns = vim.api.nvim_create_namespace("agentic_fold_anchors")
+            writer._pending_fold_ops = {
+                { id = vim.api.nvim_buf_set_extmark(bufnr, ns, 0, 0, {}), open = false },
+                { id = vim.api.nvim_buf_set_extmark(bufnr, ns, 1, 0, {}), open = false },
+                { id = vim.api.nvim_buf_set_extmark(bufnr, ns, 20, 0, {}), open = false },
+            }
+
+            writer:flush_pending_fold_ops()
+
+            assert.equal(1, notify.call_count)
+            assert.truthy(notify.calls[1][1]:find("E490", 1, true))
+            -- The failures do not stop the ops after them.
+            assert.equal(21, vim.fn.foldclosed(21))
+            notify:revert()
+        end)
+
+        it("a write in insert mode to a wiped buffer is a no-op", function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            local mode = spy.stub(vim.api, "nvim_get_mode")
+            mode:returns({ mode = "i", blocking = false })
+
+            local ok, err = pcall(writer._own_edit, writer, function() end)
+
+            mode:revert()
+            assert.is_true(ok, tostring(err))
+        end)
 
         it("flush does not scroll a window in user control", function()
             setup_buffer(50, 1)
@@ -2190,7 +2233,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(21, topline())
 
             mode:revert()
-            vim.api.nvim_exec_autocmds("InsertLeave", {})
+            vim.api.nvim_exec_autocmds("ModeChanged", {})
 
             -- Header, closed fold, footer: 3 rows, 8 above them.
             assert.equal(13, topline())
@@ -4888,29 +4931,6 @@ describe("agentic.ui.MessageWriter", function()
             local fences = fold_fence_lines()
             assert.equal(1, #fences)
             local body_start = fences[1] + 1
-            deferred.drain()
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
-        end)
-
-        it("holds the fold through insert mode and closes on leave", function()
-            -- Vim suppresses foldUpdate in insert mode, which is where a
-            -- thought run usually lands: the agent thinks while the user types
-            -- the next prompt.
-            local mode = spy.stub(vim.api, "nvim_get_mode")
-            mode:returns({ mode = "i", blocking = false })
-
-            writer:write_message_chunk(
-                make_thought_update("first\nsecond\nthird")
-            )
-            writer:finalize_turn()
-            deferred.drain()
-
-            local body_start = fold_fence_lines()[1] + 1
-            assert.equal(-1, vim.fn.foldclosed(body_start))
-            assert.equal(1, #writer._pending_fold_ops)
-
-            mode:revert()
-            vim.api.nvim_exec_autocmds("InsertLeave", {})
             deferred.drain()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)

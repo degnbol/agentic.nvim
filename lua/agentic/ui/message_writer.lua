@@ -164,8 +164,10 @@ end
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
 --- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history`.
---- @field _fold_retry_armed? boolean True while an InsertLeave autocmd is waiting to retry deferred fold ops (see `flush_pending_fold_ops`). Guards against arming a second one per pending batch.
---- @field _scroll_owed boolean True from a write's `_schedule_follow` until a scroll discharges it: `_schedule_follow`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. The callback's skip branch leaves it set, so a scroll deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold. The insert-mode hold is the one deferral the callback does not wait on — see the skip condition, which reads `_fold_retry_armed`.
+--- @field _rebuild_armed boolean True while a ModeChanged autocmd waits for insert mode to end to rebuild the chat windows' folds. Guards against arming a second one.
+--- @field _augroup integer The writer's autocmd group, deleted with the buffer
+--- @field _replay_held table<integer, true> Windows that started showing the buffer in insert mode, whose `replay_folds` waits for the rebuild
+--- @field _scroll_owed boolean True from a write's `_schedule_follow` until a scroll discharges it: `_schedule_follow`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. The callback's skip branch leaves it set, so a scroll deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold. In insert mode the callback scrolls anyway and still leaves it set.
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
 --- @field _chunk_start_line? integer 0-indexed buffer line the unreflowed tail of the current prose run starts at; advanced past each paragraph a streaming reflow wraps, and cleared by the flushing one. Read by `_reflow_chunks` to bound its rewrite.
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared by `_release_prose_pin` and `_clear_prose_pin`
@@ -233,7 +235,8 @@ function MessageWriter:new(bufnr, home_window)
         _home_window = home_window,
         tool_call_blocks = {},
         _thought_run = nil,
-        _fold_retry_armed = false,
+        _rebuild_armed = false,
+        _replay_held = {},
         _scroll_owed = false,
         _scroll_callback_queued = false,
         _chunk_start_line = nil,
@@ -261,6 +264,7 @@ function MessageWriter:new(bufnr, home_window)
         "agentic_message_writer_" .. bufnr,
         { clear = true }
     )
+    instance._augroup = group
     vim.api.nvim_create_autocmd("WinEnter", {
         group = group,
         buffer = bufnr,
@@ -660,6 +664,8 @@ end
 ---
 --- Rendering loses nothing, so `modified` is left as it was before the write:
 --- the flag belongs to the buffer's owner.
+---
+--- A write in insert mode gets its folds when insert mode ends.
 --- @param fn fun(bufnr: integer): boolean|nil
 --- @return boolean|nil result What `fn` returned; false for an invalid buffer or an error
 function MessageWriter:_own_edit(fn)
@@ -672,6 +678,9 @@ function MessageWriter:_own_edit(fn)
         end
         return written
     end)
+    if vim.api.nvim_buf_is_valid(self.bufnr) and BufHelpers.in_insert_mode() then
+        self:_rebuild_folds_after_insert()
+    end
     self:_mark_last_line()
     BufHelpers.redraw_if_cmdline()
     return result
@@ -2505,8 +2514,8 @@ end
 --- fold-level recompute, so it measures the already-*closed* fold. Scrolling
 --- here would race the recompute and park the viewport at the unfolded bottom
 --- (the fold-vs-follow timing bug). The callback skips when fold ops are
---- pending, leaving the owed scroll for flush — unless they are held for
---- insert mode, a wait no write can afford to sit out.
+--- pending, leaving the owed scroll for flush — except in insert mode, where
+--- the callback scrolls and still leaves the scroll owed.
 function MessageWriter:_schedule_follow()
     self._scroll_owed = true
 
@@ -2519,10 +2528,12 @@ function MessageWriter:_schedule_follow()
         self._scroll_callback_queued = false
 
         -- Fold-close owns the scroll on this tick — leave it owed.
-        -- Except while the ops are held for insert mode: that hold lasts as
-        -- long as the user keeps typing, and deferring to a flush that will not
-        -- run until then freezes the viewport for every write in between.
-        if #self._pending_fold_ops > 0 and not self._fold_retry_armed then
+        -- Except in insert mode: the ops wait as long as the user keeps
+        -- typing, and deferring to a flush that will not run until then
+        -- freezes the viewport for every write in between.
+        if
+            #self._pending_fold_ops > 0 and not BufHelpers.in_insert_mode()
+        then
             return
         end
 
@@ -2530,7 +2541,11 @@ function MessageWriter:_schedule_follow()
             self:_scroll_followers()
         end
 
-        self._scroll_owed = false
+        -- Ops held for insert mode leave it owed, so the flush after the
+        -- rebuild scrolls again against the closed folds.
+        if #self._pending_fold_ops == 0 then
+            self._scroll_owed = false
+        end
     end)
 end
 
@@ -2630,46 +2645,69 @@ end
 --- @param winid integer
 --- @param row integer 0-indexed
 --- @param open boolean
+--- @return string|nil err Why the fold could not be changed, e.g. E490 when `row` has no fold
 local function apply_fold(winid, row, open)
-    -- A missing fold (E490) is non-fatal: the body just stays visible, so it
-    -- is swallowed deliberately.
-    pcall(vim.api.nvim_win_call, winid, function()
-        vim.cmd(
-            string.format("%d%s", row + 1, open and "foldopen" or "foldclose")
-        )
+    return vim.api.nvim_win_call(winid, function()
+        local ok, err = pcall(vim.api.nvim_cmd, {
+            cmd = open and "foldopen" or "foldclose",
+            range = { row + 1 },
+        }, {})
+        return not ok and err or nil
     end)
 end
 
---- Hold the pending fold ops until the user leaves insert mode, then retry.
+--- Once the user leaves insert mode, rebuild the folds of every window showing
+--- the buffer, then replay the held windows' fold states and apply the
+--- pending fold ops. No-op while a rebuild is already waiting.
 ---
---- Vim skips `foldUpdate` in insert mode, so a `:foldclose` issued while the
---- user types in another buffer finds no fold and raises E490. The autocmd is
---- not buffer-scoped: the insert session it waits on is in another buffer.
+--- In insert or replace mode, in any buffer, neovim drops the fold updates of
+--- a text change, and leaving it does not recompute expression folds, so rows
+--- written meanwhile have no fold until a rebuild.
 --- @private
-function MessageWriter:_retry_folds_on_insert_leave()
-    if self._fold_retry_armed then
+function MessageWriter:_rebuild_folds_after_insert()
+    if self._rebuild_armed then
         return
     end
-    self._fold_retry_armed = true
-    vim.api.nvim_create_autocmd("InsertLeave", {
-        once = true,
+    self._rebuild_armed = true
+    -- ModeChanged, unlike InsertLeave, also fires on a `<C-c>` exit. Not
+    -- buffer-scoped: the insert session it waits on is in another buffer.
+    vim.api.nvim_create_autocmd("ModeChanged", {
+        group = self._augroup,
         callback = function()
-            self._fold_retry_armed = false
-            -- Vim does not recompute expr folds on leaving insert
-            -- (`foldUpdateAfterInsert`), so rows written during insert still
-            -- have no fold here and their ops fail with E490.
-            vim.schedule(function()
-                self:flush_pending_fold_ops()
-            end)
+            if BufHelpers.in_insert_mode() then
+                return
+            end
+            -- Rebuild here rather than scheduled, so no flush or replay
+            -- scheduled during insert runs against the stale folds first.
+            for _, winid in ipairs(vim.fn.win_findbuf(self.bufnr)) do
+                BufHelpers.recompute_folds(winid)
+                if self._replay_held[winid] then
+                    self:replay_folds(winid)
+                end
+            end
+            self._replay_held = {}
+            self:flush_pending_fold_ops()
+            -- Cleared with the autocmd's deletion, after the work: an error
+            -- above keeps both, and the next mode change retries.
+            self._rebuild_armed = false
+            return true
         end,
     })
 end
 
 --- Give every applied fold its recorded state in `winid`. Fold state is
 --- window-local, so a window opened later would otherwise show every block
---- open. Forgets the states whose anchor extmark is gone.
+--- open. Forgets the states whose anchor extmark is gone. In insert mode,
+--- waits for the rebuild after it. Reports the first fold that could not be
+--- changed.
 --- @param winid integer
 function MessageWriter:replay_folds(winid)
+    if BufHelpers.in_insert_mode() then
+        self._replay_held[winid] = true
+        self:_rebuild_folds_after_insert()
+        return
+    end
+    local err
     self:_own_change(function()
         for id, open in pairs(self._fold_states) do
             local pos = vim.api.nvim_buf_get_extmark_by_id(
@@ -2679,19 +2717,24 @@ function MessageWriter:replay_folds(winid)
                 {}
             )
             if pos[1] then
-                apply_fold(winid, pos[1], open)
+                local fold_err = apply_fold(winid, pos[1], open)
+                err = err or fold_err
             else
                 self._fold_states[id] = nil
             end
         end
     end)
+    if err then
+        Logger.notify("Failed to open or close a chat fold:\n" .. err)
+    end
 end
 
 --- Apply every pending fold op (see _queue_fold). Resolves each anchor
 --- extmark's current row so edits since the render are accounted for. No-op
 --- when nothing is pending. When no chat window exists yet, or the user is in
---- insert mode, the anchors stay pending and a retry is armed (BufWinEnter and
---- InsertLeave respectively).
+--- insert mode, the anchors stay pending until a chat window opens or insert
+--- mode ends, respectively.
+--- Reports the first fold that could not be changed.
 --- Then scrolls the windows that follow, if a write owes a scroll.
 --- Public so the BufWinEnter autocmd closure can reach it without tripping
 --- LuaLS's invisible-field check.
@@ -2707,19 +2750,16 @@ function MessageWriter:flush_pending_fold_ops()
     if #winids == 0 then
         return
     end
-    if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then
-        self:_retry_folds_on_insert_leave()
-        -- Scroll for the owed write before returning. `_schedule_follow`'s
-        -- callback skips for as long as ops are pending, on the assumption that
-        -- flush follows within the tick; holding for a whole insert session
-        -- would instead freeze the viewport for every write until the user
-        -- leaves insert. Scroll against the still-open fold and leave the
-        -- scroll owed, so the InsertLeave retry re-measures the collapsed
-        -- height.
+    if BufHelpers.in_insert_mode() then
+        self:_rebuild_folds_after_insert()
+        -- For a write whose `_schedule_follow` callback ran before insert
+        -- mode began and so left its scroll to this flush; the scroll stays
+        -- owed, as in that callback's insert-mode branch.
         self:_scroll_followers()
         return
     end
 
+    local err
     -- An own change: collapsing or expanding a fold shifts the view.
     self:_own_change(function()
         for _, op in ipairs(self._pending_fold_ops) do
@@ -2731,13 +2771,17 @@ function MessageWriter:flush_pending_fold_ops()
             )
             if pos[1] then
                 for _, winid in ipairs(winids) do
-                    apply_fold(winid, pos[1], op.open)
+                    local fold_err = apply_fold(winid, pos[1], op.open)
+                    err = err or fold_err
                 end
                 self._fold_states[op.id] = op.open
             end
         end
     end)
     self._pending_fold_ops = {}
+    if err then
+        Logger.notify("Failed to open or close a chat fold:\n" .. err)
+    end
 
     -- The fold path's single scroll. The folds are now closed, so the
     -- fold-aware scroll_down measures the collapsed height — `_schedule_follow`'s
