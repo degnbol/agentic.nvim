@@ -134,12 +134,12 @@ describe("agentic.acp.ACPClient", function()
             )
         end)
 
-        it("points at the log file only while logging", function()
+        it("points at the log folder only while logging", function()
             Config.log = true
             make_client():_on_process_output("stderr", "oops")
             assert.equal(
-                "Provider 1.0 stderr: oops (full output in "
-                    .. Logger.LOG_FILE_PATH
+                "Provider 1.0 stderr: oops (logs in "
+                    .. Logger.LOG_DIR
                     .. ")",
                 notify_stub.calls[1][1]
             )

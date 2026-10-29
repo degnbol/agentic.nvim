@@ -498,8 +498,10 @@ multiple chunks per turn, most of which are system content.
 ### Process output never reaches a chat
 
 Non-JSON stdout and all stderr lines go to `ACPClient:_on_process_output`: it
-logs every line and notifies once per `LogLine.summary`. Adapters add ignore
-patterns by overriding `ignores_output`. Rules: those docstrings.
+logs every line and notifies once per `LogLine.summary`. An adapter whose
+provider can keep its info logs off stderr does so (claude: `CLAUDE_AGENT_LOGS`,
+set in `ClaudeAgentACPAdapter:new`); `ignores_output` is for providers that
+cannot. Rules: those docstrings.
 
 ### Prompt loop stall — no client-side fix
 

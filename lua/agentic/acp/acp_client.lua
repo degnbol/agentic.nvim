@@ -311,7 +311,7 @@ function ACPClient:_on_process_output(stream, line)
     self._notified_output[summary] = true
 
     local suffix = Config.log
-            and " (full output in " .. Logger.LOG_FILE_PATH .. ")"
+            and " (logs in " .. Logger.LOG_DIR .. ")"
         or ""
     Logger.notify(label .. ": " .. summary .. suffix, vim.log.levels.WARN)
 end

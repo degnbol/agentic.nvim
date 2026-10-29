@@ -4,10 +4,11 @@ local RotatingFile = require("agentic.utils.rotating_file")
 --- @class agentic.utils.Logger
 local Logger = {}
 
---- Absolute path of the file `debug_to_file` writes to. Cached at require
---- time so debug_to_file is safe in libuv callbacks (vim.fn.stdpath cannot
---- be called from fast events).
-Logger.LOG_FILE_PATH = vim.fn.stdpath("cache") .. "/agentic_debug.log"
+--- Absolute path of the folder holding the plugin's log. Resolved and created
+--- at require time, as `vim.fn` cannot be called from fast events.
+Logger.LOG_DIR = vim.fn.stdpath("log") .. "/agentic"
+--- Absolute path of the plugin's log file.
+Logger.LOG_FILE_PATH = Logger.LOG_DIR .. "/agentic.log"
 local LOG_MAX_BYTES = 10 * 1024 * 1024
 
 --- Write failures are reported once per nvim session, not once per message.
@@ -65,6 +66,11 @@ function Logger.notify(msg, level, opts)
     end)
 end
 
+local mkdir_ok, mkdir_err = pcall(vim.fn.mkdir, Logger.LOG_DIR, "p")
+if not mkdir_ok then
+    Logger.notify("Log folder: " .. mkdir_err)
+end
+
 --- Print a debug message that can be read by `:messages`
 function Logger.debug(...)
     if not Config.debug then
@@ -78,8 +84,7 @@ function Logger.debug(...)
     end
 end
 
---- Append a debug message to a log file in the cache directory
---- Usually at `~/.cache/nvim/agentic_debug.log` on Mac/Linux
+--- Append a debug message to `LOG_FILE_PATH`
 function Logger.debug_to_file(...)
     if not Config.log then
         return

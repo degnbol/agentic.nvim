@@ -1184,11 +1184,14 @@ User AgenticHeadersChanged
 <
 
 `debug` prints debug messages, readable with |:messages|. `log` appends them
-to `~/.cache/nvim/agentic_debug.log`; at 10 MB the file moves to
-`agentic_debug.log.1`, replacing the previous one. The two are independent.
+to `agentic/agentic.log` under |stdpath()| `log`, e.g.
+`~/.local/state/nvim/agentic/agentic.log`; at 10 MB the file moves to
+`agentic.log.1`, replacing the previous one. The two are independent. With
+`log` set, the Claude provider writes its own log, `agent.log`, to the same
+folder, unless `CLAUDE_AGENT_LOGS` is set.
 
 Text the provider process writes outside the protocol shows as a warning, once
-per distinct message. With `log` set, the full text is in the log.
+per distinct message. With `log` set, the full text is in `agentic.log`.
 
 ==============================================================================
 vim:tw=78:ft=help:norl:

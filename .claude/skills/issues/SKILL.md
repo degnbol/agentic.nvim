@@ -8,10 +8,11 @@ description: Debugging agentic.nvim at runtime, plus its recurring misdiagnosed 
 ## Runtime debugging
 
 `Logger.debug()` (prints to `:messages`) is gated by `Config.debug`.
-`Logger.debug_to_file()` (appends to `~/.cache/nvim/agentic_debug.log`; older
-lines are in `agentic_debug.log.1`) is gated by `Config.log`. Both default to
+`Logger.debug_to_file()` (appends to `stdpath("log")/agentic/agentic.log`;
+older lines are in `agentic.log.1`) is gated by `Config.log`. Both default to
 `false` and are independent — enable `log` alone for file logging without
-screen distraction. For temporary diagnostics that must fire unconditionally,
+screen distraction. With `Config.log`, `agent.log` beside it is
+claude-agent-acp's own log, including the info lines it keeps off stderr. For temporary diagnostics that must fire unconditionally,
 use `io.open` directly:
 
 ```lua

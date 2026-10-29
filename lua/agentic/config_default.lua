@@ -66,9 +66,9 @@ local ConfigDefault = {
     debug = false,
 
     --- Enable appending debug messages to a log file at
-    --- `vim.fn.stdpath("cache") .. "/agentic_debug.log"` (typically
-    --- `~/.cache/nvim/agentic_debug.log`). At 10 MB the file moves to
-    --- `agentic_debug.log.1`, replacing the previous one. Independent of
+    --- `vim.fn.stdpath("log") .. "/agentic/agentic.log"` (typically
+    --- `~/.local/state/nvim/agentic/agentic.log`). At 10 MB the file moves to
+    --- `agentic.log.1`, replacing the previous one. Independent of
     --- `debug` — set this without `debug` to log without screen distraction.
     log = false,
 

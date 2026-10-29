@@ -22,16 +22,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         }, { __index = ClaudeAgentACPAdapter })
     end
 
-    it("ignores its own and the base process output patterns", function()
-        local adapter = make_adapter()
-        assert.is_true(adapter:ignores_output("[PreToolUseHook] x"))
-        assert.is_true(
-            adapter:ignores_output("[session/create] sessionId=s-1 phase=settings")
-        )
-        assert.is_true(adapter:ignores_output("Session not found"))
-        assert.is_false(adapter:ignores_output("Unexpected case"))
-    end)
-
     describe("subagent control", function()
         it("predicts background only under force_background", function()
             local adapter = make_adapter()
@@ -1439,6 +1429,54 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             })
 
             assert.equal("0", config.env.CLAUDE_CODE_ENABLE_TODO_TOOLS)
+        end)
+
+        describe("CLAUDE_AGENT_LOGS", function()
+            local Config = require("agentic.config")
+            local Logger = require("agentic.utils.logger")
+            local original_log, original_env
+
+            before_each(function()
+                original_log = Config.log
+                original_env = vim.env.CLAUDE_AGENT_LOGS
+                vim.env.CLAUDE_AGENT_LOGS = nil
+            end)
+
+            after_each(function()
+                Config.log = original_log
+                vim.env.CLAUDE_AGENT_LOGS = original_env
+            end)
+
+            it("is the log folder with log on", function()
+                Config.log = true
+                local config = spawn_config({ command = "claude-agent-acp" })
+                assert.equal(Logger.LOG_DIR, config.env.CLAUDE_AGENT_LOGS)
+            end)
+
+            it("is nvim's run folder with log off", function()
+                Config.log = false
+                local config = spawn_config({ command = "claude-agent-acp" })
+                assert.equal(
+                    vim.fn.stdpath("run"),
+                    config.env.CLAUDE_AGENT_LOGS
+                )
+            end)
+
+            it("yields to the shell's value", function()
+                Config.log = true
+                vim.env.CLAUDE_AGENT_LOGS = "/from/shell"
+                local config = spawn_config({ command = "claude-agent-acp" })
+                assert.equal("/from/shell", config.env.CLAUDE_AGENT_LOGS)
+            end)
+
+            it("yields to an explicit env entry", function()
+                Config.log = true
+                local config = spawn_config({
+                    command = "claude-agent-acp",
+                    env = { CLAUDE_AGENT_LOGS = "/explicit" },
+                })
+                assert.equal("/explicit", config.env.CLAUDE_AGENT_LOGS)
+            end)
         end)
     end)
 

@@ -1,4 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
+local Config = require("agentic.config")
+local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local SkillPath = require("agentic.utils.skill_path")
@@ -88,19 +90,25 @@ local ClaudeAgentACPAdapter = ACPClient.extend()
 --- CHANGELOG entry naming the same variable). The bridge turns Task* calls
 --- into ACP `plan` updates, so without the flag `SessionManager` receives no
 --- `plan` and the todos split stays empty.
---- An explicit `env` entry wins over `todo_tools`.
+--- `CLAUDE_AGENT_LOGS` is always set: only then does the bridge keep its info
+--- lines off stderr, writing them to `agent.log` in that folder. With
+--- `Config.log` off it is nvim's per-session `stdpath("run")`, which nvim
+--- deletes on exit. A value in the shell's environment wins over the default.
+--- An explicit `env` entry wins over the defaults and the shell's environment.
 --- @param config agentic.acp.ClaudeProviderConfig
 --- @param on_ready fun(client: agentic.acp.ACPClient)
 --- @return agentic.acp.ACPClient
 function ClaudeAgentACPAdapter:new(config, on_ready)
-    config = vim.deepcopy(config)
-    if config.todo_tools then
-        config = vim.tbl_deep_extend(
-            "force",
-            { env = { CLAUDE_CODE_ENABLE_TODO_TOOLS = "1" } },
-            config
-        ) --[[@as agentic.acp.ClaudeProviderConfig]]
-    end
+    local env_defaults = {
+        CLAUDE_AGENT_LOGS = vim.env.CLAUDE_AGENT_LOGS
+            or (Config.log and Logger.LOG_DIR or vim.fn.stdpath("run")),
+        CLAUDE_CODE_ENABLE_TODO_TOOLS = config.todo_tools and "1" or nil,
+    }
+    config = vim.tbl_deep_extend(
+        "force",
+        { env = env_defaults },
+        vim.deepcopy(config)
+    ) --[[@as agentic.acp.ClaudeProviderConfig]]
 
     local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
     client._session_dirs = {}
@@ -157,19 +165,6 @@ end
 --- @return "bash"|"zsh"|nil
 function ClaudeAgentACPAdapter:exec_shell()
     return self._exec_shell
-end
-
---- @protected
---- @param line string
---- @return boolean
-function ClaudeAgentACPAdapter:ignores_output(line)
-    return ACPClient.ignores_output(self, line)
-        or line:find("Spawning Claude Code process", 1, true) ~= nil
-        or line:find("Spawning Claude Code:", 1, true) ~= nil
-        or line:find("No onPostToolUseHook found", 1, true) ~= nil
-        or line:find("[PreToolUseHook]", 1, true) ~= nil
-        -- Per-phase timing, with a session id and durations in every line
-        or vim.startswith(line, "[session/")
 end
 
 --- The SDK's record of a subagent's spawn: its meta file beside the session
