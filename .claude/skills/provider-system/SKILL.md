@@ -495,13 +495,11 @@ text starts with `<` or known instruction prefixes.
 Any new code that processes replayed user messages must account for this: expect
 multiple chunks per turn, most of which are system content.
 
-### Non-JSON stdout/stderr forwarding
+### Process output never reaches a chat
 
-The transport layer forwards non-JSON stdout lines and non-ignored stderr lines
-to subscribers via `on_stdout_text`. This is wired through `ACPClient` →
-`SessionManager` → `MessageWriter`, gated by `is_generating` to suppress noise.
-Currently no known ACP provider emits useful non-JSON stdout, but the
-infrastructure exists for future use.
+Non-JSON stdout and all stderr lines go to `ACPClient:_on_process_output`: it
+logs every line and notifies once per `LogLine.summary`. Adapters add ignore
+patterns by overriding `ignores_output`. Rules: those docstrings.
 
 ### Prompt loop stall — no client-side fix
 

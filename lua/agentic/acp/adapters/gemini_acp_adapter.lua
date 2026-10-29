@@ -6,6 +6,16 @@ local FileSystem = require("agentic.utils.file_system")
 local GeminiACPAdapter = ACPClient.extend()
 
 --- @protected
+--- @param line string
+--- @return boolean
+function GeminiACPAdapter:ignores_output(line)
+    return ACPClient.ignores_output(self, line)
+        or line:find("Experiments loaded", 1, true) ~= nil
+        or line:find("You have exhausted your capacity on this model", 1, true)
+            ~= nil
+end
+
+--- @protected
 --- @param session_id string
 --- @param update agentic.acp.ToolCallMessage
 function GeminiACPAdapter:__handle_tool_call(session_id, update)

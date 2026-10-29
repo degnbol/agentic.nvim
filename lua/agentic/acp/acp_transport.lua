@@ -1,3 +1,4 @@
+local LineReader = require("agentic.utils.line_reader")
 local Logger = require("agentic.utils.logger")
 
 --- @alias agentic.acp.TransportType "stdio" | "tcp" | "websocket"
@@ -9,8 +10,8 @@ local M = {}
 --- @field on_state_change fun(state: agentic.acp.ClientConnectionState): nil The transport state like "connecting", "connected", "disconnected", "error"
 --- @field on_message fun(message: agentic.acp.ResponseRaw): nil
 --- @field on_reconnect fun(): nil
---- @field on_stdout_text? fun(text: string): nil Non-JSON stdout lines (e.g. local command output)
---- @field on_stderr_text? fun(text: string): nil Stderr lines that don't match ignore patterns
+--- @field on_stdout_line fun(line: string): nil A non-blank stdout line that is not JSON, untrimmed. Called in the luv read callback.
+--- @field on_stderr_line fun(line: string): nil A non-blank stderr line, untrimmed. Called in the luv read callback.
 
 --- @class agentic.acp.StdioTransportConfig
 --- @field command string Command to spawn agent
@@ -18,20 +19,6 @@ local M = {}
 --- @field env? table<string, string|nil> Environment variables
 --- @field enable_reconnect? boolean Enable auto-reconnect
 --- @field max_reconnect_attempts? number Maximum reconnection attempts
-
---- Some known messages the ACP providers write to stderr because it communicates via stdio
---- These can be safely ignored, as they aren't errors, but logs
-local IGNORE_STDERR_PATTERNS = {
-    "Session not found",
-    "session/prompt",
-    "Spawning Claude Code process",
-    "does not appear in the file:",
-    "Experiments loaded", -- from Gemini
-    "No onPostToolUseHook found", -- from Claude
-    "You have exhausted your capacity on this model", -- from Gemini
-    "Spawning Claude Code:",
-    "[PreToolUseHook]",
-}
 
 --- Create stdio transport for ACP communication
 --- @param config agentic.acp.StdioTransportConfig
@@ -73,6 +60,13 @@ function M.create_stdio_transport(config, callbacks)
 
         -- Capture stderr for better error reporting
         local stderr_buffer = {}
+        local feed_stderr = LineReader.new(function(line)
+            if vim.trim(line) == "" then
+                return
+            end
+            table.insert(stderr_buffer, line)
+            callbacks.on_stderr_line(line)
+        end)
         local args = vim.deepcopy(config.args or {})
         local env = config.env
 
@@ -114,6 +108,10 @@ function M.create_stdio_transport(config, callbacks)
             stdio = { stdin, stdout, stderr },
             detached = false,
         }, function(code, signal)
+            -- The pipe's EOF can arrive after exit; the report needs a last
+            -- line written without a newline.
+            feed_stderr(nil)
+
             local cmd_str = config.command
                 .. (#args > 0 and " " .. table.concat(args, " ") or "")
 
@@ -182,64 +180,31 @@ function M.create_stdio_transport(config, callbacks)
 
         callbacks.on_state_change("connected")
 
-        local chunks = ""
+        local feed_stdout = LineReader.new(function(line)
+            local trimmed = vim.trim(line)
+            if trimmed == "" then
+                return
+            end
+            -- A decode error means the line is not JSON.
+            local ok, message = pcall(vim.json.decode, trimmed)
+            if ok then
+                callbacks.on_message(message)
+            else
+                callbacks.on_stdout_line(line)
+            end
+        end)
+
         stdout:read_start(function(err, data)
             if err then
                 Logger.notify("ACP stdout error: " .. err, vim.log.levels.ERROR)
                 callbacks.on_state_change("error")
                 return
             end
-
-            if data then
-                chunks = chunks .. data
-
-                -- Split on newlines and process complete JSON-RPC messages
-                local lines = vim.split(chunks, "\n", { plain = true })
-                chunks = lines[#lines]
-
-                for i = 1, #lines - 1 do
-                    local line = vim.trim(lines[i])
-                    if line ~= "" then
-                        local ok, message = pcall(vim.json.decode, line)
-                        if ok then
-                            callbacks.on_message(message)
-                        else
-                            if callbacks.on_stdout_text then
-                                callbacks.on_stdout_text(line)
-                            end
-                        end
-                    end
-                end
-            end
+            feed_stdout(data)
         end)
 
         stderr:read_start(function(_, data)
-            if data then
-                -- Always capture stderr for error reporting
-                local trimmed = vim.trim(data)
-                if trimmed ~= "" then
-                    table.insert(stderr_buffer, trimmed)
-                end
-
-                -- Only skip logging if matches ignore patterns
-                local should_ignore = false
-                for _, pattern in ipairs(IGNORE_STDERR_PATTERNS) do
-                    if data:find(pattern, 1, true) then
-                        should_ignore = true
-                        break
-                    end
-                end
-
-                if not should_ignore then
-                    vim.schedule(function()
-                        Logger.debug("ACP stderr: ", data)
-                    end)
-
-                    if callbacks.on_stderr_text then
-                        callbacks.on_stderr_text(trimmed)
-                    end
-                end
-            end
+            feed_stderr(data)
         end)
     end
 

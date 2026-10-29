@@ -1,5 +1,7 @@
 local AcpKind = require("agentic.utils.acp_kind")
+local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
+local LogLine = require("agentic.utils.log_line")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
 local SkillPath = require("agentic.utils.skill_path")
@@ -32,7 +34,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field _on_ready fun(client: agentic.acp.ACPClient)
---- @field _broadcast_stdout_text fun(self: agentic.acp.ACPClient, text: string)
+--- @field _notified_output table<string, true> Process output summaries already shown as a notification by this client
 --- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
 --- @field _children table<string, string> Child session id → the subscribed root session that spawned it, directly or through other children
 --- @field _session_roots table<string, string[]> Skill-search roots per session, from the cwd and additional directories that session was opened with
@@ -103,6 +105,7 @@ function ACPClient:new(config, on_ready)
     client._children = {}
     client._session_roots = {}
     client._tool_call_kinds = ToolCallKinds:new()
+    client._notified_output = {}
 
     client:_setup_transport()
     client:_connect()
@@ -270,17 +273,47 @@ function ACPClient:__with_subscriber(session_id, callback)
     end)
 end
 
---- Broadcast non-JSON stdout text to all subscribers that handle it.
---- Used for local command output (e.g. /context) that bypasses JSON-RPC.
---- @param text string
-function ACPClient:_broadcast_stdout_text(text)
-    for _, subscriber in pairs(self.subscribers) do
-        if subscriber.on_stdout_text then
-            vim.schedule(function()
-                subscriber.on_stdout_text(text)
-            end)
-        end
+--- Whether a line the provider process wrote outside the protocol is known
+--- noise. Overrides add their provider's patterns and call the base.
+--- @protected
+--- @param line string
+--- @return boolean
+function ACPClient:ignores_output(line)
+    return line:find("Session not found", 1, true) ~= nil
+        or line:find("session/prompt", 1, true) ~= nil
+        or line:find("does not appear in the file:", 1, true) ~= nil
+end
+
+--- Handle a line the provider process wrote outside the protocol. Every line
+--- goes to the log file. A line not ignored also goes to `:messages`, and its
+--- `LogLine.summary` is shown as a warning the first time this client sees it.
+--- Never written to a chat: the process serves every session, and its output
+--- has no order relative to the protocol stream. Safe in a luv callback.
+--- @param stream "stdout"|"stderr"
+--- @param line string
+function ACPClient:_on_process_output(stream, line)
+    local config = self.provider_config
+    local label = (config.name or config.command)
+        .. (self.agent_info and " " .. self.agent_info.version or "")
+        .. " "
+        .. stream
+
+    Logger.debug_to_file(label .. ":", line)
+    if self:ignores_output(line) then
+        return
     end
+    Logger.debug(label .. ":", line)
+
+    local summary = LogLine.summary(line)
+    if not summary or self._notified_output[summary] then
+        return
+    end
+    self._notified_output[summary] = true
+
+    local suffix = Config.log
+            and " (full output in " .. Logger.LOG_FILE_PATH .. ")"
+        or ""
+    Logger.notify(label .. ": " .. summary .. suffix, vim.log.levels.WARN)
 end
 
 function ACPClient:_setup_transport()
@@ -309,11 +342,11 @@ function ACPClient:_setup_transport()
                     self:_connect()
                 end
             end,
-            on_stdout_text = function(text)
-                self:_broadcast_stdout_text(text)
+            on_stdout_line = function(line)
+                self:_on_process_output("stdout", line)
             end,
-            on_stderr_text = function(text)
-                self:_broadcast_stdout_text(text)
+            on_stderr_line = function(line)
+                self:_on_process_output("stderr", line)
             end,
             get_reconnect_count = function()
                 return self.reconnect_count
@@ -1721,7 +1754,6 @@ return ACPClient
 --- @field on_request_permission agentic.acp.ClientHandlers.on_request_permission
 --- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock, source_session_id: string|nil): nil
 --- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase, source_session_id: string|nil): nil
---- @field on_stdout_text? fun(text: string): nil Non-JSON stdout lines (e.g. local command output)
 --- @field on_disconnect? fun(): nil The provider process died or failed
 
 --- @class agentic.acp.ACPProviderConfig

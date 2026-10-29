@@ -159,6 +159,19 @@ function ClaudeAgentACPAdapter:exec_shell()
     return self._exec_shell
 end
 
+--- @protected
+--- @param line string
+--- @return boolean
+function ClaudeAgentACPAdapter:ignores_output(line)
+    return ACPClient.ignores_output(self, line)
+        or line:find("Spawning Claude Code process", 1, true) ~= nil
+        or line:find("Spawning Claude Code:", 1, true) ~= nil
+        or line:find("No onPostToolUseHook found", 1, true) ~= nil
+        or line:find("[PreToolUseHook]", 1, true) ~= nil
+        -- Per-phase timing, with a session id and durations in every line
+        or vim.startswith(line, "[session/")
+end
+
 --- The SDK's record of a subagent's spawn: its meta file beside the session
 --- transcript. Nil until the file exists.
 --- @param session_id string The root session

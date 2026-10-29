@@ -22,6 +22,16 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         }, { __index = ClaudeAgentACPAdapter })
     end
 
+    it("ignores its own and the base process output patterns", function()
+        local adapter = make_adapter()
+        assert.is_true(adapter:ignores_output("[PreToolUseHook] x"))
+        assert.is_true(
+            adapter:ignores_output("[session/create] sessionId=s-1 phase=settings")
+        )
+        assert.is_true(adapter:ignores_output("Session not found"))
+        assert.is_false(adapter:ignores_output("Unexpected case"))
+    end)
+
     describe("subagent control", function()
         it("predicts background only under force_background", function()
             local adapter = make_adapter()

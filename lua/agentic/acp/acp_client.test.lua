@@ -54,6 +54,98 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    describe("_on_process_output", function()
+        local Config = require("agentic.config")
+
+        --- @type TestStub
+        local notify_stub
+        --- @type TestStub
+        local file_stub
+        --- @type boolean|nil
+        local original_log
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+            file_stub = spy.stub(Logger, "debug_to_file")
+            original_log = Config.log
+            Config.log = false
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+            file_stub:revert()
+            Config.log = original_log
+        end)
+
+        --- @param provider_config agentic.acp.ACPProviderConfig|nil
+        --- @return agentic.acp.ACPClient
+        local function make_client(provider_config)
+            return setmetatable({
+                provider_config = provider_config
+                    or { name = "Provider", command = "provider-cmd" },
+                agent_info = { name = "p", version = "1.0" },
+                _notified_output = {},
+            }, { __index = ACPClient })
+        end
+
+        it("notifies once per summary and logs every line", function()
+            local client = make_client()
+
+            client:_on_process_output("stderr", 'Unexpected case: {"a":1}')
+            client:_on_process_output("stderr", 'Unexpected case: {"b":2}')
+
+            assert.spy(notify_stub).was.called(1)
+            assert.spy(file_stub).was.called(2)
+        end)
+
+        it("notifies again for a different summary", function()
+            local client = make_client()
+
+            client:_on_process_output("stderr", "first problem")
+            client:_on_process_output("stderr", "second problem")
+
+            assert.spy(notify_stub).was.called(2)
+        end)
+
+        it("logs an ignored line without notifying", function()
+            local client = make_client()
+
+            client:_on_process_output("stderr", "Session not found: s-1")
+
+            assert.spy(file_stub).was.called(1)
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("warns with the provider name, version and stream", function()
+            make_client():_on_process_output("stdout", "oops")
+
+            local args = notify_stub.calls[1]
+            assert.equal("Provider 1.0 stdout: oops", args[1])
+            assert.equal(vim.log.levels.WARN, args[2])
+        end)
+
+        it("names the provider by command when it has no name", function()
+            make_client({ command = "provider-cmd" })
+                :_on_process_output("stderr", "oops")
+
+            assert.equal(
+                "provider-cmd 1.0 stderr: oops",
+                notify_stub.calls[1][1]
+            )
+        end)
+
+        it("points at the log file only while logging", function()
+            Config.log = true
+            make_client():_on_process_output("stderr", "oops")
+            assert.equal(
+                "Provider 1.0 stderr: oops (full output in "
+                    .. Logger.LOG_FILE_PATH
+                    .. ")",
+                notify_stub.calls[1][1]
+            )
+        end)
+    end)
+
     describe("_fail_pending_callbacks", function()
         --- @type tests.helpers.Deferred
         local deferred
@@ -348,7 +440,6 @@ describe("agentic.acp.ACPClient", function()
                     recorded.permissions = recorded.permissions + 1
                     cb(nil)
                 end,
-                on_stdout_text = function() end,
             }
             return handlers, recorded
         end

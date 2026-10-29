@@ -2147,18 +2147,6 @@ function SessionManager:_delete_session()
     end
 end
 
---- Handle non-JSON text from the ACP process (stdout non-JSON or stderr).
---- Used for local command output (e.g. /context) that bypasses JSON-RPC.
---- Only displays when a prompt is actively generating to avoid noise.
---- @param text string
-function SessionManager:_on_stdout_text(text)
-    if not self.is_generating then
-        return
-    end
-
-    self.message_writer:write_message(ACPPayloads.generate_agent_message(text))
-end
-
 --- Build the ACP client handlers table.
 --- @return agentic.acp.ClientHandlers
 function SessionManager:_build_handlers()
@@ -2174,10 +2162,6 @@ function SessionManager:_build_handlers()
 
         on_tool_call_update = function(tool_call_update)
             self:_on_tool_call_update(tool_call_update)
-        end,
-
-        on_stdout_text = function(text)
-            self:_on_stdout_text(text)
         end,
 
         on_request_permission = function(request, callback)
