@@ -3,7 +3,7 @@ name: rendering
 description:
   Chat-buffer rendering — tool call blocks, code fences, search highlighting,
   body folding. Use when adding a tool kind, changing the fence info-string,
-  modifying tool_call_renderer or message_writer rendering paths, editing
+  modifying tool_call_layout/_renderer or message_writer render paths, editing
   queries/agentic/folds.scm or injections.scm, or wiring in a new foldable
   body. Per-site rationale (sign_text vs virt_text, set_text vs set_lines,
   fold-anchor scheduling, priority numbers) lives in docstrings at the
@@ -100,14 +100,13 @@ A tool head with no name renders as a bare `###`, byte-identical to the
 section-close boundary `write_message_chunk` emits; both must stay uncaptured
 by `queries/agentic/context.scm`.
 
-`collapsed_header` backtick-guards the whole name when the kind is in
-`CODE_KINDS`. A prose head guards each word that `needs_guard` accepts, with
-its punctuation outside the span (`guard_words`). The docstrings carry the
-rationale.
+`collapsed_header` (`tool_call_layout.lua`) backtick-guards the whole name
+when the kind is in `CODE_KINDS`, else each word that needs it
+(`MarkdownGuard`). The docstrings carry the rationale.
 
 ## Fence info-strings — cross-kind reference
 
-`Renderer.safe_fence(body_lines)` returns a backtick run one longer than the
+`TextWrap.safe_fence(body_lines)` returns a backtick run one longer than the
 longest run in the content, so embedded triple-backticks never close the outer
 fence. The same fence string is used for open and close. The info-string after
 the fence is set per kind:
@@ -116,10 +115,11 @@ the fence is set per kind:
 | --- | --- | --- |
 | Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback | Cosmetic; zsh parser is aliased to `bash`, identical highlighting |
 | Search command (argument fence) | `bash` | |
-| Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | claude-agent-acp pre-wraps in its own console fence; `prepare_block_lines` unwraps an already-fenced execute body before re-wrapping |
+| Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
-| Fetch / WebSearch / SubAgent body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`fold_state` return): `open` normally, `closed_when_final` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
+| Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
+| Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`Section.fold`): `open` normally, `closed_when_final` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
@@ -137,8 +137,7 @@ would only buy a second parse of the same text.
 
 **Downstream fence consumers must handle variable width.** Match `^\`+$`
 (any backtick-only line) instead of literal triple-backticks, and
-`^\`+<lang>$` for typed fences. See `apply_block_highlights` for the
-existing pattern.
+`^\`+<lang>$` for typed fences.
 
 ## Body folding
 
@@ -152,9 +151,9 @@ read them in this order when changing fold behaviour:
 2. `lua/agentic/ui/folds.lua` — the foldexpr: root-tree-only levels, cached
    per `b:changedtick`. Its module docstring is the record of why core's
    `vim.treesitter.foldexpr()` cannot be used here.
-3. `lua/agentic/ui/tool_call_renderer.lua` — `prepare_block_lines` decides
-   per-kind whether to append `-fold`, and returns `fold_anchor` (0-indexed
-   offset of the first body line).
+3. `lua/agentic/ui/tool_call_layout.lua` — `ToolCallLayout.build`: a
+   section with `fold` set gets `-fold`; `Layout.fold.anchor` is the first
+   row inside the fold.
 4. `lua/agentic/ui/message_writer.lua` — `MessageWriter:_queue_fold`'s
    docstring explains why the fold close is deferred via `vim.schedule` and
    how anchor extmarks survive edits and chat-window hides.
@@ -166,9 +165,7 @@ Threshold config keys (in `config_default.lua`):
 - Fetch / WebSearch / SubAgent — fold when multi-line, no config.
   Fetch/WebSearch close at a final status, a subagent's prompt at render
 
-`prepare_block_lines` returns a `fold_state` (`agentic.ui.FoldState`) with
-each fold: when the state is due. A kind that sets none closes at a final
-status.
+`Section.fold` (`agentic.ui.FoldState`) says when the state is due.
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
 word when it has one, plus a character count where the writer marks the
@@ -176,20 +173,19 @@ fence row in `Folds.NS_CHAR_COUNT`.
 
 Adding a new foldable kind:
 
-1. Decide the threshold policy and append `-fold` to the info-string in
-   `prepare_block_lines` when the body exceeds it.
-2. Return the correct `fold_anchor` (offset within the returned `lines` to
-   the first body line — the line *inside* the fold, not the fence
-   delimiter), and a `fold_state` if not `closed_when_final`.
-3. No changes needed to `folds.scm`, `injections.scm` or `folds.lua` — they
+1. Decide the threshold policy and set `fold` on the body section in its
+   `BODIES` builder when the body exceeds it; `assemble` adds `-fold` and
+   the anchor.
+2. No changes needed to `folds.scm`, `injections.scm` or `folds.lua` — they
    match the `fold$` suffix generically (use `<lang>-fold` to fold *and* inject
    the base language; the `difffold` marker is the special case that suppresses
    injection).
 
 ## Search match highlighting
 
-`extract_search_term_highlights` in `tool_call_renderer.lua` matches a
-pattern against the body via `AgenticSearchMatch` extmarks (priority 200).
+`GrepHighlights.terms` (`utils/grep_highlights.lua`) matches a pattern
+against the body via `AgenticSearchMatch` extmarks (priority 200, over ANSI
+spans at 150).
 Terms match only the text of a match line, after its `path:N:` prefix, and a
 match must be the same under every layout the grep's flags allow (see
 `GrepOutput`); a missing highlight is acceptable, a false one is not.
@@ -206,7 +202,7 @@ Grep-format lines (`path:linenum:rest`) get per-component highlights
 fire for all search blocks and for those same execute blocks. Execute
 blocks whose grep asked for line numbers (`GrepArgs.Invocation.line_numbers`)
 also accept a path-less `linenum:rest`. The two coexist via the optional
-`hl_group` field on `SearchMatch`.
+`hl_group` field on `GrepHighlights.Match`.
 
 ## Update-path invariants (read before changing `update_tool_call_block`)
 

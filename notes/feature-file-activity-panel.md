@@ -315,7 +315,7 @@ Two sources, in order of preference:
 
 Source 2 is unreliable across a restore, which is why the range has to be
 persisted rather than recomputed. On Path B, `cached_diff_blocks` *is*
-recreated (`tool_call_renderer.lua:714`), but `extract_diff_blocks`
+recreated (`diff_body` in `tool_call_layout.lua`), but `extract_diff_blocks`
 matches OLD text against now-post-edit disk (`tool_call_diff.lua:59-89`)
 and typically finds nothing — the ranges come back wrong or empty, not
 absent. Persist the range at capture time.

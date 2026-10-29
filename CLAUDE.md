@@ -57,7 +57,7 @@ Grep by `"title":"<name>"` to find a session renamed via `/rename` across all pr
 Tool call blocks, code-fence widths and info-strings, search highlighting, and
 body folding — see the `rendering` project skill. Per-site rationale (sign
 extmarks, status footer writes, fold-anchor scheduling, priority numbers) lives
-in docstrings at the relevant functions in `tool_call_renderer.lua`,
+in docstrings at the relevant functions in `tool_call_{layout,renderer}.lua`,
 `message_writer.lua`, `extmark_block.lua`, `theme.lua`, and the
 `queries/agentic/*.scm` files. The chat buffer always has folds; any viewport,
 scroll, or cursor math must be fold-aware (see neovim skill § "Common

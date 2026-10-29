@@ -17,7 +17,7 @@ During the buggy window (while the agent is responding):
 **IS NOT written:**
 - Regular Claude prose text (`agent_message_chunk` stream).
 - Entire tool call frames — not just body/content, the whole frame including
-  the header line (` ### Read `, ` ### Execute `, etc.).
+  the `###` header line.
 
 **Release trigger:**
 - The exact moment the user types and submits a new prompt, ALL the missing

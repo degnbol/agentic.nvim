@@ -80,11 +80,11 @@ Provider sends "tool_call"
   -> Adapter builds ToolCallBlock { tool_call_id, kind, argument, status, body?, diff? }
   -> subscriber.on_tool_call(block)
   -> MessageWriter:write_tool_call_block(block)
-     1. Renders header + body/diff lines to buffer (footer is empty "")
-     2. Writes status text into footer line via set_text + extmark highlight
-     3. Creates sign_text extmarks (NS_DECORATIONS) for ╭─ │ ╰─ borders
-     4. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
-     5. Stores block in tool_call_blocks[id]
+     1. Writes ToolCallLayout.build's lines to buffer (footer is empty "")
+     2. Stores block in tool_call_blocks[id]
+     3. Creates range extmark (NS_TOOL_BLOCKS) as position anchor
+     4. Creates sign_text extmarks (NS_DECORATIONS): kind glyph, │, ╰─
+     5. Writes status text into footer line via set_text + extmark highlight
 ```
 
 **Phase 2 — `tool_call_update` (one or more)**
@@ -145,7 +145,7 @@ from `rawInput`; see "Edit diffs come from `content[]`".
   updates.
 - **Body accumulates:** Multiple updates with different body content get
   concatenated with `---` dividers, not replaced.
-- **Sign column for borders:** Block decorations (╭─ │ ╰─) use `sign_text`
+- **Sign column for borders:** Block decorations (glyph │ ╰─) use `sign_text`
   extmarks in the sign column rather than inline virtual text. This is more
   stable during buffer edits — signs survive line content replacement without
   needing delete/recreate cycles.
@@ -179,15 +179,13 @@ in a literal-backtick grep). Two consequences the adapter fixes
 1. **Description is lifted to a title.** Without intervention the description
    seeds the body and accumulates ahead of the output behind a `---` divider
    (see body-accumulation in `update_tool_call_block`). The adapter moves it to
-   `ToolCallBase.description`, which the renderer prints as a Comment-highlighted
-   line directly under `### Execute`, above the command fence.
-2. **The bridge's console fence is stripped.** `ClaudeShared.strip_console_fence`
-   removes the ` ```console … ``` ` wrapper at the source. Without it `safe_fence`
-   widens the outer fence to four backticks around the bridge's inner three,
-   double-wrapping the output. `prepare_block_lines` also unwraps an
-   already-fenced execute body as a final guard (idempotent), so single-wrapping
-   is a property of the renderer — it survives a stale adapter instance after a
-   hot-reload, or another provider that pre-fences.
+   `ToolCallBase.description`, which names the block's `###` head, above the
+   command fence.
+2. **The bridge's console fence is stripped** (`TextWrap.fenced_inner`).
+   Without it `safe_fence` widens the outer fence around the bridge's inner
+   one, double-wrapping the output. `CanonicalToolCall.normalise` unwraps any
+   execute message that arrives as one fenced block, so another provider
+   that pre-fences renders single-wrapped too.
 
 The fence/non-fence distinction also separates the two payloads: claude Bash
 output is always fenced, so unfenced execute content is the description echo and
@@ -202,17 +200,16 @@ is dropped from the body (the description is read from `rawInput.description`).
   `markdown` if the `agentic` language could not be registered.
 - The zsh treesitter parser must be installed (bash is aliased to zsh via
   `vim.treesitter.language.register("zsh", "bash")` in `bootstrap.lua` as fallback)
-- The `_apply_block_highlights` Comment extmarks skip the code fence lines to
-  avoid overriding treesitter highlights (extmark default priority 4096 >
-  treesitter priority 100)
+- Comment extmarks land only on unfenced rows (`comment_rows` in
+  `tool_call_layout.lua`), so they never override injected highlights
+  (extmark default priority 4096 > treesitter priority 100)
 
 **Format comparison:**
 
 ```
-All kinds:    "### Read"                   (heading — ### is @punctuation.special, kind is TOOL_KIND)
-              "`/tmp/file.txt`"            (argument on next line, TOOL_ARGUMENT highlight)
-Execute:      "### Execute"                (heading only, no argument line)
-              ```zsh                       (code fence, label from `shell` — treesitter injection)
+Read:         "### `/tmp/file.txt`"        (kind shows as the sign glyph only)
+Execute:      "### List files"             (description, or bare "###")
+              ```zsh                       (label from `shell` — treesitter injection)
               ls -la /tmp
               ```
 ```
@@ -380,15 +377,15 @@ every kind it can mint needs a `Glyphs.KIND` entry.
 
 The ACP schema spells kinds in lowercase (`"read"`, `"search"`, `"execute"`,
 …), and most providers follow that. opencode emits capitalised kinds
-(`"Read"`, `"Search"`) — which still render correctly because
-`tool_call_renderer.display_kind` normalises case for the chat heading,
-but a case-sensitive lookup (e.g. of `"Read"` in `auto_approve_kinds`) silently
-misses. The vocabulary itself is `AcpKind.PROTOCOL_KINDS`, which is also how a
-consumer tells a bridge-assigned kind from an adapter-minted one (see
-`ToolCallRenderer.strip_kind_prefix`). Any kind-based dispatch must lowercase
-before lookup, or compose a
-table that includes both casings. The chat heading is not a reliable signal
-that the right `kind` arrived — `display_kind` hides the difference.
+(`"Read"`, `"Search"`), which render correctly because every kind lookup
+in the chat goes through `AcpKind.normalise`, but a case-sensitive lookup
+(e.g. of `"Read"` in `auto_approve_kinds`) silently misses. The vocabulary
+itself is `AcpKind.PROTOCOL_KINDS`, which is also how a consumer tells a
+bridge-assigned kind from an adapter-minted one (see `strip_kind_prefix` in
+`ui/tool_call_layout.lua`). Any kind-based dispatch must lowercase before
+lookup, or compose a table that includes both casings. The chat is not a
+reliable signal that the right `kind` arrived — normalising hides the
+difference.
 
 ### Subagents are child sessions (claude-agent-acp)
 

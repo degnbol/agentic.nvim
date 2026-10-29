@@ -1,9 +1,11 @@
 local ACPClient = require("agentic.acp.acp_client")
+local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local SkillPath = require("agentic.utils.skill_path")
+local TextWrap = require("agentic.utils.text_wrap")
 
 local HOOKS_DIR = vim.fs.root(debug.getinfo(1, "S").source:sub(2), "hooks")
     .. "/hooks"
@@ -255,9 +257,9 @@ end
 local function lift_execute_description(message, raw_input)
     local desc = raw_input
         and (raw_input.description or raw_input.command_description)
-    local stripped, was_fenced = ClaudeUtils.strip_console_fence(message.body)
-    if was_fenced then
-        message.body = stripped
+    local inner = TextWrap.fenced_inner(message.body or {})
+    if inner ~= nil then
+        message.body = inner
     else
         -- Unfenced content is the description echo, not output. Prefer the
         -- explicit rawInput field, fall back to the echoed text.
@@ -498,15 +500,8 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
             elseif update.title then
                 -- rawInput may lack offset/limit; fall back to parsing
                 -- the title string e.g. "Read file.txt (10 - 42)"
-                local a, b = update.title:match("%((%d+)%s*%-%s*(%d+)%)%s*$")
-                if a then
-                    local na = tonumber(a) --[[@as integer]]
-                    local nb = tonumber(b) --[[@as integer]]
-                    message.read_range = {
-                        offset = na,
-                        limit = nb - na + 1,
-                    }
-                end
+                local _, range = CanonicalToolCall.parse_read_range(update.title)
+                message.read_range = range
             end
         end
     elseif kind == "fetch" then

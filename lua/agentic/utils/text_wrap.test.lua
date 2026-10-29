@@ -652,6 +652,64 @@ describe("agentic.utils.TextWrap", function()
         end)
     end)
 
+    describe("safe_fence", function()
+        it("is three backticks for content without a run", function()
+            assert.equal("```", TextWrap.safe_fence({ "a", "b" }))
+        end)
+
+        it("outlasts the longest run in the content", function()
+            assert.equal("````", TextWrap.safe_fence({ "```lua", "x", "```" }))
+        end)
+    end)
+
+    describe("fenced_inner", function()
+        it("returns the rows of one fenced block", function()
+            assert.same(
+                { "line 01", "line 02" },
+                TextWrap.fenced_inner({
+                    "```console",
+                    "line 01",
+                    "line 02",
+                    "```",
+                })
+            )
+        end)
+
+        it("accepts any language word", function()
+            assert.same(
+                { "x" },
+                TextWrap.fenced_inner({ "```text", "x", "```" })
+            )
+            assert.same({ "x" }, TextWrap.fenced_inner({ "```", "x", "```" }))
+        end)
+
+        it("accepts a four-backtick fence", function()
+            assert.same(
+                { "```", "x" },
+                TextWrap.fenced_inner({ "````console", "```", "x", "````" })
+            )
+        end)
+
+        it("rejects a closer shorter than the opener", function()
+            assert.is_nil(TextWrap.fenced_inner({ "````", "x", "```" }))
+        end)
+
+        it("rejects two blocks", function()
+            assert.is_nil(
+                TextWrap.fenced_inner({ "```", "a", "```", "```", "b", "```" })
+            )
+        end)
+
+        it("rejects an unfenced body", function()
+            assert.is_nil(TextWrap.fenced_inner({ "plain", "text" }))
+        end)
+
+        it("rejects fewer than two rows", function()
+            assert.is_nil(TextWrap.fenced_inner({}))
+            assert.is_nil(TextWrap.fenced_inner({ "```console" }))
+        end)
+    end)
+
     describe("truncate_to_width", function()
         it("leaves a string that already fits", function()
             assert.equal("short", TextWrap.truncate_to_width("short", 10))

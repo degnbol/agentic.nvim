@@ -10,6 +10,7 @@ local AcpKind = require("agentic.utils.acp_kind")
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
 local Bootstrap = require("agentic.bootstrap")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
@@ -2244,12 +2245,11 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         parent = self:_task_of(child_id)
     end
 
+    tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
     tool_call.decided_by = self.permission_manager:take_deciders(id)
     self:_writer_for(id):write_tool_call_block(tool_call)
     self:_indicator_for(id):reposition()
 
-    -- After the write: the writer drops bodies that must not be kept (a mode
-    -- switch's internal instructions) and the renderer adds `read_range`.
     local tool_msg = ChatHistory.tool_call_record(tool_call)
     tool_msg.parent_tool_use_id = parent
     self.chat_history:add_message(tool_msg)
@@ -2671,6 +2671,11 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         self:_read_agent_record(child_id)
     end
     local writer = self:_writer_for(id)
+    local existing = writer.tool_call_blocks[id]
+    tool_call_update = CanonicalToolCall.normalise(
+        tool_call_update,
+        tool_call_update.kind or (existing and existing.kind)
+    )
 
     writer:update_tool_call_block(tool_call_update)
     self:_indicator_for(id):reposition()

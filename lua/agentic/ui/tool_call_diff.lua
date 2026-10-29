@@ -82,9 +82,7 @@ function M.extract_diff_blocks(opts)
             end
         end
 
-        -- No match: return empty diff_blocks. Callers (tool_call_renderer)
-        -- handle the not-found case by emitting a single placeholder line in
-        -- place of the diff.
+        -- No match: return empty diff_blocks.
         if blocks then
             if opts.replace_all then
                 vim.list_extend(diff_blocks, blocks)

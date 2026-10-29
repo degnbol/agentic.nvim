@@ -24,9 +24,9 @@ end
 ---
 --- Membership is what separates "the bridge said this" from "this plugin
 --- decided this", and both readings matter: `ACPClient` warns about a kind no
---- provider should have sent, and `ToolCallRenderer.strip_kind_prefix` undoes a
---- bridge-written title only for a kind the bridge wrote. Key through
---- `normalise` — opencode capitalises these.
+--- provider should have sent, and `strip_kind_prefix` in
+--- `ui/tool_call_layout.lua` undoes a bridge-written title only for a kind the
+--- bridge wrote. Key through `normalise` — opencode capitalises these.
 --- @type table<string, boolean>
 M.PROTOCOL_KINDS = {
     read = true,

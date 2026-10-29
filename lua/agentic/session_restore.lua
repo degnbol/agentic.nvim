@@ -1,4 +1,5 @@
 local ACPPayloads = require("agentic.acp.acp_payloads")
+local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
@@ -483,7 +484,10 @@ function SessionRestore.replay_messages(writer, messages, buffer_name)
             }
             writer:write_message_chunk(thought_chunk)
         elseif msg.type == "tool_call" then
-            writer:write_tool_call_block(ChatHistory.to_tool_call_block(msg))
+            -- Records saved before normalisation at ingress hold the raw
+            -- argument. Only the split is safe to repeat (`normalise`).
+            local record = CanonicalToolCall.split_read_range(msg, msg.kind)
+            writer:write_tool_call_block(ChatHistory.to_tool_call_block(record))
         elseif msg.type == "session_message" or msg.type == "subagent_end" then
             SessionRestore.write_row(writer, msg, true, buffer_name)
         end

@@ -287,6 +287,52 @@ function M.unclosed_fence(lines)
     return open_fence, open_index
 end
 
+--- @param text string
+--- @return integer longest Length of the longest backtick run in `text`
+function M.longest_backtick_run(text)
+    local longest = 0
+    for ticks in text:gmatch("`+") do
+        longest = math.max(longest, #ticks)
+    end
+    return longest
+end
+
+--- A backtick fence that no backtick run in `body_lines` closes: three
+--- backticks, or one longer than the longest run. A fence of exactly three
+--- around content that holds its own code block closes on that block's
+--- fence, and swallows everything after it.
+--- @param body_lines string[]
+--- @return string fence e.g. "```" or "````"
+function M.safe_fence(body_lines)
+    local longest = 0
+    for _, line in ipairs(body_lines) do
+        longest = math.max(longest, M.longest_backtick_run(line))
+    end
+    return string.rep("`", math.max(3, longest + 1))
+end
+
+--- The rows inside `lines` when `lines` is exactly one backtick-fenced code
+--- block: the first row opens a backtick fence by `unclosed_fence`'s rule,
+--- no row before the last closes it, and the last row is a bare backtick
+--- run at least as long as the opener.
+--- @param lines string[]
+--- @return string[]|nil inner nil when `lines` is not one fenced block
+function M.fenced_inner(lines)
+    local opener, i_open =
+        M.unclosed_fence(vim.list_slice(lines, 1, #lines - 1))
+    local closer = #lines >= 2 and lines[#lines]:match("^`+$")
+    if
+        i_open ~= 1
+        or not opener
+        or not closer
+        or opener:sub(1, 1) ~= "`"
+        or #closer < #opener
+    then
+        return nil
+    end
+    return vim.list_slice(lines, 2, #lines - 1)
+end
+
 --- Whether a line is a fence delimiter — the opening or closing ` ``` ` of a
 --- fenced code block.
 ---

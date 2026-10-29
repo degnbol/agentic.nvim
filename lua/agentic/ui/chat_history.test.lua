@@ -249,6 +249,36 @@ describe("ChatHistory", function()
             return prompt[1].text
         end
 
+        it("writes the range of a read", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "tool_call",
+                    tool_call_id = "tc-read",
+                    kind = "read",
+                    status = "completed",
+                    argument = "/tmp/f.lua",
+                    read_range = { offset = 10, limit = 5 },
+                },
+            }, prompt)
+            assert.equal("Tool call (read): /tmp/f.lua (10 - 14)", prompt[1].text)
+        end)
+
+        it("writes the open range of a read", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "tool_call",
+                    tool_call_id = "tc-read",
+                    kind = "read",
+                    status = "completed",
+                    argument = "/tmp/f.lua",
+                    read_range = { offset = 10 },
+                },
+            }, prompt)
+            assert.equal("Tool call (read): /tmp/f.lua (10 - …)", prompt[1].text)
+        end)
+
         it("renders a subagent block as type, name and status", function()
             assert.equal(
                 'Subagent Explore "map UI": completed',
@@ -727,8 +757,6 @@ describe("ChatHistory", function()
             local block = vim.tbl_extend("force", fields, {
                 extmark_id = 1,
                 decoration_extmark_ids = { 2 },
-                search_matches = {},
-                search_ansi = {},
                 cached_diff_blocks = {},
                 fold_anchor_id = 3,
             }) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]

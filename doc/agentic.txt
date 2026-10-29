@@ -252,6 +252,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         Lines before folding execute output.
     `other_max_lines`          integer (default: 25)
         Lines before folding generic, MCP and meta tool-result bodies.
+        A flat JSON body shows as a table.
     `execute_formatter`        string | false (default: `"shfmt"`)
         External formatter for execute code blocks. Set to `false` to
         use the built-in operator-splitting fallback only.

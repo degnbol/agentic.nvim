@@ -2905,345 +2905,6 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
-    describe("_prepare_block_lines", function()
-        local FileSystem
-        local read_stub
-        local path_stub
-
-        before_each(function()
-            FileSystem = require("agentic.utils.file_system")
-            read_stub = spy.stub(FileSystem, "read_from_buffer_or_disk")
-            path_stub = spy.stub(FileSystem, "to_absolute_path")
-            path_stub:invokes(function(path)
-                return path
-            end)
-        end)
-
-        after_each(function()
-            read_stub:revert()
-            path_stub:revert()
-        end)
-
-        it("renders execute tool call with bash and console fences", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-fence",
-                status = "pending",
-                kind = "execute",
-                argument = "ls -la /tmp",
-                body = { "total 16" },
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("###", lines[1])
-            assert.equal("```bash", lines[2])
-            assert.equal("ls -la /tmp", lines[3])
-            assert.equal("```", lines[4])
-            assert.equal("```console", lines[5])
-            assert.equal("total 16", lines[6])
-            assert.equal("```", lines[7])
-        end)
-
-        it("labels the execute fence with the block's shell", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-zsh",
-                status = "pending",
-                kind = "execute",
-                argument = "ls -la /tmp",
-                body = { "total 16" },
-                shell = "zsh",
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("```zsh", lines[2])
-        end)
-
-        it("labels the fence bash without a shell", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-unknown",
-                status = "pending",
-                kind = "execute",
-                argument = "ls -la /tmp",
-                body = { "total 16" },
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("```bash", lines[2])
-        end)
-
-        it(
-            "renders the execute description as the collapsed heading name",
-            function()
-                --- @type agentic.ui.MessageWriter.ToolCallBlock
-                local block = {
-                    tool_call_id = "exec-desc",
-                    status = "completed",
-                    kind = "execute",
-                    argument = "ls -la /tmp",
-                    description = "List the temp directory",
-                    body = { "total 16" },
-                }
-
-                local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-                assert.equal("### List the temp directory", lines[1])
-                assert.equal("```bash", lines[2])
-                assert.equal("ls -la /tmp", lines[3])
-                assert.equal("```", lines[4])
-                -- Single console fence around the body — no nested/double wrap.
-                assert.equal("```console", lines[5])
-                assert.equal("total 16", lines[6])
-                assert.equal("```", lines[7])
-            end
-        )
-
-        it(
-            "unwraps an already-fenced execute body to avoid double-wrapping",
-            function()
-                -- A body that arrives still wrapped in a ```console fence (e.g.
-                -- a stale adapter instance after hot-reload, or a provider that
-                -- pre-fences) must not be wrapped a second time.
-                --- @type agentic.ui.MessageWriter.ToolCallBlock
-                local block = {
-                    tool_call_id = "exec-prefenced",
-                    status = "completed",
-                    kind = "execute",
-                    argument = "echo hi",
-                    body = { "```console", "hi", "```" },
-                }
-
-                local lines, _ = Renderer.prepare_block_lines(block, 80)
-                local text = table.concat(lines, "\n")
-
-                assert.is_nil(text:match("```console\n```console"))
-                local openers = 0
-                for _ in text:gmatch("```console") do
-                    openers = openers + 1
-                end
-                assert.equal(1, openers)
-                assert.equal("###", lines[1])
-                assert.equal("```bash", lines[2])
-                assert.equal("echo hi", lines[3])
-                assert.equal("```", lines[4])
-                assert.equal("```console", lines[5])
-                assert.equal("hi", lines[6])
-                assert.equal("```", lines[7])
-            end
-        )
-
-        it("splits multi-line execute arguments into separate lines", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-multi",
-                status = "pending",
-                kind = "execute",
-                argument = "for i in 1 2 3; do\necho $i\ndone",
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("###", lines[1])
-            assert.equal("```bash", lines[2])
-            assert.equal("for i in 1 2 3; do", lines[3])
-            assert.equal("echo $i", lines[4])
-            assert.equal("done", lines[5])
-            assert.equal("```", lines[6])
-        end)
-
-        it(
-            "renders non-execute tool call with argument on the collapsed heading",
-            function()
-                --- @type agentic.ui.MessageWriter.ToolCallBlock
-                local block = {
-                    tool_call_id = "read-inline",
-                    status = "pending",
-                    kind = "read",
-                    argument = "/tmp/file.txt",
-                    body = { "line1" },
-                }
-
-                local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-                assert.equal("### `/tmp/file.txt`", lines[1])
-                assert.equal("Read 1 lines", lines[2])
-            end
-        )
-
-        it("strips redundant kind prefix from argument", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "read-prefix",
-                status = "pending",
-                kind = "read",
-                argument = "Read /tmp/file.txt",
-                body = { "line1" },
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("### `/tmp/file.txt`", lines[1])
-        end)
-
-        it("extracts range from argument into read_range", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "read-title-range",
-                status = "pending",
-                kind = "read",
-                argument = "Read /tmp/file.txt (1 - 100)",
-                body = { "a", "b", "c" },
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("### `/tmp/file.txt:1`", lines[1])
-            assert.equal("Read 100 lines (1 - 100)", lines[2])
-        end)
-
-        it("shows line range in read info when read_range is set", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "read-range",
-                status = "pending",
-                kind = "read",
-                argument = "/tmp/file.txt",
-                body = { "a", "b", "c" },
-                read_range = { offset = 10, limit = 3 },
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("### `/tmp/file.txt:10`", lines[1])
-            assert.equal("Read 3 lines (10 - 12)", lines[2])
-        end)
-
-        it("heads an open-ended read with its start line", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "read-open-range",
-                status = "pending",
-                kind = "read",
-                argument = "/tmp/file.txt",
-                body = { "a", "b", "c" },
-                read_range = { offset = 10 },
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("### `/tmp/file.txt:10`", lines[1])
-            assert.equal("Read 3 lines (10 - …)", lines[2])
-        end)
-
-        it("creates highlight ranges for pure insertion hunks", function()
-            read_stub:returns({ "line1", "line2", "line3" })
-
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "test-hl",
-                status = "pending",
-                kind = "edit",
-                argument = "/test.lua",
-                diff = {
-                    old = { "line1", "line2", "line3" },
-                    new = { "line1", "inserted", "line2", "line3" },
-                },
-            }
-
-            local lines, highlight_ranges =
-                Renderer.prepare_block_lines(block, 80)
-
-            local found_inserted = false
-            for _, line in ipairs(lines) do
-                if line == "inserted" then
-                    found_inserted = true
-                    break
-                end
-            end
-            assert.is_true(found_inserted)
-
-            local new_ranges = vim.tbl_filter(function(r)
-                return r.type == "new"
-            end, highlight_ranges)
-            assert.is_true(#new_ranges > 0)
-            assert.equal("inserted", new_ranges[1].new_line)
-        end)
-
-        it("splits long one-liner execute commands at operators", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-long",
-                status = "pending",
-                kind = "execute",
-                argument = "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test",
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("###", lines[1])
-            assert.equal("```bash", lines[2])
-            assert.equal("cd /some/very/long/project/path &&", lines[3])
-            assert.equal("npm install --save-dev typescript &&", lines[4])
-            assert.equal("npm run build &&", lines[5])
-            assert.equal("npm test", lines[6])
-            assert.equal("```", lines[7])
-        end)
-
-        it("does not split short execute commands", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-short",
-                status = "pending",
-                kind = "execute",
-                argument = "ls -la && echo done",
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("ls -la && echo done", lines[3])
-        end)
-
-        it("does not split inside quoted strings", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-quoted",
-                status = "pending",
-                kind = "execute",
-                argument = [[echo "this && that || other" && echo 'pipes | here ; too' && echo done with a very long command line]],
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("```bash", lines[2])
-            assert.equal([[echo "this && that || other" &&]], lines[3])
-            assert.equal([[echo 'pipes | here ; too' &&]], lines[4])
-            assert.equal("echo done with a very long command line", lines[5])
-        end)
-
-        it("does not split inside subshells", function()
-            --- @type agentic.ui.MessageWriter.ToolCallBlock
-            local block = {
-                tool_call_id = "exec-subshell",
-                status = "pending",
-                kind = "execute",
-                argument = "result=$(cmd1 && cmd2 || cmd3) && echo $result && final_command with some extra arguments to be long",
-            }
-
-            local lines, _ = Renderer.prepare_block_lines(block, 80)
-
-            assert.equal("result=$(cmd1 && cmd2 || cmd3) &&", lines[3])
-            assert.equal("echo $result &&", lines[4])
-            assert.equal(
-                "final_command with some extra arguments to be long",
-                lines[5]
-            )
-        end)
-    end)
-
     describe("status footer as direct buffer text", function()
         --- @type TestStub
         local schedule_stub
@@ -3789,7 +3450,7 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
-    describe("deferred block highlights", function()
+    describe("block highlights", function()
         --- @type TestStub
         local schedule_stub
 
@@ -3800,12 +3461,6 @@ describe("agentic.ui.MessageWriter", function()
         after_each(function()
             schedule_stub:revert()
         end)
-
-        local function run_scheduled()
-            for _, call in ipairs(schedule_stub.calls) do
-                call[1]()
-            end
-        end
 
         --- @return integer[] rows 0-indexed rows holding a search-term extmark
         local function term_rows()
@@ -3822,7 +3477,7 @@ describe("agentic.ui.MessageWriter", function()
             return rows
         end
 
-        it("follow the block when rows are inserted above it", function()
+        it("exist right after an update and follow inserted rows", function()
             writer:write_tool_call_block({
                 tool_call_id = "grep-shift",
                 status = "pending",
@@ -3834,10 +3489,10 @@ describe("agentic.ui.MessageWriter", function()
                 status = "completed",
                 body = { "12:foo" },
             })
+            assert.equal(1, #term_rows())
 
             vim.bo[bufnr].modifiable = true
             vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { "a", "b", "c" })
-            run_scheduled()
 
             local rows = term_rows()
             assert.equal(1, #rows)
@@ -3845,7 +3500,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal("12:foo", lines[rows[1] + 1])
         end)
 
-        it("apply only the latest update's pass", function()
+        it("leave no stale marks after a second update", function()
             writer:write_tool_call_block({
                 tool_call_id = "grep-twice",
                 status = "pending",
@@ -3862,11 +3517,29 @@ describe("agentic.ui.MessageWriter", function()
                 status = "completed",
                 body = { "13:foo" },
             })
-            run_scheduled()
 
-            -- The merged body holds both lines; a stale first pass would add
-            -- a third mark.
+            -- The merged body holds both lines; a mark left by the first
+            -- update would be a third.
             assert.equal(2, #term_rows())
+        end)
+
+        it("keeps a todowrite body and folds it closed", function()
+            writer:write_tool_call_block({
+                tool_call_id = "todo-1",
+                status = "pending",
+                kind = "TodoWrite",
+                argument = "todos",
+            })
+            local body = { '{"todos": [{"content": "a"}, {"content": "b"}]}' }
+            writer:update_tool_call_block({
+                tool_call_id = "todo-1",
+                status = "completed",
+                body = body,
+            })
+
+            local tracker = writer.tool_call_blocks["todo-1"]
+            assert.same(body, tracker.body)
+            assert.is_false(tracker.fold_open)
         end)
     end)
 
@@ -5437,16 +5110,11 @@ describe("agentic.ui.MessageWriter", function()
                     status = "failed",
                     failure_reason = { "short" },
                 })
-                -- No wait: the orphaned marks are the OLD highlights that survive
-                -- the synchronous clear+set_lines. The re-applied (correct) marks
-                -- land later via vim.schedule, but the bug is detectable now.
-
-                -- The diff body ends at the last added line; nothing below it
-                -- (reason fence, footer, trailing blank) may carry a diff highlight.
+                -- The diff body ends at the last added line; below it only the
+                -- reason row carries a highlight, its own error one.
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
                 local last_diff_row
-                for i, l in
-                    ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
-                do
+                for i, l in ipairs(lines) do
                     if l == "end" then
                         last_diff_row = i - 1 -- 0-indexed; last added diff line
                     end
@@ -5458,13 +5126,15 @@ describe("agentic.ui.MessageWriter", function()
                     Renderer.NS_DIFF_HIGHLIGHTS,
                     0,
                     -1,
-                    {}
+                    { details = true }
                 )
                 for _, m in ipairs(marks) do
-                    assert.is_true(
-                        m[2] <= last_diff_row,
-                        "diff highlight orphaned at row " .. m[2]
-                    )
+                    if m[2] > last_diff_row then
+                        assert.same(
+                            { "short", Theme.HL_GROUPS.ERROR_BODY },
+                            { lines[m[2] + 1], m[4].hl_group }
+                        )
+                    end
                 end
             end
         )

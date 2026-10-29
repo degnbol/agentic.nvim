@@ -4402,6 +4402,91 @@ describe("agentic.SessionManager", function()
             assert.is_nil(record.decoration_extmark_ids)
         end)
 
+        it("keeps switch_mode and todowrite bodies in history", function()
+            for i, kind in ipairs({ "switch_mode", "TodoWrite" }) do
+                session:_on_tool_call({
+                    tool_call_id = "tc-" .. kind,
+                    kind = kind,
+                    argument = kind,
+                    status = "pending",
+                    body = { "line 1", "line 2" },
+                })
+                assert.same(
+                    { "line 1", "line 2" },
+                    session.chat_history.messages[i].body
+                )
+            end
+        end)
+
+        describe("read range", function()
+            before_each(function()
+                session:_on_tool_call({
+                    tool_call_id = "tc-read",
+                    kind = "read",
+                    argument = "Read /tmp/f.lua",
+                    status = "pending",
+                })
+            end)
+
+            it("splits the range off an update's argument", function()
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-read",
+                    status = "in_progress",
+                    argument = "/tmp/f.lua (10 - 19)",
+                })
+
+                local tracker = session.message_writer.tool_call_blocks["tc-read"]
+                local record = session.chat_history.messages[1]
+                for _, message in ipairs({ tracker, record }) do
+                    assert.equal("/tmp/f.lua", message.argument)
+                    assert.same(
+                        { offset = 10, limit = 10 },
+                        message.read_range
+                    )
+                end
+            end)
+
+            it("takes a newer update's range over the tracker's", function()
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-read",
+                    status = "in_progress",
+                    argument = "/tmp/f.lua (10 - 19)",
+                })
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-read",
+                    status = "in_progress",
+                    argument = "/tmp/f.lua (30 - 39)",
+                })
+
+                assert.same(
+                    { offset = 30, limit = 10 },
+                    session.message_writer.tool_call_blocks["tc-read"].read_range
+                )
+            end)
+        end)
+
+        it("renders a later fenced execute body single-fenced", function()
+            tool_call("tc-1")
+            session:_on_tool_call_update({
+                tool_call_id = "tc-1",
+                status = "in_progress",
+                body = { "first" },
+            })
+            session:_on_tool_call_update({
+                tool_call_id = "tc-1",
+                status = "completed",
+                body = { "```console", "second", "```" },
+            })
+
+            assert.same(
+                { "first", "", "---", "", "second" },
+                session.message_writer.tool_call_blocks["tc-1"].body
+            )
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local i_second = vim.fn.index(lines, "second")
+            assert.equal("```", lines[i_second + 2])
+        end)
+
         --- @return string footer The last line of the chat that holds a status
         local function footer()
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)

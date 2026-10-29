@@ -42,9 +42,9 @@ function M.find_block_at_row(bufnr, row, tool_call_blocks)
 end
 
 --- Map a chat (row, col) inside a diff block to a target file position.
---- The renderer emits hunks in order; within each hunk, all "old" lines
---- come before all "new" lines (see `insert_diff_line` in
---- tool_call_renderer.lua). We replay that order to count rows per pair
+--- Hunks are laid out in order; within each hunk, all "old" lines
+--- come before all "new" lines (see `hunk_rows` in
+--- tool_call_layout.lua). We replay that order to count rows per pair
 --- without storing extra state.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @param block_start_row integer 0-indexed first row of the block in chat buffer

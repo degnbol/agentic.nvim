@@ -1,3 +1,4 @@
+local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
@@ -377,10 +378,13 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                 ),
             })
         elseif msg.type == "tool_call" and msg.argument then
+            local range = msg.read_range
             local tool_text = string.format(
-                "Tool call (%s): %s",
+                "Tool call (%s): %s%s",
                 msg.kind or "unknown",
-                msg.argument
+                msg.argument,
+                range and " " .. CanonicalToolCall.format_read_range(range)
+                    or ""
             )
             -- Include tool output if available
             if msg.body and #msg.body > 0 then

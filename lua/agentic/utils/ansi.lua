@@ -312,7 +312,8 @@ end
 --- @param ns integer namespace for the extmarks
 --- @param start_row integer 0-indexed buffer row of the first line
 --- @param highlights agentic.utils.Ansi.Span[][] per-line spans from process_lines
-function Ansi.apply_highlights(bufnr, ns, start_row, highlights)
+--- @param priority integer|nil extmark priority; nil keeps the default
+function Ansi.apply_highlights(bufnr, ns, start_row, highlights, priority)
     for i, spans in ipairs(highlights) do
         local row = start_row + i - 1
         for _, span in ipairs(spans) do
@@ -320,6 +321,7 @@ function Ansi.apply_highlights(bufnr, ns, start_row, highlights)
                 pcall(vim.api.nvim_buf_set_extmark, bufnr, ns, row, span[1], {
                     end_col = span[2],
                     hl_group = span[3],
+                    priority = priority,
                 })
             if not ok then
                 local Logger = require("agentic.utils.logger")

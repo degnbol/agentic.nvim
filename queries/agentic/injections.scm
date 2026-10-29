@@ -9,7 +9,7 @@
 ;
 ; Edit diffs carry a "difffold" marker (```lua-difffold) and are deliberately
 ; EXCLUDED here: their colour comes from block_col_hl extmarks
-; (tool_call_renderer build_highlight_map), which override any injection at
+; (`hunk_rows` in tool_call_layout), which override any injection at
 ; priority 200 on every loadable diff, so injecting the base language would only
 ; buy a second parse of the same text.
 ;

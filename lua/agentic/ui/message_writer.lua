@@ -1,4 +1,3 @@
-local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
@@ -9,6 +8,7 @@ local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Renderer = require("agentic.ui.tool_call_renderer")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
+local ToolCallLayout = require("agentic.ui.tool_call_layout")
 
 local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- Anchors a `*-fold` fence's opening line so a deferred close (chat window
@@ -62,19 +62,6 @@ local function is_final_status(status)
     return status == "completed" or status == "failed" or status == "cancelled"
 end
 
---- @class agentic.ui.MessageWriter.HighlightRange
---- @field type "comment"|"error"|"old"|"new"|"new_modification" Type of highlight to apply
---- @field line_index integer Line index relative to returned lines (0-based)
---- @field old_line? string Original line content (for diff types)
---- @field new_line? string Modified line content (for diff types)
---- @field block_col_hl? table<integer, string> Byte-col → language-qualified capture name from context-aware treesitter parse
-
---- @class agentic.ui.MessageWriter.SearchMatch
---- @field line_index integer Line index relative to block lines (0-based)
---- @field col_start integer Start column (byte offset)
---- @field col_end integer End column (byte offset)
---- @field hl_group? string Highlight group override (default: AgenticSearchMatch)
-
 --- @class agentic.ui.MessageWriter.ToolCallDiff
 --- @field new string[]
 --- @field old string[]
@@ -126,14 +113,11 @@ end
 --- @field argument string
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
---- @field search_matches? agentic.ui.MessageWriter.SearchMatch[] Pattern match positions (relative to block lines)
---- @field search_ansi? agentic.utils.Ansi.Span[][] ANSI highlight spans for search body
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
 --- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
 --- @field trailing_insert_mark_id? integer Zero-width NS_TOOL_BLOCKS mark riding just below the block, marking where the next region anchored to it goes (see `MessageWriter:_anchor_insert_row`). Absent until the first such region.
---- @field highlight_pass? integer Sequence number of the latest scheduled highlight pass. A pass that is no longer the latest skips.
 --- @field fold_anchor_id? integer The block's anchor extmark in NS_FOLD_ANCHORS, on the first body row of its foldable fence.
---- @field fold_open? boolean The fold state the renderer wants for the block's current lines.
+--- @field fold_open? boolean The fold state the layout wants for the block's current lines.
 --- @field fold_sent? boolean The state last queued for the anchor. Nil while the op is deferred.
 
 --- Append the closing fence for `lines` when they leave one open.
@@ -1059,7 +1043,7 @@ local function collapsed_region_lines(body, source, section_break)
         vim.list_extend(lines, { "###", "" })
     end
 
-    local fence = #body > 1 and Renderer.safe_fence(body) or nil
+    local fence = #body > 1 and TextWrap.safe_fence(body) or nil
     if fence then
         -- `source` as a second word after the language: `folds.scm` and
         -- `injections.scm` both key on the `(info_string (language))` node,
@@ -1490,7 +1474,7 @@ function MessageWriter:write_notice(notice)
     if #fold_body > 0 then
         -- Fenced even as one line, so no markdown in it can open a block that
         -- outlives the notice.
-        local fence = Renderer.safe_fence(fold_body)
+        local fence = TextWrap.safe_fence(fold_body)
         table.insert(lines, fence .. "markdown-fold")
         fold_offset = #lines
         vim.list_extend(lines, fold_body)
@@ -2609,20 +2593,14 @@ end
 --- due state again, which replaces a fold change the user made by hand.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @param start_row integer 0-indexed first row of the block
---- @param fold_anchor integer|nil Offset from `start_row` of the first body row of the block's foldable fence. Nil when it has none.
---- @param fold_state agentic.ui.FoldState|nil Fold state of the block's fence. Nil when it has none.
-function MessageWriter:_render_block_fold(
-    block,
-    start_row,
-    fold_anchor,
-    fold_state
-)
-    if not fold_anchor then
+--- @param fold { anchor: integer, state: agentic.ui.FoldState }|nil The block's fold, nil when it has none
+function MessageWriter:_render_block_fold(block, start_row, fold)
+    if not fold then
         return
     end
-    block.fold_anchor_id = self:_place_fold_anchor(start_row + fold_anchor)
-    block.fold_open = fold_state == "open"
-    if fold_state ~= "closed_when_final" or is_final_status(block.status) then
+    block.fold_anchor_id = self:_place_fold_anchor(start_row + fold.anchor)
+    block.fold_open = fold.state == "open"
+    if fold.state ~= "closed_when_final" or is_final_status(block.status) then
         self:_queue_fold_op(block.fold_anchor_id, block.fold_open)
         block.fold_sent = block.fold_open
     end
@@ -2638,6 +2616,23 @@ function MessageWriter:_settle_block_fold(block, open)
         self:_queue_fold_op(block.fold_anchor_id, open)
         block.fold_sent = open
         block.fold_open = open
+    end
+end
+
+--- Rewrite a block's status footer and, once the status is final, settle
+--- its fold to `open`.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @param footer_row integer 0-indexed footer row
+--- @param open boolean fold state for a final status
+function MessageWriter:_write_status_and_settle_fold(block, footer_row, open)
+    Renderer.apply_status_footer(
+        self.bufnr,
+        footer_row,
+        block.status,
+        footer_note(block)
+    )
+    if is_final_status(block.status) then
+        self:_settle_block_fold(block, open)
     end
 end
 
@@ -2790,6 +2785,59 @@ function MessageWriter:flush_pending_fold_ops()
     self._scroll_owed = false
 end
 
+--- Paint a laid-out block whose rows are in the buffer from `start_row`:
+--- the range extmark, highlights, region signs, fold, dim, status footer
+--- and injections. Records the extmark ids on `block`.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @param start_row integer 0-indexed header row
+--- @param layout agentic.ui.ToolCallLayout.Layout
+function MessageWriter:_paint_tool_call_block(block, start_row, layout)
+    local bufnr = self.bufnr
+    local end_row = start_row + #layout.lines - 1
+
+    -- right_gravity=true so the start moves past content inserted at the
+    -- boundary by a preceding block's update_tool_call_block.
+    -- set_lines(buf, prev_start, prev_end+1) has its exclusive end at this
+    -- block's start row — right_gravity=false would pull the start into the
+    -- replacement range, corrupting this extmark.
+    block.extmark_id = vim.api.nvim_buf_set_extmark(
+        bufnr,
+        Renderer.NS_TOOL_BLOCKS,
+        start_row,
+        0,
+        {
+            id = block.extmark_id,
+            end_row = end_row,
+            right_gravity = true,
+            end_right_gravity = false,
+        }
+    )
+
+    Renderer.apply_block_highlights(bufnr, start_row, layout)
+
+    block.decoration_extmark_ids =
+        Renderer.render_decorations(bufnr, start_row, end_row, block.kind)
+
+    self:_render_block_fold(block, start_row, layout.fold)
+    if layout.dim then
+        local dim_id = Renderer.set_dim_range(
+            bufnr,
+            start_row + layout.dim[1],
+            start_row + layout.dim[2]
+        )
+        table.insert(block.decoration_extmark_ids, dim_id)
+    end
+
+    Renderer.apply_status_footer(
+        bufnr,
+        end_row,
+        block.status,
+        footer_note(block)
+    )
+
+    materialize_injections(bufnr, start_row, end_row)
+end
+
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:write_tool_call_block(tool_call_block)
     -- Thinking interrupted by a tool call belongs above it.
@@ -2797,18 +2845,6 @@ function MessageWriter:write_tool_call_block(tool_call_block)
 
     -- A tool call ends the current prose run, and with it the prose pin.
     self:_release_prose_pin()
-
-    -- Mode-switch tool calls (EnterPlanMode, ExitPlanMode)
-    -- carry internal instructions in their body — strip it so only the
-    -- compact header renders (e.g. "Switch Mode `EnterPlanMode`").
-    -- TodoWrite body is the raw JSON request — hide it since the todo window
-    -- shows the rendered todos.
-    if
-        AcpKind.normalise(tool_call_block.kind) == "switch_mode"
-        or AcpKind.normalise(tool_call_block.kind) == "todowrite"
-    then
-        tool_call_block.body = nil
-    end
 
     self:_schedule_follow()
 
@@ -2819,78 +2855,21 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         -- tracking) via nvim_buf_set_lines.
         self:_end_prose_run(bufnr)
 
-        local kind = tool_call_block.kind
-
-        local lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_state =
-            Renderer.prepare_block_lines(
-                tool_call_block,
-                self:_get_wrap_width()
-            )
-
-        self:_append_lines(lines)
-
-        -- Compute start/end AFTER _append_lines: when the buffer was empty,
-        -- _append_lines replaces instead of appending, so line_count before
-        -- the call would over-count by 1.
-        local end_row = vim.api.nvim_buf_line_count(bufnr) - 1
-        local start_row = end_row - #lines + 1
-
-        Renderer.apply_block_highlights(
-            bufnr,
-            start_row,
-            end_row,
-            kind,
-            highlight_ranges,
-            ansi_highlights,
-            tool_call_block.search_matches,
-            tool_call_block.search_ansi
-        )
-
-        tool_call_block.decoration_extmark_ids =
-            Renderer.render_decorations(bufnr, start_row, end_row, kind)
-
-        self:_render_block_fold(
-            tool_call_block,
-            start_row,
-            fold_anchor,
-            fold_state
-        )
-        if dim_range then
-            local dim_id = Renderer.set_dim_range(
-                bufnr,
-                start_row + dim_range[1],
-                start_row + dim_range[2]
-            )
-            table.insert(tool_call_block.decoration_extmark_ids, dim_id)
+        local layout =
+            ToolCallLayout.build(tool_call_block, self:_get_wrap_width())
+        if layout.diff_blocks then
+            tool_call_block.cached_diff_blocks = layout.diff_blocks
         end
 
-        -- right_gravity=true so the start moves past content inserted
-        -- at the boundary by a preceding block's update_tool_call_block.
-        -- set_lines(buf, prev_start, prev_end+1) has its exclusive end
-        -- at this block's start row — right_gravity=false would pull the
-        -- start into the replacement range, corrupting this extmark.
-        tool_call_block.extmark_id = vim.api.nvim_buf_set_extmark(
-            bufnr,
-            Renderer.NS_TOOL_BLOCKS,
-            start_row,
-            0,
-            {
-                end_row = end_row,
-                right_gravity = true,
-                end_right_gravity = false,
-            }
-        )
+        self:_append_lines(layout.lines)
+
+        -- Compute the start AFTER _append_lines: when the buffer was empty,
+        -- _append_lines replaces instead of appending, so line_count before
+        -- the call would over-count by 1.
+        local start_row = vim.api.nvim_buf_line_count(bufnr) - #layout.lines
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block
-
-        Renderer.apply_status_footer(
-            bufnr,
-            end_row,
-            tool_call_block.status,
-            footer_note(tool_call_block)
-        )
-
-        materialize_injections(bufnr, start_row, end_row)
+        self:_paint_tool_call_block(tool_call_block, start_row, layout)
 
         self:_append_lines({ "" })
         self:_mark_section_break()
@@ -2945,26 +2924,6 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             { title = "Agentic sync: missing tracker" }
         )
         return
-    end
-
-    -- Strip internal instructions from switch_mode updates
-    -- TodoWrite body is the raw JSON request — hide it since the todo window
-    -- shows the rendered todos.
-    if
-        AcpKind.normalise(tracker.kind) == "switch_mode"
-        or AcpKind.normalise(tracker.kind) == "todowrite"
-    then
-        tool_call_block.body = nil
-    end
-
-    -- For read blocks, extract range from the current argument before the merge
-    -- overwrites it — the initial title may contain "(N - M)" that the adapter
-    -- update replaces with just the file path.
-    if AcpKind.normalise(tracker.kind) == "read" and not tracker.read_range then
-        local _, range = Renderer.parse_read_range(tracker.argument)
-        if range then
-            tracker.read_range = range
-        end
     end
 
     -- Some ACP providers don't send the diff on the first tool_call
@@ -3050,7 +3009,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         -- only update status highlights - don't replace content.
         -- Exception: the transition to `failed` re-renders so the failure
         -- reason renders below the diff and the diff folds closed
-        -- (tool_call_renderer diff branch). Re-extraction is safe — a failed
+        -- (`diff_body` in tool_call_layout). Re-extraction is safe — a failed
         -- file-mutating tool never applied its change, so the file is
         -- unchanged and reproduces the same diff.
         if already_has_diff and tracker.status ~= "failed" then
@@ -3068,27 +3027,24 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             end
 
             -- Decorations (kind glyph, │, ╰─) are stable — leave them in place.
-            -- Only refresh status footer which changes on completion.
-            Renderer.apply_status_footer(
-                bufnr,
-                old_end_row,
-                tracker.status,
-                footer_note(tracker)
-            )
             -- A non-failed diff's fold state does not depend on the status,
             -- so the state stored at render still holds.
-            if is_final_status(tracker.status) then
-                self:_settle_block_fold(tracker, tracker.fold_open == true)
-            end
-
+            self:_write_status_and_settle_fold(
+                tracker,
+                old_end_row,
+                tracker.fold_open == true
+            )
             return false
         end
 
-        local new_lines, highlight_ranges, ansi_highlights, fold_anchor, dim_range, fold_state =
-            Renderer.prepare_block_lines(tracker, self:_get_wrap_width())
+        local layout = ToolCallLayout.build(tracker, self:_get_wrap_width())
+        if layout.diff_blocks then
+            tracker.cached_diff_blocks = layout.diff_blocks
+        end
+        local new_lines = layout.lines
 
         -- Compare content lines excluding the footer — the buffer's footer
-        -- has status text while prepare_block_lines produces "" for it.
+        -- has status text while the layout holds "" for it.
         local current_lines =
             vim.api.nvim_buf_get_lines(bufnr, start_row, old_end_row + 1, false)
         local content_unchanged = #new_lines == #current_lines
@@ -3102,15 +3058,11 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         end
 
         if content_unchanged then
-            Renderer.apply_status_footer(
-                bufnr,
+            self:_write_status_and_settle_fold(
+                tracker,
                 old_end_row,
-                tracker.status,
-                footer_note(tracker)
+                layout.fold ~= nil and layout.fold.state == "open"
             )
-            if is_final_status(tracker.status) then
-                self:_settle_block_fold(tracker, fold_state == "open")
-            end
             return false
         end
 
@@ -3185,74 +3137,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             end
         end
 
-        -- Rows are read when the callback runs, since lines written above
-        -- the block in the meantime move it down. A later update replaces
-        -- this pass's lines.
-        local pass = (tracker.highlight_pass or 0) + 1
-        tracker.highlight_pass = pass
-        local tool_call_id = tracker.tool_call_id
-        vim.schedule(function()
-            local current = self.tool_call_blocks[tool_call_id]
-            if
-                not current
-                or current.highlight_pass ~= pass
-                or not vim.api.nvim_buf_is_valid(bufnr)
-            then
-                return
-            end
-            local block_start, block_end = self:_block_rows(current)
-            if block_start then
-                Renderer.apply_block_highlights(
-                    bufnr,
-                    block_start,
-                    block_end,
-                    current.kind,
-                    highlight_ranges,
-                    ansi_highlights,
-                    current.search_matches,
-                    current.search_ansi
-                )
-            end
-        end)
-
-        vim.api.nvim_buf_set_extmark(
-            bufnr,
-            Renderer.NS_TOOL_BLOCKS,
-            start_row,
-            0,
-            {
-                id = tracker.extmark_id,
-                end_row = new_end_row,
-                right_gravity = true,
-                end_right_gravity = false,
-            }
-        )
-
-        tracker.decoration_extmark_ids = Renderer.render_decorations(
-            bufnr,
-            start_row,
-            new_end_row,
-            tracker.kind
-        )
-
-        self:_render_block_fold(tracker, start_row, fold_anchor, fold_state)
-        if dim_range then
-            local dim_id = Renderer.set_dim_range(
-                bufnr,
-                start_row + dim_range[1],
-                start_row + dim_range[2]
-            )
-            table.insert(tracker.decoration_extmark_ids, dim_id)
-        end
-
-        Renderer.apply_status_footer(
-            bufnr,
-            new_end_row,
-            tracker.status,
-            footer_note(tracker)
-        )
-
-        materialize_injections(bufnr, start_row, new_end_row)
+        self:_paint_tool_call_block(tracker, start_row, layout)
     end)
 end
 

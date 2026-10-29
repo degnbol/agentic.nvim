@@ -102,3 +102,30 @@ describe("GrepOutput.strip_omitted", function()
         assert.equal("abc", GrepOutput.strip_omitted("abc"))
     end)
 end)
+
+describe("GrepOutput.prefix_parts", function()
+    --- @param line string
+    --- @param pathless boolean
+    --- @return string[]|nil texts
+    local function texts(line, pathless)
+        local parts = GrepOutput.prefix_parts(line, pathless)
+        return parts
+            and vim.tbl_map(function(part)
+                return part.text
+            end, parts)
+    end
+
+    it("splits a path prefix", function()
+        assert.same({ "a.lua", ":", "3", ":" }, texts("a.lua:3:x", false))
+        assert.same({ "a.lua", ":", "3", "-" }, texts("a.lua:3-x", false))
+    end)
+
+    it("accepts a bare line number only when pathless", function()
+        assert.same({ "12", "-" }, texts("12-foo", true))
+        assert.is_nil(texts("12-foo", false))
+    end)
+
+    it("gives nil without a prefix", function()
+        assert.is_nil(texts("plain", true))
+    end)
+end)

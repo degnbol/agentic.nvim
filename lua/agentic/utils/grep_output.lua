@@ -1,3 +1,5 @@
+local Theme = require("agentic.theme")
+
 --- Where the matched text sits in the lines a grep-family tool prints.
 --- @class agentic.utils.GrepOutput
 local M = {}
@@ -61,6 +63,35 @@ function M.strip_omitted(text)
         return nil
     end
     return (text:gsub(" %[%.%.%. omitted end of long line%]$", ""))
+end
+
+--- Split a grep-format line prefix into highlighted parts: `path:N:` (or
+--- `path:N-` for a context line), else, when `pathless`, `N:`/`N-` as grep
+--- prints it for a single file or stdin. A path-less line whose text starts
+--- with `M:` or `M-` parses as `path:N:`, since only the command's file
+--- operands tell the two apart.
+--- @param line string one output line
+--- @param pathless boolean also accept a bare `N:`/`N-` prefix
+--- @return { text: string, hl_group: string }[]|nil parts in line order, nil when no prefix
+function M.prefix_parts(line, pathless)
+    local HL = Theme.HL_GROUPS
+    local path, sep1, linenum, sep2 = line:match("^([^:]+)(:)(%d+)([:-])")
+    if path then
+        return {
+            { text = path, hl_group = HL.GREP_PATH },
+            { text = sep1, hl_group = HL.GREP_SEPARATOR },
+            { text = linenum, hl_group = HL.GREP_LINE_NR },
+            { text = sep2, hl_group = HL.GREP_SEPARATOR },
+        }
+    end
+    linenum, sep2 = line:match("^(%d+)([:-])")
+    if pathless and linenum then
+        return {
+            { text = linenum, hl_group = HL.GREP_LINE_NR },
+            { text = sep2, hl_group = HL.GREP_SEPARATOR },
+        }
+    end
+    return nil
 end
 
 return M

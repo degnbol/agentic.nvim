@@ -45,35 +45,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
-    describe("strip_console_fence", function()
-        it("strips a ```console wrapper and reports it was fenced", function()
-            local inner, was_fenced = ClaudeUtils.strip_console_fence({
-                "```console",
-                "line 01",
-                "line 02",
-                "```",
-            })
-            assert.same({ "line 01", "line 02" }, inner)
-            assert.is_true(was_fenced)
-        end)
-
-        it("leaves unfenced content untouched and reports false", function()
-            local inner, was_fenced =
-                ClaudeUtils.strip_console_fence({ "plain", "text" })
-            assert.same({ "plain", "text" }, inner)
-            assert.is_false(was_fenced)
-        end)
-
-        it("handles nil and too-short bodies", function()
-            local n, nf = ClaudeUtils.strip_console_fence(nil)
-            assert.is_nil(n)
-            assert.is_false(nf)
-            local s, sf = ClaudeUtils.strip_console_fence({ "```console" })
-            assert.same({ "```console" }, s)
-            assert.is_false(sf)
-        end)
-    end)
-
     describe("execute description and body separation", function()
         local CMD = "for i in $(seq 1 30); do printf '%d\\n' \"$i\"; done"
         local DESC = "Print 30 numbered lines to demo execute folding"

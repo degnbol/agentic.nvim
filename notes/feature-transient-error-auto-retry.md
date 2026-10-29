@@ -326,7 +326,7 @@ Resolved:
   cancel — it is a pre-existing bug, not one this feature introduces, and
   suppressing the error block only makes it more confusing. Deliberately **not**
   fixed here, because the obvious fix is unsafe: marking such a block `failed`
-  with a `failure_reason` re-runs `prepare_block_lines` on the invariant "a
+  with a `failure_reason` re-runs `ToolCallLayout.build` on the invariant "a
   failed file-mutating tool never applied its change, so the file is unchanged
   and reproduces the same diff" (`message_writer.lua:1543-1547`) — which is
   false for a mid-stream truncation, since the subprocess survives and the edit

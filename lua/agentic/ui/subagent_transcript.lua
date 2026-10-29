@@ -4,7 +4,7 @@ local Glyphs = require("agentic.glyphs")
 local MessageWriter = require("agentic.ui.message_writer")
 local ResponseBoundary = require("agentic.acp.response_boundary")
 local StatusIndicator = require("agentic.ui.status_indicator")
-local ToolCallRenderer = require("agentic.ui.tool_call_renderer")
+local ToolCallLayout = require("agentic.ui.tool_call_layout")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- What the owning session does for a transcript's buffer.
@@ -127,7 +127,7 @@ function SubagentTranscript:restart(subagent)
         vim.api.nvim_buf_set_lines(self.bufnr, 0, -1, false, {})
     end)
     self.writer:write_subagent_heading(
-        ToolCallRenderer.subagent_heading(subagent)
+        ToolCallLayout.subagent_heading(subagent)
     )
 end
 
@@ -137,7 +137,7 @@ function SubagentTranscript:set_header(subagent)
     local header = WindowDecoration.get_header(self.bufnr)
     header.title = Glyphs.KIND.subagent
         .. " "
-        .. ToolCallRenderer.subagent_heading(subagent)
+        .. ToolCallLayout.subagent_heading(subagent)
     WindowDecoration.set_header(self.bufnr, header)
 end
 

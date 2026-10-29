@@ -51,7 +51,7 @@ hanging `parse()` (see `notes/bug-zsh-parser-hang.md` § 4):
   `parse_zsh_untrusted` for sourced-file bodies).
 - Context-aware highlight reconstruct (`utils/treesitter.lua`).
 - Chat command-fence injection (`shell_fence_lang` in
-  `ui/tool_call_renderer.lua` labels a trigger-shaped command `text`).
+  `ui/tool_call_layout.lua` labels a trigger-shaped command `text`).
 
 `utils/zsh_parse_guard.lua` (`contains_hang_trigger`) is the cheap in-process
 tripwire for the known shape; `parse_zsh_untrusted` adds a killable-subprocess

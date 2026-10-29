@@ -55,7 +55,7 @@ tokens differently. Any code line longer than the wrap width will hit it for
 some token split.
 
 Only prose fences are affected. Tool-call command and body fences are built by
-`prepare_block_lines` and never go through the streaming tail wrap. The tail
+`ToolCallLayout.build` and never go through the streaming tail wrap. The tail
 wrap also does not know `$$` display math, which `wrap_prose` passes through,
 so a long math line can break the same way.
 

@@ -867,6 +867,42 @@ describe("SessionRestore", function()
             assert.equal(1, write_message_spy.call_count)
         end)
 
+        it("splits a saved read's range, keeping execute fences", function()
+            local write_tool_spy = spy.new(function() end)
+            local writer = {
+                write_tool_call_block = write_tool_spy,
+                flush_thought_run = function() end,
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                {
+                    {
+                        type = "tool_call",
+                        tool_call_id = "r",
+                        kind = "read",
+                        status = "completed",
+                        argument = "/tmp/f.lua (1 - 2)",
+                    },
+                    {
+                        type = "tool_call",
+                        tool_call_id = "e",
+                        kind = "execute",
+                        status = "completed",
+                        argument = "cat x.md",
+                        body = { "```", "x", "```" },
+                    },
+                },
+                no_buffer
+            )
+
+            -- Method calls: argument 1 is the writer.
+            local read = write_tool_spy.calls[1][2]
+            assert.equal("/tmp/f.lua", read.argument)
+            assert.same({ offset = 1, limit = 2 }, read.read_range)
+            assert.same({ "```", "x", "```" }, write_tool_spy.calls[2][2].body)
+        end)
+
         --- Notices `replay_messages` writes for `rows`, as `write_notice` got them.
         --- @param rows agentic.ui.ChatHistory.Message[]
         --- @param buffer_name fun(session_id: string): string|nil

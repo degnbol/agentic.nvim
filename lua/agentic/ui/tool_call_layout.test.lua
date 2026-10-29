@@ -1,0 +1,2261 @@
+local assert = require("tests.helpers.assert")
+local spy = require("tests.helpers.spy")
+local Logger = require("agentic.utils.logger")
+
+--- Check whether a parser for `lang` is installed.
+--- @param lang string
+--- @return boolean
+local function has_parser(lang)
+    return pcall(vim.treesitter.language.add, lang)
+end
+
+describe("agentic.ui.ToolCallLayout", function()
+    local Layout = require("agentic.ui.tool_call_layout")
+    local Config = require("agentic.config")
+    local FileSystem
+    local read_stub
+    local disk_stub
+    local path_stub
+    local original_formatter
+
+    before_each(function()
+        -- Commands render split by the built-in fallback, without shfmt.
+        original_formatter = Config.tool_call_display.execute_formatter
+        Config.tool_call_display.execute_formatter = false
+        FileSystem = require("agentic.utils.file_system")
+        path_stub = spy.stub(FileSystem, "to_absolute_path")
+        path_stub:invokes(function(path)
+            return path
+        end)
+        read_stub = spy.stub(FileSystem, "read_from_buffer_or_disk")
+        -- extract_diff_blocks retries against real disk when the first match
+        -- fails, so a fixture path that happens to exist (/tmp/file.txt is
+        -- exactly what a scratch session leaves behind) would supply content
+        -- no test declared.
+        disk_stub = spy.stub(FileSystem, "read_from_disk")
+    end)
+
+    after_each(function()
+        Config.tool_call_display.execute_formatter = original_formatter
+        read_stub:revert()
+        disk_stub:revert()
+        path_stub:revert()
+    end)
+
+    describe("context-aware diff highlights", function()
+        it(
+            "tags edits inside a multi-line string with a string capture",
+            function()
+                if not has_parser("python") then
+                    return
+                end
+
+                local file_lines = {
+                    'doc = """',
+                    "placeholder",
+                    '"""',
+                }
+                read_stub:invokes(function()
+                    return file_lines, nil
+                end)
+
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "edit-string",
+                    status = "pending",
+                    kind = "edit",
+                    argument = "/context.py",
+                    diff = {
+                        old = { "placeholder" },
+                        new = { "for_helper = 1" },
+                    },
+                }
+
+                local highlight_ranges = Layout.build(block, 0).highlights
+
+                local found
+                for _, hr in ipairs(highlight_ranges) do
+                    if
+                        (hr.type == "new" or hr.type == "new_modification")
+                        and hr.block_col_hl
+                    then
+                        local cap = hr.block_col_hl[0]
+                        if
+                            cap
+                            and (cap:match("string") or cap:match("spell"))
+                        then
+                            found = cap
+                            break
+                        end
+                    end
+                end
+                assert.is_not_nil(found)
+            end
+        )
+
+        it("falls back silently when no parser is available", function()
+            -- An extension neovim resolves no filetype for yields lang == "",
+            -- so use_context_highlights stays false.
+            read_stub:invokes(function()
+                return { "placeholder" }, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "edit-no-parser",
+                status = "pending",
+                kind = "edit",
+                argument = "/plain.agentic_no_parser_xyz",
+                diff = {
+                    old = { "placeholder" },
+                    new = { "replacement" },
+                },
+            }
+
+            local highlight_ranges = Layout.build(block, 0).highlights
+
+            for _, hr in ipairs(highlight_ranges) do
+                assert.is_nil(hr.block_col_hl)
+            end
+        end)
+
+        it("skips context highlighting for a large Write", function()
+            if not has_parser("python") then
+                return
+            end
+
+            -- Write sends no old_string, so diff.old is empty while the file
+            -- on disk is long: the reconstruction cost is the file's size.
+            local file_lines = {}
+            for i = 1, Config.tool_call_display.diff_context_max_lines + 1 do
+                table.insert(file_lines, "x = " .. i)
+            end
+            read_stub:invokes(function()
+                return file_lines, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "write-large",
+                status = "pending",
+                kind = "write",
+                argument = "/large.py",
+                diff = { old = {}, new = { "y = 1" } },
+            }
+
+            local highlight_ranges = Layout.build(block, 0).highlights
+
+            for _, hr in ipairs(highlight_ranges) do
+                assert.is_nil(hr.block_col_hl)
+            end
+        end)
+    end)
+
+    describe("diff heading line number", function()
+        --- Render a diff-bearing block over `file_lines`, reporting its
+        --- heading line.
+        --- @param kind string
+        --- @param diff agentic.ui.MessageWriter.ToolCallDiff
+        --- @param file_lines string[]
+        --- @return string heading
+        local function diff_heading(kind, diff, file_lines)
+            read_stub:invokes(function()
+                return file_lines, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "diff-heading-" .. kind,
+                status = "pending",
+                kind = kind,
+                argument = "/tmp/file.txt",
+                diff = diff,
+            }
+
+            return Layout.build(block, 80).lines[1]
+        end
+
+        it("heads an edit with the first changed line", function()
+            assert.equal(
+                "### `/tmp/file.txt:3`",
+                diff_heading(
+                    "edit",
+                    { old = { "c" }, new = { "C" } },
+                    { "a", "b", "c", "d" }
+                )
+            )
+        end)
+
+        -- The two hunk shapes ToolCallDiff.hunk_to_block computes differently:
+        -- a replacement offsets by `start_a - 1`, a pure insertion by `start_a`.
+        -- Both must land on the same post-edit line for the first hunk. The
+        -- single-line cases above miss them — one takes minimize_diff_blocks's
+        -- single-line fast path, the other cancels the offset at start_a == 1.
+
+        it("heads a replacement hunk below the matched block", function()
+            assert.equal(
+                "### `/tmp/file.txt:3`",
+                diff_heading(
+                    "edit",
+                    { old = { "b", "c", "d" }, new = { "b", "C", "d" } },
+                    { "a", "b", "c", "d" }
+                )
+            )
+        end)
+
+        it("heads a pure insertion at the inserted line", function()
+            assert.equal(
+                "### `/tmp/file.txt:3`",
+                diff_heading(
+                    "edit",
+                    { old = { "b", "c" }, new = { "b", "X", "c" } },
+                    { "a", "b", "c", "d" }
+                )
+            )
+        end)
+
+        it("heads a replace_all edit with its earliest site", function()
+            -- The head is one number, so a later site's line must not win —
+            -- only the first is still valid post-edit, the rest have shifted.
+            assert.equal(
+                "### `/tmp/file.txt:2`",
+                diff_heading(
+                    "edit",
+                    { old = { "x" }, new = { "y" }, all = true },
+                    { "a", "x", "b", "x" }
+                )
+            )
+        end)
+
+        it("leaves the head bare when the old text is missing", function()
+            -- No match means no coordinate: the unmatched fallback hunk
+            -- indexes nothing, so a number here would be fabricated.
+            assert.equal(
+                "### `/tmp/file.txt`",
+                diff_heading(
+                    "edit",
+                    { old = { "gone" }, new = { "new" } },
+                    { "a", "b" }
+                )
+            )
+        end)
+
+        it("leaves a created file's head bare", function()
+            -- The diff is the whole file, so line 1 names nothing.
+            assert.equal(
+                "### `/tmp/file.txt`",
+                diff_heading("create", { old = {}, new = { "a", "b" } }, {})
+            )
+        end)
+
+        it("heads a write that changes an existing file's line 1", function()
+            -- Write sends no old_string, so this differs from a creation only
+            -- by the file having content to diff against.
+            assert.equal(
+                "### `/tmp/file.txt:1`",
+                diff_heading("write", { old = {}, new = { "A", "b" } }, {
+                    "a",
+                    "b",
+                })
+            )
+        end)
+    end)
+
+    describe("collapsed heading", function()
+        --- Render `kind`'s tool call block, reporting its heading line.
+        --- @param kind string
+        --- @param argument string
+        --- @param wrap_width? integer
+        --- @return string heading
+        local function heading(kind, argument, wrap_width)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "heading-" .. kind,
+                status = "completed",
+                kind = kind,
+                argument = argument,
+            }
+
+            return Layout.build(block, wrap_width or 80).lines[1]
+        end
+
+        --- `heading` for an execute block, whose heading name is the model's
+        --- description rather than the command.
+        --- @param description string
+        --- @param wrap_width? integer
+        --- @return string heading
+        local function execute_heading(description, wrap_width)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-heading",
+                status = "completed",
+                kind = "execute",
+                argument = "ls",
+                description = description,
+            }
+
+            return Layout.build(block, wrap_width or 80).lines[1]
+        end
+
+        describe("subagent block", function()
+            --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
+            --- @param body string[]|nil
+            --- @return string[] lines
+            local function subagent_lines(subagent, body)
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "a1b2c3d4e5",
+                    status = "in_progress",
+                    kind = "SubAgent",
+                    argument = "agentic://1/subagent/map-UI-c3d4e5",
+                    subagent = subagent,
+                    body = body,
+                }
+                return Layout.build(block, 80).lines
+            end
+
+            it("heads with the heading, then the transcript name", function()
+                local lines = subagent_lines({
+                    label = "map UI",
+                    mode = "background",
+                    confirmed = false,
+                }, { "Find the files." })
+
+                assert.equal("### Background? map UI", lines[1])
+                assert.equal("agentic://1/subagent/map-UI-c3d4e5", lines[2])
+            end)
+
+            it("does not fold a one-line prompt", function()
+                local lines = subagent_lines({
+                    label = "map UI",
+                    mode = "blocking",
+                    confirmed = true,
+                }, { "Find the files." })
+
+                assert.equal("```markdown", lines[3])
+                assert.equal("Find the files.", lines[4])
+                assert.equal("```", lines[5])
+            end)
+
+            it("folds a multi-line prompt closed at render", function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "a1b2c3d4e5",
+                    status = "in_progress",
+                    kind = "SubAgent",
+                    argument = "agentic://1/subagent/map-UI-c3d4e5",
+                    subagent = {
+                        label = "map UI",
+                        mode = "blocking",
+                        confirmed = true,
+                    },
+                    body = { "Find the files.", "", "List them." },
+                }
+                local layout = Layout.build(block, 80)
+
+                assert.equal("```markdown-fold", layout.lines[3])
+                assert.same({ anchor = 3, state = "closed" }, layout.fold)
+            end)
+
+            it("prefixes the heading with the agent type once known", function()
+                assert.equal(
+                    "Blocking Explore · map UI",
+                    Layout.subagent_heading({
+                        label = "map UI",
+                        agent_type = "Explore",
+                        mode = "blocking",
+                        confirmed = true,
+                    })
+                )
+                assert.equal("Agent", Layout.subagent_heading(nil))
+            end)
+
+            it("keeps the transcript row Comment on a failed block", function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "a1b2c3d4e5",
+                    status = "failed",
+                    kind = "SubAgent",
+                    argument = "agentic://1/subagent/map-UI-c3d4e5",
+                    subagent = {
+                        label = "map UI",
+                        mode = "blocking",
+                        confirmed = true,
+                    },
+                    failure_reason = { "stopped" },
+                }
+                local layout = Layout.build(block, 80)
+
+                assert.same(
+                    { type = "comment", line_index = 1 },
+                    layout.highlights[1]
+                )
+            end)
+
+            it("uses the default head without a subagent", function()
+                local lines = subagent_lines(nil, { "Find the files." })
+
+                assert.equal("### agentic://1/subagent/map-UI-c3d4e5", lines[1])
+                assert.equal("```markdown", lines[2])
+            end)
+        end)
+
+        it("leaves a name markdown cannot reinterpret unguarded", function()
+            assert.equal(
+                "### Compact conversation",
+                execute_heading("Compact conversation")
+            )
+            assert.equal("### Plan mode", heading("switch_mode", "Plan mode"))
+            assert.equal(
+                "### Compact conversation",
+                heading("other", "Compact conversation")
+            )
+            assert.equal("### implement", heading("Skill", "implement"))
+            assert.equal(
+                "### /implement",
+                heading("SlashCommand", "/implement")
+            )
+        end)
+
+        --- @class agentic.ui.ToolCallLayout.test.InlineNode
+        --- @field type string
+        --- @field start integer 0-based byte offset
+        --- @field stop integer 0-based byte offset, exclusive
+
+        --- Top-level `markdown_inline` nodes of `text`.
+        --- @param text string
+        --- @return agentic.ui.ToolCallLayout.test.InlineNode[]
+        local function inline_nodes(text)
+            local root = vim.treesitter
+                .get_string_parser(text, "markdown_inline")
+                :parse()[1]
+                :root()
+            --- @type agentic.ui.ToolCallLayout.test.InlineNode[]
+            local nodes = {}
+            for _, node in ipairs(root:named_children()) do
+                local _, _, start, _, _, stop = node:range(true)
+                table.insert(
+                    nodes,
+                    { type = node:type(), start = start, stop = stop }
+                )
+            end
+            return nodes
+        end
+
+        --- Assert that `head` shows `name` literally: its only markdown is
+        --- code spans, and removing the guard spans — every span not already
+        --- in `name` — leaves `name`, or a prefix of it cut with `…`.
+        --- Valid only for names whose raw tree-sitter spans match the
+        --- guard's pairing: an escaped tick, or a span tree-sitter closes
+        --- early, gives a false failure.
+        --- @param name string
+        --- @param head string
+        local function assert_literal(name, head)
+            local text = head:sub(#"### " + 1)
+            --- @type table<string, boolean>
+            local own_spans = {}
+            for _, node in ipairs(inline_nodes(name)) do
+                own_spans[name:sub(node.start + 1, node.stop)] = true
+            end
+            local parts, cursor = {}, 0
+            for _, node in ipairs(inline_nodes(text)) do
+                assert.equal("code_span", node.type)
+                local span = text:sub(node.start + 1, node.stop)
+                local run = #span:match("^`+")
+                local content = own_spans[span] and span
+                    or span:sub(run + 1, -run - 1):gsub("^ (.*) $", "%1")
+                table.insert(parts, text:sub(cursor + 1, node.start))
+                table.insert(parts, content)
+                cursor = node.stop
+            end
+            table.insert(parts, text:sub(cursor + 1))
+            local shown = table.concat(parts)
+            if shown ~= name then
+                assert.equal("…", shown:sub(-#"…"))
+                local kept = shown:sub(1, -#"…" - 1)
+                assert.equal(kept, name:sub(1, #kept))
+            end
+        end
+
+        --- `execute_heading`, asserting the result shows `description`
+        --- literally.
+        --- @param description string
+        --- @param wrap_width? integer
+        --- @return string heading
+        local function literal_heading(description, wrap_width)
+            local head = execute_heading(description, wrap_width)
+            assert_literal(description, head)
+            return head
+        end
+
+        it("leaves `$`, `#` and `&` bare outside their shapes", function()
+            for _, name in ipairs({ "fix #12", "cost $5", "A & B" }) do
+                assert.equal("### " .. name, literal_heading(name))
+            end
+        end)
+
+        it("guards each word holding a special character", function()
+            assert.equal(
+                "### run `build_and_test`",
+                literal_heading("run build_and_test")
+            )
+            assert.equal("### a `*` b", literal_heading("a * b"))
+            assert.equal("### `C:\\path`", literal_heading("C:\\path"))
+            assert.equal("### read `arr[0]`", literal_heading("read arr[0]"))
+        end)
+
+        it("leaves characters that only close markdown bare", function()
+            for _, name in ipairs({ "A -> B", "x => y", "a]" }) do
+                assert.equal("### " .. name, literal_heading(name))
+            end
+        end)
+
+        it("guards `#`, `&` and `$` in the shapes markdown acts on", function()
+            assert.equal("### close `##`", literal_heading("close ##"))
+            assert.equal("### a `&amp;` b", literal_heading("a &amp; b"))
+        end)
+
+        it("keeps punctuation outside the guard", function()
+            assert.equal(
+                "### Edit `foo_bar.lua`,",
+                literal_heading("Edit foo_bar.lua,")
+            )
+            assert.equal(
+                "### (see `foo_bar`)",
+                literal_heading("(see foo_bar)")
+            )
+            assert.equal(
+                "### call `foo_bar()`",
+                literal_heading("call foo_bar()")
+            )
+            assert.equal('### "`foo_bar`"?', literal_heading('"foo_bar"?'))
+            assert.equal("### (`foo_bar`)", literal_heading("(foo_bar)"))
+            assert.equal("### `(a_b)c`", literal_heading("(a_b)c"))
+            assert.equal("### (`(a_b)c`)", literal_heading("((a_b)c)"))
+            assert.equal("### `foo_bar;`", literal_heading("foo_bar;"))
+        end)
+
+        it("guards emphasis and HTML words", function()
+            assert.equal(
+                "### kill `_the_` `<pid>`",
+                literal_heading("kill _the_ <pid>")
+            )
+            assert.equal("### `foo*bar*baz`", literal_heading("foo*bar*baz"))
+        end)
+
+        it("guards each `$` word on its own", function()
+            -- Every `$` lands in a span, so no math pair is left bare.
+            assert.equal(
+                "### raise `$5` to `$6`",
+                literal_heading("raise $5 to $6")
+            )
+        end)
+
+        it("guards at the edge cases of words and spans", function()
+            assert.equal("### `$` ``$x``", literal_heading("`$` $x"))
+            assert.equal("### (`&amp;`)", literal_heading("(&amp;)"))
+            assert.equal("### a\t`b_c`", literal_heading("a\tb_c"))
+        end)
+
+        it("guards the stray tick a cut leaves of a code span", function()
+            assert.equal(
+                "### Run `` `make… ``",
+                literal_heading("Run `make target_name` now", 20)
+            )
+        end)
+
+        it("renders any name as text and code spans only", function()
+            local alphabet = {
+                "a",
+                " ",
+                "\t",
+                "`",
+                "``",
+                "*",
+                "_",
+                "~",
+                "[",
+                "]",
+                "<",
+                ">",
+                "\\",
+                "$",
+                "#",
+                "&",
+                "&amp;",
+                "(",
+                ")",
+                '"',
+                ".",
+                ";",
+            }
+            math.randomseed(1)
+            for _ = 1, 2000 do
+                local chars = {}
+                for i = 1, math.random(1, 12) do
+                    chars[i] = alphabet[math.random(#alphabet)]
+                end
+                local name = vim.trim(table.concat(chars))
+                local width = math.random() < 0.5 and math.random(10, 30) or 0
+                local text = execute_heading(name, width):sub(#"### " + 1)
+                for _, node in ipairs(inline_nodes(text)) do
+                    -- The name rides along so a failure reports it.
+                    assert.same(
+                        { name = name, type = "code_span" },
+                        { name = name, type = node.type }
+                    )
+                end
+            end
+        end)
+
+        it("guards snake_case and dunder words", function()
+            assert.equal("### `__init__`", literal_heading("__init__"))
+            assert.equal("### `foo_bar.lua`", literal_heading("foo_bar.lua"))
+        end)
+
+        it("leaves a code span the name already holds", function()
+            assert.equal(
+                "### Run `make x` now",
+                literal_heading("Run `make x` now")
+            )
+            assert.equal("### `x`", literal_heading("`x`"))
+        end)
+
+        it("widens every guard past a stray backtick in the name", function()
+            -- A one-tick guard would pair with the apostrophe-like tick and
+            -- leave the text between them as a span.
+            assert.equal("### ``don`t`` ``_x_``", literal_heading("don`t _x_"))
+        end)
+
+        it("guards a word holding a stray tick with a longer run", function()
+            assert.equal("### ``a`_x_`` b", literal_heading("a`_x_ b"))
+        end)
+
+        it("guards a code span with the word it abuts", function()
+            assert.equal(
+                "### `` _a_`b c` `` d `` `e ``",
+                literal_heading("_a_`b c` d `e")
+            )
+            assert.equal(
+                "### x `` `a b`_c_ `` d",
+                literal_heading("x `a b`_c_ d")
+            )
+        end)
+
+        it("guards an escaped tick with its word", function()
+            assert.equal(
+                "### x `` \\`a` `` `` b` ``",
+                literal_heading("x \\`a` b`")
+            )
+        end)
+
+        it("guards a span that tree-sitter would close early", function()
+            assert.equal("### ``` `a``*b*` ```", literal_heading("`a``*b*`"))
+            assert.equal(
+                "### Use ``` `a``b` ``` then ```_x_```",
+                literal_heading("Use `a``b` then _x_")
+            )
+        end)
+
+        it("guards a code kind's name that needs no guarding", function()
+            -- A path column reads uniformly only if the guard does not come
+            -- and go with whether one filename happens to hold an emphasised
+            -- component.
+            assert.equal(
+                "### `/tmp/plain.txt`",
+                heading("read", "/tmp/plain.txt")
+            )
+        end)
+
+        it("guards every file-mutating kind's path alike", function()
+            -- SessionManager acts on all five; a path that renders guarded
+            -- under one and bare under another reads as arbitrary.
+            for _, kind in ipairs({
+                "edit",
+                "create",
+                "write",
+                "delete",
+                "move",
+            }) do
+                assert.equal(
+                    "### `/tmp/plain.txt`",
+                    heading(kind, "/tmp/plain.txt")
+                )
+            end
+        end)
+
+        it("strips a bridge title that repeats its kind", function()
+            assert.equal(
+                "### `/tmp/plain.txt`",
+                heading("read", "Read /tmp/plain.txt")
+            )
+        end)
+
+        -- opencode capitalises the kinds it assigns, so the strip keys on
+        -- membership of the protocol vocabulary rather than on casing.
+        it("strips a capitalised bridge kind's prefix too", function()
+            assert.equal(
+                "### `/tmp/plain.txt`",
+                heading("Read", "Read /tmp/plain.txt")
+            )
+        end)
+
+        -- An adapter-minted head needs no undoing, and the strip can only
+        -- misfire on it: a Monitor description opening with the word "Monitor"
+        -- would lose it.
+        it("leaves a minted head that opens with its kind intact", function()
+            assert.equal(
+                "### Monitor the CI run until it settles",
+                heading("Monitor", "Monitor the CI run until it settles")
+            )
+        end)
+
+        it("fits the wrap width including the frame it adds", function()
+            local head = execute_heading(string.rep("long name ", 10), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("…", head:sub(-3))
+        end)
+
+        it("pays for the guard out of the truncation budget", function()
+            -- The backticks are part of the rendered width, so a guarded name
+            -- has two fewer cells to spend than a bare one.
+            local head =
+                literal_heading("_wide_ " .. string.rep("wide ", 20), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("### `_wide_`", head:sub(1, #"### `_wide_`"))
+            assert.equal("…", head:sub(-#"…"))
+        end)
+
+        it("pays for a widened guard too", function()
+            local head =
+                literal_heading("don`t _x_ " .. string.rep("wide ", 20), 40)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.truthy(head:find("``_x_``", 1, true))
+            assert.truthy(head:find("``don`t``", 1, true))
+        end)
+
+        it("fits when the guards cost more than the cut saves", function()
+            local head = literal_heading(string.rep("_x_ ", 10), 20)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 20)
+        end)
+
+        it("fits a double-width cut beside a guard", function()
+            local head = literal_heading("_x_ " .. string.rep("世", 30), 20)
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 20)
+        end)
+
+        --- Render a search block for `rg -n foo lua/`, reporting its lines.
+        --- @param search_pattern string|nil
+        --- @param wrap_width integer
+        --- @return string[] lines
+        local function search_lines(search_pattern, wrap_width)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "search-heading",
+                status = "completed",
+                kind = "search",
+                argument = "rg -n foo lua/",
+                search_pattern = search_pattern,
+            }
+            return Layout.build(block, wrap_width).lines
+        end
+
+        it("truncates a code kind's name inside its whole guard", function()
+            local head = search_lines(string.rep("foo|", 20), 40)[1]
+
+            assert.is_true(vim.fn.strdisplaywidth(head) <= 40)
+            assert.equal("### `", head:sub(1, #"### `"))
+            assert.equal("…`", head:sub(-#"…`"))
+        end)
+
+        it("heads a search block with its pattern", function()
+            local lines = search_lines("foo", 80)
+
+            assert.equal("### `foo`", lines[1])
+            assert.equal("rg -n foo lua/", lines[3])
+        end)
+
+        it("leaves a search block without a pattern bare", function()
+            local lines = search_lines(nil, 80)
+
+            assert.equal("###", lines[1])
+            assert.equal("rg -n foo lua/", lines[3])
+        end)
+    end)
+
+    describe("skill path line", function()
+        --- @param skill_path string|nil
+        --- @param failure_reason string[]|nil
+        --- @return agentic.ui.ToolCallLayout.Layout
+        local function skill_block(skill_path, failure_reason)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-skill",
+                status = failure_reason and "failed" or "completed",
+                kind = "Skill",
+                argument = "coding",
+                skill_path = skill_path,
+                failure_reason = failure_reason,
+            }
+
+            return Layout.build(block, 80)
+        end
+
+        it("puts the path under the header as Comment", function()
+            local layout = skill_block("/skills/x/SKILL.md")
+
+            assert.equal("/skills/x/SKILL.md", layout.lines[2])
+            assert.same(
+                { { type = "comment", line_index = 1 } },
+                layout.highlights
+            )
+        end)
+
+        it("keeps the path Comment on a failed block", function()
+            local layout = skill_block("/skills/x/SKILL.md", { "denied" })
+
+            assert.same(
+                { type = "comment", line_index = 1 },
+                layout.highlights[1]
+            )
+        end)
+
+        it("renders the header alone when no path resolved", function()
+            -- The header, then the empty status footer every block ends on.
+            assert.equal(2, #skill_block(nil).lines)
+        end)
+    end)
+
+    describe("buffer side effects", function()
+        --- Render `block`, reporting how many buffers the render added and the
+        --- lines it produced. Measures a single render: `bufadd` is idempotent
+        --- by name, so a second render of the same path reports a delta of 0
+        --- even when the first one created a buffer.
+        --- @param block agentic.ui.MessageWriter.ToolCallBlock
+        --- @return integer n_created
+        --- @return string[] lines
+        local function render_counting_buffers(block)
+            local before = #vim.api.nvim_list_bufs()
+            local lines = Layout.build(block, 80).lines
+            return #vim.api.nvim_list_bufs() - before, lines
+        end
+
+        it("creates no buffer for an edit with a real path", function()
+            read_stub:invokes(function()
+                return { "placeholder" }, nil
+            end)
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "edit-real-path",
+                status = "in_progress",
+                kind = "edit",
+                argument = "/some_file.py",
+                diff = { old = { "placeholder" }, new = { "replacement" } },
+            }
+
+            local n_created, _ = render_counting_buffers(block)
+            assert.equal(0, n_created)
+        end)
+
+        it("creates no cwd buffer for an edit with an empty path", function()
+            -- Partial streaming Edit: the diff arrives before file_path, so
+            -- argument is "". A cwd-named buffer here hands a directory to
+            -- whatever plugin owns directory buffers.
+            --
+            -- to_absolute_path must run unstubbed: fnamemodify("", ":p")
+            -- returning the cwd is the mechanism under test, and the identity
+            -- stub from before_each would hide it.
+            path_stub:revert()
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "edit-empty-path",
+                status = "in_progress",
+                kind = "edit",
+                argument = "",
+                diff = { old = { "before" }, new = { "after" } },
+            }
+
+            local n_created, lines = render_counting_buffers(block)
+            assert.equal(0, n_created)
+
+            local cwd = vim.fn.getcwd()
+            for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+                local name = vim.api.nvim_buf_get_name(bufnr)
+                assert.are_not.equal(cwd, name)
+                assert.are_not.equal(cwd .. "/", name)
+            end
+
+            -- The diff still renders, from the old/new arrays alone.
+            assert.is_true(vim.tbl_contains(lines, "before"))
+            assert.is_true(vim.tbl_contains(lines, "after"))
+        end)
+    end)
+
+    describe("failure_reason rendering", function()
+        it(
+            "replaces Read's 'Read N lines' summary with the failure reason",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-1",
+                    kind = "read",
+                    argument = "/tmp/foo.lua",
+                    status = "failed",
+                    body = { "```", "Read hooks.md first.", "```" },
+                    failure_reason = { "Read hooks.md first." },
+                }
+
+                local lines = Layout.build(block, 0).lines
+
+                -- "Read N lines" must not appear when failed
+                for _, line in ipairs(lines) do
+                    assert.is_nil(line:match("^Read %d+ lines"))
+                end
+                -- Reason text must be in the rendered lines
+                local found = false
+                for _, line in ipairs(lines) do
+                    if line == "Read hooks.md first." then
+                        found = true
+                        break
+                    end
+                end
+                assert.is_true(found)
+            end
+        )
+
+        it(
+            "shows the reason below the diff and folds it closed when Edit fails",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-2",
+                    kind = "edit",
+                    argument = "/tmp/foo.lua",
+                    status = "failed",
+                    diff = {
+                        old = { "old content" },
+                        new = { "new content" },
+                    },
+                    failure_reason = { "Permission denied." },
+                }
+
+                local layout = Layout.build(block, 0)
+                local lines = layout.lines
+
+                -- The diff is kept (not replaced by the reason)...
+                local function index_of(needle)
+                    for i, line in ipairs(lines) do
+                        if line == needle then
+                            return i
+                        end
+                    end
+                end
+                local old_i = index_of("old content")
+                local new_i = index_of("new content")
+                local reason_i = index_of("Permission denied.")
+                assert.is_not_nil(old_i)
+                assert.is_not_nil(new_i)
+                assert.is_not_nil(reason_i)
+
+                -- ...the reason renders below the diff, not in place of it...
+                assert.is_true(reason_i > new_i)
+
+                -- ...the diff fence carries the injection-suppressing fold marker...
+                local fence_i = old_i - 1
+                assert.is_not_nil(lines[fence_i]:match("difffold$"))
+
+                -- ...and a failed edit folds closed: the anchor is the first
+                -- body line.
+                assert.same(
+                    { anchor = old_i - 1, state = "closed_when_final" },
+                    layout.fold
+                )
+            end
+        )
+
+        describe("create collapse", function()
+            local original
+
+            before_each(function()
+                original = Config.tool_call_display.create_max_lines
+                Config.tool_call_display.create_max_lines = 3
+            end)
+
+            after_each(function()
+                Config.tool_call_display.create_max_lines = original
+            end)
+
+            --- @param diff agentic.ui.MessageWriter.ToolCallDiff
+            --- @return agentic.ui.FoldState|nil fold_state
+            local function fold_state_for(diff)
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-create",
+                    kind = "create",
+                    argument = "/tmp/foo.lua",
+                    status = "completed",
+                    diff = diff,
+                }
+                local fold = Layout.build(block, 0).fold
+                return fold and fold.state
+            end
+
+            it("folds a large created file closed", function()
+                assert.equal(
+                    "closed_when_final",
+                    fold_state_for({ old = {}, new = { "a", "b", "c", "d" } })
+                )
+            end)
+
+            it("leaves a small created file open", function()
+                assert.equal(
+                    "open",
+                    fold_state_for({ old = {}, new = { "a", "b" } })
+                )
+            end)
+
+            it("never collapses an edit, even when large", function()
+                assert.equal(
+                    "open",
+                    fold_state_for({
+                        old = { "x" },
+                        new = { "a", "b", "c", "d" },
+                    })
+                )
+            end)
+        end)
+
+        it("gives a created file of one line or none no fold anchor", function()
+            for _, new in ipairs({ { "only line" }, {} }) do
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-create-short",
+                    kind = "create",
+                    argument = "/tmp/foo.lua",
+                    status = "completed",
+                    diff = { old = {}, new = new },
+                }
+                assert.is_nil(Layout.build(block, 0).fold)
+            end
+        end)
+
+        it(
+            "renders execute failure as plain console without red tint",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "tc-exec-1",
+                    kind = "execute",
+                    argument = "ls /missing",
+                    status = "failed",
+                    failure_reason = {
+                        "ls: /missing: No such file or directory",
+                    },
+                }
+
+                local layout = Layout.build(block, 0)
+                local lines, ranges = layout.lines, layout.highlights
+
+                for _, range in ipairs(ranges) do
+                    assert.are_not.equal("error", range.type)
+                end
+                local found = false
+                for _, line in ipairs(lines) do
+                    if line == "ls: /missing: No such file or directory" then
+                        found = true
+                        break
+                    end
+                end
+                assert.is_true(found)
+            end
+        )
+
+        it("does not fold execute failure at the threshold", function()
+            local reason = {}
+            for i = 1, Config.tool_call_display.execute_max_lines do
+                table.insert(reason, "err line " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-exec-2",
+                kind = "execute",
+                argument = "make build",
+                status = "failed",
+                failure_reason = reason,
+            }
+
+            local lines = Layout.build(block, 0).lines
+
+            for _, line in ipairs(lines) do
+                assert.are_not.equal("{{{", line)
+                assert.are_not.equal("}}}", line)
+            end
+        end)
+
+        it("emits no fold markers even past the fold threshold", function()
+            local reason = {}
+            for i = 1, Config.tool_call_display.execute_max_lines + 1 do
+                table.insert(reason, "err line " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-exec-3",
+                kind = "execute",
+                argument = "make build",
+                status = "failed",
+                failure_reason = reason,
+            }
+
+            local lines = Layout.build(block, 0).lines
+
+            for _, line in ipairs(lines) do
+                assert.are_not.equal("{{{", line)
+                assert.are_not.equal("}}}", line)
+            end
+        end)
+
+        it("keeps red error highlight on non-execute failures", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-edit-fail",
+                kind = "edit",
+                argument = "/tmp/foo.lua",
+                status = "failed",
+                failure_reason = { "Permission denied." },
+            }
+
+            local ranges = Layout.build(block, 0).highlights
+
+            local has_error = false
+            for _, range in ipairs(ranges) do
+                if range.type == "error" then
+                    has_error = true
+                    break
+                end
+            end
+            assert.is_true(has_error)
+        end)
+
+        it("keeps kind-specific rendering for non-failed status", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-3",
+                kind = "read",
+                argument = "/tmp/foo.lua",
+                status = "completed",
+                body = { "line a", "line b", "line c" },
+            }
+
+            local lines = Layout.build(block, 0).lines
+
+            local found = false
+            for _, line in ipairs(lines) do
+                if line == "Read 3 lines" then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+    end)
+
+    describe("no fold markers in rendered output", function()
+        --- @param lines string[]
+        local function assert_no_markers(lines)
+            for _, line in ipairs(lines) do
+                assert.are_not.equal("{{{", line)
+                assert.are_not.equal("}}}", line)
+            end
+        end
+
+        it("execute body past the threshold has no markers", function()
+            local body = {}
+            for i = 1, Config.tool_call_display.execute_max_lines + 5 do
+                table.insert(body, "out " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-fold",
+                kind = "execute",
+                argument = "ls",
+                status = "completed",
+                body = body,
+            }
+
+            local lines = Layout.build(block, 0).lines
+            assert_no_markers(lines)
+        end)
+
+        it("search body past the threshold has no markers", function()
+            local body = {}
+            for i = 1, Config.tool_call_display.search_max_lines + 5 do
+                table.insert(body, "match " .. i)
+            end
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "search-fold",
+                kind = "search",
+                argument = "rg foo",
+                status = "completed",
+                body = body,
+            }
+
+            local lines = Layout.build(block, 0).lines
+            assert_no_markers(lines)
+        end)
+
+        it("fetch body has no markers", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "fetch-fold",
+                kind = "fetch",
+                argument = "https://example.com prompt",
+                status = "completed",
+                body = { "page content line 1", "page content line 2" },
+            }
+
+            local lines = Layout.build(block, 0).lines
+            assert_no_markers(lines)
+        end)
+
+        it("WebSearch body has no markers", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "websearch-fold",
+                kind = "WebSearch",
+                argument = "lua tables",
+                status = "completed",
+                body = { "result snippet" },
+            }
+
+            local lines = Layout.build(block, 0).lines
+            assert_no_markers(lines)
+        end)
+
+        it("SubAgent body has no markers", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "subagent-fold",
+                kind = "SubAgent",
+                argument = "general-purpose",
+                status = "completed",
+                body = { "subagent output line" },
+            }
+
+            local lines = Layout.build(block, 0).lines
+            assert_no_markers(lines)
+        end)
+    end)
+
+    it("folds a multi-line fetch body closed when final", function()
+        --- @type agentic.ui.MessageWriter.ToolCallBlock
+        local block = {
+            tool_call_id = "fetch-state",
+            status = "in_progress",
+            kind = "fetch",
+            argument = "https://example.com prompt",
+            body = { "line 1", "", "line 2" },
+        }
+        assert.equal("closed_when_final", Layout.build(block, 80).fold.state)
+    end)
+
+    describe("shell command fence label", function()
+        -- The `${…/…[…)` shape hangs the tree-sitter-zsh parser forever; the
+        -- chat buffer injects the command fence's label as that parser, so a
+        -- shell label on this command would freeze the editor. Built from char
+        -- codes so the literal shape never reaches shell tooling.
+        local HANG_CMD = "c="
+            .. string.char(36, 123, 120, 47, 47, 91, 94, 41, 93, 125)
+
+        --- First labelled fence line's info string (the command fence; a bare
+        --- closing fence has no label and is skipped).
+        --- @param lines string[]
+        --- @return string|nil
+        local function first_fence_label(lines)
+            for _, line in ipairs(lines) do
+                local label = line:match("^`+(%S+)$")
+                if label then
+                    return label
+                end
+            end
+            return nil
+        end
+
+        it(
+            "uses a non-injecting label for a hang-trigger execute command",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "exec-hang",
+                    kind = "execute",
+                    argument = HANG_CMD,
+                    status = "completed",
+                }
+                local lines = Layout.build(block, 0).lines
+                assert.equal("text", first_fence_label(lines))
+            end
+        )
+
+        it(
+            "uses a non-injecting label for a hang-trigger search command",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "search-hang",
+                    kind = "search",
+                    argument = "rg '" .. HANG_CMD .. "'",
+                    status = "completed",
+                }
+                local lines = Layout.build(block, 0).lines
+                assert.equal("text", first_fence_label(lines))
+            end
+        )
+
+        it("keeps the shell label for a benign command", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-ok",
+                kind = "execute",
+                argument = "rg -n foo file",
+                status = "completed",
+            }
+            local lines = Layout.build(block, 0).lines
+            assert.are_not.equal("text", first_fence_label(lines))
+        end)
+    end)
+
+    describe("search term highlights", function()
+        --- Render a block and return the text under each search match, split
+        --- by whether the match is a term or a grep-line part.
+        --- @param block agentic.ui.MessageWriter.ToolCallBlock
+        --- @return { terms: string[], grep_parts: string[] }
+        local function matched_texts(block)
+            local layout = Layout.build(block, 200)
+            local lines = layout.lines
+            local texts = { terms = {}, grep_parts = {} }
+            for _, m in ipairs(layout.matches) do
+                local text =
+                    lines[m.line_index + 1]:sub(m.col_start + 1, m.col_end)
+                table.insert(
+                    m.hl_group and texts.grep_parts or texts.terms,
+                    text
+                )
+            end
+            return texts
+        end
+
+        --- @param argument string
+        --- @param body string[]
+        --- @return { terms: string[], grep_parts: string[] }
+        local function execute_texts(argument, body)
+            return matched_texts({
+                tool_call_id = "exec-grep",
+                status = "completed",
+                kind = "execute",
+                argument = argument,
+                body = body,
+            })
+        end
+
+        it("highlights a grep that follows `cd …;`", function()
+            local texts =
+                execute_texts('cd /x; rg -n "foo" .', { "a.lua:3:foo bar" })
+            assert.same({ "foo" }, texts.terms)
+            assert.same({ "a.lua", ":", "3", ":" }, texts.grep_parts)
+        end)
+
+        it("takes the pattern from the grep, not an earlier command", function()
+            local texts = execute_texts(
+                'find . -name "*.py" | xargs grep "plot"',
+                { "src/a.py:plot(x)" }
+            )
+            assert.same({ "plot" }, texts.terms)
+        end)
+
+        it("highlights line numbers of path-less grep output", function()
+            local texts = execute_texts(
+                "grep -nA 1 foo f",
+                { "12:foo", "13-bar", "--", "20:foo" }
+            )
+            assert.same({ "12", ":", "13", "-", "20", ":" }, texts.grep_parts)
+        end)
+
+        it("leaves path-less prefixes alone without -n", function()
+            local texts =
+                execute_texts("ls | grep 2024", { "2024-01-notes.md" })
+            assert.same({}, texts.grep_parts)
+        end)
+
+        it("leaves path-less prefixes of search blocks alone", function()
+            local texts = matched_texts({
+                tool_call_id = "search-dated",
+                status = "completed",
+                kind = "search",
+                argument = "notes/*.md",
+                body = { "2024-01-notes.md" },
+            })
+            assert.same({}, texts.grep_parts)
+        end)
+
+        it("leaves the block unchanged", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "search-rerender",
+                status = "completed",
+                kind = "search",
+                argument = "foo",
+                body = { "a:1:x" },
+            }
+            local before = vim.deepcopy(block)
+            local first = Layout.build(block, 200)
+            assert.same(before, block)
+            assert.same(first, Layout.build(block, 200))
+        end)
+
+        it("gives a search body with ANSI both spans and terms", function()
+            local layout = Layout.build({
+                tool_call_id = "search-ansi",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'foo'",
+                body = { "\27[35ma.lua\27[0m:3:foo" },
+            }, 200)
+            local terms = vim.tbl_filter(function(m)
+                return m.hl_group == nil
+            end, layout.matches)
+
+            assert.equal("a.lua:3:foo", layout.lines[6])
+            assert.equal(5, layout.ansi[1].first)
+            assert.same(
+                { { line_index = 5, col_start = 8, col_end = 11 } },
+                terms
+            )
+        end)
+
+        it("matches the ANSI-stripped text of an execute body", function()
+            local texts = execute_texts(
+                "grep -n foo f",
+                { "\27[32m1\27[0m:\27[31mfoo\27[0m" }
+            )
+            assert.same({ "foo" }, texts.terms)
+            assert.same({ "1", ":" }, texts.grep_parts)
+        end)
+
+        it(
+            "advances past a multibyte character after a zero-width match",
+            function()
+                -- `^` matches empty at column 0; the next try must not start
+                -- inside `é`, where `\S` would match its continuation byte.
+                local texts = execute_texts([[grep '^|\S' f]], { "é" })
+                assert.same({}, texts.terms)
+            end
+        )
+
+        it("anchors `^` at the line start only", function()
+            local texts = execute_texts("grep '^foo' f", { "foofoo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("drops zero-width matches", function()
+            local texts = execute_texts("grep 'x*' f", { "ab" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("highlights the term after a split brace glob", function()
+            local texts = execute_texts(
+                'grep -rn --include=*.{ts,tsx} "foo" src',
+                { "a.ts:1:foo" }
+            )
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("keeps a dollar before the closing quote of a pattern", function()
+            local ShellParse = require("agentic.utils.shell_parse")
+            local GrepArgs = require("agentic.utils.grep_args")
+            local rec = ShellParse.extract_commands([[rg -v "^$"]])[1]
+            assert.same(
+                { "^$" },
+                GrepArgs.parse(rec.name, rec.argv, rec.argv_dynamic).patterns
+            )
+            assert.same({}, execute_texts([[rg -v "^$"]], { "", "a" }).terms)
+        end)
+
+        it("does not overlap matches", function()
+            local texts = execute_texts("grep aa f", { "aaaa" })
+            assert.same({ "aa", "aa" }, texts.terms)
+        end)
+
+        it("matches case-sensitively under 'ignorecase'", function()
+            local ignorecase = vim.o.ignorecase
+            vim.o.ignorecase = true
+            local texts = execute_texts("grep foo f", { "Foo foo" })
+            vim.o.ignorecase = ignorecase
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("matches a line holding a NUL byte", function()
+            local texts = execute_texts("grep foo f", { "a\0foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("matches case-insensitively under -i", function()
+            local texts = execute_texts("cat f | grep -i FOO", { "foo" })
+            assert.same({ "foo" }, texts.terms)
+            assert.same({}, texts.grep_parts)
+        end)
+
+        it("highlights through a downstream grep -v", function()
+            local texts = execute_texts("grep a f | grep -v b", { "ac" })
+            assert.same({ "a" }, texts.terms)
+        end)
+
+        it("highlights every pattern of every grep", function()
+            local texts = execute_texts("rg -e x -e y f | grep z", { "x y z" })
+            assert.same({ "x", "y", "z" }, texts.terms)
+        end)
+
+        it("reads each grep's pattern in its own dialect", function()
+            assert.same(
+                { "foo" },
+                execute_texts([[rg 'foo\b' f]], { "foox", "foo x" }).terms
+            )
+            assert.same(
+                { "a|b" },
+                execute_texts("grep 'a|b' f", { "a b a|b" }).terms
+            )
+            assert.same(
+                { "a.b" },
+                execute_texts("grep -F 'a.b' f", { "axb a.b" }).terms
+            )
+            assert.same(
+                { "foo" },
+                execute_texts("grep -w foo f", { "foox foo" }).terms
+            )
+        end)
+
+        it("keeps only the first match where POSIX order may differ", function()
+            -- grep matches `ab` then nothing; Vim alone would match `a`, `bc`.
+            local texts = execute_texts([[grep -o 'a\|ab\|bc' f]], { "abc" })
+            assert.same({ "a" }, texts.terms)
+        end)
+
+        it("keeps prefix colours for an untranslatable pattern", function()
+            local texts = execute_texts("rg -n -P '(?=x)y' f", { "a.lua:3:xy" })
+            assert.same({}, texts.terms)
+            assert.same({ "a.lua", ":", "3", ":" }, texts.grep_parts)
+        end)
+
+        it("needs every dialect grep's flags allow to agree", function()
+            local texts = execute_texts("grep -F -E 'a.b' f", { "a.b axb" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves an echoed pattern ugrep rejects alone", function()
+            local texts = execute_texts("grep -E '(|a)b' f", { "(?m)(|a)b" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves non-ASCII text alone under an ASCII class", function()
+            assert.same(
+                {},
+                execute_texts([[rg '\w{2}' f]], { "x naïve" }).terms
+            )
+            assert.same(
+                { "ab" },
+                execute_texts([[rg '\w{2}' f]], { "ab" }).terms
+            )
+        end)
+
+        it("does not match an end anchor where rg cut the line", function()
+            local texts = execute_texts(
+                "rg -n 'foo$' f",
+                { "1:xfoo [... omitted end of long line]", "2:foo" }
+            )
+            assert.same({ "foo" }, texts.terms)
+            assert.same({ "1", ":", "2", ":" }, texts.grep_parts)
+        end)
+
+        it("notifies a failed match and leaves the terms alone", function()
+            local notify_stub = spy.stub(Logger, "notify")
+            local texts =
+                execute_texts([[rg '(\w*\b\s*)*;' f]], { ("word "):rep(40) })
+            notify_stub:revert()
+            assert.same({}, texts.terms)
+            assert.equal(1, notify_stub.call_count)
+        end)
+
+        it("leaves a command without grep unhighlighted", function()
+            assert.same(
+                { terms = {}, grep_parts = {} },
+                execute_texts("echo x | head", { "a.lua:3:x" })
+            )
+        end)
+
+        it("uses a search block's explicit pattern", function()
+            local texts = matched_texts({
+                tool_call_id = "search-pattern",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'quoted'",
+                search_pattern = "fo+",
+                body = { "3:foo quoted" },
+            })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("falls back to a search block's first quoted string", function()
+            local texts = matched_texts({
+                tool_call_id = "search-quoted",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'bar'",
+                body = { "3:foo bar" },
+            })
+            assert.same({ "bar" }, texts.terms)
+        end)
+
+        --- @param argument string
+        --- @param body string[]
+        --- @return { terms: string[], grep_parts: string[] }
+        local function search_texts(argument, body)
+            return matched_texts({
+                tool_call_id = "search",
+                status = "completed",
+                kind = "search",
+                argument = argument,
+                body = body,
+            })
+        end
+
+        it("leaves the path of a match line alone", function()
+            local texts = execute_texts(
+                "grep -r util lua/",
+                { "lua/utils/x.lua:util here" }
+            )
+            assert.same({ "util" }, texts.terms)
+        end)
+
+        it("leaves context lines alone when a file name may show", function()
+            local texts =
+                execute_texts("grep -r -C1 util d", { "d/utils.lua-x" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("anchors `^` at the start of the text", function()
+            local texts = execute_texts("grep -n '^cd ' f", { "12:cd foo" })
+            assert.same({ "cd " }, texts.terms)
+        end)
+
+        it("matches a grep's patterns together", function()
+            local texts = execute_texts("grep -o -e ab -e bc f", { "abc" })
+            assert.same({ "ab" }, texts.terms)
+        end)
+
+        for _, argument in ipairs({
+            "grep -l foo d",
+            "grep -c foo d",
+            "grep -v foo d",
+            "rg -r X foo d",
+        }) do
+            it(
+                "leaves output without matched text alone: " .. argument,
+                function()
+                    local texts = execute_texts(argument, { "a.lua:3:foo" })
+                    assert.same({}, texts.terms)
+                    assert.same({ "a.lua", ":", "3", ":" }, texts.grep_parts)
+                end
+            )
+        end
+
+        it("leaves diagnostics alone", function()
+            local texts = execute_texts("grep foo d", {
+                "grep: d/foo.bin: binary file matches",
+                "Binary file d/foo.bin matches",
+            })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves rg's long-line placeholder alone", function()
+            local texts = execute_texts("rg -n Omitted", {
+                "3:[Omitted long matching line]",
+                "4:Omitted [... omitted end of long line]",
+            })
+            assert.same({ "Omitted" }, texts.terms)
+        end)
+
+        it("leaves the path after a git grep revision alone", function()
+            local texts = execute_texts(
+                "git grep util HEAD",
+                { "HEAD:lua/utils.lua:util" }
+            )
+            assert.same({ "util" }, texts.terms)
+        end)
+
+        it("leaves rg's summary lines alone", function()
+            local texts = execute_texts(
+                "rg -n --stats match f",
+                { "3:a match", "", "2 matches", "1 files contained matches" }
+            )
+            assert.same({ "match" }, texts.terms)
+        end)
+
+        it("finds a search title's pattern past an unmatched quote", function()
+            local texts = search_texts([[rg don't "foo"]], { "3:foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("ignores an empty search pattern", function()
+            local texts = matched_texts({
+                tool_call_id = "search-empty",
+                status = "completed",
+                kind = "search",
+                argument = "rg",
+                search_pattern = "",
+                body = { "3:foo" },
+            })
+            assert.same({}, texts.terms)
+        end)
+
+        it("leaves a search block's file list alone", function()
+            local texts = search_texts(
+                'grep -l "foo"',
+                { "Found 2 files", "a.lua", "foo.lua" }
+            )
+            assert.same({}, texts.terms)
+        end)
+
+        it("honours a search block's -i", function()
+            local texts = search_texts('grep -i -n "Foo" x', { "3:foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("leaves a multiline search block alone", function()
+            local texts = search_texts('grep -n -P "foo" x', { "3:foo" })
+            assert.same({}, texts.terms)
+        end)
+
+        it("matches the text of opencode's search output", function()
+            local texts = search_texts('rg "foo"', { "  Line 57: foo" })
+            assert.same({ "foo" }, texts.terms)
+        end)
+
+        it("skips a quoted option value in a search title", function()
+            local texts = search_texts(
+                'grep -n --include="lua/**" "foo"',
+                { "lua/a.lua:3:lua foo" }
+            )
+            assert.same({ "foo" }, texts.terms)
+        end)
+    end)
+
+    describe("execute and read layout", function()
+        it("renders execute tool call with bash and console fences", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-fence",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la /tmp",
+                body = { "total 16" },
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("###", lines[1])
+            assert.equal("```bash", lines[2])
+            assert.equal("ls -la /tmp", lines[3])
+            assert.equal("```", lines[4])
+            assert.equal("```console", lines[5])
+            assert.equal("total 16", lines[6])
+            assert.equal("```", lines[7])
+        end)
+
+        it("labels the execute fence with the block's shell", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-zsh",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la /tmp",
+                body = { "total 16" },
+                shell = "zsh",
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("```zsh", lines[2])
+        end)
+
+        it("labels the fence bash without a shell", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-unknown",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la /tmp",
+                body = { "total 16" },
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("```bash", lines[2])
+        end)
+
+        it(
+            "renders the execute description as the collapsed heading name",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "exec-desc",
+                    status = "completed",
+                    kind = "execute",
+                    argument = "ls -la /tmp",
+                    description = "List the temp directory",
+                    body = { "total 16" },
+                }
+
+                local lines = Layout.build(block, 80).lines
+
+                assert.equal("### List the temp directory", lines[1])
+                assert.equal("```bash", lines[2])
+                assert.equal("ls -la /tmp", lines[3])
+                assert.equal("```", lines[4])
+                -- Single console fence around the body — no nested/double wrap.
+                assert.equal("```console", lines[5])
+                assert.equal("total 16", lines[6])
+                assert.equal("```", lines[7])
+            end
+        )
+
+        it("splits multi-line execute arguments into separate lines", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-multi",
+                status = "pending",
+                kind = "execute",
+                argument = "for i in 1 2 3; do\necho $i\ndone",
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("###", lines[1])
+            assert.equal("```bash", lines[2])
+            assert.equal("for i in 1 2 3; do", lines[3])
+            assert.equal("echo $i", lines[4])
+            assert.equal("done", lines[5])
+            assert.equal("```", lines[6])
+        end)
+
+        it(
+            "renders non-execute tool call with argument on the collapsed heading",
+            function()
+                --- @type agentic.ui.MessageWriter.ToolCallBlock
+                local block = {
+                    tool_call_id = "read-inline",
+                    status = "pending",
+                    kind = "read",
+                    argument = "/tmp/file.txt",
+                    body = { "line1" },
+                }
+
+                local lines = Layout.build(block, 80).lines
+
+                assert.equal("### `/tmp/file.txt`", lines[1])
+                assert.equal("Read 1 lines", lines[2])
+            end
+        )
+
+        it("strips redundant kind prefix from argument", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-prefix",
+                status = "pending",
+                kind = "read",
+                argument = "Read /tmp/file.txt",
+                body = { "line1" },
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("### `/tmp/file.txt`", lines[1])
+        end)
+
+        it("shows line range in read info when read_range is set", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-range",
+                status = "pending",
+                kind = "read",
+                argument = "/tmp/file.txt",
+                body = { "a", "b", "c" },
+                read_range = { offset = 10, limit = 3 },
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("### `/tmp/file.txt:10`", lines[1])
+            assert.equal("Read 3 lines (10 - 12)", lines[2])
+        end)
+
+        it("heads an open-ended read with its start line", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "read-open-range",
+                status = "pending",
+                kind = "read",
+                argument = "/tmp/file.txt",
+                body = { "a", "b", "c" },
+                read_range = { offset = 10 },
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("### `/tmp/file.txt:10`", lines[1])
+            assert.equal("Read 3 lines (10 - …)", lines[2])
+        end)
+
+        it("creates highlight ranges for pure insertion hunks", function()
+            read_stub:returns({ "line1", "line2", "line3" })
+
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "test-hl",
+                status = "pending",
+                kind = "edit",
+                argument = "/test.lua",
+                diff = {
+                    old = { "line1", "line2", "line3" },
+                    new = { "line1", "inserted", "line2", "line3" },
+                },
+            }
+
+            local layout = Layout.build(block, 80)
+            local lines, highlight_ranges = layout.lines, layout.highlights
+
+            local found_inserted = false
+            for _, line in ipairs(lines) do
+                if line == "inserted" then
+                    found_inserted = true
+                    break
+                end
+            end
+            assert.is_true(found_inserted)
+
+            local new_ranges = vim.tbl_filter(function(r)
+                return r.type == "new"
+            end, highlight_ranges)
+            assert.is_true(#new_ranges > 0)
+            assert.equal("inserted", new_ranges[1].new_line)
+        end)
+
+        it("splits long one-liner execute commands at operators", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-long",
+                status = "pending",
+                kind = "execute",
+                argument = "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test",
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("###", lines[1])
+            assert.equal("```bash", lines[2])
+            assert.equal("cd /some/very/long/project/path &&", lines[3])
+            assert.equal("npm install --save-dev typescript &&", lines[4])
+            assert.equal("npm run build &&", lines[5])
+            assert.equal("npm test", lines[6])
+            assert.equal("```", lines[7])
+        end)
+
+        it("does not split short execute commands", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-short",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la && echo done",
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("ls -la && echo done", lines[3])
+        end)
+
+        it("does not split inside quoted strings", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-quoted",
+                status = "pending",
+                kind = "execute",
+                argument = [[echo "this && that || other" && echo 'pipes | here ; too' && echo done with a very long command line]],
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("```bash", lines[2])
+            assert.equal([[echo "this && that || other" &&]], lines[3])
+            assert.equal([[echo 'pipes | here ; too' &&]], lines[4])
+            assert.equal("echo done with a very long command line", lines[5])
+        end)
+
+        it("does not split inside subshells", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "exec-subshell",
+                status = "pending",
+                kind = "execute",
+                argument = "result=$(cmd1 && cmd2 || cmd3) && echo $result && final_command with some extra arguments to be long",
+            }
+
+            local lines = Layout.build(block, 80).lines
+
+            assert.equal("result=$(cmd1 && cmd2 || cmd3) &&", lines[3])
+            assert.equal("echo $result &&", lines[4])
+            assert.equal(
+                "final_command with some extra arguments to be long",
+                lines[5]
+            )
+        end)
+
+        it("fences an empty command", function()
+            local lines = Layout.build({
+                tool_call_id = "exec-empty",
+                status = "pending",
+                kind = "execute",
+                argument = "",
+                shell = "zsh",
+            }, 80).lines
+
+            assert.same({ "```zsh", "", "```" }, vim.list_slice(lines, 2, 4))
+        end)
+
+        it("keeps the head of a failed execute with an ANSI body", function()
+            local layout = Layout.build({
+                tool_call_id = "exec-failed",
+                status = "failed",
+                kind = "execute",
+                argument = "ls",
+                description = "List",
+                shell = "zsh",
+                body = {
+                    "\27[31mone\27[0m",
+                    "\27[31mtwo\27[0m",
+                    "\27[31mthree\27[0m",
+                    "\27[31mfour\27[0m",
+                },
+                failure_reason = { "\27[31mExit code 1\27[0m" },
+            }, 80)
+
+            assert.same({
+                "### List",
+                "```zsh",
+                "ls",
+                "```",
+                "```console",
+                "Exit code 1",
+                "```",
+                "",
+            }, layout.lines)
+            assert.equal(5, layout.ansi[1].first)
+        end)
+    end)
+
+    describe("folded bodies", function()
+        local original_other_max
+
+        before_each(function()
+            original_other_max = Config.tool_call_display.other_max_lines
+            Config.tool_call_display.other_max_lines = 2
+        end)
+
+        after_each(function()
+            Config.tool_call_display.other_max_lines = original_other_max
+        end)
+
+        --- @param kind string
+        --- @param body string[]
+        --- @param wrap_width integer|nil
+        --- @return agentic.ui.ToolCallLayout.Layout
+        local function layout_of(kind, body, wrap_width)
+            return Layout.build({
+                tool_call_id = "fold-" .. kind,
+                status = "completed",
+                kind = kind,
+                argument = "x",
+                body = body,
+            }, wrap_width or 80)
+        end
+
+        it("folds a multi-row todowrite body closed", function()
+            local layout = layout_of(
+                "TodoWrite",
+                { '{"todos": [{"content": "a"}, {"content": "b"}]}' }
+            )
+            assert.equal("closed", layout.fold.state)
+        end)
+
+        it("folds a multi-row switch_mode body closed, dimmed", function()
+            local layout = layout_of("switch_mode", { "line 1", "line 2" })
+            assert.equal("closed", layout.fold.state)
+            assert.equal("```markdown-fold", layout.lines[2])
+            assert.same({ 2, 3 }, layout.dim)
+        end)
+
+        it("leaves a one-row switch_mode body unfolded", function()
+            assert.is_nil(layout_of("switch_mode", { "line 1" }).fold)
+        end)
+
+        it("folds a flat JSON table past other_max_lines", function()
+            local layout = layout_of(
+                "other",
+                { '{"alpha": "1", "beta": "2", "gamma": "3"}' }
+            )
+            assert.equal("```markdown-fold", layout.lines[2])
+            assert.equal("closed_when_final", layout.fold.state)
+        end)
+
+        it("leaves table rows unwrapped at a narrow width", function()
+            local body = { '{"alpha": "a long value", "beta": "another one"}' }
+            assert.same(
+                layout_of("other", body, 80).lines,
+                layout_of("other", body, 10).lines
+            )
+        end)
+    end)
+
+    describe("index placement", function()
+        --- Rows inside a fence, and rows with a Comment range.
+        --- @param layout agentic.ui.ToolCallLayout.Layout
+        --- @return table<integer, true> rows 0-based
+        local function covered_rows(layout)
+            local TextWrap = require("agentic.utils.text_wrap")
+            local rows, open = {}, false
+            -- The header and footer are never inside a fence.
+            for i = 2, #layout.lines - 1 do
+                if TextWrap.is_fence_delimiter(layout.lines[i]) then
+                    open = not open
+                elseif open then
+                    rows[i - 1] = true
+                end
+            end
+            for _, range in ipairs(layout.highlights) do
+                if range.type == "comment" then
+                    rows[range.line_index] = true
+                end
+            end
+            return rows
+        end
+
+        local ANSI = { "\27[31ma.lua\27[0m:3:foo", "\27[32mok\27[0m" }
+
+        --- @type table<string, agentic.ui.MessageWriter.ToolCallBlock>
+        local fixtures = {
+            execute_ok = {
+                tool_call_id = "e1",
+                status = "completed",
+                kind = "execute",
+                argument = "grep -n foo f",
+                body = ANSI,
+            },
+            execute_failed = {
+                tool_call_id = "e2",
+                status = "failed",
+                kind = "execute",
+                argument = "grep -n foo f",
+                body = { "x", "y", "z" },
+                failure_reason = ANSI,
+            },
+            search_ansi = {
+                tool_call_id = "s1",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'foo'",
+                body = ANSI,
+            },
+            search_terms = {
+                tool_call_id = "s2",
+                status = "completed",
+                kind = "search",
+                argument = "rg 'foo'",
+                body = { "a.lua:3:foo", "b.lua:4:foo" },
+            },
+            sidecar = {
+                tool_call_id = "f1",
+                status = "completed",
+                kind = "fetch",
+                argument = "https://example.com prompt",
+                body = { "a", "", "b" },
+            },
+            read = {
+                tool_call_id = "r1",
+                status = "completed",
+                kind = "read",
+                argument = "/tmp/f",
+                body = { "a" },
+            },
+            failed_diff = {
+                tool_call_id = "d1",
+                status = "failed",
+                kind = "edit",
+                argument = "/tmp/f.lua",
+                diff = { old = { "a" }, new = { "b" } },
+                failure_reason = { "denied" },
+            },
+        }
+
+        for name, block in pairs(fixtures) do
+            it("places every index in its section: " .. name, function()
+                read_stub:invokes(function()
+                    return { "a" }, nil
+                end)
+                local layout = Layout.build(block, 80)
+                local rows = covered_rows(layout)
+
+                for _, range in ipairs(layout.highlights) do
+                    assert.is_true(rows[range.line_index] == true)
+                end
+                for _, match in ipairs(layout.matches) do
+                    assert.is_true(rows[match.line_index] == true)
+                end
+                for _, entry in ipairs(layout.ansi) do
+                    for i = 1, #entry.spans do
+                        assert.is_true(rows[entry.first + i - 1] == true)
+                    end
+                end
+            end)
+        end
+    end)
+
+    it("fences an unmatched diff past the backtick runs in it", function()
+        read_stub:invokes(function()
+            return { "unrelated" }, nil
+        end)
+        disk_stub:invokes(function()
+            return { "unrelated" }, nil
+        end)
+        local layout = Layout.build({
+            tool_call_id = "d-unmatched",
+            status = "completed",
+            kind = "edit",
+            argument = "/tmp/doc.md",
+            diff = {
+                old = { "```lua", "x = 1", "```" },
+                new = { "```python", "x = 1", "```" },
+            },
+        }, 80)
+
+        local TextWrap = require("agentic.utils.text_wrap")
+        local opener = layout.lines[2]:match("^`+")
+        local body = vim.list_slice(layout.lines, 3, #layout.lines - 2)
+        assert.is_true(#opener > 3)
+        assert.equal(TextWrap.safe_fence(body), opener)
+    end)
+end)
