@@ -171,7 +171,8 @@ each fold: when the state is due. A kind that sets none closes at a final
 status.
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
-word when it has one, plus a character count on thought runs.
+word when it has one, plus a character count where the writer marks the
+fence row in `Folds.NS_CHAR_COUNT`.
 
 Adding a new foldable kind:
 

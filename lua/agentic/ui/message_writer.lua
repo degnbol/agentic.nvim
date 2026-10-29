@@ -2,6 +2,7 @@ local AcpKind = require("agentic.utils.acp_kind")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
+local Folds = require("agentic.ui.folds")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
@@ -356,7 +357,8 @@ local function view_of(winid)
         -- line("w0") applies the redraw's correction first.
         local topline = vim.fn.line("w0")
         local lnum = vim.api.nvim_win_get_cursor(winid)[1]
-        local last = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+        local last =
+            vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
         local height = vim.api.nvim_win_text_height(winid, {
             start_row = topline - 1,
             end_row = last - 1,
@@ -1068,6 +1070,14 @@ local function collapsed_region_lines(body, source, section_break)
     return lines, body_offset
 end
 
+--- Mark a fold's opening fence row so its foldtext counts the body's
+--- characters (`Folds.NS_CHAR_COUNT`).
+--- @param bufnr integer
+--- @param fence_row integer 0-indexed
+local function mark_char_count(bufnr, fence_row)
+    vim.api.nvim_buf_set_extmark(bufnr, Folds.NS_CHAR_COUNT, fence_row, 0, {})
+end
+
 --- Stamp a collapsed region already in the buffer: `sign` on its first body
 --- row, the rail beneath, the whole body dimmed, and the fold closed when the
 --- body has one.
@@ -1075,17 +1085,22 @@ end
 --- @param body_start integer 0-indexed first body row of the region
 --- @param body_end integer 0-indexed last body row of the region, inclusive
 --- @param sign string `sign_text` identifying the region
+--- @param count_chars boolean The fold's foldtext counts the body's characters
 function MessageWriter:_decorate_collapsed_region(
     bufnr,
     body_start,
     body_end,
-    sign
+    sign,
+    count_chars
 )
     render_collapsed_region(bufnr, body_start, body_end, sign)
     Renderer.set_dim_range(bufnr, body_start, body_end)
     -- Same measure `collapsed_region_lines` folds on: a one-row body has no
     -- fence, and so no fold to close.
     if body_end > body_start then
+        if count_chars then
+            mark_char_count(bufnr, body_start - 1)
+        end
         self:_queue_fold(body_start, false)
     end
 end
@@ -1094,7 +1109,8 @@ end
 --- @param body string[] Already prose-wrapped
 --- @param sign string `sign_text` identifying the region
 --- @param source string|nil Where the body came from, for the foldtext to name
-function MessageWriter:_write_collapsed_region(body, sign, source)
+--- @param count_chars boolean The fold's foldtext counts the body's characters
+function MessageWriter:_write_collapsed_region(body, sign, source, count_chars)
     if #body == 0 then
         return
     end
@@ -1123,12 +1139,15 @@ function MessageWriter:_write_collapsed_region(body, sign, source)
         -- Derived from the line count AFTER the append: on an empty buffer
         -- _append_lines replaces row 0 rather than appending, so a row captured
         -- before the call would be off by one.
-        local placed_at = vim.api.nvim_buf_line_count(bufnr) - #lines
+        local body_start = vim.api.nvim_buf_line_count(bufnr)
+            - #lines
+            + body_offset
         self:_decorate_collapsed_region(
             bufnr,
-            placed_at + body_offset,
-            placed_at + body_offset + #body - 1,
-            sign
+            body_start,
+            body_start + #body - 1,
+            sign,
+            count_chars
         )
     end)
 end
@@ -1267,7 +1286,8 @@ function MessageWriter:_insert_collapsed_region(
             bufnr,
             insert_row + body_offset,
             insert_row + body_offset + #body - 1,
-            sign
+            sign,
+            false
         )
         return true
     end) == true
@@ -1292,13 +1312,13 @@ function MessageWriter:flush_thought_run()
         return
     end
 
-    self:_write_collapsed_region(
-        TextWrap.wrap_prose(
-            vim.split(vim.trim(text), "\n", { plain = true }),
-            self:_get_wrap_width()
-        ),
-        Glyphs.THINKING_SIGN
+    local body = TextWrap.wrap_prose(
+        vim.split(vim.trim(text), "\n", { plain = true }),
+        self:_get_wrap_width()
     )
+    -- Count characters: lines are a weak proxy for how much thinking happened,
+    -- and no provider reports thinking tokens.
+    self:_write_collapsed_region(body, Glyphs.THINKING_SIGN, nil, true)
 end
 
 --- Render one hook's activity as a collapsed region carrying the hook glyph and
@@ -1336,7 +1356,7 @@ function MessageWriter:write_hook_block(body, script, tool_call_id)
     -- Appending under a buffered thought run would put the region above the
     -- thinking it followed; an anchored one has no such ordering to keep.
     self:flush_thought_run()
-    self:_write_collapsed_region(wrapped, sign, script)
+    self:_write_collapsed_region(wrapped, sign, script, false)
 end
 
 --- The identity sign for a prompt heading row: the command's own glyph when the
@@ -1416,7 +1436,9 @@ end
 --- @class agentic.ui.MessageWriter.Notice
 --- @field glyph string Identity glyph, stamped as the heading row's sign (see agentic.glyphs)
 --- @field title string Heading text. Raw, not backtick-wrapped: an underscore or stray backtick in it can corrupt the heading through markdown inline parsing, the same exposure a user prompt's heading already carries.
---- @field body? string[] Already-formatted markdown lines placed under the heading
+--- @field detail? string One dimmed line under the heading
+--- @field body? string[] Already-formatted markdown lines placed under the heading, after `detail`
+--- @field fold_body? string[] Markdown lines placed prose-wrapped in a fence after `body`. Longer than one line, the fence is folded closed and its foldtext counts their characters
 --- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
 --- @field mid_turn? boolean True when a turn is running. Decides whether the notice closes the turn — see write_notice.
 --- @field id? string Id to find the notice by. Must be unique per writer
@@ -1425,8 +1447,8 @@ end
 --- such as the result of a locally-handled command.
 ---
 --- Its row carries an identity sign in the same channel as a prompt's own and
---- is navigable with `[[`/`]]`. A notice with a body grows a `│`/`╰─` rail
---- over those rows.
+--- is navigable with `[[`/`]]`. A notice with rows under its heading grows a
+--- `│`/`╰─` rail over them.
 ---
 --- Always `##`. The heading level says whose row it is, not when it was written
 --- (§ "Heading levels" in the `rendering` skill): a notice is a sibling of the
@@ -1450,8 +1472,21 @@ function MessageWriter:write_notice(notice)
     -- part that would be cut is the scope path it exists to report. A title
     -- wider than the (nowrap) chat window runs past its edge and is reached by
     -- scrolling horizontally.
-    local lines = { "## " .. notice.title }
+    local lines = { "## " .. notice.title, notice.detail }
     vim.list_extend(lines, notice.body or {})
+    local fold_body =
+        TextWrap.wrap_prose(notice.fold_body or {}, self:_get_wrap_width())
+    --- @type integer|nil 0-indexed offset of the fenced body's first row in `lines`
+    local fold_offset
+    if #fold_body > 0 then
+        -- Fenced even as one line, so no markdown in it can open a block that
+        -- outlives the notice.
+        local fence = Renderer.safe_fence(fold_body)
+        table.insert(lines, fence .. "markdown-fold")
+        fold_offset = #lines
+        vim.list_extend(lines, fold_body)
+        table.insert(lines, fence)
+    end
     table.insert(lines, "")
 
     -- A notice ends the prose run it interrupts: without this the viewport
@@ -1487,6 +1522,16 @@ function MessageWriter:write_notice(notice)
         if notice.id then
             -- The trailing blank belongs to no notice.
             self._notices[notice.id] = { mark = mark, height = #lines - 1 }
+        end
+
+        if notice.detail then
+            Renderer.set_dim_range(bufnr, heading_row + 1, heading_row + 1)
+        end
+        -- Vim cannot close a one-line fold.
+        if fold_offset and #fold_body > 1 then
+            local fold_start = heading_row + fold_offset
+            mark_char_count(bufnr, fold_start - 1)
+            self:_queue_fold(fold_start, false)
         end
 
         render_region_rail(bufnr, heading_row, heading_row + #lines - 1)
@@ -2562,9 +2607,7 @@ function MessageWriter:_render_block_fold(
     end
     block.fold_anchor_id = self:_place_fold_anchor(start_row + fold_anchor)
     block.fold_open = fold_state == "open"
-    if
-        fold_state ~= "closed_when_final" or is_final_status(block.status)
-    then
+    if fold_state ~= "closed_when_final" or is_final_status(block.status) then
         self:_queue_fold_op(block.fold_anchor_id, block.fold_open)
         block.fold_sent = block.fold_open
     end
@@ -2761,12 +2804,8 @@ function MessageWriter:write_tool_call_block(tool_call_block)
             tool_call_block.search_ansi
         )
 
-        tool_call_block.decoration_extmark_ids = Renderer.render_decorations(
-            bufnr,
-            start_row,
-            end_row,
-            kind
-        )
+        tool_call_block.decoration_extmark_ids =
+            Renderer.render_decorations(bufnr, start_row, end_row, kind)
 
         self:_render_block_fold(
             tool_call_block,

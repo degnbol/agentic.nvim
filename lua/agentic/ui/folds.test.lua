@@ -1,6 +1,5 @@
 local assert = require("tests.helpers.assert")
-local Glyphs = require("agentic.glyphs")
-local Renderer = require("agentic.ui.tool_call_renderer")
+local NS_CHAR_COUNT = require("agentic.ui.folds").NS_CHAR_COUNT
 
 describe("agentic.ui.folds", function()
     --- @type number
@@ -313,17 +312,11 @@ describe("agentic.ui.folds", function()
             end)
         end
 
-        it("adds a character count under a thinking glyph", function()
-            -- The glyph in the sign column is what says the fold is a thought
-            -- run; the count is read back out of the folded rows.
+        it("adds a character count when the fence row is marked", function()
+            -- The mark on the row above the fold asks for the count; the
+            -- count is read back out of the folded rows.
             fill_lines(20)
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                Renderer.NS_DECORATIONS,
-                4,
-                0,
-                { sign_text = Glyphs.THINKING_SIGN }
-            )
+            vim.api.nvim_buf_set_extmark(bufnr, NS_CHAR_COUNT, 3, 0, {})
 
             -- "line 5".."line 9" are 6 characters, "line 10".."line 11" are 7,
             -- plus the 6 newlines rejoining them.
@@ -340,13 +333,7 @@ describe("agentic.ui.folds", function()
                 "—·—·—",
                 "below",
             })
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                Renderer.NS_DECORATIONS,
-                1,
-                0,
-                { sign_text = Glyphs.THINKING_SIGN }
-            )
+            vim.api.nvim_buf_set_extmark(bufnr, NS_CHAR_COUNT, 0, 0, {})
 
             -- 10 dashes and middots plus the newline; by bytes it would be 31.
             assert.equal(
@@ -355,8 +342,10 @@ describe("agentic.ui.folds", function()
             )
         end)
 
-        it("leaves an unsigned fold's summary alone", function()
+        it("leaves an unmarked fold's summary alone", function()
             fill_lines(20)
+            -- A mark on the first body row, not the fence row, asks nothing.
+            vim.api.nvim_buf_set_extmark(bufnr, NS_CHAR_COUNT, 4, 0, {})
 
             assert.equal("    ··· 7 lines ···", foldtext_of(5, 11))
         end)

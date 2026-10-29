@@ -357,16 +357,16 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     return message
 end
 
---- Replace the JSON result of a `SendMessage`-kind call with its text, and
---- mark the call completed or failed by whether the message was delivered.
---- Any other body is left as it is.
+--- Replace the JSON result of a `SendMessage` or `SubagentHandback` call with
+--- its text, and mark the call completed or failed by whether the message was
+--- delivered. Any other body is left as it is.
 ---
 --- The bridge leaves such a call visible when it queued the message or could
 --- not deliver it, and the raw result carries plumbing fields.
 --- @protected
 --- @param message agentic.ui.MessageWriter.ToolCallBase
 function ClaudeAgentACPAdapter:__apply_message_result(message)
-    if message.kind ~= "SendMessage" then
+    if message.kind ~= "SendMessage" and message.kind ~= "SubagentHandback" then
         return
     end
     local lines, delivered = ClaudeUtils.message_result(message.body)

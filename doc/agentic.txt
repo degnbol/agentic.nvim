@@ -1039,12 +1039,22 @@ named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
 shows its subagent as working while it works. It also has a row for each end
 of a run, titled `completed`, `cancelled`, `failed`, `ended`, `unknown` or
-the provider's stop reason. The header shows how the last run ended. A
-resumed subagent continues in the same transcript.
+the provider's stop reason, and signed with that status's icon
+(|agentic-config-status_icons|), else 󰈼. The header shows how the last run
+ended. A resumed subagent continues in the same transcript.
 
 A message between agents, the launch prompt included, has a row in the chat
-or transcript of each agent it joins: `From <name>` with the text in the
-recipient's, `To <name>` with the recipient's buffer name in the sender's.
+or transcript of each agent it joins. Each row holds the message: its first
+line as the heading, the buffer name of the other end under it, and the rest
+folded closed. The sign gives the kind:
+
+    Sign  Kind ~
+    󰚩     Launch: the first message to a subagent
+    󰙓     Task: the first message to a subagent since its last run ended
+    󰌑     Result: from a subagent to the agent that started it
+    󰒊     Any other message, sent
+    󰇮     Any other message, received
+
 Each message is a tag named by its id, defined at both rows: |CTRL-]| on
 either row jumps to the other, |CTRL-T| jumps back, and |:tag| or
 |:tselect| with the id lists both.

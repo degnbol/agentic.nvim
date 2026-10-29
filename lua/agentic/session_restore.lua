@@ -5,6 +5,7 @@ local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
+local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
 --- @class agentic.SessionRestore.PickerItem
@@ -275,9 +276,19 @@ function SessionRestore.format_preview(messages)
                 )
             )
             table.insert(lines, "")
-        elseif msg.type == "subagent_event" then
-            table.insert(lines, "## " .. msg.title)
-            vim.list_extend(lines, msg.body or {})
+        elseif msg.type == "session_message" then
+            local title, rest = SessionRestore.message_title(msg.text)
+            table.insert(lines, "## " .. title)
+            vim.list_extend(lines, rest)
+            table.insert(lines, "")
+        elseif msg.type == "subagent_end" then
+            table.insert(lines, "## " .. msg.state)
+            if msg.error then
+                vim.list_extend(
+                    lines,
+                    vim.split(msg.error, "\n", { plain = true })
+                )
+            end
             table.insert(lines, "")
         end
     end
@@ -375,38 +386,61 @@ function SessionRestore.show_picker(current_session, scope)
     end)
 end
 
---- @type table<"sent"|"received"|"end", string>
-local GLYPH_OF_SUBAGENT_EVENT = {
-    sent = Glyphs.KIND.sendmessage,
-    received = Glyphs.MESSAGE_RECEIVED,
-    ["end"] = Glyphs.KIND.subagent,
-}
+--- The title of a message's row and the lines under it: the first non-blank
+--- line and the rest. A text with no such line is titled `(empty message)`. A
+--- first line opening a code fence is no title, so the row is titled
+--- `(message)` and the whole text goes under it.
+--- @param text string
+--- @return string title
+--- @return string[] rest
+function SessionRestore.message_title(text)
+    local head, rest = TextWrap.head_and_rest(text)
+    if not head then
+        return "(empty message)", {}
+    end
+    if TextWrap.is_fence_delimiter(head) then
+        return "(message)", vim.list_extend({ head }, rest)
+    end
+    return head, rest
+end
 
---- Write a subagent event as a notice signed with the glyph of its kind, under
---- its message id. An event with a peer gets the name of the peer's buffer as
---- its body, or no body while the peer has no buffer.
+--- Write a session message or a subagent end as a notice. A message is signed
+--- with the glyph of its kind (`Glyphs.MESSAGE`), split into heading and body
+--- by `SessionRestore.message_title`, with the other end's buffer name dimmed
+--- under the heading and the body folded, and tagged with its message id. An end is signed with
+--- its state's status icon when that is one cell wide, else
+--- `Glyphs.RUN_ENDED`, and holds the error text.
 --- @param writer agentic.ui.MessageWriter
---- @param event agentic.ui.ChatHistory.SubagentEvent
+--- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd
 --- @param mid_turn boolean The writer's turn is still running, so the notice must not finalize it
 --- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
-function SessionRestore.write_subagent_event(
-    writer,
-    event,
-    mid_turn,
-    buffer_name
-)
-    local body = event.body
-    if event.peer_session_id then
-        local name = buffer_name(event.peer_session_id)
-        body = name and { name }
+function SessionRestore.write_row(writer, row, mid_turn, buffer_name)
+    if row.type == "subagent_end" then
+        local icon = (Config.status_icons or {})[row.state]
+        -- One cell: a sign holds two, and the glyph takes a trailing space.
+        local usable = type(icon) == "string"
+            and vim.fn.strdisplaywidth(icon) == 1
+        writer:write_notice({
+            glyph = usable and icon or Glyphs.RUN_ENDED,
+            glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
+            title = row.state,
+            body = row.error and vim.split(row.error, "\n", { plain = true }),
+            mid_turn = mid_turn,
+        })
+        return
     end
+
+    local title, rest = SessionRestore.message_title(row.text)
+    local peer = row.view == "sent" and row.recipient_session_id
+        or row.sender_session_id
     writer:write_notice({
-        glyph = GLYPH_OF_SUBAGENT_EVENT[event.kind],
+        glyph = Glyphs.MESSAGE[row.kind == "message" and row.view or row.kind],
         glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
-        title = event.title,
-        body = body,
+        title = title,
+        detail = peer and buffer_name(peer),
+        fold_body = rest,
         mid_turn = mid_turn,
-        id = event.message_id,
+        id = row.message_id,
     })
 end
 
@@ -444,8 +478,8 @@ function SessionRestore.replay_messages(writer, messages, buffer_name)
                 decided_by = msg.decided_by,
             }
             writer:write_tool_call_block(tool_block)
-        elseif msg.type == "subagent_event" then
-            SessionRestore.write_subagent_event(writer, msg, true, buffer_name)
+        elseif msg.type == "session_message" or msg.type == "subagent_end" then
+            SessionRestore.write_row(writer, msg, true, buffer_name)
         end
     end
     -- Neither caller finalizes the turn, so a history ending on a thought would

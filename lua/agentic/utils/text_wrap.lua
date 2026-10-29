@@ -402,6 +402,33 @@ function M.is_fence_delimiter(line)
     return delim:sub(1, 1) == "~" or not rest:find("`", 1, true)
 end
 
+--- The first non-blank line of `text`, and the lines after it with blank
+--- lines at both edges removed. Nil and `{}` for a text with no non-blank line.
+--- @param text string
+--- @return string|nil head
+--- @return string[] rest
+function M.head_and_rest(text)
+    local lines = vim.split(text, "\n", { plain = true })
+    local function blank(i)
+        return lines[i]:match("^%s*$") ~= nil
+    end
+    local i_head = 1
+    while i_head <= #lines and blank(i_head) do
+        i_head = i_head + 1
+    end
+    if i_head > #lines then
+        return nil, {}
+    end
+    local i_first, i_last = i_head + 1, #lines
+    while i_first <= i_last and blank(i_first) do
+        i_first = i_first + 1
+    end
+    while i_last >= i_first and blank(i_last) do
+        i_last = i_last - 1
+    end
+    return lines[i_head], vim.list_slice(lines, i_first, i_last)
+end
+
 --- Prepend the newlines `text` needs to start a new paragraph: one blank line
 --- after what precedes it.
 --- @param text string Text that starts a new paragraph

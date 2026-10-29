@@ -847,12 +847,20 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 })
             end
 
-            it("heads a subagent handback with the tool name", function()
-                local msg =
-                    message_update({ message = "Report" }, "SubagentHandback")
+            it("gives a subagent handback its own kind and no head", function()
+                local adapter, calls = make_capturing_adapter()
+                adapter:__handle_tool_call("s-1", {
+                    sessionUpdate = "tool_call",
+                    toolCallId = "tc-back",
+                    kind = "other",
+                    status = "pending",
+                    title = "SubagentHandback",
+                    rawInput = { message = "Report" },
+                    _meta = { claudeCode = { toolName = "SubagentHandback" } },
+                })
 
-                assert.equal("SendMessage", msg.kind)
-                assert.equal("SubagentHandback", msg.argument)
+                assert.equal("SubagentHandback", calls[1].kind)
+                assert.equal("", calls[1].argument)
             end)
 
             it("names the addressee alone", function()
@@ -915,12 +923,25 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 local msg = make_adapter():__build_tool_call_update(
                     with_result(
                         vim.json.encode({ message = "No such agent.", success = false }),
+                        "completed"
+                    )
+                )
+
+                assert.same({ "No such agent." }, msg.body)
+                assert.equal("failed", msg.status)
+            end)
+
+            it("gives a failed handback its text and a failed status", function()
+                local msg = make_adapter():__build_tool_call_update(
+                    with_result(
+                        vim.json.encode({ message = "Parent gone.", success = false }),
                         "completed",
                         "SubagentHandback"
                     )
                 )
 
-                assert.same({ "No such agent." }, msg.body)
+                assert.equal("SubagentHandback", msg.kind)
+                assert.same({ "Parent gone." }, msg.body)
                 assert.equal("failed", msg.status)
             end)
 

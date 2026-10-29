@@ -91,6 +91,8 @@ end
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
 --- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
+--- @field _message_kinds table<string, agentic.SessionMessageKind> Kind of each session message by message id, decided at its first view
+--- @field _delegated table<string, true> Session ids of the subagents a delegation has reached
 --- @field file_list agentic.ui.FileList
 --- @field file_activity agentic.ui.FileActivity
 --- @field code_selection agentic.ui.CodeSelection
@@ -335,6 +337,8 @@ function SessionManager:new()
         _agent_by_task = {},
         _tool_call_owner = {},
         _seen_messages = {},
+        _message_kinds = {},
+        _delegated = {},
         --- @type string|nil Last model id announced via announce_model_loaded;
         --- dedups the start/pending-flush double-announce (reset per new_session)
         _announced_model_id = nil,
@@ -607,7 +611,7 @@ end
 function SessionManager:_writers_of_message(message_id)
     local writers = { self.message_writer }
     for _, msg in ipairs(self.chat_history.subagent_messages) do
-        if msg.type == "subagent_event" and msg.message_id == message_id then
+        if msg.type == "session_message" and msg.message_id == message_id then
             local task_id = msg.parent_tool_use_id --[[@as string]]
             local child_id = self._agent_by_task[task_id] or task_id
             if self._agents[child_id] then
@@ -806,26 +810,27 @@ function SessionManager:_new_transcript(child_id, subagent)
     local agent_id, generation = self.agent:subagent_id(child_id)
     --- @type agentic.ui.SubagentTranscript
     local transcript
-    transcript = SubagentTranscript:new(agent_id, generation, subagent, self.widget, {
-        setup_buf = function(bufnr, writer)
-            self:_setup_session_buf(bufnr, writer)
-            self:_bind_agent_keymaps(child_id, bufnr)
-        end,
-        on_reload = function()
-            if not self.destroyed then
-                self:_replay_transcript(child_id)
-            end
-        end,
-        on_write = function()
-            self:_write_session()
-        end,
-        on_wipeout = function()
-            local agent = self._agents[child_id]
-            if agent and agent.transcript == transcript then
-                agent.transcript = nil
-            end
-        end,
-    })
+    transcript =
+        SubagentTranscript:new(agent_id, generation, subagent, self.widget, {
+            setup_buf = function(bufnr, writer)
+                self:_setup_session_buf(bufnr, writer)
+                self:_bind_agent_keymaps(child_id, bufnr)
+            end,
+            on_reload = function()
+                if not self.destroyed then
+                    self:_replay_transcript(child_id)
+                end
+            end,
+            on_write = function()
+                self:_write_session()
+            end,
+            on_wipeout = function()
+                local agent = self._agents[child_id]
+                if agent and agent.transcript == transcript then
+                    agent.transcript = nil
+                end
+            end,
+        })
     return transcript
 end
 
@@ -1144,13 +1149,15 @@ end
 function SessionManager:_end_agent(child_id, state)
     local agent = self._agents[child_id]
     local word = end_word(state)
-    local message = Json.present(vim.tbl_get(state, "error", "message"))
-    local body = message and vim.split(message, "\n", { plain = true }) or nil
-    --- @type agentic.ui.ChatHistory.SubagentEvent
-    local event = { type = "subagent_event", kind = "end", title = word, body = body }
+    --- @type agentic.ui.ChatHistory.SubagentEnd
+    local row = {
+        type = "subagent_end",
+        state = word,
+        error = Json.present(vim.tbl_get(state, "error", "message")),
+    }
     if not agent.open then
-        if body then
-            self:_write_event(child_id, event)
+        if row.error then
+            self:_write_row(child_id, row)
         end
         return
     end
@@ -1161,7 +1168,7 @@ function SessionManager:_end_agent(child_id, state)
     if word ~= "completed" then
         self:_stamp_cancelled(transcript.writer)
     end
-    self:_write_event(child_id, event)
+    self:_write_row(child_id, row)
     transcript:set_context(word)
 end
 
@@ -1175,13 +1182,13 @@ function SessionManager:_close_agents(state)
     end
 end
 
---- Write an event row to a session's buffer and add it to the history: the
---- subagent's transcript for a subagent, else the main chat. A row leaves a
---- running turn open, the main agent's or a working subagent's, and otherwise
---- closes the turn.
+--- Write a session message or subagent end row to a session's buffer and add
+--- it to the history: the subagent's transcript for a subagent, else the main
+--- chat. A row leaves a running turn open, the main agent's or a working
+--- subagent's, and otherwise closes the turn.
 --- @param session_id string
---- @param event agentic.ui.ChatHistory.SubagentEvent Gets `parent_tool_use_id` set on a subagent's row
-function SessionManager:_write_event(session_id, event)
+--- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd Gets `parent_tool_use_id` set on a subagent's row
+function SessionManager:_write_row(session_id, row)
     local writer, indicator, mid_turn
     if self._agents[session_id] then
         -- First: reloading the transcript replays the history, which must not
@@ -1189,17 +1196,17 @@ function SessionManager:_write_event(session_id, event)
         local transcript = self:_transcript_for(session_id)
         writer, indicator = transcript.writer, transcript.status_indicator
         mid_turn = self._agents[session_id].open
-        event.parent_tool_use_id = self:_task_of(session_id)
+        row.parent_tool_use_id = self:_task_of(session_id)
     else
         writer, indicator = self.message_writer, self.status_indicator
         -- A load replays a running conversation.
         mid_turn = self._prompt_pending > 0 or self._loading
     end
-    SessionRestore.write_subagent_event(writer, event, mid_turn, function(id)
+    SessionRestore.write_row(writer, row, mid_turn, function(id)
         return self:_buffer_name(id)
     end)
     indicator:reposition()
-    self.chat_history:add_message(event)
+    self.chat_history:add_message(row)
     self:_history_changed(self.chat_history)
 end
 
@@ -1213,7 +1220,8 @@ function SessionManager:_buffer_name(session_id)
     if not agent then
         return vim.api.nvim_buf_get_name(self.widget.buf_nrs.chat)
     end
-    return agent.transcript and vim.api.nvim_buf_get_name(agent.transcript.bufnr)
+    return agent.transcript
+        and vim.api.nvim_buf_get_name(agent.transcript.bufnr)
 end
 
 --- Apply a `subagent_update`: announce an unknown child, relabel a known one,
@@ -1270,27 +1278,49 @@ function SessionManager:_on_subagent_update(update, source_session_id)
     end
 end
 
---- A session's name in a transcript row: `main agent` for the root, a
---- subagent's label, else the id.
---- @param session_id string
---- @return string
-function SessionManager:_session_name(session_id)
-    if session_id == self.session_id then
-        return "main agent"
-    elseif self._agents[session_id] then
-        return self:_agent_label(session_id)
+--- Decide the kind of a session message at its first view and record the
+--- delegation it makes; later views reuse the kind. Relies on the bridge
+--- announcing an agent before any of its views, which sets the
+--- `parent_session_id` the result rule reads.
+---
+--- `result` when the sender is a child of the recipient. A message to a
+--- subagent delegates to it: `launch` when it is the first delegation to the
+--- agent, `task` when the agent's last row in the history is the end of a
+--- run, else `message`. Anything else is a `message`.
+--- @param message_id string
+--- @param sender string|nil
+--- @param recipient string|nil
+--- @return agentic.SessionMessageKind
+function SessionManager:_classify_message(message_id, sender, recipient)
+    local cached = self._message_kinds[message_id]
+    if cached then
+        return cached
     end
-    return session_id
+    --- @type agentic.SessionMessageKind
+    local kind = "message"
+    local from = sender and self._agents[sender]
+    if from and recipient and from.parent_session_id == recipient then
+        kind = "result"
+    elseif recipient and self._agents[recipient] then
+        if not self._delegated[recipient] then
+            kind = "launch"
+        else
+            local rows =
+                self.chat_history:messages_for_task(self:_task_of(recipient))
+            if vim.tbl_get(rows, #rows, "type") == "subagent_end" then
+                kind = "task"
+            end
+        end
+        self._delegated[recipient] = true
+    end
+    self._message_kinds[message_id] = kind
+    return kind
 end
 
 --- Show one view of a session message as a row in the buffer of the session
---- it arrived on, tagged with the message id. An incoming view holds the body
---- under `From <sender>`. An outgoing one names the recipient's buffer under
---- `To <recipient>`, or holds the body itself when it has no recipient.
---- An incoming view on a subagent that does not come from a child of it (a
---- hand-back, or a nested launch's reply) is a delegation, whose id routes to
---- the subagent. While a session loads, only the main chat gets a row: the
---- session file holds the transcripts'.
+--- it arrived on, tagged with the message id. A received view on a subagent
+--- that is not a result is a delegation, whose id routes to the subagent. While a session loads,
+--- only the main chat gets a row: the session file holds the transcripts'.
 --- @param update agentic.acp.SessionMessage
 --- @param source_session_id string The session it arrived on
 function SessionManager:_on_session_message(update, source_session_id)
@@ -1311,43 +1341,32 @@ function SessionManager:_on_session_message(update, source_session_id)
             table.insert(texts, block.text)
         end
     end
-    local lines = vim.split(table.concat(texts), "\n", { plain = true })
 
     local sender = Json.present(update.senderSessionId)
     local recipient = Json.present(update.recipientSessionId)
     local received = recipient == source_session_id
-    if received and not on_root then
-        local from_child = sender
-            and self._agents[sender]
-            and self._agents[sender].parent_session_id == source_session_id
-        if not from_child then
-            self:_note_agent_task(source_session_id, update.messageId)
-        end
+    local kind = self:_classify_message(update.messageId, sender, recipient)
+    if received and not on_root and kind ~= "result" then
+        self:_note_agent_task(source_session_id, update.messageId)
     end
     if self._loading and not on_root then
         return
     end
 
-    --- @type agentic.ui.ChatHistory.SubagentEvent
-    local event = {
-        type = "subagent_event",
-        kind = received and "received" or "sent",
-        title = "Message",
+    --- @type agentic.ui.ChatHistory.SessionMessage
+    local row = {
+        type = "session_message",
         message_id = update.messageId,
+        kind = kind,
+        view = received and "received" or "sent",
+        sender_session_id = sender,
+        recipient_session_id = recipient,
+        text = table.concat(texts),
     }
-    if not received and recipient then
-        event.title = "To " .. self:_session_name(recipient)
-        event.peer_session_id = recipient
-    else
-        event.body = lines
-        if sender and received then
-            event.title = "From " .. self:_session_name(sender)
-        end
-    end
-    self:_write_event(source_session_id, event)
+    self:_write_row(source_session_id, row)
 end
 
---- Mark every subagent ended and stop its indicator, leaving its block and
+--- Mark every subagent closed and stop its indicator, leaving its block and
 --- transcript as they are.
 function SessionManager:_forget_agents()
     for _, agent in pairs(self._agents) do
@@ -1371,6 +1390,8 @@ function SessionManager:_reset_subagents()
     self._agent_by_task = {}
     self._tool_call_owner = {}
     self._seen_messages = {}
+    self._message_kinds = {}
+    self._delegated = {}
 end
 
 --- Wipe an agent's message input. Unsent text in it is given back in a
@@ -3322,7 +3343,11 @@ function SessionManager:_stop_agent(child_id)
     local held = self:_relay(instruction, { force = false })
     if held then
         Logger.notify(
-            string.format("Subagent %s not stopped — %s.", label, HOLD_CAUSE[held]),
+            string.format(
+                "Subagent %s not stopped — %s.",
+                label,
+                HOLD_CAUSE[held]
+            ),
             vim.log.levels.WARN
         )
     end
@@ -4234,6 +4259,21 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         self.file_activity:load(saved_history.file_activity)
         self.chat_history.subagent_messages = saved_history.subagent_messages
         self.chat_history.subagents = saved_history.subagents
+        -- The replay's views reuse the saved kinds, and a later delegation to
+        -- an agent the file shows delegated to is no launch.
+        for _, list in ipairs({
+            saved_history.messages,
+            saved_history.subagent_messages,
+        }) do
+            for _, msg in ipairs(list) do
+                if msg.type == "session_message" then
+                    self._message_kinds[msg.message_id] = msg.kind
+                    if msg.kind ~= "result" and msg.recipient_session_id then
+                        self._delegated[msg.recipient_session_id] = true
+                    end
+                end
+            end
+        end
         -- The replay carries no deciders; `_on_tool_call` takes these.
         for _, msg in ipairs(saved_history.messages) do
             if msg.type == "tool_call" and msg.decided_by then
@@ -4576,8 +4616,10 @@ function SessionManager:_get_system_info()
             { "git", "rev-parse", "--abbrev-ref", "HEAD" },
             { text = true }
         )
-        local changed_job =
-            vim.system({ "git", "status", "--porcelain" }, { text = true })
+        local changed_job = vim.system(
+            { "git", "status", "--porcelain" },
+            { text = true }
+        )
         local commits_job = vim.system({
             "git",
             "log",
@@ -4596,7 +4638,8 @@ function SessionManager:_get_system_info()
         end
 
         local changed = changed_job:wait()
-        local files = vim.split(changed.stdout or "", "\n", { trimempty = true })
+        local files =
+            vim.split(changed.stdout or "", "\n", { trimempty = true })
         if changed.code == 0 and #files > 0 then
             res = res .. "\n- Changed files:"
             for _, file in ipairs(files) do

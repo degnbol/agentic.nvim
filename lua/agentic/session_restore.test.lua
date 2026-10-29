@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local MiniTest = require("mini.test")
 local Glyphs = require("agentic.glyphs")
 local spy = require("tests.helpers.spy")
 
@@ -237,13 +238,26 @@ describe("SessionRestore", function()
         it("formats a message row as a heading over its text", function()
             local lines = SessionRestore.format_preview({
                 {
-                    type = "subagent_event",
-                    kind = "received",
-                    title = "From map UI",
-                    body = { "Found it." },
+                    type = "session_message",
+                    message_id = "m1",
+                    kind = "result",
+                    view = "received",
+                    text = "Found it.\nIn lib/.",
                 },
+                { type = "subagent_end", state = "completed" },
+                { type = "subagent_end", state = "failed", error = "boom\ntwo" },
             })
-            assert.same({ "## From map UI", "Found it.", "" }, lines)
+            assert.same({
+                "## Found it.",
+                "In lib/.",
+                "",
+                "## completed",
+                "",
+                "## failed",
+                "boom",
+                "two",
+                "",
+            }, lines)
         end)
 
         it("truncates long thought blocks", function()
@@ -853,84 +867,122 @@ describe("SessionRestore", function()
             assert.equal(1, write_message_spy.call_count)
         end)
 
-        it("replays a subagent event as a notice that never finalizes", function()
+        --- Notices `replay_messages` writes for `rows`, as `write_notice` got them.
+        --- @param rows agentic.ui.ChatHistory.Message[]
+        --- @param buffer_name fun(session_id: string): string|nil
+        --- @return agentic.ui.MessageWriter.Notice[]
+        local function replayed_notices(rows, buffer_name)
             local notice_spy = spy.new(function() end)
             local writer = {
                 write_notice = notice_spy,
                 flush_thought_run = spy.new(function() end),
+                _get_wrap_width = function()
+                    return 0
+                end,
             }
-
             SessionRestore.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    {
-                        type = "subagent_event",
-                        kind = "end",
-                        title = "failed",
-                        body = { "boom" },
-                        parent_tool_use_id = "toolu_1",
-                    },
-                    {
-                        type = "subagent_event",
-                        kind = "received",
-                        title = "From main agent",
-                        parent_tool_use_id = "toolu_1",
-                    },
-                    {
-                        type = "subagent_event",
-                        kind = "sent",
-                        title = "To main agent",
-                        parent_tool_use_id = "toolu_1",
-                    },
-                },
-                no_buffer
+                rows,
+                buffer_name
             )
+            return vim.tbl_map(function(call)
+                return call[2]
+            end, notice_spy.calls)
+        end
 
-            assert.equal(3, notice_spy.call_count)
-            local ended = notice_spy.calls[1][2]
-            assert.equal("failed", ended.title)
-            assert.same({ "boom" }, ended.body)
-            assert.is_true(ended.mid_turn)
-            assert.equal(Glyphs.KIND.subagent, ended.glyph)
-            assert.equal(Glyphs.MESSAGE_RECEIVED, notice_spy.calls[2][2].glyph)
-            assert.equal(Glyphs.KIND.sendmessage, notice_spy.calls[3][2].glyph)
+        --- A session message row of `kind` and `view`.
+        local function message_row(kind, view, text)
+            return {
+                type = "session_message",
+                message_id = "m-" .. kind .. "-" .. view,
+                kind = kind,
+                view = view,
+                sender_session_id = "root",
+                recipient_session_id = "c1",
+                text = text or "Title\nbody",
+            }
+        end
+
+        it("signs an end with its status icon, else the flag", function()
+            local original_icons = Config.status_icons
+            MiniTest.finally(function()
+                Config.status_icons = original_icons
+            end)
+            Config.status_icons =
+                { failed = "F", cancelled = "", completed = "❌" }
+
+            local notices = replayed_notices({
+                { type = "subagent_end", state = "failed", error = "boom\ntwo" },
+                { type = "subagent_end", state = "cancelled" },
+                { type = "subagent_end", state = "end_turn_odd" },
+                { type = "subagent_end", state = "completed" },
+            }, no_buffer)
+
+            assert.equal("F", notices[1].glyph)
+            assert.equal("failed", notices[1].title)
+            assert.same({ "boom", "two" }, notices[1].body)
+            assert.is_true(notices[1].mid_turn)
+            assert.equal(Glyphs.RUN_ENDED, notices[2].glyph)
+            assert.equal(Glyphs.RUN_ENDED, notices[3].glyph)
+            -- Too wide for the sign column.
+            assert.equal(Glyphs.RUN_ENDED, notices[4].glyph)
         end)
 
-        it("a link row names the peer's buffer and carries the message id", function()
-            local notice_spy = spy.new(function() end)
-            local writer = {
-                write_notice = notice_spy,
-                flush_thought_run = spy.new(function() end),
-            }
+        it("signs a message by its kind, and a plain one by its view", function()
+            local notices = replayed_notices({
+                message_row("launch", "received"),
+                message_row("task", "sent"),
+                message_row("result", "received"),
+                message_row("message", "sent"),
+                message_row("message", "received"),
+            }, no_buffer)
 
-            SessionRestore.replay_messages(
-                writer --[[@as agentic.ui.MessageWriter]],
-                {
-                    {
-                        type = "subagent_event",
-                        kind = "sent",
-                        title = "To finder",
-                        message_id = "toolu_1",
-                        peer_session_id = "c1",
-                    },
-                    {
-                        type = "subagent_event",
-                        kind = "sent",
-                        title = "To gone",
-                        message_id = "toolu_2",
-                        peer_session_id = "c2",
-                    },
-                },
-                function(session_id)
-                    return session_id == "c1" and "agentic://1/subagent/finder"
-                        or nil
-                end
-            )
+            assert.same({
+                Glyphs.MESSAGE.launch,
+                Glyphs.MESSAGE.task,
+                Glyphs.MESSAGE.result,
+                Glyphs.KIND.sendmessage,
+                Glyphs.MESSAGE_RECEIVED,
+            }, vim.tbl_map(function(n)
+                return n.glyph
+            end, notices))
+        end)
 
-            local linked = notice_spy.calls[1][2]
-            assert.same({ "agentic://1/subagent/finder" }, linked.body)
-            assert.equal("toolu_1", linked.id)
-            assert.is_nil(notice_spy.calls[2][2].body)
+        it("titles a message by its first line and folds the rest", function()
+            local notice = replayed_notices({
+                message_row("launch", "sent", "\nFind it.\n\nIn lib/.\nThen tests/.\n"),
+            }, no_buffer)[1]
+
+            assert.equal("Find it.", notice.title)
+            assert.same({ "In lib/.", "Then tests/." }, notice.fold_body)
+            assert.equal("m-launch-sent", notice.id)
+        end)
+
+        it("gives the other end's buffer as the detail", function()
+            local function buffer_name(session_id)
+                return session_id == "c1" and "agentic://1/subagent/finder"
+                    or nil
+            end
+            local notices = replayed_notices({
+                message_row("launch", "sent"),
+                message_row("launch", "received"),
+            }, buffer_name)
+
+            assert.equal("agentic://1/subagent/finder", notices[1].detail)
+            -- The sender has no buffer here.
+            assert.is_nil(notices[2].detail)
+        end)
+
+        it("titles an empty or fenced message by a placeholder", function()
+            local notices = replayed_notices({
+                message_row("message", "sent", " \n"),
+                message_row("message", "sent", "```lua\nx = 1\n```"),
+            }, no_buffer)
+
+            assert.equal("(empty message)", notices[1].title)
+            assert.same({}, notices[1].fold_body)
+            assert.equal("(message)", notices[2].title)
+            assert.same({ "```lua", "x = 1", "```" }, notices[2].fold_body)
         end)
 
         it("replays thought chunks", function()

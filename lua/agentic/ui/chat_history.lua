@@ -23,23 +23,33 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field type "tool_call"
 --- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's call
 
---- A row for an event outside an agent's own output: a message the agent sent
---- or received, or the end of a subagent's run.
---- @class agentic.ui.ChatHistory.SubagentEvent
---- @field type "subagent_event"
---- @field kind "sent"|"received"|"end"
---- @field title string
---- @field body? string[]
---- @field message_id? string The message's id, shared by its rows in the sender's and the recipient's buffer. Absent on an end, and on rows saved before messages were linked
---- @field peer_session_id? string The session at the message's other end, on a row that names the other row's buffer instead of holding the body
+--- @alias agentic.SessionMessageKind "launch"|"task"|"message"|"result"
+
+--- One view of a message between two sessions of the conversation.
+--- @class agentic.ui.ChatHistory.SessionMessage
+--- @field type "session_message"
+--- @field message_id string Shared by the message's views
+--- @field kind agentic.SessionMessageKind
+--- @field view "sent"|"received" The view on the sender's session, or on the recipient's
+--- @field sender_session_id? string
+--- @field recipient_session_id? string
+--- @field text string
 --- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's row
+
+--- The end of a subagent's run.
+--- @class agentic.ui.ChatHistory.SubagentEnd
+--- @field type "subagent_end"
+--- @field state string How the run ended: `completed`, `cancelled`, `failed`, `ended`, `unknown` or a stop reason
+--- @field error? string The provider's error text
+--- @field parent_tool_use_id? string The spawning Task's tool call id
 
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
 --- | agentic.ui.ChatHistory.AgentMessage
 --- | agentic.ui.ChatHistory.ThoughtMessage
 --- | agentic.ui.ChatHistory.ToolCall
---- | agentic.ui.ChatHistory.SubagentEvent
+--- | agentic.ui.ChatHistory.SessionMessage
+--- | agentic.ui.ChatHistory.SubagentEnd
 
 --- The id, working directory, provider and model of a session.
 --- @class agentic.ui.ChatHistory.SessionRef
@@ -260,6 +270,25 @@ function ChatHistory:update_tool_call(tool_call_id, update)
     end
 end
 
+--- The label of a session among `messages`: its SubAgent block's label, else
+--- `main agent`. The block is the `tool_call` whose `tool_call_id` is the
+--- session id.
+--- @param messages agentic.ui.ChatHistory.Message[]
+--- @param session_id string|nil
+--- @return string
+function ChatHistory.session_label(messages, session_id)
+    for _, msg in ipairs(messages) do
+        if
+            msg.type == "tool_call"
+            and msg.tool_call_id == session_id
+            and msg.subagent
+        then
+            return msg.subagent.label
+        end
+    end
+    return "main agent"
+end
+
 --- Prepend restored messages to prompt in ACP Content format
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @param prompt agentic.acp.Content[] The prompt array to prepend to
@@ -302,10 +331,19 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                     .. table.concat(msg.body, "\n")
             end
             table.insert(prompt, { type = "text", text = tool_text })
-        elseif msg.type == "subagent_event" and msg.body then
+        elseif msg.type == "session_message" then
+            local sent = msg.view == "sent"
+            local peer = sent and msg.recipient_session_id
+                or msg.sender_session_id
             table.insert(prompt, {
                 type = "text",
-                text = msg.title .. ":\n" .. table.concat(msg.body, "\n"),
+                text = string.format(
+                    "%s %s %s:\n%s",
+                    msg.kind:sub(1, 1):upper() .. msg.kind:sub(2),
+                    sent and "sent to" or "received from",
+                    ChatHistory.session_label(messages, peer),
+                    msg.text
+                ),
             })
         end
     end
@@ -369,8 +407,14 @@ function ChatHistory.from_data(data)
     local instance = ChatHistory:new()
     instance.session_id = data.session_id
     instance.timestamp = data.timestamp
-    instance.messages = data.messages
-    instance.subagent_messages = data.subagent_messages or {}
+    -- `subagent_event` rows, from files written before session messages kept
+    -- their text, are dropped.
+    local function current(msg)
+        return msg.type ~= "subagent_event"
+    end
+    instance.messages = vim.tbl_filter(current, data.messages)
+    instance.subagent_messages =
+        vim.tbl_filter(current, data.subagent_messages or {})
     instance.subagents = data.subagents or {}
     instance.title = data.title or ""
     instance.provider = data.provider

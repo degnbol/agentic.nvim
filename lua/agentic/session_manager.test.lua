@@ -4097,6 +4097,101 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_classify_message", function()
+        --- A session with the main agent `root`, its child `c1` and that
+        --- child's child `c2`, and a sibling `c3` of `c1`.
+        local function make_session()
+            return {
+                _agents = {
+                    c1 = { open = false, parent_session_id = "root" },
+                    c2 = { open = false, parent_session_id = "c1" },
+                    c3 = { open = false, parent_session_id = "root" },
+                },
+                _message_kinds = {},
+                _delegated = {},
+                chat_history = require("agentic.ui.chat_history"):new(),
+                _classify_message = SessionManager._classify_message,
+                _task_of = SessionManager._task_of,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        --- Add a row of type `type` to c1's history.
+        local function add_c1_row(session, type)
+            session.chat_history:add_message({
+                type = type,
+                state = "completed",
+                text = "x",
+                provider_name = "p",
+                parent_tool_use_id = "c1",
+            })
+        end
+
+        it("classes the first delegation to an agent a launch", function()
+            local session = make_session()
+
+            assert.equal("launch", session:_classify_message("m1", "root", "c1"))
+        end)
+
+        it("classes a later delegation to a working agent a message", function()
+            local session = make_session()
+            session:_classify_message("m1", "root", "c1")
+            add_c1_row(session, "agent")
+
+            assert.equal("message", session:_classify_message("m2", "root", "c1"))
+        end)
+
+        it("classes a delegation after an end row a task", function()
+            local session = make_session()
+            session:_classify_message("m1", "root", "c1")
+            add_c1_row(session, "subagent_end")
+
+            assert.equal("task", session:_classify_message("m2", "root", "c1"))
+            -- Its received row now follows the end.
+            add_c1_row(session, "session_message")
+            assert.equal("message", session:_classify_message("m3", "root", "c1"))
+        end)
+
+        it("classes a delegation after a saved end row a task", function()
+            -- After a load, the history and the delegations come from the file.
+            local session = make_session()
+            session._delegated.c1 = true
+            add_c1_row(session, "subagent_end")
+
+            assert.equal("task", session:_classify_message("m1", "root", "c1"))
+        end)
+
+        it("classes a child's message to its parent a result", function()
+            local session = make_session()
+
+            assert.equal("result", session:_classify_message("m1", "c1", "root"))
+            assert.equal("result", session:_classify_message("m2", "c2", "c1"))
+            assert.is_nil(session._delegated.root)
+        end)
+
+        it("classes a message to a sibling a delegation to it", function()
+            local session = make_session()
+
+            assert.equal("launch", session:_classify_message("m1", "c1", "c3"))
+            assert.equal("message", session:_classify_message("m2", "c1", "c3"))
+        end)
+
+        it("classes a message to an unknown session a message", function()
+            local session = make_session()
+
+            assert.equal("message", session:_classify_message("m1", "c1", "x"))
+            assert.equal("message", session:_classify_message("m2", nil, nil))
+        end)
+
+        it("reuses the kind decided at the first view", function()
+            local session = make_session()
+            assert.equal("launch", session:_classify_message("m1", "root", "c1"))
+
+            -- The second view keeps its kind, where a new message would not.
+            assert.equal("launch", session:_classify_message("m1", "root", "c1"))
+            assert.equal("message", session:_classify_message("m2", "root", "c1"))
+        end)
+    end)
+
     describe("permission memory", function()
         local Recovery = require("agentic.session_recovery")
         local SlashCommands = require("agentic.acp.slash_commands")

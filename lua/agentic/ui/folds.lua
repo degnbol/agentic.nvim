@@ -1,4 +1,3 @@
-local Glyphs = require("agentic.glyphs")
 local TextWrap = require("agentic.utils.text_wrap")
 
 --- Fold levels and fold text for the chat buffer.
@@ -118,32 +117,23 @@ function M.foldexpr()
     return cached.levels[vim.v.lnum] or "0"
 end
 
---- The sign stamped on `row`, or nil when the row carries none.
----
---- Read across every namespace: a fold's summary is keyed on what the region
---- *is*, which the chat buffer states in the sign column and nowhere else, and
---- the writers that place those signs are not otherwise this module's business.
---- `type = "sign"` is not just the cheaper query (10× over an unfiltered one on
---- a row of ANSI highlights, and this runs per closed fold per redraw) — it is
---- also what makes the row unambiguous, a dim range starting at the same
---- `(row, 0)` being otherwise indistinguishable by anything but creation order.
+--- Namespace in which a writer marks a fold's opening fence row to have the
+--- foldtext count the body's characters.
+M.NS_CHAR_COUNT = vim.api.nvim_create_namespace("agentic_fold_char_count")
+
+--- Whether a 0-indexed row carries a mark in `NS_CHAR_COUNT`.
 --- @param bufnr integer
---- @param row integer 0-indexed buffer row
---- @return string|nil sign_text
-local function sign_at(bufnr, row)
+--- @param row integer
+--- @return boolean
+local function counts_chars(bufnr, row)
     local marks = vim.api.nvim_buf_get_extmarks(
         bufnr,
-        -1,
+        M.NS_CHAR_COUNT,
         { row, 0 },
         { row, -1 },
-        { details = true, type = "sign" }
+        { limit = 1 }
     )
-    for _, mark in ipairs(marks) do
-        if mark[4].sign_text then
-            return mark[4].sign_text
-        end
-    end
-    return nil
+    return #marks > 0
 end
 
 --- The name a fold's opening fence gives its content, or nil when it gives
@@ -169,11 +159,10 @@ end
 --- so foldend - foldstart + 1 is the body's line count.
 ---
 --- A named body leads with its name — one hook block's summary is otherwise
---- indistinguishable from the next. A thought run adds the character count,
---- because lines are a weak proxy for how much thinking happened and no
---- provider reports thinking tokens. Both figures are read back out of
---- the folded rows rather than recorded at write time, so they describe what
---- `zo` will actually show.
+--- indistinguishable from the next. A fold whose opening fence row is marked in
+--- `NS_CHAR_COUNT` adds the body's character count. Both figures are read back
+--- out of the folded rows rather than recorded at write time, so they describe
+--- what `zo` will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
@@ -185,7 +174,8 @@ function M.foldtext()
         summary = source .. " · " .. summary
     end
 
-    if sign_at(bufnr, first - 1) == Glyphs.THINKING_SIGN then
+    -- `first` is 1-indexed, so the 0-indexed fence row above it is first - 2.
+    if counts_chars(bufnr, first - 2) then
         local body = vim.api.nvim_buf_get_lines(bufnr, first - 1, last, false)
         -- strchars, not `#`: thought text is full of dashes, middots and
         -- box-drawing, whose byte counts overstate it by a third.

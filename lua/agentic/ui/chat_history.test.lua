@@ -272,29 +272,89 @@ describe("ChatHistory", function()
             )
         end)
 
-        it("renders a message row with its text, and skips a link row", function()
+        it("renders both views of a message, naming the peer", function()
             local prompt = {}
             ChatHistory.prepend_restored_messages({
                 {
-                    type = "subagent_event",
-                    kind = "sent",
-                    title = "To map UI",
-                    message_id = "toolu_1",
-                    peer_session_id = "child-1",
+                    type = "tool_call",
+                    tool_call_id = "child-1",
+                    kind = "SubAgent",
+                    status = "completed",
+                    subagent = { label = "map UI", mode = "blocking", confirmed = true },
                 },
                 {
-                    type = "subagent_event",
-                    kind = "received",
-                    title = "From map UI",
-                    body = { "Found it.", "In lib/." },
-                    message_id = "toolu_1:reply",
+                    type = "session_message",
+                    message_id = "toolu_1",
+                    kind = "launch",
+                    view = "sent",
+                    sender_session_id = "root",
+                    recipient_session_id = "child-1",
+                    text = "Map the UI.",
                 },
+                {
+                    type = "session_message",
+                    message_id = "toolu_1:reply",
+                    kind = "result",
+                    view = "received",
+                    sender_session_id = "child-1",
+                    recipient_session_id = "root",
+                    text = "Found it.\nIn lib/.",
+                },
+                { type = "subagent_end", state = "completed" },
             }, prompt)
 
-            assert.same(
-                { { type = "text", text = "From map UI:\nFound it.\nIn lib/." } },
-                prompt
-            )
+            assert.same({
+                "Launch sent to map UI:\nMap the UI.",
+                "Result received from map UI:\nFound it.\nIn lib/.",
+            }, vim.list_slice(
+                vim.tbl_map(function(p)
+                    return p.text
+                end, prompt),
+                2
+            ))
+        end)
+    end)
+
+    describe("session_label", function()
+        local messages = {
+            {
+                type = "tool_call",
+                tool_call_id = "child-1",
+                kind = "SubAgent",
+                status = "completed",
+                subagent = { label = "map UI", mode = "blocking", confirmed = true },
+            },
+        }
+
+        it("gives a subagent's block label", function()
+            assert.equal("map UI", ChatHistory.session_label(messages, "child-1"))
+        end)
+
+        it("gives main agent for any other session", function()
+            assert.equal("main agent", ChatHistory.session_label(messages, "root"))
+            assert.equal("main agent", ChatHistory.session_label(messages, nil))
+        end)
+    end)
+
+    describe("from_data", function()
+        it("drops subagent_event rows", function()
+            -- A file from before the row type was replaced.
+            local data = vim.json.decode([[{
+                "session_id": "s", "title": "", "timestamp": 0,
+                "messages": [
+                    { "type": "subagent_event", "kind": "sent", "title": "To x" },
+                    { "type": "user", "text": "hi", "timestamp": 0, "provider_name": "p" }
+                ],
+                "subagent_messages": [
+                    { "type": "subagent_event", "kind": "end", "title": "completed" }
+                ]
+            }]])
+            local history = ChatHistory.from_data(data)
+
+            assert.same({ "user" }, vim.tbl_map(function(m)
+                return m.type
+            end, history.messages))
+            assert.same({}, history.subagent_messages)
         end)
     end)
 
@@ -343,13 +403,12 @@ describe("ChatHistory", function()
             )
         end)
 
-        it("keeps a subagent event with the subagent's messages", function()
+        it("keeps a subagent end with the subagent's messages", function()
             local history = ChatHistory:new()
 
             history:add_message({
-                type = "subagent_event",
-                kind = "end",
-                title = "completed",
+                type = "subagent_end",
+                state = "completed",
                 parent_tool_use_id = "toolu_1",
             })
 
@@ -357,7 +416,7 @@ describe("ChatHistory", function()
             assert.same(
                 { "completed" },
                 vim.tbl_map(function(m)
-                    return m.title
+                    return m.state
                 end, history:messages_for_task("toolu_1"))
             )
         end)

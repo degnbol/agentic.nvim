@@ -25,10 +25,8 @@ local Glyphs = {}
 --- granularity, and the diff already separates them.
 ---
 --- The agent-orchestration family is the other place one glyph covers several
---- tools: `taskcontrol`, `cron` and `sendmessage` (which also carries a
---- subagent's `SubagentHandback` to its caller) are a family each, and their
---- head names the operation. `md-robot_outline` against `subagent`'s filled 󰚩,
---- and `md-alarm` or `md-autorenew` against the round `status_icons` faces, are
+--- tools: `taskcontrol` and `cron` are a family each, and their head names the
+--- operation. `md-robot_outline` against `subagent`'s filled 󰚩, and `md-alarm` or `md-autorenew` against the round `status_icons` faces, are
 --- the outline-vs-filled indistinguishability this module exists to prevent —
 --- hence a tray and a calendar.
 --- @type table<string, string>
@@ -77,10 +75,7 @@ Glyphs.KIND_DEFAULT = "󰒓"
 --- thinking distinguishable from switching which model does it.
 Glyphs.THINKING = "󰧑"
 
---- `THINKING` as a sign. Named because it is written and read at opposite ends
---- of a dispatch — the writer stamps it, `folds.lua` matches on it to decide
---- whether a fold summary carries a character count — and a padding change on
---- one side alone would silently drop the count.
+--- `THINKING` as a `sign_text`.
 Glyphs.THINKING_SIGN = Glyphs.THINKING .. " "
 
 --- A `think` tool call is the same act as a thought run, arriving as a tool
@@ -93,9 +88,30 @@ Glyphs.KIND.think = Glyphs.THINKING
 --- deliver anything, so the reader's question is which script spoke.
 Glyphs.HOOK = "󰛢"
 
---- Identity of a message a subagent received. A letter against
---- `KIND.sendmessage`'s send arrow, which marks a message it sent.
+--- Identity of a received `message` row. A letter against
+--- `KIND.sendmessage`'s send arrow, which marks a sent one.
 Glyphs.MESSAGE_RECEIVED = "󰇮"
+
+--- A subagent handing its result back to its caller: the `SubagentHandback`
+--- tool call and the `result` message row are one identity.
+Glyphs.HANDBACK = "󰌑"
+Glyphs.KIND.subagenthandback = Glyphs.HANDBACK
+
+--- Glyph of a session message row, keyed by the row's kind, or by its view
+--- (`sent`/`received`) for a `message` row.
+--- @type table<"launch"|"task"|"result"|"sent"|"received", string>
+Glyphs.MESSAGE = {
+    launch = Glyphs.KIND.subagent,
+    task = "󰙓",
+    result = Glyphs.HANDBACK,
+    sent = Glyphs.KIND.sendmessage,
+    received = Glyphs.MESSAGE_RECEIVED,
+}
+
+--- A subagent run's end, when its state has no usable `Config.status_icons`
+--- entry. A flag rather than a circle: `status_icons.cancelled` is a round
+--- face.
+Glyphs.RUN_ENDED = "󰈼"
 
 --- Identity of a failure the provider reported for the turn
 --- (`MessageWriter:write_error_message`). A crossed circle rather than the alert
