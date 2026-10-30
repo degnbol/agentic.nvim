@@ -70,10 +70,8 @@ otherwise prompts for paths outside `additionalDirectories` even for reads.
 Each `Bash`/`execute` command is parsed with the **zsh treesitter grammar**
 (commands execute in zsh — see the `claude` skill's `references/execute-tool.md`
 § Shell) and every leaf classified independently, so pipelines, loops,
-conditionals, redirects, and env-prefixes are all checked structurally. This
-fills a provider gap: the SDK matches the entire command string against each
-`Bash(...)` pattern, so `grep foo | head -20` prompts even when both
-`Bash(grep *)` and `Bash(head *)` are allowed. `auto_approve_tier = nil`
+conditionals, redirects, and env-prefixes are all checked structurally.
+`auto_approve_tier = nil`
 approves no shell command; deny/ask still apply.
 
 **Two matcher layers run per leaf.** The **glob matcher** consumes Claude's

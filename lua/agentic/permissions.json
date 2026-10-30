@@ -189,10 +189,8 @@
                         "remove-section", "rename-section", "edit", "e"] },
       { "positionals": ["stash", "drop"] },
       { "positionals": ["stash", "clear"] },
-      { "positionals": ["stash", "pop"] },
       { "positionals": ["checkout"] },
       { "positionals": ["reset"] },
-      { "positionals": ["push"] },
       { "positionals": ["commit"] },
       { "leading_options": ["c", "config-env"] }
     ],
@@ -746,7 +744,23 @@
                           "T", "upload-file",
                           "d", "data", "data-ascii", "data-binary",
                           "data-raw", "data-urlencode",
-                          "F", "form", "X", "request", "json"] }]
+                          "F", "form", "X", "request", "json",
+                          "c", "cookie-jar", "libcurl", "etag-save",
+                          "stderr", "hsts", "alt-svc", "ssl-sessions",
+                          "w", "write-out", "form-string", "Q", "quote",
+                          "expand-output", "expand-output-dir",
+                          "expand-dump-header", "expand-trace",
+                          "expand-trace-ascii", "expand-config",
+                          "expand-upload-file", "expand-data",
+                          "expand-data-ascii", "expand-data-binary",
+                          "expand-data-raw", "expand-data-urlencode",
+                          "expand-form", "expand-form-string",
+                          "expand-request", "expand-json",
+                          "expand-cookie-jar", "expand-libcurl",
+                          "expand-etag-save", "expand-stderr",
+                          "expand-hsts", "expand-alt-svc",
+                          "expand-ssl-sessions", "expand-write-out",
+                          "expand-quote"] }]
   },
 
   "http": {
