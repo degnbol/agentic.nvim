@@ -53,7 +53,7 @@ end
 --- @field reset? boolean Add the time to reset after each gauge, e.g. "1h05m"
 --- @field now? integer Epoch seconds, default `os.time()`
 
---- Text in 'statusline' format: `<label> <gauge>` per window, joined by a
+--- Text in 'statusline' format: `<label> <gauge> ` per window, joined by a
 --- space, each wrapped in `%#AgenticBudgetWarning#`/`%#AgenticBudgetExhausted#`
 --- when not ok. A window whose `resets_at` has passed shows as empty. "" without
 --- a budget.
@@ -68,9 +68,12 @@ function Budget.statusline(opts)
     for _, window in ipairs(windows) do
         local resets_in = Budget.resets_in(window, now)
         local refilled = resets_in == 0
+        -- The space after the gauge is the cell a wide-aspect glyph expands
+        -- into (see `agentic.Glyphs`).
         local item = window.label
             .. " "
             .. Budget.gauge(refilled and 0 or window.utilization)
+            .. " "
         if opts.reset then
             item = item .. " " .. Duration.format(resets_in)
         end

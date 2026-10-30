@@ -535,7 +535,7 @@ Each window is a table:
 
                                                 *agentic.budget.statusline()*
 budget.statusline({opts})
-    Text in 'statusline' format: `<label> <gauge>` per window. A
+    Text in 'statusline' format: `<label> <gauge> ` per window. A
     window that warns or is exhausted is coloured `AgenticBudgetWarning` or
     `AgenticBudgetExhausted` (|agentic-highlights|). A window past
     `resets_at` shows as empty.

@@ -92,7 +92,7 @@ describe("agentic.Budget", function()
                 },
             }
             assert.equal(
-                "5h " .. Glyphs.GAUGE[5] .. " wk " .. Glyphs.GAUGE[9],
+                "5h " .. Glyphs.GAUGE[5] .. "  wk " .. Glyphs.GAUGE[9] .. " ",
                 Budget.statusline({ now = NOW })
             )
         end)
@@ -100,7 +100,7 @@ describe("agentic.Budget", function()
         it("colours a window that is not ok", function()
             vim.g.agentic_budget = { five_hour(0.5, 2.5 * HOUR, "warning") }
             assert.equal(
-                "%#AgenticBudgetWarning#5h " .. Glyphs.GAUGE[5] .. "%*",
+                "%#AgenticBudgetWarning#5h " .. Glyphs.GAUGE[5] .. " %*",
                 Budget.statusline({ now = NOW })
             )
         end)
@@ -108,7 +108,7 @@ describe("agentic.Budget", function()
         it("shows a window past its reset as empty and ok", function()
             vim.g.agentic_budget = { five_hour(1, -HOUR, "exhausted") }
             assert.equal(
-                "5h " .. Glyphs.GAUGE[1],
+                "5h " .. Glyphs.GAUGE[1] .. " ",
                 Budget.statusline({ now = NOW })
             )
         end)
@@ -116,11 +116,11 @@ describe("agentic.Budget", function()
         it("colours a window over pace with pace = true", function()
             vim.g.agentic_budget = { five_hour(0.9, 4 * HOUR) }
             assert.equal(
-                "5h " .. Glyphs.GAUGE[9],
+                "5h " .. Glyphs.GAUGE[9] .. " ",
                 Budget.statusline({ now = NOW })
             )
             assert.equal(
-                "%#AgenticBudgetWarning#5h " .. Glyphs.GAUGE[9] .. "%*",
+                "%#AgenticBudgetWarning#5h " .. Glyphs.GAUGE[9] .. " %*",
                 Budget.statusline({ now = NOW, pace = true })
             )
         end)
@@ -133,9 +133,9 @@ describe("agentic.Budget", function()
             assert.equal(
                 "5h "
                     .. Glyphs.GAUGE[5]
-                    .. " 1h05m 5h "
+                    .. "  1h05m 5h "
                     .. Glyphs.GAUGE[5]
-                    .. " 42m",
+                    .. "  42m",
                 Budget.statusline({ now = NOW, reset = true })
             )
         end)
