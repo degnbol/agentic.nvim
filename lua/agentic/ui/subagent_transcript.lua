@@ -131,19 +131,46 @@ function SubagentTranscript:restart(subagent)
     )
 end
 
---- Show the subagent's heading in the header.
+--- Whether the buffer is loaded. An unloaded one has no b-vars, so no
+--- header: its next load writes it whole.
+--- @return boolean
+function SubagentTranscript:_is_loaded()
+    return vim.api.nvim_buf_is_valid(self.bufnr)
+        and vim.api.nvim_buf_is_loaded(self.bufnr)
+end
+
+--- Show the subagent's heading in the header, after its session's id. A
+--- no-op while the buffer is unloaded.
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
 function SubagentTranscript:set_header(subagent)
+    if not self:_is_loaded() then
+        return
+    end
     local header = WindowDecoration.get_header(self.bufnr)
-    header.title = Glyphs.KIND.subagent
-        .. " "
+    header.icon = Glyphs.AGENT
+    header.title = "#"
+        .. vim.b[self.bufnr].agentic_session_id
+        .. " › "
         .. ToolCallLayout.subagent_heading(subagent)
     WindowDecoration.set_header(self.bufnr, header)
 end
 
---- Set the header's context text, or clear it with nil.
+--- Show in the header whether the subagent works. A no-op while the buffer
+--- is unloaded.
+--- @param running boolean
+function SubagentTranscript:set_running(running)
+    if self:_is_loaded() then
+        WindowDecoration.set_header_fact(self.bufnr, "running", running)
+    end
+end
+
+--- Set the header's context text, or clear it with nil. A no-op while the
+--- buffer is unloaded.
 --- @param context string|nil
 function SubagentTranscript:set_context(context)
+    if not self:_is_loaded() then
+        return
+    end
     local header = WindowDecoration.get_header(self.bufnr)
     header.context = context
     WindowDecoration.set_header(self.bufnr, header)
@@ -152,10 +179,7 @@ end
 --- Set 'modified', unless the buffer is unloaded or gone.
 --- @param modified boolean
 function SubagentTranscript:set_modified(modified)
-    if
-        vim.api.nvim_buf_is_valid(self.bufnr)
-        and vim.api.nvim_buf_is_loaded(self.bufnr)
-    then
+    if self:_is_loaded() then
         vim.bo[self.bufnr].modified = modified
     end
 end

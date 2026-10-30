@@ -42,11 +42,11 @@ require("agentic.session_registry").current().widget:set_chat_title("fix a/b")
         assert.equal("fix a-b", get_panel_basename("agent"))
     end)
 
-    it("the attention badge stays out of the name", function()
+    it("the header's id and state stay out of the name", function()
         child.cmd("Agentic")
         child.flush()
         child.lua([[
-require("agentic.session_registry").current().widget:set_badge("[idle]")
+require("agentic.session_registry").current().widget:set_idle(true)
 ]])
 
         assert.equal("agent", get_panel_basename("agent"))

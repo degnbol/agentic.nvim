@@ -1,5 +1,6 @@
 local assert = require("tests.helpers.assert")
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 
 describe("agentic.ui.SubagentTranscript", function()
     local ChatWidget = require("agentic.ui.chat_widget")
@@ -223,5 +224,37 @@ describe("agentic.ui.SubagentTranscript", function()
         header = vim.b[transcript.bufnr].agentic_header
         assert.is_nil(header.context)
         assert.is_true(header.title:find("Background? map the UI", 1, true) ~= nil)
+    end)
+
+    it("heads its header with the robot and the session id breadcrumb", function()
+        local ToolCallLayout = require("agentic.ui.tool_call_layout")
+        local transcript = new_transcript("aa11bb22cc33dd44")
+        transcript:set_header(info)
+
+        local header = vim.b[transcript.bufnr].agentic_header
+        assert.equal(Glyphs.AGENT, header.icon)
+        assert.equal(
+            "#" .. owner_id .. " › " .. ToolCallLayout.subagent_heading(info),
+            header.title
+        )
+    end)
+
+    it("writes no header after :bd", function()
+        local transcript = new_transcript("aa11bb22cc33dd44")
+        vim.cmd.bdelete({ args = { transcript.bufnr }, bang = true })
+
+        transcript:set_header(info)
+        transcript:set_running(true)
+        transcript:set_context("completed")
+
+        assert.is_nil(vim.b[transcript.bufnr].agentic_header)
+    end)
+
+    it("shows running in its header until set otherwise", function()
+        local transcript = new_transcript("aa11bb22cc33dd44")
+        transcript:set_running(true)
+        assert.is_true(vim.b[transcript.bufnr].agentic_header.running)
+        transcript:set_running(false)
+        assert.is_nil(vim.b[transcript.bufnr].agentic_header.running)
     end)
 end)

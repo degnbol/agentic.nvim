@@ -10,8 +10,10 @@
 
 --- @alias agentic.UserConfig.HeaderRenderFn fun(parts: agentic.ui.ChatWidget.HeaderParts): string|nil
 
+--- @alias agentic.UserConfig.HeaderTable { icon?: string, title?: string }
+
 --- User config headers - each panel can have either config parts or a custom render function
---- @alias agentic.UserConfig.Headers table<agentic.ui.ChatWidget.PanelNames, agentic.ui.ChatWidget.HeaderParts|agentic.UserConfig.HeaderRenderFn|nil>
+--- @alias agentic.UserConfig.Headers table<agentic.ui.ChatWidget.PanelNames, agentic.UserConfig.HeaderTable|agentic.UserConfig.HeaderRenderFn|nil>
 
 --- Data passed to the on_prompt_submit hook
 --- @class agentic.UserConfig.PromptSubmitData
@@ -440,7 +442,7 @@ local ConfigDefault = {
 
     --- Customize window headers for each panel in the chat widget.
     --- Each header can be either:
-    --- 1. A table with title field
+    --- 1. A table with icon and/or title fields
     --- 2. A function that receives header parts and returns a custom header string
     ---
     --- The context field is managed internally and shows dynamic info like counts.

@@ -75,7 +75,7 @@ Three race conditions can overwrite `self.session_id` during ACP
   replaced while the RPC was in flight.
 - `_do_load_acp_session` must feed `result.configOptions` through
   `_handle_new_config_options` on success (mirrors the `new_session` path) —
-  otherwise the header stays on the previous provider's model after a
+  otherwise the config options stay on the previous provider's after a
   cross-provider restore.
 
 ## The in-flight counter
@@ -85,7 +85,7 @@ provider runs a mid-turn prompt as the next turn — only the automatic drains
 (`_drain_queue`, `_dispatch_deferred_prompts`), which is what advances the queue
 one block per turn. The prompt callback reads it as "a turn is still
 streaming": it runs the turn boundary below but not the idle signals
-(`is_generating`, indicator, `[idle]`). An epoch mismatch runs neither.
+(`_set_generating(false)`, indicator, `_notify_attention`). An epoch mismatch runs neither.
 
 ## Cross-turn state hazards in MessageWriter
 
@@ -107,19 +107,21 @@ add another `vim.schedule` wrapper or the cleanup races with the next turn.
 
 ## Header state and external UI plugins
 
-Runtime session data (mode, context %, session name) flows to external UI
-plugins (incline.nvim, tabline plugins) through the **headers state pipeline**,
-not through buffer names.
+Runtime session data (title, context, state) flows to external UI plugins
+(incline.nvim, tabline plugins) through the **headers state pipeline**, not
+through buffer names.
 
-**Pipeline:** `SessionManager` → `ChatWidget:render_header()` /
-`set_chat_title()` / `set_badge()` → `WindowDecoration.set_header()` →
-`vim.b[buf].agentic_header` → `AgenticHeadersChanged` User autocmd (`data.buf`)
-→ external plugin refresh. `set_header` also renders the winbar, local-scope,
-in every window showing the buffer.
+**Pipeline:** every header writer (`ChatWidget`, `SubagentTranscript`) →
+`WindowDecoration.set_header()` → `vim.b[buf].agentic_header` →
+`AgenticHeadersChanged` User autocmd (`data.buf`) → external plugin refresh.
+State facts go through `set_header_fact()`, a no-op when the fact holds.
+`set_header` also renders the winbar, local-scope, in every window showing
+the buffer.
 
-`vim.b[buf].agentic_header` (a `HeaderParts`: `title`, `context`, `badge`,
-`session_name`) is the single source of truth for header display
-data; `vim.b[buf].agentic_window` names the buffer's panel.
+`vim.b[buf].agentic_header` (`ChatWidget.HeaderParts`) is the single source
+of truth. Its `running`/`waiting`/`idle` facts are independent;
+`WindowDecoration.header_state` picks the one shown. `vim.b[buf].agentic_window` names
+the buffer's panel.
 
 **Do not rely on buffer names for UI display.** `nvim_buf_set_name` fires no
 event floating-window plugins respond to. Names are `agentic://<id>/<panel>`;

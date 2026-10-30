@@ -615,6 +615,12 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
                 child.lua_get("_G.s.id"),
                 child.lua_get("vim.b[_G.sub].agentic_session_id")
             )
+            local header = child.lua_get("vim.b[_G.sub].agentic_header")
+            assert.equal(
+                1,
+                header.title:find("#" .. child.lua_get("_G.s.id") .. " › ", 1, true)
+            )
+            assert.is_true(header.running)
             assert.is_true(child.lua_get([[(function()
     for _, map in ipairs(vim.api.nvim_buf_get_keymap(_G.sub, "n")) do
         if map.desc == "Agentic: Stop subagent or generation" then

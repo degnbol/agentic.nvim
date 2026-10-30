@@ -138,32 +138,30 @@ function SessionManager._ring_bell()
     end
 end
 
---- Notify the user that the agent needs attention.
---- Bell when the chat window is unfocused, header badge when no chat window
---- follows. When `skip_badge` is true (a shown permission float), only bell when
---- unfocused — the float is in view, so the badge is irrelevant.
---- @param badge string Badge text (e.g. "[idle]", "[?]")
---- @param skip_badge boolean|nil True to skip badge logic (bell-only when unfocused)
-function SessionManager:_notify_attention(badge, skip_badge)
+--- Notify the user that the agent needs attention: bell when the chat window
+--- is unfocused, and with `mark_idle`, the idle state in the chat header when
+--- no chat window follows.
+--- @param mark_idle boolean
+function SessionManager:_notify_attention(mark_idle)
     local is_chat_focused = vim.api.nvim_get_current_buf()
         == self.widget.buf_nrs.agent
     if not is_chat_focused then
         SessionManager._ring_bell()
     end
-    if not skip_badge and not self.message_writer:any_following() then
-        self.widget:set_badge(badge)
+    if mark_idle and not self.message_writer:any_following() then
+        self.widget:set_idle(true)
     end
 end
 
 --- Signal a permission request waiting with its float hidden, not visible in
---- the current tabpage: bell, a `[?]` badge in the header of `badge_bufnr`,
---- and a notification naming the session and `anchor_bufnr`, the buffer the
---- request belongs to. The badge stays until the request ends.
+--- the current tabpage: bell, the waiting state in the header of
+--- `badge_bufnr`, and a notification naming the session and `anchor_bufnr`,
+--- the buffer the request belongs to. The state stays until the request ends.
 --- @param badge_bufnr integer
 --- @param anchor_bufnr integer
 function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     SessionManager._ring_bell()
-    self.widget:set_badge("[?]", badge_bufnr)
+    self.widget:set_waiting(true, badge_bufnr)
     local title = self.chat_history.title
     local where = anchor_bufnr == self.widget.buf_nrs.agent
             and string.format(
@@ -285,12 +283,24 @@ function SessionManager:_set_prompt_pending(count)
     self:_sync_modified(self.chat_history)
 end
 
---- Mark a subagent working or not, and with it the chat's `modified` flag.
+--- Mark a subagent working or not, and with it the chat's `modified` flag and
+--- its transcript's header.
 --- @param agent agentic.SessionManager.Agent
 --- @param open boolean
 function SessionManager:_set_agent_open(agent, open)
     agent.open = open
     self:_sync_modified(self.chat_history)
+    -- Nil once the user wiped it.
+    if agent.transcript then
+        agent.transcript:set_running(open)
+    end
+end
+
+--- Set `is_generating` and show it in the chat header.
+--- @param generating boolean
+function SessionManager:_set_generating(generating)
+    self.is_generating = generating
+    self.widget:set_running(generating)
 end
 
 --- Handle a mutation of `history`. With no turn in flight the change is
@@ -436,12 +446,12 @@ function SessionManager:new()
         self:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     end
     self.permission_manager.on_hidden_resolved = function(bufnr)
-        -- A badged transcript the user wiped took its badge with it.
+        -- A marked transcript the user wiped took its header with it.
         if
             vim.api.nvim_buf_is_valid(bufnr)
-            and WindowDecoration.get_header(bufnr).badge == "[?]"
+            and WindowDecoration.get_header(bufnr).waiting
         then
-            self.widget:set_badge(nil, bufnr)
+            self.widget:set_waiting(false, bufnr)
         end
     end
     self.permission_manager.open_anchor = function(bufnr, how)
@@ -491,11 +501,10 @@ function SessionManager:new()
 
     -- Unlike the sibling list panels, an empty tally must not close the window
     -- and a new row must not open it: the panel is a toggle. The callback only
-    -- refreshes the ambient count and re-fits an already-open window.
+    -- re-fits an already-open window.
     self.file_activity = FileActivity:new(
         self.widget.buf_nrs.activity,
         function()
-            self:_update_chat_header()
             self.widget:resize_activity_window()
         end
     )
@@ -850,20 +859,32 @@ function SessionManager:_new_transcript(child_id, subagent)
 end
 
 --- Render a subagent's transcript again from the history: its heading, then
---- its messages.
+--- its messages, and its header, which an unload by `:bd` clears.
 --- @param child_id string
 function SessionManager:_replay_transcript(child_id)
-    local transcript = self._agents[child_id].transcript --[[@as agentic.ui.SubagentTranscript]]
+    local agent = self._agents[child_id]
+    local transcript = agent.transcript --[[@as agentic.ui.SubagentTranscript]]
     local block = self:_agent_block(child_id)
+    local rows = self.chat_history:messages_for_task(self:_task_of(child_id))
     transcript:restart(block and block.subagent)
-    SessionRestore.replay_messages(
-        transcript.writer,
-        self.chat_history:messages_for_task(self:_task_of(child_id)),
-        function(id)
-            return self:_buffer_name(id)
-        end
-    )
+    SessionRestore.replay_messages(transcript.writer, rows, function(id)
+        return self:_buffer_name(id)
+    end)
     transcript.status_indicator:reposition()
+
+    transcript:set_header(block and block.subagent)
+    transcript:set_running(agent.open)
+    --- @type string|nil
+    local end_state = nil
+    if not agent.open then
+        for i = #rows, 1, -1 do
+            if rows[i].type == "subagent_end" then
+                end_state = rows[i].state
+                break
+            end
+        end
+    end
+    transcript:set_context(end_state)
     self:_sync_modified(self.chat_history)
 end
 
@@ -1739,13 +1760,9 @@ function SessionManager:_on_session_update(update, source_session_id)
         )
     elseif update.sessionUpdate == "current_mode_update" then
         -- only for legacy modes, not for config_options
-        if
-            self.config_options.legacy_agent_modes:handle_agent_update_mode(
-                update.currentModeId
-            )
-        then
-            self:_update_chat_header()
-        end
+        self.config_options.legacy_agent_modes:handle_agent_update_mode(
+            update.currentModeId
+        )
     elseif update.sessionUpdate == "config_option_update" then
         if source_session_id and source_session_id ~= self.session_id then
             local agent = self._agents[source_session_id]
@@ -1813,7 +1830,7 @@ function SessionManager:_refresh()
         -- If nothing is actually streaming, the state is stale — reset it.
         -- If a turn IS active, this is harmless: the next response callback
         -- will set is_generating = false anyway.
-        self.is_generating = false
+        self:_set_generating(false)
         self.status_indicator:stop()
     end
 
@@ -2523,7 +2540,7 @@ function SessionManager:_on_request_permission(request, callback)
             if
                 self.permission_manager.permission_float:is_visible_in_current_tab()
             then
-                self:_notify_attention("[?]", true)
+                self:_notify_attention(false)
             end
 
             P.invoke_hook("on_permission_request", {
@@ -2755,15 +2772,14 @@ end
 --- @param mode_id string
 --- @param is_legacy boolean|nil
 --- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil `as_notice` is
----   set by the mode picker. Without it the change is silent apart from the
----   header, since the configured `default_mode` at session start arrives
----   through this same callback and is not a user switch.
+---   set by the mode picker. Without it the change is silent, since the
+---   configured `default_mode` at session start arrives through this same
+---   callback and is not a user switch.
 function SessionManager:_handle_mode_change(mode_id, is_legacy, opts)
     self:_set_session_option("mode", mode_id, is_legacy, function()
         if is_legacy then
             self.config_options.legacy_agent_modes.current_mode_id = mode_id
         end
-        self:_update_chat_header()
         if opts and opts.as_notice then
             self:_notice_mode_switched(mode_id)
         end
@@ -2843,42 +2859,14 @@ function SessionManager:_set_session_option(
 end
 
 function SessionManager:_update_chat_header()
-    local parts = {}
-
-    -- Model is announced as a chat marker (see announce_model_loaded), not in
-    -- the header — switching is rare, so the header carries only mode · %.
-
-    -- Mode — only show non-default modes (e.g. "Plan").
-    -- Hidden IDs: "default" (claude-agent-acp), "build" (opencode-acp).
-    local mode_id = self.config_options:current_mode_id()
-    if mode_id and mode_id ~= "default" and mode_id ~= "build" then
-        local mode_name = self.config_options:get_mode_name(mode_id) or mode_id
-        mode_name = mode_name:gsub(" Mode$", "")
-        table.insert(parts, mode_name)
-    end
-
-    -- Changed-file count. It rides the chat header because the activity
-    -- panel's own header only exists while that panel has a window, and the
-    -- panel is closed most of the time — a count rendered there would be
-    -- invisible exactly when it is wanted. Guarded: the tally's first render
-    -- happens while its constructor is still running.
-    local file_activity = self.file_activity
-    if file_activity and Config.windows.activity.display then
-        local changed = file_activity:count()
-        if changed > 0 then
-            table.insert(parts, string.format(" %d", changed))
-        end
-    end
-
     -- Used-token count, not %: performance degrades near a fixed ~200k
     -- threshold regardless of the model's advertised window, so the absolute
     -- number is what matters. Full ratio + % stays in the /context panel.
+    local context = nil
     if self._usage and self._usage.size > 0 then
         local used_k = math.floor(self._usage.used / 1000 + 0.5)
-        table.insert(parts, string.format("%dk", used_k))
+        context = string.format("%dk", used_k)
     end
-
-    local context = #parts > 0 and table.concat(parts, " · ") or nil
     self.widget:render_header("agent", context)
 end
 
@@ -3153,13 +3141,13 @@ function SessionManager:_submit_defer_reason(prompt)
 end
 
 --- Answer a prompt the user submitted: their attention is back on the chat, so
---- the `[idle]` badge clears, last turn's finished todo panel closes, and every
---- chat window in user control follows again. Call it from the user's submit,
---- never from the dispatch path: the automatic queue drains reach that too, and
---- one of them would clear the badge in the tick it was set, or jump a reader to
---- the bottom.
+--- the header's idle state clears, last turn's finished todo panel closes, and
+--- every chat window in user control follows again. Call it from the user's
+--- submit, never from the dispatch path: the automatic queue drains reach that
+--- too, and one of them would clear the idle state in the tick it was set, or
+--- jump a reader to the bottom.
 function SessionManager:on_user_submit()
-    self.widget:clear_idle_badge()
+    self.widget:set_idle(false)
     self.todo_list:close_if_all_completed()
     self.message_writer:resume_follow()
 end
@@ -3227,7 +3215,7 @@ end
 --- Send a prompt to the main agent on the user's behalf, apart from their
 --- own turns. It passes the submit gate, but carries none of the pending
 --- context, title, restored history or system info of a user submit, and
---- clears no badge, todo panel or user control. A held relay is not kept.
+--- clears no idle state, todo panel or user control. A held relay is not kept.
 --- @param instruction string
 --- @param opts agentic.ui.PromptInput.SubmitOpts
 --- @param on_refusal fun()|nil Called when the turn ends refused
@@ -3350,7 +3338,7 @@ function SessionManager:stop_generation()
     end
     self.agent:stop_generation(self.session_id)
     self.permission_manager:cancel_requests()
-    self.is_generating = false
+    self:_set_generating(false)
     self.status_indicator:stop()
 end
 
@@ -3772,7 +3760,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
     -- has already cancelled by the time its own turn reaches here.
     Recovery.cancel_retry_timer(self, false)
 
-    self.is_generating = true
+    self:_set_generating(true)
 
     self:_set_prompt_pending(self._prompt_pending + 1)
 
@@ -3798,7 +3786,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
         end
 
         -- Everything below ends *a* turn: the indicator, the footer and
-        -- separator, the per-turn writer flags, the attention badge and the
+        -- separator, the per-turn writer flags, the idle state and the
         -- completion hook. A superseded turn must run none of it, or it ends
         -- the turn that replaced it. Reachable from a restore mid-turn.
         if epoch ~= self._session_epoch then
@@ -3813,14 +3801,14 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
         -- idle, since the next turn is already running.
         local session_busy = self._prompt_pending > 0
 
-        self.is_generating = session_busy
+        self:_set_generating(session_busy)
 
         --- @type table|nil
         local turn_usage
         --- Set when this failure is being resent as a fresh turn. Everything
         --- that would tell the user the turn ended is suppressed, so a
-        --- recovered failure leaves no trace: no error block, no bell or `[idle]`
-        --- badge, no on_response_complete, and no queue drain.
+        --- recovered failure leaves no trace: no error block, no bell or idle
+        --- state, no on_response_complete, and no queue drain.
         local retrying = err ~= nil
             and Recovery.should_retry_transient(self, err, session_id)
 
@@ -3892,7 +3880,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
 
         if not retrying then
             if not session_busy then
-                self:_notify_attention("[idle]")
+                self:_notify_attention(true)
             end
 
             -- Fires once per user turn, not once per provider turn: the
@@ -4020,7 +4008,6 @@ function SessionManager:new_session(opts)
             if response.modes then
                 Logger.debug("Provider announce legacy mode")
                 self.config_options:set_legacy_modes(response.modes)
-                self:_update_chat_header()
             end
 
             if response.models then
@@ -4249,7 +4236,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
             self:_restore_transcripts()
 
             -- Apply configOptions the provider returned with session/load,
-            -- so the header reflects the restored session's mode/model
+            -- so the config options hold the restored session's mode/model
             -- rather than stale state from a pre-switch session.
             if result and result.configOptions then
                 self:_handle_new_config_options(result.configOptions)
@@ -4341,7 +4328,7 @@ function SessionManager:_reset_conversation()
         -- leave is_generating stale-true or a spinner
         -- running. Only reachable with a session — is_generating is set true
         -- only after the session is ready.
-        self.is_generating = false
+        self:_set_generating(false)
         self.status_indicator:stop()
     end
 
@@ -4360,6 +4347,7 @@ function SessionManager:_reset_conversation()
     self._hook_records = HookRecordReader:new()
     self._title_user_set = false -- Fresh session: allow provider auto-summary again
     self.widget:set_chat_title(nil) -- Reset buffer name to default
+    self.widget:set_idle(false)
     self._history_to_send = nil
     self._usage = nil
     self:_update_chat_header()
@@ -4500,8 +4488,6 @@ end
 --- @param new_config_options agentic.acp.ConfigOption[]
 function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
-
-    self:_update_chat_header()
 end
 
 function SessionManager:_get_system_info()

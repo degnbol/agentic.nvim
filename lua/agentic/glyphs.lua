@@ -1,4 +1,5 @@
---- Nerd Font glyph vocabulary for the chat gutter and the statusline.
+--- Nerd Font glyph vocabulary for the chat gutter, the headers and the
+--- statusline.
 --- Collected in one module so a new glyph can be checked against every
 --- existing one at a glance: the chat window is `signcolumn=yes:1`, so a
 --- glyph is the whole gutter identity a row gets. Two acts sharing one are
@@ -12,6 +13,18 @@
 ---
 --- @class agentic.Glyphs
 local Glyphs = {}
+
+--- Identity of an agent, the main one or a subagent: the lead glyph of their
+--- headers and a subagent's tool call.
+Glyphs.AGENT = "󰚩"
+
+--- Header state glyphs, shown after the title while the state holds.
+--- @type table<agentic.ui.HeaderState, string>
+Glyphs.HEADER_STATE = {
+    permission = "?", -- plain text: the circled nf-md-help_circle is hard to read at text size
+    running = "󰔟", -- nf-md-timer_sand
+    idle = "󰂞", -- nf-md-bell_ring
+}
 
 --- Per-kind tool-call glyph, keyed on the lowercased ACP kind; unlisted kinds
 --- fall back to `KIND_DEFAULT`.
@@ -42,7 +55,7 @@ Glyphs.KIND = {
     search = "󰍉",
     fetch = "󰖟",
     websearch = "󰖟",
-    subagent = "󰚩",
+    subagent = Glyphs.AGENT,
     skill = "󰗚",
     todowrite = "󰝖",
     -- Both plan-mode tools arrive as this one kind; the head text ("Plan" /

@@ -76,7 +76,7 @@ state pipeline (`WindowDecoration.set_header()` → `vim.b[buf].agentic_header`
 ## Follow and attention notifications
 
 See the `follow` project skill for the two modes (user control vs
-following), the write path, and how attention badges depend on follow.
+following), the write path, and how attention glyphs depend on follow.
 The discipline rule worth holding in your head: any new method that writes
 to the chat buffer must call `_schedule_follow(bufnr)` and write through
 `_own_edit`. User-facing: `:h agentic-follow`.

@@ -388,21 +388,15 @@ _G.s.widget:submit()
         assert.is_true(shows_held_block())
     end)
 
-    it("a submit clears [idle] and leaves [?]", function()
-        --- @param badge string
-        --- @return string|nil
-        local function after_clear(badge)
-            return child.lua_get(
-                [[(function(badge)
-_G.s.widget:set_badge(badge)
-_G.s.widget:clear_idle_badge()
-return require("agentic.ui.window_decoration").get_header(_G.chat).badge
-end)(...)]],
-                { badge }
-            )
-        end
+    it("a submit clears idle and leaves waiting", function()
+        local header = child.lua_get([[(function()
+_G.s.widget:set_idle(true)
+_G.s.widget:set_waiting(true)
+_G.s:on_user_submit()
+local header = require("agentic.ui.window_decoration").get_header(_G.chat)
+return { idle = header.idle, waiting = header.waiting }
+end)()]])
 
-        assert.equal(vim.NIL, after_clear("[idle]"))
-        assert.equal("[?]", after_clear("[?]"))
+        assert.same({ waiting = true }, header)
     end)
 end)

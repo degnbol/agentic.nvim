@@ -2,6 +2,7 @@
 --- buffer naming.
 
 local Config = require("agentic.config")
+local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.ui.WindowDecoration
@@ -9,40 +10,54 @@ local WindowDecoration = {}
 
 --- @type agentic.ui.ChatWidget.Headers
 local WINDOW_HEADERS = {
-    agent = {
-        title = "󰻞 Agentic Chat",
-    },
-    input = { title = "󰦨 Prompt" },
-    code = {
-        title = "󰪸 Selected Code Snippets",
-    },
-    files = {
-        title = " File Injections",
-    },
-    diagnostics = {
-        title = " Diagnostics",
-    },
-    activity = {
-        title = " Files",
-    },
-    todos = {
-        title = " Tasks list",
-    },
+    agent = { icon = Glyphs.AGENT, title = "Agentic Chat" },
+    subagent = { icon = Glyphs.AGENT, title = "Agent" },
+    input = { icon = "󰦨", title = "Prompt" },
+    code = { icon = "󰪸", title = "Selected Code Snippets" },
+    files = { icon = "", title = "File Injections" },
+    diagnostics = { icon = "", title = "Diagnostics" },
+    activity = { icon = "", title = "Files" },
+    todos = { icon = "", title = "Tasks list" },
 }
 
---- Concatenates header parts (title, badge, context) into a single string
+--- @alias agentic.ui.HeaderState "permission"|"running"|"idle"
+
+--- The state a header shows after its title: a waiting permission prompt,
+--- else a running turn, else an unseen turn end. Nil without one.
+--- @param parts agentic.ui.ChatWidget.HeaderParts
+--- @return agentic.ui.HeaderState|nil state
+function WindowDecoration.header_state(parts)
+    if parts.waiting then
+        return "permission"
+    elseif parts.running then
+        return "running"
+    elseif parts.idle then
+        return "idle"
+    end
+    return nil
+end
+
+--- Header text: `<icon> <title> <state glyph> · <context>`, each part only
+--- when set.
 --- @param parts agentic.ui.ChatWidget.HeaderParts
 --- @return string header_text
 local function concat_header_parts(parts)
-    local title = parts.title
-    if parts.badge then
-        title = title .. " " .. parts.badge
+    local state = WindowDecoration.header_state(parts)
+    local pieces = {}
+    for _, piece in ipairs({
+        parts.icon or "",
+        parts.title,
+        state and Glyphs.HEADER_STATE[state] or "",
+    }) do
+        if piece ~= "" then
+            table.insert(pieces, piece)
+        end
     end
-    local pieces = { title }
-    if parts.context ~= nil then
-        table.insert(pieces, parts.context)
+    local text = table.concat(pieces, " ")
+    if parts.context then
+        text = text .. " · " .. parts.context
     end
-    return table.concat(pieces, " | ")
+    return text
 end
 
 --- The header state of an Agentic buffer, `vim.b[bufnr].agentic_header`, or
@@ -67,6 +82,20 @@ function WindowDecoration.set_header(bufnr, header)
         data = { buf = bufnr },
     })
     WindowDecoration.render_header(bufnr)
+end
+
+--- Set one state fact of an Agentic buffer's header, as `set_header` does.
+--- A no-op when the fact already holds.
+--- @param bufnr integer
+--- @param fact "running"|"waiting"|"idle"
+--- @param value boolean
+function WindowDecoration.set_header_fact(bufnr, fact, value)
+    local header = WindowDecoration.get_header(bufnr)
+    if (header[fact] or false) == value then
+        return
+    end
+    header[fact] = value or nil
+    WindowDecoration.set_header(bufnr, header)
 end
 
 --- Resolves the final header text applying user customization

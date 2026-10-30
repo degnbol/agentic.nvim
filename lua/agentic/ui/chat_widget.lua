@@ -19,10 +19,13 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
+--- @field icon? string The panel's identity glyph
 --- @field title string Main header text
 --- @field context? string Dynamic info (managed internally)
 --- @field session_name? string Custom session name (set by /rename or first message)
---- @field badge? string Attention badge (e.g. "[idle]", "[?]")
+--- @field running? boolean The agent works
+--- @field waiting? boolean A permission prompt waits unseen
+--- @field idle? boolean A turn ended unseen
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
 --- @alias agentic.ui.ChatWidget.WinNrs table<agentic.ui.ChatWidget.PanelNames, integer|nil>
@@ -1022,6 +1025,7 @@ end
 
 function ChatWidget:_initialize()
     self.buf_nrs = self:_create_buf_nrs()
+    self:set_chat_title(nil)
 
     self:_bind_keymaps()
     self:_setup_queue()
@@ -1498,33 +1502,37 @@ function ChatWidget:render_header(window_name, context)
     WindowDecoration.set_header(bufnr, header)
 end
 
---- Set a buffer's attention badge (e.g. "[idle]", "[?]"), shown in its header.
---- @param badge string|nil Nil clears it
---- @param bufnr integer|nil The buffer to badge; nil = the chat
-function ChatWidget:set_badge(badge, bufnr)
-    bufnr = bufnr or self.buf_nrs.agent
-    -- Nil once the widget is destroyed.
-    if not bufnr then
-        return
-    end
-    local header = WindowDecoration.get_header(bufnr)
-    if header.badge == badge then
-        return
-    end
-    header.badge = badge
-    WindowDecoration.set_header(bufnr, header)
-end
-
---- Clear the chat's `[idle]` badge. A `[?]` stays until its prompt is answered.
-function ChatWidget:clear_idle_badge()
-    local chat = self.buf_nrs.agent
-    if chat and WindowDecoration.get_header(chat).badge == "[idle]" then
-        self:set_badge(nil)
+--- Set a state fact of a buffer's header.
+--- @param bufnr integer|nil Nil is a no-op
+--- @param fact "running"|"waiting"|"idle"
+--- @param value boolean
+local function set_header_fact(bufnr, fact, value)
+    if bufnr then
+        WindowDecoration.set_header_fact(bufnr, fact, value)
     end
 end
 
---- Set the chat's title, shown in its header and as the tail of its buffer
---- name.
+--- Mark a buffer's header as waiting on a hidden permission prompt, or clear it.
+--- @param waiting boolean
+--- @param bufnr integer|nil The buffer to mark; nil = the chat
+function ChatWidget:set_waiting(waiting, bufnr)
+    set_header_fact(bufnr or self.buf_nrs.agent, "waiting", waiting)
+end
+
+--- Mark the chat's header as having ended a turn unseen, or clear it.
+--- @param idle boolean
+function ChatWidget:set_idle(idle)
+    set_header_fact(self.buf_nrs.agent, "idle", idle)
+end
+
+--- Mark the chat's header as running a turn, or clear it.
+--- @param running boolean
+function ChatWidget:set_running(running)
+    set_header_fact(self.buf_nrs.agent, "running", running)
+end
+
+--- Set the chat's title, shown in its header after the session id and as the
+--- tail of its buffer name.
 --- @param title string|nil New title, or nil to reset to default
 function ChatWidget:set_chat_title(title)
     local chat = self.buf_nrs.agent
@@ -1534,17 +1542,15 @@ function ChatWidget:set_chat_title(title)
     end
     local header = WindowDecoration.get_header(chat)
 
+    local display = nil
     if title and title ~= "" then
         -- Keep the buffer name short. Cut by display width, not bytes: a
         -- byte-slice can halve a codepoint and put invalid UTF-8 into the
         -- buffer name and winbar.
-        local display = TextWrap.truncate_to_width(title, 31)
-        header.title = "󰻞 " .. display
-        header.session_name = display
-    else
-        header.title = "󰻞 Agentic Chat"
-        header.session_name = nil
+        display = TextWrap.truncate_to_width(title, 31)
     end
+    header.title = "#" .. self._owner_id .. " " .. (display or "Agentic Chat")
+    header.session_name = display
 
     WindowDecoration.set_header(chat, header)
     BufHelpers.rename(

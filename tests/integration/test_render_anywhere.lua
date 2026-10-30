@@ -198,16 +198,16 @@ _G.s:_on_request_permission({
 ]])
         child.flush()
 
-        local function badge()
+        local function waiting()
             return child.lua_get(
-                [[require("agentic.ui.window_decoration").get_header(_G.chat).badge]]
+                [[require("agentic.ui.window_decoration").get_header(_G.chat).waiting]]
             )
         end
         assert.is_false(
             child.lua_get("_G.s.permission_manager.permission_float:is_shown()")
         )
         assert.equal(1, child.lua_get("_G.bells"))
-        assert.equal("[?]", badge())
+        assert.is_true(waiting())
         assert.same(
             {},
             child.lua_get([[vim.fn.maparg("\\y", "n", false, true)]])
@@ -221,11 +221,11 @@ _G.s:_on_request_permission({
         assert.is_true(
             child.lua_get("_G.s.permission_manager.permission_float:is_shown()")
         )
-        assert.equal("[?]", badge())
+        assert.is_true(waiting())
         child.type_keys("\\y")
         child.flush()
         assert.equal("allow-once", child.lua_get("_G.answer"))
-        assert.equal(vim.NIL, badge())
+        assert.equal(vim.NIL, waiting())
     end)
 
     it("a detached permission moves to the home window when show_in shows the chat", function()

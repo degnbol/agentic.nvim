@@ -3,8 +3,8 @@ name: follow
 description:
   Maintenance map for follow (the chat view tracking streamed output, also
   called auto-scroll — per-window user control vs following, the prose pin,
-  scroll-to-bottom) and attention signals (terminal bell, `[idle]`/`[?]` header
-  badges). Use when editing `_schedule_follow`, `on_view_change`,
+  scroll-to-bottom) and attention signals (terminal bell, header idle and
+  waiting states). Use when editing `_schedule_follow`, `on_view_change`,
   `_own_change`, `BufHelpers.scroll_down`, `BufHelpers.show_rows`, the tool
   call hold, `_notify_attention`, or adding any
   method that writes to the chat buffer (it must call `_schedule_follow`).
@@ -59,7 +59,7 @@ handed it over (`hand_next_window_to_user`).
 
 ## Attention
 
-`SessionManager:_notify_attention` badges `[idle]` only when no chat window
+`SessionManager:_notify_attention` marks the chat idle only when no chat window
 follows (`any_following`). Following again does not clear it; a submit does.
-A hidden permission prompt's `[?]` goes on its request's `badge_bufnr`: the
-chat while the float shows there in place of a transcript.
+A hidden permission prompt's waiting state goes on its request's
+`badge_bufnr`: the chat while the float shows there in place of a transcript.

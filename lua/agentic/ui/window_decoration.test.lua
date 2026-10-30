@@ -56,27 +56,44 @@ describe("agentic.ui.WindowDecoration", function()
     end)
 
     describe("headers", function()
-        it("default to the panel's title", function()
-            assert.equal(
-                "󰻞 Agentic Chat",
-                WindowDecoration.get_header(bufnr).title
-            )
+        it("default to the panel's icon and title", function()
+            local header = WindowDecoration.get_header(bufnr)
+            assert.equal("󰚩", header.icon)
+            assert.equal("Agentic Chat", header.title)
         end)
 
-        it("render title, badge and context in every showing window", function()
+        it("render a header never set as its default", function()
+            WindowDecoration.render_header(bufnr)
+            assert.equal("󰚩 Agentic Chat", vim.wo[winid].winbar)
+        end)
+
+        it("render icon, title, state and context in every showing window", function()
             local second = vim.api.nvim_open_win(bufnr, false, {
                 split = "below",
                 win = winid,
             })
 
-            WindowDecoration.set_header(
-                bufnr,
-                { title = "Chat", badge = "[idle]", context = "Mode: plan" }
-            )
+            WindowDecoration.set_header(bufnr, {
+                icon = "I",
+                title = "Chat",
+                idle = true,
+                context = "12k",
+            })
 
-            assert.equal("Chat [idle] | Mode: plan", vim.wo[winid].winbar)
-            assert.equal("Chat [idle] | Mode: plan", vim.wo[second].winbar)
+            assert.equal("I Chat 󰂞 · 12k", vim.wo[winid].winbar)
+            assert.equal("I Chat 󰂞 · 12k", vim.wo[second].winbar)
             vim.api.nvim_win_close(second, true)
+        end)
+
+        it("render without a state or context", function()
+            WindowDecoration.set_header(bufnr, { icon = "I", title = "Chat" })
+            assert.equal("I Chat", vim.wo[winid].winbar)
+        end)
+
+        it("take a Config.headers table icon", function()
+            Config.headers = { agent = { icon = "X" } } --- @diagnostic disable-line: inject-field
+            WindowDecoration.set_header(bufnr, { icon = "I", title = "Chat" })
+            assert.equal("X Chat", vim.wo[winid].winbar)
         end)
 
         it("set the winbar with local scope", function()
@@ -113,6 +130,47 @@ describe("agentic.ui.WindowDecoration", function()
 
             assert.equal("", vim.wo[winid].winbar)
             Config.winbar = original_winbar
+        end)
+    end)
+
+    describe("header_state", function()
+        it("is nil without a state", function()
+            assert.is_nil(WindowDecoration.header_state({ title = "" }))
+        end)
+
+        it("is each fact alone", function()
+            assert.equal(
+                "permission",
+                WindowDecoration.header_state({ title = "", waiting = true })
+            )
+            assert.equal(
+                "running",
+                WindowDecoration.header_state({ title = "", running = true })
+            )
+            assert.equal(
+                "idle",
+                WindowDecoration.header_state({ title = "", idle = true })
+            )
+        end)
+
+        it("prefers permission, then running, then idle", function()
+            assert.equal(
+                "permission",
+                WindowDecoration.header_state({
+                    title = "",
+                    waiting = true,
+                    running = true,
+                    idle = true,
+                })
+            )
+            assert.equal(
+                "running",
+                WindowDecoration.header_state({
+                    title = "",
+                    running = true,
+                    idle = true,
+                })
+            )
         end)
     end)
 end)

@@ -198,8 +198,8 @@ All options with defaults are in `lua/agentic/config_default.lua`.
       `todos`         `{ display = true, max_height = 10, win_opts = {} }`
       `subagent`      `{ win_opts = {} }`
 
-    `activity.display` turns off both the panel and its count in the chat
-    header. `activity.hide_reverted`: see |agentic-file-activity|.
+    `activity.display` turns off the panel. `activity.hide_reverted`: see
+    |agentic-file-activity|.
 
     `win_opts` is passed to |nvim_set_option_value()| for each window.
 
@@ -377,7 +377,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     mid-response, API unreachable, overloaded), send "continue"
     immediately as a new turn, up to 3 times. The retried turns write
     nothing to the chat: no prompt heading, no error block, no bell or
-    `[idle]` badge. Once the budget runs out the error is written as
+    idle glyph 󰂞 in the header. Once the budget runs out the error is written as
     usual, followed by the number of attempts made. Tools already run in a
     retried turn may run again.
 
@@ -387,8 +387,8 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                                      *agentic-config-headers*
 `headers` table
-    Customise window headers per panel. Each entry can be a table with a
-    `title` field or a function receiving header parts.
+    Customise window headers per panel. Each entry can be a table with
+    `icon` and `title` fields or a function receiving header parts.
 
                                                *agentic-config-notifications*
 `notifications` table
@@ -993,18 +993,18 @@ edge.
 9.3 ATTENTION                                              *agentic-attention*
 
 When a turn ends, the terminal bell rings if the chat window is not the
-current window (`notifications.bell`), and the chat header shows `[idle]`
-if no chat window follows (|agentic-follow|). `[idle]` stays until the next
-submit.
+current window (`notifications.bell`), and the chat header shows 󰂞 after
+its title if no chat window follows (|agentic-follow|). 󰂞 stays until the
+next submit. While a later turn runs, the header shows 󰔟 in its place.
 
 When a permission float is shown, the bell rings if the chat window is not
 the current window.
 
 When the float is not in the current tabpage, once per prompt, the bell
 rings, the header of the tool call's buffer (the chat, or a transcript; the
-chat while no window shows the transcript) shows `[?]`, and a notification
-names the session and the tool call's buffer. `[?]` stays until the prompt is
-answered.
+chat while no window shows the transcript) shows `?` after its title, and a
+notification names the session and the tool call's buffer. `?` stays until
+the prompt is answered.
 
 Auto-approved requests do none of this.
 
@@ -1048,8 +1048,7 @@ A toggled panel listing the files the agent has changed over the session,
 one row per file however many times it was touched. Subagent (Task) edits
 appear alongside the main agent's, unmarked.
 
-Toggle with `<localLeader>f`. The chat header carries the number of changed
-files.
+Toggle with `<localLeader>f`.
 
     Row      Meaning ~
     `+ path`   File created
@@ -1088,10 +1087,12 @@ thinking and tool calls under a `##` heading like its block's. A transcript
 shows its subagent as working while it works. It also has a row for each end
 of a run, titled `completed`, `cancelled`, `failed`, `ended`, `unknown` or
 the provider's stop reason, and signed with that status's icon
-(|agentic-config-status_icons|), else 󰈼. The header shows how the last run
+(|agentic-config-status_icons|), else 󰈼. The header reads
+`#<id> › <heading>`, shows 󰔟 while the subagent works, and how the last run
 ended. A resumed subagent continues in the same transcript. The main agent's
 buffer is `agentic://<id>/agent`, or `agentic://<id>/agent/<title>` once the
-session has a title.
+session has a title; its header reads `#<id> <title>`, with 󰔟 while a turn
+runs.
 
 A message between agents, the launch prompt included, has a row in the chat
 or transcript of each agent it joins. Each row holds the message: a heading,
@@ -1233,9 +1234,14 @@ User AgenticSessionChanged
                                                       *AgenticHeadersChanged*
 User AgenticHeadersChanged
     Fired when an Agentic buffer's header state changes. The `data` table
-    contains `buf`. The state itself is `vim.b[buf].agentic_header`, a table
-    with a `title` and optional `context` and `badge` strings. The buffer's
-    panel name is `vim.b[buf].agentic_window`.
+    contains `buf`. Read the state with
+    `require("agentic.ui.window_decoration").get_header(buf)`, which falls
+    back to the panel's default: a table with a `title` string, optional
+    `icon` and `context` strings, and optional `running`, `waiting` and
+    `idle` booleans. `require("agentic.ui.window_decoration").header_state(parts)`
+    gives the state to show (`"permission"`, `"running"`, `"idle"` or nil),
+    and `require("agentic.glyphs").HEADER_STATE[state]` its glyph. The
+    buffer's panel name is `vim.b[buf].agentic_window`.
 
                                                        *AgenticBudgetChanged*
 User AgenticBudgetChanged

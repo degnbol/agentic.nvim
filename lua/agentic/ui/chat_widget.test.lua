@@ -1107,6 +1107,57 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
+    describe("header", function()
+        local WindowDecoration = require("agentic.ui.window_decoration")
+        local widget
+
+        before_each(function()
+            widget = new_widget(function()
+                return true
+            end)
+        end)
+
+        after_each(function()
+            pcall(function()
+                widget:destroy()
+            end)
+        end)
+
+        it("titles a new chat with its session id", function()
+            local header = WindowDecoration.get_header(widget.buf_nrs.agent)
+            assert.equal("#" .. last_owner_id .. " Agentic Chat", header.title)
+        end)
+
+        it("keeps the plain title in the buffer name", function()
+            widget:set_chat_title("Fix parser")
+            local chat = widget.buf_nrs.agent
+            assert.equal(
+                "#" .. last_owner_id .. " Fix parser",
+                WindowDecoration.get_header(chat).title
+            )
+            assert.equal(
+                "Fix parser",
+                vim.fn.fnamemodify(vim.api.nvim_buf_get_name(chat), ":t")
+            )
+        end)
+
+        it("keeps idle when a prompt on the chat resolves", function()
+            widget:set_idle(true)
+            widget:set_waiting(true)
+            widget:set_waiting(false)
+            local header = WindowDecoration.get_header(widget.buf_nrs.agent)
+            assert.is_true(header.idle)
+            assert.is_nil(header.waiting)
+        end)
+
+        it("sets no state on a destroyed widget", function()
+            widget:destroy()
+            widget:set_idle(true)
+            widget:set_running(true)
+            widget:set_waiting(true)
+        end)
+    end)
+
     describe("prompt navigation", function()
         local MessageWriter = require("agentic.ui.message_writer")
         local widget

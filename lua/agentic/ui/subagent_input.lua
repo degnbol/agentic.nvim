@@ -31,7 +31,7 @@ function SubagentInput:new(name, label, widget, handlers)
         widget:setup_panel_buf(bufnr, "message")
         WindowDecoration.set_header(
             bufnr,
-            { title = "󰦨 Message to " .. label }
+            { icon = "󰦨", title = "Message to " .. label }
         )
         PromptInput.bind_submit(bufnr, function(opts)
             vim.cmd("stopinsert")

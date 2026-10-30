@@ -86,7 +86,7 @@ describe("agentic.SessionManager", function()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
         end)
 
-        it("updates state and re-renders header without notifying", function()
+        it("updates state without notifying or touching the header", function()
             session:_on_session_update(mode_update("code"))
 
             assert.equal(
@@ -94,10 +94,7 @@ describe("agentic.SessionManager", function()
                 session.config_options.legacy_agent_modes.current_mode_id
             )
 
-            assert.spy(render_header_spy).was.called(1)
-            assert.equal("agent", render_header_spy.calls[1][2])
-            assert.equal("Code", render_header_spy.calls[1][3])
-
+            assert.spy(render_header_spy).was.called(0)
             assert.spy(notify_stub).was.called(0)
         end)
 
@@ -155,7 +152,7 @@ describe("agentic.SessionManager", function()
             vim.api.nvim_buf_delete(test_bufnr, { force = true })
         end)
 
-        it("sets config options and updates header on mode", function()
+        it("sets config options without touching the header", function()
             --- @type agentic.acp.ConfigOptionsUpdate
             local update = {
                 sessionUpdate = "config_option_update",
@@ -181,8 +178,78 @@ describe("agentic.SessionManager", function()
 
             assert.is_not_nil(session.config_options.mode)
             assert.equal("plan", session.config_options.mode.currentValue)
-            assert.spy(render_header_spy).was.called(1)
-            assert.equal("Plan", render_header_spy.calls[1][3])
+            assert.spy(render_header_spy).was.called(0)
+        end)
+    end)
+
+    describe("header state", function()
+        it("_set_generating sets the field and the chat's running", function()
+            local set_running = spy.new(function() end)
+            local session = {
+                widget = { set_running = set_running },
+                _set_generating = SessionManager._set_generating,
+            } --[[@as agentic.SessionManager]]
+
+            session:_set_generating(true)
+
+            assert.is_true(session.is_generating)
+            assert.spy(set_running).was.called_with(session.widget, true)
+        end)
+
+        it("_set_agent_open sets the transcript's running", function()
+            local set_running = spy.new(function() end)
+            local session = {
+                widget = { buf_nrs = {} },
+                chat_history = {},
+                _agents = {},
+                _set_agent_open = SessionManager._set_agent_open,
+                _sync_modified = SessionManager._sync_modified,
+            } --[[@as agentic.SessionManager]]
+            local transcript = { set_running = set_running }
+            local agent = { transcript = transcript, open = false } --[[@as agentic.SessionManager.Agent]]
+
+            session:_set_agent_open(agent, true)
+
+            assert.is_true(agent.open)
+            assert.spy(set_running).was.called_with(transcript, true)
+        end)
+
+        it("_set_agent_open accepts a wiped transcript", function()
+            local session = {
+                widget = { buf_nrs = {} },
+                chat_history = {},
+                _agents = {},
+                _set_agent_open = SessionManager._set_agent_open,
+                _sync_modified = SessionManager._sync_modified,
+            } --[[@as agentic.SessionManager]]
+            local agent = { open = true } --[[@as agentic.SessionManager.Agent]]
+
+            session:_set_agent_open(agent, false)
+
+            assert.is_false(agent.open)
+        end)
+
+        it("_update_chat_header shows only tokens", function()
+            local render_header = spy.new(function() end)
+            local session = {
+                config_options = {
+                    current_mode_id = function()
+                        return "plan"
+                    end,
+                },
+                file_activity = {
+                    count = function()
+                        return 3
+                    end,
+                },
+                _usage = { used = 123400, size = 200000 },
+                widget = { render_header = render_header },
+                _update_chat_header = SessionManager._update_chat_header,
+            } --[[@as agentic.SessionManager]]
+
+            session:_update_chat_header()
+
+            assert.spy(render_header).was.called_with(session.widget, "agent", "123k")
         end)
     end)
 
@@ -273,9 +340,12 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
+                    set_running = function() end,
+                    set_idle = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
@@ -321,11 +391,14 @@ describe("agentic.SessionManager", function()
                         buf_nrs = { input = 0 },
                         clear = noop,
                         set_chat_title = noop,
+                        set_running = noop,
+                        set_idle = noop,
                     },
                     message_writer = { reset = noop },
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
                     _reset_conversation = SessionManager._reset_conversation,
+                    _set_generating = SessionManager._set_generating,
                     _update_chat_header = function() end,
                     _reset_subagents = function() end,
                     _sync_modified = SessionManager._sync_modified,
@@ -383,10 +456,13 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { input = 0 },
                     clear = noop,
                     set_chat_title = noop,
+                    set_running = noop,
+                    set_idle = noop,
                 },
                 message_writer = { reset = noop },
                 clear_chat = SessionManager.clear_chat,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_generating = SessionManager._set_generating,
                 _update_chat_header = update_chat_header or noop,
                 _reset_subagents = noop,
                 _sync_modified = SessionManager._sync_modified,
@@ -538,9 +614,12 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
+                    set_running = function() end,
+                    set_idle = function() end,
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
@@ -616,6 +695,8 @@ describe("agentic.SessionManager", function()
                 widget = {
                     clear = noop,
                     set_chat_title = noop,
+                    set_running = noop,
+                    set_idle = noop,
                     buf_nrs = { agent = 0, input = 0 },
                 },
                 permission_manager = { clear = noop, drop_deciders = noop },
@@ -637,6 +718,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _restore_transcripts = noop,
@@ -2475,8 +2557,9 @@ describe("agentic.SessionManager", function()
                     get_chat_width = function()
                         return 80
                     end,
-                    clear_idle_badge = noop,
-                    set_badge = noop,
+                    set_idle = noop,
+                    set_waiting = noop,
+                    set_running = noop,
                     set_chat_title = noop,
                     next_queued_block = function()
                         return nil
@@ -2496,6 +2579,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
+                _set_generating = SessionManager._set_generating,
                 _notify_attention = SessionManager._notify_attention,
                 file_activity = { serialize = noop },
                 config_options = { current_model_id = noop },
@@ -2684,8 +2768,9 @@ describe("agentic.SessionManager", function()
                     get_chat_width = function()
                         return 80
                     end,
-                    clear_idle_badge = noop,
-                    set_badge = noop,
+                    set_idle = noop,
+                    set_waiting = noop,
+                    set_running = noop,
                     set_chat_title = noop,
                     next_queued_block = function()
                         sink.drains = (sink.drains or 0) + 1
@@ -2704,6 +2789,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
+                _set_generating = SessionManager._set_generating,
                 _send_synthetic_prompt = function(this, text)
                     table.insert(sink.synthetic, text)
                     SessionManager._send_synthetic_prompt(this, text)
@@ -3645,7 +3731,7 @@ describe("agentic.SessionManager", function()
                 _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
-                    clear_idle_badge = noop,
+                    set_idle = noop,
                     set_chat_title = noop,
                     cancel_queue = noop,
                     next_queued_block = function()
@@ -4032,10 +4118,13 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
+                    set_running = function() end,
+                    set_idle = function() end,
                 },
                 stop_generation = SessionManager.stop_generation,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _sync_modified = SessionManager._sync_modified,
@@ -4719,7 +4808,7 @@ describe("agentic.SessionManager", function()
                 _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
-                    clear_idle_badge = noop,
+                    set_idle = noop,
                     set_chat_title = noop,
                     next_queued_block = function()
                         local text = queued[1]
