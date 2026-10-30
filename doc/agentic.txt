@@ -162,13 +162,6 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     Agent or LSP tool. An `Agent` PreToolUse hook of your own that rewrites
     the tool input can undo this.
 
-                                              *agentic-config-budget_display*
-`budget_display` boolean (default: true)
-    Show the claude.ai subscription rate-limit budget in the chat header:
-    the binding window ("5h" five-hour or "wk" weekly), the time until it
-    resets, and the utilisation percentage when available. Only shown
-    under claude.ai subscription auth.
-
                                 *agentic-config-auto_continue_on_usage_limit*
 `auto_continue_on_usage_limit` boolean (default: true)
     When the provider reports a usage limit with a reset time, schedule
@@ -521,6 +514,51 @@ agentic.resolve_session({query}, {callback})
                                                  *agentic.send_operatorfunc()*
 agentic.send_operatorfunc({type})
     'operatorfunc' callback for sending a motion/selection as a prompt.
+
+                                                              *agentic-budget*
+Budget ~
+
+`require("agentic.budget")` formats the account's usage budget. Only claude.ai
+subscription auth reports one. All chats share one budget per Neovim.
+
+`vim.g.agentic_budget` holds the windows of the last report, shortest first.
+Each window is a table:
+    `label`        Short name: "5h" or "wk"
+    `utilization`  Fraction 0-1 of the window used
+    `resets_at`    Epoch seconds when the window refills
+    `window_s`     Length of the window in seconds
+    `state`        "ok" | "warning" | "exhausted"
+|AgenticBudgetChanged| fires on each report.
+
+                                                *agentic.budget.statusline()*
+budget.statusline({opts})
+    Statusline text for a `%{%...%}` item: `<label> <gauge>` per window. A
+    window that warns or is exhausted is coloured `AgenticBudgetWarning` or
+    `AgenticBudgetExhausted` (|agentic-highlights|). A window past
+    `resets_at` shows as empty.
+    Returns "" without a budget. Optional `opts` table:
+      `pace`   Colour a window as warning when its |agentic.budget.pace()|
+               is above 1.
+      `reset`  Add the time to reset after each gauge, e.g. "1h05m".
+      `now`    Epoch seconds (default: `os.time()`).
+
+                                                      *agentic.budget.pace()*
+budget.pace({window}, {now})
+    Projected use of {window} at its reset at the average rate so far:
+    `utilization` divided by the fraction of `window_s` passed at {now}.
+    Above 1 the limit is hit before the reset. nil below 5% passed.
+
+                                                 *agentic.budget.resets_in()*
+budget.resets_in({window}, {now})
+    Seconds from {now} until {window} refills, 0 once `resets_at` has passed.
+
+Example: >lua
+    vim.o.statusline = "%=%{%v:lua.require'agentic.budget'.statusline()%}"
+    vim.api.nvim_create_autocmd("User", {
+        pattern = "AgenticBudgetChanged",
+        command = "redrawstatus",
+    })
+<
 
 ==============================================================================
 6. KEYMAPS                                                   *agentic-keymaps*
@@ -1155,6 +1193,10 @@ File activity ~
     AgenticActivityRead       `Comment`             Read marker
     AgenticActivityUnseen     |hl-DiagnosticHint|   Changed-since-viewed dot
 
+Budget statusline ~
+    AgenticBudgetWarning      |hl-DiagnosticWarn|    Warning window
+    AgenticBudgetExhausted    |hl-DiagnosticError|   Exhausted window
+
 Session picker ~
     AgenticPickerDate         `Comment`     Session timestamp
     AgenticPickerDelim        `Delimiter`   Field separator
@@ -1194,6 +1236,11 @@ User AgenticHeadersChanged
     contains `buf`. The state itself is `vim.b[buf].agentic_header`, a table
     with a `title` and optional `context` and `badge` strings. The buffer's
     panel name is `vim.b[buf].agentic_window`.
+
+                                                       *AgenticBudgetChanged*
+User AgenticBudgetChanged
+    Fired when a provider reports the account's usage budget. The budget
+    is `vim.g.agentic_budget`, see |agentic-budget|.
 
 ==============================================================================
 12. HEALTH CHECK                                              *agentic-health*

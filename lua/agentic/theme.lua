@@ -44,6 +44,8 @@ Theme.HL_GROUPS = {
     ACTIVITY_READ = "AgenticActivityRead",
     ACTIVITY_UNSEEN = "AgenticActivityUnseen",
     TABLE_ROW_END = "AgenticTableRowEnd",
+    BUDGET_WARNING = "AgenticBudgetWarning",
+    BUDGET_EXHAUSTED = "AgenticBudgetExhausted",
 }
 
 local status_hl = {
@@ -225,6 +227,10 @@ function Theme.setup()
         -- continuation lines, in the colour the markdown highlights
         -- query gives the table's pipes and delimiter row
         { Theme.HL_GROUPS.TABLE_ROW_END, underdashed_hl("@punctuation.special") },
+
+        -- Statusline budget windows that warn or are exhausted
+        { Theme.HL_GROUPS.BUDGET_WARNING, { link = "DiagnosticWarn" } },
+        { Theme.HL_GROUPS.BUDGET_EXHAUSTED, { link = "DiagnosticError" } },
     }
     -- stylua: ignore end
 

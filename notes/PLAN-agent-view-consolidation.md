@@ -48,7 +48,7 @@ The header (`vim.b.agentic_header`, rendered by incline) is short on room. This 
 | 9 | Thought level | Stored (`agent_config_options.lua:99-100`), not shown | Missing | n/a (separate ticket) |
 | 10 | Model/mode picker keys | `config_options:bind_keymaps` on every session buffer (SM:546) | Bound on transcripts (SM:740) and message inputs (SM:1213) through the same `_bind_session_keymaps`. They act on the **main** agent's options (`agent_config_options.lua:53-71`). | Same keys, main target |
 | 11 | Header title | Session title or `Agentic Chat`, with glyph U+F0EDE (`chat_widget.lua:1545-1563`) | `Glyphs.KIND.subagent` (U+F06A9) and the heading (`subagent_transcript.lua:137-144`) | No |
-| 12 | Header context | Mode, changed-file count (glyph at SM:2673), `<n>k` tokens, budget (SM:2647-2720) | Nil while running (`subagent_transcript.lua:81`). The raw `SubagentState` string after close (SM:1088). | No |
+| 12 | Header context | Mode, changed-file count (glyph at SM:2673), `<n>k` tokens (SM:2647-2720). The budget is in the statusline (`agentic.budget`). | Nil while running (`subagent_transcript.lua:81`). The raw `SubagentState` string after close (SM:1088). | No |
 | 13 | Header badge | `[idle]` at turn end (SM:3744 → SM:136-161). Bell-only `[?]` for a visible float (SM:2281). `[?]` on `badge_bufnr` for a hidden float (SM:169-171). | `[?]` when its request is hidden (`permission_manager.lua:41`, :912-916). Cleared SM:426-433. No `[idle]`/bell when it ends (`_end_agent`). | `[?]` shared, `[idle]` main only |
 | 14 | Header user customisation | `Config.headers.agent` (`window_decoration.lua:78-83`, `config_default.lua:437-444`) | Keyed `subagent` / `message` (`agentic_window`, `chat_widget.lua:1488`). Absent from defaults. | Same mechanism, separate keys |
 | 15 | Buffer name | `agentic://<id>/agent/<title>` (`chat_widget.lua:1566-1569`) | `agentic://<id>/subagent/<id8>[-gN]-<label>` (`subagent_transcript.lua:36-42`, :56-66) | `WindowDecoration.buffer_name` shared |
@@ -89,7 +89,7 @@ Methods. These are moves of existing code plus one extraction, with no change in
 
 What each owner keeps:
 - **SessionManager (main):**
-  - Session-wide header parts: file count, tokens, budget (SM:2664-2716). `_update_chat_header` becomes `{ main_view:mode_label(), <session parts> }`.
+  - Session-wide header parts: file count, tokens (SM:2664-2716). `_update_chat_header` becomes `{ main_view:mode_label(), <session parts> }`.
   - Welcome line (SM:193).
   - Usage footer and hook drain (`_finalize_turn`).
   - Errors and retry (SM:3687-3726).

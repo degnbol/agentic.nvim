@@ -15,7 +15,7 @@ by hand: `agent:cancel_session`, `clear_chat`, the three context lists and
 - `is_generating` and the status indicator, `session_id`, the retry timer and
   `_transient_attempt`, `_hook_records`, `_title_user_set` and the chat title
   (an untitled restore keeps the old title), `_usage`, slash commands,
-  `config_options`, the budget and the load gate.
+  `config_options` and the load gate.
 
 `SessionManager:restart_session` already does the same transition correctly:
 `_cancel_session()`, then `restore_from_history(saved_history)`.

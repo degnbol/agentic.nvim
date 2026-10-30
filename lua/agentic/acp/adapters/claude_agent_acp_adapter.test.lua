@@ -1289,13 +1289,42 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
-    it("reads budget display and auto-continue from the provider config", function()
+    it("reads auto-continue from the provider config", function()
         local adapter = make_adapter()
-        adapter.provider_config.budget_display = true
         adapter.provider_config.auto_continue_on_usage_limit = false
 
-        assert.is_true(adapter:budget_display())
         assert.is_false(adapter:auto_continue_on_usage_limit())
+    end)
+
+    describe("budget_windows", function()
+        --- @param meta table|nil
+        --- @return agentic.acp.UsageUpdate
+        local function usage_update(meta)
+            return {
+                sessionUpdate = "usage_update",
+                used = 0,
+                size = 0,
+                _meta = meta,
+            }
+        end
+
+        it("reads the windows of the rate-limit meta", function()
+            local windows = make_adapter():budget_windows(usage_update({
+                ["_claude/rateLimit"] = {
+                    unifiedWindows = {
+                        five_hour = { utilization = 0.79, resetsAt = 1000 },
+                    },
+                },
+            })) --[[@as agentic.acp.BudgetWindow[] ]]
+            assert.equal("5h", windows[1].label)
+            assert.equal(0.79, windows[1].utilization)
+        end)
+
+        it("returns nil without rate-limit meta", function()
+            local adapter = make_adapter()
+            assert.is_nil(adapter:budget_windows(usage_update(nil)))
+            assert.is_nil(adapter:budget_windows(usage_update({})))
+        end)
     end)
 
     describe("session_meta", function()

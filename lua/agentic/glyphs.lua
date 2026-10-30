@@ -1,8 +1,9 @@
---- Nerd Font glyph vocabulary for the chat buffer. Collected in one module so a
---- new glyph can be checked against every existing one at a glance: the chat
---- window is `signcolumn=yes:1`, so a glyph is the whole gutter identity a row
---- gets. Two acts sharing one are indistinguishable in the gutter; two tools
---- doing one act may share one, and the head text names which tool ran.
+--- Nerd Font glyph vocabulary for the chat gutter and the statusline.
+--- Collected in one module so a new glyph can be checked against every
+--- existing one at a glance: the chat window is `signcolumn=yes:1`, so a
+--- glyph is the whole gutter identity a row gets. Two acts sharing one are
+--- indistinguishable in the gutter; two tools doing one act may share one,
+--- and the head text names which tool ran.
 ---
 --- Glyphs are `nf-md-*`, never emoji. A `sign_text` must be `glyph .. " "` —
 --- `nvim_buf_set_extmark` accepts 1-2 cells and rejects 3, and the trailing
@@ -216,5 +217,10 @@ Glyphs.COMMAND_DEFAULT = Glyphs.KIND.skill
 --- so even when it does fire the head cannot name the command the way a
 --- user-typed one does; it takes the glyph an unlisted word would.
 Glyphs.KIND.slashcommand = Glyphs.COMMAND_DEFAULT
+
+--- Gauge of a fraction used: an empty circle, then 1 to 8 eighths filled.
+--- @type string[]
+Glyphs.GAUGE =
+    { "󰝦", "󰪞", "󰪟", "󰪠", "󰪡", "󰪢", "󰪣", "󰪤", "󰪥" }
 
 return Glyphs

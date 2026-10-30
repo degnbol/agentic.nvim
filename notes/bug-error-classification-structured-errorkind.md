@@ -80,9 +80,9 @@ it.
    (`:1621-1633`) then returns `reset_epoch = nil`. Thus the mapped branch must
    also scrape the reset clause from the text when present, or leave the
    epoch to the dispatch site.
-2. At the dispatch site, take the reset epoch from `self._budget.resetsAt`.
-   Normalise milliseconds the same way as `_budget_status`
-   (`session_manager.lua:2670`). Use the text-scraped `reset_epoch` as the
+2. At the dispatch site, take the reset epoch from the `exhausted` window's
+   `resets_at` in `vim.g.agentic_budget` (`agentic.budget`; the adapter
+   already normalises units). Use the text-scraped `reset_epoch` as the
    fallback. Keep the 3-value return of `format_error_lines`.
 3. Call `offer_auto_continue` only when one of the two sources gives an epoch.
    With no epoch, show a hint and set no gate.
@@ -93,16 +93,17 @@ it.
 1. **Transient 429 vs limit rejection.** `rate_limit` also covers a plain 429
    (`Request rejected (429) · …`, `apiErrorIsTransient`). Mapping all of
    `rate_limit` to `usage_limit` makes a capacity 429 respawn the subprocess
-   and set a gate. Decide if the class needs a second signal (a rejected
-   `_budget.status`, or the message prefix `You've hit your` /
+   and set a gate. Decide if the class needs a second signal (an `exhausted`
+   window in `vim.g.agentic_budget`, or the message prefix `You've hit your` /
    `You've reached your`, which the bridge itself uses in
    `isSyntheticUsageLimitMessage`).
-2. **Is `_budget` current at error time?** The bridge forwards
+2. **Is the published budget current at error time?** The bridge forwards
    `rate_limit_event` as a `usage_update` only when `lastAssistantTotalUsage`
    is not `null` (`acp-agent.js:4919-4930`). That value is reset at turn start
    (`:2475`). A turn rejected on its first request can therefore leave
-   `_budget` at its pre-turn value. Capture a live rejection (event order and
-   `status`) before `_budget.resetsAt` becomes the primary source.
+   `vim.g.agentic_budget` at its pre-turn value. Capture a live rejection
+   (event order and `status`) before the window's `resets_at` becomes the
+   primary source.
 3. **What to do with no epoch.** The org-spend-cap text has no reset clause.
-   If `_budget` also has no usable `resetsAt`, decide between hint-only (no
+   If no window is `exhausted`, decide between hint-only (no
    gate, no respawn) and respawn without auto-continue.

@@ -173,10 +173,19 @@ function ACPClient:exec_shell()
     return nil
 end
 
---- Whether to show the provider's rate-limit budget in the chat header.
---- @return boolean
-function ACPClient:budget_display()
-    return false
+--- One usage-limit window the provider reported.
+--- @class agentic.acp.BudgetWindow
+--- @field label string Short name of the window, e.g. "5h", "wk"
+--- @field utilization number Fraction 0-1 of the window used
+--- @field resets_at number Epoch seconds when the window refills
+--- @field window_s number Length of the window in seconds
+--- @field state "ok"|"warning"|"exhausted"
+
+--- The usage-limit windows a usage update reports, shortest window first.
+--- @param _update agentic.acp.UsageUpdate
+--- @return agentic.acp.BudgetWindow[]|nil windows Nil when the update reports none
+function ACPClient:budget_windows(_update)
+    return nil
 end
 
 --- Whether to send "continue" once a usage limit resets.
@@ -1633,29 +1642,12 @@ return ACPClient
 --- @field sessionUpdate "current_mode_update"
 --- @field currentModeId string
 
---- claude.ai subscription rate-limit budget, forwarded verbatim by
---- claude-agent-acp from the SDK's `rate_limit_event` (SDKRateLimitInfo).
---- Observed units: `utilization` 0–1, `resetsAt` epoch seconds. Steady-state
---- events (`status = "allowed"`) omit `utilization`; the CLI includes it only
---- with its own threshold warnings (`allowed_warning`) and rejections.
---- `overageStatus = "rejected"` is the steady state for subscriptions without
---- overage credits (`overageDisabledReason = "out_of_credits"`) — it does not
---- mean requests are being rejected.
---- @class agentic.acp.RateLimitInfo
---- @field status? "allowed" | "allowed_warning" | "rejected"
---- @field rateLimitType? "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "seven_day_overage_included" | "overage"
---- @field utilization? number Fraction (0–1) of the currently-binding window used
---- @field resetsAt? number Epoch seconds when that window refills
---- @field overageStatus? "allowed" | "allowed_warning" | "rejected"
---- @field overageDisabledReason? string
---- @field isUsingOverage? boolean
-
 --- @class agentic.acp.UsageUpdate
 --- @field sessionUpdate "usage_update"
 --- @field used number Tokens currently in context
 --- @field size number Total context window size in tokens
 --- @field cost? { amount: number, currency: string } Cumulative session cost. Omitted on rate-limit-triggered updates.
---- @field public _meta? { ["_claude/rateLimit"]?: agentic.acp.RateLimitInfo }
+--- @field public _meta? table
 
 --- @class agentic.acp.ConfigOptionsUpdate
 --- @field sessionUpdate "config_option_update"

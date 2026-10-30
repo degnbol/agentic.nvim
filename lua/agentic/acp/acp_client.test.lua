@@ -1034,9 +1034,13 @@ describe("agentic.acp.ACPClient", function()
         assert.equal(client.ERROR_CODES.PROTOCOL_ERROR, err.code)
     end)
 
-    it("neither displays a budget nor auto-continues by default", function()
+    it("neither reports budget windows nor auto-continues by default", function()
         local client = setmetatable({}, { __index = ACPClient })
-        assert.is_false(client:budget_display())
+        assert.is_nil(client:budget_windows({
+            sessionUpdate = "usage_update",
+            used = 0,
+            size = 0,
+        }))
         assert.is_false(client:auto_continue_on_usage_limit())
     end)
 

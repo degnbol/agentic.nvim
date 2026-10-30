@@ -51,7 +51,6 @@ end
 --- @class agentic.acp.ClaudeProviderConfig : agentic.acp.ACPProviderConfig
 --- @field todo_tools boolean
 --- @field subagents agentic.UserConfig.Subagents
---- @field budget_display boolean
 --- @field auto_continue_on_usage_limit boolean
 --- @field allowed_tools string[] Claude Code `--allowedTools` permission rules
 
@@ -134,9 +133,11 @@ function ClaudeAgentACPAdapter:plan_file(request)
     return nil
 end
 
---- @return boolean
-function ClaudeAgentACPAdapter:budget_display()
-    return self.provider_config.budget_display
+--- @param update agentic.acp.UsageUpdate
+--- @return agentic.acp.BudgetWindow[]|nil
+function ClaudeAgentACPAdapter:budget_windows(update)
+    local info = vim.tbl_get(update, "_meta", "_claude/rateLimit")
+    return info and ClaudeUtils.budget_windows(info)
 end
 
 --- @return boolean

@@ -9,6 +9,7 @@ local ChatHistory = require("agentic.ui.chat_history")
 local FileSystem = require("agentic.utils.file_system")
 local Config = require("agentic.config")
 local Deferred = require("tests.helpers.deferred")
+local Budget = require("agentic.budget")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
@@ -433,20 +434,17 @@ describe("agentic.SessionManager", function()
             assert.spy(session.status_indicator.stop).was.called(1)
         end)
 
-        it("keeps the rate-limit budget and the load gate", function()
+        it("keeps the load gate", function()
             local session = make_session()
-            local budget = { rateLimitType = "five_hour" }
-            session._budget = budget
             session._loading = true
 
             session:_reset_conversation()
 
-            assert.equal(budget, session._budget)
             assert.is_true(session._loading)
         end)
     end)
 
-    describe("_on_session_update: usage_update budget", function()
+    describe("_on_session_update: usage_update", function()
         --- @param fields table|nil Extra usage_update fields (cost, _meta)
         --- @return agentic.acp.UsageUpdate
         local function usage_update(fields)
@@ -457,39 +455,51 @@ describe("agentic.SessionManager", function()
             }, fields or {}) --[[@as agentic.acp.UsageUpdate]]
         end
 
+        --- @type TestStub
+        local publish_stub
+
+        before_each(function()
+            publish_stub = spy.stub(Budget, "publish")
+        end)
+
+        after_each(function()
+            publish_stub:revert()
+        end)
+
+        --- @param windows agentic.acp.BudgetWindow[]|nil What the agent reports
         --- @return agentic.SessionManager
-        local function make_session()
+        local function make_session(windows)
             return {
+                agent = {
+                    budget_windows = function()
+                        return windows
+                    end,
+                },
                 _update_chat_header = function() end,
                 _on_session_update = SessionManager._on_session_update,
-                _budget_status = SessionManager._budget_status,
             } --[[@as agentic.SessionManager]]
         end
 
-        it("captures _meta rate-limit into _budget", function()
-            local session = make_session()
-
-            session:_on_session_update(usage_update({
-                _meta = {
-                    ["_claude/rateLimit"] = {
-                        rateLimitType = "five_hour",
-                        utilization = 0.5,
-                        resetsAt = os.time() + 9000,
-                    },
+        it("publishes the windows the agent reports", function()
+            local windows = {
+                {
+                    label = "5h",
+                    utilization = 0.5,
+                    resets_at = os.time() + 9000,
+                    window_s = 5 * 3600,
+                    state = "ok",
                 },
-            }))
+            }
 
-            assert.equal("five_hour", session._budget.rateLimitType)
-            assert.equal(0.5, session._budget.utilization)
+            make_session(windows):_on_session_update(usage_update())
+
+            assert.spy(publish_stub).was.called_with(windows)
         end)
 
-        it("keeps prior _budget when the update has no _meta", function()
-            local session = make_session()
-            session._budget = { rateLimitType = "five_hour" }
+        it("publishes nothing when the agent reports no windows", function()
+            make_session(nil):_on_session_update(usage_update())
 
-            session:_on_session_update(usage_update())
-
-            assert.equal("five_hour", session._budget.rateLimitType)
+            assert.spy(publish_stub).was.called(0)
         end)
 
         it("preserves prior cost when the update omits it", function()
@@ -503,43 +513,6 @@ describe("agentic.SessionManager", function()
             session:_on_session_update(usage_update())
 
             assert.equal(1.5, session._usage.cost.amount)
-        end)
-
-        it("clears _budget on session reset (/new, /clear)", function()
-            local Recovery = require("agentic.session_recovery")
-            local SlashCommands = require("agentic.acp.slash_commands")
-            local stubs = {
-                spy.stub(Recovery, "cancel_retry_timer"),
-                spy.stub(SlashCommands, "setCommands"),
-            }
-
-            local session = {
-                session_id = nil, -- skip the cancel/clear-content block
-                _budget = { rateLimitType = "five_hour" },
-                permission_manager = {
-                    clear = function() end,                },
-                widget = {
-                    buf_nrs = { input = 0 },
-                    set_chat_title = function() end,
-                },
-                _cancel_session = SessionManager._cancel_session,
-                _reset_conversation = SessionManager._reset_conversation,
-                _update_chat_header = function() end,
-                _reset_subagents = function() end,
-                _sync_modified = SessionManager._sync_modified,
-                _agents = {},
-                _set_prompt_pending = SessionManager._set_prompt_pending,
-                _budget_status = SessionManager._budget_status,
-            } --[[@as agentic.SessionManager]]
-
-            session:_cancel_session()
-
-            assert.is_nil(session._budget)
-            assert.is_nil(session:_budget_status())
-
-            for _, s in ipairs(stubs) do
-                s:revert()
-            end
         end)
 
         -- /new is exempt from the deferral gate precisely so it stays
@@ -587,177 +560,6 @@ describe("agentic.SessionManager", function()
             for _, s in ipairs(stubs) do
                 s:revert()
             end
-        end)
-    end)
-
-    describe("_budget_status", function()
-        --- @param budget agentic.acp.RateLimitInfo|nil
-        --- @return agentic.SessionManager
-        local function make_session(budget)
-            return {
-                _budget = budget,
-                _budget_status = SessionManager._budget_status,
-            } --[[@as agentic.SessionManager]]
-        end
-
-        it("on pace at half window: overshoot ≈ 1.0", function()
-            local session = make_session({
-                rateLimitType = "five_hour",
-                utilization = 0.5,
-                resetsAt = os.time() + 2.5 * 3600,
-            })
-
-            local util, overshoot = session:_budget_status()
-
-            assert.equal(0.5, util)
-            assert.is_true(math.abs(overshoot - 1.0) < 0.01)
-        end)
-
-        it("too fast: 90% used at 20% elapsed → overshoot > 1", function()
-            local session = make_session({
-                rateLimitType = "five_hour",
-                utilization = 0.9,
-                resetsAt = os.time() + 4 * 3600,
-            })
-
-            local _, overshoot = session:_budget_status()
-
-            assert.is_true(overshoot > 1)
-        end)
-
-        it("no verdict at the top of a fresh window (frac < 0.05)", function()
-            local session = make_session({
-                rateLimitType = "five_hour",
-                utilization = 0.1,
-                resetsAt = os.time() + 5 * 3600 - 1,
-            })
-
-            local util, overshoot = session:_budget_status()
-
-            assert.equal(0.1, util)
-            assert.is_nil(overshoot)
-        end)
-
-        it("normalises 0–100 utilization to a fraction", function()
-            local session = make_session({
-                rateLimitType = "five_hour",
-                utilization = 50,
-                resetsAt = os.time() + 2.5 * 3600,
-            })
-
-            local util = session:_budget_status()
-
-            assert.equal(0.5, util)
-        end)
-
-        it("normalises millisecond resetsAt", function()
-            local session = make_session({
-                rateLimitType = "five_hour",
-                utilization = 0.5,
-                resetsAt = (os.time() + 2.5 * 3600) * 1000,
-            })
-
-            local util, overshoot = session:_budget_status()
-
-            assert.equal(0.5, util)
-            assert.is_true(math.abs(overshoot - 1.0) < 0.01)
-        end)
-
-        it("steady-state event without utilization: resets only", function()
-            -- Real observed payload: status "allowed" carries no
-            -- utilization; overageStatus "rejected" = no overage credits.
-            local session = make_session({
-                status = "allowed",
-                rateLimitType = "five_hour",
-                resetsAt = os.time() + 3600,
-                overageStatus = "rejected",
-                isUsingOverage = false,
-            })
-
-            local util, overshoot, resets = session:_budget_status()
-
-            assert.is_nil(util)
-            assert.is_nil(overshoot)
-            assert.is_not_nil(resets)
-        end)
-
-        it("bails to nil when rateLimitType is missing", function()
-            local session = make_session({
-                utilization = 0.5,
-                resetsAt = os.time() + 3600,
-            })
-
-            assert.is_nil(session:_budget_status())
-        end)
-
-        it("overage: utilization but no pace verdict", function()
-            local session = make_session({
-                rateLimitType = "overage",
-                utilization = 0.3,
-                resetsAt = os.time() + 3600,
-            })
-
-            local util, overshoot = session:_budget_status()
-
-            assert.equal(0.3, util)
-            assert.is_nil(overshoot)
-        end)
-
-        it("isUsingOverage suppresses the pace verdict", function()
-            local session = make_session({
-                rateLimitType = "five_hour",
-                utilization = 0.9,
-                resetsAt = os.time() + 4 * 3600,
-                isUsingOverage = true,
-            })
-
-            local util, overshoot = session:_budget_status()
-
-            assert.equal(0.9, util)
-            assert.is_nil(overshoot)
-        end)
-
-        it("nil budget → nil", function()
-            assert.is_nil(make_session(nil):_budget_status())
-        end)
-    end)
-
-    describe("_update_chat_header: budget", function()
-        --- Header context rendered for a session with a five-hour budget.
-        --- @param budget_display boolean What the agent answers for `budget_display`
-        --- @return string|nil context
-        local function header_context(budget_display)
-            local render_header_spy = spy.new(function() end)
-            local session = {
-                config_options = {
-                    legacy_agent_modes = AgentModes:new(),
-                    current_mode_id = AgentConfigOptions.current_mode_id,
-                },
-                agent = {
-                    budget_display = function()
-                        return budget_display
-                    end,
-                },
-                widget = { render_header = render_header_spy },
-                _budget = {
-                    rateLimitType = "five_hour",
-                    resetsAt = os.time() + 3600,
-                },
-                _budget_status = SessionManager._budget_status,
-                _update_chat_header = SessionManager._update_chat_header,
-            } --[[@as agentic.SessionManager]]
-
-            session:_update_chat_header()
-
-            return render_header_spy.calls[1][3]
-        end
-
-        it("shows the budget when the agent displays it", function()
-            assert.is_not_nil(header_context(true):find("5h", 1, true))
-        end)
-
-        it("leaves the budget out when the agent does not", function()
-            assert.is_nil(header_context(false))
         end)
     end)
 
@@ -927,16 +729,6 @@ describe("agentic.SessionManager", function()
 
                 assert.is_true(session._title_user_set)
                 assert.equal("Saved title", session.chat_history.title)
-            end)
-
-            it("keeps the rate-limit budget", function()
-                local session = make_live_session()
-                local budget = { rateLimitType = "five_hour" }
-                session._budget = budget
-
-                session:_do_load_acp_session("test-session-id", "/tmp")
-
-                assert.equal(budget, session._budget)
             end)
         end)
 

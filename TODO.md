@@ -232,7 +232,6 @@ the result of plan 1.
 
 1. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
 2. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
-3. [`PLAN-adapter-budget.md`](notes/PLAN-adapter-budget.md)
 
 ## Feature ideas
 

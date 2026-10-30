@@ -112,12 +112,6 @@ local ConfigDefault = {
                 force_background = false,
             },
 
-            --- Show the claude.ai subscription rate-limit budget in the chat
-            --- header (binding window utilisation + reset countdown, warns
-            --- when the current pace overshoots the window). Only populated
-            --- under claude.ai subscription auth. Set false to hide.
-            budget_display = true,
-
             --- Auto-continue after usage limit errors.
             --- When the provider reports "out of extra usage · resets Xpm",
             --- schedules a timer to send "continue" once the reset time

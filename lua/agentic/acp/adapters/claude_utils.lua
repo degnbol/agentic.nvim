@@ -387,4 +387,68 @@ function M.suppress_placeholder_title(title)
     return title
 end
 
+--- One window of `ClaudeRateLimitInfo.unifiedWindows`.
+--- @class agentic.acp.ClaudeRateLimitWindow
+--- @field utilization? number Fraction (0–1) of the window used
+--- @field resetsAt? number Epoch seconds when the window refills
+--- @field status? "allowed" | "allowed_warning" | "rejected"
+
+--- claude.ai subscription rate-limit state, forwarded verbatim by
+--- claude-agent-acp from the SDK's `rate_limit_event` (SDKRateLimitInfo) as
+--- `usage_update._meta["_claude/rateLimit"]`. The top level describes the
+--- window that applies now and omits its `utilization` on `allowed` events.
+--- `unifiedWindows` has every window, each with its `utilization`.
+--- `overageStatus = "rejected"` is the steady state for subscriptions without
+--- overage credits (`overageDisabledReason = "out_of_credits"`). It does not
+--- mean requests are being rejected.
+--- @class agentic.acp.ClaudeRateLimitInfo
+--- @field status? "allowed" | "allowed_warning" | "rejected"
+--- @field rateLimitType? "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "seven_day_overage_included" | "overage"
+--- @field utilization? number Fraction (0–1) of the window that applies now
+--- @field resetsAt? number Epoch seconds when that window refills
+--- @field overageStatus? "allowed" | "allowed_warning" | "rejected"
+--- @field overageDisabledReason? string
+--- @field isUsingOverage? boolean
+--- @field unifiedWindows? table<string, agentic.acp.ClaudeRateLimitWindow>
+
+--- The `unifiedWindows` keys read as budget windows, shortest first.
+local BUDGET_WINDOWS = {
+    { key = "five_hour", label = "5h", window_s = 5 * 3600 },
+    { key = "seven_day", label = "wk", window_s = 7 * 24 * 3600 },
+}
+
+--- @type table<string, "warning"|"exhausted">
+local BUDGET_STATES = { allowed_warning = "warning", rejected = "exhausted" }
+
+--- The windows an SDK rate-limit event reports. A window's state is its own
+--- `status`, else the top-level `status` when `rateLimitType` names it.
+--- @param info agentic.acp.ClaudeRateLimitInfo
+--- @return agentic.acp.BudgetWindow[]|nil windows Nil without a readable window
+function M.budget_windows(info)
+    --- @type agentic.acp.BudgetWindow[]
+    local windows = {}
+    for _, spec in ipairs(BUDGET_WINDOWS) do
+        local entry = vim.tbl_get(info, "unifiedWindows", spec.key)
+        if
+            entry
+            and type(entry.utilization) == "number"
+            and type(entry.resetsAt) == "number"
+        then
+            local status = entry.status
+                or (info.rateLimitType == spec.key and info.status or nil)
+            -- `resetsAt` above 1e12 is milliseconds. Observed events use
+            -- seconds.
+            table.insert(windows, {
+                label = spec.label,
+                utilization = entry.utilization,
+                resets_at = entry.resetsAt > 1e12 and entry.resetsAt / 1000
+                    or entry.resetsAt,
+                window_s = spec.window_s,
+                state = BUDGET_STATES[status] or "ok",
+            })
+        end
+    end
+    return #windows > 0 and windows or nil
+end
+
 return M

@@ -202,4 +202,97 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
             assert.equal(3, generation)
         end)
     end)
+
+    describe("budget_windows", function()
+        it("reads both windows, shortest first", function()
+            local windows = ClaudeUtils.budget_windows({
+                unifiedWindows = {
+                    seven_day = { utilization = 0.54, resetsAt = 2000 },
+                    five_hour = { utilization = 0.03, resetsAt = 1000 },
+                },
+            })
+            assert.same({
+                {
+                    label = "5h",
+                    utilization = 0.03,
+                    resets_at = 1000,
+                    window_s = 5 * 3600,
+                    state = "ok",
+                },
+                {
+                    label = "wk",
+                    utilization = 0.54,
+                    resets_at = 2000,
+                    window_s = 7 * 24 * 3600,
+                    state = "ok",
+                },
+            }, windows)
+        end)
+
+        it("reads milliseconds", function()
+            local windows = ClaudeUtils.budget_windows({
+                unifiedWindows = {
+                    five_hour = { utilization = 0.42, resetsAt = 1.7e12 },
+                },
+            }) --[[@as agentic.acp.BudgetWindow[] ]]
+            assert.equal(1.7e9, windows[1].resets_at)
+        end)
+
+        it("takes the state from the entry", function()
+            local windows = ClaudeUtils.budget_windows({
+                status = "allowed",
+                rateLimitType = "five_hour",
+                unifiedWindows = {
+                    five_hour = {
+                        utilization = 1,
+                        resetsAt = 1000,
+                        status = "rejected",
+                    },
+                    seven_day = {
+                        utilization = 0.9,
+                        resetsAt = 2000,
+                        status = "allowed_warning",
+                    },
+                },
+            }) --[[@as agentic.acp.BudgetWindow[] ]]
+            assert.equal("exhausted", windows[1].state)
+            assert.equal("warning", windows[2].state)
+        end)
+
+        it("takes the state from the top level for the binding window", function()
+            local windows = ClaudeUtils.budget_windows({
+                status = "allowed_warning",
+                rateLimitType = "seven_day",
+                unifiedWindows = {
+                    five_hour = { utilization = 0.1, resetsAt = 1000 },
+                    seven_day = { utilization = 0.9, resetsAt = 2000 },
+                },
+            }) --[[@as agentic.acp.BudgetWindow[] ]]
+            assert.equal("ok", windows[1].state)
+            assert.equal("warning", windows[2].state)
+        end)
+
+        it("skips unknown keys and unreadable entries", function()
+            local windows = ClaudeUtils.budget_windows({
+                unifiedWindows = {
+                    seven_day_overage_included = {
+                        utilization = 0.5,
+                        resetsAt = 3000,
+                    },
+                    five_hour = { resetsAt = 1000 },
+                    seven_day = { utilization = 0.5, resetsAt = 2000 },
+                },
+            }) --[[@as agentic.acp.BudgetWindow[] ]]
+            assert.equal(1, #windows)
+            assert.equal("wk", windows[1].label)
+        end)
+
+        it("returns nil without unifiedWindows", function()
+            assert.is_nil(ClaudeUtils.budget_windows({
+                rateLimitType = "five_hour",
+                utilization = 0.5,
+                resetsAt = 1000,
+            }))
+        end)
+    end)
 end)
