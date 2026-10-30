@@ -207,7 +207,8 @@ the approval (a typo `"Unless"`), so the allow rule closes that too.
 mutation sent over GET is not known, so it keeps prompting.)
 
 `curl`: take `o`, `output`, `D`, `dump-header` out of the ask list into a
-second gate:
+second gate (`expand-output` and `expand-dump-header` stay in the main
+list):
 ```json
 { "options": ["o", "output", "D", "dump-header"],
   "unless": [{ "option_values": { "options": ["o", "output", "D", "dump-header"],
@@ -230,8 +231,8 @@ Remove `Bash(gh api *)` from allow and `Bash(gh api *-X*)`,
 `permission_rules.test.lua` (end to end, `should_auto_approve`):
 - approve: `gh api -X GET /x -f q=1`, `gh api -XGET /x`, `gh api -iXGET /x`,
   `gh api --method=GET /x -f q=1`, `gh api /x` (unchanged),
-  `curl -sS -o /dev/null -w '%{http_code}' https://x`,
-  `curl -sSo/dev/null https://x`, `curl -D - https://x`
+  `curl -sS -o /dev/null https://x`,
+  `curl -sS -o/dev/null https://x`, `curl -D - https://x`
 - prompt: `gh api -X GET /x -X DELETE`, `gh api -X GET --method POST /x`,
   `gh api -X GET -H -- -X POST /x`, `gh api /x -f q=1`,
   `gh api /x --raw-field q=1`, `gh api /x --field q=1`,
@@ -269,7 +270,7 @@ unhinted flag that may absorb the gated option (ask fires).
 - Limit, next to the `option_values` doc: a single-letter long word
   (`--m`) is read as a short option, so a getopt_long abbreviation of a
   listed long option is not a hit. Not reachable for `gh` (pflag) or
-  `curl` (no abbreviations).
+  `curl` (exact names from 8.6; before, `--o` and `--d` are ambiguous).
 
 ## Expected outcome
 - `gh api -X GET search/issues -f q=x -f per_page=20 --jq …` auto-approves.
@@ -290,8 +291,8 @@ unhinted flag that may absorb the gated option (ask fires).
 - Deny-gate conditions (see Background).
 - The other carve-outs the fields enable (`curl -G`, `zsh -n`,
   `print -u`, `git -c`).
-- curl write options missing from the ask list:
-  `notes/bug-curl-unlisted-write-options.md`.
+- A value-aware `curl -w` carve-out: it needs `option_values_may` to read
+  values.
 
 ## Open questions
 None.

@@ -2017,6 +2017,64 @@ describe("PermissionRules", function()
             )
         end)
 
+        for _, cmd in ipairs({
+            "curl -c jar https://x",
+            "curl --cookie-jar jar https://x",
+            "curl -sc jar https://x",
+            "curl --libcurl out.c https://x",
+            "curl --etag-save e https://x",
+            "curl --stderr log https://x",
+            "curl --hsts h https://x",
+            "curl --alt-svc a https://x",
+            "curl --ssl-sessions s https://x",
+            "curl -w '%output{f}x' https://x",
+            "curl --write-out @fmt https://x",
+            "curl --form-string a=b https://x",
+            "curl -Q 'DELE f' ftp://x",
+            "curl --quote 'DELE f' ftp://x",
+            "curl --variable v=f --expand-output '{{v}}' https://x",
+            "curl --expand-write-out x https://x",
+        }) do
+            it("asks " .. cmd, function()
+                assert.is_false(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        for _, cmd in ipairs({ "curl -sSL https://x", "curl -fsSL https://x" }) do
+            it("auto-approves " .. cmd, function()
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        it("lists the expand- twin of every valued curl ask option", function()
+            local booleans = {
+                ["remote-name"] = true,
+                ["remote-name-all"] = true,
+                ["remote-header-name"] = true,
+                ["create-dirs"] = true,
+            }
+            local options = vim.iter(
+                PermissionRules.get_structured_entries().curl.ask
+            )
+                :map(function(gate)
+                    return gate.options
+                end)
+                :flatten()
+                :totable()
+            for _, name in ipairs(options) do
+                if
+                    #name > 1
+                    and not booleans[name]
+                    and not vim.startswith(name, "expand-")
+                then
+                    assert.is_true(
+                        vim.list_contains(options, "expand-" .. name),
+                        "expand-" .. name
+                    )
+                end
+            end
+        end)
+
         it("auto-approves gh api with no method flag (GET default)", function()
             assert.is_true(
                 PermissionRules.should_auto_approve("gh api /rate_limit")
