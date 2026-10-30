@@ -46,9 +46,13 @@
 --- @field widget table<string, agentic.UserConfig.KeymapValue>
 --- @field prompts table<string, agentic.UserConfig.PromptSpec>
 --- @field prompt table<string, agentic.UserConfig.KeymapValue>
---- @field agent table<string, agentic.UserConfig.KeymapValue>
+--- @field agent agentic.UserConfig.Keymaps.Agent
 --- @field permission table<string, string> Key for permission responses by option kind
 --- @field permission_open agentic.UserConfig.Keymaps.PermissionOpen
+
+--- @class agentic.UserConfig.Keymaps.Agent
+--- @field to_input string|string[]
+--- @field [string] agentic.UserConfig.KeymapValue
 
 --- @class agentic.UserConfig.Keymaps.PermissionOpen
 --- @field edit string|false In the current window (`:edit`)
@@ -318,10 +322,15 @@ local ConfigDefault = {
             paste_image = "",
         },
 
-        --- Key bindings for the chat buffer
+        --- Keys for the chat and subagent transcripts
         agent = {
             prev_prompt = "[[",
             next_prompt = "]]",
+
+            --- Normal-mode keys that move to this buffer's input, then run
+            --- there as typed, at the input's own cursor. Also bound in the
+            --- panels.
+            to_input = { "a", "A", "i", "I", "o", "O", "gi", "gI", "p", "P" },
         },
 
         --- Keys for permission responses by option kind. An option with no key

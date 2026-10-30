@@ -61,11 +61,6 @@ function BufHelpers.rename(bufnr, name)
     end
 end
 
-function BufHelpers.start_insert_on_last_char()
-    vim.cmd("normal! G$")
-    vim.cmd("startinsert!")
-end
-
 --- Sets a keymap for a specific buffer.
 --- @param bufnr integer
 --- @param mode string|string[]
@@ -128,7 +123,7 @@ end
 --- (`is_keymap_disabled`).
 --- @param keymaps agentic.UserConfig.KeymapValue|nil
 --- @param bufnr integer
---- @param callback fun():any
+--- @param callback fun(lhs: string):any
 --- @param opts vim.keymap.set.Opts|nil
 --- @param default_mode? string|string[] Mode for bare-string entries when no explicit mode (default "n")
 function BufHelpers.multi_keymap_set(
@@ -161,8 +156,37 @@ function BufHelpers.multi_keymap_set(
             keymap = key --[[@as string]]
         end
 
-        BufHelpers.keymap_set(bufnr, modes, keymap, callback, opts)
+        BufHelpers.keymap_set(bufnr, modes, keymap, function()
+            return callback(keymap)
+        end, opts)
     end
+end
+
+--- Bind `keymaps` on `bufnr` to focus `input_win()`, then feed the pressed
+--- key there with its count and register, remapped. No-op when `input_win()`
+--- returns nil.
+--- @param keymaps string|string[]|nil
+--- @param bufnr integer
+--- @param input_win fun(): integer|nil
+function BufHelpers.bind_to_input(keymaps, bufnr, input_win)
+    BufHelpers.multi_keymap_set(keymaps, bufnr, function(lhs)
+        local count = vim.v.count
+        local register = vim.v.register
+        local winid = input_win()
+        if not winid then
+            return
+        end
+        vim.api.nvim_set_current_win(winid)
+        -- `"=` would prompt for a new expression; `<CR>` reuses the last.
+        if register == "=" then
+            register = "=\r"
+        end
+        local keys = (count > 0 and count or "")
+            .. '"'
+            .. register
+            .. vim.keycode(lhs)
+        vim.api.nvim_feedkeys(keys, "mi", false)
+    end, { desc = "Agentic: Run key in the input" })
 end
 
 --- Whether a buffer is an unnamed, unmodified normal buffer with no text, as
@@ -285,10 +309,6 @@ function BufHelpers.prepend_draft(bufnr, text)
     BufHelpers.prepend_paragraph(bufnr, lines)
     BufHelpers.sync_modified(bufnr)
 end
-
---- Normal-mode keys that start insert, which a buffer that cannot be typed in
---- can map to typing in another.
-BufHelpers.INSERT_KEYS = { "a", "A", "o", "O", "i", "I", "c", "C", "x", "X" }
 
 --- Set a buffer's `modified` to whether it holds text, for a buffer whose
 --- text is unsent rather than unwritten.

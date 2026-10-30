@@ -5,6 +5,7 @@ local MiniTest = require("mini.test")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
+local BufHelpers = require("agentic.utils.buf_helpers")
 local Renderer = require("agentic.ui.tool_call_renderer")
 
 describe("agentic.ui.ChatWidget", function()
@@ -835,6 +836,94 @@ describe("agentic.ui.ChatWidget", function()
                 )
             end)
         end
+
+        --- @return string[]
+        local function input_lines()
+            return vim.api.nvim_buf_get_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false
+            )
+        end
+
+        it("i inserts at the input's cursor from before it closed", function()
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                { "one", "two" }
+            )
+            local input = widget:input_win()
+            vim.api.nvim_win_set_cursor(input, { 1, 1 })
+            vim.api.nvim_win_close(input, true)
+            vim.api.nvim_set_current_win(home)
+
+            press("iX\27")
+
+            assert.same({ "oXne", "two" }, input_lines())
+        end)
+
+        it("a count repeats the key in the input", function()
+            vim.api.nvim_set_current_win(home)
+
+            press("3aX\27")
+
+            assert.same({ "XXX" }, input_lines())
+        end)
+
+        it("a register prefix pastes that register in the input", function()
+            vim.fn.setreg("a", "named", "c")
+            vim.api.nvim_set_current_win(home)
+
+            press('"ap')
+
+            assert.same({ "named" }, input_lines())
+        end)
+
+        it("an expression register pastes its value in the input", function()
+            vim.api.nvim_set_current_win(home)
+
+            press('"="expr"\rp')
+
+            assert.same({ "expr" }, input_lines())
+        end)
+
+        it("a user map on the key runs in the input", function()
+            vim.keymap.set("n", "gI", function()
+                vim.api.nvim_buf_set_lines(0, 0, -1, false, { "mapped" })
+            end)
+            MiniTest.finally(function()
+                vim.keymap.del("n", "gI")
+            end)
+            vim.api.nvim_set_current_win(home)
+
+            press("gI")
+
+            assert.same({ "mapped" }, input_lines())
+        end)
+
+        it("x in the chat changes no buffer", function()
+            vim.api.nvim_buf_set_lines(
+                widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                { "abc" }
+            )
+            BufHelpers.with_modifiable(widget.buf_nrs.agent, function(bufnr)
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "chat" })
+            end)
+            vim.api.nvim_set_current_win(home)
+            local chat_tick = vim.b[widget.buf_nrs.agent].changedtick
+
+            press("x")
+
+            assert.equal(home, vim.api.nvim_get_current_win())
+            assert.equal(chat_tick, vim.b[widget.buf_nrs.agent].changedtick)
+            assert.same({ "abc" }, input_lines())
+        end)
 
         it(
             "input_win opens below the current window without a home in the tab",

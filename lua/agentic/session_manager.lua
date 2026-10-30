@@ -1531,32 +1531,16 @@ function SessionManager:_agent_input_win(agent_id)
 end
 
 --- Bind the keys of a subagent's transcript that act on the agent, each
---- resolving the agent's message input when pressed: the insert keys start
---- insert in the agent's input window (`_agent_input_win`), `p` and `P`
---- paste there, and `keymaps.widget.stop_generation` stops the agent, or the
---- main agent's turn for an agent without a message input.
+--- resolving the agent's message input when pressed: `keymaps.agent.to_input`
+--- runs in the agent's input, and `keymaps.widget.stop_generation` stops the
+--- agent, or the main agent's turn for an agent without a message input.
 --- @param child_id string
 --- @param bufnr integer The transcript
 function SessionManager:_bind_agent_keymaps(child_id, bufnr)
     local agent_id = (self.agent:subagent_id(child_id))
-    for _, key in ipairs(BufHelpers.INSERT_KEYS) do
-        BufHelpers.keymap_set(bufnr, "n", key, function()
-            local winid = self:_agent_input_win(agent_id)
-            if winid then
-                vim.api.nvim_set_current_win(winid)
-                BufHelpers.start_insert_on_last_char()
-            end
-        end)
-    end
-    for _, key in ipairs({ "p", "P" }) do
-        BufHelpers.keymap_set(bufnr, "n", key, function()
-            local winid = self:_agent_input_win(agent_id)
-            if winid then
-                vim.api.nvim_set_current_win(winid)
-                vim.cmd("normal! " .. key)
-            end
-        end)
-    end
+    BufHelpers.bind_to_input(Config.keymaps.agent.to_input, bufnr, function()
+        return self:_agent_input_win(agent_id)
+    end)
     BufHelpers.multi_keymap_set(
         Config.keymaps.widget.stop_generation,
         bufnr,

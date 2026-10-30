@@ -88,11 +88,13 @@ _G.sent_text = function(i)
     local prompt = _G.sent[i]
     return prompt and prompt[#prompt].text
 end
--- Run the normal-mode map of `lhs` on `bufnr`, from the current window.
+-- Run the normal-mode map of `lhs` on `bufnr`, from the current window, and
+-- the keys it feeds, ending in normal mode.
 _G.press = function(bufnr, lhs)
     vim.api.nvim_buf_call(bufnr, function()
         return vim.fn.maparg(lhs, "n", false, true)
     end).callback()
+    vim.api.nvim_feedkeys("", "x", false)
 end
 _G.wins_of = function(bufnr)
     return #vim.fn.win_findbuf(bufnr)
@@ -402,7 +404,6 @@ _G.spawn("c1")
 _G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
 _G.press(_G.transcript("c1").bufnr, "i")
-vim.cmd("stopinsert")
 _G.s:_reset_subagents()
 ]])
 
@@ -477,7 +478,6 @@ _G.home = _G.s.widget:home_win()
 vim.api.nvim_set_current_win(_G.home)
 _G.press(_G.s.widget.buf_nrs.agent, "i")
 _G.first = vim.api.nvim_get_current_win()
-vim.cmd("stopinsert")
 vim.api.nvim_set_current_win(_G.home)
 _G.press(_G.s.widget.buf_nrs.agent, "a")
 ]])

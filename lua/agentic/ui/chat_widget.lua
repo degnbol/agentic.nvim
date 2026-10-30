@@ -959,16 +959,6 @@ function ChatWidget:input_win()
     return WidgetLayout.open_input_below(input)
 end
 
---- Focus `input_win()` and start insert on the input's last character.
---- No-op when the input panel fails to open.
-function ChatWidget:focus_input()
-    local winid = self:input_win()
-    if winid then
-        vim.api.nvim_set_current_win(winid)
-        BufHelpers.start_insert_on_last_char()
-    end
-end
-
 --- Buffer-local autocmds on the chat that tie the home window to it: a
 --- window the chat enters becomes home while there is none, a home that
 --- shows another buffer loses its panels, and `:q` on the home closes its
@@ -1216,7 +1206,13 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
 
     -- A transcript's keys depend on its agent; its session binds them.
     if panel ~= "input" and panel ~= "message" and panel ~= "subagent" then
-        self:_bind_insert_keymaps(bufnr)
+        BufHelpers.bind_to_input(
+            Config.keymaps.agent.to_input,
+            bufnr,
+            function()
+                return self:input_win()
+            end
+        )
     end
 end
 
@@ -1276,27 +1272,6 @@ function ChatWidget:_stage_input(text)
     end
     vim.api.nvim_set_current_win(winid)
     vim.api.nvim_win_set_cursor(winid, { row + 1, 0 })
-end
-
---- Bind the insert keys and `p`/`P` on a read-only panel buffer to type and
---- paste into the input.
---- @param bufnr integer
-function ChatWidget:_bind_insert_keymaps(bufnr)
-    for _, key in ipairs(BufHelpers.INSERT_KEYS) do
-        BufHelpers.keymap_set(bufnr, "n", key, function()
-            self:focus_input()
-        end)
-    end
-
-    for _, key in ipairs({ "p", "P" }) do
-        BufHelpers.keymap_set(bufnr, "n", key, function()
-            local input_win = self:input_win()
-            if input_win then
-                vim.api.nvim_set_current_win(input_win)
-                vim.cmd("normal! " .. key)
-            end
-        end)
-    end
 end
 
 --- @param bufnr integer The input buffer

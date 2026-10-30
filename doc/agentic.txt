@@ -572,6 +572,8 @@ What the queue bindings dispatch, and when, is in |agentic-queue|.
     Key    Mode    Description ~
     `[[`     n       Previous prompt or notice
     `]]`     n       Next prompt or notice
+    `a A i I o O gi gI p P`
+             n       Run in the input (`to_input`)
 
 `[[` and `]]` also move between the rows of a subagent transcript.
 
@@ -584,12 +586,13 @@ split, or in a new tabpage. A count is ignored there.
 Tool output over its line threshold (|agentic-config-tool-display|) is
 folded; |zo|, |zc| and |za| toggle a fold as usual.
 
-An insert key (`i`, `a`, `o`, `c`, `x`, ...) starts insert in an input: a
-background subagent's transcript in its message input (|agentic-subagents|),
-the chat, a panel or any other transcript in the session's. It uses the
-input's window in the current tabpage, else opens the input panel below the
-chat's window (|agentic-buffers|) when the current tabpage shows the chat,
-else opens one below the current window. `p` and `P` in the chat paste there.
+A `to_input` key moves to an input and runs there as typed, at the input's
+cursor, with its count, register and user mappings: from a background
+subagent's transcript to its message input (|agentic-subagents|), from the
+chat, a panel or any other transcript to the session's. It uses the input's
+window in the current tabpage, else opens the input panel below the chat's
+window (|agentic-buffers|) when the current tabpage shows the chat, else
+opens one below the current window.
 
 ------------------------------------------------------------------------------
 6.4 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
@@ -899,13 +902,13 @@ chat: after |:q| on its chat window, or |:e| or |gf| there.
 The chat shows in any window, like any buffer. Its panels attach to one
 window showing it, the chat's window: the first window the chat enters
 while it has none, or the window |agentic.open()| opens. In a tabpage
-without the chat's window, a key that opens a panel (an insert key, `p`,
+without the chat's window, a key that opens a panel (a `to_input` key,
 `<localLeader>f`) makes a window there that shows the chat, the current one
 first, the chat's window. The panels stack
 below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
-panels open while they list something. The input opens on the first insert
-key (|agentic-keymaps-agent|). `<localLeader>f` toggles the file activity
-panel.
+panels open while they list something. The input opens on the first
+`to_input` key (|agentic-keymaps-agent|). `<localLeader>f` toggles the file
+activity panel.
 
 When the chat's window closes or shows another buffer, its panels close.
 |:q| in the chat's window closes its panels first; when vim refuses the
@@ -1082,12 +1085,13 @@ ends the subagents that the provider then reports ended.
 A permission prompt from a subagent whose transcript has no window shows on
 the chat (|agentic-permissions-prompt|).
 
-An insert key in a background subagent's transcript opens its message input.
-`:w` there sends the text to the subagent through the main agent, as your
-prompt in the chat; `@path` stays text. `<C-c>` in either buffer asks the
-main agent to stop the subagent. A blocking subagent has no message input: in
-its transcript, insert keys go to the session's input and `<C-c>` stops the
-turn. A restored background subagent gets its input when it runs again.
+A `to_input` key in a background subagent's transcript opens its message
+input. `:w` there sends the text to the subagent through the main agent, as
+your prompt in the chat; `@path` stays text. `<C-c>` in either buffer asks
+the main agent to stop the subagent. A blocking subagent has no message
+input: in its transcript, `to_input` keys go to the session's input and
+`<C-c>` stops the turn. A restored background subagent gets its input when it
+runs again.
 
 Transcripts are saved with the session (|agentic-buffers|) and come back on
 load and restore.
