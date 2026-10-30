@@ -1,5 +1,6 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Budget = require("agentic.budget")
+local Duration = require("agentic.utils.duration")
 
 local DAY = 24 * 3600
 
@@ -24,8 +25,8 @@ local DAY = 24 * 3600
 --- @class agentic.ui.InfoPanel
 local InfoPanel = {}
 
---- Context totals, e.g. "12.3k / 200k · 6%". Nil without usage or with a size
---- of 0.
+--- Context totals, e.g. "12.3k / 200k tokens (6%)". Nil without usage or with
+--- a size of 0.
 --- @param usage { used: number, size: number }|nil
 --- @return string|nil
 function InfoPanel.context_totals(usage)
@@ -33,14 +34,14 @@ function InfoPanel.context_totals(usage)
         return nil
     end
     return string.format(
-        "%.1fk / %.0fk · %d%%",
+        "%.1fk / %.0fk tokens (%d%%)",
         usage.used / 1000,
         usage.size / 1000,
         math.floor(usage.used / usage.size * 100)
     )
 end
 
---- Session cost, e.g. "$0.1234 USD". Nil when not reported.
+--- Session cost, e.g. "0.1234 USD". Nil when not reported.
 --- @param usage { cost?: { amount: number, currency: string } }|nil
 --- @return string|nil
 function InfoPanel.cost(usage)
@@ -48,7 +49,7 @@ function InfoPanel.cost(usage)
     if not cost then
         return nil
     end
-    return string.format("$%.4f %s", cost.amount, cost.currency)
+    return string.format("%.4f %s", cost.amount, cost.currency)
 end
 
 --- The non-nil arguments, joined by " · ".
@@ -89,6 +90,13 @@ local function account_lines(auth)
     return lines
 end
 
+--- A fraction as a rounded percent, e.g. "42%".
+--- @param fraction number
+--- @return string
+local function percent(fraction)
+    return string.format("%d%%", math.floor(fraction * 100 + 0.5))
+end
+
 --- A window's line: its use, reset time and pace. Once the reset has passed,
 --- its label and 0% only.
 --- @param window agentic.acp.BudgetWindow
@@ -97,18 +105,17 @@ end
 local function window_line(window, now)
     local resets_in = Budget.resets_in(window, now)
     if resets_in == 0 then
-        return "- " .. window.label .. " 0%"
+        return "- " .. window.label .. ": 0% used"
     end
-    local percent = math.floor(window.utilization * 100 + 0.5)
     local reset =
         os.date(resets_in > DAY and "%a %H:%M" or "%H:%M", window.resets_at) --[[@as string]]
     local pace = Budget.pace(window, now)
     local pace_text = pace
-        and string.format("pace %.1f%s", pace, pace > 1 and " ⚠" or "")
+        and ("on pace for " .. percent(pace) .. (pace > 1 and " ⚠" or ""))
     return "- "
         .. join(
-            string.format("%s %d%%", window.label, percent),
-            "resets " .. reset,
+            window.label .. ": " .. percent(window.utilization) .. " used",
+            "resets " .. reset .. " (in " .. Duration.format(resets_in) .. ")",
             pace_text
         )
 end

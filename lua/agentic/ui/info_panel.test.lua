@@ -34,9 +34,9 @@ end
 
 describe("agentic.ui.InfoPanel", function()
     describe("context_totals", function()
-        it("formats used and size with the percent", function()
+        it("formats used and size in tokens with the percent", function()
             assert.equal(
-                "12.3k / 200k · 6%",
+                "12.3k / 200k tokens (6%)",
                 InfoPanel.context_totals({ used = 12345, size = 200000 })
             )
         end)
@@ -50,7 +50,7 @@ describe("agentic.ui.InfoPanel", function()
     describe("cost", function()
         it("formats the amount and currency", function()
             assert.equal(
-                "$0.1234 USD",
+                "0.1234 USD",
                 InfoPanel.cost({ cost = { amount = 0.1234, currency = "USD" } })
             )
         end)
@@ -135,7 +135,7 @@ describe("agentic.ui.InfoPanel", function()
 
         it("shows the context totals and cost", function()
             assert.equal(
-                "- Context: 12.3k / 200k · 6% · $0.5000 USD",
+                "- Context: 12.3k / 200k tokens (6%) · 0.5000 USD",
                 line_starting({
                     provider = "Claude",
                     usage = {
@@ -162,9 +162,9 @@ describe("agentic.ui.InfoPanel", function()
         it("rounds the window percent and shows the reset time", function()
             local window = five_hour(0.026, HOUR)
             assert.equal(
-                "- 5h 3% · resets "
+                "- 5h: 3% used · resets "
                     .. os.date("%H:%M", window.resets_at)
-                    .. " · pace 0.0",
+                    .. " (in 1h00m) · on pace for 3%",
                 line_starting(
                     { provider = "Claude", budget = { window } },
                     "- 5h"
@@ -188,7 +188,7 @@ describe("agentic.ui.InfoPanel", function()
             )
         end)
 
-        it("shows the pace to one decimal, marked above 1", function()
+        it("shows the pace as a percent, marked above 100%", function()
             -- 3 of 5 hours passed.
             local slow = five_hour(0.3, 2 * HOUR)
             local fast = five_hour(0.9, 2 * HOUR)
@@ -196,13 +196,13 @@ describe("agentic.ui.InfoPanel", function()
                 line_starting(
                     { provider = "Claude", budget = { slow } },
                     "- 5h"
-                ):find("· pace 0.5$")
+                ):find("· on pace for 50%%$")
             )
             assert.truthy(
                 line_starting(
                     { provider = "Claude", budget = { fast } },
                     "- 5h"
-                ):find("· pace 1.5 ⚠$")
+                ):find("· on pace for 150%% ⚠$")
             )
         end)
 
@@ -212,12 +212,12 @@ describe("agentic.ui.InfoPanel", function()
                 { provider = "Claude", budget = { fresh } },
                 "- 5h"
             ) or ""
-            assert.is_nil(line:find("pace", 1, true))
+            assert.is_nil(line:find("on pace", 1, true))
         end)
 
         it("shows a passed reset as 0% with no reset", function()
             assert.equal(
-                "- 5h 0%",
+                "- 5h: 0% used",
                 line_starting(
                     { provider = "Claude", budget = { five_hour(0.8, -60) } },
                     "- 5h"

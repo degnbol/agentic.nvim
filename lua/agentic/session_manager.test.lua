@@ -1574,8 +1574,8 @@ describe("agentic.SessionManager", function()
                 cost = { amount = 0.0412, currency = "USD" },
             })
 
-            assert.equal("72.4k / 200k · 36%", notice.title)
-            assert.same({ "- Cost: $0.0412 USD" }, notice.body)
+            assert.equal("72.4k / 200k tokens (36%)", notice.title)
+            assert.same({ "- Cost: 0.0412 USD" }, notice.body)
         end)
 
         it("falls back to a bare title with no totals to show", function()

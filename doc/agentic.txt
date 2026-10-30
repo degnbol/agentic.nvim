@@ -224,11 +224,10 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     selection. Elsewhere it puts the text at the end of the input, with a
     blank line before it when the input has text, and moves the cursor to it
     in normal mode. Send or queue it with the keys in
-    |agentic-keymaps-prompt|. The default binds `<localLeader>c` to
-    "Continue". A value may be `{ prompt, mode, desc }` for mode and
-    description control. Set a key to
-    `vim.NIL` or `""` to disable an inherited binding; plain `nil` does not
-    disable it. >lua
+    |agentic-keymaps-prompt|. The default binds a key to "Continue". A value
+    may be `{ prompt, mode, desc }` for mode and description control. Set a
+    key to `vim.NIL` or `""` to disable an inherited binding; plain `nil` does
+    not disable it. >lua
         require("agentic").setup {
             keymaps = { prompts = { ["<localLeader>y"] = "Go ahead." } },
         }
@@ -577,18 +576,17 @@ configurable via `keymaps` in |agentic-config-keymaps|.
 
 Applied to all buffers in the widget (chat, prompt, panels).
 
-    Key              Mode    Description ~
-    `<localLeader>m`   n/v     Switch agent mode
-    `<C-c>`            n/i     Stop generation
-    `<localLeader>c`   n       Put "Continue" in the input (canned prompt)
-    `<localLeader>R`   n       Restore session
-    `<localLeader>p`   n       Switch provider
-    `<localLeader>M`   n       Switch model
-    `<localLeader>!`   n       Restart session
-    `<localLeader>f`   n       Toggle changed-files panel
-    `<localLeader>I`   n       Toggle session info panel (|agentic-info-panel|)
-    `<localLeader>a`   n       Toggle follow (|agentic-follow|)
-    `<localLeader>G`   n       Scroll chat and transcripts in the tabpage to bottom, keep focus
+    Key              Field               Mode    Description ~
+    `<localLeader>m`   `change_mode`         n/v     Switch agent mode
+    `<C-c>`            `stop_generation`     n/i     Stop generation
+    `<localLeader>R`   `restore_session`     n       Restore session
+    `<localLeader>p`   `switch_provider`     n       Switch provider
+    `<localLeader>M`   `switch_model`        n       Switch model
+    `<localLeader>!`   `restart_session`     n       Restart session
+    `<localLeader>f`   `toggle_activity`     n       Toggle file activity panel (|agentic-file-activity|)
+    `<localLeader>I`   `toggle_info`         n       Toggle session info panel (|agentic-info-panel|)
+    `<localLeader>a`   `toggle_follow`       n       Toggle follow (|agentic-follow|)
+    `<localLeader>G`   `goto_bottom`         n       Scroll chat and transcripts in the tabpage to bottom, keep focus
 
 Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
 
@@ -954,12 +952,12 @@ The chat shows in any window, like any buffer. Its panels attach to one
 window showing it, the chat's window: the first window the chat enters
 while it has none, or the window |agentic.open()| opens. In a tabpage
 without the chat's window, a key that opens a panel (a `to_input` key,
-`<localLeader>f`) makes a window there that shows the chat, the current one
+`toggle_activity`) makes a window there that shows the chat, the current one
 first, the chat's window. The panels stack
 below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
 panels open while they list something. The input opens on the first
-`to_input` key (|agentic-keymaps-agent|). `<localLeader>f` toggles the file
-activity panel, `<localLeader>I` the session info panel.
+`to_input` key (|agentic-keymaps-agent|). `toggle_activity` toggles the file
+activity panel, `toggle_info` the session info panel.
 
 When the chat's window closes or shows another buffer, its panels close.
 |:q| in the chat's window closes its panels first; when vim refuses the
@@ -984,7 +982,7 @@ Each window showing the chat is in one of two modes:
 Moving the view or the cursor up, with keys or mouse, puts the window in
 user control. It follows again when the view moves down to show the last
 line, when the cursor moves onto the last line (e.g. |G|, or a closed fold
-that ends there), on `<localLeader>G`, or when a prompt is submitted. Prompts
+that ends there), on `goto_bottom`, or when a prompt is submitted. Prompts
 sent from the queue do not. Entering the window, e.g. by a click, and
 resizing it do not change its mode.
 
@@ -1057,8 +1055,6 @@ A toggled panel listing the files the agent has changed over the session,
 one row per file however many times it was touched. Subagent (Task) edits
 appear alongside the main agent's, unmarked.
 
-Toggle with `<localLeader>f`.
-
     Row      Meaning ~
     `+ path`   File created
     `~ path`   File changed
@@ -1090,14 +1086,7 @@ not listed.
 ------------------------------------------------------------------------------
 9.6 SESSION INFO                                          *agentic-info-panel*
 
-A toggled panel listing the session's provider, model and mode, the account
-the provider is logged in with, the context totals and cost (as `/context`
-shows them), and each usage-limit window with its use, reset time and pace.
-A pace above 1 is marked `⚠`: at the average rate so far, the limit is reached
-before the reset.
-
-Toggle with `<localLeader>I`. The panel updates when the context use, the
-mode or the model changes, and on `/new` and `/clear`.
+A toggled panel with the session's agent, account, context and usage limits.
 
 ------------------------------------------------------------------------------
 9.7 SUBAGENTS                                              *agentic-subagents*
