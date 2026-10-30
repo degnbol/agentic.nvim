@@ -184,6 +184,12 @@ Adding a new foldable kind:
    the base language; the `difffold` marker is the special case that suppresses
    injection).
 
+## Wrapped tables
+
+`TextWrap.wrap_prose` wraps body cells of a table wider than the wrap width
+onto continuation rows; the last line of each logical row carries
+`AgenticTableRowEnd` (rationale in `Renderer.mark_table_row_end`).
+
 ## Search match highlighting
 
 `GrepHighlights.terms` (`utils/grep_highlights.lua`) matches a pattern

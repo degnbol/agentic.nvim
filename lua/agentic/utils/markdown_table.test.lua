@@ -105,6 +105,7 @@ describe("agentic.utils.MarkdownTable", function()
                 { "__init__", "init" },
                 { "[x]", "x" },
                 { "[t](https://u)", "t" },
+                { '[t](u "ti")', 't "ti"' },
                 { "![a](p.png)", "a" },
                 { "&amp;", "&" },
                 { "snake_case", "snake_case" },
@@ -123,6 +124,131 @@ describe("agentic.utils.MarkdownTable", function()
                 local pad = (" "):rep(width - #pair[2])
                 assert.equal("| " .. pair[1] .. pad .. " |", lines[i + 2])
             end
+        end)
+
+        it("leaves a table that fits max_width unchanged", function()
+            local header, rows = { "k", "v" }, { { "a", "b c" } }
+            local lines, row_ends = MarkdownTable.lines(header, rows, nil, 80)
+            assert.same(MarkdownTable.lines(header, rows), lines)
+            assert.same({}, row_ends)
+        end)
+
+        it("wraps long cells onto continuation rows", function()
+            local lines, row_ends = MarkdownTable.lines(
+                { "Name", "Description" },
+                {
+                    { "a", "one two three four five six" },
+                    { "b", "short" },
+                    { "c", "x" },
+                },
+                nil,
+                20
+            )
+            assert.same({
+                "| Name | Description |",
+                "| ---- | ----------- |",
+                "| a    | one two     |",
+                "|      | three four  |",
+                "|      | five six    |",
+                "| b    | short       |",
+                "| c    | x           |",
+            }, lines)
+            assert.same({ 5, 6, 7 }, row_ends)
+            assert.same(uniform(2, 6), parsed_cell_counts(lines))
+        end)
+
+        it("never wraps the header", function()
+            local lines, row_ends = MarkdownTable.lines(
+                { "a very long header text" },
+                { { "x y" } },
+                nil,
+                10
+            )
+            assert.equal("| a very long header text |", lines[1])
+            assert.equal(3, #lines)
+            assert.same({}, row_ends)
+            assert.same(uniform(1, 2), parsed_cell_counts(lines))
+        end)
+    end)
+
+    describe("wrap_cell", function()
+        it("wraps plain words", function()
+            assert.same(
+                { "one two", "three" },
+                MarkdownTable.wrap_cell("one two three", 7)
+            )
+        end)
+
+        it("splits a link into links to the same URL", function()
+            assert.same(
+                { "[see the](https://u)", "[docs](https://u)" },
+                MarkdownTable.wrap_cell("[see the docs](https://u)", 7)
+            )
+        end)
+
+        it("closes and reopens strong emphasis per line", function()
+            assert.same(
+                { "**a b**", "**c**" },
+                MarkdownTable.wrap_cell("**a b c**", 3)
+            )
+        end)
+
+        it("keeps a nested span whole", function()
+            assert.same(
+                { "**see**", "***it now***", "**ok**" },
+                MarkdownTable.wrap_cell("**see *it now* ok**", 6)
+            )
+        end)
+
+        it("puts an overlong word on a line of its own", function()
+            assert.same(
+                { "a", "verylongword", "b" },
+                MarkdownTable.wrap_cell("a verylongword b", 5)
+            )
+        end)
+
+        it("wraps empty text to one empty line", function()
+            assert.same({ "" }, MarkdownTable.wrap_cell("", 5))
+        end)
+    end)
+
+    describe("min_width", function()
+        it("is the widest word", function()
+            assert.equal(12, MarkdownTable.min_width("a verylongword b"))
+            assert.equal(
+                4,
+                MarkdownTable.min_width("[see the docs](https://u)")
+            )
+        end)
+    end)
+
+    describe("column_widths", function()
+        it("keeps natural widths that fit", function()
+            assert.same(
+                { 4, 5 },
+                MarkdownTable.column_widths({ 4, 5 }, { 3, 3 }, 20)
+            )
+        end)
+
+        it("narrows the widest column first", function()
+            assert.same(
+                { 4, 8 },
+                MarkdownTable.column_widths({ 4, 10 }, { 3, 3 }, 12)
+            )
+        end)
+
+        it("narrows the leftmost on a tie", function()
+            assert.same(
+                { 5, 6 },
+                MarkdownTable.column_widths({ 6, 6 }, { 3, 3 }, 11)
+            )
+        end)
+
+        it("stops at the minimum", function()
+            assert.same(
+                { 5, 6 },
+                MarkdownTable.column_widths({ 6, 6 }, { 5, 6 }, 5)
+            )
         end)
     end)
 

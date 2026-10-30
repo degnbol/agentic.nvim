@@ -18,6 +18,17 @@ local NS_FOLD_ANCHORS = vim.api.nvim_create_namespace("agentic_fold_anchors")
 --- blank line). Own namespace so it stays out of the fold/tool clear paths;
 --- footers are stamped once and never updated or cleared.
 local NS_TURN_USAGE = vim.api.nvim_create_namespace("agentic_turn_usage")
+local NS_TABLE_ROWS = vim.api.nvim_create_namespace("agentic_table_rows")
+
+--- Mark buffer rows as table row ends (`Renderer.mark_table_row_end`).
+--- @param bufnr integer
+--- @param first_row integer 0-based buffer row that offset 1 maps to
+--- @param table_row_ends integer[] 1-based row offsets from `first_row`
+local function mark_table_row_ends(bufnr, first_row, table_row_ends)
+    for _, i in ipairs(table_row_ends) do
+        Renderer.mark_table_row_end(bufnr, NS_TABLE_ROWS, first_row + i - 1)
+    end
+end
 
 --- Synchronously materialise treesitter injections for a buffer row range.
 --- The chat buffer's highlighter parses injections asynchronously under the
@@ -739,13 +750,18 @@ function MessageWriter:write_message(update)
 
     local lines = vim.split(text, "\n", { plain = true })
     close_fence(lines)
-    lines = TextWrap.wrap_prose(lines, self:_get_wrap_width())
+    local wrapped, table_row_ends =
+        TextWrap.wrap_prose(lines, self:_get_wrap_width())
 
     self:_schedule_follow()
 
-    self:_own_edit(function()
-        self:_append_lines(lines)
+    self:_own_edit(function(bufnr)
+        self:_append_lines(wrapped)
         self:_append_lines({ "" })
+        -- After the append: on an empty buffer `_append_lines` replaces row
+        -- 0, so a count taken before would be off by one.
+        local first_row = vim.api.nvim_buf_line_count(bufnr) - #wrapped - 1
+        mark_table_row_ends(bufnr, first_row, table_row_ends)
     end)
 end
 
@@ -1079,15 +1095,18 @@ end
 --- @param body_end integer 0-indexed last body row of the region, inclusive
 --- @param sign string `sign_text` identifying the region
 --- @param count_chars boolean The fold's foldtext counts the body's characters
+--- @param table_row_ends integer[]|nil 1-based row offsets from `body_start` to highlight as table row ends
 function MessageWriter:_decorate_collapsed_region(
     bufnr,
     body_start,
     body_end,
     sign,
-    count_chars
+    count_chars,
+    table_row_ends
 )
     render_collapsed_region(bufnr, body_start, body_end, sign)
     Renderer.set_dim_range(bufnr, body_start, body_end)
+    mark_table_row_ends(bufnr, body_start, table_row_ends or {})
     -- Same measure `collapsed_region_lines` folds on: a one-row body has no
     -- fence, and so no fold to close.
     if body_end > body_start then
@@ -1103,7 +1122,14 @@ end
 --- @param sign string `sign_text` identifying the region
 --- @param source string|nil Where the body came from, for the foldtext to name
 --- @param count_chars boolean The fold's foldtext counts the body's characters
-function MessageWriter:_write_collapsed_region(body, sign, source, count_chars)
+--- @param table_row_ends integer[]|nil 1-based indices into `body` of lines to highlight as table row ends
+function MessageWriter:_write_collapsed_region(
+    body,
+    sign,
+    source,
+    count_chars,
+    table_row_ends
+)
     if #body == 0 then
         return
     end
@@ -1140,7 +1166,8 @@ function MessageWriter:_write_collapsed_region(body, sign, source, count_chars)
             body_start,
             body_start + #body - 1,
             sign,
-            count_chars
+            count_chars,
+            table_row_ends
         )
     end)
 end
@@ -1224,12 +1251,14 @@ end
 --- @param sign string `sign_text` identifying the region
 --- @param source string|nil Where the body came from, for the foldtext to name
 --- @param tool_call_id string The call the region belongs to
+--- @param table_row_ends integer[]|nil 1-based indices into `body` of lines to highlight as table row ends
 --- @return boolean placed False when the anchor is unusable and the caller should append instead
 function MessageWriter:_insert_collapsed_region(
     body,
     sign,
     source,
-    tool_call_id
+    tool_call_id,
+    table_row_ends
 )
     local tracker = self.tool_call_blocks[tool_call_id]
     if #body == 0 or not tracker then
@@ -1280,7 +1309,8 @@ function MessageWriter:_insert_collapsed_region(
             insert_row + body_offset,
             insert_row + body_offset + #body - 1,
             sign,
-            false
+            false,
+            table_row_ends
         )
         return true
     end) == true
@@ -1305,13 +1335,19 @@ function MessageWriter:flush_thought_run()
         return
     end
 
-    local body = TextWrap.wrap_prose(
+    local body, table_row_ends = TextWrap.wrap_prose(
         vim.split(vim.trim(text), "\n", { plain = true }),
         self:_get_wrap_width()
     )
     -- Count characters: lines are a weak proxy for how much thinking happened,
     -- and no provider reports thinking tokens.
-    self:_write_collapsed_region(body, Glyphs.THINKING_SIGN, nil, true)
+    self:_write_collapsed_region(
+        body,
+        Glyphs.THINKING_SIGN,
+        nil,
+        true,
+        table_row_ends
+    )
 end
 
 --- Render one hook's activity as a collapsed region carrying the hook glyph and
@@ -1336,12 +1372,19 @@ end
 --- @param script string|nil Basename of the script it came from, if known
 --- @param tool_call_id string|nil The call the hook fired on, if any
 function MessageWriter:write_hook_block(body, script, tool_call_id)
-    local wrapped = TextWrap.wrap_prose(body, self:_get_wrap_width())
+    local wrapped, table_row_ends =
+        TextWrap.wrap_prose(body, self:_get_wrap_width())
     local sign = Glyphs.HOOK .. " "
 
     if
         tool_call_id
-        and self:_insert_collapsed_region(wrapped, sign, script, tool_call_id)
+        and self:_insert_collapsed_region(
+            wrapped,
+            sign,
+            script,
+            tool_call_id,
+            table_row_ends
+        )
     then
         return
     end
@@ -1349,7 +1392,7 @@ function MessageWriter:write_hook_block(body, script, tool_call_id)
     -- Appending under a buffered thought run would put the region above the
     -- thinking it followed; an anchored one has no such ordering to keep.
     self:flush_thought_run()
-    self:_write_collapsed_region(wrapped, sign, script, false)
+    self:_write_collapsed_region(wrapped, sign, script, false, table_row_ends)
 end
 
 --- The identity sign for a prompt heading row: the command's own glyph when the
@@ -1388,7 +1431,8 @@ function MessageWriter:write_user_prompt(text, extra_lines)
     -- An unclosed fence would swallow everything written after the prompt into
     -- the prompt's own code block.
     close_fence(flat)
-    flat = TextWrap.wrap_prose(flat, self:_get_wrap_width())
+    local table_row_ends
+    flat, table_row_ends = TextWrap.wrap_prose(flat, self:_get_wrap_width())
 
     self:_schedule_follow()
 
@@ -1423,6 +1467,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
         )
 
         render_region_rail(bufnr, heading_row, heading_row + #flat - 1)
+        mark_table_row_ends(bufnr, heading_row, table_row_ends)
     end)
 end
 
@@ -1467,7 +1512,7 @@ function MessageWriter:write_notice(notice)
     -- scrolling horizontally.
     local lines = { "## " .. notice.title, notice.detail }
     vim.list_extend(lines, notice.body or {})
-    local fold_body =
+    local fold_body, table_row_ends =
         TextWrap.wrap_prose(notice.fold_body or {}, self:_get_wrap_width())
     --- @type integer|nil 0-indexed offset of the fenced body's first row in `lines`
     local fold_offset
@@ -1519,6 +1564,13 @@ function MessageWriter:write_notice(notice)
 
         if notice.detail then
             Renderer.set_dim_range(bufnr, heading_row + 1, heading_row + 1)
+        end
+        if fold_offset then
+            mark_table_row_ends(
+                bufnr,
+                heading_row + fold_offset,
+                table_row_ends
+            )
         end
         -- Vim cannot close a one-line fold.
         if fold_offset and #fold_body > 1 then
@@ -1864,7 +1916,7 @@ function MessageWriter:write_error_message(err)
     local all_lines = { HEADING }
     vim.list_extend(
         all_lines,
-        TextWrap.wrap_prose(body_lines, self:_get_wrap_width())
+        (TextWrap.wrap_prose(body_lines, self:_get_wrap_width()))
     )
 
     self:_release_prose_pin()
@@ -2179,7 +2231,8 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
     end
 
     local raw = vim.api.nvim_buf_get_lines(bufnr, start, reflow_end, false)
-    local wrapped = TextWrap.wrap_prose(raw, self:_get_wrap_width())
+    local wrapped, table_row_ends =
+        TextWrap.wrap_prose(raw, self:_get_wrap_width())
 
     if not vim.deep_equal(raw, wrapped) then
         vim.api.nvim_buf_set_lines(bufnr, start, reflow_end, false, wrapped)
@@ -2190,6 +2243,7 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
             self:_rebuild_prose_region(bufnr)
         end
     end
+    mark_table_row_ends(bufnr, start, table_row_ends)
 
     if flush_all then
         -- Same job as `close_fence`, but appended to the buffer: reflow_end is

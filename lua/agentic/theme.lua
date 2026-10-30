@@ -43,6 +43,7 @@ Theme.HL_GROUPS = {
     ACTIVITY_DELETE = "AgenticActivityDelete",
     ACTIVITY_READ = "AgenticActivityRead",
     ACTIVITY_UNSEEN = "AgenticActivityUnseen",
+    TABLE_ROW_END = "AgenticTableRowEnd",
 }
 
 local status_hl = {
@@ -74,6 +75,15 @@ local function glyph_off_hl(source)
         return { link = Theme.HL_GROUPS.GLYPH_USER }
     end
     return { fg = fg, strikethrough = true }
+end
+
+--- Definition for a dashed underline coloured like `source`'s foreground, or
+--- in the text colour when `source` has none.
+--- @param source string Group to take the underline colour from
+--- @return vim.api.keyset.highlight
+local function underdashed_hl(source)
+    local fg = vim.api.nvim_get_hl(0, { name = source, link = false }).fg
+    return { underdashed = true, sp = fg }
 end
 
 --- What this module last wrote to each group, as `nvim_get_hl` reads it back.
@@ -210,6 +220,11 @@ function Theme.setup()
         { Theme.HL_GROUPS.ACTIVITY_DELETE, { link = "Removed" } },
         { Theme.HL_GROUPS.ACTIVITY_READ, { link = "Comment" } },
         { Theme.HL_GROUPS.ACTIVITY_UNSEEN, { link = "DiagnosticHint" } },
+
+        -- Last line of each table body row, in tables whose rows wrap onto
+        -- continuation lines, in the colour the markdown highlights
+        -- query gives the table's pipes and delimiter row
+        { Theme.HL_GROUPS.TABLE_ROW_END, underdashed_hl("@punctuation.special") },
     }
     -- stylua: ignore end
 

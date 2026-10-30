@@ -86,7 +86,7 @@ local function table_lines(value)
             rows[i] =
                 { MarkdownTable.cell(key), MarkdownTable.cell(cells[key]) }
         end
-        return MarkdownTable.lines({ "key", "value" }, rows)
+        return (MarkdownTable.lines({ "key", "value" }, rows))
     end
 
     if next(value) == nil or not vim.islist(value) then
@@ -119,7 +119,7 @@ local function table_lines(value)
             return MarkdownTable.cell(record[key])
         end, order)
     end
-    return MarkdownTable.lines(header, rows)
+    return (MarkdownTable.lines(header, rows))
 end
 
 --- Display rows for JSON text. A flat object, or a non-empty array of flat

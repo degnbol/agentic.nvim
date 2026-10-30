@@ -25,7 +25,7 @@ local M = {}
 --- @alias agentic.ui.FoldState "open"|"closed"|"closed_when_final"
 
 --- @class agentic.ui.ToolCallLayout.HighlightRange
---- @field type "comment"|"error"|"old"|"new"|"new_modification" Type of highlight to apply
+--- @field type "comment"|"error"|"old"|"new"|"new_modification"|"table_row_end" Type of highlight to apply
 --- @field line_index integer 0-based row index
 --- @field old_line? string Original line content (for diff types)
 --- @field new_line? string Modified line content (for diff types)
@@ -367,12 +367,19 @@ end
 --- @param fold agentic.ui.FoldState fold state when more than one row
 --- @return agentic.ui.ToolCallLayout.Section
 local function prose_section(rows, wrap_width, fold)
-    local wrapped = TextWrap.wrap_prose(rows, wrap_width)
+    local wrapped, table_row_ends = TextWrap.wrap_prose(rows, wrap_width)
+    --- @type agentic.ui.ToolCallLayout.HighlightRange[]
+    local highlights = {}
+    for _, i in ipairs(table_row_ends) do
+        highlights[#highlights + 1] =
+            { type = "table_row_end", line_index = i - 1 }
+    end
     --- @type agentic.ui.ToolCallLayout.Section
     local section = {
         rows = wrapped,
         lang = "markdown",
         dim = true,
+        highlights = highlights,
         -- A one-row body gets no fold (`Folds.levels`), so closing it raises E490.
         fold = #wrapped > 1 and fold or nil,
     }

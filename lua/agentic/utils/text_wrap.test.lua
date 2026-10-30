@@ -395,6 +395,41 @@ describe("agentic.utils.TextWrap", function()
             }, TextWrap.wrap_prose(lines, 80))
         end)
 
+        describe("table_row_ends", function()
+            local wide_table = {
+                "| Name | Description |",
+                "|---|---|",
+                "| a | one two three four five six |",
+                "| b | short |",
+                "| c | x |",
+            }
+
+            it("offsets row ends by the lines before each table", function()
+                local lines = { "intro", "" }
+                vim.list_extend(lines, wide_table)
+                vim.list_extend(lines, { "", "between" })
+                vim.list_extend(lines, wide_table)
+                lines[#lines + 1] = "after"
+                local result, row_ends = TextWrap.wrap_prose(lines, 20)
+                assert.same({ 7, 8, 9, 16, 17, 18 }, row_ends)
+                assert.equal("|      | five six    |", result[7])
+                assert.equal("after", result[#result])
+            end)
+
+            it("counts a pipe block that is no table as lines", function()
+                local lines = { "| a | b |", "| c |", "" }
+                vim.list_extend(lines, wide_table)
+                local _, row_ends = TextWrap.wrap_prose(lines, 20)
+                assert.same({ 8, 9, 10 }, row_ends)
+            end)
+
+            it("is empty when the width is not positive", function()
+                local result, row_ends = TextWrap.wrap_prose(wide_table, 0)
+                assert.same(wide_table, result)
+                assert.same({}, row_ends)
+            end)
+        end)
+
         it(
             "leaves a pipe-led block without a delimiter row unchanged",
             function()

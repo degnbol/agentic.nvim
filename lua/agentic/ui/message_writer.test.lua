@@ -5393,3 +5393,183 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 end)
+
+describe("agentic.ui.MessageWriter wrapped table rows", function()
+    local MessageWriter = require("agentic.ui.message_writer")
+
+    -- At a wrap width of 20 the first body row takes three lines.
+    local TABLE = {
+        "| Name | Description |",
+        "|---|---|",
+        "| a | one two three four five six |",
+        "| b | short |",
+        "| c | x |",
+    }
+
+    local bufnr, winid, writer, original_windows
+
+    before_each(function()
+        original_windows = vim.deepcopy(Config.windows)
+        Config.windows.min_wrap_width = 0
+        Config.windows.max_wrap_width = 20
+        bufnr = vim.api.nvim_create_buf(false, true)
+        winid = vim.api.nvim_open_win(bufnr, true, {
+            relative = "editor",
+            width = 60,
+            height = 20,
+            row = 0,
+            col = 0,
+        })
+        vim.wo[winid].wrap = false
+        writer = MessageWriter:new(bufnr)
+    end)
+
+    after_each(function()
+        Config.windows = original_windows
+        vim.api.nvim_win_close(winid, true)
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    --- 0-indexed rows carrying the row-end underline, in any namespace.
+    --- @return integer[]
+    local function underlined_rows()
+        local rows = {}
+        local marks =
+            vim.api.nvim_buf_get_extmarks(bufnr, -1, 0, -1, { details = true })
+        for _, mark in ipairs(marks) do
+            if mark[4].hl_group == "AgenticTableRowEnd" then
+                assert.equal(mark[2] + 1, mark[4].end_row)
+                rows[#rows + 1] = mark[2]
+            end
+        end
+        return rows
+    end
+
+    --- @param text string
+    --- @param kind string|nil
+    local function update(text, kind)
+        return {
+            sessionUpdate = kind or "agent_message_chunk",
+            content = { type = "text", text = text },
+        }
+    end
+
+    it("underlines row ends of a message in an empty buffer", function()
+        writer:write_message(update(table.concat(TABLE, "\n")))
+        assert.equal(
+            "|      | five six    |",
+            vim.api.nvim_buf_get_lines(bufnr, 4, 5, false)[1]
+        )
+        assert.same({ 4, 5, 6 }, underlined_rows())
+    end)
+
+    it("underlines row ends of a message after content", function()
+        writer:write_message(update("intro"))
+        writer:write_message(update(table.concat(TABLE, "\n")))
+        assert.same({ 6, 7, 8 }, underlined_rows())
+    end)
+
+    it("underlines a streamed table once and leaves later prose", function()
+        writer:write_message_chunk(
+            update("intro\n\n" .. table.concat(TABLE, "\n") .. "\n\n")
+        )
+        writer:write_message_chunk(update("more prose here"))
+        writer:finalize_turn()
+
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        assert.equal("|      | five six    |", lines[7])
+        assert.equal("more prose here", lines[11])
+        assert.same({ 6, 7, 8 }, underlined_rows())
+
+        local signs = vim.api.nvim_buf_get_extmarks(
+            bufnr,
+            require("agentic.ui.tool_call_renderer").NS_DECORATIONS,
+            0,
+            -1,
+            { details = true }
+        )
+        local last = signs[#signs]
+        assert.same({ 10, "╰─" }, { last[2], last[4].sign_text })
+    end)
+
+    it("underlines a table in a thought run's body", function()
+        writer:write_message_chunk(
+            update(table.concat(TABLE, "\n"), "agent_thought_chunk")
+        )
+        writer:flush_thought_run()
+        assert.same({ 5, 6, 7 }, underlined_rows())
+    end)
+
+    it("underlines a table in a hook block's body", function()
+        writer:write_hook_block(vim.deepcopy(TABLE), "guard.sh")
+        assert.same({ 5, 6, 7 }, underlined_rows())
+        assert.equal(
+            Glyphs.HOOK .. " ",
+            vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                require("agentic.ui.tool_call_renderer").NS_DECORATIONS,
+                1,
+                1,
+                { details = true }
+            )[1][4].sign_text
+        )
+    end)
+
+    it("underlines a table in a user prompt", function()
+        writer:write_user_prompt("look\n" .. table.concat(TABLE, "\n"))
+        assert.same({ 5, 6, 7 }, underlined_rows())
+    end)
+
+    it("underlines a table in a notice's folded body", function()
+        writer:write_notice({
+            glyph = "x",
+            title = "t",
+            fold_body = vim.deepcopy(TABLE),
+            mid_turn = true,
+        })
+        assert.same({ 6, 7, 8 }, underlined_rows())
+    end)
+
+    it("underlines a table in a hook block placed under its call", function()
+        local schedule_stub = spy.stub(vim, "schedule")
+        MiniTest.finally(function()
+            schedule_stub:revert()
+        end)
+        writer:write_tool_call_block({
+            tool_call_id = "t1",
+            status = "completed",
+            kind = "execute",
+            argument = "ls",
+            body = { "output" },
+        })
+        writer:write_message_chunk(update("after the call"))
+        writer:write_hook_block(vim.deepcopy(TABLE), "guard.sh", "t1")
+
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        local i_five = vim.iter(ipairs(lines)):find(function(_, line)
+            return line == "|      | five six    |"
+        end)
+        assert.is_true(i_five < #lines - 1)
+        assert.equal("after the call", lines[#lines])
+        assert.same({ i_five - 1, i_five, i_five + 1 }, underlined_rows())
+    end)
+
+    it("underlines a table in a fetch body", function()
+        local schedule_stub = spy.stub(vim, "schedule")
+        MiniTest.finally(function()
+            schedule_stub:revert()
+        end)
+        writer:write_tool_call_block({
+            tool_call_id = "fetch-table",
+            status = "completed",
+            kind = "fetch",
+            argument = "https://example.com prompt",
+            body = vim.deepcopy(TABLE),
+        })
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        local i_five = vim.iter(ipairs(lines)):find(function(_, line)
+            return line == "|      | five six    |"
+        end)
+        assert.same({ i_five - 1, i_five, i_five + 1 }, underlined_rows())
+    end)
+end)

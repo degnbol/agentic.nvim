@@ -246,6 +246,8 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                     }
                 )
             end
+        elseif hl_range.type == "table_row_end" then
+            M.mark_table_row_end(bufnr, NS_DIFF_HIGHLIGHTS, buffer_line)
         end
 
         if hl_range.block_col_hl and buffer_line < line_count then
@@ -373,6 +375,26 @@ function M.restamp_border(bufnr, extmark_id, row, sign_text)
         sign_text,
         Theme.HL_GROUPS.CODE_BLOCK_FENCE
     )
+end
+
+--- Highlight a whole row with `AgenticTableRowEnd`, marking the last line
+--- of a markdown table row whose cells continue on further table rows.
+---
+--- GFM has no multi-line cells, so the continuations are real table rows.
+--- Empty separator rows would read as real empty rows and cost a line each,
+--- and the sign column already holds the region rail, so the row end is
+--- marked on the text itself.
+--- @param bufnr integer
+--- @param ns integer namespace for the extmark
+--- @param row integer 0-based buffer row
+function M.mark_table_row_end(bufnr, ns, row)
+    vim.api.nvim_buf_set_extmark(bufnr, ns, row, 0, {
+        end_row = row + 1,
+        end_col = 0,
+        hl_group = Theme.HL_GROUPS.TABLE_ROW_END,
+        priority = 200,
+        invalidate = true,
+    })
 end
 
 --- Register a dim extmark spanning a body range. Lines are highlighted with

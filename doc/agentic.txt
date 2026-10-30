@@ -1127,6 +1127,7 @@ Chat text ~
     AgenticDimmedBlock        `Comment`                Dimmed fence lines
     AgenticTurnUsage          `Comment`                Token-usage footer
     AgenticSearchMatch        |hl-Search|              Search match
+    AgenticTableRowEnd        dashed underline         End of a wrapped table row
     AgenticErrorHeading       |hl-DiagnosticError|     Error heading
     AgenticErrorBody          |hl-DiagnosticVirtualTextError|
 

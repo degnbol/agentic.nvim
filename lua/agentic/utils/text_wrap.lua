@@ -178,20 +178,23 @@ local function is_separator_row(cells)
     return #cells > 0
 end
 
---- Format a contiguous block of markdown table lines with aligned columns.
+--- Format a contiguous block of markdown table lines with aligned columns,
+--- wrapping body cells to fit `width`.
 --- A block whose second row is not a delimiter row is no table to the
 --- markdown parser, and is returned unchanged.
 --- @param table_lines string[]
---- @return string[]
-local function format_table(table_lines)
+--- @param width integer display cells per line
+--- @return string[] lines
+--- @return integer[] row_ends 1-based indices into `lines` of the last line of every body row, when some row wrapped, else {}
+local function format_table(table_lines, width)
     local rows = {}
     for _, line in ipairs(table_lines) do
         rows[#rows + 1] = parse_table_row(line)
     end
     if not (rows[2] and is_separator_row(rows[2])) then
-        return table_lines
+        return table_lines, {}
     end
-    return MarkdownTable.lines(rows[1], vim.list_slice(rows, 3), rows[2])
+    return MarkdownTable.lines(rows[1], vim.list_slice(rows, 3), rows[2], width)
 end
 
 --- Wrap a single prose line at word boundaries.
@@ -415,16 +418,18 @@ function M.paragraph_break(text, trailing_newlines)
 end
 
 --- Hard-wrap prose in a block of lines, skipping fenced code blocks and
---- formatting markdown tables with aligned columns.
+--- formatting markdown tables with aligned columns wrapped to `width`.
 --- @param lines string[]
 --- @param width integer Target width in columns
---- @return string[]
+--- @return string[] wrapped
+--- @return integer[] table_row_ends 1-based indices into `wrapped` of the last line of every table body row, in tables where some row wrapped
 function M.wrap_prose(lines, width)
     if width <= 0 then
-        return lines
+        return lines, {}
     end
 
     local out = {}
+    local table_row_ends = {} ---@type integer[]
     local in_fence = false
     local in_math = false
     local table_buf = {} ---@type string[]
@@ -432,9 +437,11 @@ function M.wrap_prose(lines, width)
     --- Emit any buffered table lines (formatted) before a non-table line.
     local function flush_table()
         if #table_buf > 0 then
-            for _, tl in ipairs(format_table(table_buf)) do
-                out[#out + 1] = tl
+            local formatted, row_ends = format_table(table_buf, width)
+            for _, row_end in ipairs(row_ends) do
+                table_row_ends[#table_row_ends + 1] = #out + row_end
             end
+            vim.list_extend(out, formatted)
             table_buf = {}
         end
     end
@@ -474,7 +481,7 @@ function M.wrap_prose(lines, width)
 
     flush_table()
 
-    return out
+    return out, table_row_ends
 end
 
 return M
