@@ -3120,8 +3120,7 @@ describe("agentic.SessionManager", function()
 
         describe("refusal", function()
             --- A session whose turns end with `response` and `err`, with a
-            --- background subagent `c1` (agent id `a1`) whose message input is
-            --- buffer 42.
+            --- background subagent `c1` whose message input is buffer 42.
             --- @param response table|nil
             --- @param err table|nil
             --- @return agentic.SessionManager session
@@ -3129,9 +3128,6 @@ describe("agentic.SessionManager", function()
                 local session = make_session(nil, nil, {})
                 session.agent.send_prompt = function(_self, _sid, _p, cb)
                     cb(response, err)
-                end
-                session.agent.subagent_id = function()
-                    return "a1"
                 end
                 session.agent.subagent_message_instruction = function(
                     _self,
@@ -3144,16 +3140,13 @@ describe("agentic.SessionManager", function()
                 session.agent.subagent_stop_instruction = function()
                     return "stop it"
                 end
-                session._latest_generation = function()
-                    return "c1"
-                end
                 session._agent_label = function()
                     return "x"
                 end
                 session._confirmed_blocking = function()
                     return false
                 end
-                session._inputs = { a1 = { bufnr = 42 } }
+                session._inputs = { c1 = { bufnr = 42 } }
                 session._relay = SessionManager._relay
                 session._relay_to_agent = SessionManager._relay_to_agent
                 session._stop_agent = SessionManager._stop_agent
@@ -3332,7 +3325,7 @@ describe("agentic.SessionManager", function()
                     end
 
                     session:_relay_to_agent("c1", "hi", { force = false })
-                    session._inputs.a1 = nil
+                    session._inputs.c1 = nil
                     resolve({ stopReason = "refusal" }, nil)
 
                     assert.is_nil(restore_stub.calls[1][4])

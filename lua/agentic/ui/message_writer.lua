@@ -98,7 +98,6 @@ end
 --- @field agent_type? string Subagent type, once the SDK's record of the spawn is read
 --- @field mode agentic.ui.MessageWriter.SubagentMode
 --- @field confirmed boolean `mode` comes from the SDK's record of the spawn rather than a prediction
---- @field agent_id? string Id addressing the agent, for its tools such as SendMessage and TaskStop
 
 --- @class agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id string

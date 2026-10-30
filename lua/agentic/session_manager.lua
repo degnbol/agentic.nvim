@@ -91,7 +91,7 @@ end
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field status_indicator agentic.ui.StatusIndicator
 --- @field _agents table<string, agentic.SessionManager.Agent> Subagents of the conversation by child session id
---- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by agent id (`ACPClient:subagent_id`)
+--- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
 --- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
@@ -839,11 +839,10 @@ end
 --- @return agentic.ui.SubagentTranscript
 function SessionManager:_new_transcript(child_id, subagent)
     local SubagentTranscript = require("agentic.ui.subagent_transcript")
-    local agent_id, generation = self.agent:subagent_id(child_id)
     --- @type agentic.ui.SubagentTranscript
     local transcript
     transcript =
-        SubagentTranscript:new(agent_id, generation, subagent, self.widget, {
+        SubagentTranscript:new(child_id, subagent, self.widget, {
             setup_buf = function(bufnr, writer)
                 self:_setup_session_buf(bufnr, writer)
                 self:_bind_agent_keymaps(child_id, bufnr)
@@ -1066,9 +1065,8 @@ function SessionManager:_read_agent_record(child_id)
     end
     -- The agent blocks its spawner, so the main agent cannot reach it apart
     -- from its own turn.
-    local agent_id = (self.agent:subagent_id(child_id))
-    if self._inputs[agent_id] then
-        self:_destroy_input(agent_id)
+    if self._inputs[child_id] then
+        self:_destroy_input(child_id)
     end
 end
 
@@ -1115,7 +1113,6 @@ function SessionManager:_open_agent(child_id, label, parent_session_id)
     --- @type agentic.ui.MessageWriter.SubagentInfo
     local subagent = {
         label = label,
-        agent_id = (self.agent:subagent_id(child_id)),
         mode = self.agent:subagent_predicted_mode(),
         confirmed = false,
     }
@@ -1265,7 +1262,7 @@ end
 
 --- Apply a `subagent_update`: announce an unknown child, relabel a known one,
 --- then start or end its work. A label is the description, else the title,
---- else the id addressing the agent. A custom (`_`-prefixed) state neither
+--- else the child session id. A custom (`_`-prefixed) state neither
 --- starts nor ends it. While a session loads, the work state is left out: the
 --- session file holds the transcript's rows, and the provider reports the
 --- current state again after the load.
@@ -1282,7 +1279,7 @@ function SessionManager:_on_subagent_update(update, source_session_id)
     if update.description ~= nil then
         description = Json.present(update.description)
     end
-    local label = description or title or (self.agent:subagent_id(child_id))
+    local label = description or title or child_id
 
     if not agent then
         self:_open_agent(child_id, label, source_session_id)
@@ -1439,17 +1436,17 @@ end
 
 --- Wipe an agent's message input. Unsent text in it is given back in a
 --- notification.
---- @param agent_id string
-function SessionManager:_destroy_input(agent_id)
-    local input = self._inputs[agent_id]
-    self._inputs[agent_id] = nil
+--- @param child_id string
+function SessionManager:_destroy_input(child_id)
+    local input = self._inputs[child_id]
+    self._inputs[child_id] = nil
     local text = input:text()
     input:destroy()
     if text:find("%S") then
         Logger.notify(
             string.format(
                 "Unsent message to subagent %s, discarded:\n%s",
-                self:_agent_label(self:_latest_generation(agent_id) or agent_id),
+                self:_agent_label(child_id),
                 text
             ),
             vim.log.levels.WARN
@@ -1459,24 +1456,9 @@ end
 
 --- Wipe every message input.
 function SessionManager:_destroy_inputs()
-    for agent_id in pairs(self._inputs) do
-        self:_destroy_input(agent_id)
+    for child_id in pairs(self._inputs) do
+        self:_destroy_input(child_id)
     end
-end
-
---- The child session of an agent's latest generation that this session
---- manager knows.
---- @param agent_id string
---- @return string|nil child_id
-function SessionManager:_latest_generation(agent_id)
-    local latest, latest_generation
-    for child_id in pairs(self._agents) do
-        local id, generation = self.agent:subagent_id(child_id)
-        if id == agent_id and generation > (latest_generation or 0) then
-            latest, latest_generation = child_id, generation
-        end
-    end
-    return latest
 end
 
 --- The message input of the agent whose transcript is `bufnr`.
@@ -1485,7 +1467,7 @@ end
 function SessionManager:_input_of_transcript(bufnr)
     for child_id, agent in pairs(self._agents) do
         if agent.transcript and agent.transcript.bufnr == bufnr then
-            return self._inputs[(self.agent:subagent_id(child_id))]
+            return self._inputs[child_id]
         end
     end
     return nil
@@ -1499,13 +1481,12 @@ function SessionManager:_open_input(child_id)
     local agent = self._agents[child_id]
     local block = self:_agent_block(child_id)
     local subagent = block and block.subagent
-    local agent_id = (self.agent:subagent_id(child_id))
     if
-        self._inputs[agent_id]
+        self._inputs[child_id]
         or not (agent and agent.open)
         or not (subagent and subagent.mode == "background")
         or not self.agent:subagent_message_instruction(
-            agent_id,
+            child_id,
             subagent.label,
             ""
         )
@@ -1536,23 +1517,23 @@ function SessionManager:_open_input(child_id)
                 )
             end,
             on_wipeout = function()
-                if self._inputs[agent_id] == input then
-                    self._inputs[agent_id] = nil
+                if self._inputs[child_id] == input then
+                    self._inputs[child_id] = nil
                 end
             end,
         }
     )
-    self._inputs[agent_id] = input
+    self._inputs[child_id] = input
 end
 
 --- The window to type into for a subagent: the window in the current
 --- tabpage showing its message input, else one opened below the current
 --- window. For an agent without a message input, the session's input
 --- (`ChatWidget:input_win`).
---- @param agent_id string
+--- @param child_id string
 --- @return integer|nil winid Nil when the session's input panel fails to open
-function SessionManager:_agent_input_win(agent_id)
-    local input = self._inputs[agent_id]
+function SessionManager:_agent_input_win(child_id)
+    local input = self._inputs[child_id]
     if input then
         return WidgetLayout.input_win(input.bufnr)
     end
@@ -1566,15 +1547,14 @@ end
 --- @param child_id string
 --- @param bufnr integer The transcript
 function SessionManager:_bind_agent_keymaps(child_id, bufnr)
-    local agent_id = (self.agent:subagent_id(child_id))
     BufHelpers.bind_to_input(Config.keymaps.agent.to_input, bufnr, function()
-        return self:_agent_input_win(agent_id)
+        return self:_agent_input_win(child_id)
     end)
     BufHelpers.multi_keymap_set(
         Config.keymaps.widget.stop_generation,
         bufnr,
         function()
-            if self._inputs[agent_id] then
+            if self._inputs[child_id] then
                 self:_stop_agent(child_id)
             else
                 self:stop_generation()
@@ -1584,13 +1564,12 @@ function SessionManager:_bind_agent_keymaps(child_id, bufnr)
     )
 end
 
---- A subagent's display name, else the id addressing it.
+--- A subagent's display name, else its child session id.
 --- @param child_id string
 --- @return string
 function SessionManager:_agent_label(child_id)
     local block = self:_agent_block(child_id)
-    return block and block.subagent and block.subagent.label
-        or (self.agent:subagent_id(child_id))
+    return block and block.subagent and block.subagent.label or child_id
 end
 
 --- Whether the provider's record says a subagent blocks its spawner.
@@ -3266,22 +3245,20 @@ end
 
 --- Ask the main agent to stop a subagent, through the provider's stop
 --- instruction. A blocking one stops by stopping the main agent's turn.
---- Notifies when the agent's latest generation has finished, the provider
---- gives no instruction, or the gate holds the request.
---- @param child_id string Any generation of the agent
+--- Notifies when the agent has finished, the provider gives no instruction,
+--- or the gate holds the request.
+--- @param child_id string
 function SessionManager:_stop_agent(child_id)
-    local agent_id = (self.agent:subagent_id(child_id))
-    local latest = self:_latest_generation(agent_id) or child_id
-    if self:_confirmed_blocking(latest) then
+    if self:_confirmed_blocking(child_id) then
         self:stop_generation()
         return
     end
-    local label = self:_agent_label(latest)
-    if not (self._agents[latest] and self._agents[latest].open) then
+    local label = self:_agent_label(child_id)
+    if not (self._agents[child_id] and self._agents[child_id].open) then
         Logger.notify(string.format("Subagent %s has finished", label))
         return
     end
-    local instruction = self.agent:subagent_stop_instruction(agent_id, label)
+    local instruction = self.agent:subagent_stop_instruction(child_id, label)
     if not instruction then
         Logger.notify(
             string.format(
@@ -3307,12 +3284,12 @@ function SessionManager:_stop_agent(child_id)
 end
 
 --- Ask the main agent to pass `text` to a subagent, through the provider's
---- message instruction. A finished agent resumes as a new generation.
---- Notifies for an agent that blocks its spawner, a provider that gives no
---- instruction, or a message the gate holds. A refused message goes back to
---- the top of the agent's input, or of the session's input once the agent's
---- is gone.
---- @param child_id string Any generation of the agent
+--- message instruction. A finished agent resumes. Notifies for an agent that
+--- blocks its spawner, a provider that gives no instruction, or a message the
+--- gate holds. A refused
+--- message goes back to the top of the agent's input, or of the session's
+--- input once the agent's is gone.
+--- @param child_id string
 --- @param text string
 --- @param opts agentic.ui.PromptInput.SubmitOpts
 --- @return boolean sent
@@ -3320,11 +3297,9 @@ function SessionManager:_relay_to_agent(child_id, text, opts)
     if not text:find("%S") then
         return false
     end
-    local agent_id = (self.agent:subagent_id(child_id))
-    local latest = self:_latest_generation(agent_id) or child_id
-    local label = self:_agent_label(latest)
-    local instruction = not self:_confirmed_blocking(latest)
-        and self.agent:subagent_message_instruction(agent_id, label, text)
+    local label = self:_agent_label(child_id)
+    local instruction = not self:_confirmed_blocking(child_id)
+        and self.agent:subagent_message_instruction(child_id, label, text)
     if not instruction then
         Logger.notify(
             string.format("Subagent %s cannot be messaged", label),
@@ -3333,7 +3308,7 @@ function SessionManager:_relay_to_agent(child_id, text, opts)
         return false
     end
     local held = self:_relay(instruction, opts, function()
-        local input = self._inputs[agent_id]
+        local input = self._inputs[child_id]
         Recovery.restore_refused_prompt(
             self,
             text,

@@ -187,10 +187,7 @@ function ClaudeAgentACPAdapter:subagent_record(session_id, child_id)
         end
         self._session_dirs[session_id] = session_dir
     end
-    local meta = ClaudeUtils.subagent_meta(
-        session_dir,
-        (ClaudeUtils.agent_id(child_id))
-    )
+    local meta = ClaudeUtils.subagent_meta(session_dir, child_id)
     if not meta then
         return nil
     end
@@ -208,15 +205,6 @@ end
 --- @return string|nil
 function ClaudeAgentACPAdapter:subagent_task_id(update)
     return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
-end
-
---- The bridge names a resumed agent's later sessions
---- `<agent id>:generation:<N>`.
---- @param child_id string
---- @return string agent_id
---- @return integer generation
-function ClaudeAgentACPAdapter:subagent_id(child_id)
-    return ClaudeUtils.agent_id(child_id)
 end
 
 --- "background" when the provider config sets `subagents.force_background`.

@@ -301,19 +301,6 @@ function M.subagent_meta(session_dir, agent_id)
     return meta
 end
 
---- Split a child session id into the agent id and the generation. The bridge
---- names a resumed agent's later generations `<agent id>:generation:<N>`.
---- @param child_id string
---- @return string agent_id
---- @return integer generation 1 for an id without the suffix
-function M.agent_id(child_id)
-    local id, generation = child_id:match("^(.*):generation:(%d+)$")
-    if not id then
-        return child_id, 1
-    end
-    return id, tonumber(generation) --[[@as integer]]
-end
-
 --- Instruction for the main agent to stop a background subagent with its
 --- TaskStop tool. Values are JSON-quoted, so quotes and newlines in them cannot
 --- break the sentence.

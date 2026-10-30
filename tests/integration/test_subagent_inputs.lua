@@ -78,8 +78,8 @@ end
 _G.transcript = function(child_id)
     return _G.s._agents[child_id].transcript
 end
-_G.input = function(agent_id)
-    return _G.s._inputs[agent_id]
+_G.input = function(child_id)
+    return _G.s._inputs[child_id]
 end
 _G.text = function(bufnr)
     return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")

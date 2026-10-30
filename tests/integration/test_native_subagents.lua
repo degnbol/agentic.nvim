@@ -597,7 +597,6 @@ _G.call("c1", "t1")
         assert.same(
             {
                 label = "find it",
-                agent_id = "c1",
                 agent_type = "Explore",
                 mode = "background",
                 confirmed = true,
@@ -885,7 +884,7 @@ _G.saved.messages = { {
     type = "tool_call", tool_call_id = "c1", kind = "SubAgent",
     status = "completed", argument = "agentic://999/subagent/finder-c1",
     body = { "Find it." },
-    subagent = { label = "finder", agent_id = "c1", mode = "blocking", confirmed = true },
+    subagent = { label = "finder", mode = "blocking", confirmed = true },
 }, {
     type = "session_message", message_id = "toolu_1", kind = "task", view = "sent",
     sender_session_id = "sid-x", recipient_session_id = "c1", text = "Find it.",

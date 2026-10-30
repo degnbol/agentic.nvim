@@ -1329,7 +1329,7 @@ describe("agentic.acp.ACPClient", function()
             assert.same({}, client._children)
         end)
 
-        it("knows no spawn record and addresses a child by its id", function()
+        it("knows no spawn record or spawning Task id", function()
             local client = make_client()
 
             assert.is_nil(client:subagent_record("root", "child"))
@@ -1337,9 +1337,6 @@ describe("agentic.acp.ACPClient", function()
                 sessionUpdate = "agent_message_chunk",
                 content = { type = "text", text = "x" },
             }))
-            local agent_id, generation = client:subagent_id("child")
-            assert.equal("child", agent_id)
-            assert.equal(1, generation)
         end)
 
         it("reports a disconnect to every subscriber", function()

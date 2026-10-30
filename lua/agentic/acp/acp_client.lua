@@ -156,16 +156,6 @@ function ACPClient:subagent_task_id(_update)
     return nil
 end
 
---- The id that addresses a subagent, and which run of it a child session
---- is. Adapters for providers that number a resumed agent's sessions
---- override this.
---- @param child_id string The subagent's child session id
---- @return string agent_id The child id itself
---- @return integer generation 1
-function ACPClient:subagent_id(child_id)
-    return child_id, 1
-end
-
 --- The shell the provider's execute tool runs commands in, when the client
 --- can prove it. Reaches only blocks built by the base `__build_tool_call_message`.
 --- @return "bash"|"zsh"|nil

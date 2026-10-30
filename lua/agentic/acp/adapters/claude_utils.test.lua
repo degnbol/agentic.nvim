@@ -189,20 +189,6 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
-    describe("agent_id", function()
-        it("returns a first generation's id unchanged", function()
-            local id, generation = ClaudeUtils.agent_id("a1b2c3")
-            assert.equal("a1b2c3", id)
-            assert.equal(1, generation)
-        end)
-
-        it("strips a later generation's suffix", function()
-            local id, generation = ClaudeUtils.agent_id("a1b2c3:generation:3")
-            assert.equal("a1b2c3", id)
-            assert.equal(3, generation)
-        end)
-    end)
-
     describe("budget_windows", function()
         it("reads both windows, shortest first", function()
             local windows = ClaudeUtils.budget_windows({

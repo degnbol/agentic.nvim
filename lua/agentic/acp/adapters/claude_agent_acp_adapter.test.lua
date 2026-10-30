@@ -1181,14 +1181,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             }, adapter():subagent_record("s1", "a1"))
         end)
 
-        it("reads a later generation's record from its agent's file", function()
-            write_meta("s1", "a1", "foreground")
-
-            local record = adapter():subagent_record("s1", "a1:generation:2")
-
-            assert.is_false(record.background)
-        end)
-
         it("has no record before the file exists, and one after", function()
             local client = adapter()
             assert.is_nil(client:subagent_record("s1", "a1"))
@@ -1232,13 +1224,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             }, "s1")
 
             assert.equal("toolu_1", message.parent_tool_use_id)
-        end)
-
-        it("splits the generation off a child id", function()
-            local agent_id, generation =
-                adapter():subagent_id("a1:generation:3")
-            assert.equal("a1", agent_id)
-            assert.equal(3, generation)
         end)
     end)
 

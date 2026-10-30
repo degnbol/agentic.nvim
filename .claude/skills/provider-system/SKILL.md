@@ -398,7 +398,7 @@ by `running`, ended by an end state or a disconnect, never by a
 turn's end. Each `session_message` view becomes a row holding the text, with
 the kind `_classify_message` decides once per message id; the two rows of a
 message link by tag.
-Adapters override `subagent_task_id`, `subagent_id`, `subagent_record`
+Adapters override `subagent_task_id`, `subagent_record`
 (type, mode, Task id; claude reads `agent-<id>.meta.json`) and
 `subagent_predicted_mode`. A background subagent gets a message input only
 when the adapter gives `subagent_stop_instruction` and
