@@ -464,12 +464,13 @@ local ConfigDefault = {
         todos = function() end,
     },
 
-    --- Maximum lines shown for tool call output before folding.
-    --- Blocks exceeding the threshold are wrapped in fold markers and
-    --- auto-closed (use zo/za/zc to toggle). Set to 0 to disable folding.
+    --- Maximum lines shown for tool call output before its fold closes (use
+    --- zo/za/zc to toggle). An execute or search block has a second fold over
+    --- its command and output, closed when the call is read-only and did not
+    --- fail.
     --- @class agentic.UserConfig.ToolCallDisplay
-    --- @field search_max_lines integer
-    --- @field execute_max_lines integer Close an execute block's command and output fold past this many output lines; 0 never closes by length. A read-only command (`:h agentic-permissions-shell`) that did not fail closes at any length.
+    --- @field search_max_lines integer Close a search block's output fold past this many lines; 0 never closes it by length. The fold over command and output closes whenever the search did not fail.
+    --- @field execute_max_lines integer Close an execute block's output fold past this many lines; 0 never closes it by length. The fold over command and output closes when the command is read-only (`:h agentic-permissions-shell`) and did not fail.
     --- @field other_max_lines integer Fold generic/MCP/meta tool-result bodies (non-execute) exceeding this many lines. Set to 0 to disable folding for these.
     --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.

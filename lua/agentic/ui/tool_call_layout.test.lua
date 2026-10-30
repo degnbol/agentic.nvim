@@ -354,7 +354,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 local layout = Layout.build(block, 80)
 
                 assert.equal("```markdown-fold", layout.lines[3])
-                assert.same({ anchor = 3, state = "closed" }, layout.fold)
+                assert.same({ { anchor = 3, state = "closed" } }, layout.folds)
             end)
 
             it("prefixes the heading with the agent type once known", function()
@@ -974,8 +974,8 @@ describe("agentic.ui.ToolCallLayout", function()
                 -- ...and a failed edit folds closed: the anchor is the first
                 -- body line.
                 assert.same(
-                    { anchor = old_i - 1, state = "closed" },
-                    layout.fold
+                    { { anchor = old_i - 1, state = "closed" } },
+                    layout.folds
                 )
             end
         )
@@ -1003,7 +1003,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     status = "completed",
                     diff = diff,
                 }
-                local fold = Layout.build(block, 0).fold
+                local fold = Layout.build(block, 0).folds[1]
                 return fold and fold.state
             end
 
@@ -1042,7 +1042,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     status = "completed",
                     diff = { old = {}, new = new },
                 }
-                assert.is_nil(Layout.build(block, 0).fold)
+                assert.same({}, Layout.build(block, 0).folds)
             end
         end)
 
@@ -1192,40 +1192,48 @@ describe("agentic.ui.ToolCallLayout", function()
             return rows
         end
 
-        --- Layout of a zsh execute block.
+        --- Layout of a zsh execute or a search block.
+        --- @param kind "execute"|"search"
         --- @param command string
         --- @param body string[]|nil
         --- @param status string|nil default "completed"
         --- @return agentic.ui.ToolCallLayout.Layout
-        local function build(command, body, status)
+        local function build(kind, command, body, status)
             return Layout.build({
-                tool_call_id = "exec-fold",
-                kind = "execute",
+                tool_call_id = "fold",
+                kind = kind,
                 argument = command,
                 status = status or "completed",
                 shell = "zsh",
                 body = body,
+                failure_reason = status == "failed" and body or nil,
             }, 0)
         end
 
+        --- Start states of a block's folds, outermost first.
+        --- @param kind "execute"|"search"
         --- @param command string
         --- @param body string[]|nil
         --- @param status string|nil
-        --- @return agentic.ui.FoldState|nil
-        local function fold_state(command, body, status)
-            local fold = build(command, body, status).fold
-            return fold and fold.state
+        --- @return agentic.ui.FoldState[]
+        local function fold_states(kind, command, body, status)
+            return vim.tbl_map(function(fold)
+                return fold.state
+            end, build(kind, command, body, status).folds)
         end
 
-        it("closes a read-only command from its first command row", function()
-            local layout = build("rg foo | head", output(2))
-            assert.same({ anchor = 2, state = "closed" }, layout.fold)
+        it("nests the output fold in the command fold", function()
+            local layout = build("execute", "rg foo | head", output(2))
+            assert.same({
+                { anchor = 2, state = "closed" },
+                { anchor = 5, state = "open" },
+            }, layout.folds)
             assert.same({
                 "###",
-                "```zsh-fold",
+                "```zsh-foldnext",
                 "rg foo | head",
                 "```",
-                "```console",
+                "```console-fold",
                 "out 1",
                 "out 2",
                 "```",
@@ -1233,32 +1241,55 @@ describe("agentic.ui.ToolCallLayout", function()
             }, layout.lines)
         end)
 
-        it("closes another command past execute_max_lines", function()
-            local max_lines = Config.tool_call_display.execute_max_lines
-            assert.equal("open", fold_state("git commit -m x", output(2)))
-            assert.equal(
-                "closed",
-                fold_state("git commit -m x", output(max_lines + 1))
+        it("gives execute folds the start state of their rules", function()
+            local long = output(Config.tool_call_display.execute_max_lines + 1)
+            assert.same(
+                { "closed", "open" },
+                fold_states("execute", "rg foo", output(2))
+            )
+            assert.same(
+                { "open", "open" },
+                fold_states("execute", "rg foo", output(2), "failed")
+            )
+            assert.same(
+                { "open", "open" },
+                fold_states("execute", "git commit -m x", output(2))
+            )
+            assert.same(
+                { "open", "closed" },
+                fold_states("execute", "git commit -m x", long)
             )
         end)
 
-        it("opens a redirect and a failed read-only command", function()
-            assert.equal("open", fold_state("rg foo > out", output(2)))
-            assert.equal("open", fold_state("rg foo", output(2), "failed"))
+        it("gives search folds the start state of their rules", function()
+            local long = output(Config.tool_call_display.search_max_lines + 1)
+            assert.same(
+                { "closed", "open" },
+                fold_states("search", "rg foo", output(2))
+            )
+            assert.same(
+                { "closed", "closed" },
+                fold_states("search", "rg foo", long)
+            )
+            assert.same(
+                { "open", "closed" },
+                fold_states("search", "rg foo", long, "failed")
+            )
         end)
 
-        it("forms no fold over one row", function()
-            assert.is_nil(build("rg foo", nil).fold)
-            local layout = build("rg foo", {})
-            assert.is_nil(layout.fold)
-            assert.equal("```zsh", layout.lines[2])
+        it("forms no output fold over one output row", function()
+            local layout = build("search", "rg foo", output(1))
+            assert.same({ { anchor = 2, state = "closed" } }, layout.folds)
+            assert.equal("```bash-foldnext", layout.lines[2])
+            assert.equal("```console", layout.lines[5])
         end)
 
-        it("forms no fold over a command without output", function()
-            assert.is_nil(build("rg foo\nrg bar", nil).fold)
-            local layout = build("rg foo\nrg bar", {})
-            assert.is_nil(layout.fold)
+        it("marks no command fence without output", function()
+            assert.same({}, build("execute", "rg foo\nrg bar", nil).folds)
+            local layout = build("execute", "rg foo\nrg bar", {})
+            assert.same({}, layout.folds)
             assert.equal("```zsh", layout.lines[2])
+            assert.equal("```bash", build("search", "rg foo", nil).lines[2])
         end)
     end)
 
@@ -1359,7 +1390,7 @@ describe("agentic.ui.ToolCallLayout", function()
             argument = "https://example.com prompt",
             body = { "line 1", "", "line 2" },
         }
-        assert.equal("closed", Layout.build(block, 80).fold.state)
+        assert.equal("closed", Layout.build(block, 80).folds[1].state)
     end)
 
     describe("shell command fence label", function()
@@ -1865,7 +1896,7 @@ describe("agentic.ui.ToolCallLayout", function()
             local lines = Layout.build(block, 80).lines
 
             assert.equal("###", lines[1])
-            assert.equal("```bash-fold", lines[2])
+            assert.equal("```bash-foldnext", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
             assert.equal("```console", lines[5])
@@ -1886,7 +1917,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             local lines = Layout.build(block, 80).lines
 
-            assert.equal("```zsh-fold", lines[2])
+            assert.equal("```zsh-foldnext", lines[2])
         end)
 
         it("labels the fence bash without a shell", function()
@@ -1901,7 +1932,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             local lines = Layout.build(block, 80).lines
 
-            assert.equal("```bash-fold", lines[2])
+            assert.equal("```bash-foldnext", lines[2])
         end)
 
         it(
@@ -1920,7 +1951,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 local lines = Layout.build(block, 80).lines
 
                 assert.equal("### List the temp directory", lines[1])
-                assert.equal("```bash-fold", lines[2])
+                assert.equal("```bash-foldnext", lines[2])
                 assert.equal("ls -la /tmp", lines[3])
                 assert.equal("```", lines[4])
                 -- Single console fence around the body — no nested/double wrap.
@@ -2152,7 +2183,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             assert.same({
                 "### List",
-                "```zsh-fold",
+                "```zsh-foldnext",
                 "ls",
                 "```",
                 "```console",
@@ -2195,18 +2226,18 @@ describe("agentic.ui.ToolCallLayout", function()
                 "TodoWrite",
                 { '{"todos": [{"content": "a"}, {"content": "b"}]}' }
             )
-            assert.equal("closed", layout.fold.state)
+            assert.equal("closed", layout.folds[1].state)
         end)
 
         it("folds a multi-row switch_mode body closed, dimmed", function()
             local layout = layout_of("switch_mode", { "line 1", "line 2" })
-            assert.equal("closed", layout.fold.state)
+            assert.equal("closed", layout.folds[1].state)
             assert.equal("```markdown-fold", layout.lines[2])
             assert.same({ 2, 3 }, layout.dim)
         end)
 
         it("leaves a one-row switch_mode body unfolded", function()
-            assert.is_nil(layout_of("switch_mode", { "line 1" }).fold)
+            assert.same({}, layout_of("switch_mode", { "line 1" }).folds)
         end)
 
         it("folds a flat JSON table past other_max_lines", function()
@@ -2215,7 +2246,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 { '{"alpha": "1", "beta": "2", "gamma": "3"}' }
             )
             assert.equal("```markdown-fold", layout.lines[2])
-            assert.equal("closed", layout.fold.state)
+            assert.equal("closed", layout.folds[1].state)
         end)
 
         it("leaves table rows unwrapped at a narrow width", function()

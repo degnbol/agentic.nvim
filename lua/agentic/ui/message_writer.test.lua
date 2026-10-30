@@ -3115,7 +3115,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 -- Header still present
                 assert.equal("###", lines_after_update[1])
-                assert.equal("```bash-fold", lines_after_update[2])
+                assert.equal("```bash-foldnext", lines_after_update[2])
 
                 -- Body output should be present
                 local found_output = false
@@ -3539,7 +3539,7 @@ describe("agentic.ui.MessageWriter", function()
 
             local tracker = writer.tool_call_blocks["todo-1"]
             assert.same(body, tracker.body)
-            assert.is_false(tracker.fold_open)
+            assert.is_false(tracker.folds[1].open)
         end)
     end)
 
@@ -4559,40 +4559,81 @@ describe("agentic.ui.MessageWriter", function()
             return body
         end
 
-        --- Buffer lines (1-indexed) carrying a `*-fold` opening fence.
+        --- Buffer lines (1-indexed) carrying an opening fence whose info
+        --- string ends in `suffix`.
+        --- @param suffix string
         --- @return integer[]
-        local function fold_fence_lines()
+        local function fence_lines(suffix)
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             local fences = {}
             for i, line in ipairs(lines) do
-                if line:match("^`+[%w]+%-fold$") then
+                if line:match("^`+[%w]+%-" .. suffix .. "$") then
                     table.insert(fences, i)
                 end
             end
             return fences
         end
 
-        it("closes the fold for a long execute body", function()
+        --- Buffer lines (1-indexed) carrying a `*-fold` opening fence.
+        --- @return integer[]
+        local function fold_fence_lines()
+            return fence_lines("fold")
+        end
+
+        --- First rows of each execute block's command and output folds, for
+        --- blocks that all have both.
+        --- @return { command: integer, output: integer }[]
+        local function execute_folds()
+            local outputs = fold_fence_lines()
+            local folds = {}
+            for i, fence in ipairs(fence_lines("foldnext")) do
+                folds[i] = { command = fence + 1, output = outputs[i] + 1 }
+            end
+            return folds
+        end
+
+        it("closes the output fold of a long execute body", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-1",
+                status = "completed",
+                kind = "execute",
+                argument = "build",
+                body = long_execute_body(),
+            })
+
+            local folds = execute_folds()
+            assert.equal(1, #folds)
+            deferred.drain()
+            -- The fold spans code_fence_content only, so it starts on the
+            -- first body line — not the conceal_lines-hidden delimiter. That
+            -- keeps the `··· N lines ···` foldtext on a visible screen row.
+            -- foldclosed returns the fold's first line for any line inside it.
+            assert.equal(folds[1].output, vim.fn.foldclosed(folds[1].output))
+            -- The opening delimiter lies outside the output fold.
+            assert.equal(-1, vim.fn.foldclosed(folds[1].output - 1))
+            assert.equal(-1, vim.fn.foldclosed(folds[1].command))
+        end)
+
+        it("closes a read-only command over its closed output", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fold-ro",
                 status = "completed",
                 kind = "execute",
                 argument = "ls",
                 body = long_execute_body(),
             })
 
-            local fences = fold_fence_lines()
-            assert.equal(1, #fences)
-            local fence = fences[1]
-            local body_start = fence + 1
+            local fold = execute_folds()[1]
             deferred.drain()
-            -- The fold spans code_fence_content only, so it starts on the
-            -- first body line — not the conceal_lines-hidden delimiter. That
-            -- keeps the `··· N lines ···` foldtext on a visible screen row.
-            -- foldclosed returns the fold's first line for any line inside it.
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
-            -- The opening delimiter is level 0, outside the fold.
-            assert.equal(-1, vim.fn.foldclosed(fence))
+            assert.equal(fold.command, vim.fn.foldclosed(fold.output))
+            assert.is_nil(
+                require("agentic.utils.buf_helpers").set_fold(
+                    winid,
+                    fold.command,
+                    true
+                )
+            )
+            assert.equal(fold.output, vim.fn.foldclosed(fold.output))
         end)
 
         it("closes the fold over a thought run", function()
@@ -4608,57 +4649,184 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
-        it("opens a short execute block that is not read-only", function()
+        it(
+            "opens both folds of a short command that is not read-only",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "fold-short",
+                    status = "completed",
+                    kind = "execute",
+                    argument = "build",
+                    body = { "output 1", "output 2" },
+                })
+
+                local folds = execute_folds()
+                assert.equal(1, #folds)
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(folds[1].command))
+                assert.equal(-1, vim.fn.foldclosed(folds[1].output))
+            end
+        )
+
+        it(
+            "closes the output fold when the body grows past the threshold",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "fold-grow",
+                    status = "in_progress",
+                    kind = "execute",
+                    argument = "build",
+                    body = { "starting", "still starting" },
+                })
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(execute_folds()[1].output))
+
+                writer:update_tool_call_block({
+                    tool_call_id = "fold-grow",
+                    status = "completed",
+                    body = long_execute_body(),
+                })
+
+                local fold = execute_folds()[1]
+                deferred.drain()
+                assert.equal(fold.output, vim.fn.foldclosed(fold.output))
+                assert.equal(-1, vim.fn.foldclosed(fold.command))
+            end
+        )
+
+        it(
+            "keeps a fold the user closed across a status update and a replay",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "fold-user",
+                    status = "in_progress",
+                    kind = "execute",
+                    argument = "build",
+                    body = long_execute_body(),
+                })
+                local fold = execute_folds()[1]
+                deferred.drain()
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd(fold.command .. "foldclose")
+                end)
+
+                writer:update_tool_call_block({
+                    tool_call_id = "fold-user",
+                    status = "completed",
+                })
+                deferred.drain()
+                local other = vim.api.nvim_open_win(bufnr, false, {
+                    relative = "editor",
+                    width = 40,
+                    height = 10,
+                    row = 0,
+                    col = 0,
+                })
+                vim.wo[other].foldlevel = 99
+                vim.wo[other].foldminlines = 1
+                writer:replay_folds(other)
+
+                assert.equal(fold.command, vim.fn.foldclosed(fold.command))
+                vim.api.nvim_win_call(other, function()
+                    assert.equal(-1, vim.fn.foldclosed(fold.command))
+                    assert.equal(fold.output, vim.fn.foldclosed(fold.output))
+                end)
+                vim.api.nvim_win_close(other, true)
+            end
+        )
+
+        it("opens only the outer fold of a revealed block", function()
             writer:write_tool_call_block({
-                tool_call_id = "fold-short",
+                tool_call_id = "fold-reveal",
                 status = "completed",
                 kind = "execute",
-                argument = "build",
-                body = { "single output line" },
-            })
-
-            local fences = fold_fence_lines()
-            assert.equal(1, #fences)
-            deferred.drain()
-            assert.equal(-1, vim.fn.foldclosed(fences[1] + 1))
-        end)
-
-        it("closes when the body grows past the threshold on update", function()
-            writer:write_tool_call_block({
-                tool_call_id = "fold-grow",
-                status = "in_progress",
-                kind = "execute",
-                argument = "build",
-                body = { "starting" },
-            })
-            deferred.drain()
-            assert.equal(-1, vim.fn.foldclosed(fold_fence_lines()[1] + 1))
-
-            writer:update_tool_call_block({
-                tool_call_id = "fold-grow",
-                status = "completed",
+                argument = "ls",
                 body = long_execute_body(),
             })
-
-            local fences = fold_fence_lines()
-            assert.equal(1, #fences)
+            local fold = execute_folds()[1]
             deferred.drain()
-            assert.equal(fences[1] + 1, vim.fn.foldclosed(fences[1] + 1))
+
+            writer:hold_tool_call("fold-reveal", true)
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(fold.command))
+            assert.equal(fold.output, vim.fn.foldclosed(fold.output))
+
+            writer:release_hold()
+            deferred.drain()
+            assert.equal(fold.command, vim.fn.foldclosed(fold.command))
         end)
+
+        it("opens the outer fold on a status-only update to failed", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fold-fail",
+                status = "in_progress",
+                kind = "execute",
+                argument = "ls",
+                body = { "out 1", "out 2" },
+            })
+            local fold = execute_folds()[1]
+            deferred.drain()
+            assert.equal(fold.command, vim.fn.foldclosed(fold.command))
+
+            writer:update_tool_call_block({
+                tool_call_id = "fold-fail",
+                status = "failed",
+            })
+            deferred.drain()
+
+            assert.equal(fold.command, execute_folds()[1].command)
+            assert.equal(-1, vim.fn.foldclosed(fold.command))
+            assert.equal(-1, vim.fn.foldclosed(fold.output))
+        end)
+
+        for _, case in ipairs({
+            { status = "completed", command_closed = true },
+            { status = "failed", command_closed = false },
+        }) do
+            it("folds a long " .. case.status .. " search", function()
+                local rows = {}
+                for i = 1, Config.tool_call_display.search_max_lines + 1 do
+                    rows[i] = "match " .. i
+                end
+                writer:write_tool_call_block({
+                    tool_call_id = "fold-search-" .. case.status,
+                    status = case.status,
+                    kind = "search",
+                    argument = "rg foo",
+                    body = case.status == "completed" and rows or nil,
+                    failure_reason = case.status == "failed" and rows or nil,
+                })
+                local fold = execute_folds()[1]
+                deferred.drain()
+
+                assert.equal(
+                    case.command_closed and fold.command or -1,
+                    vim.fn.foldclosed(fold.command)
+                )
+                assert.is_nil(
+                    require("agentic.utils.buf_helpers").set_fold(
+                        winid,
+                        fold.command,
+                        true
+                    )
+                )
+                assert.equal(fold.output, vim.fn.foldclosed(fold.output))
+            end)
+        end
 
         it("produces two distinct closed folds for adjacent blocks", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-adj-1",
                 status = "completed",
                 kind = "execute",
-                argument = "ls",
+                argument = "build",
                 body = long_execute_body(),
             })
             writer:write_tool_call_block({
                 tool_call_id = "fold-adj-2",
                 status = "completed",
                 kind = "execute",
-                argument = "pwd",
+                argument = "make",
                 body = long_execute_body(),
             })
 
@@ -4676,7 +4844,7 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "fold-status",
                 status = "pending",
                 kind = "execute",
-                argument = "ls",
+                argument = "build",
             })
             writer:update_tool_call_block({
                 tool_call_id = "fold-status",
@@ -4699,7 +4867,7 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "below-open-1",
                 status = "completed",
                 kind = "execute",
-                argument = "ls",
+                argument = "build",
                 body = long_execute_body(),
             })
             local first_body = fold_fence_lines()[1] + 1
@@ -4712,7 +4880,7 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "below-open-2",
                 status = "completed",
                 kind = "execute",
-                argument = "pwd",
+                argument = "make",
                 body = long_execute_body(),
             })
             local second_body = fold_fence_lines()[2] + 1
@@ -4937,7 +5105,7 @@ describe("agentic.ui.MessageWriter", function()
                         argument = "ls",
                         body = long_execute_body(),
                     })
-                    local exec_fence = fold_fence_lines()[1]
+                    local exec_fence = fence_lines("foldnext")[1]
                     deferred.drain()
                     assert.equal(
                         exec_fence + 1,
@@ -5304,12 +5472,12 @@ describe("agentic.ui.MessageWriter", function()
                 assert.is_nil(text:match("```console\n```console"))
 
                 local openers = 0
-                for _ in text:gmatch("```console\n") do
+                for _ in text:gmatch("```console[%w%-]*\n") do
                     openers = openers + 1
                 end
                 assert.equal(1, openers)
                 assert.is_not_nil(
-                    text:match("```bash%-fold\nls\n```\n```console\n")
+                    text:match("```bash%-foldnext\nls\n```\n```console%-fold\n")
                 )
 
                 -- The heading name is left to treesitter (@markup.raw on the

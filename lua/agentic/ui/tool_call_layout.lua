@@ -36,6 +36,7 @@ local M = {}
 --- @field lang? string Fence language; nil leaves the rows unfenced, "" fences with an empty language
 --- @field fold? agentic.ui.FoldState Fold state; adds `-fold` to the info string
 --- @field difffold? boolean Info-string marker is `-difffold` instead of `-fold`: foldable, never injected
+--- @field fold_next? boolean With `fold`, the marker is `-foldnext` instead of `-fold`: the fold runs through the next section's `console` or `console-fold` fence. Without `fold` it adds no marker
 --- @field dim? boolean Dim the rows with AgenticDimmedBlock
 --- @field highlights? agentic.ui.ToolCallLayout.HighlightRange[] `line_index` 0-based within `rows`
 --- @field ansi? agentic.utils.Ansi.Span[][] Spans per row of `rows`
@@ -48,9 +49,13 @@ local M = {}
 --- @field highlights agentic.ui.ToolCallLayout.HighlightRange[]
 --- @field ansi { first: integer, spans: agentic.utils.Ansi.Span[][] }[] Spans for the rows from each `first`
 --- @field matches agentic.utils.GrepHighlights.Match[]
---- @field fold? { anchor: integer, state: agentic.ui.FoldState } `anchor` is the first row inside the fold
+--- @field folds agentic.ui.ToolCallLayout.Fold[] Outermost first
 --- @field dim? [integer, integer] First and last dimmed row
 --- @field diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Matched hunks, nil when none matched
+
+--- @class agentic.ui.ToolCallLayout.Fold
+--- @field anchor integer First row inside the fold
+--- @field state agentic.ui.FoldState
 
 --- A call as the section builders read it.
 --- @class agentic.ui.ToolCallLayout.Call
@@ -256,18 +261,21 @@ end
 --- Place sections in order, fence each one that has a `lang` with
 --- `TextWrap.safe_fence(section.rows)`, shift every index by the section's
 --- first content row (after the opening fence; also the fold anchor), and
---- append the footer row. At most one section may fold.
+--- append the footer row.
 --- @param sections agentic.ui.ToolCallLayout.Section[]
 --- @return agentic.ui.ToolCallLayout.Layout
 local function assemble(sections)
     --- @type agentic.ui.ToolCallLayout.Layout
-    local layout = { lines = {}, highlights = {}, ansi = {}, matches = {} }
+    local layout =
+        { lines = {}, highlights = {}, ansi = {}, matches = {}, folds = {} }
     local lines = layout.lines
     for _, section in ipairs(sections) do
         local fence = section.lang and TextWrap.safe_fence(section.rows)
         if fence then
+            -- A command fence keeps its bare language until output exists:
+            -- `permission_highlight.lua`'s `OPEN_FENCE` matches only that.
             local marker = section.difffold and "-difffold"
-                or section.fold and "-fold"
+                or section.fold and (section.fold_next and "-foldnext" or "-fold")
                 or ""
             table.insert(lines, fence .. section.lang .. marker)
         end
@@ -297,10 +305,7 @@ local function assemble(sections)
             table.insert(layout.ansi, { first = first, spans = section.ansi })
         end
         if section.fold then
-            if layout.fold then
-                error("a tool call block holds at most one fold")
-            end
-            layout.fold = { anchor = first, state = section.fold }
+            table.insert(layout.folds, { anchor = first, state = section.fold })
         end
         if section.dim and #section.rows > 0 then
             layout.dim = { first, first + #section.rows - 1 }
@@ -327,6 +332,19 @@ local function comment_rows(rows)
     return section
 end
 
+--- Start state of a fold over output rows: nil for one row or none (no fold
+--- forms, so an op on its anchor would raise E490), closed past `max_lines`
+--- (0 = never), else open.
+--- @param rows string[]
+--- @param max_lines integer
+--- @return agentic.ui.FoldState|nil
+local function output_fold_state(rows, max_lines)
+    if #rows <= 1 then
+        return nil
+    end
+    return max_lines > 0 and #rows > max_lines and "closed" or "open"
+end
+
 --- A failure reason under a `console` fence, each row as `error`.
 --- @param reason string[]
 --- @return agentic.ui.ToolCallLayout.Section
@@ -341,8 +359,8 @@ local function reason_section(reason)
     return section
 end
 
---- Tool output under a `console` fence: ANSI escapes turned into spans,
---- folded past `max_lines` (0 = never).
+--- Tool output under a `console` fence: ANSI escapes turned into spans, with
+--- a fold of `output_fold_state`.
 --- @param rows string[] raw output rows
 --- @param max_lines integer
 --- @return agentic.ui.ToolCallLayout.Section
@@ -353,10 +371,8 @@ local function output_section(rows, max_lines)
         rows = ansi.has_ansi and ansi.lines or rows,
         lang = "console",
         ansi = ansi.has_ansi and ansi.highlights or nil,
+        fold = output_fold_state(rows, max_lines),
     }
-    if max_lines > 0 and #rows > max_lines then
-        section.fold = "closed"
-    end
     return section
 end
 
@@ -398,26 +414,18 @@ local function default_head(call)
     }
 end
 
---- Fold state of an execute block's one fold over its command and output
---- rows: nil without output rows, so a command alone is never hidden;
---- closed when the call did not fail and its command is read-only, or when
---- the output passes `execute_max_lines` (0 = never by length); else open.
+--- Start state of the fold over a call's command and its output (the
+--- failure reason or body): nil without output rows, so a command alone is
+--- never hidden; closed when the call did not fail and is safe; else open.
 --- @param call agentic.ui.ToolCallLayout.Call
+--- @param safe boolean True when the command is read-only
 --- @return agentic.ui.FoldState|nil
-local function execute_fold_state(call)
+local function command_fold_state(call, safe)
     local output = call.failure or call.block.body or {}
     if #output == 0 then
         return nil
     end
-    local max_lines = Config.tool_call_display.execute_max_lines
-    if
-        call.block.status ~= "failed"
-            and PermissionRules.is_read_only(call.argument)
-        or max_lines > 0 and #output > max_lines
-    then
-        return "closed"
-    end
-    return "open"
+    return call.block.status ~= "failed" and safe and "closed" or "open"
 end
 
 --- @type table<string, agentic.ui.ToolCallLayout.Builder>
@@ -456,7 +464,11 @@ local HEADS = {
             {
                 rows = cmd_rows,
                 lang = shell_fence_lang(call.argument, block.shell or "bash"),
-                fold = execute_fold_state(call),
+                fold = command_fold_state(
+                    call,
+                    PermissionRules.is_read_only(call.argument)
+                ),
+                fold_next = true,
             },
         }
     end,
@@ -476,6 +488,9 @@ local HEADS = {
             {
                 rows = vim.split(call.argument, "\n", { plain = true }),
                 lang = shell_fence_lang(call.argument, "bash"),
+                -- A search is read-only by kind.
+                fold = command_fold_state(call, true),
+                fold_next = true,
             },
         }
     end,
@@ -621,14 +636,14 @@ local BODIES = {
 
     -- A failed execute shows its reason as output: the bash stdout/stderr of
     -- a non-zero exit is long and often informational, so it takes the
-    -- output's colours rather than the red of a short denial. The command's
-    -- fold covers the output (`execute_fold_state`).
+    -- output's colours rather than the red of a short denial.
     execute = function(call)
         local rows = call.failure or call.block.body
         if not rows then
             return {}
         end
-        local section = output_section(rows, 0)
+        local section =
+            output_section(rows, Config.tool_call_display.execute_max_lines)
         section.matches =
             GrepHighlights.for_command(section.rows, call.argument)
         return { section }
@@ -941,7 +956,15 @@ function M.build(block, wrap_width)
     elseif call.failure and call.kind ~= "execute" then
         -- The summary a kind normally shows ("Read N lines", search results)
         -- describes what the tool attempted — misleading when it never ran.
-        body = { reason_section(call.failure) }
+        local reason = reason_section(call.failure)
+        if call.kind == "search" then
+            -- The search command's fold runs through this fence.
+            reason.fold = output_fold_state(
+                call.failure,
+                Config.tool_call_display.search_max_lines
+            )
+        end
+        body = { reason }
     else
         body = (BODIES[call.kind] or generic_body)(call)
     end

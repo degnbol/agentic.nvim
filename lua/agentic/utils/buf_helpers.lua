@@ -378,6 +378,55 @@ function BufHelpers.recompute_folds(winid)
     end)
 end
 
+--- Open the fold that starts at `lnum` in `winid` when `open`, else close it,
+--- leaving every other fold's state as it was. A bare `:foldopen`/`:foldclose`
+--- would act on the outermost closed or innermost open fold at `lnum`.
+---
+--- `lnum` must lie outside any fold that ends at `lnum - 1`: a fold that
+--- starts right after a same-level sibling counts as no fold here. No two
+--- folds may start on the same line, and no fold may be small enough for
+--- 'foldminlines' to show it open.
+--- @param winid integer
+--- @param lnum integer 1-indexed first line of the fold
+--- @param open boolean
+--- @return string|nil err E490 when no fold starts at `lnum`, or the error of a fold command
+function BufHelpers.set_fold(winid, lnum, open)
+    --- @param cmd "foldopen"|"foldclose"
+    --- @param line integer
+    local function fold_cmd(cmd, line)
+        vim.api.nvim_cmd({ cmd = cmd, range = { line } }, {})
+    end
+
+    return vim.api.nvim_win_call(winid, function()
+        if vim.fn.foldlevel(lnum) <= vim.fn.foldlevel(lnum - 1) then
+            return string.format("E490: No fold starts at line %d", lnum)
+        end
+        --- Closed folds around `lnum`, outermost first, opened to reach it.
+        --- @type integer[]
+        local enclosing = {}
+        local ok, err = pcall(function()
+            local closed = vim.fn.foldclosed(lnum)
+            while closed ~= -1 and closed ~= lnum do
+                table.insert(enclosing, closed)
+                fold_cmd("foldopen", closed)
+                closed = vim.fn.foldclosed(lnum)
+            end
+            if open and closed == lnum then
+                fold_cmd("foldopen", lnum)
+            elseif not open and closed == -1 then
+                fold_cmd("foldclose", lnum)
+            end
+        end)
+        -- Outside the first pcall, so a failed op still restores them.
+        local reclosed, reclose_err = pcall(function()
+            for i = #enclosing, 1, -1 do
+                fold_cmd("foldclose", enclosing[i])
+            end
+        end)
+        return not ok and err or not reclosed and reclose_err or nil
+    end)
+end
+
 --- Screen rows of lines `first` through `last` in `winid`, fold-aware.
 --- @param winid integer
 --- @param first integer 1-indexed

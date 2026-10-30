@@ -22,9 +22,10 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- `parser:for_each_tree` instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
---- writer-marked `*-fold` / `-difffold` body (a `*-fold` body runs on
---- through a `console` body right after it), and the writer always appends a body with both its fences
---- in a single `nvim_buf_set_lines`, so such a fold is never transiently
+--- writer-marked `*-fold` / `-difffold` body, and one from each `*-foldnext`
+--- body through the `console` body right after it, which encloses that
+--- body's own fold. The writer always appends a body with both its fences in a
+--- single `nvim_buf_set_lines`, so such a fold is never transiently
 --- unterminated. Levels are recomputed for the whole buffer whenever
 --- `b:changedtick` moves, the caching strategy `:help fold-expr-slow`
 --- prescribes — once per streamed chunk, inside redraw,
@@ -52,68 +53,86 @@ local function last_row(range)
     return range[5] == 0 and range[4] or range[4] + 1
 end
 
+--- Foldexpr value per line for fold ranges that are disjoint or nested: each
+--- line's depth is the number of ranges covering it, with `">" .. depth` on
+--- the first line of each range.
+--- @param ranges [integer, integer][] 1-indexed first and last line of each range
+--- @param line_count integer
+--- @return string[] levels indexed by 1-indexed line number
+function M.levels_of_ranges(ranges, line_count)
+    --- @type integer[]
+    local depths = {}
+    --- @type table<integer, true>
+    local starts = {}
+    for lnum = 1, line_count do
+        depths[lnum] = 0
+    end
+    for _, range in ipairs(ranges) do
+        starts[range[1]] = true
+        for lnum = range[1], range[2] do
+            depths[lnum] = depths[lnum] + 1
+        end
+    end
+    --- @type string[]
+    local levels = {}
+    for lnum = 1, line_count do
+        levels[lnum] = (starts[lnum] and ">" or "") .. depths[lnum]
+    end
+    return levels
+end
+
 --- Foldexpr value for every line of a buffer, from its `folds` query over the
 --- root tree only — injected languages contribute nothing. A match folds
 --- from the start of its `@fold` capture to the end of its `@fold.end`
---- capture when that fence opens on the row after `@fold`'s fence closes,
---- else to the end of `@fold`.
+--- capture. A match with a `@fold.end` capture forms no fold unless that
+--- fence opens on the row after `@fold`'s fence closes.
 --- @param bufnr integer
---- @return string[] levels `">1"` on a fold's first line, `"1"` on its remaining lines, `"0"` outside any fold; indexed by 1-indexed line number
+--- @return string[] levels foldexpr value per 1-indexed line number: the line's fold depth, prefixed `>` on a fold's first line
 --- @return table<integer, true> joined 1-indexed first line of each fold that ends at a `@fold.end` capture
 function M.levels(bufnr)
-    local levels = {}
-    for lnum = 1, vim.api.nvim_buf_line_count(bufnr) do
-        levels[lnum] = "0"
-    end
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    --- @type [integer, integer][]
+    local ranges = {}
     --- @type table<integer, true>
     local joined = {}
 
     local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
-    if not parser then
-        return levels, joined
-    end
-    local query = vim.treesitter.query.get(parser:lang(), "folds")
-    if not query then
-        return levels, joined
+    local query = parser and vim.treesitter.query.get(parser:lang(), "folds")
+    if not parser or not query then
+        return M.levels_of_ranges(ranges, line_count), joined
     end
 
     for _, tree in pairs(parser:parse() or {}) do
         for _, match, metadata in query:iter_matches(tree:root(), bufnr, 0, -1) do
             --- @type table<string, Range6|nil>
-            local ranges = {}
+            local captured = {}
             for id, nodes in pairs(match) do
-                ranges[query.captures[id]] =
+                captured[query.captures[id]] =
                     vim.treesitter.get_range(nodes[1], bufnr, metadata[id])
             end
-            local start, tail = ranges.fold, ranges["fold.end"]
+            local start = assert(
+                captured.fold,
+                "a folds.scm pattern lacks a @fold capture"
+            )
+            local tail = captured["fold.end"]
             -- The `.` anchor skips blank lines, which form no node, so a
             -- second fence joins only when it opens on the row right after
             -- the first one closes.
-            if start then
-                if tail and tail[1] ~= last_row(start) + 2 then
-                    tail = nil
-                end
-                local first = start[1] + 1
-                local last = last_row(tail or start)
-                -- Vim cannot close a one-line fold at 'foldminlines' = 1,
-                -- which `chat_win_opts` pins for exactly this reason.
-                -- Every fold is level 1: a joined match's range contains
-                -- the one-fence match of its first fence, and folds.scm
-                -- must stay otherwise non-nesting (its top comment says so).
-                if last > first then
-                    levels[first] = ">1"
-                    for lnum = first + 1, last do
-                        levels[lnum] = "1"
-                    end
-                    if tail then
-                        joined[first] = true
-                    end
+            local adjacent = not tail or tail[1] == last_row(start) + 2
+            local first = start[1] + 1
+            local last = last_row(tail or start)
+            -- Vim cannot close a one-line fold at 'foldminlines' = 1,
+            -- which `chat_win_opts` pins for exactly this reason.
+            if adjacent and last > first then
+                table.insert(ranges, { first, last })
+                if tail then
+                    joined[first] = true
                 end
             end
         end
     end
 
-    return levels, joined
+    return M.levels_of_ranges(ranges, line_count), joined
 end
 
 --- 'foldexpr' for the chat buffer. See the module docstring for why the levels

@@ -147,14 +147,14 @@ describe("agentic.ui.folds", function()
         )
 
         it(
-            "folds a `-fold` fence through a `console` fence after it",
+            "nests a `console-fold` fold in a `-foldnext` fold before it",
             function()
-                local levels = levels_of({
+                local levels, joined = levels_of({
                     "### block",
-                    "```zsh-fold",
+                    "```zsh-foldnext",
                     "rg foo",
                     "```",
-                    "```console",
+                    "```console-fold",
                     "out 1",
                     "out 2",
                     "```",
@@ -162,29 +162,47 @@ describe("agentic.ui.folds", function()
                 })
 
                 assert.same(
-                    { "0", "0", ">1", "1", "1", "1", "1", "0", "0" },
+                    { "0", "0", ">1", "1", "1", ">2", "2", "0", "0" },
                     levels
                 )
+                assert.same({ [3] = true }, joined)
             end
         )
 
-        it("folds a `-fold` command fence alone over its own rows", function()
+        it(
+            "folds a `-foldnext` fence through a one-row `console` fence",
+            function()
+                local levels, joined = levels_of({
+                    "```zsh-foldnext",
+                    "rg foo",
+                    "```",
+                    "```console",
+                    "out 1",
+                    "```",
+                })
+
+                assert.same({ "0", ">1", "1", "1", "1", "0" }, levels)
+                assert.same({ [2] = true }, joined)
+            end
+        )
+
+        it("forms no fold for a `-foldnext` fence alone", function()
             local levels = levels_of({
-                "```zsh-fold",
+                "```zsh-foldnext",
                 "git add a",
                 "git commit",
                 "```",
                 "after",
             })
 
-            assert.same({ "0", ">1", "1", "0", "0" }, levels)
+            assert.same({ "0", "0", "0", "0", "0" }, levels)
         end)
 
         it("does not join a `console` fence after a blank line", function()
             local levels, joined = levels_of({
-                "```markdown-fold",
-                "thought 1",
-                "thought 2",
+                "```zsh-foldnext",
+                "git add a",
+                "git commit",
                 "```",
                 "",
                 "```console",
@@ -193,10 +211,23 @@ describe("agentic.ui.folds", function()
                 "```",
             })
 
-            assert.same(
-                { "0", ">1", "1", "0", "0", "0", "0", "0", "0" },
-                levels
-            )
+            assert.same({ "0", "0", "0", "0", "0", "0", "0", "0", "0" }, levels)
+            assert.same({}, joined)
+        end)
+
+        it("does not join a `-fold` fence to a `console` fence", function()
+            local levels, joined = levels_of({
+                "```markdown-fold",
+                "thought 1",
+                "thought 2",
+                "```",
+                "```console",
+                "out 1",
+                "out 2",
+                "```",
+            })
+
+            assert.same({ "0", ">1", "1", "0", "0", "0", "0", "0" }, levels)
             assert.same({}, joined)
         end)
 
@@ -232,6 +263,31 @@ describe("agentic.ui.folds", function()
             assert.same(
                 { "0", "0", "0" },
                 require("agentic.ui.folds").levels(bufnr)
+            )
+        end)
+    end)
+
+    describe("levels_of_ranges", function()
+        local levels_of_ranges = require("agentic.ui.folds").levels_of_ranges
+
+        it("gives disjoint ranges level 1", function()
+            assert.same(
+                { ">1", "1", "0", ">1", "1", "0" },
+                levels_of_ranges({ { 4, 5 }, { 1, 2 } }, 6)
+            )
+        end)
+
+        it("gives a range inside another one level more", function()
+            assert.same(
+                { "0", ">1", "1", ">2", "2", "1", "0" },
+                levels_of_ranges({ { 4, 5 }, { 2, 6 } }, 7)
+            )
+        end)
+
+        it("restarts a fold on the first line of an adjacent range", function()
+            assert.same(
+                { ">1", "1", ">1", "1" },
+                levels_of_ranges({ { 1, 2 }, { 3, 4 } }, 4)
             )
         end)
     end)
@@ -456,7 +512,7 @@ describe("agentic.ui.folds", function()
             local function joined_foldtext(command)
                 levels_of({
                     "### block",
-                    "```zsh-fold",
+                    "```zsh-foldnext",
                     command,
                     "```",
                     "```console",

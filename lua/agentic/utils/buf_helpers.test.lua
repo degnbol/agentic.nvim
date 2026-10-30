@@ -790,4 +790,129 @@ describe("BufHelpers", function()
             assert.equal(16, vim.api.nvim_win_get_cursor(winid)[1])
         end)
     end)
+
+    describe("set_fold", function()
+        --- Outer fold over lines 2-8, inner fold over lines 4-8.
+        local OUTER, INNER = 2, 4
+        --- @type integer
+        local bufnr
+        --- @type integer
+        local winid
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local lines = {}
+            for i = 1, 9 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            winid = vim.api.nvim_open_win(bufnr, false, {
+                relative = "editor",
+                width = 40,
+                height = 12,
+                row = 0,
+                col = 0,
+            })
+            vim.wo[winid].foldmethod = "manual"
+            vim.wo[winid].foldminlines = 1
+            vim.wo[winid].foldenable = true
+            vim.api.nvim_win_call(winid, function()
+                -- Inner first: a range on a closed fold's lines grows to it.
+                vim.cmd(INNER .. ",8fold")
+                vim.cmd(OUTER .. ",8fold")
+                vim.cmd("%foldopen!")
+            end)
+        end)
+
+        after_each(function()
+            vim.api.nvim_win_close(winid, true)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        --- @param cmd string
+        --- @param lnum integer
+        local function fold_cmd(cmd, lnum)
+            vim.api.nvim_win_call(winid, function()
+                vim.api.nvim_cmd({ cmd = cmd, range = { lnum } }, {})
+            end)
+        end
+
+        --- Open state of both folds. Opens a closed outer fold to read the
+        --- inner one, and closes it again.
+        --- @return { outer: boolean, inner: boolean }
+        local function states()
+            return vim.api.nvim_win_call(winid, function()
+                local outer = vim.fn.foldclosed(OUTER) == -1
+                if not outer then
+                    fold_cmd("foldopen", OUTER)
+                end
+                local inner = vim.fn.foldclosed(INNER) == -1
+                if not outer then
+                    fold_cmd("foldclose", OUTER)
+                end
+                return { outer = outer, inner = inner }
+            end)
+        end
+
+        --- Give both folds a start state; the inner one first, as a close on
+        --- the inner line under a closed outer fold does nothing.
+        --- @param outer boolean
+        --- @param inner boolean
+        local function start_with(outer, inner)
+            if not inner then
+                fold_cmd("foldclose", INNER)
+            end
+            if not outer then
+                fold_cmd("foldclose", OUTER)
+            end
+            assert.same({ outer = outer, inner = inner }, states())
+        end
+
+        for _, outer in ipairs({ true, false }) do
+            for _, inner in ipairs({ true, false }) do
+                for _, open in ipairs({ true, false }) do
+                    local start = { outer = outer, inner = inner }
+                    for name, lnum in pairs({ outer = OUTER, inner = INNER }) do
+                        it(
+                            string.format(
+                                "gives the %s fold open=%s from %s",
+                                name,
+                                tostring(open),
+                                vim.inspect(start, { newline = "" })
+                            ),
+                            function()
+                                start_with(outer, inner)
+                                local wanted = vim.deepcopy(start)
+                                wanted[name] = open
+
+                                assert.is_nil(
+                                    BufHelpers.set_fold(winid, lnum, open)
+                                )
+                                assert.same(wanted, states())
+                                assert.is_nil(
+                                    BufHelpers.set_fold(winid, lnum, open)
+                                )
+                                assert.same(wanted, states())
+                            end
+                        )
+                    end
+                end
+            end
+        end
+
+        for _, open in ipairs({ true, false }) do
+            it(
+                "returns E490 where no fold starts, open=" .. tostring(open),
+                function()
+                    start_with(true, false)
+
+                    for _, lnum in ipairs({ 1, 3, 5 }) do
+                        local err = BufHelpers.set_fold(winid, lnum, open)
+                        assert.is_not_nil(err and err:match("^E490"))
+                    end
+                    assert.same({ outer = true, inner = false }, states())
+                end
+            )
+        end
+    end)
 end)

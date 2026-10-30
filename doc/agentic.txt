@@ -237,16 +237,18 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                            *agentic-config-tool_call_display*
 `tool_call_display` table
-    Line thresholds for tool call output. A block over its threshold is
-    folded closed; 0 disables that fold.
+    Line thresholds for tool call output. A body over its threshold is
+    folded closed; 0 never closes that fold by length.
+
+    An execute or search block with output has two folds: one over its
+    output, and one over its command and output. The outer fold is closed
+    when the call did not fail and is a search or a command that structured
+    `read_only` rules alone approve (|agentic-permissions-shell|).
 
     `search_max_lines`         integer (default: 8)
-        Lines before folding search output.
+        Lines before a search block's output fold closes.
     `execute_max_lines`        integer (default: 25)
-        Output lines before an execute block's command and output fold
-        closed; 0 never closes by length. A command that structured
-        `read_only` rules alone approve (|agentic-permissions-shell|) and
-        that did not fail closes at any length.
+        Lines before an execute block's output fold closes.
     `other_max_lines`          integer (default: 25)
         Lines before folding generic, MCP and meta tool-result bodies.
         A flat JSON body shows as a table.

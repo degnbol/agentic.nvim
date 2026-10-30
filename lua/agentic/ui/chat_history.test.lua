@@ -758,7 +758,7 @@ describe("ChatHistory", function()
                 extmark_id = 1,
                 decoration_extmark_ids = { 2 },
                 cached_diff_blocks = {},
-                fold_anchor_id = 3,
+                folds = { { anchor_id = 3, open = true } },
             }) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
 
             local record = ChatHistory.tool_call_record(block)
