@@ -45,9 +45,9 @@ vim.api.nvim_create_user_command("Agentic", function(args)
     require("agentic").open({
         mods = args.smods,
         auto_add_to_context = false,
-        query = args.args ~= "" and args.args or nil,
+        query = args.args,
     })
 end, {
     nargs = "?",
-    desc = "Show the agentic chat, or resume the session a session_id prefix or exact title matches; split and tab modifiers open a new window",
+    desc = "Show the agentic chat, or resume the session an exact title or session_id prefix matches, else start a new session with the text as prompt; split and tab modifiers open a new window",
 })

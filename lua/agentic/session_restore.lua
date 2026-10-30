@@ -501,49 +501,57 @@ function SessionRestore.replay_messages(writer, messages, buffer_name)
     writer:flush_thought_run()
 end
 
---- Resolve a session reference to a cached session. Tries session_id prefix
---- first, then exact case-insensitive title match. Invokes `callback` with
---- `nil` when zero or multiple sessions match (multi-match notifies).
+--- Shortest session_id prefix a query matches by.
+local MIN_ID_PREFIX = 8
+
+--- The first entry of each session_id, in order.
+--- @param sessions agentic.ui.ChatHistory.SessionMeta[]
+--- @return agentic.ui.ChatHistory.SessionMeta[]
+local function first_per_id(sessions)
+    local seen = {} --- @type table<string, true>
+    local distinct = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+    for _, s in ipairs(sessions) do
+        if not seen[s.session_id] then
+            seen[s.session_id] = true
+            table.insert(distinct, s)
+        end
+    end
+    return distinct
+end
+
+--- Resolve a session reference to a cached session: a session_id prefix of
+--- at least `MIN_ID_PREFIX` chars, else an exact case-insensitive title.
+--- Several title matches notify and pick the newest. `callback` runs with the match, or with no
+--- arguments when nothing matches. An ambiguous prefix notifies and does not
+--- call back.
 --- @param query string
 --- @param callback fun(session_id?: string, cwd?: string, model?: string)
 function SessionRestore.resolve_query(query, callback)
-    if query == "" then
-        callback()
-        return
-    end
     ChatHistory.list_all_sessions(function(sessions)
         local query_lower = query:lower()
         local prefix_matches = {}
         local title_matches = {}
-        for _, s in ipairs(sessions) do
-            if s.session_id:sub(1, #query) == query then
+        for _, s in ipairs(first_per_id(sessions)) do
+            if #query >= MIN_ID_PREFIX and vim.startswith(s.session_id, query) then
                 table.insert(prefix_matches, s)
             end
             if type(s.title) == "string" and s.title:lower() == query_lower then
                 table.insert(title_matches, s)
             end
         end
-        if #prefix_matches == 1 then
-            local m = prefix_matches[1]
-            callback(m.session_id, m.cwd, m.model)
-            return
-        elseif #prefix_matches > 1 then
+        if #prefix_matches > 1 then
             Logger.notify(
                 "Ambiguous session id prefix: " .. #prefix_matches .. " matches",
                 vim.log.levels.WARN
             )
+            return
+        end
+        local m = prefix_matches[1] or title_matches[1]
+        if not m then
             callback()
             return
         end
-        if #title_matches == 1 then
-            local m = title_matches[1]
-            callback(m.session_id, m.cwd, m.model)
-        elseif #title_matches > 1 then
-            table.sort(title_matches, function(a, b)
-                return (a.last_activity or a.timestamp or 0)
-                    > (b.last_activity or b.timestamp or 0)
-            end)
-            local m = title_matches[1]
+        if not prefix_matches[1] and #title_matches > 1 then
             Logger.notify(
                 string.format(
                     "Ambiguous session title (%d matches); picking newest (%s)",
@@ -552,10 +560,8 @@ function SessionRestore.resolve_query(query, callback)
                 ),
                 vim.log.levels.WARN
             )
-            callback(m.session_id, m.cwd, m.model)
-        else
-            callback()
         end
+        callback(m.session_id, m.cwd, m.model)
     end)
 end
 

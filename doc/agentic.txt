@@ -459,9 +459,9 @@ agentic.open({opts})
                              window, and its panels move there.
       `auto_add_to_context`  Add the current selection or file to the
                              context first (default: true).
-      `query`                A `session_id` prefix or an exact title. Open
-                             the cached session it matches instead, as
-                             |:Agentic| does with {query}.
+      `query`                Resume the cached session it matches, else
+                             start a new session with it as the first
+                             prompt, as |:Agentic| does with {query}.
 
                                                        *agentic.send_prompt()*
 agentic.send_prompt({text})
@@ -508,10 +508,11 @@ agentic.load_acp_session({session_id}, {cwd}, {model})
 
                                                    *agentic.resolve_session()*
 agentic.resolve_session({query}, {callback})
-    Resolve {query}, a `session_id` prefix or an exact title,
-    case-insensitive, against the session cache. {callback} receives
-    `session_id`, `cwd` and `model`, or nil when zero or several sessions
-    match.
+    Resolve {query} against the session cache: a `session_id` prefix of at
+    least 8 chars, else an exact title, case-insensitive, the newest when
+    several match. {callback} receives `session_id`, `cwd` and `model`, or
+    no arguments when nothing matches. A prefix that several sessions share
+    emits a warning and does not call {callback}.
 
                                                  *agentic.send_operatorfunc()*
 agentic.send_operatorfunc({type})
@@ -734,11 +735,13 @@ notices as well as prompts (|agentic-keymaps-agent|).
     current file. Takes |:command-modifiers|: `:tab Agentic`, `:vert Agentic`
     and `:bo Agentic` open the chat in a new window.
 
-    With {query}, a `session_id` prefix or an exact title, open the cached
-    session it matches (|agentic.resolve_session()|) instead, as
-    |agentic.load_acp_session()| does. Zero or several matches emit a
-    notification and change nothing. `session_restore.cd_on_load` governs
-    the working directory.
+    With {query}, open the cached session it matches
+    (|agentic.resolve_session()|) instead, as |agentic.load_acp_session()|
+    does. `session_restore.cd_on_load` governs the working directory. A
+    `session_id` prefix several sessions share emits a warning and opens
+    nothing. With no match, start a new session with {query} as its first
+    prompt, held in the input until the agent is ready. A leading `/` runs
+    as a slash command, as typed in the input.
 
 ==============================================================================
 8. PERMISSIONS                                           *agentic-permissions*

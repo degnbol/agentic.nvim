@@ -30,6 +30,14 @@ _G.s = require("agentic.session_registry").owner_of_buf(vim.api.nvim_get_current
 ]])
     end
 
+    --- Number of sessions in the child's registry.
+    --- @return integer
+    local function live_sessions()
+        return child.lua_get(
+            [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+        )
+    end
+
     --- Fill the session's code selection, which opens the code panel.
     local function add_code()
         child.lua([[
@@ -133,10 +141,10 @@ require("agentic.session_manager").load_acp_session = function(this, sid)
 end
 ]])
 
-        child.cmd("tab Agentic fix the tests")
+        child.cmd("tab Agentic sid-x-prefix")
         child.flush()
 
-        assert.equal("fix the tests", child.lua_get("_G.query"))
+        assert.equal("sid-x-prefix", child.lua_get("_G.query"))
         assert.equal("sid-x", child.lua_get("_G.loaded"))
         assert.are_not.equal(first_tab, child.api.nvim_get_current_tabpage())
         assert.same({ "AgenticChat" }, get_tabpage_filetypes(0))
@@ -150,6 +158,62 @@ end
                 [[require("agentic.session_registry").owner_of_buf(0).widget:home_win()]]
             )
         )
+    end)
+
+    describe(":Agentic {query} without a match", function()
+        before_each(function()
+            open()
+            child.lua([[
+require("agentic.session_restore").resolve_query = function(_, callback)
+    callback()
+end
+]])
+        end)
+
+        it("holds {query} in the input of a new session", function()
+            -- A session without messages ends when its chat is hidden.
+            child.lua([[
+table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
+]])
+
+            child.cmd("Agentic fix the bug")
+            child.flush()
+
+            assert.equal(2, live_sessions())
+            child.lua([[
+_G.new = require("agentic.session_registry").current()
+]])
+            assert.are_not.equal(child.lua_get("_G.s.id"), child.lua_get("_G.new.id"))
+            assert.same(
+                { "fix the bug" },
+                child.lua_get(
+                    [[vim.api.nvim_buf_get_lines(_G.new.widget.buf_nrs.input, 0, -1, false)]]
+                )
+            )
+            assert.equal(1, child.lua_get("_G.new.widget:queued_block_count()"))
+            assert.same(
+                { "" },
+                child.lua_get(
+                    [[vim.api.nvim_buf_get_lines(_G.s.widget.buf_nrs.input, 0, -1, false)]]
+                )
+            )
+        end)
+
+        it("honours a tab modifier", function()
+            local first_tab = child.api.nvim_get_current_tabpage()
+
+            child.cmd("tab Agentic fix the bug")
+            child.flush()
+
+            assert.are_not.equal(first_tab, child.api.nvim_get_current_tabpage())
+            assert.same({ "AgenticChat", "AgenticInput" }, get_tabpage_filetypes(0))
+            assert.are_not.equal(
+                child.lua_get("_G.s.id"),
+                child.lua_get(
+                    [[require("agentic.session_registry").owner_of_buf(0).id]]
+                )
+            )
+        end)
     end)
 
     it(":vert Agentic shows the chat in a vertical split", function()
@@ -220,13 +284,6 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
         assert.is_false(ok)
         assert.same({ "AgenticChat", "AgenticInput" }, get_tabpage_filetypes(0))
     end)
-
-    --- @return integer
-    local function live_sessions()
-        return child.lua_get(
-            [[vim.tbl_count(require("agentic.session_registry").by_id)]]
-        )
-    end
 
     it(":Agentic in another tabpage shows the last active session", function()
         open()

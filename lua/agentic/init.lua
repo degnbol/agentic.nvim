@@ -12,7 +12,7 @@ local Agentic = {}
 --- @class agentic.OpenOpts
 --- @field mods? vim.api.keyset.cmd_mods Command modifiers. A split or tab modifier opens the chat in a new window.
 --- @field auto_add_to_context? boolean Add the current selection or file to the context (default true). Not with `query`
---- @field query? string A session_id prefix or exact title of a saved session to resume instead of showing the current one
+--- @field query? string A saved session's exact title or session_id prefix (8+ chars) to resume; else the first prompt of a new session
 
 --- Notify `message` when the session's chat has no home window in the
 --- current tabpage, where its panels would show the change.
@@ -41,23 +41,36 @@ end
 --- show it instead in the chat window of that buffer's session in the current
 --- tabpage, else in a split above the current window.
 ---
---- With `opts.query`, resume the saved session it matches
---- (`resolve_session`, then `load_acp_session`) instead. No match: emits a
---- notification, no UI change.
+--- With a non-blank `opts.query`, resume the saved session it matches
+--- instead. No match: start a new session, show its chat and input and submit `query`
+--- as its first prompt, held until the agent is ready. An ambiguous
+--- session_id prefix notifies and changes nothing.
 --- @param opts agentic.OpenOpts|nil
 function Agentic.open(opts)
     opts = opts or {}
     local query = opts.query
-    if query then
+    if query and query:find("%S") then
         Agentic.resolve_session(query, function(session_id, cwd, model)
-            if not session_id then
-                Logger.notify(
-                    "No session found matching: " .. query,
-                    vim.log.levels.ERROR
-                )
+            if session_id then
+                Agentic.load_acp_session(session_id, cwd, model, opts.mods)
                 return
             end
-            Agentic.load_acp_session(session_id, cwd, model, opts.mods)
+            local session = Agentic.new_session({
+                mods = opts.mods,
+                auto_add_to_context = false,
+            })
+            if not session then
+                return
+            end
+            session.widget:input_win()
+            vim.api.nvim_buf_set_lines(
+                session.widget.buf_nrs.input,
+                0,
+                -1,
+                false,
+                vim.split(query, "\n")
+            )
+            session.widget:submit()
         end)
         return
     end
@@ -151,6 +164,7 @@ end
 --- Start another session and show its chat. The previous sessions stay
 --- alive.
 --- @param opts agentic.ui.NewSessionOpts|nil
+--- @return agentic.SessionManager|nil session Nil when none could be created
 function Agentic.new_session(opts)
     opts = opts or {}
     if opts.provider then
@@ -164,6 +178,7 @@ function Agentic.new_session(opts)
         end
         session.widget:show(opts.mods, SessionRegistry.target_win())
     end
+    return session
 end
 
 --- Load an existing ACP session by full UUID into a new session, show its
@@ -194,9 +209,8 @@ function Agentic.load_acp_session(session_id, cwd, model, mods)
     session.widget:show(mods, SessionRegistry.target_win())
 end
 
---- Resolve a session reference (session_id prefix or exact title) to a
---- cached session. The callback receives `nil` when zero or multiple
---- sessions match (multi-match emits a notification).
+--- Resolve a session reference to a cached session
+--- (`SessionRestore.resolve_query`).
 --- @param query string
 --- @param callback fun(session_id?: string, cwd?: string, model?: string)
 function Agentic.resolve_session(query, callback)

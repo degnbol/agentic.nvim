@@ -444,6 +444,92 @@ describe("SessionRestore", function()
         end)
     end)
 
+    describe("resolve_query", function()
+        --- @type TestStub
+        local list_all_stub
+        local UUID = "0bf3a1c2-5d6e-4f70-8a9b-0c1d2e3f4a5b"
+
+        --- Stub the cache as `sessions` and resolve `query`.
+        --- @param sessions table[]
+        --- @param query string
+        --- @return TestSpy callback
+        local function resolve(sessions, query)
+            list_all_stub:invokes(function(callback)
+                callback(sessions)
+            end)
+            local callback = spy.new(function() end)
+            SessionRestore.resolve_query(query, callback --[[@as fun()]])
+            return callback
+        end
+
+        before_each(function()
+            list_all_stub = spy.stub(ChatHistory, "list_all_sessions")
+        end)
+
+        after_each(function()
+            list_all_stub:revert()
+        end)
+
+        it("matches a full id and an 8-char prefix", function()
+            local sessions = {
+                { session_id = UUID, cwd = "/p", model = "m" },
+            }
+
+            for _, query in ipairs({ UUID, UUID:sub(1, 8) }) do
+                local callback = resolve(sessions, query)
+                assert.spy(callback).was.called_with(UUID, "/p", "m")
+            end
+        end)
+
+        it("does not match a prefix shorter than 8 chars", function()
+            local callback = resolve({ { session_id = UUID } }, "0bf")
+
+            assert.spy(callback).was.called_with()
+        end)
+
+        it("matches an exact title in another case", function()
+            local callback = resolve(
+                { { session_id = UUID, title = "Fix The Bug" } },
+                "fix the bug"
+            )
+
+            assert.equal(UUID, callback.calls[1][1])
+        end)
+
+        it("warns and picks the newest of two equal titles", function()
+            local callback = resolve({
+                { session_id = "newer", title = "Same" },
+                { session_id = "older", title = "Same" },
+            }, "same")
+
+            assert.equal("newer", callback.calls[1][1])
+            assert.equal(vim.log.levels.WARN, logger_notify_stub.calls[1][2])
+        end)
+
+        it("warns and does not call back on an ambiguous prefix", function()
+            local callback = resolve(test_sessions, "session-")
+
+            assert.spy(callback).was.called(0)
+            assert.equal(vim.log.levels.WARN, logger_notify_stub.calls[1][2])
+        end)
+
+        it("matches an id saved in two project folders", function()
+            local callback = resolve({
+                { session_id = UUID, cwd = "/a" },
+                { session_id = UUID, cwd = "/b" },
+            }, UUID)
+
+            assert.spy(callback).was.called_with(UUID, "/a", nil)
+            assert.spy(logger_notify_stub).was.called(0)
+        end)
+
+        it("calls back with no arguments on no match", function()
+            local callback = resolve(test_sessions, "fix the bug")
+
+            assert.spy(callback).was.called_with()
+        end)
+    end)
+
     describe("restore with conflict", function()
         local builtin_show_stub
 
