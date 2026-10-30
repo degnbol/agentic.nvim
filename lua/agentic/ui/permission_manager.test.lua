@@ -203,6 +203,52 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
+    describe("tool call holds", function()
+        it("reveals the request's own block, not the proxy's", function()
+            local anchor_buf = vim.api.nvim_create_buf(false, true)
+            local anchor_writer = MessageWriter:new(anchor_buf)
+            pm._writer_for = function()
+                return anchor_writer
+            end
+            pm.proxy_tool_call = function()
+                return "tc-task"
+            end
+            local fallback_stub =
+                spy.stub(pm.permission_float, "is_on_fallback")
+            fallback_stub:returns(true)
+            local own_hold = spy.stub(anchor_writer, "hold_tool_call")
+            local proxy_hold = spy.stub(writer, "hold_tool_call")
+            require("mini.test").finally(function()
+                own_hold:revert()
+                proxy_hold:revert()
+                fallback_stub:revert()
+                vim.api.nvim_buf_delete(anchor_buf, { force = true })
+            end)
+
+            pm:add_request({
+                sessionId = "test-session",
+                toolCall = { toolCallId = "tc-sub-edit", kind = "edit" },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
+                },
+            }, function() end)
+
+            assert.same({ "tc-sub-edit", true }, {
+                own_hold.calls[1][2],
+                own_hold.calls[1][3],
+            })
+            assert.same(
+                { "tc-task", false },
+                { proxy_hold.calls[1][2], proxy_hold.calls[1][3] }
+            )
+            pm:_complete_request("allow-once")
+        end)
+    end)
+
     describe("cancel_requests", function()
         --- @param tool_call_id string
         --- @return TestSpy callback

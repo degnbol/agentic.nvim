@@ -19,10 +19,8 @@ local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 --- @class agentic.ui.ToolCallLayout
 local M = {}
 
---- Fold state of a foldable block, and when it is due.
---- `open`: open at render. `closed`: closed at render. `closed_when_final`:
---- closed once the call reaches a final status, no state before then.
---- @alias agentic.ui.FoldState "open"|"closed"|"closed_when_final"
+--- Fold state of a foldable block, due at render.
+--- @alias agentic.ui.FoldState "open"|"closed"
 
 --- @class agentic.ui.ToolCallLayout.HighlightRange
 --- @field type "comment"|"error"|"old"|"new"|"new_modification"|"table_row_end" Type of highlight to apply
@@ -356,17 +354,17 @@ local function output_section(rows, max_lines)
         ansi = ansi.has_ansi and ansi.highlights or nil,
     }
     if max_lines > 0 and #rows > max_lines then
-        section.fold = "closed_when_final"
+        section.fold = "closed"
     end
     return section
 end
 
---- Text the agent wrote, as dimmed markdown wrapped to the chat width.
+--- Text the agent wrote, as dimmed markdown wrapped to the chat width,
+--- folded closed when more than one row.
 --- @param rows string[]
 --- @param wrap_width integer 0 = soft wrap
---- @param fold agentic.ui.FoldState fold state when more than one row
 --- @return agentic.ui.ToolCallLayout.Section
-local function prose_section(rows, wrap_width, fold)
+local function prose_section(rows, wrap_width)
     local wrapped, table_row_ends = TextWrap.wrap_prose(rows, wrap_width)
     --- @type agentic.ui.ToolCallLayout.HighlightRange[]
     local highlights = {}
@@ -381,7 +379,7 @@ local function prose_section(rows, wrap_width, fold)
         dim = true,
         highlights = highlights,
         -- A one-row body gets no fold (`Folds.levels`), so closing it raises E490.
-        fold = #wrapped > 1 and fold or nil,
+        fold = #wrapped > 1 and "closed" or nil,
     }
     return section
 end
@@ -531,7 +529,7 @@ local function generic_body(call)
     local section = { rows = rows or body, lang = lang or "console" }
     local max_lines = Config.tool_call_display.other_max_lines
     if max_lines > 0 and #section.rows > max_lines then
-        section.fold = "closed_when_final"
+        section.fold = "closed"
     end
     return { section }
 end
@@ -544,10 +542,7 @@ local function sidecar_body(call)
     if not body then
         return {}
     end
-    -- A subagent's prompt is fixed at spawn, and its transcript, a row above,
-    -- is what the block is for.
-    local fold = call.block.subagent ~= nil and "closed" or "closed_when_final"
-    return { prose_section(body, call.wrap_width, fold) }
+    return { prose_section(body, call.wrap_width) }
 end
 
 --- @type table<string, agentic.ui.ToolCallLayout.Builder>
@@ -625,7 +620,7 @@ local BODIES = {
         if not body then
             return {}
         end
-        return { prose_section(body, call.wrap_width, "closed") }
+        return { prose_section(body, call.wrap_width) }
     end,
 
     -- The todo window shows the rendered todos, so the raw request folds away.
@@ -826,11 +821,11 @@ local function diff_body(call)
         vim.list_extend(rows, hunk_lines)
     end
 
-    -- A created file's diff is the whole file, so collapse large ones closed;
-    -- an edit shows only fragments and is never auto-collapsed. An open diff
-    -- opens at render, so it shows while its permission prompt does. The open
-    -- must be explicit: under foldmethod=expr, a fold created after a closed
-    -- one starts closed.
+    -- A created file's diff is the whole file, so a large one is closed at
+    -- render, as is a failed diff; an edit shows only fragments and is never
+    -- auto-collapsed. A permission hold opens the block
+    -- (`MessageWriter:hold_tool_call`). Every state must be explicit: a new
+    -- fold copies the open or closed flag of the fold before it.
     local create_max = Config.tool_call_display.create_max_lines or 0
     local collapse = call_diff.is_create
         and create_max > 0
@@ -848,8 +843,7 @@ local function diff_body(call)
             lang = lang,
             difffold = true,
             -- A body of one row or none gets no fold (`Folds.levels`).
-            fold = #rows > 1 and (open and "open" or "closed_when_final")
-                or nil,
+            fold = #rows > 1 and (open and "open" or "closed") or nil,
             highlights = highlights,
         },
     }

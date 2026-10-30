@@ -886,7 +886,7 @@ function PermissionManager:_process_next()
         proxy_held = false,
     }
 
-    writer:hold_tool_call(toolCallId)
+    writer:hold_tool_call(toolCallId, true)
     self:_sync_proxy_hold()
     self:_watch_layout()
     self:_sync_keymaps()
@@ -926,7 +926,9 @@ function PermissionManager:_sync_proxy_hold()
         local id = self.proxy_tool_call
             and self.proxy_tool_call(request.writer.bufnr)
         if id then
-            self.message_writer:hold_tool_call(id)
+            -- The proxy's body is the subagent's prompt, not what the
+            -- request asks about.
+            self.message_writer:hold_tool_call(id, false)
             request.proxy_held = true
         end
     elseif not on_fallback and request.proxy_held then
@@ -962,7 +964,7 @@ function PermissionManager:_sync_anchor()
     end
     request.writer:release_hold()
     request.writer = writer
-    writer:hold_tool_call(request.toolCallId)
+    writer:hold_tool_call(request.toolCallId, true)
     self.permission_float:set_anchor(writer.bufnr)
 end
 

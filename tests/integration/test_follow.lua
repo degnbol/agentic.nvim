@@ -349,7 +349,7 @@ writer.tool_call_blocks.h = {
     tool_call_id = "h", status = "pending", kind = "execute",
     argument = "ls", extmark_id = id,
 }
-writer:hold_tool_call("h")
+writer:hold_tool_call("h", false)
 ]])
         settle()
     end

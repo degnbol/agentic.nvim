@@ -122,7 +122,7 @@ the fence is set per kind:
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`Section.fold`): `open` normally, `closed_when_final` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`Section.fold`): `open` normally, `closed` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
@@ -165,10 +165,10 @@ Threshold config keys (in `config_default.lua`):
 
 - `search_max_lines` — search/grep bodies
 - `execute_max_lines` — shell stdout (and execute failure_reason)
-- Fetch / WebSearch / SubAgent — fold when multi-line, no config.
-  Fetch/WebSearch close at a final status, a subagent's prompt at render
+- Fetch / WebSearch / SubAgent — fold when multi-line, no config
 
-`Section.fold` (`agentic.ui.FoldState`) says when the state is due.
+`Section.fold` is `open` or `closed`, due at render; the writer queues every
+state, as a new fold copies the flag of the one before.
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
 word when it has one, plus a character count where the writer marks the

@@ -974,7 +974,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 -- ...and a failed edit folds closed: the anchor is the first
                 -- body line.
                 assert.same(
-                    { anchor = old_i - 1, state = "closed_when_final" },
+                    { anchor = old_i - 1, state = "closed" },
                     layout.fold
                 )
             end
@@ -1009,7 +1009,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             it("folds a large created file closed", function()
                 assert.equal(
-                    "closed_when_final",
+                    "closed",
                     fold_state_for({ old = {}, new = { "a", "b", "c", "d" } })
                 )
             end)
@@ -1254,7 +1254,7 @@ describe("agentic.ui.ToolCallLayout", function()
         end)
     end)
 
-    it("folds a multi-line fetch body closed when final", function()
+    it("folds a multi-line fetch body closed at render", function()
         --- @type agentic.ui.MessageWriter.ToolCallBlock
         local block = {
             tool_call_id = "fetch-state",
@@ -1263,7 +1263,7 @@ describe("agentic.ui.ToolCallLayout", function()
             argument = "https://example.com prompt",
             body = { "line 1", "", "line 2" },
         }
-        assert.equal("closed_when_final", Layout.build(block, 80).fold.state)
+        assert.equal("closed", Layout.build(block, 80).fold.state)
     end)
 
     describe("shell command fence label", function()
@@ -2119,7 +2119,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 { '{"alpha": "1", "beta": "2", "gamma": "3"}' }
             )
             assert.equal("```markdown-fold", layout.lines[2])
-            assert.equal("closed_when_final", layout.fold.state)
+            assert.equal("closed", layout.fold.state)
         end)
 
         it("leaves table rows unwrapped at a narrow width", function()

@@ -2093,7 +2093,7 @@ describe("agentic.ui.MessageWriter", function()
         it("centres a block that fits", function()
             track(20, 24)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             assert.equal(14, topline())
         end)
@@ -2101,7 +2101,7 @@ describe("agentic.ui.MessageWriter", function()
         it("shows no rows past the end of the buffer", function()
             track(45, 49)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             assert.equal(32, topline())
         end)
@@ -2110,14 +2110,14 @@ describe("agentic.ui.MessageWriter", function()
             vim.wo[winid].scrolloff = 4
             track(10, 45)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             assert.equal(11, topline())
         end)
 
         it("caps writes at the header at the top, folded body included", function()
             track(20, 24)
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
             vim.api.nvim_win_call(winid, function()
                 vim.wo.foldmethod = "manual"
                 vim.cmd("22,25fold")
@@ -2134,7 +2134,7 @@ describe("agentic.ui.MessageWriter", function()
 
         it("leaves a following window the user moved down past it", function()
             track(20, 24)
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
             user_move({ topline = 25, lnum = 25 })
 
             writer:_schedule_follow()
@@ -2152,7 +2152,7 @@ describe("agentic.ui.MessageWriter", function()
                 col = 62,
             })
             track(20, 24)
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             user_move({ topline = 10, lnum = 10 })
 
@@ -2166,7 +2166,7 @@ describe("agentic.ui.MessageWriter", function()
             writer._user_controlled[winid] = true
             track(20, 24)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             assert.equal(1, topline())
         end)
@@ -2177,13 +2177,13 @@ describe("agentic.ui.MessageWriter", function()
             }) --[[@as agentic.UserConfig.Follow]]
             track(20, 24)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             assert.equal(1, topline())
         end)
 
         it("survives reset_turn_state", function()
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             writer:reset_turn_state()
 
@@ -2204,7 +2204,7 @@ describe("agentic.ui.MessageWriter", function()
                 { id = writer:_place_fold_anchor(21), open = false },
             }
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
             assert.equal(1, topline())
             writer:flush_pending_fold_ops()
 
@@ -2227,7 +2227,7 @@ describe("agentic.ui.MessageWriter", function()
             local mode = spy.stub(vim.api, "nvim_get_mode")
             mode:returns({ mode = "i", blocking = false })
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
             writer:flush_pending_fold_ops()
             -- Tall while open: header at the top.
             assert.equal(21, topline())
@@ -2268,7 +2268,7 @@ describe("agentic.ui.MessageWriter", function()
             writer._pin_held[winid] = true
             track(20, 24)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
             writer:_release_prose_pin()
 
             assert.is_nil(writer._user_controlled[winid])
@@ -2279,14 +2279,14 @@ describe("agentic.ui.MessageWriter", function()
             writer:_own_change(function() end)
             track(20, 24)
 
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             assert.equal(16, vim.api.nvim_win_get_cursor(winid)[1])
         end)
 
         it("after release_hold, follows the stream", function()
             track(20, 24)
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             writer:release_hold()
 
@@ -2295,7 +2295,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it("a hold with no rows yet follows, then places the block", function()
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
             assert.equal(32, topline())
 
             track(20, 24)
@@ -2307,7 +2307,7 @@ describe("agentic.ui.MessageWriter", function()
         it("follow_in takes a window out of user control and places it", function()
             writer._user_controlled[winid] = true
             track(20, 24)
-            writer:hold_tool_call("h")
+            writer:hold_tool_call("h", false)
 
             writer:follow_in(winid)
 
@@ -4667,25 +4667,54 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(fences[2] + 1, vim.fn.foldclosed(fences[2] + 1))
         end)
 
-        it("closes a long execute body on a status-only completion", function()
+        it("closes a long execute body in the update that adds it", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-status",
-                status = "in_progress",
+                status = "pending",
                 kind = "execute",
                 argument = "ls",
+            })
+            writer:update_tool_call_block({
+                tool_call_id = "fold-status",
+                status = "in_progress",
                 body = long_execute_body(),
             })
             local body_start = fold_fence_lines()[1] + 1
             deferred.drain()
-            -- Visible while it streams.
-            assert.equal(-1, vim.fn.foldclosed(body_start))
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
 
             writer:update_tool_call_block({
                 tool_call_id = "fold-status",
                 status = "completed",
             })
+            assert.same({}, writer._pending_fold_ops)
+        end)
+
+        it("closes a fold rendered below one the user opened", function()
+            writer:write_tool_call_block({
+                tool_call_id = "below-open-1",
+                status = "completed",
+                kind = "execute",
+                argument = "ls",
+                body = long_execute_body(),
+            })
+            local first_body = fold_fence_lines()[1] + 1
             deferred.drain()
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd(first_body .. "foldopen")
+            end)
+
+            writer:write_tool_call_block({
+                tool_call_id = "below-open-2",
+                status = "completed",
+                kind = "execute",
+                argument = "pwd",
+                body = long_execute_body(),
+            })
+            local second_body = fold_fence_lines()[2] + 1
+            deferred.drain()
+            assert.equal(second_body, vim.fn.foldclosed(second_body))
+            assert.equal(-1, vim.fn.foldclosed(first_body))
         end)
 
         --- An edit diff whose new content has ≥2 foldable structures: if the
@@ -4997,25 +5026,70 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(-1, vim.fn.foldclosed(body_start))
         end)
 
-        it("closes a large created file only when it completes", function()
-            Config.tool_call_display.create_max_lines = 3
-            writer:write_tool_call_block({
-                tool_call_id = "create-large",
-                status = "pending",
-                kind = "create",
-                argument = "/tmp/agentic_difffold_large.lua",
-                diff = { old = {}, new = diff_new },
-            })
-            local body_start = difffold_fence_line() + 1
-            deferred.drain()
-            assert.equal(-1, vim.fn.foldclosed(body_start))
+        describe("large created file", function()
+            --- @type integer|nil
+            local original
 
-            writer:update_tool_call_block({
-                tool_call_id = "create-large",
-                status = "completed",
-            })
-            deferred.drain()
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
+            before_each(function()
+                original = Config.tool_call_display.create_max_lines
+                Config.tool_call_display.create_max_lines = 3
+            end)
+
+            after_each(function()
+                Config.tool_call_display.create_max_lines = original
+            end)
+
+            --- Write a pending large create; returns its first body line.
+            --- @param id string
+            --- @return integer body_start
+            local function write_large_create(id)
+                writer:write_tool_call_block({
+                    tool_call_id = id,
+                    status = "pending",
+                    kind = "create",
+                    argument = "/tmp/agentic_difffold_" .. id .. ".lua",
+                    diff = { old = {}, new = diff_new },
+                })
+                return difffold_fence_line() + 1
+            end
+
+            it("is closed at render", function()
+                local body_start = write_large_create("create-large")
+                deferred.drain()
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
+            end)
+
+            it("opens under a revealing hold placed after render", function()
+                local body_start = write_large_create("hold-after")
+                deferred.drain()
+
+                writer:hold_tool_call("hold-after", true)
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(body_start))
+
+                writer:release_hold()
+                deferred.drain()
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
+            end)
+
+            it("opens under a revealing hold placed before render", function()
+                writer:hold_tool_call("hold-before", true)
+                local body_start = write_large_create("hold-before")
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(body_start))
+
+                writer:release_hold()
+                deferred.drain()
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
+            end)
+
+            it("stays closed under a hold that does not reveal", function()
+                write_large_create("hold-quiet")
+                deferred.drain()
+
+                writer:hold_tool_call("hold-quiet", false)
+                assert.same({}, writer._pending_fold_ops)
+            end)
         end)
 
         it("closes a failed edit that has no reason", function()
