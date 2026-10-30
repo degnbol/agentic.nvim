@@ -22,6 +22,7 @@
 (fenced_code_block
   (info_string (language) @injection.language)
   (code_fence_content) @injection.content
-  (#lua-match? @injection.language "%-fold%a*$")
+  (#match? @injection.language "-fold(next)?$")
   (#not-lua-match? @injection.language "difffold$")
-  (#gsub! @injection.language "%-fold%a*$" ""))
+  (#gsub! @injection.language "%-foldnext$" "")
+  (#gsub! @injection.language "%-fold$" ""))
