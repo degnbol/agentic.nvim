@@ -89,6 +89,11 @@ local cached_plugin_structured_mtime = 0
 --- @type table|nil, agentic.StructuredEntries
 local cached_config_structured_ref, cached_config_structured_entries = nil, {}
 
+--- Commands `is_read_only` has judged under the cached structured entries,
+--- and the verdict.
+--- @type table<string, boolean>
+local cached_read_only = {}
+
 --- Path to bundled permissions.json
 --- @return string
 local function plugin_permissions_path()
@@ -564,6 +569,7 @@ function M.get_structured_entries()
     then
         cached_plugin_structured_mtime = plugin_mtime
         cached_plugin_structured_entries = {}
+        cached_read_only = {}
         if Config.permissions.use_plugin_defaults then
             local data = read_json_if_present(plugin_path)
             cached_plugin_structured_entries =
@@ -576,6 +582,7 @@ function M.get_structured_entries()
         cached_config_structured_ref = user_table
         cached_config_structured_entries =
             normalise_structured_entries(user_table)
+        cached_read_only = {}
     end
 
     --- @type agentic.StructuredEntries
@@ -1397,6 +1404,9 @@ local function walk_command(node, src, ctx, known, funcs)
         )
     end
 
+    if script_path and not ctx.read_scripts then
+        return false
+    end
     -- Non-`-c` script execution: read the on-disk bytes and walk them like a
     -- `-c` body. Every body leaf hits the same deny/ask gates and emits its own
     -- effects into the shared `ctx.effects` (so a script writing outside a grant
@@ -1404,9 +1414,6 @@ local function walk_command(node, src, ctx, known, funcs)
     -- unreadable/oversize/unparseable body bails. Unlike the `-c` recursion (a
     -- shrinking substring), files can cycle (`a.sh` sources `b.sh` sources
     -- `a.sh`), so NESTED_MAX_DEPTH is the actual termination guard here.
-    if script_path and not ctx.read_scripts then
-        return false
-    end
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
         -- A redirect earlier in this command may have written this very path.
         -- The SDK applies nothing before approval, so disk holds stale-or-absent
@@ -2821,14 +2828,19 @@ function M.should_auto_reject(command)
     return source ~= nil, source
 end
 
---- The approve walk over a command with the given rules; see `evaluate`
---- for what it decides and returns. `read_scripts` false makes a script the
---- command runs or sources bail before it is read.
+--- Parse a Bash command with the zsh grammar and walk the tree against
+--- `rules` and the structured rules: every leaf command must match an allow
+--- pattern, no leaf may match a deny or ask pattern, and any unmodelled
+--- structure (argument-position substitution, dynamic command name, negation)
+--- bails. A file-writing redirect emits an effect rather than bailing; brace
+--- groups (`{ …; }`), subshells (`( … )`), loops, and if/case control flow
+--- recurse into every branch. Fail-closed: an absent parser, a parse error,
+--- or a truncated/malformed tree all return false.
 --- @param command string
---- @param rules { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, read_scripts: boolean }
---- @return boolean ok
---- @return agentic.utils.PermissionRules.Effect[] effects
---- @return table<agentic.utils.PermissionRules.Source, true> sources
+--- @param rules { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, read_scripts: boolean } `read_scripts` false makes a script the command runs or sources bail unread
+--- @return boolean ok Structurally approvable
+--- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `rm` operands) the command would produce, in order
+--- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
 local function run_walk(command, rules)
     if type(command) ~= "string" or command == "" then
         return false, {}, {}
@@ -2880,19 +2892,9 @@ local function run_walk(command, rules)
     return run.ok, run.ctx.effects, run.ok and run.ctx.sources or {}
 end
 
---- Check if a Bash command should be auto-approved. Parses the command with the
---- zsh grammar and walks the tree: every leaf command must match an allow
---- pattern, no leaf may match a deny or ask pattern, and any unmodelled
---- structure (argument-position substitution, dynamic command name, negation)
---- bails. A file-writing redirect emits a `ctx.effects` entry cleared by the
---- policy layer rather than bailing; brace groups (`{ …; }`), subshells
---- (`( … )`), loops, and if/case control flow recurse into every branch.
---- Fail-closed — an absent parser, a parse error, or a truncated/malformed tree
---- all return false.
+--- Check if a Bash command should be auto-approved under the configured
+--- settings.json rules and `auto_approve_tier`, by the walk of `run_walk`.
 ---
---- `ok` means structurally approvable; the second return is the ordered list of
---- concrete file-mutating effects (redirect writes, `rm` operands) the command
---- would produce.
 --- A structurally-ok command with effects STILL requires every effect to clear
 --- at the policy layer before approval — `ok` alone is not approval (see
 --- permission_manager's `_bash_effects_clear`). Empty effects means a pure
@@ -2904,7 +2906,7 @@ end
 --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
 --- @return boolean ok
 --- @return agentic.utils.PermissionRules.Effect[] effects
---- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
+--- @return table<agentic.utils.PermissionRules.Source, true> sources
 function M.evaluate(command, extra_allow)
     -- Remembered leaves count even when `auto_approve_tier` is nil, because the
     -- user approved each one.
@@ -2920,19 +2922,17 @@ function M.evaluate(command, extra_allow)
     })
 end
 
---- Commands `is_read_only` has judged, and the verdict.
---- @type table<string, boolean>
-local cached_read_only = {}
-
 --- Whether a command only reads: every leaf passes a structured `read_only`
 --- gate, no structured deny or ask gate matches, and it has no file-mutating
 --- effect. Settings.json rules, remembered leaves and `auto_approve_tier` do
---- not count. A script it runs or sources makes it not read-only; the
---- function reads no file but the structured rules. For display, never for
---- approval. Memoised per command.
+--- not count. A command that runs or sources a script is not read-only, so
+--- no file is read but the structured rules. For display, never for
+--- approval. Memoised per command while the structured rules are unchanged.
 --- @param command string
 --- @return boolean
 function M.is_read_only(command)
+    -- Clears the memo when the rules changed.
+    M.get_structured_entries()
     local cached = cached_read_only[command]
     if cached ~= nil then
         return cached
@@ -2982,7 +2982,6 @@ function M.invalidate_cache()
     cached_config_structured_ref = nil
     cached_config_structured_entries = {}
     cached_mtimes = {}
-    cached_read_only = {}
 end
 
 return M

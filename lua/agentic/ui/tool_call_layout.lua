@@ -20,7 +20,7 @@ local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 --- @class agentic.ui.ToolCallLayout
 local M = {}
 
---- Fold state of a foldable block, due at render.
+--- The fold state a foldable block takes at render.
 --- @alias agentic.ui.FoldState "open"|"closed"
 
 --- @class agentic.ui.ToolCallLayout.HighlightRange
@@ -599,7 +599,6 @@ local BODIES = {
     -- A failed execute shows its reason as output: the bash stdout/stderr of
     -- a non-zero exit is long and often informational, so it takes the
     -- output's fold and colours rather than the red of a short denial.
-    -- Output of a command that only reads folds like search output.
     execute = function(call)
         local rows = call.failure or call.block.body
         if not rows then
@@ -826,11 +825,8 @@ local function diff_body(call)
         vim.list_extend(rows, hunk_lines)
     end
 
-    -- A created file's diff is the whole file, so a large one is closed at
-    -- render, as is a failed diff; an edit shows only fragments and is never
-    -- auto-collapsed. A permission hold opens the block
-    -- (`MessageWriter:hold_tool_call`). Every state must be explicit: a new
-    -- fold copies the open or closed flag of the fold before it.
+    -- A created file's diff is the whole file, so a large one is closed. An
+    -- edit shows only fragments and stays open unless it failed.
     local create_max = Config.tool_call_display.create_max_lines or 0
     local collapse = call_diff.is_create
         and create_max > 0

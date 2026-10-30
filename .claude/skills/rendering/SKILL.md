@@ -118,11 +118,11 @@ the fence is set per kind:
 | --- | --- | --- |
 | Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback | Cosmetic; zsh parser is aliased to `bash`, identical highlighting |
 | Search command (argument fence) | `bash` | |
-| Execute body | `console`, or `console-fold` past `execute_max_lines` (`search_max_lines` when `PermissionRules.is_read_only`) | A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
+| Execute body | `console`, or `console-fold` past `execute_max_lines` (`search_max_lines` when `PermissionRules.is_read_only`) | A failure reason takes the body's place. A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block. Fold state is set **explicitly** (`Section.fold`): `open` normally, `closed` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
+| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block: `open`, or `closed` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
 **A `fold$`-suffixed info-string is the fold signal.** Two variants:
@@ -154,21 +154,12 @@ read them in this order when changing fold behaviour:
 2. `lua/agentic/ui/folds.lua` — the foldexpr: root-tree-only levels, cached
    per `b:changedtick`. Its module docstring is the record of why core's
    `vim.treesitter.foldexpr()` cannot be used here.
-3. `lua/agentic/ui/tool_call_layout.lua` — `ToolCallLayout.build`: a
-   section with `fold` set gets `-fold`; `Layout.fold.anchor` is the first
-   row inside the fold.
-4. `lua/agentic/ui/message_writer.lua` — `MessageWriter:_queue_fold`'s
-   docstring explains why the fold close is deferred via `vim.schedule` and
-   how anchor extmarks survive edits and chat-window hides.
-
-Threshold config keys (in `config_default.lua`):
-
-- `search_max_lines` — search/grep bodies, read-only shell stdout
-- `execute_max_lines` — other shell stdout (and execute failure_reason)
-- Fetch / WebSearch / SubAgent — fold when multi-line, no config
-
-`Section.fold` is `open` or `closed`, due at render; the writer queues every
-state, as a new fold copies the flag of the one before.
+3. `lua/agentic/ui/tool_call_layout.lua` — `assemble`: a section with
+   `fold` set gets `-fold`; `Layout.fold.anchor` is the first row inside the
+   fold.
+4. `lua/agentic/ui/message_writer.lua` — `_render_block_fold` places a tool
+   call's fold. `_queue_fold`'s docstring explains why the fold op is
+   deferred and how anchor extmarks survive edits and chat-window hides.
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
 word when it has one, plus a character count where the writer marks the

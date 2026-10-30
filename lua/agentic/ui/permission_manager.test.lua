@@ -247,6 +247,43 @@ describe("agentic.ui.PermissionManager", function()
             )
             pm:_complete_request("allow-once")
         end)
+
+        it("moves the revealing hold to the request's new writer", function()
+            local new_buf = vim.api.nvim_create_buf(false, true)
+            local new_writer = MessageWriter:new(new_buf)
+            local set_anchor = spy.stub(pm.permission_float, "set_anchor")
+            local new_hold = spy.stub(new_writer, "hold_tool_call")
+            local release = spy.on(writer, "release_hold")
+            require("mini.test").finally(function()
+                set_anchor:revert()
+                new_hold:revert()
+                release:revert()
+                vim.api.nvim_buf_delete(new_buf, { force = true })
+            end)
+
+            pm:add_request({
+                sessionId = "test-session",
+                toolCall = { toolCallId = "tc-moved", kind = "edit" },
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
+                },
+            }, function() end)
+            pm._writer_for = function()
+                return new_writer
+            end
+            pm:_sync_anchor()
+
+            assert.equal(1, release.call_count)
+            assert.same(
+                { "tc-moved", true },
+                { new_hold.calls[1][2], new_hold.calls[1][3] }
+            )
+            pm:_complete_request("allow-once")
+        end)
     end)
 
     describe("cancel_requests", function()

@@ -128,7 +128,7 @@ end
 --- @field trailing_insert_mark_id? integer Zero-width NS_TOOL_BLOCKS mark riding just below the block, marking where the next region anchored to it goes (see `MessageWriter:_anchor_insert_row`). Absent until the first such region.
 --- @field fold_anchor_id? integer The block's anchor extmark in NS_FOLD_ANCHORS, on the first body row of its foldable fence.
 --- @field fold_open? boolean The fold state the layout wants for the block's current lines.
---- @field fold_sent? boolean The state last queued for the anchor; nil before the first sync.
+--- @field fold_sent? boolean The state last queued for the anchor. Nil until a state is queued for the current anchor.
 
 --- Append the closing fence for `lines` when they leave one open.
 ---
@@ -167,7 +167,7 @@ end
 --- @field _prose_anchor_line? integer 0-indexed buffer line of the first non-blank line of the current prose run; pinned at the top of the viewport during streaming and cleared by `_release_prose_pin` and `_clear_prose_pin`
 --- @field _pin_held table<integer, true> Windows whose last scroll the prose pin held short of the last line. Set by `_scroll`, and cleared there by a scroll to the held tool call; `_release_prose_pin` hands them to user control.
 --- @field _held_tool_call_id? string The tool call whose block following keeps in view instead of the stream (`hold_tool_call`)
---- @field _revealed_tool_call_id? string The tool call whose fold a permission hold keeps open (`hold_tool_call`)
+--- @field _hold_reveals boolean The held tool call's fold stays open while the hold lasts (`hold_tool_call`)
 --- @field _hold_unplaced boolean The next scroll that resolves the held block's rows places it (`BufHelpers.show_rows`) instead of capping the topline at it
 --- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
 --- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
@@ -241,6 +241,7 @@ function MessageWriter:new(bufnr, home_window)
         _prose_anchor_line = nil,
         _pin_held = {},
         _hold_unplaced = false,
+        _hold_reveals = false,
         _views = {},
         _entered_window = nil,
         _user_controlled = {},
@@ -551,14 +552,14 @@ end
 
 --- Keep a tool call's block in view of the following windows, instead of
 --- the stream, until `release_hold`: place it, then cap the topline at its
---- header line. User motion does not end the hold.
+--- header line. User motion does not end the hold. Replaces an earlier hold.
 --- @param tool_call_id string
---- @param reveal boolean Keep the block's fold open until `release_hold`
+--- @param reveal boolean Keep the block's fold open while the hold lasts
 function MessageWriter:hold_tool_call(tool_call_id, reveal)
+    local previous = self._held_tool_call_id
     self._held_tool_call_id = tool_call_id
     self._hold_unplaced = true
-    local previous = self._revealed_tool_call_id
-    self._revealed_tool_call_id = reveal and tool_call_id or nil
+    self._hold_reveals = reveal
     self:_sync_tool_call_fold(previous)
     self:_sync_tool_call_fold(tool_call_id)
     self:_schedule_follow()
@@ -571,11 +572,11 @@ function MessageWriter:release_hold()
     if not self._held_tool_call_id then
         return
     end
-    local revealed = self._revealed_tool_call_id
+    local held = self._held_tool_call_id
     self._held_tool_call_id = nil
     self._hold_unplaced = false
-    self._revealed_tool_call_id = nil
-    self:_sync_tool_call_fold(revealed)
+    self._hold_reveals = false
+    self:_sync_tool_call_fold(held)
     self:_schedule_follow()
 end
 
@@ -2660,18 +2661,19 @@ function MessageWriter:_drop_block_fold(block)
     block.fold_sent = nil
 end
 
---- Queue the fold state a tool call block should have, when it differs
---- from the state last queued: open when its layout wants it open or a
---- permission hold reveals it, else closed. No-op for a block without a
---- fold, and so for a repeated call, which does not undo a fold the user
---- changed by hand.
+--- Queue the fold state a tool call block should have: open when its
+--- layout wants it open or a hold reveals it (`hold_tool_call`), else
+--- closed. No-op for a block without a fold, or when the state is the one
+--- last queued, so a repeated call does not undo a fold the user changed by
+--- hand.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 function MessageWriter:_sync_block_fold(block)
     if not block.fold_anchor_id then
         return
     end
     local open = block.fold_open == true
-        or self._revealed_tool_call_id == block.tool_call_id
+        or self._hold_reveals
+            and self._held_tool_call_id == block.tool_call_id
     if open ~= block.fold_sent then
         self:_queue_fold_op(block.fold_anchor_id, open)
         block.fold_sent = open

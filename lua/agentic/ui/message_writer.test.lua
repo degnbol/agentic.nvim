@@ -5039,7 +5039,7 @@ describe("agentic.ui.MessageWriter", function()
                 Config.tool_call_display.create_max_lines = original
             end)
 
-            --- Write a pending large create; returns its first body line.
+            --- Write a pending large create and return its first body line.
             --- @param id string
             --- @return integer body_start
             local function write_large_create(id)
@@ -5081,6 +5081,27 @@ describe("agentic.ui.MessageWriter", function()
                 writer:release_hold()
                 deferred.drain()
                 assert.equal(body_start, vim.fn.foldclosed(body_start))
+            end)
+
+            it("moves the reveal with a new hold", function()
+                write_large_create("hold-a")
+                write_large_create("hold-b")
+                local bodies = {}
+                for i, line in
+                    ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+                do
+                    if line:match("difffold$") then
+                        table.insert(bodies, i + 1)
+                    end
+                end
+                writer:hold_tool_call("hold-a", true)
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(bodies[1]))
+
+                writer:hold_tool_call("hold-b", true)
+                deferred.drain()
+                assert.equal(bodies[1], vim.fn.foldclosed(bodies[1]))
+                assert.equal(-1, vim.fn.foldclosed(bodies[2]))
             end)
 
             it("stays closed under a hold that does not reveal", function()
