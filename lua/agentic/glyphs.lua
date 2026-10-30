@@ -6,10 +6,11 @@
 --- indistinguishable in the gutter; two tools doing one act may share one,
 --- and the head text names which tool ran.
 ---
---- Glyphs are `nf-md-*`, never emoji. A `sign_text` must be `glyph .. " "` —
---- `nvim_buf_set_extmark` accepts 1-2 cells and rejects 3, and the trailing
---- space is what a wide-aspect glyph expands into instead of rendering squished
---- (kitty renders a Private Use character across the following spaces).
+--- Glyphs are `nf-md-*` or Unicode block elements, never emoji. A `sign_text`
+--- must be `glyph .. " "` — `nvim_buf_set_extmark` accepts 1-2 cells and
+--- rejects 3, and the trailing space is what a wide-aspect glyph expands into
+--- instead of rendering squished (kitty renders a Private Use character across
+--- the following spaces).
 ---
 --- @class agentic.Glyphs
 local Glyphs = {}
@@ -232,9 +233,14 @@ Glyphs.COMMAND_DEFAULT = Glyphs.KIND.skill
 --- user-typed one does; it takes the glyph an unlisted word would.
 Glyphs.KIND.slashcommand = Glyphs.COMMAND_DEFAULT
 
---- Gauge of a fraction used: an empty circle, then 1 to 8 eighths filled.
+--- Pie of a fraction: an empty circle, then 1 to 8 eighths filled.
 --- @type string[]
-Glyphs.GAUGE =
+Glyphs.PIE =
     { "󰝦", "󰪞", "󰪟", "󰪠", "󰪡", "󰪢", "󰪣", "󰪤", "󰪥" }
+
+--- Bar of a fraction: 1 to 8 eighths high. Unicode block elements, one cell
+--- wide, so no trailing cell.
+--- @type string[]
+Glyphs.BAR = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 
 return Glyphs

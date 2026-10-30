@@ -56,22 +56,80 @@ describe("agentic.Budget", function()
         end)
     end)
 
-    describe("gauge", function()
-        it("is empty at 0", function()
-            assert.equal(Glyphs.GAUGE[1], Budget.gauge(0))
+    describe("elapsed", function()
+        it("is 0 at the window start", function()
+            assert.equal(0, Budget.elapsed(five_hour(0, 5 * HOUR), NOW))
         end)
 
-        it("shows the first slice for any use", function()
-            assert.equal(Glyphs.GAUGE[2], Budget.gauge(0.01))
+        it("is 0 when the reset is further away than the window", function()
+            assert.equal(0, Budget.elapsed(five_hour(0, 6 * HOUR), NOW))
+        end)
+
+        it("is 0.5 halfway", function()
+            assert.equal(0.5, Budget.elapsed(five_hour(0, 2.5 * HOUR), NOW))
+        end)
+
+        it("is 1 after the reset", function()
+            assert.equal(1, Budget.elapsed(five_hour(0, -HOUR), NOW))
+        end)
+    end)
+
+    describe("pie", function()
+        it("is empty at 0", function()
+            assert.equal(Glyphs.PIE[1], Budget.pie(0))
+        end)
+
+        it("shows the first slice for any fraction", function()
+            assert.equal(Glyphs.PIE[2], Budget.pie(0.01))
         end)
 
         it("shows half at 0.5", function()
-            assert.equal(Glyphs.GAUGE[5], Budget.gauge(0.5))
+            assert.equal(Glyphs.PIE[5], Budget.pie(0.5))
         end)
 
         it("is full at 1 and above", function()
-            assert.equal(Glyphs.GAUGE[9], Budget.gauge(1))
-            assert.equal(Glyphs.GAUGE[9], Budget.gauge(1.3))
+            assert.equal(Glyphs.PIE[9], Budget.pie(1))
+            assert.equal(Glyphs.PIE[9], Budget.pie(1.3))
+        end)
+    end)
+
+    describe("bar", function()
+        it("is lowest at 0 and up to an eighth", function()
+            assert.equal(Glyphs.BAR[1], Budget.bar(0))
+            assert.equal(Glyphs.BAR[1], Budget.bar(0.1))
+        end)
+
+        it("is half high at 0.5", function()
+            assert.equal(Glyphs.BAR[4], Budget.bar(0.5))
+        end)
+
+        it("is full at 1 and above", function()
+            assert.equal(Glyphs.BAR[8], Budget.bar(1))
+            assert.equal(Glyphs.BAR[8], Budget.bar(1.3))
+        end)
+    end)
+
+    describe("state", function()
+        it("keeps the provider state", function()
+            assert.equal(
+                "exhausted",
+                Budget.state(five_hour(0.5, 2.5 * HOUR, "exhausted"), NOW)
+            )
+            assert.equal("ok", Budget.state(five_hour(0.5, 2.5 * HOUR), NOW))
+        end)
+
+        it("raises ok to warning over pace", function()
+            assert.equal(
+                "warning",
+                Budget.state(five_hour(0.9, 4 * HOUR), NOW)
+            )
+        end)
+
+        it("is ok past the reset", function()
+            assert.equal(
+                "ok",
+                Budget.state(five_hour(1, -HOUR, "exhausted"), NOW)
+            )
         end)
     end)
 
@@ -80,11 +138,12 @@ describe("agentic.Budget", function()
             assert.equal("", Budget.statusline({ now = NOW }))
         end)
 
-        it("shows each window with its gauge", function()
+        it("shows each window with its pie and bar", function()
             vim.g.agentic_budget = {
                 five_hour(0.5, 2.5 * HOUR),
+                -- 1 h left of 7 d at full use: pace just above 1.
                 {
-                    label = "wk",
+                    label = "7d",
                     utilization = 1,
                     resets_at = NOW + HOUR,
                     window_s = 7 * 24 * HOUR,
@@ -92,15 +151,39 @@ describe("agentic.Budget", function()
                 },
             }
             assert.equal(
-                "5h " .. Glyphs.GAUGE[5] .. "  wk " .. Glyphs.GAUGE[9] .. " ",
+                "5h "
+                    .. Glyphs.PIE[5]
+                    .. "  "
+                    .. Glyphs.BAR[4]
+                    .. " 7d "
+                    .. Glyphs.PIE[9]
+                    .. "  %#AgenticBudgetWarning#"
+                    .. Glyphs.BAR[8]
+                    .. "%*",
                 Budget.statusline({ now = NOW })
             )
         end)
 
-        it("colours a window that is not ok", function()
-            vim.g.agentic_budget = { five_hour(0.5, 2.5 * HOUR, "warning") }
+        it("colours the bar of a window that is not ok", function()
+            vim.g.agentic_budget = { five_hour(0.5, 2.5 * HOUR, "exhausted") }
             assert.equal(
-                "%#AgenticBudgetWarning#5h " .. Glyphs.GAUGE[5] .. " %*",
+                "5h "
+                    .. Glyphs.PIE[5]
+                    .. "  %#AgenticBudgetExhausted#"
+                    .. Glyphs.BAR[4]
+                    .. "%*",
+                Budget.statusline({ now = NOW })
+            )
+        end)
+
+        it("colours the bar of a window over pace", function()
+            vim.g.agentic_budget = { five_hour(0.9, 4 * HOUR) }
+            assert.equal(
+                "5h "
+                    .. Glyphs.PIE[3]
+                    .. "  %#AgenticBudgetWarning#"
+                    .. Glyphs.BAR[8]
+                    .. "%*",
                 Budget.statusline({ now = NOW })
             )
         end)
@@ -108,35 +191,8 @@ describe("agentic.Budget", function()
         it("shows a window past its reset as empty and ok", function()
             vim.g.agentic_budget = { five_hour(1, -HOUR, "exhausted") }
             assert.equal(
-                "5h " .. Glyphs.GAUGE[1] .. " ",
+                "5h " .. Glyphs.PIE[1] .. "  " .. Glyphs.BAR[1],
                 Budget.statusline({ now = NOW })
-            )
-        end)
-
-        it("colours a window over pace with pace = true", function()
-            vim.g.agentic_budget = { five_hour(0.9, 4 * HOUR) }
-            assert.equal(
-                "5h " .. Glyphs.GAUGE[9] .. " ",
-                Budget.statusline({ now = NOW })
-            )
-            assert.equal(
-                "%#AgenticBudgetWarning#5h " .. Glyphs.GAUGE[9] .. " %*",
-                Budget.statusline({ now = NOW, pace = true })
-            )
-        end)
-
-        it("adds the time to reset with reset = true", function()
-            vim.g.agentic_budget = {
-                five_hour(0.5, HOUR + 5 * 60),
-                five_hour(0.5, 42 * 60),
-            }
-            assert.equal(
-                "5h "
-                    .. Glyphs.GAUGE[5]
-                    .. "  1h05m 5h "
-                    .. Glyphs.GAUGE[5]
-                    .. "  42m",
-                Budget.statusline({ now = NOW, reset = true })
             )
         end)
     end)

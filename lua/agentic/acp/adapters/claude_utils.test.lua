@@ -206,7 +206,7 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
                     state = "ok",
                 },
                 {
-                    label = "wk",
+                    label = "7d",
                     utilization = 0.54,
                     resets_at = 2000,
                     window_s = 7 * 24 * 3600,
@@ -270,7 +270,7 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
                 },
             }) --[[@as agentic.acp.BudgetWindow[] ]]
             assert.equal(1, #windows)
-            assert.equal("wk", windows[1].label)
+            assert.equal("7d", windows[1].label)
         end)
 
         it("returns nil without unifiedWindows", function()

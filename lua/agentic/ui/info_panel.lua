@@ -1,5 +1,6 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Budget = require("agentic.budget")
+local Chunks = require("agentic.ui.chunks")
 local Duration = require("agentic.utils.duration")
 
 local DAY = 24 * 3600
@@ -97,66 +98,96 @@ local function percent(fraction)
     return string.format("%d%%", math.floor(fraction * 100 + 0.5))
 end
 
---- A window's line: its use, reset time and pace. Once the reset has passed,
---- its label and 0% only.
+--- A window's line: its use, coloured by the provider's state, reset time and
+--- pace, coloured above 1. Once the reset has passed, its label and 0% only.
 --- @param window agentic.acp.BudgetWindow
 --- @param now integer Epoch seconds
---- @return string
+--- @return agentic.ui.Chunk[]
 local function window_line(window, now)
     local resets_in = Budget.resets_in(window, now)
     if resets_in == 0 then
-        return "- " .. window.label .. ": 0% used"
+        return { { "- " .. window.label .. ": 0% used" } }
     end
     local reset =
         os.date(resets_in > DAY and "%a %H:%M" or "%H:%M", window.resets_at) --[[@as string]]
     local pace = Budget.pace(window, now)
-    local pace_text = pace
-        and ("on pace for " .. percent(pace) .. (pace > 1 and " ⚠" or ""))
-    return "- "
-        .. join(
+    --- @type agentic.ui.Chunk[]
+    local parts = {
+        {
             window.label .. ": " .. percent(window.utilization) .. " used",
-            "resets " .. reset .. " (in " .. Duration.format(resets_in) .. ")",
-            pace_text
-        )
+            Budget.hl(window.state),
+        },
+        { "resets " .. reset .. " (in " .. Duration.format(resets_in) .. ")" },
+    }
+    if pace then
+        table.insert(parts, {
+            "on pace for " .. percent(pace),
+            pace > 1 and Budget.hl("warning") or nil,
+        })
+    end
+    --- @type agentic.ui.Chunk[]
+    local chunks = { { "- " } }
+    for i, part in ipairs(parts) do
+        if i > 1 then
+            table.insert(chunks, { " · " })
+        end
+        table.insert(chunks, part)
+    end
+    return chunks
 end
 
---- The panel's lines for a snapshot.
+--- The panel's lines for a snapshot, each as chunks of text and highlight.
 --- @param snap agentic.ui.InfoPanel.Snapshot
 --- @param now integer Epoch seconds
---- @return string[]
+--- @return agentic.ui.Chunk[][]
 function InfoPanel.lines(snap, now)
-    local lines = {
+    local texts = {
         "- Agent: " .. join(snap.provider, snap.model, snap.mode),
     }
-    vim.list_extend(lines, account_lines(snap.auth))
+    vim.list_extend(texts, account_lines(snap.auth))
     -- Cost only with the totals, as `/context` shows them.
     local totals = InfoPanel.context_totals(snap.usage)
     if totals then
         table.insert(
-            lines,
+            texts,
             "- Context: " .. join(totals, InfoPanel.cost(snap.usage))
         )
     end
+    local lines = vim.tbl_map(function(text)
+        return { { text } }
+    end, texts)
     for _, window in ipairs(snap.budget or {}) do
         table.insert(lines, window_line(window, now))
     end
     return lines
 end
 
---- Replace `bufnr`'s lines with the lines for `snap`. Keeps its 'modifiable'.
+local NS = vim.api.nvim_create_namespace("agentic_info_panel")
+
+--- Replace `bufnr`'s lines and highlights with those for `snap`. Keeps its
+--- 'modifiable'.
 --- @param bufnr integer
 --- @param snap agentic.ui.InfoPanel.Snapshot
 --- @param now integer Epoch seconds
 function InfoPanel.render(bufnr, snap, now)
+    local lines = InfoPanel.lines(snap, now)
+    local texts = vim.tbl_map(Chunks.text, lines)
     BufHelpers.with_modifiable(bufnr, function(buf)
-        vim.api.nvim_buf_set_lines(
-            buf,
-            0,
-            -1,
-            false,
-            InfoPanel.lines(snap, now)
-        )
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, texts)
     end)
+    vim.api.nvim_buf_clear_namespace(bufnr, NS, 0, -1)
+    for row, chunks in ipairs(lines) do
+        local col = 0
+        for _, chunk in ipairs(chunks) do
+            if chunk[2] then
+                vim.api.nvim_buf_set_extmark(bufnr, NS, row - 1, col, {
+                    end_col = col + #chunk[1],
+                    hl_group = chunk[2],
+                })
+            end
+            col = col + #chunk[1]
+        end
+    end
 end
 
 return InfoPanel

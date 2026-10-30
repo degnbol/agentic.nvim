@@ -165,7 +165,7 @@ end
 
 --- One usage-limit window the provider reported.
 --- @class agentic.acp.BudgetWindow
---- @field label string Short name of the window, e.g. "5h", "wk"
+--- @field label string Short name of the window, e.g. "5h", "7d"
 --- @field utilization number Fraction 0-1 of the window used
 --- @field resets_at number Epoch seconds when the window refills
 --- @field window_s number Length of the window in seconds

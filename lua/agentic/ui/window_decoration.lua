@@ -1,6 +1,7 @@
 --- Window decoration: per-buffer header state, the winbars it renders, and
 --- buffer naming.
 
+local Chunks = require("agentic.ui.chunks")
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
@@ -45,16 +46,14 @@ local STATE_HL = {
     idle = Theme.HL_GROUPS.HEADER_ATTENTION,
 }
 
---- @alias agentic.ui.HeaderChunk { [1]: string, [2]: string|nil } Text and highlight group
-
 --- The header laid out as chunks: `<icon> <title> <state glyph> · <context>`.
 --- An unset or empty part has no chunk. Each chunk after the first starts
 --- with its separator (" ", or " · " for the context). Only a state glyph
 --- that asks for the user has a highlight group.
 --- @param parts agentic.ui.ChatWidget.HeaderParts
---- @return agentic.ui.HeaderChunk[] chunks
+--- @return agentic.ui.Chunk[] chunks
 function WindowDecoration.header_chunks(parts)
-    --- @type agentic.ui.HeaderChunk[]
+    --- @type agentic.ui.Chunk[]
     local chunks = {}
     local function add(text, separator, hl_group)
         if text and text ~= "" then
@@ -74,10 +73,7 @@ end
 --- @param parts agentic.ui.ChatWidget.HeaderParts
 --- @return string header_text
 local function concat_header_parts(parts)
-    local texts = vim.tbl_map(function(chunk)
-        return chunk[1]
-    end, WindowDecoration.header_chunks(parts))
-    return table.concat(texts)
+    return Chunks.text(WindowDecoration.header_chunks(parts))
 end
 
 --- The header state of an Agentic buffer, `vim.b[bufnr].agentic_header`, or

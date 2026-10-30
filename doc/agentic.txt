@@ -528,7 +528,7 @@ subscription auth reports one. All chats share one budget per Neovim.
 
 `vim.g.agentic_budget` holds the windows of the last report, shortest first.
 Each window is a table:
-    `label`        Short name: "5h" or "wk"
+    `label`        Short name: "5h" or "7d"
     `utilization`  Fraction 0-1 of the window used
     `resets_at`    Epoch seconds when the window refills
     `window_s`     Length of the window in seconds
@@ -537,20 +537,23 @@ Each window is a table:
 
                                                 *agentic.budget.statusline()*
 budget.statusline({opts})
-    Text in 'statusline' format: `<label> <gauge> ` per window. A
-    window that warns or is exhausted is coloured `AgenticBudgetWarning` or
-    `AgenticBudgetExhausted` (|agentic-highlights|). A window past
-    `resets_at` shows as empty.
+    Text in 'statusline' format: `<label> <pie>  <bar>` per window. The pie
+    fills with the time passed, the bar with the use. The bar is coloured
+    `AgenticBudgetWarning` when the window warns or its
+    |agentic.budget.pace()| is above 1, and `AgenticBudgetExhausted` when
+    exhausted (|agentic-highlights|). A window past `resets_at` shows an
+    empty pie and the lowest bar.
     Returns "" without a budget. Optional `opts` table:
-      `pace`   Colour a window as warning when its |agentic.budget.pace()|
-               is above 1.
-      `reset`  Add the time to reset after each gauge, e.g. "1h05m".
       `now`    Epoch seconds (default: `os.time()`).
+
+                                                   *agentic.budget.elapsed()*
+budget.elapsed({window}, {now})
+    Fraction 0-1 of `window_s` passed at {now}.
 
                                                       *agentic.budget.pace()*
 budget.pace({window}, {now})
     Projected use of {window} at its reset at the average rate so far:
-    `utilization` divided by the fraction of `window_s` passed at {now}.
+    `utilization` divided by |agentic.budget.elapsed()|.
     Above 1 the limit is hit before the reset. nil below 5% passed.
 
                                                  *agentic.budget.resets_in()*

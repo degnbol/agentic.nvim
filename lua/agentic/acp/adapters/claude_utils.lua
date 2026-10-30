@@ -401,7 +401,7 @@ end
 --- The `unifiedWindows` keys read as budget windows, shortest first.
 local BUDGET_WINDOWS = {
     { key = "five_hour", label = "5h", window_s = 5 * 3600 },
-    { key = "seven_day", label = "wk", window_s = 7 * 24 * 3600 },
+    { key = "seven_day", label = "7d", window_s = 7 * 24 * 3600 },
 }
 
 --- @type table<string, "warning"|"exhausted">

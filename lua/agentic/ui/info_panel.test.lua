@@ -1,6 +1,7 @@
 local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 
+local Chunks = require("agentic.ui.chunks")
 local InfoPanel = require("agentic.ui.info_panel")
 
 local NOW = 1000000
@@ -20,16 +21,43 @@ local function five_hour(utilization, reset_in)
     }
 end
 
+--- The panel's lines for `snap` as plain text.
+--- @param snap agentic.ui.InfoPanel.Snapshot
+--- @return string[]
+local function texts(snap)
+    return vim.tbl_map(Chunks.text, InfoPanel.lines(snap, NOW))
+end
+
+--- @param snap agentic.ui.InfoPanel.Snapshot
+--- @param prefix string
+--- @return agentic.ui.Chunk[]|nil chunks The first line starting with `prefix`
+local function chunks_starting(snap, prefix)
+    for _, chunks in ipairs(InfoPanel.lines(snap, NOW)) do
+        if vim.startswith(Chunks.text(chunks), prefix) then
+            return chunks
+        end
+    end
+    return nil
+end
+
 --- @param snap agentic.ui.InfoPanel.Snapshot
 --- @param prefix string
 --- @return string|nil line The first line starting with `prefix`
 local function line_starting(snap, prefix)
-    for _, line in ipairs(InfoPanel.lines(snap, NOW)) do
-        if vim.startswith(line, prefix) then
-            return line
+    local chunks = chunks_starting(snap, prefix)
+    return chunks and Chunks.text(chunks)
+end
+
+--- @param chunks agentic.ui.Chunk[]
+--- @return table<string, string> hl_by_text Highlight group of each highlighted chunk
+local function highlighted(chunks)
+    local hl_by_text = {}
+    for _, chunk in ipairs(chunks) do
+        if chunk[2] then
+            hl_by_text[chunk[1]] = chunk[2]
         end
     end
-    return nil
+    return hl_by_text
 end
 
 describe("agentic.ui.InfoPanel", function()
@@ -77,7 +105,7 @@ describe("agentic.ui.InfoPanel", function()
         end)
 
         it("shows the account with its detail and identity", function()
-            local lines = InfoPanel.lines({
+            local lines = texts({
                 provider = "Claude",
                 auth = {
                     kind = "account",
@@ -89,29 +117,29 @@ describe("agentic.ui.InfoPanel", function()
                         plan = "Max",
                     },
                 },
-            }, NOW)
+            })
             local i = vim.fn.index(lines, "- Account: Claude Team (oauth)") + 1
             assert.is_true(i > 0)
             assert.equal("  - a@b.c · Org · Max", lines[i + 1])
         end)
 
         it("shows the account without the missing parts", function()
-            local lines = InfoPanel.lines({
+            local lines = texts({
                 provider = "Claude",
                 auth = { kind = "api_key", label = "API key" },
-            }, NOW)
+            })
             assert.same({ "- Agent: Claude", "- Account: API key" }, lines)
         end)
 
         it("joins only the identity parts the account reports", function()
-            local lines = InfoPanel.lines({
+            local lines = texts({
                 provider = "Claude",
                 auth = {
                     kind = "account",
                     label = "Claude Pro",
                     account = { email = "a@b.c", plan = "Pro" },
                 },
-            }, NOW)
+            })
             assert.same({
                 "- Agent: Claude",
                 "- Account: Claude Pro",
@@ -188,7 +216,7 @@ describe("agentic.ui.InfoPanel", function()
             )
         end)
 
-        it("shows the pace as a percent, marked above 100%", function()
+        it("shows the pace as a percent", function()
             -- 3 of 5 hours passed.
             local slow = five_hour(0.3, 2 * HOUR)
             local fast = five_hour(0.9, 2 * HOUR)
@@ -202,7 +230,55 @@ describe("agentic.ui.InfoPanel", function()
                 line_starting(
                     { provider = "Claude", budget = { fast } },
                     "- 5h"
-                ):find("· on pace for 150%% ⚠$")
+                ):find("· on pace for 150%%$")
+            )
+        end)
+
+        it("colours a pace above 100% only", function()
+            local slow = five_hour(0.3, 2 * HOUR)
+            local fast = five_hour(0.9, 2 * HOUR)
+            assert.same(
+                {},
+                highlighted(
+                    chunks_starting(
+                        { provider = "Claude", budget = { slow } },
+                        "- 5h"
+                    ) or {}
+                )
+            )
+            assert.same(
+                { ["on pace for 150%"] = "AgenticBudgetWarning" },
+                highlighted(
+                    chunks_starting(
+                        { provider = "Claude", budget = { fast } },
+                        "- 5h"
+                    ) or {}
+                )
+            )
+        end)
+
+        it("colours the use by the provider state", function()
+            local warned = five_hour(0.3, 2 * HOUR)
+            warned.state = "warning"
+            local exhausted = five_hour(0.3, 2 * HOUR)
+            exhausted.state = "exhausted"
+            assert.same(
+                { ["5h: 30% used"] = "AgenticBudgetWarning" },
+                highlighted(
+                    chunks_starting(
+                        { provider = "Claude", budget = { warned } },
+                        "- 5h"
+                    ) or {}
+                )
+            )
+            assert.same(
+                { ["5h: 30% used"] = "AgenticBudgetExhausted" },
+                highlighted(
+                    chunks_starting(
+                        { provider = "Claude", budget = { exhausted } },
+                        "- 5h"
+                    ) or {}
+                )
             )
         end)
 
@@ -238,10 +314,45 @@ describe("agentic.ui.InfoPanel", function()
             InfoPanel.render(bufnr, snap, NOW)
 
             assert.same(
-                InfoPanel.lines(snap, NOW),
+                texts(snap),
                 vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             )
             assert.is_false(vim.bo[bufnr].modifiable)
+        end)
+
+        it("highlights the coloured chunks, replacing earlier ones", function()
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            MiniTest.finally(function()
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end)
+            local window = five_hour(0.9, 2 * HOUR)
+            window.state = "warning"
+            local snap = { provider = "Claude", budget = { window } }
+            local ns = vim.api.nvim_create_namespace("agentic_info_panel")
+
+            InfoPanel.render(bufnr, snap, NOW)
+            InfoPanel.render(bufnr, snap, NOW)
+
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                ns,
+                0,
+                -1,
+                { details = true }
+            )
+            -- Below the agent and account lines.
+            local line = vim.api.nvim_buf_get_lines(bufnr, 2, 3, false)[1]
+            local spans = vim.tbl_map(function(mark)
+                return {
+                    mark[2],
+                    line:sub(mark[3] + 1, mark[4].end_col),
+                    mark[4].hl_group,
+                }
+            end, marks)
+            assert.same({
+                { 2, "5h: 90% used", "AgenticBudgetWarning" },
+                { 2, "on pace for 150%", "AgenticBudgetWarning" },
+            }, spans)
         end)
     end)
 end)
