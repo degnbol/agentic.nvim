@@ -196,6 +196,10 @@ local ConfigDefault = {
     --- @field hide_reverted boolean Drop rows whose change is no longer on disk — undone, or committed
     --- @field win_opts? agentic.UserConfig.WinOpts
 
+    --- @class agentic.UserConfig.Windows.Info
+    --- @field max_height number
+    --- @field win_opts? agentic.UserConfig.WinOpts
+
     --- @class agentic.UserConfig.Windows.Todos
     --- @field display boolean
     --- @field max_height number
@@ -214,10 +218,11 @@ local ConfigDefault = {
     --- @field files agentic.UserConfig.Windows.Files
     --- @field diagnostics agentic.UserConfig.Windows.Diagnostics
     --- @field activity agentic.UserConfig.Windows.Activity
+    --- @field info agentic.UserConfig.Windows.Info
     --- @field todos agentic.UserConfig.Windows.Todos
     --- @field subagent agentic.UserConfig.Windows.Subagent
     windows = {
-        stack = { "todos", "code", "files", "diagnostics", "activity", "input" },
+        stack = { "todos", "code", "files", "diagnostics", "activity", "info", "input" },
         max_wrap_width = 80,
         min_wrap_width = 40,
         agent = { win_opts = {} },
@@ -231,6 +236,7 @@ local ConfigDefault = {
             hide_reverted = true,
             win_opts = {},
         },
+        info = { max_height = 10, win_opts = {} },
         todos = { display = true, max_height = 10, win_opts = {} },
         subagent = { win_opts = {} },
     },
@@ -252,6 +258,7 @@ local ConfigDefault = {
                 },
             },
             toggle_activity = "<localLeader>f",
+            toggle_info = "<localLeader>I",
             restart_session = "<localLeader>!",
             restore_session = "<localLeader>R",
             refresh = "",

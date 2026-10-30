@@ -22,6 +22,7 @@ local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local GrantSafety = require("agentic.utils.grant_safety")
 local HookRecordReader = require("agentic.hook_record_reader")
+local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
@@ -113,7 +114,7 @@ end
 --- @field _pending_load_cwd? string CWD for the deferred session/load
 --- @field _cwd string Working directory of the ACP session. Also selects the project folder of its session file
 --- @field _pending_load_model? string Model id to apply after session/load succeeds
---- @field _usage? { used: number, size: number, cost?: { amount: number, currency: string } }
+--- @field _usage? agentic.ui.InfoPanel.Usage
 --- @field _last_prompt? string
 --- @field destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _pending_bufferless_prompt? string Deferred prompt with no buffer range to tag
@@ -505,7 +506,7 @@ function SessionManager:new()
     self.file_activity = FileActivity:new(
         self.widget.buf_nrs.activity,
         function()
-            self.widget:resize_activity_window()
+            self.widget:resize_panel("activity")
         end
     )
 
@@ -669,6 +670,10 @@ function SessionManager:_bind_owner_keymaps(bufnr)
         self:toggle_file_activity()
     end, { desc = "Agentic: Toggle changed-files panel" })
 
+    BufHelpers.multi_keymap_set(keymaps.toggle_info, bufnr, function()
+        self:toggle_info()
+    end, { desc = "Agentic: Toggle session info panel" })
+
     BufHelpers.multi_keymap_set(keymaps.restart_session, bufnr, function()
         self:restart_session()
     end, { desc = "Agentic: Restart session (cancel and restore)" })
@@ -766,6 +771,9 @@ function SessionManager:_setup_buffer_lifecycle()
         end,
         [buf_nrs.activity] = function()
             self.file_activity:render()
+        end,
+        [buf_nrs.info] = function()
+            self:_render_info()
         end,
     }
     for bufnr, reload in pairs(reloads) do
@@ -1763,6 +1771,7 @@ function SessionManager:_on_session_update(update, source_session_id)
         self.config_options.legacy_agent_modes:handle_agent_update_mode(
             update.currentModeId
         )
+        self:_render_info()
     elseif update.sessionUpdate == "config_option_update" then
         if source_session_id and source_session_id ~= self.session_id then
             local agent = self._agents[source_session_id]
@@ -1800,6 +1809,7 @@ function SessionManager:_on_session_update(update, source_session_id)
         end
 
         self:_update_chat_header()
+        self:_render_info()
     elseif update.sessionUpdate == "session_info_update" then
         -- Provider pushes the SDK's background-generated title at turn-end.
         -- Adopt it unless the user has chosen a title via /rename.
@@ -1856,24 +1866,13 @@ function SessionManager:_display_context_usage()
     -- The totals are the notice's title; the glyph says what they measure, so
     -- there is no label line. With no totals to show there is nothing to title
     -- the notice with either, hence the bare fallback.
-    local title = "context"
+    local totals = InfoPanel.context_totals(usage)
+    local title = totals or "context"
 
-    if usage and usage.size > 0 then
-        title = string.format(
-            "%.1fk / %.0fk · %d%%",
-            usage.used / 1000,
-            usage.size / 1000,
-            math.floor(usage.used / usage.size * 100)
-        )
-        if usage.cost then
-            table.insert(
-                body,
-                string.format(
-                    "- Cost: $%.4f %s",
-                    usage.cost.amount,
-                    usage.cost.currency
-                )
-            )
+    if totals then
+        local cost = InfoPanel.cost(usage)
+        if cost then
+            table.insert(body, "- Cost: " .. cost)
         end
     else
         -- Cost stays with the totals: a spend figure under "no usage data"
@@ -2426,9 +2425,9 @@ function SessionManager:toggle_file_activity()
         return
     end
 
-    self.widget:toggle_activity_window(function()
+    self.widget:toggle_panel("activity", function()
         self.file_activity:reconcile(function()
-            self.widget:resize_activity_window()
+            self.widget:resize_panel("activity")
         end)
     end, function()
         self.file_activity:mark_viewed()
@@ -2436,6 +2435,38 @@ function SessionManager:toggle_file_activity()
         -- The marker's whole point is surviving a quit-and-resume, and quitting
         -- straight after looking at the panel is the ordinary case.
         self:_persist_history(self.chat_history)
+    end)
+end
+
+--- The session's current agent, account and context usage, with the account
+--- budget from `vim.g.agentic_budget`.
+--- @return agentic.ui.InfoPanel.Snapshot
+function SessionManager:_info_snapshot()
+    local options = self.config_options
+    local model_id = options:current_model_id()
+    local mode_id = options:current_mode_id()
+    --- @type agentic.ui.InfoPanel.Snapshot
+    local snap = {
+        provider = self.agent.provider_config.name,
+        model = model_id and (self:_resolve_model_display(model_id)),
+        mode = mode_id and options:get_mode_name(mode_id),
+        auth = self.agent.auth_status,
+        usage = self._usage,
+        budget = vim.g.agentic_budget,
+    }
+    return snap
+end
+
+--- Render the info panel's buffer, and fit its window when it is open.
+function SessionManager:_render_info()
+    InfoPanel.render(self.widget.buf_nrs.info, self:_info_snapshot(), os.time())
+    self.widget:resize_panel("info")
+end
+
+--- Show or hide the info panel.
+function SessionManager:toggle_info()
+    self.widget:toggle_panel("info", function()
+        self:_render_info()
     end)
 end
 
@@ -2825,6 +2856,10 @@ function SessionManager:_set_session_option(
     end
 
     local function callback(result, err)
+        -- Destroyed while the request was in flight: its buffers are gone.
+        if self.destroyed then
+            return
+        end
         if err then
             Logger.notify(
                 string.format(
@@ -2842,6 +2877,7 @@ function SessionManager:_set_session_option(
             self:_handle_new_config_options(result.configOptions)
         end
         on_set()
+        self:_render_info()
     end
 
     if not is_legacy then
@@ -4026,6 +4062,7 @@ function SessionManager:new_session(opts)
                 self:_handle_mode_change(mode, is_legacy)
             end
         )
+        self:_render_info()
 
         -- Reset first message flag for new session (skip when restoring)
         if not restore_mode then
@@ -4351,6 +4388,7 @@ function SessionManager:_reset_conversation()
     self._history_to_send = nil
     self._usage = nil
     self:_update_chat_header()
+    self:_render_info()
 end
 
 --- Cancel the ACP session on the provider and reset the conversation like
@@ -4488,6 +4526,7 @@ end
 --- @param new_config_options agentic.acp.ConfigOption[]
 function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
+    self:_render_info()
 end
 
 function SessionManager:_get_system_info()

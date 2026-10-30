@@ -5,7 +5,7 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 local Logger = require("agentic.utils.logger")
 
 --- A panel that opens in the stack below the chat's home window.
---- @alias agentic.ui.ChatWidget.StackPanel "todos"|"code"|"files"|"diagnostics"|"activity"|"input"
+--- @alias agentic.ui.ChatWidget.StackPanel "todos"|"code"|"files"|"diagnostics"|"activity"|"info"|"input"
 
 --- @class agentic.ui.WidgetLayout
 local WidgetLayout = {}

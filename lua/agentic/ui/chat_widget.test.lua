@@ -239,7 +239,7 @@ describe("agentic.ui.ChatWidget", function()
             local input = widget:input_win()
             assert.is_not_nil(input)
             local activity_opened = false
-            widget:toggle_activity_window(function()
+            widget:toggle_panel("activity", function()
                 activity_opened = true
             end)
             assert.is_true(activity_opened)
@@ -485,7 +485,7 @@ describe("agentic.ui.ChatWidget", function()
                 fill_buffer(widget, "activity", { "a.lua" })
                 local home = show(widget)
                 widget:input_win()
-                widget:toggle_activity_window()
+                widget:toggle_panel("activity")
                 local deferred = capture_deferred()
 
                 vim.api.nvim_set_current_win(home)
@@ -667,7 +667,7 @@ describe("agentic.ui.ChatWidget", function()
                 vim.api.nvim_win_set_buf(second, widget.buf_nrs.agent)
                 assert.equal(first, widget:home_win())
 
-                widget:toggle_activity_window()
+                widget:toggle_panel("activity")
 
                 assert.equal(second, widget:home_win())
                 local tab = vim.api.nvim_get_current_tabpage()
@@ -679,64 +679,84 @@ describe("agentic.ui.ChatWidget", function()
                 end
             end)
 
-            it("notifies and opens nothing without a home", function()
-                local notify_stub = spy.stub(Logger, "notify")
-                MiniTest.finally(function()
-                    notify_stub:revert()
-                end)
-                local on_open = spy.new(function() end)
+            for panel, title in pairs({ activity = "Files", info = "Session" }) do
+                it(
+                    panel .. ": notifies and opens nothing without a home",
+                    function()
+                        local notify_stub = spy.stub(Logger, "notify")
+                        MiniTest.finally(function()
+                            notify_stub:revert()
+                        end)
+                        local on_open = spy.new(function() end)
 
-                widget:toggle_activity_window(on_open --[[@as function]])
+                        widget:toggle_panel(panel, on_open --[[@as function]])
 
-                assert.spy(on_open).was.called(0)
-                assert.is_false(widget:is_activity_window_open())
-                assert.spy(notify_stub).was.called(1)
-                assert.equal(
-                    "Show the chat to open the file activity panel.",
-                    notify_stub.calls[1][1]
+                        assert.spy(on_open).was.called(0)
+                        assert.is_nil(widget:panel_win(panel))
+                        assert.spy(notify_stub).was.called(1)
+                        assert.equal(
+                            "Show the chat to open the " .. title .. " panel.",
+                            notify_stub.calls[1][1]
+                        )
+                    end
                 )
-            end)
 
-            it("opens below home with the input closed", function()
-                local home = show(widget)
-                local open_during_on_open
+                it(
+                    panel .. ": opens below home with the input closed",
+                    function()
+                        local home = show(widget)
+                        local open_during_on_open
 
-                widget:toggle_activity_window(function()
-                    open_during_on_open = widget:is_activity_window_open()
+                        widget:toggle_panel(panel, function()
+                            open_during_on_open = widget:panel_win(panel)
+                        end)
+
+                        assert.is_nil(open_during_on_open)
+                        local winid = widget:panel_win(panel)
+                        assert.is_not_nil(winid)
+                        assert.is_nil(widget.win_nrs.input)
+                        assert.is_true(row_of(winid) > row_of(home))
+                        assert.equal(col_of(home), col_of(winid))
+                    end
+                )
+
+                it(panel .. ": toggles closed and runs on_close", function()
+                    show(widget)
+                    local on_close = spy.new(function() end)
+                    widget:toggle_panel(panel, nil, on_close --[[@as function]])
+                    local winid = widget.win_nrs[panel]
+
+                    widget:toggle_panel(panel, nil, on_close --[[@as function]])
+
+                    assert.spy(on_close).was.called(1)
+                    assert.is_false(vim.api.nvim_win_is_valid(winid))
+                    assert.is_nil(widget:panel_win(panel))
                 end)
+            end
 
-                assert.is_false(open_during_on_open)
-                assert.is_true(widget:is_activity_window_open())
-                assert.is_nil(widget.win_nrs.input)
-                local winid = widget.win_nrs.activity
-                assert.is_true(row_of(winid) > row_of(home))
-                assert.equal(col_of(home), col_of(winid))
-            end)
-
-            it("toggles closed and runs on_close", function()
+            it("sync_panels leaves the info panel alone", function()
+                fill_buffer(widget, "info", { "- Agent: x" })
                 show(widget)
-                local on_close = spy.new(function() end)
-                widget:toggle_activity_window(nil, on_close --[[@as function]])
-                local winid = widget.win_nrs.activity
+                widget:sync_panels()
+                assert.is_nil(widget:panel_win("info"))
 
-                widget:toggle_activity_window(nil, on_close --[[@as function]])
-
-                assert.spy(on_close).was.called(1)
-                assert.is_false(vim.api.nvim_win_is_valid(winid))
-                assert.is_false(widget:is_activity_window_open())
+                widget:toggle_panel("info")
+                fill_buffer(widget, "info", {})
+                widget:sync_panels()
+                assert.is_not_nil(widget:panel_win("info"))
             end)
 
-            it("resize_activity_window fits the panel to its rows", function()
+            it("resize_panel fits the panel to its rows", function()
                 fill_buffer(widget, "activity", { "a", "b" })
                 show(widget)
-                widget:toggle_activity_window()
+                widget:toggle_panel("activity")
                 assert.equal(
                     3,
                     vim.api.nvim_win_get_height(widget.win_nrs.activity)
                 )
 
                 fill_buffer(widget, "activity", { "a", "b", "c", "d", "e" })
-                widget:resize_activity_window()
+                widget:resize_panel("activity")
 
                 assert.equal(
                     6,
@@ -744,13 +764,13 @@ describe("agentic.ui.ChatWidget", function()
                 )
             end)
 
-            it("resize_activity_window is a no-op while closed", function()
+            it("resize_panel is a no-op while closed", function()
                 show(widget)
 
                 assert.has_no_errors(function()
-                    widget:resize_activity_window()
+                    widget:resize_panel("activity")
                 end)
-                assert.is_false(widget:is_activity_window_open())
+                assert.is_nil(widget:panel_win("activity"))
             end)
         end)
     end)

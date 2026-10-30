@@ -17,6 +17,7 @@ local WINDOW_HEADERS = {
     files = { icon = "", title = "File Injections" },
     diagnostics = { icon = "", title = "Diagnostics" },
     activity = { icon = "", title = "Files" },
+    info = { icon = Glyphs.INFO, title = "Session" },
     todos = { icon = "", title = "Tasks list" },
 }
 

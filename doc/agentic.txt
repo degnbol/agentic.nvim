@@ -42,7 +42,8 @@ CONTENTS                                                    *agentic-contents*
        9.3 Attention ..................................... |agentic-attention|
        9.4 Message queue ..................................... |agentic-queue|
        9.5 File activity ............................. |agentic-file-activity|
-       9.6 Subagents ..................................... |agentic-subagents|
+       9.6 Session info ................................ |agentic-info-panel|
+       9.7 Subagents ..................................... |agentic-subagents|
    10. Highlight groups ................................. |agentic-highlights|
    11. Autocmds ........................................... |agentic-autocmds|
    12. Health check ......................................... |agentic-health|
@@ -175,12 +176,12 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     Panels and wrapping.
 
     `stack`             list (default: `{ "todos", "code", "files",`
-                        `"diagnostics", "activity", "input" }`)
+                        `"diagnostics", "activity", "info", "input" }`)
     `max_wrap_width`    integer (default: 80)
     `min_wrap_width`    integer (default: 40)
 
     `stack` is the top-to-bottom order of the panels below the chat's
-    window (|agentic-buffers|). It must list each of the six exactly once.
+    window (|agentic-buffers|). It must list each of the seven exactly once.
 
     Chat prose is hard-wrapped to the chat window width, clamped between
     `min_wrap_width` and `max_wrap_width`. Setting either to 0 drops that
@@ -195,6 +196,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
       `diagnostics`   `{ max_height = 10, win_opts = {} }`
       `activity`      `{ display = true, max_height = 10,`
                       ` hide_reverted = true, win_opts = {} }`
+      `info`          `{ max_height = 10, win_opts = {} }`
       `todos`         `{ display = true, max_height = 10, win_opts = {} }`
       `subagent`      `{ win_opts = {} }`
 
@@ -580,6 +582,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>M`   n       Switch model
     `<localLeader>!`   n       Restart session
     `<localLeader>f`   n       Toggle changed-files panel
+    `<localLeader>I`   n       Toggle session info panel (|agentic-info-panel|)
     `<localLeader>a`   n       Toggle follow (|agentic-follow|)
     `<localLeader>G`   n       Scroll chat and transcripts in the tabpage to bottom, keep focus
 
@@ -950,7 +953,7 @@ first, the chat's window. The panels stack
 below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
 panels open while they list something. The input opens on the first
 `to_input` key (|agentic-keymaps-agent|). `<localLeader>f` toggles the file
-activity panel.
+activity panel, `<localLeader>I` the session info panel.
 
 When the chat's window closes or shows another buffer, its panels close.
 |:q| in the chat's window closes its panels first; when vim refuses the
@@ -1079,7 +1082,19 @@ Only the file-editing tools are tracked. Files a shell command changes are
 not listed.
 
 ------------------------------------------------------------------------------
-9.6 SUBAGENTS                                              *agentic-subagents*
+9.6 SESSION INFO                                          *agentic-info-panel*
+
+A toggled panel listing the session's provider, model and mode, the account
+the provider is logged in with, the context totals and cost (as `/context`
+shows them), and each usage-limit window with its use, reset time and pace.
+A pace above 1 is marked `⚠`: at the average rate so far, the limit is reached
+before the reset.
+
+Toggle with `<localLeader>I`. The panel updates when the context use, the
+mode or the model changes, and on `/new` and `/clear`.
+
+------------------------------------------------------------------------------
+9.7 SUBAGENTS                                              *agentic-subagents*
 
 With claude-agent-acp, each subagent has its own transcript: a listed buffer
 named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,

@@ -15,7 +15,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- so a module-level (global) namespace is fine (see session-isolation rules).
 local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
---- @alias agentic.ui.ChatWidget.PanelNames "agent"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"subagent"|"message"
+--- @alias agentic.ui.ChatWidget.PanelNames "agent"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"info"|"subagent"|"message"
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
@@ -292,6 +292,9 @@ function ChatWidget:show(mods, target_win)
     self:show_in(vim.api.nvim_get_current_win())
 end
 
+--- The stack panels that only a key opens or closes, never their buffer's rows.
+local TOGGLED_PANELS = { input = true, activity = true, info = true }
+
 --- Open or close each content panel (code, files, diagnostics, and todos
 --- when `Config.windows.todos.display`) to match its buffer. No-op without a
 --- home window.
@@ -301,7 +304,7 @@ function ChatWidget:sync_panels()
         return
     end
     for _, panel in ipairs(Config.windows.stack) do
-        local is_content = panel ~= "input" and panel ~= "activity"
+        local is_content = not TOGGLED_PANELS[panel]
         if
             is_content and (panel ~= "todos" or Config.windows.todos.display)
         then
@@ -1396,6 +1399,7 @@ local function panel_buf_opts(panel)
         files = { filetype = "AgenticFiles" },
         diagnostics = { filetype = "AgenticDiagnostics" },
         activity = { filetype = "AgenticActivity" },
+        info = { filetype = "AgenticInfo" },
         -- `acwrite` makes `:w` submit, and an unsent prompt block `:qa`.
         input = {
             filetype = "AgenticInput",
@@ -1423,6 +1427,7 @@ function ChatWidget:_create_buf_nrs()
     local files = self:_create_new_buf("files", false)
     local diagnostics = self:_create_new_buf("diagnostics", false)
     local activity = self:_create_new_buf("activity", false)
+    local info = self:_create_new_buf("info", false)
     local input = self:_create_new_buf("input", false)
 
     ChatBuffer.setup(chat)
@@ -1431,6 +1436,7 @@ function ChatWidget:_create_buf_nrs()
     pcall(vim.treesitter.start, code, "markdown")
     pcall(vim.treesitter.start, files, "markdown")
     pcall(vim.treesitter.start, diagnostics, "markdown")
+    pcall(vim.treesitter.start, info, "markdown")
 
     --- @type agentic.ui.ChatWidget.BufNrs
     local buf_nrs = {
@@ -1440,6 +1446,7 @@ function ChatWidget:_create_buf_nrs()
         files = files,
         diagnostics = diagnostics,
         activity = activity,
+        info = info,
         input = input,
     }
 
@@ -1559,32 +1566,28 @@ function ChatWidget:set_chat_title(title)
     )
 end
 
---- @return boolean
-function ChatWidget:is_activity_window_open()
-    return self:panel_win("activity") ~= nil
-end
-
---- Show or hide the file activity panel. `on_open` runs before the window
---- appears, so a caller can reconcile the rows first; `on_close` after it goes,
---- to record that the rows have been seen. Unlike the content panels, the
---- buffer's rows never open or close it. Acts on the panels of the chat in
---- the current tabpage, moving them to a window there that shows it
---- (`_home_in_tab`). Notifies when the current tabpage shows no chat.
+--- Show or hide `panel`. Only this call opens or closes it, never its buffer's
+--- rows. `on_open` runs before the window opens, `on_close` after it closes.
+--- Acts on the panels of the chat in the current tabpage, moving them to a
+--- window there that shows the chat. Warns, and does nothing, when the current
+--- tabpage shows no chat.
+--- @param panel "activity"|"info"
 --- @param on_open fun()|nil
 --- @param on_close fun()|nil
-function ChatWidget:toggle_activity_window(on_open, on_close)
+function ChatWidget:toggle_panel(panel, on_open, on_close)
     local home = self:_home_in_tab()
     if not home then
+        local title = WindowDecoration.get_header(self.buf_nrs[panel]).title
         Logger.notify(
-            "Show the chat to open the file activity panel.",
+            "Show the chat to open the " .. title .. " panel.",
             vim.log.levels.WARN,
             { title = "Agentic" }
         )
         return
     end
 
-    if self:is_activity_window_open() then
-        self:close_panel("activity")
+    if self:panel_win(panel) then
+        self:close_panel(panel)
         if on_close then
             on_close()
         end
@@ -1594,13 +1597,13 @@ function ChatWidget:toggle_activity_window(on_open, on_close)
     if on_open then
         on_open()
     end
-    WidgetLayout.open_panel(self.win_nrs, self.buf_nrs, home, "activity")
+    WidgetLayout.open_panel(self.win_nrs, self.buf_nrs, home, panel)
 end
 
---- Keep the open activity panel's height matched to its row count. No-op while
---- the panel is closed, which is its normal state during a turn.
-function ChatWidget:resize_activity_window()
-    WidgetLayout.resize_panel(self.win_nrs, self.buf_nrs, "activity")
+--- Fit the open `panel` window to its buffer. No-op while it is closed.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+function ChatWidget:resize_panel(panel)
+    WidgetLayout.resize_panel(self.win_nrs, self.buf_nrs, panel)
 end
 
 return ChatWidget

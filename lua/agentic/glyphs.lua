@@ -141,6 +141,7 @@ Glyphs.PROMPT = "❯"
 Glyphs.PROVIDER = "󰚥"
 Glyphs.RESUME = "󰁯"
 Glyphs.AUTH = "󰍂"
+Glyphs.INFO = "󰋼"
 
 --- Per-command glyph, keyed on the command word without its leading slash (the
 --- word `PromptBlocks.command` returns). Stamped on the heading row of whatever

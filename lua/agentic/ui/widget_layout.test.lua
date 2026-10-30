@@ -225,8 +225,15 @@ describe("WidgetLayout", function()
         end)
 
         it("keeps a reordering of every panel", function()
-            local stack =
-                { "input", "activity", "diagnostics", "files", "code", "todos" }
+            local stack = {
+                "input",
+                "info",
+                "activity",
+                "diagnostics",
+                "files",
+                "code",
+                "todos",
+            }
             Config.windows.stack = stack
 
             WidgetLayout.validate_stack()
@@ -236,7 +243,14 @@ describe("WidgetLayout", function()
         end)
 
         for name, stack in pairs({
-            missing = { "todos", "code", "files", "diagnostics", "activity" },
+            missing = {
+                "todos",
+                "code",
+                "files",
+                "diagnostics",
+                "activity",
+                "input",
+            },
             duplicate = {
                 "todos",
                 "code",
@@ -244,6 +258,7 @@ describe("WidgetLayout", function()
                 "files",
                 "diagnostics",
                 "activity",
+                "info",
                 "input",
             },
             unknown = {
@@ -252,6 +267,7 @@ describe("WidgetLayout", function()
                 "files",
                 "diagnostics",
                 "activity",
+                "info",
                 "prompt",
             },
             ["not a list"] = "input",
@@ -262,7 +278,15 @@ describe("WidgetLayout", function()
                 WidgetLayout.validate_stack()
 
                 assert.same(
-                    { "todos", "code", "files", "diagnostics", "activity", "input" },
+                    {
+                        "todos",
+                        "code",
+                        "files",
+                        "diagnostics",
+                        "activity",
+                        "info",
+                        "input",
+                    },
                     Config.windows.stack
                 )
                 assert.equal(1, notify_stub.call_count)
