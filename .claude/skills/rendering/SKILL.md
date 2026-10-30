@@ -118,7 +118,7 @@ the fence is set per kind:
 | --- | --- | --- |
 | Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback | Cosmetic; zsh parser is aliased to `bash`, identical highlighting |
 | Search command (argument fence) | `bash` | |
-| Execute body | `console`, or `console-fold` when `execute_max_lines` exceeded | A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
+| Execute body | `console`, or `console-fold` past `execute_max_lines` (`search_max_lines` when `PermissionRules.is_read_only`) | A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
@@ -163,8 +163,8 @@ read them in this order when changing fold behaviour:
 
 Threshold config keys (in `config_default.lua`):
 
-- `search_max_lines` — search/grep bodies
-- `execute_max_lines` — shell stdout (and execute failure_reason)
+- `search_max_lines` — search/grep bodies, read-only shell stdout
+- `execute_max_lines` — other shell stdout (and execute failure_reason)
 - Fetch / WebSearch / SubAgent — fold when multi-line, no config
 
 `Section.fold` is `open` or `closed`, due at render; the writer queues every

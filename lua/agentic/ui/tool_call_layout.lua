@@ -8,6 +8,7 @@ local GrepOutput = require("agentic.utils.grep_output")
 local GrepRegex = require("agentic.utils.grep_regex")
 local JsonDisplay = require("agentic.utils.json_display")
 local MarkdownGuard = require("agentic.utils.markdown_guard")
+local PermissionRules = require("agentic.utils.permission_rules")
 local ShellFormat = require("agentic.utils.shell_format")
 local TextWrap = require("agentic.utils.text_wrap")
 local ToolCallDiff = require("agentic.ui.tool_call_diff")
@@ -598,13 +599,17 @@ local BODIES = {
     -- A failed execute shows its reason as output: the bash stdout/stderr of
     -- a non-zero exit is long and often informational, so it takes the
     -- output's fold and colours rather than the red of a short denial.
+    -- Output of a command that only reads folds like search output.
     execute = function(call)
         local rows = call.failure or call.block.body
         if not rows then
             return {}
         end
-        local section =
-            output_section(rows, Config.tool_call_display.execute_max_lines)
+        local display = Config.tool_call_display
+        local max_lines = PermissionRules.is_read_only(call.argument)
+                and display.search_max_lines
+            or display.execute_max_lines
+        local section = output_section(rows, max_lines)
         section.matches =
             GrepHighlights.for_command(section.rows, call.argument)
         return { section }

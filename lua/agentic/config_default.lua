@@ -468,7 +468,7 @@ local ConfigDefault = {
     --- Blocks exceeding the threshold are wrapped in fold markers and
     --- auto-closed (use zo/za/zc to toggle). Set to 0 to disable folding.
     --- @class agentic.UserConfig.ToolCallDisplay
-    --- @field search_max_lines integer
+    --- @field search_max_lines integer Fold search output, and execute output that only reads (structured read_only rules), past this many lines. 0 disables.
     --- @field execute_max_lines integer
     --- @field other_max_lines integer Fold generic/MCP/meta tool-result bodies (non-execute) exceeding this many lines. Set to 0 to disable folding for these.
     --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.

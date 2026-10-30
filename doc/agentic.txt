@@ -242,7 +242,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     folded closed; 0 disables that fold.
 
     `search_max_lines`         integer (default: 8)
-        Lines before folding search output.
+        Lines before folding search output, and execute output of a
+        command that only reads: every leaf passes a structured `read_only`
+        rule (|agentic-permissions-shell|) and nothing is written.
     `execute_max_lines`        integer (default: 25)
         Lines before folding execute output.
     `other_max_lines`          integer (default: 25)

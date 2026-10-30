@@ -629,7 +629,7 @@ end
 --- unsafe whatever its scope or order relative to the definition.
 --- @alias agentic.utils.PermissionRules.Shadowed table<string, true>
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve_tier: agentic.PermAutoApproveTier, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve_tier: agentic.PermAutoApproveTier, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean }
 
 --- Run `walk_once` until a run adds no name to the shadowed set, or a run
 --- reports its result final. A run judges each call against the names shadowed
@@ -1404,6 +1404,9 @@ local function walk_command(node, src, ctx, known, funcs)
     -- unreadable/oversize/unparseable body bails. Unlike the `-c` recursion (a
     -- shrinking substring), files can cycle (`a.sh` sources `b.sh` sources
     -- `a.sh`), so NESTED_MAX_DEPTH is the actual termination guard here.
+    if script_path and not ctx.read_scripts then
+        return false
+    end
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
         -- A redirect earlier in this command may have written this very path.
         -- The SDK applies nothing before approval, so disk holds stale-or-absent
@@ -2818,6 +2821,65 @@ function M.should_auto_reject(command)
     return source ~= nil, source
 end
 
+--- The approve walk over a command with the given rules; see `evaluate`
+--- for what it decides and returns. `read_scripts` false makes a script the
+--- command runs or sources bail before it is read.
+--- @param command string
+--- @param rules { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, read_scripts: boolean }
+--- @return boolean ok
+--- @return agentic.utils.PermissionRules.Effect[] effects
+--- @return table<agentic.utils.PermissionRules.Source, true> sources
+local function run_walk(command, rules)
+    if type(command) ~= "string" or command == "" then
+        return false, {}, {}
+    end
+    -- A pathologically long generated command could make parsing slow on this
+    -- cold path. 64 KB is far above any real command — refuse rather than parse.
+    if #command > 65536 then
+        return false, {}, {}
+    end
+
+    local structured_entries = M.get_structured_entries()
+    -- Skip the parse entirely when neither layer has any allow source — the
+    -- walker has nothing to approve against.
+    if
+        #rules.allow_settings == 0
+        and #rules.allow_remembered == 0
+        and next(structured_entries) == nil
+    then
+        return false, {}, {}
+    end
+
+    local root = parse_zsh(command)
+    if not root then
+        return false, {}, {}
+    end
+
+    local run = walk_until_shadowed_settles(function(shadowed)
+        --- @type agentic.utils.PermissionRules.WalkCtx
+        local ctx = {
+            allow_settings = rules.allow_settings,
+            allow_remembered = rules.allow_remembered,
+            sources = {},
+            deny = rules.deny,
+            ask = rules.ask,
+            structured_entries = structured_entries,
+            auto_approve_tier = rules.tier,
+            depth = 0,
+            effects = {},
+            written = {},
+            for_budget = FOR_UNROLL_CAP,
+            shadowed = shadowed,
+            read_scripts = rules.read_scripts,
+        }
+        local ok = walk(root, command, ctx)
+        -- More shadowed names only turn approvals into bails.
+        return { ok = ok, ctx = ctx }, not ok
+    end)
+    -- Leaves before a failing one have already added their sources.
+    return run.ok, run.ctx.effects, run.ok and run.ctx.sources or {}
+end
+
 --- Check if a Bash command should be auto-approved. Parses the command with the
 --- zsh grammar and walks the tree: every leaf command must match an allow
 --- pattern, no leaf may match a deny or ask pattern, and any unmodelled
@@ -2844,61 +2906,48 @@ end
 --- @return agentic.utils.PermissionRules.Effect[] effects
 --- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
 function M.evaluate(command, extra_allow)
-    if type(command) ~= "string" or command == "" then
-        return false, {}, {}
-    end
-    -- A pathologically long generated command could make parsing slow on this
-    -- cold path. 64 KB is far above any real command — refuse rather than parse.
-    if #command > 65536 then
-        return false, {}, {}
-    end
-
     -- Remembered leaves count even when `auto_approve_tier` is nil, because the
     -- user approved each one.
-    local allow_settings = Config.permissions.auto_approve_tier
-            and M.get_settings_patterns("allow")
-        or {}
-    local allow_remembered = extra_allow or {}
-    local structured_entries = M.get_structured_entries()
-    -- Skip the parse entirely when neither layer has any allow source — the
-    -- walker has nothing to approve against.
-    if
-        #allow_settings == 0
-        and #allow_remembered == 0
-        and next(structured_entries) == nil
-    then
-        return false, {}, {}
-    end
+    return run_walk(command, {
+        allow_settings = Config.permissions.auto_approve_tier
+                and M.get_settings_patterns("allow")
+            or {},
+        allow_remembered = extra_allow or {},
+        deny = M.get_settings_patterns("deny"),
+        ask = M.get_settings_patterns("ask"),
+        tier = Config.permissions.auto_approve_tier,
+        read_scripts = true,
+    })
+end
 
-    local root = parse_zsh(command)
-    if not root then
-        return false, {}, {}
-    end
+--- Commands `is_read_only` has judged, and the verdict.
+--- @type table<string, boolean>
+local cached_read_only = {}
 
-    local deny = M.get_settings_patterns("deny")
-    local ask = M.get_settings_patterns("ask")
-    local run = walk_until_shadowed_settles(function(shadowed)
-        --- @type agentic.utils.PermissionRules.WalkCtx
-        local ctx = {
-            allow_settings = allow_settings,
-            allow_remembered = allow_remembered,
-            sources = {},
-            deny = deny,
-            ask = ask,
-            structured_entries = structured_entries,
-            auto_approve_tier = Config.permissions.auto_approve_tier,
-            depth = 0,
-            effects = {},
-            written = {},
-            for_budget = FOR_UNROLL_CAP,
-            shadowed = shadowed,
-        }
-        local ok = walk(root, command, ctx)
-        -- More shadowed names only turn approvals into bails.
-        return { ok = ok, ctx = ctx }, not ok
-    end)
-    -- Leaves before a failing one have already added their sources.
-    return run.ok, run.ctx.effects, run.ok and run.ctx.sources or {}
+--- Whether a command only reads: every leaf passes a structured `read_only`
+--- gate, no structured deny or ask gate matches, and it has no file-mutating
+--- effect. Settings.json rules, remembered leaves and `auto_approve_tier` do
+--- not count. A script it runs or sources makes it not read-only; the
+--- function reads no file but the structured rules. For display, never for
+--- approval. Memoised per command.
+--- @param command string
+--- @return boolean
+function M.is_read_only(command)
+    local cached = cached_read_only[command]
+    if cached ~= nil then
+        return cached
+    end
+    local ok, effects = run_walk(command, {
+        allow_settings = {},
+        allow_remembered = {},
+        deny = {},
+        ask = {},
+        tier = "read_only",
+        read_scripts = false,
+    })
+    local read_only = ok and #effects == 0
+    cached_read_only[command] = read_only
+    return read_only
 end
 
 --- Whether a command auto-approves on its own, with no grant scope. True iff it
@@ -2933,6 +2982,7 @@ function M.invalidate_cache()
     cached_config_structured_ref = nil
     cached_config_structured_entries = {}
     cached_mtimes = {}
+    cached_read_only = {}
 end
 
 return M

@@ -4632,4 +4632,54 @@ describe("PermissionRules", function()
             )
         end)
     end)
+
+    describe("is_read_only", function()
+        before_each(function()
+            Config.permissions.use_plugin_defaults = true
+            stub_settings(nil)
+        end)
+        after_each(remove_written)
+
+        for _, cmd in ipairs({ "rg x", "ls | wc -l", "cat f 2>&1" }) do
+            it("is true for " .. cmd, function()
+                assert.is_true(PermissionRules.is_read_only(cmd))
+            end)
+        end
+
+        for _, cmd in ipairs({ "git add x", "rg x > f", "", "if then fi (" }) do
+            it("is false for '" .. cmd .. "'", function()
+                assert.is_false(PermissionRules.is_read_only(cmd))
+            end)
+        end
+
+        it("ignores a settings.json allow", function()
+            stub_settings({ allow = { "Bash(mytool *)" } })
+            assert.is_true(PermissionRules.should_auto_approve("mytool x"))
+            assert.is_false(PermissionRules.is_read_only("mytool x"))
+        end)
+
+        for _, launcher in ipairs({ "bash", "source" }) do
+            it("does not read a script run with " .. launcher, function()
+                local cmd = launcher .. " " .. script("ls\n")
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
+
+                local open = spy.on(vim.uv, "fs_open")
+                MiniTest.finally(function()
+                    open:revert()
+                end)
+                assert.is_false(PermissionRules.is_read_only(cmd))
+                assert.equal(0, open.call_count)
+            end)
+        end
+
+        it("walks a command once", function()
+            local entries = spy.on(PermissionRules, "get_structured_entries")
+            MiniTest.finally(function()
+                entries:revert()
+            end)
+            PermissionRules.is_read_only("rg x")
+            PermissionRules.is_read_only("rg x")
+            assert.equal(1, entries.call_count)
+        end)
+    end)
 end)

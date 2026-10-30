@@ -1166,6 +1166,51 @@ describe("agentic.ui.ToolCallLayout", function()
         end)
     end)
 
+    describe("execute fold threshold", function()
+        local read_from_disk =
+            require("agentic.utils.file_system").read_from_disk
+        local PermissionRules = require("agentic.utils.permission_rules")
+
+        before_each(function()
+            -- The structured rules are the bundled permissions.json.
+            disk_stub:invokes(function(path)
+                if vim.endswith(path, "/permissions.json") then
+                    return read_from_disk(path)
+                end
+            end)
+            PermissionRules.invalidate_cache()
+        end)
+
+        --- Fold state of `command`'s output, with more rows than
+        --- `search_max_lines` and no more than `execute_max_lines`.
+        --- @param command string
+        --- @return agentic.ui.FoldState|nil
+        local function fold_state(command)
+            local body = {}
+            for i = 1, Config.tool_call_display.search_max_lines + 1 do
+                table.insert(body, "out " .. i)
+            end
+            assert.is_true(#body <= Config.tool_call_display.execute_max_lines)
+            local fold = Layout.build({
+                tool_call_id = "exec-threshold",
+                kind = "execute",
+                argument = command,
+                status = "completed",
+                body = body,
+            }, 0).fold
+            return fold and fold.state
+        end
+
+        it("folds output that only reads at search_max_lines", function()
+            assert.equal("closed", fold_state("rg foo | head"))
+        end)
+
+        it("folds other output at execute_max_lines", function()
+            assert.is_nil(fold_state("git commit -m x"))
+            assert.is_nil(fold_state("rg foo > out"))
+        end)
+    end)
+
     describe("no fold markers in rendered output", function()
         --- @param lines string[]
         local function assert_no_markers(lines)
