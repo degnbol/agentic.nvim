@@ -220,8 +220,8 @@ fence rather than escaped to literal `\n`.
 ## Permission flow and client-side auto-approval
 
 See the `permissions` project skill for the permission flow ASCII
-diagram, the four auto-approval mechanisms, response keys table, and
-the `/grant` safety properties.
+diagram, the four auto-approval mechanisms, and the `/grant` safety
+properties.
 
 ## Adapter override points
 

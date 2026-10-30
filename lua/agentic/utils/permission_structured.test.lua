@@ -748,7 +748,7 @@ describe("PermissionStructured", function()
     end)
 
     -- ------------------------------------------------------------------
-    -- End-to-end cases (see the `permissions` skill § "Compound Bash commands")
+    -- End-to-end cases (see the `permissions` skill § "Shell command parsing")
     -- ------------------------------------------------------------------
     describe("end-to-end cases", function()
         local sort_entry = {

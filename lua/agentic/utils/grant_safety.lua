@@ -509,8 +509,15 @@ function M.is_scratch(args)
     return args.tmp == true and not args.tracked
 end
 
---- Per-kind safety predicate. See the `permissions` skill § "Grant scopes"
---- (property 3, "Recoverability").
+--- Whether a mutation of `kind` leaves the path recoverable. Scratch
+--- (`is_scratch`) clears write, create and edit. Otherwise:
+---   * create — the file does not exist
+---   * write  — a new file, or tracked and clean
+---   * delete — a tracked, clean file that is not a directory
+---   * edit   — a new file; tracked and clean; a pure addition; an edit range
+---     disjoint from the unstaged hunks; or every overlapping hunk inside a
+---     verified Claude-owned range
+---   * move   — the source passes `edit` and the destination passes `write`
 --- @param kind agentic.acp.ToolKind
 --- @param args agentic.utils.GrantSafety.KindArgs
 --- @return boolean safe

@@ -1627,8 +1627,8 @@ end
 --- Walk a statement-level `variable_assignment` (`f=path`, `arr=(a b c)`,
 --- `f=$(echo hi)`, `arr=(a $(echo b) c)`). Inert by itself — only its `value`
 --- may carry a side-effecting substitution, and only assignment value /
---- array-element position is sound (see the `permissions` skill § "Compound
---- Bash commands"). A poisoned name (`PATH=/evil`) bails because a
+--- array-element position is sound (see the `permissions` skill
+--- `references/parsing.md` § Pipeline). A poisoned name (`PATH=/evil`) bails because a
 --- later command would inherit it.
 --- @param node TSNode
 --- @param src string

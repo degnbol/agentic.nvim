@@ -19,7 +19,7 @@ local PermissionRules = require("agentic.utils.permission_rules")
 ---     An entry's `arity` hints cut the parses. An absent hint never
 ---     under-guards (it only adds a prompt). A present one is trusted.
 ---
---- See the `permissions` project skill § "Compound Bash commands" for the
+--- See the `permissions` project skill § "Shell command parsing" for the
 --- cross-file overview; this module's functions are the authoritative algorithm.
 --- @class agentic.utils.PermissionStructured
 local M = {}

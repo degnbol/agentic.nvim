@@ -2284,6 +2284,12 @@ end
 --- matches. Skips the session/load replay for the same reason: the bridge
 --- replays each past Edit as `pending`, but disk already holds the edit, so
 --- `diff.old` is either gone or found at a post-edit position.
+---
+--- The range is recorded here, not searched for at grant-check time. Claude's
+--- Edit tool sends no line numbers, the bridge flattens `rawOutput` to a
+--- success string (dropping the SDK's `structuredPatch`), and a check-time
+--- search for `diff.new` is ambiguous for short replacements such as `}`,
+--- `end` or a blank line.
 --- @param tool_call_id string
 function SessionManager:_try_record_edit_range(tool_call_id)
     if not tool_call_id or self._loading then
