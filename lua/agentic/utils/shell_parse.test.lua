@@ -198,6 +198,18 @@ describe("ShellParse.extract_commands", function()
             assert.same({ "uv" }, names("uv run --script s.py"))
         end)
 
+        it("records the wrappers a command was unwrapped from", function()
+            local recs = ShellParse.extract_commands(
+                "timeout 5 uv run python x.py; zsh -c 'ls'; pwd"
+            )
+            assert.same(
+                { { "timeout", "uv" }, { "zsh" }, {} },
+                vim.tbl_map(function(r)
+                    return r.via
+                end, recs)
+            )
+        end)
+
         it("leaves non-`run` uv subcommands as a leaf", function()
             assert.same(
                 { "uv pip list" },
@@ -213,6 +225,157 @@ describe("ShellParse.extract_commands", function()
 
         it("recurses into loop bodies", function()
             assert.same({ "rm" }, names("for f in a b; do rm -f $f; done"))
+        end)
+
+        --- `pipe_from` of each record of `src`, as name lists.
+        --- @param src string
+        --- @return table<string, string[]|false> by record name, false where
+        ---         `pipe_from` is nil
+        local function upstream_names(src)
+            local recs = ShellParse.extract_commands(src) or {}
+            local out = {}
+            for _, r in ipairs(recs) do
+                out[r.name] = r.pipe_from
+                        and vim.tbl_map(function(i)
+                            return recs[i].name
+                        end, r.pipe_from)
+                    or false
+            end
+            return out
+        end
+
+        it("links each pipeline element to the one before it", function()
+            assert.same(
+                { curl = false, grep = { "curl" }, sh = { "grep" } },
+                upstream_names("curl x | grep y | sh")
+            )
+        end)
+
+        it("links every record of a compound element", function()
+            assert.same(
+                { echo = false, curl = false, sh = { "echo", "curl" } },
+                upstream_names("{ echo; curl x; } | sh")
+            )
+        end)
+
+        it("links through wrappers and nested pipelines", function()
+            assert.same(
+                { curl = false, a = { "curl" }, b = { "a" } },
+                upstream_names("curl x | { a | b; }")
+            )
+            assert.same(
+                { curl = false, sh = { "curl" } },
+                upstream_names("curl x | timeout 5 sh")
+            )
+        end)
+
+        it("leaves commands outside a pipeline unlinked", function()
+            assert.same(
+                { curl = false, sh = false },
+                upstream_names("curl x; sh")
+            )
+        end)
+    end)
+
+    describe("dynamic names and code-taking builtins", function()
+        it("gives a dynamic command name no record", function()
+            for _, src in ipairs({ "$VAR -rf /", "${CMD} -f x" }) do
+                assert.same({}, ShellParse.extract_commands(src))
+            end
+            assert.same({ "ls" }, names("$VAR -f x; ls"))
+        end)
+
+        it("still collects substitutions in a dynamic command", function()
+            assert.same({ "echo" }, names("$(echo rm) -rf /"))
+            assert.same({ "id" }, names('$cmd "$(id)"'))
+        end)
+
+        it("unwraps an eval of static words", function()
+            local recs = ShellParse.extract_commands("eval 'rm -f' x")
+            assert.same({ "rm -f x" }, render(recs))
+            assert.same({ "eval" }, recs[1].via)
+        end)
+
+        it("records an eval with a dynamic argument, source and .", function()
+            assert.same(
+                { 'eval "rm -f $x"' },
+                vim.tbl_map(function(r)
+                    return r.name .. " " .. r.argv[1]
+                end, ShellParse.extract_commands(
+                    'eval "rm -f $x"'
+                ))
+            )
+            assert.same({ "source", ".", "ls" }, names("source a; . b; ls"))
+        end)
+    end)
+
+    describe("launchers", function()
+        it("unwraps launchers to the command they run", function()
+            for src, want in pairs({
+                ["sudo -u bob rm -f x"] = { "sudo" },
+                ["env -i A=1 B=2 rm -f x"] = { "env" },
+                ["nice -n 5 rm -f x"] = { "nice" },
+                ["nohup rm -f x"] = { "nohup" },
+                ["exec rm -f x"] = { "exec" },
+                ["builtin eval 'rm -f x'"] = { "builtin", "eval" },
+                ["noglob rm -f x"] = { "noglob" },
+            }) do
+                local recs = ShellParse.extract_commands(src)
+                assert.same({ "rm -f x" }, render(recs))
+                assert.same(want, recs[1].via)
+            end
+        end)
+
+        it("unwraps find's action commands", function()
+            for _, src in ipairs({
+                "find . -name x -exec rm -f {} \\;",
+                "find . -execdir rm -f {} +",
+                "find . -exec rm -f {} ';' -print",
+            }) do
+                local recs = ShellParse.extract_commands(src)
+                assert.same({ "rm" }, names(src))
+                assert.same({ "find" }, recs[1].via)
+            end
+            assert.same(
+                { "echo", "rm" },
+                names("find . -exec echo {} \\; -exec rm -f {} \\;")
+            )
+            assert.same({ "find" }, names("find . -name x -print"))
+        end)
+
+        it("ends a launcher's options at --", function()
+            assert.same(
+                { "rm -f x" },
+                render(ShellParse.extract_commands("sudo -- rm -f x"))
+            )
+        end)
+
+        it("marks a command whose code it could not unwrap opaque", function()
+            for _, src in ipairs({
+                "sudo --frob rm -f x",
+                'zsh -c "rm -f $x"',
+                'eval "rm -f $x"',
+                "find . -exec rm -f {}",
+            }) do
+                local recs = ShellParse.extract_commands(src)
+                assert.equal(1, #recs)
+                assert.equal(true, recs[1].opaque)
+            end
+            for _, src in ipairs({
+                "zsh script.zsh",
+                "find . -name x",
+                "uv pip list",
+                "ls -l",
+            }) do
+                assert.equal(nil, ShellParse.extract_commands(src)[1].opaque)
+            end
+        end)
+
+        it("lets a same-shell prefix's cd carry over", function()
+            local recs = ShellParse.extract_commands("eval 'cd /x'; ls")
+            assert.equal("/x", recs[2].cwd)
+            recs = ShellParse.extract_commands("nohup cd /x; ls")
+            assert.equal(nil, recs[2].cwd)
         end)
     end)
 
@@ -368,22 +531,6 @@ describe("ShellParse.extract_commands", function()
     describe("fail-closed (nil, not empty)", function()
         it("returns nil on a parse error", function()
             assert.equal(nil, ShellParse.extract_commands("rm -f $("))
-        end)
-
-        it("returns nil on a substitution command name", function()
-            assert.equal(nil, ShellParse.extract_commands("$(echo rm) -rf /"))
-        end)
-
-        it("returns nil on an expansion command name", function()
-            -- `$R` could resolve to anything; a record named `$R` matches no
-            -- block rule, so bail rather than emit a name no guard can catch.
-            assert.equal(nil, ShellParse.extract_commands("$VAR -rf /"))
-            assert.equal(nil, ShellParse.extract_commands("R=rm; $R -f /"))
-            assert.equal(nil, ShellParse.extract_commands("${CMD} -f x"))
-        end)
-
-        it("returns nil on a code-taking builtin", function()
-            assert.equal(nil, ShellParse.extract_commands('eval "rm -f x"'))
         end)
 
         it("returns empty for a bare string (parsed, no command)", function()

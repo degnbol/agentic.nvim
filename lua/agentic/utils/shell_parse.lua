@@ -216,8 +216,7 @@ local DYNAMIC_NAME_TYPES = {
 }
 
 --- Code-taking builtins: the argument is shell code the matcher cannot inspect,
---- so they bail even when the builtin name would match a pattern. Never treated
---- as transparent wrappers.
+--- so they bail even when the builtin name would match a pattern.
 local CODE_TAKING_BUILTINS = { eval = true, source = true, ["."] = true }
 
 -- ── Structural predicates ────────────────────────────────────────────────────
@@ -520,7 +519,7 @@ end
 
 --- Extract the literal command name from a `command_name` node, normalising
 --- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
---- deny pattern). Returns nil to bail on a dynamic name — a substitution,
+--- deny pattern). Returns nil for a dynamic name — a substitution,
 --- expansion, arithmetic, glob, or a `string`/`concatenation` carrying one
 --- (`"$x"`). A literal
 --- concatenation in command-name position (e.g. `gr"e"p`) joins to its
@@ -533,11 +532,8 @@ local function command_name_text(command_name, src)
     if not inner then
         return nil
     end
-    -- A dynamic name bails. `literal_token` hands back raw `$VAR` text for a
-    -- bare expansion; the permission walk tolerates that (a `$VAR` leaf matches
-    -- no allow pattern → prompt) but `extract_commands` does not — a
-    -- `$VAR`-named record matches no block rule, a silent miss. So drop it here
-    -- and both consumers get nil. ponytail: lazy bail, not var propagation.
+    -- A dynamic name is nil, not the raw `$VAR` text `literal_token` hands
+    -- back for a bare expansion, so no consumer mistakes it for a name.
     if DYNAMIC_NAME_TYPES[inner:type()] or token_is_dynamic(inner) then
         return nil
     end
@@ -1447,6 +1443,8 @@ end
 --- @field positionals? integer count of fixed positional operands before the inner command (timeout's `DURATION` = 1); skipped by count, not inspected
 --- @field subcommand? string require this literal first positional (uv's `run`); options are consumed both before and after it, and a non-match falls through to the leaf matchers (so `uv pip`/`uv lock` keep their own allow rules)
 --- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the safe_write tier — a read-only inner must not launder the command into a read-only one.
+--- @field assignments? boolean `NAME=value` operands may follow the options (env's), skipped like options
+--- @field exec_action? boolean the inner is not the trailing words but find's actions: the words after each `-exec`/`-execdir`/`-ok`/`-okdir` up to the `;` or `+` ending it, one action per line
 
 --- Exec-wrappers: effect-neutral prefixes whose sole job is to launch the
 --- following command. Excluding a write option / requiring a positional makes
@@ -1548,9 +1546,70 @@ local EXEC_WRAPPERS = {
 --- `EXEC_WRAPPERS` for reporting what runs rather than deciding approval: `uv
 --- run` also skips its code-injecting options (`--with`, `--python`, ...),
 --- which change the environment but not which command runs. `--script`/`-s`
---- and `--directory` still stop the skip.
+--- and `--directory` still stop the skip. Also unwraps the launchers that
+--- `EXEC_WRAPPERS` leaves out for their other effects (`sudo`, `env`, `nohup`,
+--- `exec`, `builtin`, ...) and `find -exec`: they still run the command.
 --- @type table<string, agentic.utils.ShellParse.WrapperSpec>
 local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
+    sudo = {
+        value_opts = {
+            "-u",
+            "-g",
+            "-h",
+            "-p",
+            "-C",
+            "-D",
+            "-r",
+            "-t",
+            "-U",
+            "--user",
+            "--group",
+            "--host",
+            "--prompt",
+            "--close-from",
+            "--chdir",
+            "--role",
+            "--type",
+            "--other-user",
+        },
+        flag_opts = {
+            "-A",
+            "-b",
+            "-E",
+            "-H",
+            "-k",
+            "-n",
+            "-P",
+            "-S",
+            "--askpass",
+            "--background",
+            "--preserve-env",
+            "--set-home",
+            "--reset-timestamp",
+            "--non-interactive",
+            "--preserve-groups",
+            "--stdin",
+        },
+        attached = { "^%-%-[%w-]+=", "^%-[ugpCDrtUh]." },
+    },
+    -- [OPTION]... [NAME=VALUE]... COMMAND; `-S` splits a string into words
+    -- and stops the skip.
+    env = {
+        value_opts = { "-u", "-C", "--unset", "--chdir" },
+        flag_opts = { "-", "-i", "-0", "--ignore-environment", "--null" },
+        attached = { "^%-%-unset=", "^%-%-chdir=", "^%-[uC]." },
+        assignments = true,
+    },
+    nice = {
+        value_opts = { "-n", "--adjustment" },
+        attached = { "^%-%-adjustment=", "^%-n.", "^%-%d+$" },
+    },
+    nohup = {},
+    exec = { value_opts = { "-a" }, flag_opts = { "-c", "-l" } },
+    builtin = {},
+    noglob = {},
+    nocorrect = {},
+    find = { exec_action = true },
     uv = vim.tbl_extend("force", EXEC_WRAPPERS.uv, {
         value_opts = {
             "--with",
@@ -1601,7 +1660,11 @@ local function skip_wrapper_operands(args, spec)
     local function consume_options(i)
         while args[i] and args[i]:sub(1, 1) == "-" do
             local opt = args[i]
-            if spec.value_opts and vim.tbl_contains(spec.value_opts, opt) then
+            if opt == "--" then
+                return i + 1 -- end of options
+            elseif
+                spec.value_opts and vim.tbl_contains(spec.value_opts, opt)
+            then
                 i = i + 2 -- value is the next token (`-s KILL`)
             elseif
                 -- boolean flag, or self-contained form (`-oL`, `--signal=K`, `-5`)
@@ -1629,7 +1692,40 @@ local function skip_wrapper_operands(args, spec)
     if not i then
         return nil
     end
+    while spec.assignments and args[i] and args[i]:match("^[%a_][%w_]*=") do
+        i = i + 1
+    end
     return i + (spec.positionals or 0)
+end
+
+--- find's options that run a command: the words after one, up to the `;` or
+--- `+` ending it.
+local FIND_ACTIONS =
+    { ["-exec"] = true, ["-execdir"] = true, ["-ok"] = true, ["-okdir"] = true }
+
+--- The words of each of find's action commands.
+--- @param args string[] quote-stripped arg tokens after `find`
+--- @return { [1]: integer, [2]: integer }[]|nil spans first and last index into
+---         `args` of each action's words, in order. nil when an action is
+---         empty or has no `;`/`+`.
+local function find_action_spans(args)
+    local spans = {}
+    local i = 1
+    while i <= #args do
+        if FIND_ACTIONS[args[i]] then
+            local j = i + 1
+            while args[j] and args[j] ~= ";" and args[j] ~= "+" do
+                j = j + 1
+            end
+            if not args[j] or j == i + 1 then
+                return nil
+            end
+            table.insert(spans, { i + 1, j - 1 })
+            i = j
+        end
+        i = i + 1
+    end
+    return spans
 end
 
 --- @alias agentic.utils.ShellParse.Origin [integer, integer]
@@ -1645,7 +1741,8 @@ end
 --- it gets an origin (content start) and tally ranges map 1:1; any other quoting
 --- (double, `$'...'`, concatenation) processes the body and stays nil-origin. The
 --- wrapper inner is a raw substring of `src` (quotes/escapes intact)
---- from the inner node's start to the wrapper command node's end, with the inner
+--- from the inner node's start to the wrapper command node's end (for an
+--- `exec_action` wrapper, its actions' words, one action per line), with the inner
 --- node's `(row, col)` as origin for translating tally ranges.
 --- @param cmd_name string command name, already path-stripped
 --- @param node TSNode the `command` node
@@ -1699,6 +1796,21 @@ local function inner_source(
     local spec = (wrappers or EXEC_WRAPPERS)[cmd_name]
     if not spec then
         return nil, nil, false
+    end
+    if spec.exec_action then
+        local spans = find_action_spans(args)
+        if not spans or #spans == 0 then
+            return nil, nil, false
+        end
+        -- One action per line, so the inner parses as a command list.
+        local actions = {}
+        for _, span in ipairs(spans) do
+            local _, _, start_byte = arg_nodes[span[1]]:range(true)
+            local _, _, _, _, _, end_byte = arg_nodes[span[2]]:range(true)
+            table.insert(actions, src:sub(start_byte + 1, end_byte))
+        end
+        local sr, sc = arg_nodes[spans[1][1]]:range()
+        return table.concat(actions, "\n"), { sr, sc }, false
     end
     local inner_idx = skip_wrapper_operands(args, spec)
     if not inner_idx then
@@ -1903,9 +2015,65 @@ function M.join_adjacent_args(args, arg_nodes, args_dynamic, src)
     return joined_args, joined_nodes, joined_dynamic
 end
 
+--- Transparent prefixes whose inner runs in the current shell, not a child.
+local SAME_SHELL_PREFIXES = {
+    eval = true,
+    builtin = true,
+    exec = true,
+    noglob = true,
+    nocorrect = true,
+}
+
+--- Whether a command that was not unwrapped still runs code given in its
+--- arguments: an `eval`, a shell with `-c`, a find action, or a launcher in
+--- `VISIBLE_WRAPPERS` whose operands did not resolve.
+--- @param cmd_name string
+--- @param args string[] quote-stripped arg tokens
+--- @return boolean
+local function names_unseen_command(cmd_name, args)
+    if #args == 0 then
+        return false
+    end
+    if cmd_name == "eval" then
+        return true
+    end
+    if SHELL_C_COMMANDS[cmd_name] then
+        return vim.tbl_contains(args, function(arg)
+            return arg:match("^%-[a-zA-Z]*c$") ~= nil
+        end, { predicate = true })
+    end
+    local spec = VISIBLE_WRAPPERS[cmd_name]
+    if not spec then
+        return false
+    end
+    if spec.exec_action then
+        return vim.tbl_contains(args, function(arg)
+            return FIND_ACTIONS[arg] ~= nil
+        end, { predicate = true })
+    end
+    return not spec.subcommand or vim.list_contains(args, spec.subcommand)
+end
+
 --- Forward declaration — `collect` and `collect_command` are mutually recursive.
 --- @type fun(node: TSNode, src: string, out: agentic.ShellCommand[], depth: integer, shell: agentic.utils.ShellParse.Shell, stdin_of: table<string, agentic.utils.ShellParse.Heredoc>): boolean
 local collect
+
+--- `collect` over each node in turn, stopping at the first failure.
+--- @param nodes TSNode[]
+--- @param src string
+--- @param out agentic.ShellCommand[]
+--- @param depth integer
+--- @param shell agentic.utils.ShellParse.Shell
+--- @param stdin_of table<string, agentic.utils.ShellParse.Heredoc>
+--- @return boolean ok
+local function collect_each(nodes, src, out, depth, shell, stdin_of)
+    for _, node in ipairs(nodes) do
+        if not collect(node, src, out, depth, shell, stdin_of) then
+            return false
+        end
+    end
+    return true
+end
 
 --- Process a `command` node: resolve its name, unwrap transparent prefixes
 --- (exec-wrapper / inline `-c` body) by re-parsing the inner, else emit an
@@ -1976,27 +2144,34 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
     end
     local name = command_name_text(name_node, src)
     if not name then
-        return false -- dynamic command name
+        -- A dynamic name is no evidence of any particular command: no record,
+        -- but the substitutions in its name and arguments still run.
+        table.insert(to_flatten, 1, name_node)
+        return collect_each(to_flatten, src, out, depth, shell, stdin_of)
     end
     local cmd_name = strip_command_path(name)
-    if CODE_TAKING_BUILTINS[cmd_name] then
-        return false
-    end
     args, arg_nodes, args_dynamic =
         M.join_adjacent_args(args, arg_nodes, args_dynamic, src)
 
     -- Transparent prefix: re-parse and flatten the inner instead of emitting the
     -- wrapper/shell itself, so `timeout 5 rm -f x` and `zsh -c 'rm -f x'` both
-    -- yield a record for `rm`.
-    local inner = inner_source(
-        cmd_name,
-        node,
-        args,
-        arg_nodes,
-        args_dynamic,
-        src,
-        VISIBLE_WRAPPERS
-    )
+    -- yield a record for `rm`. An `eval` of static words runs those words,
+    -- joined by spaces, as code.
+    local inner
+    if cmd_name == "eval" then
+        inner = not vim.list_contains(args_dynamic, true)
+            and table.concat(args, " ")
+    else
+        inner = inner_source(
+            cmd_name,
+            node,
+            args,
+            arg_nodes,
+            args_dynamic,
+            src,
+            VISIBLE_WRAPPERS
+        )
+    end
     if inner and inner ~= "" then
         if depth >= NESTED_MAX_DEPTH then
             return false
@@ -2019,15 +2194,21 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
         then
             inner_stdin_of[inner_cmd:id()] = stdin_of[node:id()]
         end
-        -- The inner runs in a process of its own, so its `cd` does not leak out.
-        return collect(
+        local first = #out + 1
+        -- Most inners run in a process of their own, so their `cd` does not
+        -- leak out.
+        local ok = collect(
             root,
             inner,
             out,
             depth + 1,
-            { cwd = shell.cwd },
+            SAME_SHELL_PREFIXES[cmd_name] and shell or { cwd = shell.cwd },
             inner_stdin_of
         )
+        for i = first, #out do
+            table.insert(out[i].via, 1, cmd_name)
+        end
+        return ok
     end
 
     --- @type agentic.ShellCommand
@@ -2039,16 +2220,16 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
         argv_dynamic = args_dynamic,
         stdin = stdin_of[node:id()],
         cwd = shell.cwd,
+        via = {},
+        opaque = names_unseen_command(cmd_name, args) or nil,
     }
     for _, tok in ipairs(args) do
         classify_token(tok, rec.flags, rec.args)
     end
     table.insert(out, rec)
 
-    for _, sub in ipairs(to_flatten) do
-        if not collect(sub, src, out, depth, shell, stdin_of) then
-            return false
-        end
+    if not collect_each(to_flatten, src, out, depth, shell, stdin_of) then
+        return false
     end
 
     if cmd_name == "cd" then
@@ -2109,13 +2290,26 @@ function collect(node, src, out, depth, shell, stdin_of)
     -- statements, assignments, substitutions): recurse named children. A
     -- redirect target / env prefix does not hide a command, so we never bail
     -- here — only `collect_command` decides safety.
+    --- @type integer[]|nil indices in `out` of the previous pipeline element's records
+    local upstream
     for _, child in ipairs(node:named_children()) do
         if child:type() ~= "comment" then
             local child_shell = runs_in_child_shell(node, child)
                     and { cwd = shell.cwd }
                 or shell
+            local first = #out + 1
             if not collect(child, src, out, depth, child_shell, stdin_of) then
                 return false
+            end
+            if t == "pipeline" then
+                -- An inner pipeline has already set its own downstream elements.
+                for i = first, #out do
+                    out[i].pipe_from = out[i].pipe_from or upstream
+                end
+                upstream = {}
+                for i = first, #out do
+                    table.insert(upstream, i)
+                end
             end
         end
     end
@@ -2130,20 +2324,27 @@ end
 --- @field argv_dynamic boolean[] parallel to `argv`: true where the token is not a static literal (expansion, substitution, xargs' stand-in `$__xargs_stdin`)
 --- @field stdin? agentic.utils.ShellParse.Heredoc the heredoc this command reads on stdin
 --- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell. Not normalised, and relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
+--- @field opaque? true the command runs code from its arguments that extraction could not unwrap (`eval "$x"`, `sudo -i …`, `zsh -c "$x"`), so `argv` holds commands no record shows
+--- @field via string[] the launchers, `-c` shells and static `eval`s this command was unwrapped from, outermost first (`timeout 5 uv run x` → `{ "timeout", "uv" }`)
+--- @field pipe_from? integer[] indices, in the same record list, of the records of the pipeline element before this command's, whose output its stdin reads. Every record inside a pipeline element, its substitutions included, gets them. nil outside a pipeline and in its first element.
 
 --- Extract the flat list of statically-resolvable commands a shell string would
---- run — across pipelines, control flow, exec-wrappers, inline `-c` bodies, and
---- live command substitutions. Each record is normalised to an
---- `agentic.ShellCommand`.
+--- run — across pipelines, control flow, launchers (`VISIBLE_WRAPPERS`), inline
+--- `-c` bodies, `eval`s of static words, and live command substitutions. Each
+--- record is normalised to an `agentic.ShellCommand`.
 ---
---- Fail-closed: parse error, absent parser, an `ERROR` node, a dynamic command
---- name, a code-taking builtin (`eval`/`source`/`.`), or an unextractable token
---- — anything that could hide a command from view — returns `nil`. `nil` means
---- "can't prove what runs" (a consumer fires every block rule); `{}` means
---- "parsed, no command" (a bare string) and fires nothing. Conflating the two is
---- the silent-miss bug — keep them distinct.
+--- A command with a dynamic name (`$cmd -f x`) gets no record, but the
+--- commands in the substitutions of its name and arguments still do. `source`
+--- and `.` are records like any other: their code is not walked. A command
+--- that runs code extraction could not unwrap (an `eval` with a dynamic
+--- argument, a launcher with an unknown option) is a record marked `opaque`.
+---
+--- An empty or over-64-KiB `src`, a parse error, an absent parser, an `ERROR`
+--- node, an unextractable token or unwrapping nested past `NESTED_MAX_DEPTH`
+--- returns `nil`: what runs is unknown. `{}` means "parsed, no command" (a
+--- bare string).
 --- @param src string
---- @return agentic.ShellCommand[]|nil records nil = fail-closed (can't prove what runs)
+--- @return agentic.ShellCommand[]|nil records nil = what runs is unknown
 function M.extract_commands(src)
     if type(src) ~= "string" or src == "" then
         return nil
