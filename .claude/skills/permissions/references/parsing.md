@@ -5,9 +5,14 @@
 The matcher over-approximates option presence per token (single-dash `-uo`
 expands to letters `{u, o}` AND long-name `uo`; double-dash `--output=x`
 becomes prefix-matched long-name `output`), which is sound for deny/ask —
-extra candidates can only widen a match, never miss one. This is why the
-structured layer beats globs against option clustering and GNU abbreviation
-(`sort -uo out`, `sort --out=x`, `sort -oFILE` all evade `Bash(sort * -o *)`).
+extra candidates can only widen a match. This is why the structured layer
+beats globs against option clustering and GNU abbreviation (`sort -uo out`,
+`sort --out=x`, `sort -oFILE` all evade `Bash(sort * -o *)`).
+
+The one cut: a letter that the entry's `arity` lists as a taker in every
+scope ends the cluster, and the rest is its value (`curl -o/dev/null`
+carries only `o`). That is sound only given a correct hint; a wrong one
+can hide a deny or an ask.
 
 A token is split at whitespace. Each segment that starts with `-` is read
 as its own dash word (perl reads `-p -i` in one word as two switches). The
@@ -39,6 +44,13 @@ that ends options are positionals. For deny/ask, a `--` directly after a flag
 may be its value, so options continue: `tar -tf -- --use-compress-program=x`
 exposes `use-compress-program`.
 
+An `unless` gate is read in the opposite direction from the gate that holds
+it (`gate_may`/`gate_must`), so an ask's `unless` is universal and a present
+hint can suppress the ask. `option_values` is option presence when read
+existentially and value globs when read universally (`option_values_must`).
+Deny gates take neither field: a dynamic token fails a universal `unless`,
+so the deny would fire, and deny rejects with no prompt.
+
 ## `leading_options`
 
 A gate field matching a flag only in the leading region (before the first
@@ -51,10 +63,10 @@ positional in every parse.
 
 ## Token expansion: resolve statically, else dynamic
 
-Imprecision is one-directional — it may only ever over-prompt, never
-auto-approve something the gates would otherwise catch. So a token's concrete
-value is resolved wherever it provably can be, and falls back to a conservative
-"could be anything" otherwise.
+A dynamic token's imprecision is one-directional — it may only ever
+over-prompt, never auto-approve something the gates would otherwise catch.
+So a token's concrete value is resolved wherever it provably can be, and
+falls back to a conservative "could be anything" otherwise.
 
 **Resolved** — a literal, or a `$name`/`${name}` (bare or its single-word quoted
 form `"$name"`/`"${name}"`) bound to a *splitting-proof* literal (`is_safe_literal`

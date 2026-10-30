@@ -80,7 +80,8 @@ settings.json (`PermissionRules.get_settings_patterns`). The **structured
 matcher** (`lua/agentic/utils/permission_structured.lua`) consumes the bundled
 `lua/agentic/permissions.json` plus any `Config.permissions.structured`
 additions: cmd-keyed gate arrays (`read_only`, `safe_write`, `ask`, `deny`)
-matched on flag identifiers and positionals. It exists because globs are
+matched on flag identifiers and positionals, plus `unless` (negation) and
+`option_values` (value globs) on non-deny gates. It exists because globs are
 unsound against option clustering and GNU abbreviation (`sort -uo out`,
 `sort --out=x`).
 
@@ -103,8 +104,9 @@ one that mutates disk or executes arbitrary code as its normal action is
   any other file redirect bails, whether or not the command succeeds.
 - **One name predicate for every binding** — `ShellParse.is_safe_var_name`.
 - **Dynamic tokens wildcard deny/ask, never allow** (§ Token expansion).
-- **Over-approximation is sound for deny/ask**; allow holds in every parse
-  (§ Over-approximation).
+- **Over-approximation is sound for deny/ask**; allow holds in every parse,
+  and `unless` swaps the two (§ Over-approximation, § Arity). A present
+  `arity` hint is trusted by both.
 
 **Composition per leaf:**
 `approve iff (glob_allow OR structured_allow) AND NOT (glob_deny OR
