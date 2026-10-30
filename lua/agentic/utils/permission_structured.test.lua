@@ -59,6 +59,16 @@ describe("PermissionStructured", function()
             assert.same({ "E", "F", "I", "L", "o", "oFILE" }, cands)
         end)
 
+        it("ends a cluster at a taker letter", function()
+            assert.same(
+                { "s", "o" },
+                PermissionStructured.extract_option_candidates(
+                    "-so/dev/null -x",
+                    { o = true }
+                )
+            )
+        end)
+
         it("treats a quote-stripped short flag like its raw form", function()
             local cands = PermissionStructured.extract_option_candidates("-o")
             assert.same({ "o" }, cands)
@@ -1495,6 +1505,79 @@ describe("PermissionStructured", function()
                     args_dynamic = {},
                 }))
             end)
+        end)
+    end)
+
+    -- `unless` and `option_values`: an ask fires when it may hold, so an
+    -- `unless` must hold in every parse to suppress it.
+    describe("gate conditions", function()
+        --- `foo -m` asks unless every `-m` has value GET and no `-f` occurs.
+        --- @type agentic.StructuredEntries
+        local entries = {
+            foo = {
+                read_only = { {} },
+                ask = {
+                    {
+                        options = { "m" },
+                        unless = {
+                            {
+                                option_values = {
+                                    options = { "m" },
+                                    values = { "GET" },
+                                },
+                                unless = { { options = { "f" } } },
+                            },
+                        },
+                    },
+                },
+                arity = { ["*"] = { takers = { "-m", "-f" } } },
+            },
+        }
+
+        --- @param args string[]
+        --- @param dynamic boolean[]|nil
+        --- @return agentic.PermDecision
+        local function decide(args, dynamic)
+            local leaf = parsed("foo", args)
+            leaf.args_dynamic = dynamic
+            return (PermissionStructured.decide_leaf(entries, leaf, "read_only"))
+        end
+
+        it("approves when the nested condition holds", function()
+            assert.equal("allow", decide({ "-m", "GET", "x" }))
+        end)
+
+        it("asks when the nested unless holds", function()
+            assert.equal("ask", decide({ "-m", "GET", "-f", "y" }))
+        end)
+
+        it("asks on another value", function()
+            assert.equal("ask", decide({ "-m", "POST" }))
+        end)
+
+        it("asks on a dynamic word", function()
+            assert.equal(
+                "ask",
+                decide({ "-m", "GET", "$x" }, { false, false, true })
+            )
+        end)
+
+        it("asks when an unhinted flag may absorb the option", function()
+            assert.equal("ask", decide({ "-q", "-m", "GET" }))
+        end)
+
+        it("classifies by the same readings", function()
+            local get = PermissionStructured.classify_leaf(
+                entries,
+                parsed("foo", { "-m", "GET" })
+            )
+            local post = PermissionStructured.classify_leaf(
+                entries,
+                parsed("foo", { "-m", "POST" })
+            )
+            assert.is_false(get.ask)
+            assert.is_true(get.read_only)
+            assert.is_true(post.ask)
         end)
     end)
 end)

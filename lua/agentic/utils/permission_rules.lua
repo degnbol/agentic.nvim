@@ -292,39 +292,139 @@ end
 
 local STRUCTURED_KINDS = { "read_only", "safe_write", "ask", "deny" }
 
---- Deep-copy a single gate, normalising every option string (`options` and
---- `leading_options`) to the dashless form. Positionals are left raw
---- (glob-compiled at match time). Unknown keys are dropped — defence in depth,
---- so a gate is never silently treated as the all-wildcard `{}`.
+--- Keys a gate may have.
+local GATE_KEYS = {
+    options = true,
+    leading_options = true,
+    positionals = true,
+    unless = true,
+    option_values = true,
+}
+
+--- Nesting of `unless` beyond this is a defect, so a cyclic table ends.
+local MAX_UNLESS_DEPTH = 8
+
+--- Whether `value` is a list.
+--- @param value any
+--- @return boolean
+local function is_list(value)
+    return type(value) == "table" and vim.islist(value)
+end
+
+--- Copy of a list of strings.
+--- @param value any
+--- @return string[]|nil strings nil unless `value` is a list of strings only
+local function string_list(value)
+    if
+        is_list(value)
+        and vim.iter(value):all(function(element)
+            return type(element) == "string"
+        end)
+    then
+        return vim.list_slice(value)
+    end
+    return nil
+end
+
+--- Copy of an `option_values` condition with dashless options.
+--- @param cond any
+--- @return agentic.PermOptionValues|nil cond nil unless `options` and
+---         `values` are both non-empty lists of strings
+local function normalise_option_values(cond)
+    if type(cond) ~= "table" then
+        return nil
+    end
+    local options = string_list(cond.options)
+    local values = string_list(cond.values)
+    if not (options and values and #options > 0 and #values > 0) then
+        return nil
+    end
+    --- @type agentic.PermOptionValues
+    local copy = { options = vim.tbl_map(normalise_option, options), values = values }
+    return copy
+end
+
+--- Deep-copy a single gate, normalising every option string (`options`,
+--- `leading_options`, `option_values.options`) to the dashless form.
+--- Positionals are left raw (glob-compiled at match time).
+---
+--- A defect is an unknown key, a field of the wrong type, a malformed
+--- `option_values`, an `unless` child that is not a table or normalises to
+--- `{}`, a defect in an `unless` child, nesting over `MAX_UNLESS_DEPTH`, or
+--- `unless`/`option_values` on a deny gate. Lists must be lists, not maps.
+--- On a defect, an allow gate is dropped, and an ask or deny gate keeps its
+--- valid plain fields but loses a malformed one, `unless` and
+--- `option_values`: an absent field matches anything.
 --- @param gate any
---- @return agentic.PermGate
-local function normalise_gate(gate)
+--- @param kind agentic.PermKind
+--- @param depth integer nesting level of `unless`, 1 at the top
+--- @return agentic.PermGate|nil gate nil when the gate is dropped
+--- @return boolean defect the gate or its `unless` subtree had a defect
+local function normalise_gate(gate, kind, depth)
+    local is_allow = kind == "read_only" or kind == "safe_write"
+    if type(gate) ~= "table" or depth > MAX_UNLESS_DEPTH then
+        return not is_allow and {} or nil, true
+    end
+
+    local defect = false
+    for key in pairs(gate) do
+        defect = defect or not GATE_KEYS[key]
+    end
+
     --- @type agentic.PermGate
     local g = {}
-    if type(gate) ~= "table" then
-        return g
-    end
-    for _, field in ipairs({ "options", "leading_options" }) do
-        if type(gate[field]) == "table" then
-            local opts = {}
-            for _, opt in ipairs(gate[field]) do
-                if type(opt) == "string" then
-                    table.insert(opts, normalise_option(opt))
-                end
+    for _, field in ipairs({ "options", "leading_options", "positionals" }) do
+        if gate[field] ~= nil then
+            local strings = string_list(gate[field])
+            defect = defect or strings == nil
+            if strings and field ~= "positionals" then
+                strings = vim.tbl_map(normalise_option, strings)
             end
-            g[field] = opts
+            g[field] = strings
         end
     end
-    if type(gate.positionals) == "table" then
-        local pos = {}
-        for _, p in ipairs(gate.positionals) do
-            if type(p) == "string" then
-                table.insert(pos, p)
-            end
+
+    local option_values = normalise_option_values(gate.option_values)
+    defect = defect or (gate.option_values ~= nil and option_values == nil)
+
+    --- @type agentic.PermGate[]
+    local unless = {}
+    if gate.unless ~= nil then
+        defect = defect or not is_list(gate.unless)
+        for _, child in ipairs(is_list(gate.unless) and gate.unless or {}) do
+            local c, child_defect = normalise_gate(child, kind, depth + 1)
+            defect = defect or child_defect or c == nil or next(c) == nil
+            table.insert(unless, c)
         end
-        g.positionals = pos
     end
-    return g
+
+    local conditional = gate.unless ~= nil or gate.option_values ~= nil
+    defect = defect or (kind == "deny" and conditional)
+    if defect and is_allow then
+        return nil, true
+    end
+    if not defect then
+        g.unless = gate.unless ~= nil and unless or nil
+        g.option_values = option_values
+    end
+    return g, defect
+end
+
+--- Warn that a gate of `cmd` is malformed.
+--- @param cmd string
+--- @param kind agentic.PermKind
+--- @param kept boolean the gate is kept without its conditions
+local function warn_gate_defect(cmd, kind, kept)
+    Logger.notify(
+        "Structured permission "
+            .. kind
+            .. " gate of "
+            .. cmd
+            .. " is malformed; "
+            .. (kept and "ignoring its unless and option_values" or "dropping it"),
+        vim.log.levels.WARN,
+        { title = "Agentic" }
+    )
 end
 
 --- Whether `token` is an option token the matcher reads: a short letter
@@ -428,7 +528,11 @@ local function normalise_structured_entries(entries)
                     if type(gates) == "table" then
                         local arr = {}
                         for _, gate in ipairs(gates) do
-                            table.insert(arr, normalise_gate(gate))
+                            local g, defect = normalise_gate(gate, kind, 1)
+                            if defect then
+                                warn_gate_defect(cmd, kind, g ~= nil)
+                            end
+                            table.insert(arr, g)
                         end
                         copy[kind] = arr
                     end

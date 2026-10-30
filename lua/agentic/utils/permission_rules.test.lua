@@ -1162,6 +1162,117 @@ describe("PermissionRules", function()
                 assert.equal(5, notify.call_count)
             end)
 
+            describe("gate conditions", function()
+                local notify
+                before_each(function()
+                    notify = spy.stub(Logger, "notify")
+                end)
+                after_each(function()
+                    notify:revert()
+                end)
+
+                --- `foo` approves, but asks on `-x` unless a gate of
+                --- `unless` holds.
+                --- @param unless any
+                --- @return table
+                local function foo_entries(unless)
+                    return {
+                        foo = {
+                            read_only = { {} },
+                            ask = { { options = { "x" }, unless = unless } },
+                            arity = { [""] = { takers = { "-x" } } },
+                        },
+                    }
+                end
+
+                --- @param entries table
+                --- @param command string
+                --- @return boolean
+                local function approves(entries, command)
+                    Config.permissions.structured = entries
+                    return decide(command, {})
+                end
+
+                it("approves when the condition holds", function()
+                    local unless = {
+                        { option_values = { options = { "x" }, values = { "1" } } },
+                    }
+                    assert.is_true(approves(foo_entries(unless), "foo -x 1"))
+                    assert.is_false(approves(foo_entries(unless), "foo -x 2"))
+                    assert.equal(0, notify.call_count)
+                end)
+
+                it("keeps the ask on a typo key in an unless child", function()
+                    local unless = {
+                        { option_value = { options = { "x" }, values = { "1" } } },
+                    }
+                    assert.is_false(approves(foo_entries(unless), "foo -x 1"))
+                    assert.equal(1, notify.call_count)
+                end)
+
+                it("keeps the ask on an empty unless child", function()
+                    assert.is_false(approves(foo_entries({ {} }), "foo -x 1"))
+                    assert.equal(1, notify.call_count)
+                end)
+
+                it("drops an allow gate with a defect", function()
+                    local entries = {
+                        foo = { read_only = { { positionals = { "a" }, Unless = {} } } },
+                    }
+                    assert.is_false(approves(entries, "foo a"))
+                    local foo = PermissionRules.get_structured_entries().foo
+                    assert.same({}, foo and foo.read_only)
+                    assert.equal(1, notify.call_count)
+                end)
+
+                it("drops an allow gate whose unless is one gate", function()
+                    local entries = {
+                        foo = {
+                            read_only = { { unless = { options = { "x" } } } },
+                        },
+                    }
+                    assert.is_false(approves(entries, "foo -x"))
+                    assert.equal(1, notify.call_count)
+                end)
+
+                it("drops a partly valid list from an ask gate", function()
+                    --- @type table
+                    local malformed = { foo = { ask = { { options = { "x", 5 } } } } }
+                    Config.permissions.structured = malformed
+                    PermissionRules.invalidate_cache()
+                    local foo = PermissionRules.get_structured_entries().foo
+                    assert.same({ {} }, foo and foo.ask)
+                    assert.equal(1, notify.call_count)
+                end)
+
+                it("drops unless from a deny gate", function()
+                    Config.permissions.structured = {
+                        foo = {
+                            deny = {
+                                {
+                                    options = { "x" },
+                                    unless = { { options = { "y" } } },
+                                },
+                            },
+                        },
+                    }
+                    PermissionRules.invalidate_cache()
+                    local foo = PermissionRules.get_structured_entries().foo
+                    assert.same({ { options = { "x" } } }, foo and foo.deny)
+                    assert.equal(1, notify.call_count)
+                end)
+
+                it("drops a cyclic unless", function()
+                    local gate = { options = { "x" } }
+                    gate.unless = { gate }
+                    Config.permissions.structured = { foo = { ask = { gate } } }
+                    PermissionRules.invalidate_cache()
+                    local foo = PermissionRules.get_structured_entries().foo
+                    assert.same({ { options = { "x" } } }, foo and foo.ask)
+                    assert.equal(1, notify.call_count)
+                end)
+            end)
+
             describe("over the bundled arity", function()
                 --- The merged git arity under `user` as the user's git entry.
                 --- @param user table
@@ -2081,16 +2192,44 @@ describe("PermissionRules", function()
             )
         end)
 
-        -- `-X` asks on option identity, not value, so an explicit `-X GET`
-        -- prompts like any other method. Exempting the GET value is not
-        -- expressible: ask outranks allow, and gh's `-X` is last-wins
-        -- (`-X GET … -X DELETE` sends DELETE), so an allow gate keyed on the
-        -- GET token would approve the DELETE that follows it.
-        it("asks gh api -X GET (value-blind method gate)", function()
-            assert.is_false(
-                PermissionRules.should_auto_approve("gh api -X GET /rate_limit")
-            )
-        end)
+        for _, cmd in ipairs({
+            "gh api -X GET /x -f q=1",
+            "gh api -XGET /x",
+            "gh api -iXGET /x",
+            "gh api --method=GET /x -f q=1",
+            "curl -sS -o /dev/null https://x",
+            "curl -sS -o/dev/null https://x",
+            "curl -D - https://x",
+        }) do
+            it("auto-approves " .. cmd, function()
+                assert.is_true(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
+
+        -- gh's `-X` is last-wins, so every occurrence of `-X`/`--method`
+        -- must have the GET value.
+        for _, cmd in ipairs({
+            "gh api -X GET /x -X DELETE",
+            "gh api -X GET --method POST /x",
+            "gh api -X GET -H -- -X POST /x",
+            "gh api /x -f q=1",
+            "gh api /x --raw-field q=1",
+            "gh api /x --field q=1",
+            "gh api -X GET /x -F a=@/etc/passwd",
+            "gh api -X $m /x",
+            "gh api -X GET /x -X",
+            "gh api -X=GET /x",
+            "gh api --meth GET /x",
+            "gh api -X get /x",
+            "gh api graphql -X GET -f query=x",
+            "curl -o /dev/null -o out https://x",
+            "curl -o out https://x",
+            "curl --output /dev/null https://x",
+        }) do
+            it("asks " .. cmd, function()
+                assert.is_false(PermissionRules.should_auto_approve(cmd))
+            end)
+        end
 
         it("asks gh api -XDELETE (glued short cluster)", function()
             assert.is_false(

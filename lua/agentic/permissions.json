@@ -660,10 +660,22 @@
     ],
     "ask": [
       { "positionals": ["api"],
-        "options":     ["X", "method", "f", "F", "input", "hostname"] },
+        "options":     ["X", "method", "f", "raw-field"],
+        "unless": [{ "option_values": { "options": ["X", "method"],
+                                        "values":  ["GET"] } }] },
+      { "positionals": ["api"],
+        "options":     ["F", "field", "input", "hostname"] },
+      { "positionals": ["api", "graphql"], "options": ["f", "raw-field"] },
       { "positionals": ["issue", "create"] }
     ],
-    "arity": { "*": { "takers": ["-R", "--repo", "--hostname"] } }
+    "arity": {
+      "*":   { "takers": ["-R", "--repo", "--hostname"] },
+      "api": { "takers": ["-X", "--method", "-f", "--raw-field", "-F", "--field",
+                          "-H", "--header", "-q", "--jq", "-t", "--template",
+                          "--input", "-p", "--preview", "--cache"],
+               "booleans": ["-i", "--include", "--paginate", "--slurp",
+                            "--silent", "--verbose", "--allow-escape-sequences"] }
+    }
   },
 
   "aws": {
@@ -736,11 +748,11 @@
 
   "curl": {
     "read_only": [{}],
-    "ask": [{ "options": ["o", "O", "output",
+    "ask": [{ "options": ["O",
                           "remote-name", "remote-name-all",
                           "remote-header-name", "J",
                           "output-dir", "create-dirs",
-                          "D", "dump-header", "trace", "trace-ascii",
+                          "trace", "trace-ascii",
                           "K", "config",
                           "T", "upload-file",
                           "d", "data", "data-ascii", "data-binary",
@@ -761,7 +773,23 @@
                           "expand-etag-save", "expand-stderr",
                           "expand-hsts", "expand-alt-svc",
                           "expand-ssl-sessions", "expand-write-out",
-                          "expand-quote"] }]
+                          "expand-quote"] },
+            { "options": ["o", "output", "D", "dump-header"],
+              "unless": [{ "option_values": {
+                "options": ["o", "output", "D", "dump-header"],
+                "values":  ["/dev/null", "-"] } }] }],
+    "arity": {
+      "*": {
+        "takers": ["-o", "--output", "-D", "--dump-header", "-w", "--write-out",
+                   "-H", "--header", "-A", "--user-agent", "-e", "--referer",
+                   "-u", "--user", "-m", "--max-time", "--connect-timeout",
+                   "--retry", "-b", "--cookie", "-X", "--request"],
+        "booleans": ["-s", "--silent", "-S", "--show-error", "-L", "--location",
+                     "-f", "--fail", "-I", "--head", "-i", "--include",
+                     "-k", "--insecure", "-v", "--verbose", "-G", "--get",
+                     "--compressed"]
+      }
+    }
   },
 
   "http": {

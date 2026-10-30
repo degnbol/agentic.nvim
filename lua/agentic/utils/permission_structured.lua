@@ -1,5 +1,6 @@
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
+local OptionParse = require("agentic.utils.option_parse")
 local PermissionRules = require("agentic.utils.permission_rules")
 
 --- Structured option matcher for compound-Bash auto-approval. Consumes a
@@ -9,15 +10,18 @@ local PermissionRules = require("agentic.utils.permission_rules")
 --- already quote-stripped tokens, joined literal concatenations, and excluded
 --- redirects / env-prefixes / substitution; this module trusts that input shape.
 ---
---- The matcher needs no getopt arity table for soundness. A dash word may or
---- may not take the next word as its value, and the two directions read that
---- ambiguity dually:
+--- A dash word may or may not take the next word as its value, and the two
+--- directions read that ambiguity dually:
 ---   * deny/ask are EXISTENTIAL — a gate fires if *any* absorption parse (plus
 ---     dynamic-token wildcarding) exposes the gated subcommand/option. An
 ---     over-match only over-prompts.
 ---   * allow is UNIVERSAL — a gate approves only if it holds in *every* parse.
 ---     An entry's `arity` hints cut the parses. An absent hint never
 ---     under-guards (it only adds a prompt). A present one is trusted.
+--- A short letter hinted as a taker in every scope also ends a cluster for
+--- deny/ask (`-o/dev/null` carries only `o`). An `unless` swaps the readings
+--- of its gates, so an ask's `unless` is universal. So a present hint can
+--- also suppress a deny or an ask.
 ---
 --- See the `permissions` project skill § "Shell command parsing" for the
 --- cross-file overview; this module's functions are the authoritative algorithm.
@@ -35,6 +39,7 @@ local M = {}
 --- `options`/`leading_options` list are ORed; gates within a kind-array are ORed.
 --- To require two distinct flags *together*, split them across `options` and
 --- `leading_options` — listing both in one `options` array matches either.
+--- `unless` negates, which with AND and OR gives full propositional logic.
 --- @class agentic.PermGate
 --- @field options?     string[] -- flag identifiers (dashless), matched
 ---        order-free over every flag anywhere in the command: a letter for a
@@ -55,6 +60,17 @@ local M = {}
 ---        On allow, for a mode flag that counts only before the operand
 ---        (`command -v`): the word must precede the first positional in
 ---        every parse.
+--- @field unless? agentic.PermGate[] -- the gate holds only if none of these
+---        holds. Not on deny gates.
+--- @field option_values? agentic.PermOptionValues -- must also hold. Not on
+---        deny gates.
+
+--- Some listed option occurs, and every occurrence of any listed option has
+--- a value that matches a glob. The options are one group: `-X GET --method
+--- POST` fails `{ options = { "X", "method" }, values = { "GET" } }`.
+--- @class agentic.PermOptionValues
+--- @field options string[] dashless identifiers, one group
+--- @field values string[] globs a value must match (`*` crosses `/`)
 
 --- One value of the cmd-keyed schema. The kind name encodes the policy:
 --- `read_only` approves at either non-nil tier, `safe_write` only at
@@ -79,9 +95,6 @@ local M = {}
 --- Scope key: `""` = before the first positional; a literal first
 --- positional (`config`) = after it; `"*"` = every scope.
 --- @alias agentic.PermArity table<string, agentic.PermArityScope>
-
---- @alias agentic.PermArityKind "taker" | "boolean"
---- @alias agentic.PermTakesNext "always" | "never" | "maybe"
 
 --- Cmd-keyed table (`"*"` is the literal wildcard key). A `vim.NIL` value is
 --- treated as "no entry" so a user can disable a bundled cmd via
@@ -109,10 +122,13 @@ local MULTI_ELEMENT_FLAG_CAP = 24
 
 --- Option-identifier candidates of one dash word with no whitespace:
 --- letters and the one-dash long name for `-abc`, the name for
---- `--name[=value]`. Returns `{}` for `-` and `--`.
+--- `--name[=value]`. Returns `{}` for `-` and `--`. In `-abc`, a letter in
+--- `takers` ends the letters: the rest of the word is its value.
 --- @param word string
---- @return string[]
-local function dash_word_candidates(word)
+--- @param takers table<string, true> letters that take a value
+--- @return string[] candidates
+--- @return boolean valued the rest of the word is a value
+local function dash_word_candidates(word, takers)
     -- Long-only =value strip: only fires for `--`-prefixed tokens. Short
     -- tokens keep their full body, so `-=x` stays a short cluster. A
     -- `=` at position 3 (`--=value`) strips to just `--`, which the
@@ -125,23 +141,25 @@ local function dash_word_candidates(word)
         end
     end
 
+    local valued = head ~= word
+
     -- End-of-options / stdin sentinels.
     if head == "-" or head == "--" then
-        return {}
+        return {}, valued
     end
 
     if head:sub(1, 2) == "--" then
         local name = head:sub(3)
         if name == "" then
-            return {}
+            return {}, valued
         end
-        return { name }
+        return { name }, valued
     end
 
     -- Short-flag branch: head starts with "-" but not "--".
     local body = head:sub(2)
     if body == "" then
-        return {}
+        return {}, false
     end
 
     local seen = {}
@@ -152,24 +170,30 @@ local function dash_word_candidates(word)
             seen[ch] = true
             table.insert(out, ch)
         end
+        if takers[ch] then
+            return out, true
+        end
     end
     if not seen[body] then
         table.insert(out, body)
     end
-    return out
+    return out, false
 end
 
 --- Build the set of option-identifier candidates for a single token. The
 --- output is over-approximate: extra candidates can only widen a deny/ask
---- match, never miss a real one. Each whitespace-separated segment that
+--- match, and miss a real one only when `takers` is wrong. Each whitespace-separated segment that
 --- starts with `-` is read as its own dash word, since perl parses `-p -i`
 --- in one word as two switches. Other segments, and all segments after a
 --- `--name=value` segment, are dropped: getopt exits at the whitespace or
 --- has already taken it as a value. Returns `{}` for positionals and for
 --- dash words with no dash segment that has a body (`-`, `--`, `- x`).
 --- @param token string
+--- @param takers table<string, true>|nil short letters that take a value in
+---        every scope (`o` for `-o`): in a cluster, the rest of the token is
+---        that letter's value
 --- @return string[]
-function M.extract_option_candidates(token)
+function M.extract_option_candidates(token, takers)
     if token:sub(1, 1) ~= "-" then
         return {}
     end
@@ -177,13 +201,14 @@ function M.extract_option_candidates(token)
     local out = {}
     for segment in token:gmatch("%S+") do
         if segment:sub(1, 1) == "-" then
-            for _, cand in ipairs(dash_word_candidates(segment)) do
+            local cands, valued = dash_word_candidates(segment, takers or {})
+            for _, cand in ipairs(cands) do
                 if not seen[cand] then
                     seen[cand] = true
                     table.insert(out, cand)
                 end
             end
-            if segment:sub(1, 2) == "--" and segment:find("=", 3, true) then
+            if valued then
                 break
             end
         end
@@ -263,23 +288,36 @@ local function ends_options(words, i, dashdash_value)
     return not (dashdash_value and i > 1 and is_flag(words[i - 1]))
 end
 
---- Option-identifier candidates from every dash word that is a flag in some
---- absorption parse: every flag before the first `--` that ends options in
---- every parse.
+--- Option candidates of every dash word that is a flag in some absorption
+--- parse: every flag before the first `--` that ends options in every parse.
 --- @param words string[]
 --- @param dashdash_value boolean `--` may be the value of the flag before it
---- @return string[]
-local function flag_candidates(words, dashdash_value)
-    local cands = {}
+--- @param takers table<string, true> see `M.extract_option_candidates`
+--- @return table<integer, string[]> candidates by word index
+local function flag_candidates_at(words, dashdash_value, takers)
+    local cands_at = {}
     for i, w in ipairs(words) do
         if ends_options(words, i, dashdash_value) then
             break
         end
         if is_flag(w) then
-            vim.list_extend(cands, M.extract_option_candidates(w))
+            cands_at[i] = M.extract_option_candidates(w, takers)
         end
     end
-    return cands
+    return cands_at
+end
+
+--- Whether the candidates of some word match `rule_options`.
+--- @param cands_at table<integer, string[]> candidates by word index
+--- @param rule_options string[]
+--- @return boolean
+local function some_word_matches(cands_at, rule_options)
+    for _, cands in pairs(cands_at) do
+        if M.match_options(cands, rule_options) then
+            return true
+        end
+    end
+    return false
 end
 
 --- Walk the absorption parses far enough to collect, as index sets:
@@ -339,11 +377,12 @@ end
 --- Flatten option candidates from the flags at the given indices.
 --- @param words string[]
 --- @param set table<integer, boolean>
+--- @param takers table<string, true> see `M.extract_option_candidates`
 --- @return string[]
-local function candidates_at(words, set)
+local function candidates_at(words, set, takers)
     local cands = {}
     for i in pairs(set) do
-        vim.list_extend(cands, M.extract_option_candidates(words[i]))
+        vim.list_extend(cands, M.extract_option_candidates(words[i], takers))
     end
     return cands
 end
@@ -466,7 +505,7 @@ end
 --- @field dynamic boolean[]
 --- @field dashdash_value boolean `--` may be the value of the flag before it
 --- @field has_dynamic boolean
---- @field flag_cands string[]
+--- @field flag_cands_at table<integer, string[]> option candidates of each word that is a flag in some parse, by word index
 --- @field leading_cands string[]
 --- @field leading_dynamic boolean
 --- @field subcommand_idx table<integer, boolean>
@@ -482,7 +521,7 @@ local function gate_matches_existential(gate, ctx)
     if gate.options ~= nil then
         if
             not (
-                M.match_options(ctx.flag_cands, gate.options)
+                some_word_matches(ctx.flag_cands_at, gate.options)
                 or ctx.has_dynamic
             )
         then
@@ -535,10 +574,10 @@ end
 --- Hinted arity of each option token in a scope.
 --- @param arity agentic.PermArity|nil hints of one command
 --- @param scope string scope key, read together with `"*"`
---- @return table<string, agentic.PermArityKind> kind per literal token. A
+--- @return table<string, agentic.OptionKind> kind per literal token. A
 ---         token listed as both kinds is absent (unknown).
 local function arity_kinds(arity, scope)
-    --- @type table<string, agentic.PermArityKind|false>
+    --- @type table<string, agentic.OptionKind|false>
     local listed = {}
     for _, key in ipairs({ scope, "*" }) do
         local hints = arity and arity[key] or {}
@@ -552,7 +591,7 @@ local function arity_kinds(arity, scope)
             end
         end
     end
-    --- @type table<string, agentic.PermArityKind>
+    --- @type table<string, agentic.OptionKind>
     local kinds = {}
     for token, kind in pairs(listed) do
         if kind then
@@ -562,60 +601,28 @@ local function arity_kinds(arity, scope)
     return kinds
 end
 
---- Whether an option word takes the next word as its value.
---- @param word string a dash word other than `-` and `--`
---- @param kinds table<string, agentic.PermArityKind> hinted kind per token
---- @return agentic.PermTakesNext takes `"never"` for `--x=v`. A bare
----         `--x` follows its hinted kind, else `"maybe"`. A cluster `-abc`
----         follows its first letter that is not a hinted boolean: a taker
----         gives `"always"` as the last letter, else `"never"` (the rest is
----         its value). An unhinted letter gives `"maybe"`. All hinted
----         booleans give `"never"`.
-local function option_takes_next(word, kinds)
-    if word:sub(1, 2) == "--" then
-        if word:find("=", 3, true) then
-            return "never"
-        end
-        local kind = kinds[word]
-        if kind == nil then
-            return "maybe"
-        end
-        return kind == "taker" and "always" or "never"
-    end
-    local letters = word:sub(2)
-    for i = 1, #letters do
-        local kind = kinds["-" .. letters:sub(i, i)]
-        if kind == "taker" then
-            return i == #letters and "always" or "never"
-        end
-        if kind ~= "boolean" then
-            return "maybe"
+--- The short letters that take a value in every scope.
+--- @param arity agentic.PermArity|nil hints of one command
+--- @return table<string, true> takers letters, `o` for `-o`
+local function every_scope_takers(arity)
+    local scopes = vim.list_extend({ "", "*" }, vim.tbl_keys(arity or {}))
+    local kinds_per_scope = vim.tbl_map(function(scope)
+        return arity_kinds(arity, scope)
+    end, scopes)
+    --- @type table<string, true>
+    local takers = {}
+    for token in pairs(kinds_per_scope[1]) do
+        local letter = token:match("^%-([^%-])$")
+        if
+            letter
+            and vim.iter(kinds_per_scope):all(function(kinds)
+                return kinds[token] == "taker"
+            end)
+        then
+            takers[letter] = true
         end
     end
-    return "never"
-end
-
---- Identifiers an option word carries in every cluster reading. Only the
---- text before its first whitespace counts.
---- @param word string a dash word
---- @param kinds table<string, agentic.PermArityKind> hinted kind per token
---- @return string[] ids `name` for `--name[=v]`. For `-abc`, the letters up
----         to and including the first that is not a hinted boolean (a later
----         letter may be its value).
-local function sure_identifiers(word, kinds)
-    local head = word:match("^%S*")
-    if head:sub(1, 2) == "--" then
-        local name = head:sub(3):match("^[^=]+")
-        return name and { name } or {}
-    end
-    local ids = {}
-    for letter in head:sub(2):gmatch(".") do
-        table.insert(ids, letter)
-        if kinds["-" .. letter] ~= "boolean" then
-            break
-        end
-    end
-    return ids
+    return takers
 end
 
 --- The scope class of a parse after it reads a positional.
@@ -663,14 +670,15 @@ end
 --- @field words        string[]
 --- @field n_static     integer number of words before the first dynamic one
 --- @field arity?       agentic.PermArity
---- @field kinds        table<string, table<string, agentic.PermArityKind>> hinted kind per token, per scope class, filled lazily
+--- @field kinds        table<string, table<string, agentic.OptionKind>> hinted kind per token, per scope class, filled lazily
 --- @field sure_flags   string[] identifiers that are options in every parse
 --- @field sure_leading string[] those also before every parse's first positional
+--- @field word_values  table<integer, agentic.OptionValue> option value of an option word, by word index, when every parse gives the same one
 
 --- Hinted kind per token in a scope class. Caches into `ctx.kinds`.
 --- @param ctx agentic.PermStructured.ForallCtx
 --- @param scope string
---- @return table<string, agentic.PermArityKind>
+--- @return table<string, agentic.OptionKind>
 local function kinds_in(ctx, scope)
     local kinds = ctx.kinds[scope]
     if kinds == nil then
@@ -697,7 +705,7 @@ local function parse_steps(ctx, state)
     if word == "--" then
         return { { i = i + 1, scope = state.scope, open = false } }
     end
-    local takes = option_takes_next(word, kinds_in(ctx, state.scope))
+    local takes = OptionParse.takes_next(word, kinds_in(ctx, state.scope))
     --- @type agentic.PermStructured.ParseState[]
     local states = {}
     if takes ~= "always" then
@@ -722,9 +730,32 @@ local function intersection(lists)
         :totable()
 end
 
+--- The option value an option word gives under every one of several hint
+--- sets.
+--- @param word string a dash word other than `-` and `--`
+--- @param next_word string|nil
+--- @param kinds_list table<string, agentic.OptionKind>[] non-empty
+--- @return agentic.OptionValue|nil occurrence nil when some hint set gives
+---         none or two give different ones
+local function option_value_in_every(word, next_word, kinds_list)
+    local first = OptionParse.option_value(word, next_word, kinds_list[1])
+    if first == nil then
+        return nil
+    end
+    for i = 2, #kinds_list do
+        local occurrence =
+            OptionParse.option_value(word, next_word, kinds_list[i])
+        if occurrence == nil or not vim.deep_equal(occurrence, first) then
+            return nil
+        end
+    end
+    return first
+end
+
 --- Context over every parse of a word list, with the identifiers that are
---- options in every parse. A word contributes when no parse takes it as a
---- value, every parse that reaches it has options open, and no dynamic word
+--- options in every parse and the option value each such word gives. A word
+--- contributes when no parse takes it as a value, every parse that reaches
+--- it has options open, and no dynamic word
 --- comes before it (one may expand to an option, `--`, or several words).
 --- Its identifiers are those it carries in every cluster reading, in every
 --- scope class it is reached in.
@@ -748,6 +779,7 @@ local function build_forall_ctx(words, dynamic, arity)
         kinds = {},
         sure_flags = {},
         sure_leading = {},
+        word_values = {},
     }
     --- @type agentic.PermStructured.ParseState
     local start = { i = 1, scope = "", open = true }
@@ -765,9 +797,19 @@ local function build_forall_ctx(words, dynamic, arity)
             end)
         if options_word then
             local ids = intersection(vim.tbl_map(function(s)
-                return sure_identifiers(words[i], kinds_in(ctx, s.scope))
+                return OptionParse.sure_identifiers(
+                    words[i],
+                    kinds_in(ctx, s.scope)
+                )
             end, states))
             vim.list_extend(ctx.sure_flags, ids)
+            ctx.word_values[i] = option_value_in_every(
+                words[i],
+                words[i + 1],
+                vim.tbl_map(function(s)
+                    return kinds_in(ctx, s.scope)
+                end, states)
+            )
             if
                 vim.iter(states):all(function(s)
                     return s.scope == ""
@@ -868,6 +910,109 @@ local function gate_matches_universal(gate, ctx)
     return true
 end
 
+--- True iff some gate in `gates` matches under `predicate`. A nil or empty
+--- array matches nothing.
+--- @param gates agentic.PermGate[]|nil
+--- @param predicate fun(gate: agentic.PermGate): boolean
+--- @return boolean
+local function any_gate(gates, predicate)
+    if gates == nil then
+        return false
+    end
+    for _, gate in ipairs(gates) do
+        if predicate(gate) then
+            return true
+        end
+    end
+    return false
+end
+
+--- Whether `cond` holds in every parse. Some flag word must name a listed
+--- option. Every flag word that names one, abbreviations included, must give
+--- in every parse a value to a listed option spelled in full, and each
+--- candidate value must match a glob in `cond.values`. False when the leaf
+--- has a dynamic word.
+--- @param cond agentic.PermOptionValues
+--- @param exist agentic.PermStructured.ExistCtx
+--- @param forall agentic.PermStructured.ForallCtx
+--- @return boolean
+local function option_values_must(cond, exist, forall)
+    if exist.has_dynamic then
+        return false
+    end
+    local value_patterns =
+        vim.tbl_map(PermissionRules.glob_to_lua_pattern, cond.values)
+    local function allowed(value)
+        return vim.iter(value_patterns):any(function(pattern)
+            return value:match(pattern) ~= nil
+        end)
+    end
+    local hit = false
+    for i, cands in pairs(exist.flag_cands_at) do
+        if M.match_options(cands, cond.options) then
+            local occurrence = forall.word_values[i]
+            if
+                occurrence == nil
+                or not vim.list_contains(cond.options, occurrence.id)
+                or not vim.iter(occurrence.values):all(allowed)
+            then
+                return false
+            end
+            hit = true
+        end
+    end
+    return hit
+end
+
+--- Whether `cond` may hold: some listed option may occur. Values are
+--- ignored.
+--- @param cond agentic.PermOptionValues
+--- @param exist agentic.PermStructured.ExistCtx
+--- @return boolean
+local function option_values_may(cond, exist)
+    return some_word_matches(exist.flag_cands_at, cond.options)
+        or exist.has_dynamic
+end
+
+local gate_must
+
+--- Whether `gate` holds in some parse: its plain fields match
+--- existentially, its `option_values` may hold, and no `unless` gate holds
+--- in every parse.
+--- @param gate agentic.PermGate
+--- @param exist agentic.PermStructured.ExistCtx
+--- @param get_forall fun(): agentic.PermStructured.ForallCtx
+--- @return boolean
+local function gate_may(gate, exist, get_forall)
+    return gate_matches_existential(gate, exist)
+        and (gate.option_values == nil or option_values_may(
+            gate.option_values,
+            exist
+        ))
+        and not any_gate(gate.unless, function(g)
+            return gate_must(g, exist, get_forall)
+        end)
+end
+
+--- Whether `gate` holds in every parse: its plain fields match
+--- universally, its `option_values` holds in every parse, and every
+--- `unless` gate fails in every parse.
+--- @param gate agentic.PermGate
+--- @param exist agentic.PermStructured.ExistCtx
+--- @param get_forall fun(): agentic.PermStructured.ForallCtx
+--- @return boolean
+gate_must = function(gate, exist, get_forall)
+    return gate_matches_universal(gate, get_forall())
+        and (gate.option_values == nil or option_values_must(
+            gate.option_values,
+            exist,
+            get_forall()
+        ))
+        and not any_gate(gate.unless, function(g)
+            return gate_may(g, exist, get_forall)
+        end)
+end
+
 --- The allow kinds that approve at `tier`. Deny/ask gates
 --- are unconditional and do not consult this.
 --- @param tier agentic.PermAutoApproveTier
@@ -901,29 +1046,13 @@ function M.validate_auto_approve_tier()
     Config.permissions.auto_approve_tier = nil
 end
 
---- True iff some gate in `gates` matches under `predicate`. A nil or empty
---- array matches nothing.
---- @param gates agentic.PermGate[]|nil
---- @param predicate fun(gate: agentic.PermGate): boolean
---- @return boolean
-local function any_gate(gates, predicate)
-    if gates == nil then
-        return false
-    end
-    for _, gate in ipairs(gates) do
-        if predicate(gate) then
-            return true
-        end
-    end
-    return false
-end
-
 --- Build the existential-match context from a leaf's word list and dynamic mask.
 --- @param words string[]
 --- @param dynamic boolean[]
 --- @param dashdash_value boolean `--` may be the value of the flag before it
+--- @param takers table<string, true> see `M.extract_option_candidates`
 --- @return agentic.PermStructured.ExistCtx
-local function build_exist_ctx(words, dynamic, dashdash_value)
+local function build_exist_ctx(words, dynamic, dashdash_value, takers)
     local has_dynamic = false
     for _, d in ipairs(dynamic) do
         if d then
@@ -939,13 +1068,28 @@ local function build_exist_ctx(words, dynamic, dashdash_value)
         dynamic = dynamic,
         dashdash_value = dashdash_value,
         has_dynamic = has_dynamic,
-        flag_cands = flag_candidates(words, dashdash_value),
-        leading_cands = candidates_at(words, leading_flag_idx),
+        flag_cands_at = flag_candidates_at(words, dashdash_value, takers),
+        leading_cands = candidates_at(words, leading_flag_idx, takers),
         leading_dynamic = any_dynamic(subcommand_idx, dynamic)
             or any_dynamic(leading_flag_idx, dynamic),
         subcommand_idx = subcommand_idx,
     }
     return ctx
+end
+
+--- A getter that builds the universal-match context on its first call and
+--- returns the same one after.
+--- @param words string[]
+--- @param dynamic boolean[]
+--- @param arity agentic.PermArity|nil hints of the command
+--- @return fun(): agentic.PermStructured.ForallCtx
+local function forall_getter(words, dynamic, arity)
+    --- @type agentic.PermStructured.ForallCtx|nil
+    local ctx
+    return function()
+        ctx = ctx or build_forall_ctx(words, dynamic, arity)
+        return ctx
+    end
 end
 
 --- The entries at `keys`, in order, skipping absent or `vim.NIL` values. Built
@@ -1010,8 +1154,11 @@ end
 function M.decide_leaf(entries, parsed, tier)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
-    local ctx = build_exist_ctx(words, dynamic, true)
+    local arity = arity_of(entries, parsed.cmd_name)
+    local ctx =
+        build_exist_ctx(words, dynamic, true, every_scope_takers(arity))
     local relevant = relevant_entries(entries, parsed.cmd_name)
+    local get_forall = forall_getter(words, dynamic, arity)
 
     local function exist(gate)
         return gate_matches_existential(gate, ctx)
@@ -1021,16 +1168,17 @@ function M.decide_leaf(entries, parsed, tier)
             return "deny"
         end
     end
+    local function may(gate)
+        return gate_may(gate, ctx, get_forall)
+    end
     for _, e in ipairs(relevant) do
-        if any_gate(e.ask, exist) then
+        if any_gate(e.ask, may) then
             return "ask"
         end
     end
 
-    local forall =
-        build_forall_ctx(words, dynamic, arity_of(entries, parsed.cmd_name))
     local function allow(gate)
-        return gate_matches_universal(gate, forall)
+        return gate_must(gate, ctx, get_forall)
     end
     local kinds = eligible_allow_kinds(tier)
     for _, e in ipairs(allow_entries(entries, parsed.cmd_name)) do
@@ -1063,16 +1211,20 @@ end
 function M.classify_leaf(entries, parsed)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
-    local ctx = build_exist_ctx(words, dynamic, true)
-    local forall =
-        build_forall_ctx(words, dynamic, arity_of(entries, parsed.cmd_name))
+    local arity = arity_of(entries, parsed.cmd_name)
+    local ctx =
+        build_exist_ctx(words, dynamic, true, every_scope_takers(arity))
+    local get_forall = forall_getter(words, dynamic, arity)
     local relevant = relevant_entries(entries, parsed.cmd_name)
 
     local function exist(gate)
         return gate_matches_existential(gate, ctx)
     end
+    local function may(gate)
+        return gate_may(gate, ctx, get_forall)
+    end
     local function allow(gate)
-        return gate_matches_universal(gate, forall)
+        return gate_must(gate, ctx, get_forall)
     end
 
     --- @type agentic.PermClassification
@@ -1082,7 +1234,7 @@ function M.classify_leaf(entries, parsed)
         if any_gate(e.deny, exist) then
             result.deny = true
         end
-        if any_gate(e.ask, exist) then
+        if any_gate(e.ask, may) then
             result.ask = true
         end
     end
@@ -1111,7 +1263,12 @@ end
 --- @param parsed agentic.ParsedLeaf
 --- @return boolean
 function M.deny_leaf(entries, parsed)
-    local ctx = build_exist_ctx(parsed.args, {}, false)
+    local ctx = build_exist_ctx(
+        parsed.args,
+        {},
+        false,
+        every_scope_takers(arity_of(entries, parsed.cmd_name))
+    )
     local relevant = relevant_entries(entries, parsed.cmd_name)
     local function exist(gate)
         return gate_matches_existential(gate, ctx)

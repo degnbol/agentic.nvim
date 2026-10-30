@@ -841,6 +841,10 @@ option (`o`, also inside a cluster `-uo`) or a name for a long option
 An option of unknown arity may or may not take the next word as its
 value, and a `read_only` or `safe_write` gate must match in every
 combination of these readings.
+A gate also takes `unless`, a list of gates, and `option_values = {
+options = {...}, values = {...} }`: a listed option occurs and every value
+of a listed option matches a glob in `values` (`*` also matches `/`).
+`deny` gates take neither.
 A command's optional `arity` field lists, per scope, the literal option
 tokens that take a value (`takers`) and that take none (`booleans`).
 A token is a letter (`-x`, also inside a cluster) or a long name
