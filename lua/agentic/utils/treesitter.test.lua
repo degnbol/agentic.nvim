@@ -206,4 +206,137 @@ describe("Treesitter", function()
             )
         end)
     end)
+
+    describe("conceal_ranges", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        --- Start the markdown highlighter on the buffer and parse it whole.
+        local function highlight()
+            vim.treesitter.start(bufnr, "markdown")
+            vim.treesitter.get_parser(bufnr):parse(true)
+        end
+
+        --- Conceal ranges of the buffer's highlighter on rows srow..erow-1.
+        --- @param srow integer
+        --- @param erow integer exclusive
+        --- @return agentic.utils.Conceal.Range[]
+        local function conceal(srow, erow)
+            return Treesitter.conceal_ranges(
+                bufnr,
+                Treesitter.highlight_trees(bufnr, srow, erow),
+                srow,
+                erow
+            )
+        end
+
+        --- @param ranges agentic.utils.Conceal.Range[]
+        --- @return integer[][] positions row, col and end_col of each range
+        local function positions(ranges)
+            return vim.tbl_map(function(range)
+                return { range.row, range.col, range.end_col }
+            end, ranges)
+        end
+
+        it(
+            "returns link conceals in table cells and blockquotes in buffer columns",
+            function()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                    "| a | b |",
+                    "| - | - |",
+                    "| [x](u) | y |",
+                    "",
+                    "> see [lab",
+                    "> el](url) end",
+                })
+                highlight()
+
+                assert.same({
+                    { 2, 2, 3 },
+                    { 2, 4, 5 },
+                    { 2, 5, 6 },
+                    { 2, 6, 7 },
+                    { 2, 7, 8 },
+                    { 4, 6, 7 },
+                    { 5, 4, 5 },
+                    { 5, 5, 6 },
+                    { 5, 6, 9 },
+                    { 5, 9, 10 },
+                }, positions(conceal(0, 6)))
+            end
+        )
+
+        it("returns only ranges on the requested rows", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                "[a](b)",
+                "[c](d)",
+            })
+            highlight()
+
+            local ranges = conceal(1, 2)
+            local rows = vim.tbl_map(function(range)
+                return range.row
+            end, ranges)
+            assert.same({ 1, 1, 1, 1, 1 }, rows)
+            assert.same({
+                row = 1,
+                col = 0,
+                end_col = 1,
+                text = "",
+                priority = vim.hl.priorities.treesitter,
+                starts_on_row = true,
+            }, ranges[1])
+        end)
+
+        it("returns only ranges of the given trees", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "[a](b)" })
+            highlight()
+            assert.same({}, Treesitter.conceal_ranges(bufnr, {}, 0, 1))
+        end)
+    end)
+
+    describe("highlight_trees", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                "[a](b)",
+                "",
+                "text",
+            })
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("returns the root tree and injected trees on the rows", function()
+            vim.treesitter.start(bufnr, "markdown")
+            vim.treesitter.get_parser(bufnr):parse(true)
+            local trees = Treesitter.highlight_trees(bufnr, 0, 1)
+            assert.same(
+                { 0, 0 },
+                vim.tbl_map(function(tree)
+                    return tree.start_row
+                end, trees)
+            )
+        end)
+
+        it("returns nothing for a buffer without a highlighter", function()
+            assert.same({}, Treesitter.highlight_trees(bufnr, 0, 1))
+        end)
+
+        it("returns nothing when only a parser exists", function()
+            vim.treesitter.get_parser(bufnr, "markdown"):parse(true)
+            assert.same({}, Treesitter.highlight_trees(bufnr, 0, 1))
+        end)
+    end)
 end)

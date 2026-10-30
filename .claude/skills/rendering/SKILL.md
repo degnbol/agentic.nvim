@@ -25,6 +25,9 @@ Two consequences worth carrying in your head:
   treesitter clears `vim.bo.syntax` and the chat buffer has to render correctly
   with or without a user re-enable. Highlight group names are in
   `lua/agentic/theme.lua` (`Theme.HL_GROUPS`).
+- Horizontal scroll moves every row by displayed columns, not raw ones, via
+  the `agentic.ui.edge_conceal` decoration provider (rationale in its module
+  docstring).
 
 ## Heading levels
 

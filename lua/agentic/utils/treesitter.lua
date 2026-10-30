@@ -1,5 +1,5 @@
---- Treesitter helpers: the language of a file, and syntactic context for a
---- snippet of one.
+--- Treesitter helpers: the language of a file, syntactic context for a
+--- snippet of one, and the conceal the highlighter draws in a buffer.
 ---
 --- `highlight_map_in_context` parses a snippet "as if" it were spliced into
 --- a real file, so captures that depend on structural context (strings,
@@ -10,6 +10,7 @@
 --- @class agentic.utils.Treesitter
 local M = {}
 
+local Conceal = require("agentic.utils.conceal")
 local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 
 --- Treesitter language of a file, detected from its name, else from
@@ -132,6 +133,122 @@ function M.highlight_map_in_context(
     end)
 
     return map
+end
+
+--- Intersection of two ranges, nil when they do not overlap.
+--- @param a Range4 0-based, end exclusive
+--- @param b Range4
+--- @return Range4|nil
+local function intersect(a, b)
+    local function before(row_a, col_a, row_b, col_b)
+        return row_a < row_b or (row_a == row_b and col_a < col_b)
+    end
+    local start = before(a[1], a[2], b[1], b[2]) and b or a
+    local stop = before(a[3], a[4], b[3], b[4]) and a or b
+    if not before(start[1], start[2], stop[3], stop[4]) then
+        return nil
+    end
+    return { start[1], start[2], stop[3], stop[4] }
+end
+
+--- @class agentic.utils.Treesitter.HighlightTree
+--- @field root TSNode
+--- @field query vim.treesitter.Query highlights query of the tree's language
+--- @field regions Range4[] the tree's included ranges
+--- @field start_row integer 0-based
+--- @field end_row integer 0-based, inclusive
+
+--- Trees the active treesitter highlighter of `bufnr` draws on rows
+--- srow..erow-1, in its drawing order, each with its highlights query.
+--- Returns {} when no highlighter is active on the buffer.
+--- @param bufnr integer
+--- @param srow integer
+--- @param erow integer exclusive
+--- @return agentic.utils.Treesitter.HighlightTree[]
+function M.highlight_trees(bufnr, srow, erow)
+    local highlighter = vim.treesitter.highlighter.active[bufnr]
+    --- @type agentic.utils.Treesitter.HighlightTree[]
+    local trees = {}
+    if not highlighter then
+        return trees
+    end
+    highlighter.tree:for_each_tree(function(tstree, ltree)
+        local root = tstree:root()
+        local start_row, _, end_row = root:range()
+        local query = vim.treesitter.query.get(ltree:lang(), "highlights")
+        if query and start_row < erow and end_row >= srow then
+            trees[#trees + 1] = {
+                root = root,
+                query = query,
+                regions = tstree:included_ranges(false),
+                start_row = start_row,
+                end_row = end_row,
+            }
+        end
+    end)
+    return trees
+end
+
+--- Conceal ranges one tree draws on rows srow..erow-1, in capture order.
+--- @param bufnr integer
+--- @param tree agentic.utils.Treesitter.HighlightTree
+--- @param srow integer
+--- @param erow integer exclusive
+--- @return agentic.utils.Conceal.Range[]
+local function tree_conceal_ranges(bufnr, tree, srow, erow)
+    --- @type agentic.utils.Conceal.Range[]
+    local ranges = {}
+    for capture, node, metadata in
+        tree.query:iter_captures(tree.root, bufnr, srow, erow)
+    do
+        local capture_meta = metadata[capture] or {}
+        local conceal = metadata.conceal or capture_meta.conceal
+        if conceal then
+            local priority = tonumber(
+                metadata.priority or capture_meta.priority
+            ) or vim.hl.priorities.treesitter
+            local r = vim.treesitter.get_range(node, bufnr, capture_meta)
+            local node_range = { r[1], r[2], r[4], r[5] }
+            for _, region in ipairs(tree.regions) do
+                local clipped = intersect(region, node_range)
+                if clipped then
+                    vim.list_extend(
+                        ranges,
+                        Conceal.split_rows(
+                            clipped,
+                            conceal,
+                            priority,
+                            srow,
+                            erow
+                        )
+                    )
+                end
+            end
+        end
+    end
+    return ranges
+end
+
+--- Conceal ranges `trees` draw on rows srow..erow-1, in the highlighter's
+--- drawing order: tree by tree, captures in query order. Mirrors
+--- `on_range_impl` in $VIMRUNTIME/lua/vim/treesitter/highlighter.lua.
+--- @param bufnr integer
+--- @param trees agentic.utils.Treesitter.HighlightTree[] from `highlight_trees`
+--- @param srow integer
+--- @param erow integer exclusive
+--- @return agentic.utils.Conceal.Range[]
+function M.conceal_ranges(bufnr, trees, srow, erow)
+    --- @type agentic.utils.Conceal.Range[]
+    local ranges = {}
+    for _, tree in ipairs(trees) do
+        if tree.start_row < erow and tree.end_row >= srow then
+            vim.list_extend(
+                ranges,
+                tree_conceal_ranges(bufnr, tree, srow, erow)
+            )
+        end
+    end
+    return ranges
 end
 
 return M

@@ -1,10 +1,11 @@
 local AgentInstance = require("agentic.acp.agent_instance")
 local Config = require("agentic.config")
+local EdgeConceal = require("agentic.ui.edge_conceal")
 local SessionRegistry = require("agentic.session_registry")
 local Logger = require("agentic.utils.logger")
 
---- Process-wide initialization: treesitter languages, global autocmds,
---- image paste, signal handlers.
+--- Process-wide initialization: treesitter languages, the edge conceal
+--- decoration provider, global autocmds, image paste, signal handlers.
 --- @class agentic.Bootstrap
 local Bootstrap = {}
 
@@ -155,6 +156,7 @@ function Bootstrap.ensure()
     done = true
 
     register_languages()
+    EdgeConceal.register()
     create_global_autocmds()
     if Config.image_paste.enabled then
         wrap_paste()
