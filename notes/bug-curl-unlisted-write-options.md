@@ -10,6 +10,9 @@ These options also write a file and are not in the list (from
 - `--stderr <file>`
 - `--hsts <filename>`, `--alt-svc <filename>` — cache files
 
+`-w`/`--write-out` also writes a file through its `%output{path}` variable
+(`curl -w '%output{/tmp/x}hi' https://x` creates `/tmp/x`, curl 8.7.1).
+
 So `curl -c out https://x` classifies `read_only` in the structured layer.
 In compound commands, the settings.json `Bash(curl *)` allow then approves
 it.
