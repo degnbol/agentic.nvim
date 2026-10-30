@@ -532,7 +532,7 @@ Each window is a table:
 
                                                 *agentic.budget.statusline()*
 budget.statusline({opts})
-    Statusline text for a `%{%...%}` item: `<label> <gauge>` per window. A
+    Text in 'statusline' format: `<label> <gauge>` per window. A
     window that warns or is exhausted is coloured `AgenticBudgetWarning` or
     `AgenticBudgetExhausted` (|agentic-highlights|). A window past
     `resets_at` shows as empty.
@@ -553,7 +553,7 @@ budget.resets_in({window}, {now})
     Seconds from {now} until {window} refills, 0 once `resets_at` has passed.
 
 Example: >lua
-    vim.o.statusline = "%=%{%v:lua.require'agentic.budget'.statusline()%}"
+    vim.o.statusline = "%!'%='..v:lua.require'agentic.budget'.statusline()"
     vim.api.nvim_create_autocmd("User", {
         pattern = "AgenticBudgetChanged",
         command = "redrawstatus",

@@ -53,10 +53,10 @@ end
 --- @field reset? boolean Add the time to reset after each gauge, e.g. "1h05m"
 --- @field now? integer Epoch seconds, default `os.time()`
 
---- Statusline text: `<label> <gauge>` per window, joined by a space, each
---- wrapped in `%#AgenticBudgetWarning#`/`%#AgenticBudgetExhausted#` when not
---- ok. A window whose `resets_at` has passed shows as empty. "" without a
---- budget. For a `%{%…%}` statusline item.
+--- Text in 'statusline' format: `<label> <gauge>` per window, joined by a
+--- space, each wrapped in `%#AgenticBudgetWarning#`/`%#AgenticBudgetExhausted#`
+--- when not ok. A window whose `resets_at` has passed shows as empty. "" without
+--- a budget.
 --- @param opts agentic.Budget.StatuslineOpts|nil
 --- @return string
 function Budget.statusline(opts)
