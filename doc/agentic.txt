@@ -804,12 +804,12 @@ Every Bash command is parsed with the `zsh` treesitter grammar
 (|agentic-requirements-parsers|) and its leaf commands are matched one by
 one, so `cd /path && git status` matches a `git` rule on its `git` leaf.
 
-The walk rejects by default: a missing parser, a parse error, command or
-process substitution (`$(...)`, backticks, `<(...)`), control flow (loops,
-conditionals, subshells, functions), a file-writing redirect outside a grant
+Leaves inside command and process substitution (`$(...)`, backticks,
+`<(...)`), loops, conditionals, subshells and functions are matched too.
+A missing parser, a parse error, a file-writing redirect outside a grant
 (|agentic-permissions-grant|; `/dev/null` and fd duplication such as `2>&1`
-are not file-writing), a dynamic command name, or
-a code-taking builtin (`eval`, `source`, `.`) all fall through to a prompt.
+are not file-writing), a dynamic command name, or a code-taking builtin
+(`eval`, `source`, `.`) prompts.
 
 Each remaining leaf is stripped of a `stdbuf` wrapper and a system
 binary-dir prefix, then checked against two layers:
