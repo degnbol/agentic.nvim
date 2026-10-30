@@ -399,15 +399,14 @@ local function default_head(call)
 end
 
 --- Fold state of an execute block's one fold over its command and output
---- rows: nil when they total one row (no fold forms), closed when the call
---- did not fail and its command is read-only, or when the output passes
---- `execute_max_lines` (0 = never by length), else open.
+--- rows: nil without output rows, so a command alone is never hidden;
+--- closed when the call did not fail and its command is read-only, or when
+--- the output passes `execute_max_lines` (0 = never by length); else open.
 --- @param call agentic.ui.ToolCallLayout.Call
---- @param cmd_rows string[]
 --- @return agentic.ui.FoldState|nil
-local function execute_fold_state(call, cmd_rows)
+local function execute_fold_state(call)
     local output = call.failure or call.block.body or {}
-    if #cmd_rows + #output <= 1 then
+    if #output == 0 then
         return nil
     end
     local max_lines = Config.tool_call_display.execute_max_lines
@@ -453,12 +452,11 @@ local HEADS = {
             -- The shell label is cosmetic: the zsh parser is aliased to
             -- "bash", so highlighting is identical either way and the label
             -- only shows at conceallevel=0. "bash" keeps it from going blank
-            -- on an unknown shell. The fold spans the command and the output
-            -- fence after it (folds.scm).
+            -- on an unknown shell.
             {
                 rows = cmd_rows,
                 lang = shell_fence_lang(call.argument, block.shell or "bash"),
-                fold = execute_fold_state(call, cmd_rows),
+                fold = execute_fold_state(call),
             },
         }
     end,

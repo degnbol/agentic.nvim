@@ -1254,9 +1254,11 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.equal("```zsh", layout.lines[2])
         end)
 
-        it("folds a two-row command with no output", function()
-            local layout = build("git add a\ngit commit -m x", nil)
-            assert.same({ anchor = 2, state = "open" }, layout.fold)
+        it("forms no fold over a command without output", function()
+            assert.is_nil(build("rg foo\nrg bar", nil).fold)
+            local layout = build("rg foo\nrg bar", {})
+            assert.is_nil(layout.fold)
+            assert.equal("```zsh", layout.lines[2])
         end)
     end)
 
@@ -1940,7 +1942,7 @@ describe("agentic.ui.ToolCallLayout", function()
             local lines = Layout.build(block, 80).lines
 
             assert.equal("###", lines[1])
-            assert.equal("```bash-fold", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
             assert.equal("done", lines[5])
@@ -2061,7 +2063,7 @@ describe("agentic.ui.ToolCallLayout", function()
             local lines = Layout.build(block, 80).lines
 
             assert.equal("###", lines[1])
-            assert.equal("```bash-fold", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal("cd /some/very/long/project/path &&", lines[3])
             assert.equal("npm install --save-dev typescript &&", lines[4])
             assert.equal("npm run build &&", lines[5])
@@ -2094,7 +2096,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             local lines = Layout.build(block, 80).lines
 
-            assert.equal("```bash-fold", lines[2])
+            assert.equal("```bash", lines[2])
             assert.equal([[echo "this && that || other" &&]], lines[3])
             assert.equal([[echo 'pipes | here ; too' &&]], lines[4])
             assert.equal("echo done with a very long command line", lines[5])

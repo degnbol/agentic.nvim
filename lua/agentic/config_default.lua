@@ -469,7 +469,7 @@ local ConfigDefault = {
     --- auto-closed (use zo/za/zc to toggle). Set to 0 to disable folding.
     --- @class agentic.UserConfig.ToolCallDisplay
     --- @field search_max_lines integer
-    --- @field execute_max_lines integer Close an execute block's command and output fold past this many output lines; 0 never closes by length. A read-only command (`:h agentic-permissions-shell`) closes at any length.
+    --- @field execute_max_lines integer Close an execute block's command and output fold past this many output lines; 0 never closes by length. A read-only command (`:h agentic-permissions-shell`) that did not fail closes at any length.
     --- @field other_max_lines integer Fold generic/MCP/meta tool-result bodies (non-execute) exceeding this many lines. Set to 0 to disable folding for these.
     --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.

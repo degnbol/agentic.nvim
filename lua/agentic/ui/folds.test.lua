@@ -180,6 +180,26 @@ describe("agentic.ui.folds", function()
             assert.same({ "0", ">1", "1", "0", "0" }, levels)
         end)
 
+        it("does not join a `console` fence after a blank line", function()
+            local levels, joined = levels_of({
+                "```markdown-fold",
+                "thought 1",
+                "thought 2",
+                "```",
+                "",
+                "```console",
+                "out 1",
+                "out 2",
+                "```",
+            })
+
+            assert.same(
+                { "0", ">1", "1", "0", "0", "0", "0", "0", "0" },
+                levels
+            )
+            assert.same({}, joined)
+        end)
+
         it("does not join a `-difffold` fence to a `console` fence", function()
             local levels, joined = levels_of({
                 "```lua-difffold",

@@ -61,7 +61,7 @@ Only levels 2 and 3 are dimmed by the chat window's `winhighlight`
 │  ```<lang>              ← optional command fence (execute/search)
 │  <command lines>
 │  ```
-│  ```<lang>[-fold]       ← optional body fence
+│  ```<lang>              ← optional body fence
 │  <body lines>
 │  ```
 ╰─  ✔ completed · grant   ← footer (sign + status text + decider note — NS_STATUS)
@@ -116,22 +116,16 @@ the fence is set per kind:
 
 | Site | Info string | Notes |
 | --- | --- | --- |
-| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback; `<shell>-fold` when command and output total more than one row | Cosmetic; zsh parser is aliased to `bash`, identical highlighting. The fold runs through the `console` output fence (`execute_fold_state`) |
+| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback; `<shell>-fold` once output arrives | The shell label is cosmetic (zsh is aliased to `bash`). The fold runs through the `console` output fence (`execute_fold_state`) |
 | Search command (argument fence) | `bash` | |
-| Execute body | `console` | Folded with the command fence above it. A failure reason takes the body's place. A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
+| Execute body | `console` | Folded with the command fence above it. A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
-| Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
+| Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
 | Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block: `open`, or `closed` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
 | Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
 
-**A `fold$`-suffixed info-string is the fold signal.** Two variants:
-`<lang>-fold` (sidecar bodies past their per-kind threshold, plus thought runs
-and hook blocks — see `_write_collapsed_region`) and `<lang>-difffold` (every
-edit diff). A second word may follow the language (`markdown-fold guard.sh`):
-`(info_string (language))` is the first word alone, so both queries ignore it
-and the foldtext reads it as the body's name.
-`folds.scm` matches `fold$` on the language. `injections.scm` strips a trailing
+`injections.scm` strips a trailing
 `-fold` before resolving the injected parser (so sidecar markdown still
 highlights) but **excludes `difffold$` from injection entirely** — a diff's
 syntax colour comes from `block_col_hl` extmarks (`highlight_map_in_context`),
@@ -144,13 +138,19 @@ would only buy a second parse of the same text.
 
 ## Body folding
 
-A `fold$`-suffixed info-string on `code_fence_content`'s parent fence is the
-only fold trigger — and, because levels come from the root tree alone, the
-chat buffer's only fold source at all. Mechanism is split across four files;
-read them in this order when changing fold behaviour:
+A `fold$`-suffixed fence language is the only fold trigger — and, because
+levels come from the root tree alone, the chat buffer's only fold source at
+all. Two variants: `<lang>-fold` (sidecar bodies past their threshold, thought
+runs and hook blocks via `_write_collapsed_region`, the execute command fence)
+and `<lang>-difffold` (every edit diff). A `-fold` fence directly followed by a
+`console` fence folds through that fence's content too (execute command and
+output). A second word after the language (`markdown-fold guard.sh`) is
+ignored by the queries and read by the foldtext as the body's name. Mechanism
+is split across four files; read them in this order when changing fold
+behaviour:
 
 1. `queries/agentic/folds.scm` — folds `code_fence_content`, not the whole
-   `fenced_code_block` (the file's top comment explains why).
+   `fenced_code_block` (the file's top comment explains why and both patterns).
 2. `lua/agentic/ui/folds.lua` — the foldexpr: root-tree-only levels, cached
    per `b:changedtick`. Its module docstring is the record of why core's
    `vim.treesitter.foldexpr()` cannot be used here.
@@ -162,7 +162,7 @@ read them in this order when changing fold behaviour:
    deferred and how anchor extmarks survive edits and chat-window hides.
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
-word when it has one, plus a character count where the writer marks the
+word, or for a joined fold by its first row, plus a character count where the writer marks the
 fence row in `Folds.NS_CHAR_COUNT`.
 
 Adding a new foldable kind:
@@ -171,9 +171,8 @@ Adding a new foldable kind:
    `BODIES` builder when the body exceeds it; `assemble` adds `-fold` and
    the anchor.
 2. No changes needed to `folds.scm`, `injections.scm` or `folds.lua` — they
-   match the `fold$` suffix generically (use `<lang>-fold` to fold *and* inject
-   the base language; the `difffold` marker is the special case that suppresses
-   injection).
+   match the `fold$` suffix generically. A `-fold` section directly before a
+   `console` section joins its fold.
 
 ## Wrapped tables
 

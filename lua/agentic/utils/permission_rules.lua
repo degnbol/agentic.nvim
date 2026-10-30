@@ -2925,8 +2925,8 @@ end
 --- Whether a command only reads: every leaf passes a structured `read_only`
 --- gate, no structured deny or ask gate matches, and it has no file-mutating
 --- effect. Settings.json rules, remembered leaves and `auto_approve_tier` do
---- not count. A command that runs or sources a script is not read-only, so
---- no file is read but the structured rules. For display, never for
+--- not count. A command that runs or sources a script is not read-only, and
+--- the script is not read. For display, never for
 --- approval. Memoised per command while the structured rules are unchanged.
 --- @param command string
 --- @return boolean

@@ -3080,7 +3080,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- Header should be present
                 assert.equal("###", lines_after_write[1])
                 -- Code fence and split command
-                assert.equal("```bash-fold", lines_after_write[2])
+                assert.equal("```bash", lines_after_write[2])
                 assert.equal(
                     "cd /some/very/long/project/path &&",
                     lines_after_write[3]
@@ -3212,7 +3212,7 @@ describe("agentic.ui.MessageWriter", function()
                 writer:write_tool_call_block(block)
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                assert.equal("```bash-fold", lines[2])
+                assert.equal("```bash", lines[2])
                 assert.equal("cd /some/very/long/project/path &&", lines[3])
             end
         )
@@ -3258,7 +3258,7 @@ describe("agentic.ui.MessageWriter", function()
                 if line == "###" then
                     found_header = true
                 end
-                if line == "```bash-fold" then
+                if line == "```bash" then
                     found_fence = true
                 end
                 if line:find("for colour") then
@@ -3266,7 +3266,7 @@ describe("agentic.ui.MessageWriter", function()
                 end
             end
             assert.is_true(found_header, "Execute header missing")
-            assert.is_true(found_fence, "```bash-fold fence missing")
+            assert.is_true(found_fence, "```bash fence missing")
             assert.is_true(found_command, "Command missing")
 
             -- Block should still be tracked
@@ -3315,12 +3315,12 @@ describe("agentic.ui.MessageWriter", function()
                     if line == "###" then
                         found_header = true
                     end
-                    if line == "```bash-fold" then
+                    if line == "```bash" then
                         found_fence = true
                     end
                 end
                 assert.is_true(found_header, "Execute header missing")
-                assert.is_true(found_fence, "```bash-fold fence missing")
+                assert.is_true(found_fence, "```bash fence missing")
 
                 -- Decorations should survive
                 local NS_DECORATIONS =

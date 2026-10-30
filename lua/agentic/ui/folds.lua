@@ -22,8 +22,8 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- `parser:for_each_tree` instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
---- writer-marked `*-fold` / `-difffold` body, joined with a `console` body
---- right after it, and the writer always appends a body with both its fences
+--- writer-marked `*-fold` / `-difffold` body (a `*-fold` body runs on
+--- through a `console` body right after it), and the writer always appends a body with both its fences
 --- in a single `nvim_buf_set_lines`, so such a fold is never transiently
 --- unterminated. Levels are recomputed for the whole buffer whenever
 --- `b:changedtick` moves, the caching strategy `:help fold-expr-slow`
@@ -43,10 +43,20 @@ local M = {}
 --- @type table<integer, agentic.ui.Folds.Levels>
 local cache = {}
 
+--- 1-indexed last row a node covers.
+--- @param range Range6
+--- @return integer
+local function last_row(range)
+    -- An end column of 0 means the node stops before the first byte of that
+    -- row, so the row is not part of it.
+    return range[5] == 0 and range[4] or range[4] + 1
+end
+
 --- Foldexpr value for every line of a buffer, from its `folds` query over the
 --- root tree only — injected languages contribute nothing. A match folds
 --- from the start of its `@fold` capture to the end of its `@fold.end`
---- capture, or of `@fold` when it has none.
+--- capture when that fence opens on the row after `@fold`'s fence closes,
+--- else to the end of `@fold`.
 --- @param bufnr integer
 --- @return string[] levels `">1"` on a fold's first line, `"1"` on its remaining lines, `"0"` outside any fold; indexed by 1-indexed line number
 --- @return table<integer, true> joined 1-indexed first line of each fold that ends at a `@fold.end` capture
@@ -69,18 +79,22 @@ function M.levels(bufnr)
 
     for _, tree in pairs(parser:parse() or {}) do
         for _, match, metadata in query:iter_matches(tree:root(), bufnr, 0, -1) do
-            --- @type table<string, Range6>
+            --- @type table<string, Range6|nil>
             local ranges = {}
             for id, nodes in pairs(match) do
                 ranges[query.captures[id]] =
                     vim.treesitter.get_range(nodes[1], bufnr, metadata[id])
             end
-            local start, stop = ranges.fold, ranges["fold.end"] or ranges.fold
+            local start, tail = ranges.fold, ranges["fold.end"]
+            -- The `.` anchor skips blank lines, which form no node, so a
+            -- second fence joins only when it opens on the row right after
+            -- the first one closes.
             if start then
+                if tail and tail[1] ~= last_row(start) + 2 then
+                    tail = nil
+                end
                 local first = start[1] + 1
-                -- An end column of 0 means the node stops before the first
-                -- byte of that row, so the row is not part of the fold.
-                local last = stop[5] == 0 and stop[4] or stop[4] + 1
+                local last = last_row(tail or start)
                 -- Vim cannot close a one-line fold at 'foldminlines' = 1,
                 -- which `chat_win_opts` pins for exactly this reason.
                 -- Every fold is level 1: a joined match's range contains
@@ -91,7 +105,7 @@ function M.levels(bufnr)
                     for lnum = first + 1, last do
                         levels[lnum] = "1"
                     end
-                    if ranges["fold.end"] then
+                    if tail then
                         joined[first] = true
                     end
                 end
