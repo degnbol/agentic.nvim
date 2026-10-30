@@ -191,6 +191,7 @@
       { "positionals": ["stash", "clear"] },
       { "positionals": ["checkout"] },
       { "positionals": ["reset"] },
+      { "positionals": ["push"] },
       { "positionals": ["commit"] },
       { "leading_options": ["c", "config-env"] }
     ],
