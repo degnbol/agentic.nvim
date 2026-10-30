@@ -1,3 +1,4 @@
+local Duration = require("agentic.utils.duration")
 local Glyphs = require("agentic.glyphs")
 local Theme = require("agentic.theme")
 
@@ -47,17 +48,6 @@ function Budget.gauge(utilization)
     return Glyphs.GAUGE[1 + math.min(math.max(math.ceil(utilization * 8), 0), 8)]
 end
 
---- A duration as hours and minutes, e.g. "1h05m", or minutes alone under an hour.
---- @param seconds integer
---- @return string
-local function hours_minutes(seconds)
-    local mins = math.floor(seconds / 60)
-    if mins < 60 then
-        return string.format("%dm", mins)
-    end
-    return string.format("%dh%02dm", math.floor(mins / 60), mins % 60)
-end
-
 --- @class agentic.Budget.StatuslineOpts
 --- @field pace? boolean Colour a window as warning when its pace is above 1
 --- @field reset? boolean Add the time to reset after each gauge, e.g. "1h05m"
@@ -82,7 +72,7 @@ function Budget.statusline(opts)
             .. " "
             .. Budget.gauge(refilled and 0 or window.utilization)
         if opts.reset then
-            item = item .. " " .. hours_minutes(resets_in)
+            item = item .. " " .. Duration.format(resets_in)
         end
         local state = refilled and "ok" or window.state
         if

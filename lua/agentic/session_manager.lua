@@ -4690,7 +4690,4 @@ function SessionManager:restart_session()
     self:restore_from_history(saved_history)
 end
 
---- Static reference kept for the test suite (see session_manager.test.lua).
-SessionManager._format_duration = Recovery.format_duration
-
 return SessionManager

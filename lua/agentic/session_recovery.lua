@@ -17,6 +17,7 @@
 local ACPClient = require("agentic.acp.acp_client")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
+local Duration = require("agentic.utils.duration")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 
@@ -449,20 +450,6 @@ function M.respawn_preserving_history(sm, on_created)
     end)
 end
 
---- Format seconds into a human-readable duration (e.g. "2h 15m", "45m", "30s").
---- @param seconds number
---- @return string
-function M.format_duration(seconds)
-    local h = math.floor(seconds / 3600)
-    local m = math.floor((seconds % 3600) / 60)
-    if h > 0 then
-        return string.format("%dh %dm", h, m)
-    elseif m > 0 then
-        return string.format("%dm", m)
-    end
-    return string.format("%ds", seconds)
-end
-
 --- Schedule auto-continue after a usage limit error.
 --- On the first attempt, waits until `reset_epoch + 2 min`. On subsequent
 --- attempts (provider's reset time was inaccurate), retries with a fixed
@@ -503,7 +490,7 @@ function M.offer_auto_continue(sm, reset_epoch)
 
     sm._retry_attempt = sm._retry_attempt + 1
 
-    local duration = M.format_duration(delay_s)
+    local duration = Duration.format(delay_s)
     local attempt_suffix = sm._retry_attempt > 1
             and string.format(
                 " (attempt %d/%d)",
