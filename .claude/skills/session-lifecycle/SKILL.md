@@ -121,7 +121,9 @@ the buffer.
 `vim.b[buf].agentic_header` (`ChatWidget.HeaderParts`) is the single source
 of truth. Its `running`/`waiting`/`idle` facts are independent;
 `WindowDecoration.header_state` picks the one shown. `vim.b[buf].agentic_window` names
-the buffer's panel.
+the buffer's panel. `WindowDecoration.header_chunks` is the one layout of the
+parts: the default winbar concatenates it, and outside readers use it rather than
+rebuild the order.
 
 **Do not rely on buffer names for UI display.** `nvim_buf_set_name` fires no
 event floating-window plugins respond to. Names are `agentic://<id>/<panel>`;

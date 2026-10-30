@@ -4,6 +4,7 @@
 local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
+local Theme = require("agentic.theme")
 
 --- @class agentic.ui.WindowDecoration
 local WindowDecoration = {}
@@ -38,27 +39,45 @@ function WindowDecoration.header_state(parts)
     return nil
 end
 
---- Header text: `<icon> <title> <state glyph> · <context>`, each part only
---- when set.
+--- @type table<agentic.ui.HeaderState, string|nil>
+local STATE_HL = {
+    permission = Theme.HL_GROUPS.HEADER_ATTENTION,
+    idle = Theme.HL_GROUPS.HEADER_ATTENTION,
+}
+
+--- @alias agentic.ui.HeaderChunk { [1]: string, [2]: string|nil } Text and highlight group
+
+--- The header laid out as chunks: `<icon> <title> <state glyph> · <context>`.
+--- An unset or empty part has no chunk. Each chunk after the first starts
+--- with its separator (" ", or " · " for the context). Only a state glyph
+--- that asks for the user has a highlight group.
+--- @param parts agentic.ui.ChatWidget.HeaderParts
+--- @return agentic.ui.HeaderChunk[] chunks
+function WindowDecoration.header_chunks(parts)
+    --- @type agentic.ui.HeaderChunk[]
+    local chunks = {}
+    local function add(text, separator, hl_group)
+        if text and text ~= "" then
+            local prefix = #chunks > 0 and separator or ""
+            table.insert(chunks, { prefix .. text, hl_group })
+        end
+    end
+    local state = WindowDecoration.header_state(parts)
+    add(parts.icon, " ")
+    add(parts.title, " ")
+    add(Glyphs.HEADER_STATE[state], " ", STATE_HL[state])
+    add(parts.context, " · ")
+    return chunks
+end
+
+--- Header text: the concatenated `header_chunks`.
 --- @param parts agentic.ui.ChatWidget.HeaderParts
 --- @return string header_text
 local function concat_header_parts(parts)
-    local state = WindowDecoration.header_state(parts)
-    local pieces = {}
-    for _, piece in ipairs({
-        parts.icon or "",
-        parts.title,
-        state and Glyphs.HEADER_STATE[state] or "",
-    }) do
-        if piece ~= "" then
-            table.insert(pieces, piece)
-        end
-    end
-    local text = table.concat(pieces, " ")
-    if parts.context then
-        text = text .. " · " .. parts.context
-    end
-    return text
+    local texts = vim.tbl_map(function(chunk)
+        return chunk[1]
+    end, WindowDecoration.header_chunks(parts))
+    return table.concat(texts)
 end
 
 --- The header state of an Agentic buffer, `vim.b[bufnr].agentic_header`, or

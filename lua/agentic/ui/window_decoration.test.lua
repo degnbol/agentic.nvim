@@ -173,4 +173,66 @@ describe("agentic.ui.WindowDecoration", function()
             )
         end)
     end)
+
+    describe("header_chunks", function()
+        it("lay out every part with its separator", function()
+            assert.same({
+                { "󰚩" },
+                { " #3 Fix" },
+                { " ?", "AgenticHeaderAttention" },
+                { " · 12k" },
+            }, WindowDecoration.header_chunks({
+                icon = "󰚩",
+                title = "#3 Fix",
+                waiting = true,
+                context = "12k",
+            }))
+        end)
+
+        it("have no separator before the first chunk", function()
+            assert.same(
+                { { "Chat" } },
+                WindowDecoration.header_chunks({ title = "Chat" })
+            )
+            assert.same(
+                { { "I" } },
+                WindowDecoration.header_chunks({ icon = "I", title = "" })
+            )
+            assert.same(
+                { { "Chat" }, { " 󰔟" } },
+                WindowDecoration.header_chunks({ title = "Chat", running = true })
+            )
+            assert.same(
+                { { "12k" } },
+                WindowDecoration.header_chunks({ title = "", context = "12k" })
+            )
+        end)
+
+        it("are empty without parts", function()
+            assert.same({}, WindowDecoration.header_chunks({ title = "" }))
+        end)
+
+        it("skip an empty context", function()
+            assert.same(
+                { { "Chat" } },
+                WindowDecoration.header_chunks({ title = "Chat", context = "" })
+            )
+        end)
+
+        it("colour permission and idle, not running", function()
+            local function state_hl(parts)
+                local chunks = WindowDecoration.header_chunks(parts)
+                return chunks[#chunks][2]
+            end
+            assert.equal(
+                "AgenticHeaderAttention",
+                state_hl({ title = "", waiting = true })
+            )
+            assert.equal(
+                "AgenticHeaderAttention",
+                state_hl({ title = "", idle = true })
+            )
+            assert.is_nil(state_hl({ title = "", running = true }))
+        end)
+    end)
 end)

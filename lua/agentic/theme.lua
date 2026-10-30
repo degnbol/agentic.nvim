@@ -46,6 +46,7 @@ Theme.HL_GROUPS = {
     TABLE_ROW_END = "AgenticTableRowEnd",
     BUDGET_WARNING = "AgenticBudgetWarning",
     BUDGET_EXHAUSTED = "AgenticBudgetExhausted",
+    HEADER_ATTENTION = "AgenticHeaderAttention",
 }
 
 local status_hl = {
@@ -231,6 +232,10 @@ function Theme.setup()
         -- Statusline budget windows that warn or are exhausted
         { Theme.HL_GROUPS.BUDGET_WARNING, { link = "DiagnosticWarn" } },
         { Theme.HL_GROUPS.BUDGET_EXHAUSTED, { link = "DiagnosticError" } },
+
+        -- Header state glyphs asking for the user: a permission prompt, an
+        -- unseen turn end
+        { Theme.HL_GROUPS.HEADER_ATTENTION, { link = "DiagnosticWarn" } },
     }
     -- stylua: ignore end
 

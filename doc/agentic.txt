@@ -1213,6 +1213,9 @@ Budget statusline ~
     AgenticBudgetWarning      |hl-DiagnosticWarn|    Warning window
     AgenticBudgetExhausted    |hl-DiagnosticError|   Exhausted window
 
+Header chunks (|AgenticHeadersChanged|) ~
+    AgenticHeaderAttention    |hl-DiagnosticWarn|    Permission and turn-end glyph
+
 Session picker ~
     AgenticPickerDate         `Comment`     Session timestamp
     AgenticPickerDelim        `Delimiter`   Field separator
@@ -1249,14 +1252,16 @@ User AgenticSessionChanged
                                                       *AgenticHeadersChanged*
 User AgenticHeadersChanged
     Fired when an Agentic buffer's header state changes. The `data` table
-    contains `buf`. Read the state with
+    contains `buf`. Read the state, `header`, with
     `require("agentic.ui.window_decoration").get_header(buf)`, which falls
     back to the panel's default: a table with a `title` string, optional
     `icon` and `context` strings, and optional `running`, `waiting` and
-    `idle` booleans. `require("agentic.ui.window_decoration").header_state(parts)`
-    gives the state to show (`"permission"`, `"running"`, `"idle"` or nil),
-    and `require("agentic.glyphs").HEADER_STATE[state]` its glyph. The
-    buffer's panel name is `vim.b[buf].agentic_window`.
+    `idle` booleans.
+    `require("agentic.ui.window_decoration").header_chunks(header)` gives
+    it as a list of `{ text, hl_group }` chunks, `hl_group` nil or a group
+    from |agentic-highlights|. The texts concatenate to the header text
+    without |agentic-config-headers|. The buffer's panel name is
+    `vim.b[buf].agentic_window`.
 
                                                        *AgenticBudgetChanged*
 User AgenticBudgetChanged
