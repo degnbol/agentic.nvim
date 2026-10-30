@@ -4687,5 +4687,12 @@ describe("PermissionRules", function()
             Config.permissions.structured = { mytool = { read_only = { {} } } }
             assert.is_true(PermissionRules.is_read_only("mytool x"))
         end)
+
+        it("judges again when use_plugin_defaults changes", function()
+            Config.permissions.use_plugin_defaults = true
+            assert.is_true(PermissionRules.is_read_only("rg x"))
+            Config.permissions.use_plugin_defaults = false
+            assert.is_false(PermissionRules.is_read_only("rg x"))
+        end)
     end)
 end)

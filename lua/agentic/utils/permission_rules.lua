@@ -85,6 +85,9 @@ local cached_mtimes = {}
 local cached_plugin_structured_entries
 --- @type number
 local cached_plugin_structured_mtime = 0
+--- `Config.permissions.use_plugin_defaults` at the last load of the bundled entries
+--- @type boolean|nil
+local cached_plugin_defaults_used
 
 --- @type table|nil, agentic.StructuredEntries
 local cached_config_structured_ref, cached_config_structured_entries = nil, {}
@@ -557,7 +560,8 @@ end
 --- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)` — a
 --- user cmd key wins wholesale (its kind-arrays replace the bundled ones), and
 --- a `vim.NIL` value disables the bundled cmd entirely (stripped before return).
---- Re-reads the bundled file automatically when its mtime changes; user
+--- Re-reads the bundled file automatically when its mtime or
+--- `use_plugin_defaults` changes; user
 --- additions are recompiled when the table reference changes.
 --- @return agentic.StructuredEntries
 function M.get_structured_entries()
@@ -566,8 +570,10 @@ function M.get_structured_entries()
     if
         cached_plugin_structured_entries == nil
         or plugin_mtime ~= cached_plugin_structured_mtime
+        or Config.permissions.use_plugin_defaults ~= cached_plugin_defaults_used
     then
         cached_plugin_structured_mtime = plugin_mtime
+        cached_plugin_defaults_used = Config.permissions.use_plugin_defaults
         cached_plugin_structured_entries = {}
         cached_read_only = {}
         if Config.permissions.use_plugin_defaults then
