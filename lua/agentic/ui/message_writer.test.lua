@@ -3080,7 +3080,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- Header should be present
                 assert.equal("###", lines_after_write[1])
                 -- Code fence and split command
-                assert.equal("```bash", lines_after_write[2])
+                assert.equal("```bash-fold", lines_after_write[2])
                 assert.equal(
                     "cd /some/very/long/project/path &&",
                     lines_after_write[3]
@@ -3115,7 +3115,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 -- Header still present
                 assert.equal("###", lines_after_update[1])
-                assert.equal("```bash", lines_after_update[2])
+                assert.equal("```bash-fold", lines_after_update[2])
 
                 -- Body output should be present
                 local found_output = false
@@ -3212,7 +3212,7 @@ describe("agentic.ui.MessageWriter", function()
                 writer:write_tool_call_block(block)
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                assert.equal("```bash", lines[2])
+                assert.equal("```bash-fold", lines[2])
                 assert.equal("cd /some/very/long/project/path &&", lines[3])
             end
         )
@@ -3258,7 +3258,7 @@ describe("agentic.ui.MessageWriter", function()
                 if line == "###" then
                     found_header = true
                 end
-                if line == "```bash" then
+                if line == "```bash-fold" then
                     found_fence = true
                 end
                 if line:find("for colour") then
@@ -3266,7 +3266,7 @@ describe("agentic.ui.MessageWriter", function()
                 end
             end
             assert.is_true(found_header, "Execute header missing")
-            assert.is_true(found_fence, "```bash fence missing")
+            assert.is_true(found_fence, "```bash-fold fence missing")
             assert.is_true(found_command, "Command missing")
 
             -- Block should still be tracked
@@ -3315,12 +3315,12 @@ describe("agentic.ui.MessageWriter", function()
                     if line == "###" then
                         found_header = true
                     end
-                    if line == "```bash" then
+                    if line == "```bash-fold" then
                         found_fence = true
                     end
                 end
                 assert.is_true(found_header, "Execute header missing")
-                assert.is_true(found_fence, "```bash fence missing")
+                assert.is_true(found_fence, "```bash-fold fence missing")
 
                 -- Decorations should survive
                 local NS_DECORATIONS =
@@ -4608,19 +4608,22 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
-        it("does not fold a short execute body", function()
+        it("opens a short execute block that is not read-only", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-short",
                 status = "completed",
                 kind = "execute",
-                argument = "ls",
+                argument = "build",
                 body = { "single output line" },
             })
 
-            assert.equal(0, #fold_fence_lines())
+            local fences = fold_fence_lines()
+            assert.equal(1, #fences)
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(fences[1] + 1))
         end)
 
-        it("folds when the body grows past the threshold on update", function()
+        it("closes when the body grows past the threshold on update", function()
             writer:write_tool_call_block({
                 tool_call_id = "fold-grow",
                 status = "in_progress",
@@ -4628,7 +4631,8 @@ describe("agentic.ui.MessageWriter", function()
                 argument = "build",
                 body = { "starting" },
             })
-            assert.equal(0, #fold_fence_lines())
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(fold_fence_lines()[1] + 1))
 
             writer:update_tool_call_block({
                 tool_call_id = "fold-grow",
@@ -5113,6 +5117,28 @@ describe("agentic.ui.MessageWriter", function()
             end)
         end)
 
+        it("closes an open edit that re-renders as failed", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fail-reason",
+                status = "pending",
+                kind = "edit",
+                argument = "/tmp/agentic_difffold_reason.lua",
+                diff = { old = { "stub" }, new = diff_new },
+            })
+            local body_start = difffold_fence_line() + 1
+            deferred.drain()
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+
+            writer:update_tool_call_block({
+                tool_call_id = "fail-reason",
+                status = "failed",
+                failure_reason = { "rejected" },
+            })
+            deferred.drain()
+            body_start = difffold_fence_line() + 1
+            assert.equal(body_start, vim.fn.foldclosed(body_start))
+        end)
+
         it("closes a failed edit that has no reason", function()
             writer:write_tool_call_block({
                 tool_call_id = "fail-no-reason",
@@ -5275,13 +5301,16 @@ describe("agentic.ui.MessageWriter", function()
                 )
                 -- No accumulation divider, no double-wrapped console fence.
                 assert.is_nil(text:match("\n%-%-%-\n"))
-                assert.is_nil(text:match("```console%-fold\n```console"))
+                assert.is_nil(text:match("```console\n```console"))
 
                 local openers = 0
-                for _ in text:gmatch("```console%-fold") do
+                for _ in text:gmatch("```console\n") do
                     openers = openers + 1
                 end
                 assert.equal(1, openers)
+                assert.is_not_nil(
+                    text:match("```bash%-fold\nls\n```\n```console\n")
+                )
 
                 -- The heading name is left to treesitter (@markup.raw on the
                 -- backtick code span) — the renderer applies no NS_STATUS

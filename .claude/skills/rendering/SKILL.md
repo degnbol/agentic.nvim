@@ -116,9 +116,9 @@ the fence is set per kind:
 
 | Site | Info string | Notes |
 | --- | --- | --- |
-| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback | Cosmetic; zsh parser is aliased to `bash`, identical highlighting |
+| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback; `<shell>-fold` when command and output total more than one row | Cosmetic; zsh parser is aliased to `bash`, identical highlighting. The fold runs through the `console` output fence (`execute_fold_state`) |
 | Search command (argument fence) | `bash` | |
-| Execute body | `console`, or `console-fold` past `execute_max_lines` (`search_max_lines` when `PermissionRules.is_read_only`) | A failure reason takes the body's place. A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
+| Execute body | `console` | Folded with the command fence above it. A failure reason takes the body's place. A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
 | Search body | `console`, or `console-fold` when `search_max_lines` exceeded | `console` prevents markdown parsing of `--`, `*` |
 | Fetch / WebSearch / SubAgent / switch_mode body | `markdown-fold` (multi-line) or `markdown` | Folded per § Body folding; dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |

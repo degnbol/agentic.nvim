@@ -47,9 +47,10 @@ describe("agentic.ui.folds", function()
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
     end
 
-    --- Render `lines` as a chat buffer and return one foldexpr value per line.
+    --- Render `lines` as a chat buffer and return its `Folds.levels`.
     --- @param lines string[]
     --- @return string[] levels
+    --- @return table<integer, true> joined
     local function levels_of(lines)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         vim.bo[bufnr].filetype = "AgenticChat"
@@ -144,6 +145,56 @@ describe("agentic.ui.folds", function()
                 )
             end
         )
+
+        it(
+            "folds a `-fold` fence through a `console` fence after it",
+            function()
+                local levels = levels_of({
+                    "### block",
+                    "```zsh-fold",
+                    "rg foo",
+                    "```",
+                    "```console",
+                    "out 1",
+                    "out 2",
+                    "```",
+                    "after",
+                })
+
+                assert.same(
+                    { "0", "0", ">1", "1", "1", "1", "1", "0", "0" },
+                    levels
+                )
+            end
+        )
+
+        it("folds a `-fold` command fence alone over its own rows", function()
+            local levels = levels_of({
+                "```zsh-fold",
+                "git add a",
+                "git commit",
+                "```",
+                "after",
+            })
+
+            assert.same({ "0", ">1", "1", "0", "0" }, levels)
+        end)
+
+        it("does not join a `-difffold` fence to a `console` fence", function()
+            local levels, joined = levels_of({
+                "```lua-difffold",
+                "local a = 1",
+                "local b = 2",
+                "```",
+                "```console",
+                "reason 1",
+                "reason 2",
+                "```",
+            })
+
+            assert.same({ "0", ">1", "1", "0", "0", "0", "0", "0" }, levels)
+            assert.same({}, joined)
+        end)
 
         it("skips a one-line body, which vim cannot close", function()
             local levels = levels_of({
@@ -375,6 +426,48 @@ describe("agentic.ui.folds", function()
             })
 
             assert.equal("    ··· 2 lines ···", foldtext_of(3, 4))
+        end)
+
+        describe("of a joined fold", function()
+            --- Render an execute block with `command` as the chat buffer
+            --- under its own foldexpr, and return the foldtext of its fold.
+            --- @param command string
+            --- @return string
+            local function joined_foldtext(command)
+                levels_of({
+                    "### block",
+                    "```zsh-fold",
+                    command,
+                    "```",
+                    "```console",
+                    "out 1",
+                    "out 2",
+                    "```",
+                })
+                vim.wo[winid].foldmethod = "expr"
+                vim.wo[winid].foldexpr =
+                    'v:lua.require("agentic.ui.folds").foldexpr()'
+                vim.wo[winid].foldtext =
+                    'v:lua.require("agentic.ui.folds").foldtext()'
+                return vim.api.nvim_win_call(winid, function()
+                    return vim.fn.foldtextresult(3)
+                end)
+            end
+
+            it("leads with the first row and counts content rows", function()
+                assert.equal(
+                    "    ··· rg foo · 3 lines ···",
+                    joined_foldtext("rg foo")
+                )
+            end)
+
+            it("cuts the first row to the window's text width", function()
+                vim.api.nvim_win_set_width(winid, 30)
+                local text = joined_foldtext(string.rep("x", 40))
+
+                assert.equal(30, vim.fn.strdisplaywidth(text))
+                assert.is_not_nil(text:match("x… · 3 lines ···$"))
+            end)
         end)
     end)
 end)

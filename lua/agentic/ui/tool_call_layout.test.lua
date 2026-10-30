@@ -1166,7 +1166,7 @@ describe("agentic.ui.ToolCallLayout", function()
         end)
     end)
 
-    describe("execute fold threshold", function()
+    describe("execute fold", function()
         local read_from_disk =
             require("agentic.utils.file_system").read_from_disk
         local PermissionRules = require("agentic.utils.permission_rules")
@@ -1181,33 +1181,82 @@ describe("agentic.ui.ToolCallLayout", function()
             PermissionRules.invalidate_cache()
         end)
 
-        --- Fold state of `command`'s output, with more rows than
-        --- `search_max_lines` and no more than `execute_max_lines`.
-        --- @param command string
-        --- @return agentic.ui.FoldState|nil
-        local function fold_state(command)
-            local body = {}
-            for i = 1, Config.tool_call_display.search_max_lines + 1 do
-                table.insert(body, "out " .. i)
+        --- `n` output rows.
+        --- @param n integer
+        --- @return string[]
+        local function output(n)
+            local rows = {}
+            for i = 1, n do
+                rows[i] = "out " .. i
             end
-            assert.is_true(#body <= Config.tool_call_display.execute_max_lines)
-            local fold = Layout.build({
-                tool_call_id = "exec-threshold",
+            return rows
+        end
+
+        --- Layout of a zsh execute block.
+        --- @param command string
+        --- @param body string[]|nil
+        --- @param status string|nil default "completed"
+        --- @return agentic.ui.ToolCallLayout.Layout
+        local function build(command, body, status)
+            return Layout.build({
+                tool_call_id = "exec-fold",
                 kind = "execute",
                 argument = command,
-                status = "completed",
+                status = status or "completed",
+                shell = "zsh",
                 body = body,
-            }, 0).fold
+            }, 0)
+        end
+
+        --- @param command string
+        --- @param body string[]|nil
+        --- @param status string|nil
+        --- @return agentic.ui.FoldState|nil
+        local function fold_state(command, body, status)
+            local fold = build(command, body, status).fold
             return fold and fold.state
         end
 
-        it("folds output that only reads at search_max_lines", function()
-            assert.equal("closed", fold_state("rg foo | head"))
+        it("closes a read-only command from its first command row", function()
+            local layout = build("rg foo | head", output(2))
+            assert.same({ anchor = 2, state = "closed" }, layout.fold)
+            assert.same({
+                "###",
+                "```zsh-fold",
+                "rg foo | head",
+                "```",
+                "```console",
+                "out 1",
+                "out 2",
+                "```",
+                "",
+            }, layout.lines)
         end)
 
-        it("folds other output at execute_max_lines", function()
-            assert.is_nil(fold_state("git commit -m x"))
-            assert.is_nil(fold_state("rg foo > out"))
+        it("closes another command past execute_max_lines", function()
+            local max_lines = Config.tool_call_display.execute_max_lines
+            assert.equal("open", fold_state("git commit -m x", output(2)))
+            assert.equal(
+                "closed",
+                fold_state("git commit -m x", output(max_lines + 1))
+            )
+        end)
+
+        it("opens a redirect and a failed read-only command", function()
+            assert.equal("open", fold_state("rg foo > out", output(2)))
+            assert.equal("open", fold_state("rg foo", output(2), "failed"))
+        end)
+
+        it("forms no fold over one row", function()
+            assert.is_nil(build("rg foo", nil).fold)
+            local layout = build("rg foo", {})
+            assert.is_nil(layout.fold)
+            assert.equal("```zsh", layout.lines[2])
+        end)
+
+        it("folds a two-row command with no output", function()
+            local layout = build("git add a\ngit commit -m x", nil)
+            assert.same({ anchor = 2, state = "open" }, layout.fold)
         end)
     end)
 
@@ -1814,7 +1863,7 @@ describe("agentic.ui.ToolCallLayout", function()
             local lines = Layout.build(block, 80).lines
 
             assert.equal("###", lines[1])
-            assert.equal("```bash", lines[2])
+            assert.equal("```bash-fold", lines[2])
             assert.equal("ls -la /tmp", lines[3])
             assert.equal("```", lines[4])
             assert.equal("```console", lines[5])
@@ -1835,7 +1884,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             local lines = Layout.build(block, 80).lines
 
-            assert.equal("```zsh", lines[2])
+            assert.equal("```zsh-fold", lines[2])
         end)
 
         it("labels the fence bash without a shell", function()
@@ -1850,7 +1899,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             local lines = Layout.build(block, 80).lines
 
-            assert.equal("```bash", lines[2])
+            assert.equal("```bash-fold", lines[2])
         end)
 
         it(
@@ -1869,7 +1918,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 local lines = Layout.build(block, 80).lines
 
                 assert.equal("### List the temp directory", lines[1])
-                assert.equal("```bash", lines[2])
+                assert.equal("```bash-fold", lines[2])
                 assert.equal("ls -la /tmp", lines[3])
                 assert.equal("```", lines[4])
                 -- Single console fence around the body — no nested/double wrap.
@@ -1891,7 +1940,7 @@ describe("agentic.ui.ToolCallLayout", function()
             local lines = Layout.build(block, 80).lines
 
             assert.equal("###", lines[1])
-            assert.equal("```bash", lines[2])
+            assert.equal("```bash-fold", lines[2])
             assert.equal("for i in 1 2 3; do", lines[3])
             assert.equal("echo $i", lines[4])
             assert.equal("done", lines[5])
@@ -2012,7 +2061,7 @@ describe("agentic.ui.ToolCallLayout", function()
             local lines = Layout.build(block, 80).lines
 
             assert.equal("###", lines[1])
-            assert.equal("```bash", lines[2])
+            assert.equal("```bash-fold", lines[2])
             assert.equal("cd /some/very/long/project/path &&", lines[3])
             assert.equal("npm install --save-dev typescript &&", lines[4])
             assert.equal("npm run build &&", lines[5])
@@ -2045,7 +2094,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             local lines = Layout.build(block, 80).lines
 
-            assert.equal("```bash", lines[2])
+            assert.equal("```bash-fold", lines[2])
             assert.equal([[echo "this && that || other" &&]], lines[3])
             assert.equal([[echo 'pipes | here ; too' &&]], lines[4])
             assert.equal("echo done with a very long command line", lines[5])
@@ -2101,7 +2150,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             assert.same({
                 "### List",
-                "```zsh",
+                "```zsh-fold",
                 "ls",
                 "```",
                 "```console",

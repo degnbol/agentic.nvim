@@ -398,6 +398,29 @@ local function default_head(call)
     }
 end
 
+--- Fold state of an execute block's one fold over its command and output
+--- rows: nil when they total one row (no fold forms), closed when the call
+--- did not fail and its command is read-only, or when the output passes
+--- `execute_max_lines` (0 = never by length), else open.
+--- @param call agentic.ui.ToolCallLayout.Call
+--- @param cmd_rows string[]
+--- @return agentic.ui.FoldState|nil
+local function execute_fold_state(call, cmd_rows)
+    local output = call.failure or call.block.body or {}
+    if #cmd_rows + #output <= 1 then
+        return nil
+    end
+    local max_lines = Config.tool_call_display.execute_max_lines
+    if
+        call.block.status ~= "failed"
+            and PermissionRules.is_read_only(call.argument)
+        or max_lines > 0 and #output > max_lines
+    then
+        return "closed"
+    end
+    return "open"
+end
+
 --- @type table<string, agentic.ui.ToolCallLayout.Builder>
 local HEADS = {
     execute = function(call)
@@ -430,10 +453,12 @@ local HEADS = {
             -- The shell label is cosmetic: the zsh parser is aliased to
             -- "bash", so highlighting is identical either way and the label
             -- only shows at conceallevel=0. "bash" keeps it from going blank
-            -- on an unknown shell.
+            -- on an unknown shell. The fold spans the command and the output
+            -- fence after it (folds.scm).
             {
                 rows = cmd_rows,
                 lang = shell_fence_lang(call.argument, block.shell or "bash"),
+                fold = execute_fold_state(call, cmd_rows),
             },
         }
     end,
@@ -598,17 +623,14 @@ local BODIES = {
 
     -- A failed execute shows its reason as output: the bash stdout/stderr of
     -- a non-zero exit is long and often informational, so it takes the
-    -- output's fold and colours rather than the red of a short denial.
+    -- output's colours rather than the red of a short denial. The command's
+    -- fold covers the output (`execute_fold_state`).
     execute = function(call)
         local rows = call.failure or call.block.body
         if not rows then
             return {}
         end
-        local display = Config.tool_call_display
-        local max_lines = PermissionRules.is_read_only(call.argument)
-                and display.search_max_lines
-            or display.execute_max_lines
-        local section = output_section(rows, max_lines)
+        local section = output_section(rows, 0)
         section.matches =
             GrepHighlights.for_command(section.rows, call.argument)
         return { section }

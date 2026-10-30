@@ -22,11 +22,12 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- `parser:for_each_tree` instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
---- writer-marked `*-fold` / `-difffold` body, and the writer always appends a
---- body with both its fences in a single `nvim_buf_set_lines`, so such a fold
---- is never transiently unterminated. Levels are recomputed for the whole
---- buffer whenever `b:changedtick` moves, the caching strategy
---- `:help fold-expr-slow` prescribes — once per streamed chunk, inside redraw,
+--- writer-marked `*-fold` / `-difffold` body, joined with a `console` body
+--- right after it, and the writer always appends a body with both its fences
+--- in a single `nvim_buf_set_lines`, so such a fold is never transiently
+--- unterminated. Levels are recomputed for the whole buffer whenever
+--- `b:changedtick` moves, the caching strategy `:help fold-expr-slow`
+--- prescribes — once per streamed chunk, inside redraw,
 --- costing 0.75 ms at 2820 lines and 2.9 ms at 11280 (measured, linear in
 --- buffer size, query walk dominating the parse). An incremental version is
 --- possible here in a way it is not for core, because a row's level depends
@@ -37,56 +38,68 @@ local M = {}
 --- @class agentic.ui.Folds.Levels
 --- @field tick integer `b:changedtick` the levels were computed at
 --- @field levels string[] Foldexpr value per 1-indexed line
+--- @field joined table<integer, true> 1-indexed first line of each fold that runs through a second fence (`@fold.end`)
 
 --- @type table<integer, agentic.ui.Folds.Levels>
 local cache = {}
 
 --- Foldexpr value for every line of a buffer, from its `folds` query over the
---- root tree only — injected languages contribute nothing.
+--- root tree only — injected languages contribute nothing. A match folds
+--- from the start of its `@fold` capture to the end of its `@fold.end`
+--- capture, or of `@fold` when it has none.
 --- @param bufnr integer
 --- @return string[] levels `">1"` on a fold's first line, `"1"` on its remaining lines, `"0"` outside any fold; indexed by 1-indexed line number
+--- @return table<integer, true> joined 1-indexed first line of each fold that ends at a `@fold.end` capture
 function M.levels(bufnr)
     local levels = {}
     for lnum = 1, vim.api.nvim_buf_line_count(bufnr) do
         levels[lnum] = "0"
     end
+    --- @type table<integer, true>
+    local joined = {}
 
     local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
     if not parser then
-        return levels
+        return levels, joined
     end
     local query = vim.treesitter.query.get(parser:lang(), "folds")
     if not query then
-        return levels
+        return levels, joined
     end
 
     for _, tree in pairs(parser:parse() or {}) do
         for _, match, metadata in query:iter_matches(tree:root(), bufnr, 0, -1) do
+            --- @type table<string, Range6>
+            local ranges = {}
             for id, nodes in pairs(match) do
-                if query.captures[id] == "fold" then
-                    local range =
-                        vim.treesitter.get_range(nodes[1], bufnr, metadata[id])
-                    local first = range[1] + 1
-                    -- An end column of 0 means the node stops before the first
-                    -- byte of that row, so the row is not part of the fold.
-                    local last = range[5] == 0 and range[4] or range[4] + 1
-                    -- Vim cannot close a one-line fold at 'foldminlines' = 1,
-                    -- which `chat_win_opts` pins for exactly this reason.
-                    -- Every match is level 1: `code_fence_content` cannot
-                    -- nest, and folds.scm must stay non-nesting to keep that
-                    -- true (its top comment says so).
-                    if last > first then
-                        levels[first] = ">1"
-                        for lnum = first + 1, last do
-                            levels[lnum] = "1"
-                        end
+                ranges[query.captures[id]] =
+                    vim.treesitter.get_range(nodes[1], bufnr, metadata[id])
+            end
+            local start, stop = ranges.fold, ranges["fold.end"] or ranges.fold
+            if start then
+                local first = start[1] + 1
+                -- An end column of 0 means the node stops before the first
+                -- byte of that row, so the row is not part of the fold.
+                local last = stop[5] == 0 and stop[4] or stop[4] + 1
+                -- Vim cannot close a one-line fold at 'foldminlines' = 1,
+                -- which `chat_win_opts` pins for exactly this reason.
+                -- Every fold is level 1: a joined match's range contains
+                -- the one-fence match of its first fence, and folds.scm
+                -- must stay otherwise non-nesting (its top comment says so).
+                if last > first then
+                    levels[first] = ">1"
+                    for lnum = first + 1, last do
+                        levels[lnum] = "1"
+                    end
+                    if ranges["fold.end"] then
+                        joined[first] = true
                     end
                 end
             end
         end
     end
 
-    return levels
+    return levels, joined
 end
 
 --- 'foldexpr' for the chat buffer. See the module docstring for why the levels
@@ -110,7 +123,8 @@ function M.foldexpr()
 
     local tick = vim.api.nvim_buf_get_changedtick(bufnr)
     if not cached or cached.tick ~= tick then
-        cached = { tick = tick, levels = M.levels(bufnr) }
+        local levels, joined = M.levels(bufnr)
+        cached = { tick = tick, levels = levels, joined = joined }
         cache[bufnr] = cached
     end
 
@@ -154,23 +168,44 @@ local function fence_source(bufnr, fold_start)
     return fence and fence:match("^`+%S*fold%s+(%S+)%s*$")
 end
 
---- 'foldtext' for the chat buffer: a line-count summary styled as Comment. The
---- fold spans the `code_fence_content` node (body only, delimiters excluded),
---- so foldend - foldstart + 1 is the body's line count.
+local FOLDTEXT_LEAD, FOLDTEXT_TAIL = "    ··· ", " ···"
+
+--- 'foldtext' for the chat buffer: a line-count summary styled as Comment. A
+--- fold spans `code_fence_content` nodes, so its line count is the rows of
+--- content `zo` shows: a joined fold (`M.levels`) leaves out the two fence
+--- rows between its fences.
 ---
 --- A named body leads with its name — one hook block's summary is otherwise
---- indistinguishable from the next. A fold whose opening fence row is marked in
---- `NS_CHAR_COUNT` adds the body's character count. Both figures are read back
+--- indistinguishable from the next. A joined fold leads with its first row,
+--- cut so the fold text fits the window's text width: a closed execute block
+--- shows which command ran. A fold whose opening fence row is marked in
+--- `NS_CHAR_COUNT` adds the body's character count. All figures are read back
 --- out of the folded rows rather than recorded at write time, so they describe
 --- what `zo` will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
     local first, last = vim.v.foldstart, vim.v.foldend
-    local summary = string.format("%d lines", last - first + 1)
+    local cached = cache[bufnr]
+    local joined = cached ~= nil and cached.joined[first] == true
+    local summary =
+        string.format("%d lines", last - first + 1 - (joined and 2 or 0))
 
     local source = fence_source(bufnr, first)
-    if source then
+    if joined then
+        local row = vim.trim(
+            vim.api.nvim_buf_get_lines(bufnr, first - 1, first, false)[1]
+        )
+        local frame = vim.fn.strdisplaywidth(
+            FOLDTEXT_LEAD .. " · " .. summary .. FOLDTEXT_TAIL
+        )
+        local winid = vim.api.nvim_get_current_win()
+        local text_width = vim.api.nvim_win_get_width(winid)
+            - vim.fn.getwininfo(winid)[1].textoff
+        summary = TextWrap.truncate_to_width(row, text_width - frame)
+            .. " · "
+            .. summary
+    elseif source then
         summary = source .. " · " .. summary
     end
 
@@ -186,7 +221,7 @@ function M.foldtext()
             .. " chars"
     end
 
-    return { { "    ··· " .. summary .. " ···", "Comment" } }
+    return { { FOLDTEXT_LEAD .. summary .. FOLDTEXT_TAIL, "Comment" } }
 end
 
 return M

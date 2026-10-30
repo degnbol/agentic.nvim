@@ -2609,9 +2609,9 @@ end
 
 --- Queue an open/close of the treesitter fold containing `anchor_row`.
 --- `anchor_row` is the first body line of a `*-fold`/`-difffold` block — a
---- level-1 row that belongs only to our fold (the fold spans
---- `code_fence_content`, so the concealed fence delimiters are level 0,
---- outside it). The one-level :foldopen/:foldclose hits exactly our block,
+--- level-1 row that belongs only to our fold (the fold starts at
+--- `code_fence_content`, so the concealed opening fence is level 0, outside
+--- it). The one-level :foldopen/:foldclose hits exactly our block,
 --- leaving other blocks untouched. Anchoring on a body line (not the
 --- delimiter) also keeps a closed fold's first screen row visible, so the
 --- `··· N lines ···` foldtext shows.

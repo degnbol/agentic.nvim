@@ -3,7 +3,9 @@
 ; (```console-fold, ```markdown-fold) and the "difffold" marker on edit diffs
 ; (```lua-difffold). The threshold policy lives in the writer (per-kind line
 ; counts, sidecar always-fold, diffs always foldable); this query just folds
-; whatever the writer marked.
+; whatever the writer marked. An execute block's "-fold" command fence
+; (```zsh-fold) folds through a ```console fence directly after it: the
+; block's command and output are one fold.
 ;
 ; This is the chat buffer's ONLY fold source. `agentic.ui.folds` runs it over
 ; the root tree alone, so an injected language's own folds.scm — zsh heredocs,
@@ -21,3 +23,14 @@
   (info_string (language) @_lang)
   (code_fence_content) @fold
   (#lua-match? @_lang "fold$"))
+
+(_
+  (fenced_code_block
+    (info_string (language) @_lang)
+    (code_fence_content) @fold)
+  .
+  (fenced_code_block
+    (info_string (language) @_output)
+    (code_fence_content) @fold.end)
+  (#lua-match? @_lang "%-fold$")
+  (#eq? @_output "console"))
