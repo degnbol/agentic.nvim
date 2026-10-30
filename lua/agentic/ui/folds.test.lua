@@ -1,3 +1,4 @@
+local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local NS_CHAR_COUNT = require("agentic.ui.folds").NS_CHAR_COUNT
 
@@ -318,30 +319,275 @@ describe("agentic.ui.folds", function()
             assert.equal(">1", level_at(3))
         end)
 
-        it("computes levels once per changedtick", function()
+        --- Evaluate the foldexpr for every line of the chat window.
+        --- @return string[] levels
+        local function foldexpr_levels()
             local Folds = require("agentic.ui.folds")
-            levels_of({
-                "```console-fold",
-                "out 1",
-                "out 2",
-                "```",
+            return vim.api.nvim_win_call(winid, function()
+                local levels = {}
+                for lnum = 1, vim.api.nvim_buf_line_count(bufnr) do
+                    vim.v.lnum = lnum
+                    levels[lnum] = Folds.foldexpr()
+                end
+                return levels
+            end)
+        end
+
+        --- 1-indexed row of the first line equal to `text` after row `after`.
+        --- @param text string
+        --- @param after integer|nil
+        --- @return integer
+        local function row_of(text, after)
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            for row = (after or 0) + 1, #lines do
+                if lines[row] == text then
+                    return row
+                end
+            end
+            error("no line " .. text)
+        end
+
+        it("queries only the rows of the block an edit lands in", function()
+            local block = { "```console-fold", "a", "b", "c", "```" }
+            local lines = { "prose" }
+            for _, name in ipairs({ "one", "two", "three" }) do
+                vim.list_extend(lines, { "### " .. name })
+                vim.list_extend(lines, block)
+            end
+            levels_of(lines)
+            vim.wo[winid].foldmethod = "expr"
+            vim.wo[winid].foldexpr =
+                'v:lua.require("agentic.ui.folds").foldexpr()'
+            foldexpr_levels()
+
+            local query = vim.treesitter.query.get("agentic", "folds")
+            assert.is_not_nil(query)
+            --- @cast query -nil
+            --- @type [integer, integer][]
+            local queried = {}
+            local iter_matches = query.iter_matches
+            query.iter_matches = function(self, node, source, start, stop, opts)
+                table.insert(queried, { start, stop })
+                return iter_matches(self, node, source, start, stop, opts)
+            end
+            MiniTest.finally(function()
+                query.iter_matches = nil
+            end)
+
+            local fence = row_of("```console-fold", row_of("### two"))
+            vim.api.nvim_buf_set_lines(bufnr, fence + 1, fence + 1, false, {
+                "inserted",
             })
-            local real_levels = Folds.levels
-            local calls = 0
-            Folds.levels = function(buf)
-                calls = calls + 1
-                return real_levels(buf)
+            foldexpr_levels()
+
+            assert.is_true(#queried > 0)
+            -- 0-indexed start and end-exclusive stop, within the fence row
+            -- through the closing fence.
+            local closer = row_of("```", fence)
+            for _, range in ipairs(queried) do
+                assert.is_true(range[1] >= fence - 1)
+                assert.is_true(range[2] <= closer)
+            end
+        end)
+
+        describe("after each edit", function()
+            --- Assert the foldexpr and fold state equal a full recompute.
+            local function assert_matches_full()
+                local Folds = require("agentic.ui.folds")
+                local line_count = vim.api.nvim_buf_line_count(bufnr)
+                local got = foldexpr_levels()
+                local levels, joined = Folds.levels(bufnr)
+                local state = Folds._state(bufnr)
+                assert.is_not_nil(state)
+                --- @cast state -nil
+
+                assert.same(levels, got)
+                assert.same(joined, state.joined)
+                assert.equal(line_count, #state.levels)
             end
 
-            vim.api.nvim_win_call(winid, function()
-                for lnum = 1, 4 do
-                    vim.v.lnum = lnum
-                    Folds.foldexpr()
-                end
-            end)
-            Folds.levels = real_levels
+            --- @param lines string[]
+            local function append(lines)
+                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
+                assert_matches_full()
+            end
 
-            assert.equal(1, calls)
+            --- Insert `lines` after 1-indexed row `row`.
+            --- @param row integer
+            --- @param lines string[]
+            local function insert_after(row, lines)
+                vim.api.nvim_buf_set_lines(bufnr, row, row, false, lines)
+                assert_matches_full()
+            end
+
+            --- @param row integer 1-indexed
+            local function delete(row)
+                vim.api.nvim_buf_set_lines(bufnr, row - 1, row, false, {})
+                assert_matches_full()
+            end
+
+            --- Replace the text of 1-indexed row `row` from byte `col`
+            --- through `end_col` (0-indexed, exclusive).
+            --- @param row integer
+            --- @param col integer
+            --- @param end_col integer
+            --- @param text string
+            local function set_text(row, col, end_col, text)
+                vim.api.nvim_buf_set_text(
+                    bufnr,
+                    row - 1,
+                    col,
+                    row - 1,
+                    end_col,
+                    { text }
+                )
+                assert_matches_full()
+            end
+
+            before_each(function()
+                levels_of({ "# header", "", "prose" })
+                vim.wo[winid].foldmethod = "expr"
+                vim.wo[winid].foldexpr =
+                    'v:lua.require("agentic.ui.folds").foldexpr()'
+                assert_matches_full()
+            end)
+
+            it("streams tool calls, prose and fences", function()
+                append({
+                    "### read",
+                    "```console-fold",
+                    "a",
+                    "b",
+                    "c",
+                    "```",
+                    "footer",
+                    "###",
+                })
+                append({
+                    "### run",
+                    "```zsh-foldnext",
+                    "rg foo",
+                    "```",
+                    "```console-fold",
+                    "o1",
+                    "o2",
+                    "```",
+                    "###",
+                })
+                insert_after(row_of("o1"), { "o1b" })
+                insert_after(row_of("rg foo"), { "rg bar" })
+                append({ "", "more prose" })
+                insert_after(row_of("a"), { "a2" })
+                set_text(row_of("footer"), 0, 0, "✔ ")
+                append({ "```console-fold" })
+                append({ "x1", "x2" })
+                append({ "```" })
+                delete(row_of("```console-fold"))
+            end)
+
+            it("follows a cleared and rewritten buffer", function()
+                append({ "```console-fold", "a", "b", "```" })
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                    "```lua-difffold",
+                    "x",
+                    "y",
+                    "```",
+                })
+                assert_matches_full()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+                assert_matches_full()
+                append({ "```console-fold", "a", "b", "```" })
+            end)
+
+            describe("of an execute transcript", function()
+                before_each(function()
+                    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                        "## prompt one",
+                        "### run",
+                        "```zsh-foldnext",
+                        "rg foo",
+                        "```",
+                        "```console-fold",
+                        "o1",
+                        "o2",
+                        "```",
+                        "###",
+                        "### plain",
+                        "```console",
+                        "p1",
+                        "p2",
+                        "```",
+                        "###",
+                        "## prompt two",
+                        "### run2",
+                        "```zsh-foldnext",
+                        "ls",
+                        "```",
+                        "```console-fold",
+                        "q1",
+                        "q2",
+                        "```",
+                        "###",
+                    })
+                    assert_matches_full()
+                end)
+
+                it("rewrites fold markers in info strings", function()
+                    local output = row_of("```console-fold")
+                    set_text(output, 10, 15, "")
+                    set_text(row_of("```zsh-foldnext"), 6, 15, "")
+                    set_text(
+                        row_of("```console", row_of("### plain")),
+                        10,
+                        10,
+                        "-fold"
+                    )
+                end)
+
+                it("splits and rejoins a command and its output", function()
+                    local closer = row_of("```", row_of("ls"))
+                    insert_after(closer, { "" })
+                    delete(closer + 1)
+                end)
+
+                it("edits beside a heading", function()
+                    local heading = row_of("## prompt two")
+                    insert_after(heading - 1, { "text" })
+                    set_text(heading + 1, 2, 2, " ")
+                end)
+
+                it("collects edits made while no fold is computed", function()
+                    -- Under `manual` nothing evaluates the foldexpr during an
+                    -- edit, so the dirty rows of all four edits add up.
+                    vim.wo[winid].foldmethod = "manual"
+                    local q1 = row_of("q1")
+                    vim.api.nvim_buf_set_lines(bufnr, q1, q1, false, { "q1b" })
+                    local plain = row_of("```console", row_of("### plain"))
+                    vim.api.nvim_buf_set_text(
+                        bufnr,
+                        plain - 1,
+                        10,
+                        plain + 1,
+                        0,
+                        { "-fold", "p1b", "" }
+                    )
+                    local o2 = row_of("o2")
+                    vim.api.nvim_buf_set_lines(bufnr, o2 - 1, o2, false, {})
+                    -- Moves the earlier dirty rows further than any fold is
+                    -- long, so an unmoved dirty range misses them.
+                    local top = {}
+                    for i = 1, 20 do
+                        top[i] = "top " .. i
+                    end
+                    vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, top)
+
+                    assert_matches_full()
+                end)
+
+                it("loses an output fence's closer", function()
+                    delete(row_of("```", row_of("q2")))
+                end)
+            end)
         end)
 
         it("keeps levels per buffer", function()

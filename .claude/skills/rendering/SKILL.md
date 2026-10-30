@@ -152,8 +152,8 @@ behaviour:
 
 1. `queries/agentic/folds.scm` — folds `code_fence_content`, not the whole
    `fenced_code_block` (the file's top comment explains why and both patterns).
-2. `lua/agentic/ui/folds.lua` — the foldexpr: root-tree-only levels, cached
-   per `b:changedtick`. Its module docstring is the record of why core's
+2. `lua/agentic/ui/folds.lua` — the foldexpr: root-tree-only levels, updated
+   per edit. Its module docstring is the record of why core's
    `vim.treesitter.foldexpr()` cannot be used here.
 3. `lua/agentic/ui/tool_call_layout.lua` — `assemble`: a section with
    `fold` set gets `-fold`; each `Layout.folds[i].anchor` is the first row
