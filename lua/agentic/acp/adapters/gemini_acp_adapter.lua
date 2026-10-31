@@ -11,7 +11,11 @@ local GeminiACPAdapter = ACPClient.extend()
 function GeminiACPAdapter:ignores_output(line)
     return ACPClient.ignores_output(self, line)
         or line:find("Experiments loaded", 1, true) ~= nil
-        or line:find("You have exhausted your capacity on this model", 1, true)
+        or line:find(
+                "You have exhausted your capacity on this model",
+                1,
+                true
+            )
             ~= nil
 end
 

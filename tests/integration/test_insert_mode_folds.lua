@@ -35,15 +35,13 @@ _G.chat = _G.s.widget.buf_nrs.agent
     --- Write a notice whose three-line fold body the writer closes.
     --- @param session string Child global holding the session
     local function write_folded_notice(session)
-        child.lua(
-            ([[
+        child.lua(([[
 %s.message_writer:write_notice({
     glyph = "*",
     title = "notice",
     fold_body = { "one", "two", "three" },
 })
-]]):format(session)
-        )
+]]):format(session))
         settle()
     end
 
@@ -51,8 +49,7 @@ _G.chat = _G.s.widget.buf_nrs.agent
     --- @param chat string|nil Child global holding the buffer; `_G.chat` when nil
     --- @return integer[] rows
     local function anchor_rows(chat)
-        return child.lua_get(
-            ([[
+        return child.lua_get(([[
 vim.tbl_map(function(mark)
     return mark[2] + 1
 end, vim.api.nvim_buf_get_extmarks(
@@ -62,8 +59,7 @@ end, vim.api.nvim_buf_get_extmarks(
     -1,
     {}
 ))
-]]):format(chat or "_G.chat")
-        )
+]]):format(chat or "_G.chat"))
     end
 
     --- `foldclosed(row)` in every window showing a chat buffer.
@@ -71,15 +67,13 @@ end, vim.api.nvim_buf_get_extmarks(
     --- @param chat string|nil Child global holding the buffer; `_G.chat` when nil
     --- @return integer[] closed
     local function foldclosed_per_window(row, chat)
-        return child.lua_get(
-            ([[
+        return child.lua_get(([[
 vim.tbl_map(function(winid)
     return vim.api.nvim_win_call(winid, function()
         return vim.fn.foldclosed(%d)
     end)
 end, vim.fn.win_findbuf(%s))
-]]):format(row, chat or "_G.chat")
-        )
+]]):format(row, chat or "_G.chat"))
     end
 
     for _, exit_key in ipairs({ "<Esc>", "<C-c>" }) do

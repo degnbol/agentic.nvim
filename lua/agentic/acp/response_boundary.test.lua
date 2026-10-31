@@ -47,17 +47,23 @@ describe("agentic.acp.ResponseBoundary", function()
         )
     end)
 
-    it("stops stripping at the first chunk with text, whatever its id", function()
-        assert.same({
-            { "a", false },
-            { "", false },
-            { "foo", true },
-            { "\nbar", false },
-        }, run({
-            { "X", "a" },
-            { "Y", "\n" },
-            { nil, "foo" },
-            { "Y", "\nbar" },
-        }))
-    end)
+    it(
+        "stops stripping at the first chunk with text, whatever its id",
+        function()
+            assert.same(
+                {
+                    { "a", false },
+                    { "", false },
+                    { "foo", true },
+                    { "\nbar", false },
+                },
+                run({
+                    { "X", "a" },
+                    { "Y", "\n" },
+                    { nil, "foo" },
+                    { "Y", "\nbar" },
+                })
+            )
+        end
+    )
 end)

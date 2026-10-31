@@ -651,45 +651,52 @@ describe("agentic.ui.MessageWriter", function()
                 assert.equal("m1", writer:notice_at(2))
             end)
 
-            it("folds a longer body closed and counts its characters", function()
-                writer:write_notice({
-                    glyph = GLYPH,
-                    title = "t",
-                    detail = "path",
-                    fold_body = { "one", "two" },
-                    id = "m1",
-                })
+            it(
+                "folds a longer body closed and counts its characters",
+                function()
+                    writer:write_notice({
+                        glyph = GLYPH,
+                        title = "t",
+                        detail = "path",
+                        fold_body = { "one", "two" },
+                        id = "m1",
+                    })
 
-                assert.same({
-                    "## t",
-                    "path",
-                    "```markdown-fold",
-                    "one",
-                    "two",
-                    "```",
-                    "",
-                    "",
-                }, buffer_lines())
-                assert.same({ 2 }, char_count_rows())
-                assert.equal(1, #writer._pending_fold_ops)
-                assert.is_false(writer._pending_fold_ops[1].open)
-                -- The fold is anchored on its first body row, not the fence.
-                assert.equal(
-                    3,
-                    vim.api.nvim_buf_get_extmark_by_id(
-                        bufnr,
-                        vim.api.nvim_create_namespace("agentic_fold_anchors"),
-                        writer._pending_fold_ops[1].id,
-                        {}
-                    )[1]
-                )
-                assert.same(
-                    { { 1, "│ " }, { 2, "│ " }, { 3, "│ " }, { 4, "╰─" } },
-                    rail()
-                )
-                assert.equal("m1", writer:notice_at(5))
-                assert.is_nil(writer:notice_at(6))
-            end)
+                    assert.same({
+                        "## t",
+                        "path",
+                        "```markdown-fold",
+                        "one",
+                        "two",
+                        "```",
+                        "",
+                        "",
+                    }, buffer_lines())
+                    assert.same({ 2 }, char_count_rows())
+                    assert.equal(1, #writer._pending_fold_ops)
+                    assert.is_false(writer._pending_fold_ops[1].open)
+                    -- The fold is anchored on its first body row, not the fence.
+                    assert.equal(
+                        3,
+                        vim.api.nvim_buf_get_extmark_by_id(
+                            bufnr,
+                            vim.api.nvim_create_namespace(
+                                "agentic_fold_anchors"
+                            ),
+                            writer._pending_fold_ops[1].id,
+                            {}
+                        )[1]
+                    )
+                    assert.same({
+                        { 1, "│ " },
+                        { 2, "│ " },
+                        { 3, "│ " },
+                        { 4, "╰─" },
+                    }, rail())
+                    assert.equal("m1", writer:notice_at(5))
+                    assert.is_nil(writer:notice_at(6))
+                end
+            )
         end)
 
         it("leaves a heading-only notice unbracketed", function()
@@ -753,11 +760,17 @@ describe("agentic.ui.MessageWriter", function()
         it("a notice with an id keeps its row as lines go in above", function()
             writer:write_notice({ glyph = GLYPH, title = "first" })
             writer:write_notice({ glyph = GLYPH, title = "second", id = "m1" })
-            assert.equal("## second", buffer_lines()[writer:notice_row("m1") + 1])
+            assert.equal(
+                "## second",
+                buffer_lines()[writer:notice_row("m1") + 1]
+            )
 
             vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { "a", "b" })
 
-            assert.equal("## second", buffer_lines()[writer:notice_row("m1") + 1])
+            assert.equal(
+                "## second",
+                buffer_lines()[writer:notice_row("m1") + 1]
+            )
             assert.is_nil(writer:notice_row("m2"))
         end)
 
@@ -853,9 +866,12 @@ describe("agentic.ui.MessageWriter", function()
                 -1,
                 {}
             )
-            assert.same({ 0 }, vim.tbl_map(function(m)
-                return m[2]
-            end, marks))
+            assert.same(
+                { 0 },
+                vim.tbl_map(function(m)
+                    return m[2]
+                end, marks)
+            )
         end)
 
         it("widens the fence past backticks in the thinking", function()
@@ -1861,9 +1877,18 @@ describe("agentic.ui.MessageWriter", function()
             local notify = spy.stub(require("agentic.utils.logger"), "notify")
             local ns = vim.api.nvim_create_namespace("agentic_fold_anchors")
             writer._pending_fold_ops = {
-                { id = vim.api.nvim_buf_set_extmark(bufnr, ns, 0, 0, {}), open = false },
-                { id = vim.api.nvim_buf_set_extmark(bufnr, ns, 1, 0, {}), open = false },
-                { id = vim.api.nvim_buf_set_extmark(bufnr, ns, 20, 0, {}), open = false },
+                {
+                    id = vim.api.nvim_buf_set_extmark(bufnr, ns, 0, 0, {}),
+                    open = false,
+                },
+                {
+                    id = vim.api.nvim_buf_set_extmark(bufnr, ns, 1, 0, {}),
+                    open = false,
+                },
+                {
+                    id = vim.api.nvim_buf_set_extmark(bufnr, ns, 20, 0, {}),
+                    open = false,
+                },
             }
 
             writer:flush_pending_fold_ops()
@@ -1920,60 +1945,51 @@ describe("agentic.ui.MessageWriter", function()
             schedule_stub:revert()
         end)
 
-        it(
-            "write_message owes a scroll",
-            function()
-                setup_buffer(10, 10)
+        it("write_message owes a scroll", function()
+            setup_buffer(10, 10)
 
-                local long_text = {}
-                for i = 1, 50 do
-                    long_text[i] = "message line " .. i
-                end
-
-                writer:write_message(
-                    make_message_update(table.concat(long_text, "\n"))
-                )
-
-                assert.is_true(writer._scroll_owed)
+            local long_text = {}
+            for i = 1, 50 do
+                long_text[i] = "message line " .. i
             end
-        )
 
-        it(
-            "write_tool_call_block owes a scroll",
-            function()
-                setup_buffer(10, 10)
+            writer:write_message(
+                make_message_update(table.concat(long_text, "\n"))
+            )
 
-                local body = {}
-                for i = 1, 15 do
-                    body[i] = "file" .. i .. ".lua"
-                end
+            assert.is_true(writer._scroll_owed)
+        end)
 
-                --- @type agentic.ui.MessageWriter.ToolCallBlock
-                local block = {
-                    tool_call_id = "test-1",
-                    status = "pending",
-                    kind = "execute",
-                    argument = "ls -la",
-                    body = body,
-                }
-                writer:write_tool_call_block(block)
+        it("write_tool_call_block owes a scroll", function()
+            setup_buffer(10, 10)
 
-                assert.is_true(writer._scroll_owed)
-                assert.is_true(vim.api.nvim_buf_line_count(bufnr) > 20)
+            local body = {}
+            for i = 1, 15 do
+                body[i] = "file" .. i .. ".lua"
             end
-        )
 
-        it(
-            "finalize_turn owes a scroll",
-            function()
-                setup_buffer(20, 20)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "test-1",
+                status = "pending",
+                kind = "execute",
+                argument = "ls -la",
+                body = body,
+            }
+            writer:write_tool_call_block(block)
 
-                writer:finalize_turn()
+            assert.is_true(writer._scroll_owed)
+            assert.is_true(vim.api.nvim_buf_line_count(bufnr) > 20)
+        end)
 
-                assert.is_true(writer._scroll_owed)
-                assert.equal(21, vim.api.nvim_buf_line_count(bufnr))
-            end
-        )
+        it("finalize_turn owes a scroll", function()
+            setup_buffer(20, 20)
+
+            writer:finalize_turn()
+
+            assert.is_true(writer._scroll_owed)
+            assert.equal(21, vim.api.nvim_buf_line_count(bufnr))
+        end)
 
         it("write_message does not scroll a window in user control", function()
             schedule_stub:invokes(function(fn)
@@ -2047,24 +2063,27 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(writer._user_controlled[winid])
         end)
 
-        it("closing a fold that ends on the last line keeps following", function()
-            vim.api.nvim_win_call(winid, function()
-                vim.wo.foldmethod = "manual"
-                vim.cmd("40,50fold")
-                vim.cmd("40foldopen")
-            end)
-            start_at({ topline = 31, lnum = 50 })
+        it(
+            "closing a fold that ends on the last line keeps following",
+            function()
+                vim.api.nvim_win_call(winid, function()
+                    vim.wo.foldmethod = "manual"
+                    vim.cmd("40,50fold")
+                    vim.cmd("40foldopen")
+                end)
+                start_at({ topline = 31, lnum = 50 })
 
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd("normal! zc")
-                -- As vim's main loop does after zc: the cursor goes to the
-                -- fold start, and lines from above fill the rows it freed.
-                vim.fn.winrestview({ topline = 21, lnum = 40 })
-            end)
-            writer:on_view_change(winid, false)
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd("normal! zc")
+                    -- As vim's main loop does after zc: the cursor goes to the
+                    -- fold start, and lines from above fill the rows it freed.
+                    vim.fn.winrestview({ topline = 21, lnum = 40 })
+                end)
+                writer:on_view_change(winid, false)
 
-            assert.is_nil(writer._user_controlled[winid])
-        end)
+                assert.is_nil(writer._user_controlled[winid])
+            end
+        )
 
         it(
             "closing a fold that brings the end into view keeps user control",
@@ -2082,15 +2101,18 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
-        it("a view move down short of the last line keeps user control", function()
-            writer._user_controlled[winid] = true
-            start_at({ topline = 1, lnum = 1 })
+        it(
+            "a view move down short of the last line keeps user control",
+            function()
+                writer._user_controlled[winid] = true
+                start_at({ topline = 1, lnum = 1 })
 
-            move({ topline = 10, lnum = 10 })
-            writer:on_view_change(winid, false)
+                move({ topline = 10, lnum = 10 })
+                writer:on_view_change(winid, false)
 
-            assert.is_true(writer._user_controlled[winid])
-        end)
+                assert.is_true(writer._user_controlled[winid])
+            end
+        )
 
         it("a cursor move onto the last line follows again", function()
             writer._user_controlled[winid] = true
@@ -2102,15 +2124,18 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(writer._user_controlled[winid])
         end)
 
-        it("a cursor move down short of the last line keeps user control", function()
-            writer._user_controlled[winid] = true
-            start_at({ topline = 31, lnum = 40 })
+        it(
+            "a cursor move down short of the last line keeps user control",
+            function()
+                writer._user_controlled[winid] = true
+                start_at({ topline = 31, lnum = 40 })
 
-            move({ topline = 31, lnum = 45 })
-            writer:on_view_change(winid, false)
+                move({ topline = 31, lnum = 45 })
+                writer:on_view_change(winid, false)
 
-            assert.is_true(writer._user_controlled[winid])
-        end)
+                assert.is_true(writer._user_controlled[winid])
+            end
+        )
 
         it("the view our own change leaves is not a motion", function()
             start_at({ topline = 31, lnum = 50 })
@@ -2143,25 +2168,31 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(writer._user_controlled[winid])
         end)
 
-        it("an entry left without a view change skips no later motion", function()
-            start_at({ topline = 31, lnum = 50 })
+        it(
+            "an entry left without a view change skips no later motion",
+            function()
+                start_at({ topline = 31, lnum = 50 })
 
-            writer:on_window_enter(winid)
-            writer:on_window_leave(winid)
-            move({ topline = 31, lnum = 40 })
-            writer:on_view_change(winid, false)
+                writer:on_window_enter(winid)
+                writer:on_window_leave(winid)
+                move({ topline = 31, lnum = 40 })
+                writer:on_view_change(winid, false)
 
-            assert.is_true(writer._user_controlled[winid])
-        end)
+                assert.is_true(writer._user_controlled[winid])
+            end
+        )
 
-        it("go_to_bottom puts the window in following on the last line", function()
-            writer._user_controlled[winid] = true
+        it(
+            "go_to_bottom puts the window in following on the last line",
+            function()
+                writer._user_controlled[winid] = true
 
-            writer:go_to_bottom(winid)
+                writer:go_to_bottom(winid)
 
-            assert.is_nil(writer._user_controlled[winid])
-            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
-        end)
+                assert.is_nil(writer._user_controlled[winid])
+                assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+            end
+        )
     end)
 
     describe("tool call hold", function()
@@ -2239,22 +2270,31 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(11, topline())
         end)
 
-        it("caps writes at the header at the top, folded body included", function()
-            track(20, 24)
-            writer:hold_tool_call("h", false)
-            vim.api.nvim_win_call(winid, function()
-                vim.wo.foldmethod = "manual"
-                vim.cmd("22,25fold")
-            end)
+        it(
+            "caps writes at the header at the top, folded body included",
+            function()
+                track(20, 24)
+                writer:hold_tool_call("h", false)
+                vim.api.nvim_win_call(winid, function()
+                    vim.wo.foldmethod = "manual"
+                    vim.cmd("22,25fold")
+                end)
 
-            vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "a", "b", "c" })
-            for _ = 1, 30 do
-                vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "more" })
+                vim.api.nvim_buf_set_lines(
+                    bufnr,
+                    -1,
+                    -1,
+                    false,
+                    { "a", "b", "c" }
+                )
+                for _ = 1, 30 do
+                    vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "more" })
+                end
+                writer:_schedule_follow()
+
+                assert.equal(21, topline())
             end
-            writer:_schedule_follow()
-
-            assert.equal(21, topline())
-        end)
+        )
 
         it("leaves a following window the user moved down past it", function()
             track(20, 24)
@@ -2267,24 +2307,27 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(25, topline())
         end)
 
-        it("a user scroll up takes only that window, keeping the hold", function()
-            local other = vim.api.nvim_open_win(bufnr, false, {
-                relative = "editor",
-                width = 60,
-                height = 20,
-                row = 0,
-                col = 62,
-            })
-            track(20, 24)
-            writer:hold_tool_call("h", false)
+        it(
+            "a user scroll up takes only that window, keeping the hold",
+            function()
+                local other = vim.api.nvim_open_win(bufnr, false, {
+                    relative = "editor",
+                    width = 60,
+                    height = 20,
+                    row = 0,
+                    col = 62,
+                })
+                track(20, 24)
+                writer:hold_tool_call("h", false)
 
-            user_move({ topline = 10, lnum = 10 })
+                user_move({ topline = 10, lnum = 10 })
 
-            assert.is_true(writer._user_controlled[winid])
-            assert.is_nil(writer._user_controlled[other])
-            assert.equal("h", writer._held_tool_call_id)
-            vim.api.nvim_win_close(other, true)
-        end)
+                assert.is_true(writer._user_controlled[winid])
+                assert.is_nil(writer._user_controlled[other])
+                assert.equal("h", writer._held_tool_call_id)
+                vim.api.nvim_win_close(other, true)
+            end
+        )
 
         it("does not move a window in user control", function()
             writer._user_controlled[winid] = true
@@ -2336,32 +2379,35 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(13, topline())
         end)
 
-        it("placed in insert mode, places again once the folds close", function()
-            setup_buffer(80, 1)
-            writer:_own_change(function() end)
-            track(20, 45)
-            vim.api.nvim_win_call(winid, function()
-                vim.wo.foldmethod = "manual"
-                vim.cmd("22,45fold")
-                vim.cmd("22foldopen")
-            end)
-            writer._pending_fold_ops = {
-                { id = writer:_place_fold_anchor(21), open = false },
-            }
-            local mode = spy.stub(vim.api, "nvim_get_mode")
-            mode:returns({ mode = "i", blocking = false })
+        it(
+            "placed in insert mode, places again once the folds close",
+            function()
+                setup_buffer(80, 1)
+                writer:_own_change(function() end)
+                track(20, 45)
+                vim.api.nvim_win_call(winid, function()
+                    vim.wo.foldmethod = "manual"
+                    vim.cmd("22,45fold")
+                    vim.cmd("22foldopen")
+                end)
+                writer._pending_fold_ops = {
+                    { id = writer:_place_fold_anchor(21), open = false },
+                }
+                local mode = spy.stub(vim.api, "nvim_get_mode")
+                mode:returns({ mode = "i", blocking = false })
 
-            writer:hold_tool_call("h", false)
-            writer:flush_pending_fold_ops()
-            -- Tall while open: header at the top.
-            assert.equal(21, topline())
+                writer:hold_tool_call("h", false)
+                writer:flush_pending_fold_ops()
+                -- Tall while open: header at the top.
+                assert.equal(21, topline())
 
-            mode:revert()
-            vim.api.nvim_exec_autocmds("ModeChanged", {})
+                mode:revert()
+                vim.api.nvim_exec_autocmds("ModeChanged", {})
 
-            -- Header, closed fold, footer: 3 rows, 8 above them.
-            assert.equal(13, topline())
-        end)
+                -- Header, closed fold, footer: 3 rows, 8 above them.
+                assert.equal(13, topline())
+            end
+        )
 
         it("with follow off, the pin holds no window", function()
             writer._pin_held[winid] = true
@@ -2375,17 +2421,20 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(writer._user_controlled[winid])
         end)
 
-        it("a pin release skips a window that no longer shows the buffer", function()
-            writer._pin_held[winid] = true
-            local other = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_win_set_buf(winid, other)
+        it(
+            "a pin release skips a window that no longer shows the buffer",
+            function()
+                writer._pin_held[winid] = true
+                local other = vim.api.nvim_create_buf(false, true)
+                vim.api.nvim_win_set_buf(winid, other)
 
-            writer:_release_prose_pin()
+                writer:_release_prose_pin()
 
-            assert.is_nil(writer._user_controlled[winid])
-            vim.api.nvim_win_set_buf(winid, bufnr)
-            vim.api.nvim_buf_delete(other, { force = true })
-        end)
+                assert.is_nil(writer._user_controlled[winid])
+                vim.api.nvim_win_set_buf(winid, bufnr)
+                vim.api.nvim_buf_delete(other, { force = true })
+            end
+        )
 
         it("a hold scroll clears the pin's hold on the window", function()
             writer._prose_anchor_line = 5
@@ -2428,16 +2477,19 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(14, topline())
         end)
 
-        it("follow_in takes a window out of user control and places it", function()
-            writer._user_controlled[winid] = true
-            track(20, 24)
-            writer:hold_tool_call("h", false)
+        it(
+            "follow_in takes a window out of user control and places it",
+            function()
+                writer._user_controlled[winid] = true
+                track(20, 24)
+                writer:hold_tool_call("h", false)
 
-            writer:follow_in(winid)
+                writer:follow_in(winid)
 
-            assert.is_nil(writer._user_controlled[winid])
-            assert.equal(14, topline())
-        end)
+                assert.is_nil(writer._user_controlled[winid])
+                assert.equal(14, topline())
+            end
+        )
     end)
 
     describe("last position", function()
@@ -2529,35 +2581,41 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(11, vim.fn.line("w0", winid))
         end)
 
-        it("without it, a window vim restores below the pin reaches the pin", function()
-            vim.api.nvim_win_set_cursor(winid, { 45, 0 })
-            hide()
-            writer._prose_anchor_line = 9
-            schedule_stub:revert()
-            local deferred = Deferred.capture()
-            MiniTest.finally(deferred.revert)
+        it(
+            "without it, a window vim restores below the pin reaches the pin",
+            function()
+                vim.api.nvim_win_set_cursor(winid, { 45, 0 })
+                hide()
+                writer._prose_anchor_line = 9
+                schedule_stub:revert()
+                local deferred = Deferred.capture()
+                MiniTest.finally(deferred.revert)
 
-            vim.cmd("sbuffer " .. bufnr)
-            winid = vim.api.nvim_get_current_win()
-            -- Vim's restore from the window history, after BufWinEnter.
-            assert.equal(45, vim.api.nvim_win_get_cursor(winid)[1])
-            vim.cmd("redraw")
-            deferred.drain()
+                vim.cmd("sbuffer " .. bufnr)
+                winid = vim.api.nvim_get_current_win()
+                -- Vim's restore from the window history, after BufWinEnter.
+                assert.equal(45, vim.api.nvim_win_get_cursor(winid)[1])
+                vim.cmd("redraw")
+                deferred.drain()
 
-            vim.cmd("redraw")
-            assert.equal(10, vim.fn.line("w0", winid))
-            assert.is_nil(writer._user_controlled[winid])
-        end)
+                vim.cmd("redraw")
+                assert.equal(10, vim.fn.line("w0", winid))
+                assert.is_nil(writer._user_controlled[winid])
+            end
+        )
 
-        it("without it and follow off, a shown window goes to the last line", function()
-            Config.follow = vim.tbl_extend("force", Config.follow, {
-                enabled = false,
-            }) --[[@as agentic.UserConfig.Follow]]
+        it(
+            "without it and follow off, a shown window goes to the last line",
+            function()
+                Config.follow = vim.tbl_extend("force", Config.follow, {
+                    enabled = false,
+                }) --[[@as agentic.UserConfig.Follow]]
 
-            writer:on_window_shown(winid)
+                writer:on_window_shown(winid)
 
-            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
-        end)
+                assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+            end
+        )
 
         it("with it, a shown window keeps its place in user control", function()
             writer._has_last_position = true
@@ -2574,24 +2632,27 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(10, vim.api.nvim_win_get_cursor(winid)[1])
         end)
 
-        it("with it, only the first window shown after it keeps its place", function()
-            writer._has_last_position = true
-            writer:on_window_shown(winid)
+        it(
+            "with it, only the first window shown after it keeps its place",
+            function()
+                writer._has_last_position = true
+                writer:on_window_shown(winid)
 
-            local other = vim.api.nvim_open_win(bufnr, false, {
-                relative = "editor",
-                width = 60,
-                height = 20,
-                row = 0,
-                col = 62,
-            })
-            MiniTest.finally(function()
-                vim.api.nvim_win_close(other, true)
-            end)
+                local other = vim.api.nvim_open_win(bufnr, false, {
+                    relative = "editor",
+                    width = 60,
+                    height = 20,
+                    row = 0,
+                    col = 62,
+                })
+                MiniTest.finally(function()
+                    vim.api.nvim_win_close(other, true)
+                end)
 
-            assert.is_true(writer._user_controlled[winid])
-            assert.is_nil(writer._user_controlled[other])
-        end)
+                assert.is_true(writer._user_controlled[winid])
+                assert.is_nil(writer._user_controlled[other])
+            end
+        )
 
         it("with it, follow_in after the show still follows", function()
             writer._has_last_position = true
@@ -2639,15 +2700,18 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_not_nil(writer._views[winid])
         end)
 
-        it("the last window is forgotten after its last position is kept", function()
-            writer._user_controlled[winid] = true
+        it(
+            "the last window is forgotten after its last position is kept",
+            function()
+                writer._user_controlled[winid] = true
 
-            hide()
+                hide()
 
-            assert.is_true(writer._has_last_position)
-            assert.is_nil(writer._user_controlled[winid])
-            assert.is_nil(writer._views[winid])
-        end)
+                assert.is_true(writer._has_last_position)
+                assert.is_nil(writer._user_controlled[winid])
+                assert.is_nil(writer._views[winid])
+            end
+        )
 
         it("is forgotten on reset", function()
             writer._has_last_position = true
@@ -2767,15 +2831,18 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(writer._prose_anchor_line)
         end)
 
-        it("resume_follow ends user control and scrolls to the bottom", function()
-            setup_buffer(50, 1)
-            writer._user_controlled[winid] = true
+        it(
+            "resume_follow ends user control and scrolls to the bottom",
+            function()
+                setup_buffer(50, 1)
+                writer._user_controlled[winid] = true
 
-            writer:resume_follow()
+                writer:resume_follow()
 
-            assert.is_nil(writer._user_controlled[winid])
-            assert.equal(vim.fn.getwininfo(winid)[1].botline, 50)
-        end)
+                assert.is_nil(writer._user_controlled[winid])
+                assert.equal(vim.fn.getwininfo(winid)[1].botline, 50)
+            end
+        )
 
         it("does not set the pin in user control", function()
             writer._user_controlled[winid] = true
@@ -2931,19 +2998,22 @@ describe("agentic.ui.MessageWriter", function()
             assert.same({ 3, 2 }, vim.api.nvim_win_get_cursor(winid))
         end)
 
-        it("puts the cursor on the last line under a cap that does not bind", function()
-            local lines = {}
-            for i = 1, 10 do
-                lines[i] = "line " .. i
+        it(
+            "puts the cursor on the last line under a cap that does not bind",
+            function()
+                local lines = {}
+                for i = 1, 10 do
+                    lines[i] = "line " .. i
+                end
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+                vim.api.nvim_win_set_cursor(winid, { 3, 0 })
+
+                local held = BufHelpers.scroll_down(winid, 1, 1)
+
+                assert.is_false(held)
+                assert.equal(10, vim.api.nvim_win_get_cursor(winid)[1])
             end
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-            vim.api.nvim_win_set_cursor(winid, { 3, 0 })
-
-            local held = BufHelpers.scroll_down(winid, 1, 1)
-
-            assert.is_false(held)
-            assert.equal(10, vim.api.nvim_win_get_cursor(winid)[1])
-        end)
+        )
 
         it("scrolls normally when max_topline is nil", function()
             local lines = {}
@@ -5342,36 +5412,47 @@ describe("agentic.ui.MessageWriter", function()
                 kind = "SubAgent",
                 argument = "finder",
                 body = { "first", "", "second", "", "third" },
-                subagent = { label = "finder", mode = "blocking", confirmed = true },
+                subagent = {
+                    label = "finder",
+                    mode = "blocking",
+                    confirmed = true,
+                },
             })
             local body_start = fold_fence_lines()[2] + 1
             deferred.drain()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
-        it("keeps a subagent prompt the user opened through completion", function()
-            writer:write_tool_call_block({
-                tool_call_id = "spawn-reopen",
-                status = "in_progress",
-                kind = "SubAgent",
-                argument = "finder",
-                body = { "first", "", "second", "", "third" },
-                subagent = { label = "finder", mode = "blocking", confirmed = true },
-            })
-            local body_start = fold_fence_lines()[1] + 1
-            deferred.drain()
-            assert.equal(body_start, vim.fn.foldclosed(body_start))
+        it(
+            "keeps a subagent prompt the user opened through completion",
+            function()
+                writer:write_tool_call_block({
+                    tool_call_id = "spawn-reopen",
+                    status = "in_progress",
+                    kind = "SubAgent",
+                    argument = "finder",
+                    body = { "first", "", "second", "", "third" },
+                    subagent = {
+                        label = "finder",
+                        mode = "blocking",
+                        confirmed = true,
+                    },
+                })
+                local body_start = fold_fence_lines()[1] + 1
+                deferred.drain()
+                assert.equal(body_start, vim.fn.foldclosed(body_start))
 
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd(body_start .. "foldopen")
-            end)
-            writer:update_tool_call_block({
-                tool_call_id = "spawn-reopen",
-                status = "completed",
-            })
-            deferred.drain()
-            assert.equal(-1, vim.fn.foldclosed(body_start))
-        end)
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd(body_start .. "foldopen")
+                end)
+                writer:update_tool_call_block({
+                    tool_call_id = "spawn-reopen",
+                    status = "completed",
+                })
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(body_start))
+            end
+        )
 
         describe("large created file", function()
             --- @type integer|nil

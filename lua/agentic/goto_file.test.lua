@@ -60,11 +60,14 @@ describe("agentic.GotoFile", function()
             assert.equal("/x", GotoFile.resolve("/x"))
         end)
 
-        it("returns the name unchanged before the ACP session exists", function()
-            owner_stub:returns(owner(nil))
+        it(
+            "returns the name unchanged before the ACP session exists",
+            function()
+                owner_stub:returns(owner(nil))
 
-            assert.equal("/x", GotoFile.resolve("/x"))
-        end)
+                assert.equal("/x", GotoFile.resolve("/x"))
+            end
+        )
     end)
 
     it("makes gf open a skill from an AgenticInput buffer", function()

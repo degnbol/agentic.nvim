@@ -214,22 +214,25 @@ _G.s.message_writer:write_tool_call_block({
         assert.is_true(shows_last_line())
     end)
 
-    it("a write that fits the view moves the cursor to the last line", function()
-        -- Empty rows below the last line, as a fold that closes leaves them.
-        child.lua([[
+    it(
+        "a write that fits the view moves the cursor to the last line",
+        function()
+            -- Empty rows below the last line, as a fold that closes leaves them.
+            child.lua([[
 local last = vim.api.nvim_buf_line_count(_G.chat)
 _G.s.message_writer:_own_change(function()
     vim.fn.winrestview({ topline = last - 2, lnum = last })
 end)
 ]])
-        write_more(3)
+            write_more(3)
 
-        assert.is_true(
-            child.lua_get(
-                "vim.api.nvim_win_get_cursor(_G.win)[1] == vim.api.nvim_buf_line_count(_G.chat)"
+            assert.is_true(
+                child.lua_get(
+                    "vim.api.nvim_win_get_cursor(_G.win)[1] == vim.api.nvim_buf_line_count(_G.chat)"
+                )
             )
-        )
-    end)
+        end
+    )
 
     it("the cursor a window entry places is not a motion", function()
         child.lua([[
@@ -271,17 +274,22 @@ _G.win = _G.s.widget:home_win()
         settle()
     end
 
-    it("a widget hidden while following reopens at the bottom, following", function()
-        reopen(function()
-            write_more()
-        end)
+    it(
+        "a widget hidden while following reopens at the bottom, following",
+        function()
+            reopen(function()
+                write_more()
+            end)
 
-        assert.is_false(user_controlled())
-        assert.is_true(shows_last_line())
-    end)
+            assert.is_false(user_controlled())
+            assert.is_true(shows_last_line())
+        end
+    )
 
-    it("a widget reopened while following fills the window to a closed fold at the end", function()
-        child.lua([[
+    it(
+        "a widget reopened while following fills the window to a closed fold at the end",
+        function()
+            child.lua([[
 local writer = _G.s.message_writer
 local first_body = vim.api.nvim_buf_line_count(_G.chat) + 1
 writer:_own_edit(function(bufnr)
@@ -292,19 +300,20 @@ writer:_own_edit(function(bufnr)
 end)
 writer:_queue_fold(first_body, false)
 ]])
-        settle()
+            settle()
 
-        reopen(function() end)
+            reopen(function() end)
 
-        assert.is_true(shows_last_line())
-        -- Rows of text from the topline down: a scroll measured against the
-        -- open fold leaves empty rows below the end once it closes.
-        assert.is_true(child.lua_get([[
+            assert.is_true(shows_last_line())
+            -- Rows of text from the topline down: a scroll measured against the
+            -- open fold leaves empty rows below the end once it closes.
+            assert.is_true(child.lua_get([[
 vim.api.nvim_win_text_height(_G.win, {
     start_row = vim.fn.getwininfo(_G.win)[1].topline - 1,
 }).all >= vim.api.nvim_win_get_height(_G.win) - 1
 ]]))
-    end)
+        end
+    )
 
     it("a widget hidden in user control reopens where it was left", function()
         child.type_keys("100G")
@@ -321,7 +330,10 @@ writer:_queue_fold_op(writer:_place_fold_anchor(10), false)
         end)
 
         assert.is_true(user_controlled())
-        assert.equal(100, child.lua_get("vim.api.nvim_win_get_cursor(_G.win)[1]"))
+        assert.equal(
+            100,
+            child.lua_get("vim.api.nvim_win_get_cursor(_G.win)[1]")
+        )
     end)
 
     it("goto bottom puts an unfocused window in following", function()
@@ -363,17 +375,22 @@ vim.fn.getwininfo(_G.win)[1].topline <= 100
     end
 
     for _, focus in ipairs({ "focused", "unfocused" }) do
-        it("an " .. focus .. " window a hold placed mid-buffer keeps following", function()
-            if focus == "unfocused" then
-                child.lua([[vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)]])
+        it(
+            "an " .. focus .. " window a hold placed mid-buffer keeps following",
+            function()
+                if focus == "unfocused" then
+                    child.lua(
+                        [[vim.api.nvim_set_current_win(_G.s.widget.win_nrs.input)]]
+                    )
+                end
+
+                hold_mid_block()
+
+                assert.is_true(shows_held_block())
+                assert.is_false(shows_last_line())
+                assert.is_false(user_controlled())
             end
-
-            hold_mid_block()
-
-            assert.is_true(shows_held_block())
-            assert.is_false(shows_last_line())
-            assert.is_false(user_controlled())
-        end)
+        )
     end
 
     it("a submit during a hold keeps the held block in view", function()

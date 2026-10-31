@@ -42,11 +42,17 @@ describe("agentic.utils.LogLine", function()
         end)
 
         it("keeps brackets that do not start JSON", function()
-            assert.equal("Got {not json} here", LogLine.summary("Got {not json} here"))
+            assert.equal(
+                "Got {not json} here",
+                LogLine.summary("Got {not json} here")
+            )
         end)
 
         it("keeps truncated JSON", function()
-            assert.equal("Bad value: [1, 2", LogLine.summary("Bad value: [1, 2"))
+            assert.equal(
+                "Bad value: [1, 2",
+                LogLine.summary("Bad value: [1, 2")
+            )
         end)
 
         it("keeps a line with more brackets than are tried", function()

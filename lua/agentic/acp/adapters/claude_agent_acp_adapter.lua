@@ -561,7 +561,8 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
             elseif update.title then
                 -- rawInput may lack offset/limit; fall back to parsing
                 -- the title string e.g. "Read file.txt (10 - 42)"
-                local _, range = CanonicalToolCall.parse_read_range(update.title)
+                local _, range =
+                    CanonicalToolCall.parse_read_range(update.title)
                 message.read_range = range
             end
         end

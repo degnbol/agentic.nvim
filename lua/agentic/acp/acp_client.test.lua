@@ -130,8 +130,10 @@ describe("agentic.acp.ACPClient", function()
         end)
 
         it("names the provider by command when it has no name", function()
-            make_client({ command = "provider-cmd" })
-                :_on_process_output("stderr", "oops")
+            make_client({ command = "provider-cmd" }):_on_process_output(
+                "stderr",
+                "oops"
+            )
 
             assert.equal(
                 "provider-cmd 1.0 stderr: oops",
@@ -143,9 +145,7 @@ describe("agentic.acp.ACPClient", function()
             Config.log = true
             make_client():_on_process_output("stderr", "oops")
             assert.equal(
-                "Provider 1.0 stderr: oops (logs in "
-                    .. Logger.LOG_DIR
-                    .. ")",
+                "Provider 1.0 stderr: oops (logs in " .. Logger.LOG_DIR .. ")",
                 notify_stub.calls[1][1]
             )
         end)
@@ -1039,15 +1039,18 @@ describe("agentic.acp.ACPClient", function()
         assert.equal(client.ERROR_CODES.PROTOCOL_ERROR, err.code)
     end)
 
-    it("neither reports budget windows nor auto-continues by default", function()
-        local client = setmetatable({}, { __index = ACPClient })
-        assert.is_nil(client:budget_windows({
-            sessionUpdate = "usage_update",
-            used = 0,
-            size = 0,
-        }))
-        assert.is_false(client:auto_continue_on_usage_limit())
-    end)
+    it(
+        "neither reports budget windows nor auto-continues by default",
+        function()
+            local client = setmetatable({}, { __index = ACPClient })
+            assert.is_nil(client:budget_windows({
+                sessionUpdate = "usage_update",
+                used = 0,
+                size = 0,
+            }))
+            assert.is_false(client:auto_continue_on_usage_limit())
+        end
+    )
 
     describe("session roots", function()
         --- @param overrides table
@@ -1116,19 +1119,24 @@ describe("agentic.acp.ACPClient", function()
             assert.is_nil(client.subscribers["s-1"])
         end)
 
-        it("forgets the session's tool-call kinds with the subscriber", function()
-            local client = make_client({ subscribers = { ["s-1"] = {} } })
-            client._tool_call_kinds:apply(
-                "s-1",
-                { sessionUpdate = "tool_call", toolCallId = "t", kind = "edit" }
-            )
+        it(
+            "forgets the session's tool-call kinds with the subscriber",
+            function()
+                local client = make_client({ subscribers = { ["s-1"] = {} } })
+                client._tool_call_kinds:apply("s-1", {
+                    sessionUpdate = "tool_call",
+                    toolCallId = "t",
+                    kind = "edit",
+                })
 
-            client:unsubscribe("s-1")
+                client:unsubscribe("s-1")
 
-            local update = { sessionUpdate = "tool_call_update", toolCallId = "t" }
-            client._tool_call_kinds:apply("s-1", update)
-            assert.is_nil(update.kind)
-        end)
+                local update =
+                    { sessionUpdate = "tool_call_update", toolCallId = "t" }
+                client._tool_call_kinds:apply("s-1", update)
+                assert.is_nil(update.kind)
+            end
+        )
 
         it("records no kinds for an unsubscribed session", function()
             local client = make_client({
@@ -1287,25 +1295,28 @@ describe("agentic.acp.ACPClient", function()
             assert.same({ "/tmp/project" }, client:session_roots("child"))
         end)
 
-        it("forwards a child's replayed user chunk while the root loads", function()
-            local handlers, calls = recording_handlers()
-            local client = make_client({
-                subscribers = { root = handlers },
-                _loading_sessions = { root = true },
-            })
-            spawn(client, "root", "child")
+        it(
+            "forwards a child's replayed user chunk while the root loads",
+            function()
+                local handlers, calls = recording_handlers()
+                local client = make_client({
+                    subscribers = { root = handlers },
+                    _loading_sessions = { root = true },
+                })
+                spawn(client, "root", "child")
 
-            client:__handle_session_update({
-                sessionId = "child",
-                update = {
-                    sessionUpdate = "user_message_chunk",
-                    content = { type = "text", text = "p" },
-                },
-            })
-            deferred.drain()
+                client:__handle_session_update({
+                    sessionId = "child",
+                    update = {
+                        sessionUpdate = "user_message_chunk",
+                        content = { type = "text", text = "p" },
+                    },
+                })
+                deferred.drain()
 
-            assert.equal(2, #calls)
-        end)
+                assert.equal(2, #calls)
+            end
+        )
 
         it("drops a root's children with its subscriber", function()
             local client =

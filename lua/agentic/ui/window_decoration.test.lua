@@ -67,23 +67,26 @@ describe("agentic.ui.WindowDecoration", function()
             assert.equal("󰚩 Agentic Chat", vim.wo[winid].winbar)
         end)
 
-        it("render icon, title, state and context in every showing window", function()
-            local second = vim.api.nvim_open_win(bufnr, false, {
-                split = "below",
-                win = winid,
-            })
+        it(
+            "render icon, title, state and context in every showing window",
+            function()
+                local second = vim.api.nvim_open_win(bufnr, false, {
+                    split = "below",
+                    win = winid,
+                })
 
-            WindowDecoration.set_header(bufnr, {
-                icon = "I",
-                title = "Chat",
-                idle = true,
-                context = "12k",
-            })
+                WindowDecoration.set_header(bufnr, {
+                    icon = "I",
+                    title = "Chat",
+                    idle = true,
+                    context = "12k",
+                })
 
-            assert.equal("I Chat 󰂞 · 12k", vim.wo[winid].winbar)
-            assert.equal("I Chat 󰂞 · 12k", vim.wo[second].winbar)
-            vim.api.nvim_win_close(second, true)
-        end)
+                assert.equal("I Chat 󰂞 · 12k", vim.wo[winid].winbar)
+                assert.equal("I Chat 󰂞 · 12k", vim.wo[second].winbar)
+                vim.api.nvim_win_close(second, true)
+            end
+        )
 
         it("render without a state or context", function()
             WindowDecoration.set_header(bufnr, { icon = "I", title = "Chat" })
@@ -176,17 +179,20 @@ describe("agentic.ui.WindowDecoration", function()
 
     describe("header_chunks", function()
         it("lay out every part with its separator", function()
-            assert.same({
-                { "󰚩" },
-                { " #3 Fix" },
-                { " ?", "AgenticHeaderAttention" },
-                { " · 12k" },
-            }, WindowDecoration.header_chunks({
-                icon = "󰚩",
-                title = "#3 Fix",
-                waiting = true,
-                context = "12k",
-            }))
+            assert.same(
+                {
+                    { "󰚩" },
+                    { " #3 Fix" },
+                    { " ?", "AgenticHeaderAttention" },
+                    { " · 12k" },
+                },
+                WindowDecoration.header_chunks({
+                    icon = "󰚩",
+                    title = "#3 Fix",
+                    waiting = true,
+                    context = "12k",
+                })
+            )
         end)
 
         it("have no separator before the first chunk", function()
@@ -200,7 +206,10 @@ describe("agentic.ui.WindowDecoration", function()
             )
             assert.same(
                 { { "Chat" }, { " 󰔟" } },
-                WindowDecoration.header_chunks({ title = "Chat", running = true })
+                WindowDecoration.header_chunks({
+                    title = "Chat",
+                    running = true,
+                })
             )
             assert.same(
                 { { "12k" } },

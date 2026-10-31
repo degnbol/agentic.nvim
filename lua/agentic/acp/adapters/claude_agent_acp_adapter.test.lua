@@ -623,7 +623,6 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
 
                 assert.is_true(msg.exits_plan)
             end)
-
         end)
 
         it("shows EnterWorktree as its own call, not a mode switch", function()
@@ -868,9 +867,14 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     title = "SendMessage",
                     rawInput = { to = "a1b2", message = "Also lib/." },
                     content = {
-                        { type = "content", content = { type = "text", text = text } },
+                        {
+                            type = "content",
+                            content = { type = "text", text = text },
+                        },
                     },
-                    _meta = { claudeCode = { toolName = toolName or "SendMessage" } },
+                    _meta = {
+                        claudeCode = { toolName = toolName or "SendMessage" },
+                    },
                 }
             end
 
@@ -882,7 +886,10 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     success = true,
                 })
 
-                adapter:__handle_tool_call("s-1", with_result(result, "completed"))
+                adapter:__handle_tool_call(
+                    "s-1",
+                    with_result(result, "completed")
+                )
 
                 assert.same({
                     "Message queued for delivery to a1b2 at its next tool round.",
@@ -894,7 +901,10 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             it("fails a call whose result was not delivered", function()
                 local msg = make_adapter():__build_tool_call_update(
                     with_result(
-                        vim.json.encode({ message = "No such agent.", success = false }),
+                        vim.json.encode({
+                            message = "No such agent.",
+                            success = false,
+                        }),
                         "completed"
                     )
                 )
@@ -903,19 +913,25 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 assert.equal("failed", msg.status)
             end)
 
-            it("gives a failed handback its text and a failed status", function()
-                local msg = make_adapter():__build_tool_call_update(
-                    with_result(
-                        vim.json.encode({ message = "Parent gone.", success = false }),
-                        "completed",
-                        "SubagentHandback"
+            it(
+                "gives a failed handback its text and a failed status",
+                function()
+                    local msg = make_adapter():__build_tool_call_update(
+                        with_result(
+                            vim.json.encode({
+                                message = "Parent gone.",
+                                success = false,
+                            }),
+                            "completed",
+                            "SubagentHandback"
+                        )
                     )
-                )
 
-                assert.equal("SubagentHandback", msg.kind)
-                assert.same({ "Parent gone." }, msg.body)
-                assert.equal("failed", msg.status)
-            end)
+                    assert.equal("SubagentHandback", msg.kind)
+                    assert.same({ "Parent gone." }, msg.body)
+                    assert.equal("failed", msg.status)
+                end
+            )
 
             it("leaves a body that is not such an object as it is", function()
                 local msg = make_adapter():__build_tool_call_update(
@@ -1161,7 +1177,10 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     toolUseId = "toolu_" .. session_id,
                     requestShape = shape,
                 }),
-            }, vim.fs.joinpath(dir, "agent-" .. agent_id .. ".meta.json"))
+            }, vim.fs.joinpath(
+                dir,
+                "agent-" .. agent_id .. ".meta.json"
+            ))
         end
 
         --- @return agentic.acp.ACPClient
@@ -1530,18 +1549,22 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
 
         for _, todo_tools in ipairs({ true, false }) do
-            it("keeps a copy of the config, todo_tools " .. tostring(todo_tools), function()
-                local provider_config = {
-                    command = "claude-agent-acp",
-                    todo_tools = todo_tools,
-                    subagents = { force_background = false },
-                }
+            it(
+                "keeps a copy of the config, todo_tools "
+                    .. tostring(todo_tools),
+                function()
+                    local provider_config = {
+                        command = "claude-agent-acp",
+                        todo_tools = todo_tools,
+                        subagents = { force_background = false },
+                    }
 
-                local config = spawn_config(provider_config)
-                provider_config.subagents.force_background = true
+                    local config = spawn_config(provider_config)
+                    provider_config.subagents.force_background = true
 
-                assert.is_false(config.subagents.force_background)
-            end)
+                    assert.is_false(config.subagents.force_background)
+                end
+            )
         end
 
         it("yields to an explicit env entry", function()
@@ -1713,7 +1736,10 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             })
             send(adapter, {
                 sessionUpdate = "tool_call_update",
-                rawInput = { command = "ls", command_description = "List files" },
+                rawInput = {
+                    command = "ls",
+                    command_description = "List files",
+                },
                 _meta = meta("Bash"),
             })
 

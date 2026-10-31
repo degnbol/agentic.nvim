@@ -143,7 +143,9 @@ vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(chat), 0 })
 
     it("on an agentic:// name opens that buffer", function()
         cursor_on_prose(
-            child.lua_get("vim.api.nvim_buf_get_name(_G.s.widget.buf_nrs.input)")
+            child.lua_get(
+                "vim.api.nvim_buf_get_name(_G.s.widget.buf_nrs.input)"
+            )
         )
 
         press("gf")

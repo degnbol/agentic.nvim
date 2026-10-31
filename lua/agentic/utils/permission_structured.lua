@@ -350,7 +350,9 @@ local function prefix_walk(words, dashdash_value)
             elseif is_flag(w) then
                 leading_flag_idx[i] = true
                 table.insert(stack, i + 1) -- absorb 0
-                if i + 1 <= n and absorbs_value(words[i + 1], dashdash_value) then
+                if
+                    i + 1 <= n and absorbs_value(words[i + 1], dashdash_value)
+                then
                     table.insert(stack, i + 2) -- absorb 1
                 end
             else
@@ -479,9 +481,7 @@ local function some_stream_matches(patterns, words, dynamic, dashdash_value)
             if rec(i + 1, pos) then -- absorb 0
                 return true
             end
-            if
-                i + 1 <= nw and absorbs_value(words[i + 1], dashdash_value)
-            then
+            if i + 1 <= nw and absorbs_value(words[i + 1], dashdash_value) then
                 return rec(i + 2, pos) -- absorb 1
             end
             return false
@@ -1155,8 +1155,7 @@ function M.decide_leaf(entries, parsed, tier)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
     local arity = arity_of(entries, parsed.cmd_name)
-    local ctx =
-        build_exist_ctx(words, dynamic, true, every_scope_takers(arity))
+    local ctx = build_exist_ctx(words, dynamic, true, every_scope_takers(arity))
     local relevant = relevant_entries(entries, parsed.cmd_name)
     local get_forall = forall_getter(words, dynamic, arity)
 
@@ -1212,8 +1211,7 @@ function M.classify_leaf(entries, parsed)
     local words = parsed.args
     local dynamic = parsed.args_dynamic or {}
     local arity = arity_of(entries, parsed.cmd_name)
-    local ctx =
-        build_exist_ctx(words, dynamic, true, every_scope_takers(arity))
+    local ctx = build_exist_ctx(words, dynamic, true, every_scope_takers(arity))
     local get_forall = forall_getter(words, dynamic, arity)
     local relevant = relevant_entries(entries, parsed.cmd_name)
 

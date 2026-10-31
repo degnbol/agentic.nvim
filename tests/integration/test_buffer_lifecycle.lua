@@ -112,9 +112,7 @@ vim.api.nvim_set_current_win(_G.s.widget:home_win())
         it("stays set after :w while a turn runs", function()
             open_session()
             mutate(true)
-            child.lua(
-                [[vim.api.nvim_set_current_win(_G.s.widget:home_win())]]
-            )
+            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:home_win())]])
 
             child.cmd("write")
 
@@ -206,9 +204,13 @@ vim.cmd("stopinsert")
 
                 assert.equal(
                     0,
-                    child.lua_get("#vim.fn.win_findbuf(_G.s.widget.buf_nrs.input)")
+                    child.lua_get(
+                        "#vim.fn.win_findbuf(_G.s.widget.buf_nrs.input)"
+                    )
                 )
-                assert.is_true(child.lua_get("#vim.fn.win_findbuf(_G.chat) > 0"))
+                assert.is_true(
+                    child.lua_get("#vim.fn.win_findbuf(_G.chat) > 0")
+                )
                 assert.same({ "hello" }, child.lua_get("_G.sent"))
             end)
         end
@@ -226,9 +228,7 @@ vim.cmd("stopinsert")
                 child.cmd("vsplit")
                 open_session()
                 mutate(false)
-                child.lua(
-                    "vim.api.nvim_set_current_win(" .. wins[panel] .. ")"
-                )
+                child.lua("vim.api.nvim_set_current_win(" .. wins[panel] .. ")")
 
                 child.cmd("quit")
                 child.flush()
@@ -618,7 +618,11 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             local header = child.lua_get("vim.b[_G.sub].agentic_header")
             assert.equal(
                 1,
-                header.title:find("#" .. child.lua_get("_G.s.id") .. " › ", 1, true)
+                header.title:find(
+                    "#" .. child.lua_get("_G.s.id") .. " › ",
+                    1,
+                    true
+                )
             )
             assert.is_true(header.running)
             assert.is_true(child.lua_get([[(function()
@@ -674,7 +678,10 @@ end)()]]))
             end, sub_lines())
             assert.equal(1, #headings)
             assert.is_true(vim.endswith(headings[1], " map"))
-            assert.equal(1, select(2, table.concat(sub_lines(), "\n"):gsub("first", "")))
+            assert.equal(
+                1,
+                select(2, table.concat(sub_lines(), "\n"):gsub("first", ""))
+            )
         end)
 
         it("records a subagent edit that completes after :e!", function()

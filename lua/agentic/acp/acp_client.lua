@@ -333,9 +333,7 @@ function ACPClient:_on_process_output(stream, line)
     end
     self._notified_output[summary] = true
 
-    local suffix = Config.log
-            and " (logs in " .. Logger.LOG_DIR .. ")"
-        or ""
+    local suffix = Config.log and " (logs in " .. Logger.LOG_DIR .. ")" or ""
     Logger.notify(label .. ": " .. summary .. suffix, vim.log.levels.WARN)
 end
 
@@ -1144,7 +1142,10 @@ end
 function ACPClient:_startup_auth_method()
     local id = self.provider_config.auth_method
     for _, method in ipairs(self.auth_methods or {}) do
-        if method.id == id and ACPClient.auth_method_kind(method) == "agent" then
+        if
+            method.id == id
+            and ACPClient.auth_method_kind(method) == "agent"
+        then
             return method
         end
     end

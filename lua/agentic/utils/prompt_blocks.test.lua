@@ -52,12 +52,15 @@ describe("agentic.utils.PromptBlocks", function()
     describe("split", function()
         -- The property that makes splitting safe to apply to every submit.
         it("yields exactly one block for prose-only text", function()
-            assert.same({
-                { "Continue with the refactor\nthen run the tests", 0, 1 },
-            }, shape(PromptBlocks.split({
-                "Continue with the refactor",
-                "then run the tests",
-            })))
+            assert.same(
+                {
+                    { "Continue with the refactor\nthen run the tests", 0, 1 },
+                },
+                shape(PromptBlocks.split({
+                    "Continue with the refactor",
+                    "then run the tests",
+                }))
+            )
         end)
 
         it("splits a command from the prose below it", function()
@@ -78,7 +81,9 @@ describe("agentic.utils.PromptBlocks", function()
             assert.same({
                 { "/compact", 0, 0 },
                 { "Focus on X", 1, 1 },
-            }, shape(PromptBlocks.split({ "/compact", "Focus on X" })))
+            }, shape(
+                PromptBlocks.split({ "/compact", "Focus on X" })
+            ))
         end)
 
         it("keeps path lines in one prose block", function()
@@ -107,7 +112,9 @@ describe("agentic.utils.PromptBlocks", function()
             assert.same({
                 { "/context", 0, 0 },
                 { "/compact", 2, 2 },
-            }, shape(PromptBlocks.split({ "/context", "", "/compact" })))
+            }, shape(
+                PromptBlocks.split({ "/context", "", "/compact" })
+            ))
         end)
 
         it("trims a prose block's edge blank lines but spans them", function()

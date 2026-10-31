@@ -465,23 +465,26 @@ describe("agentic.session_recovery", function()
                 assert.equal(0, #sink.notices)
             end)
 
-            it("ignores the answer to a stopped authenticate request", function()
-                local session, sink = make_session({ AGENT })
-                --- @type fun(err: agentic.acp.ACPError|nil)
-                local answer_stopped
-                session.agent.authenticate = function(_self, _id, cb)
-                    answer_stopped = cb
+            it(
+                "ignores the answer to a stopped authenticate request",
+                function()
+                    local session, sink = make_session({ AGENT })
+                    --- @type fun(err: agentic.acp.ACPError|nil)
+                    local answer_stopped
+                    session.agent.authenticate = function(_self, _id, cb)
+                        answer_stopped = cb
+                    end
+                    Recovery.run_login(session, AGENT, function() end)
+                    local first = answer_stopped
+
+                    Recovery.run_login(session, AGENT, function() end)
+                    local replacement = session.agent.login_job
+                    first(nil)
+
+                    assert.equal(replacement, session.agent.login_job)
+                    assert.equal(0, #sink.notices)
                 end
-                Recovery.run_login(session, AGENT, function() end)
-                local first = answer_stopped
-
-                Recovery.run_login(session, AGENT, function() end)
-                local replacement = session.agent.login_job
-                first(nil)
-
-                assert.equal(replacement, session.agent.login_job)
-                assert.equal(0, #sink.notices)
-            end)
+            )
 
             it("recovers nothing for a destroyed session", function()
                 local session, sink = make_session({ AGENT })
@@ -581,8 +584,9 @@ describe("agentic.session_recovery", function()
             end)
 
             it("writes nothing when the client can run none", function()
-                local session, sink =
-                    make_session({ { id = "env", name = "E", type = "env_var" } })
+                local session, sink = make_session({
+                    { id = "env", name = "E", type = "env_var" },
+                })
 
                 Recovery.offer_login(session)
 
@@ -765,7 +769,8 @@ describe("agentic.session_recovery", function()
                     end,
                 },
             }
-            return session --[[@as agentic.SessionManager]], sink
+            return session, --[[@as agentic.SessionManager]]
+                sink
         end
 
         --- @param session agentic.SessionManager
@@ -792,8 +797,10 @@ describe("agentic.session_recovery", function()
         end)
 
         it("leaves the queue as draft below the text", function()
-            local session, sink =
-                make_session({ "one", "", "two", "draft" }, { { 0, 0 }, { 2, 2 } })
+            local session, sink = make_session(
+                { "one", "", "two", "draft" },
+                { { 0, 0 }, { 2, 2 } }
+            )
             session._pending_bufferless_prompt = "held"
 
             Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
@@ -817,9 +824,17 @@ describe("agentic.session_recovery", function()
                 vim.api.nvim_buf_delete(other, { force = true })
             end)
 
-            Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT, other)
+            Recovery.restore_refused_prompt(
+                session,
+                "refused",
+                NO_CONTEXT,
+                other
+            )
 
-            assert.same({ "refused" }, vim.api.nvim_buf_get_lines(other, 0, -1, false))
+            assert.same(
+                { "refused" },
+                vim.api.nvim_buf_get_lines(other, 0, -1, false)
+            )
             assert.same({ "" }, input_lines(session))
         end)
 

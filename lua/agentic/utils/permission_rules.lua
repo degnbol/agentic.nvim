@@ -348,7 +348,8 @@ local function normalise_option_values(cond)
         return nil
     end
     --- @type agentic.PermOptionValues
-    local copy = { options = vim.tbl_map(normalise_option, options), values = values }
+    local copy =
+        { options = vim.tbl_map(normalise_option, options), values = values }
     return copy
 end
 
@@ -429,7 +430,10 @@ local function warn_gate_defect(cmd, kind, kept)
             .. " gate of "
             .. cmd
             .. " is malformed; "
-            .. (kept and "ignoring its unless and option_values" or "dropping it"),
+            .. (
+                kept and "ignoring its unless and option_values"
+                or "dropping it"
+            ),
         vim.log.levels.WARN,
         { title = "Agentic" }
     )
@@ -570,7 +574,8 @@ function M.get_structured_entries()
     if
         cached_plugin_structured_entries == nil
         or plugin_mtime ~= cached_plugin_structured_mtime
-        or Config.permissions.use_plugin_defaults ~= cached_plugin_defaults_used
+        or Config.permissions.use_plugin_defaults
+            ~= cached_plugin_defaults_used
     then
         cached_plugin_structured_mtime = plugin_mtime
         cached_plugin_defaults_used = Config.permissions.use_plugin_defaults

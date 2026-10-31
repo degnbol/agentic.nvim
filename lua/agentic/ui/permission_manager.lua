@@ -1256,7 +1256,9 @@ function PermissionManager:_sync_keymaps()
         for _, key in ipairs(PermissionFloat.open_keys()) do
             self:_shadow_keymap(bufnrs, key.lhs, function()
                 self:_open_anchor(key.how)
-            end, { desc = "Open the buffer asking permission: " .. key.how })
+            end, {
+                desc = "Open the buffer asking permission: " .. key.how,
+            })
         end
     end
 end

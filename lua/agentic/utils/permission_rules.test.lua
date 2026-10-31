@@ -792,20 +792,27 @@ describe("PermissionRules", function()
             deny = { "Bash(make deploy*)" },
         }
 
-        it("ignores settings.json allow when auto_approve_tier is nil", function()
-            Config.permissions.use_plugin_defaults = false
-            Config.permissions.auto_approve_tier = nil
-            stub_settings(MAKE)
-            assert.is_false(PermissionRules.should_auto_approve("make test x"))
-            assert.is_true(PermissionRules.should_auto_reject("make deploy"))
-            -- A remembered leaf still counts.
-            assert.is_true(
-                PermissionRules.should_auto_approve(
-                    "make test x",
-                    { PermissionRules.literal_pattern("make test x") }
+        it(
+            "ignores settings.json allow when auto_approve_tier is nil",
+            function()
+                Config.permissions.use_plugin_defaults = false
+                Config.permissions.auto_approve_tier = nil
+                stub_settings(MAKE)
+                assert.is_false(
+                    PermissionRules.should_auto_approve("make test x")
                 )
-            )
-        end)
+                assert.is_true(
+                    PermissionRules.should_auto_reject("make deploy")
+                )
+                -- A remembered leaf still counts.
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "make test x",
+                        { PermissionRules.literal_pattern("make test x") }
+                    )
+                )
+            end
+        )
 
         it(
             "use_claude_settings=false drops settings.json allow and deny",
@@ -1195,7 +1202,12 @@ describe("PermissionRules", function()
 
                 it("approves when the condition holds", function()
                     local unless = {
-                        { option_values = { options = { "x" }, values = { "1" } } },
+                        {
+                            option_values = {
+                                options = { "x" },
+                                values = { "1" },
+                            },
+                        },
                     }
                     assert.is_true(approves(foo_entries(unless), "foo -x 1"))
                     assert.is_false(approves(foo_entries(unless), "foo -x 2"))
@@ -1204,7 +1216,12 @@ describe("PermissionRules", function()
 
                 it("keeps the ask on a typo key in an unless child", function()
                     local unless = {
-                        { option_value = { options = { "x" }, values = { "1" } } },
+                        {
+                            option_value = {
+                                options = { "x" },
+                                values = { "1" },
+                            },
+                        },
                     }
                     assert.is_false(approves(foo_entries(unless), "foo -x 1"))
                     assert.equal(1, notify.call_count)
@@ -1217,7 +1234,11 @@ describe("PermissionRules", function()
 
                 it("drops an allow gate with a defect", function()
                     local entries = {
-                        foo = { read_only = { { positionals = { "a" }, Unless = {} } } },
+                        foo = {
+                            read_only = {
+                                { positionals = { "a" }, Unless = {} },
+                            },
+                        },
                     }
                     assert.is_false(approves(entries, "foo a"))
                     local foo = PermissionRules.get_structured_entries().foo
@@ -1237,7 +1258,8 @@ describe("PermissionRules", function()
 
                 it("drops a partly valid list from an ask gate", function()
                     --- @type table
-                    local malformed = { foo = { ask = { { options = { "x", 5 } } } } }
+                    local malformed =
+                        { foo = { ask = { { options = { "x", 5 } } } } }
                     Config.permissions.structured = malformed
                     PermissionRules.invalidate_cache()
                     local foo = PermissionRules.get_structured_entries().foo
@@ -1874,7 +1896,9 @@ describe("PermissionRules", function()
 
         it("auto-approves pip3 list and launchctl list", function()
             assert.is_true(PermissionRules.should_auto_approve("pip3 list"))
-            assert.is_true(PermissionRules.should_auto_approve("launchctl list"))
+            assert.is_true(
+                PermissionRules.should_auto_approve("launchctl list")
+            )
         end)
 
         it("auto-approves fc-list and whence", function()

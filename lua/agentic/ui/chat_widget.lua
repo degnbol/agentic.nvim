@@ -162,8 +162,7 @@ function ChatWidget:show_in(winid)
     local replaced = vim.api.nvim_win_get_buf(winid)
     -- With autocmds: the chat's BufWinEnter sets its window options and
     -- follow mode.
-    local ok, err =
-        pcall(vim.api.nvim_win_set_buf, winid, self.buf_nrs.agent)
+    local ok, err = pcall(vim.api.nvim_win_set_buf, winid, self.buf_nrs.agent)
     if not ok then
         Logger.notify(
             "Cannot show the chat here: " .. tostring(err),
@@ -1177,16 +1176,11 @@ function ChatWidget:_bind_buf_keymaps(panel, bufnr)
         self:_bind_canned_prompt_keymaps(bufnr)
     end
 
-    BufHelpers.multi_keymap_set(
-        Config.keymaps.widget.refresh,
-        bufnr,
-        function()
-            if self.on_refresh then
-                self.on_refresh()
-            end
-        end,
-        { desc = "Agentic: Refresh chat (reset stale state)" }
-    )
+    BufHelpers.multi_keymap_set(Config.keymaps.widget.refresh, bufnr, function()
+        if self.on_refresh then
+            self.on_refresh()
+        end
+    end, { desc = "Agentic: Refresh chat (reset stale state)" })
 
     BufHelpers.multi_keymap_set(
         Config.keymaps.widget.toggle_follow,

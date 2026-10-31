@@ -119,10 +119,7 @@ describe("agentic.Budget", function()
         end)
 
         it("raises ok to warning over pace", function()
-            assert.equal(
-                "warning",
-                Budget.state(five_hour(0.9, 4 * HOUR), NOW)
-            )
+            assert.equal("warning", Budget.state(five_hour(0.9, 4 * HOUR), NOW))
         end)
 
         it("is ok past the reset", function()

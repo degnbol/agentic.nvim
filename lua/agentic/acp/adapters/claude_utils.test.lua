@@ -256,18 +256,21 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
             assert.equal("warning", windows[2].state)
         end)
 
-        it("takes the state from the top level for the binding window", function()
-            local windows = ClaudeUtils.budget_windows({
-                status = "allowed_warning",
-                rateLimitType = "seven_day",
-                unifiedWindows = {
-                    five_hour = { utilization = 0.1, resetsAt = 1000 },
-                    seven_day = { utilization = 0.9, resetsAt = 2000 },
-                },
-            }) --[[@as agentic.acp.BudgetWindow[] ]]
-            assert.equal("ok", windows[1].state)
-            assert.equal("warning", windows[2].state)
-        end)
+        it(
+            "takes the state from the top level for the binding window",
+            function()
+                local windows = ClaudeUtils.budget_windows({
+                    status = "allowed_warning",
+                    rateLimitType = "seven_day",
+                    unifiedWindows = {
+                        five_hour = { utilization = 0.1, resetsAt = 1000 },
+                        seven_day = { utilization = 0.9, resetsAt = 2000 },
+                    },
+                }) --[[@as agentic.acp.BudgetWindow[] ]]
+                assert.equal("ok", windows[1].state)
+                assert.equal("warning", windows[2].state)
+            end
+        )
 
         it("skips unknown keys and unreadable entries", function()
             local windows = ClaudeUtils.budget_windows({

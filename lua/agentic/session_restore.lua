@@ -281,7 +281,8 @@ function SessionRestore.format_preview(messages)
             )
             table.insert(lines, "")
         elseif msg.type == "session_message" then
-            local title, rest = SessionRestore.message_title(msg.text, msg.summary)
+            local title, rest =
+                SessionRestore.message_title(msg.text, msg.summary)
             table.insert(lines, "## " .. title)
             vim.list_extend(lines, rest)
             table.insert(lines, "")
@@ -532,7 +533,9 @@ function SessionRestore.resolve_query(query, callback)
         local prefix_matches = {}
         local title_matches = {}
         for _, s in ipairs(first_per_id(sessions)) do
-            if #query >= MIN_ID_PREFIX and vim.startswith(s.session_id, query) then
+            if
+                #query >= MIN_ID_PREFIX and vim.startswith(s.session_id, query)
+            then
                 table.insert(prefix_matches, s)
             end
             if type(s.title) == "string" and s.title:lower() == query_lower then

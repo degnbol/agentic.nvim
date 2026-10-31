@@ -222,7 +222,15 @@ local ConfigDefault = {
     --- @field todos agentic.UserConfig.Windows.Todos
     --- @field subagent agentic.UserConfig.Windows.Subagent
     windows = {
-        stack = { "todos", "code", "files", "diagnostics", "activity", "info", "input" },
+        stack = {
+            "todos",
+            "code",
+            "files",
+            "diagnostics",
+            "activity",
+            "info",
+            "input",
+        },
         max_wrap_width = 80,
         min_wrap_width = 40,
         agent = { win_opts = {} },

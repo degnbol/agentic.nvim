@@ -340,7 +340,9 @@ describe("ClaudeHookRecords", function()
         it("ignores an attachment that is not a hook record", function()
             assert.same(
                 {},
-                ClaudeHookRecords.decode(line({ type = "file", content = "…" }))
+                ClaudeHookRecords.decode(
+                    line({ type = "file", content = "…" })
+                )
             )
         end)
 

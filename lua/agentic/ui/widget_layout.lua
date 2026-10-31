@@ -187,7 +187,8 @@ function WidgetLayout.validate_stack()
 
     local stack = Config.windows.stack
     if
-        type(stack) == "table" and vim.deep_equal(sorted(stack), sorted(expected))
+        type(stack) == "table"
+        and vim.deep_equal(sorted(stack), sorted(expected))
     then
         return
     end

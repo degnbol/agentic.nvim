@@ -422,7 +422,10 @@ function PermissionFloat:place()
             { title = self._title, footer = hint }
         )
     else
-        self:_render(self._bufnr, vim.list_extend(vim.list_slice(self._lines), { hint }))
+        self:_render(
+            self._bufnr,
+            vim.list_extend(vim.list_slice(self._lines), { hint })
+        )
         self._height = #self._lines + 1
         vim.api.nvim_win_set_config(self._winid, self:_placement(anchor_winid))
     end

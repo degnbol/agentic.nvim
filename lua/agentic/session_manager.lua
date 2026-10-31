@@ -430,9 +430,12 @@ function SessionManager:new()
     end
 
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.agent)
-    self.message_writer = MessageWriter:new(self.widget.buf_nrs.agent, function()
-        return self.widget:home_win()
-    end)
+    self.message_writer = MessageWriter:new(
+        self.widget.buf_nrs.agent,
+        function()
+            return self.widget:home_win()
+        end
+    )
 
     self.permission_manager = PermissionManager:new(
         self.message_writer,
@@ -839,27 +842,26 @@ function SessionManager:_new_transcript(child_id, subagent)
     local SubagentTranscript = require("agentic.ui.subagent_transcript")
     --- @type agentic.ui.SubagentTranscript
     local transcript
-    transcript =
-        SubagentTranscript:new(child_id, subagent, self.widget, {
-            setup_buf = function(bufnr, writer)
-                self:_setup_session_buf(bufnr, writer)
-                self:_bind_agent_keymaps(child_id, bufnr)
-            end,
-            on_reload = function()
-                if not self.destroyed then
-                    self:_replay_transcript(child_id)
-                end
-            end,
-            on_write = function()
-                self:_write_session()
-            end,
-            on_wipeout = function()
-                local agent = self._agents[child_id]
-                if agent and agent.transcript == transcript then
-                    agent.transcript = nil
-                end
-            end,
-        })
+    transcript = SubagentTranscript:new(child_id, subagent, self.widget, {
+        setup_buf = function(bufnr, writer)
+            self:_setup_session_buf(bufnr, writer)
+            self:_bind_agent_keymaps(child_id, bufnr)
+        end,
+        on_reload = function()
+            if not self.destroyed then
+                self:_replay_transcript(child_id)
+            end
+        end,
+        on_write = function()
+            self:_write_session()
+        end,
+        on_wipeout = function()
+            local agent = self._agents[child_id]
+            if agent and agent.transcript == transcript then
+                agent.transcript = nil
+            end
+        end,
+    })
     return transcript
 end
 

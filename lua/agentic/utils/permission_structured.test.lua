@@ -1540,7 +1540,9 @@ describe("PermissionStructured", function()
         local function decide(args, dynamic)
             local leaf = parsed("foo", args)
             leaf.args_dynamic = dynamic
-            return (PermissionStructured.decide_leaf(entries, leaf, "read_only"))
+            return (
+                PermissionStructured.decide_leaf(entries, leaf, "read_only")
+            )
         end
 
         it("approves when the nested condition holds", function()

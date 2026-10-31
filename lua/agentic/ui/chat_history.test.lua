@@ -261,7 +261,10 @@ describe("ChatHistory", function()
                     read_range = { offset = 10, limit = 5 },
                 },
             }, prompt)
-            assert.equal("Tool call (read): /tmp/f.lua (10 - 14)", prompt[1].text)
+            assert.equal(
+                "Tool call (read): /tmp/f.lua (10 - 14)",
+                prompt[1].text
+            )
         end)
 
         it("writes the open range of a read", function()
@@ -276,7 +279,10 @@ describe("ChatHistory", function()
                     read_range = { offset = 10 },
                 },
             }, prompt)
-            assert.equal("Tool call (read): /tmp/f.lua (10 - …)", prompt[1].text)
+            assert.equal(
+                "Tool call (read): /tmp/f.lua (10 - …)",
+                prompt[1].text
+            )
         end)
 
         it("renders a subagent block as type, name and status", function()
@@ -310,7 +316,11 @@ describe("ChatHistory", function()
                     tool_call_id = "child-1",
                     kind = "SubAgent",
                     status = "completed",
-                    subagent = { label = "map UI", mode = "blocking", confirmed = true },
+                    subagent = {
+                        label = "map UI",
+                        mode = "blocking",
+                        confirmed = true,
+                    },
                 },
                 {
                     type = "session_message",
@@ -333,15 +343,18 @@ describe("ChatHistory", function()
                 { type = "subagent_end", state = "completed" },
             }, prompt)
 
-            assert.same({
-                "Task sent to map UI:\nMap the UI.",
-                "Result received from map UI:\nFound it.\nIn lib/.",
-            }, vim.list_slice(
-                vim.tbl_map(function(p)
-                    return p.text
-                end, prompt),
-                2
-            ))
+            assert.same(
+                {
+                    "Task sent to map UI:\nMap the UI.",
+                    "Result received from map UI:\nFound it.\nIn lib/.",
+                },
+                vim.list_slice(
+                    vim.tbl_map(function(p)
+                        return p.text
+                    end, prompt),
+                    2
+                )
+            )
         end)
     end)
 
@@ -352,16 +365,26 @@ describe("ChatHistory", function()
                 tool_call_id = "child-1",
                 kind = "SubAgent",
                 status = "completed",
-                subagent = { label = "map UI", mode = "blocking", confirmed = true },
+                subagent = {
+                    label = "map UI",
+                    mode = "blocking",
+                    confirmed = true,
+                },
             },
         }
 
         it("gives a subagent's block label", function()
-            assert.equal("map UI", ChatHistory.session_label(messages, "child-1"))
+            assert.equal(
+                "map UI",
+                ChatHistory.session_label(messages, "child-1")
+            )
         end)
 
         it("gives main agent for any other session", function()
-            assert.equal("main agent", ChatHistory.session_label(messages, "root"))
+            assert.equal(
+                "main agent",
+                ChatHistory.session_label(messages, "root")
+            )
             assert.equal("main agent", ChatHistory.session_label(messages, nil))
         end)
     end)
@@ -381,9 +404,12 @@ describe("ChatHistory", function()
             }]])
             local history = ChatHistory.from_data(data)
 
-            assert.same({ "user" }, vim.tbl_map(function(m)
-                return m.type
-            end, history.messages))
+            assert.same(
+                { "user" },
+                vim.tbl_map(function(m)
+                    return m.type
+                end, history.messages)
+            )
             assert.same({}, history.subagent_messages)
         end)
     end)
@@ -753,21 +779,24 @@ describe("ChatHistory", function()
             decided_by = { "grant" },
         }
 
-        it("keeps every field of a tool call and none of its rendering", function()
-            local block = vim.tbl_extend("force", fields, {
-                extmark_id = 1,
-                decoration_extmark_ids = { 2 },
-                cached_diff_blocks = {},
-                folds = { { anchor_id = 3, open = true } },
-            }) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+        it(
+            "keeps every field of a tool call and none of its rendering",
+            function()
+                local block = vim.tbl_extend("force", fields, {
+                    extmark_id = 1,
+                    decoration_extmark_ids = { 2 },
+                    cached_diff_blocks = {},
+                    folds = { { anchor_id = 3, open = true } },
+                }) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
 
-            local record = ChatHistory.tool_call_record(block)
+                local record = ChatHistory.tool_call_record(block)
 
-            assert.same(
-                vim.tbl_extend("force", fields, { type = "tool_call" }),
-                record
-            )
-        end)
+                assert.same(
+                    vim.tbl_extend("force", fields, { type = "tool_call" }),
+                    record
+                )
+            end
+        )
 
         -- The kept fields are a hand copy of the `@class`, which nothing else
         -- ties to it.
@@ -797,7 +826,9 @@ describe("ChatHistory", function()
             for _, field in ipairs(declared) do
                 block[field] = true
             end
-            local record = ChatHistory.tool_call_record(block --[[@as agentic.ui.MessageWriter.ToolCallBase]])
+            local record = ChatHistory.tool_call_record(
+                block --[[@as agentic.ui.MessageWriter.ToolCallBase]]
+            )
 
             local kept = vim.tbl_filter(function(field)
                 return record[field] ~= nil
@@ -1056,9 +1087,7 @@ describe("ChatHistory", function()
             assert.equal(1, #sessions)
             assert.equal("sid-valid", sessions[1].session_id)
             assert.equal(1, notify_stub.call_count)
-            assert.truthy(
-                notify_stub.calls[1][1]:find(corrupt_path, 1, true)
-            )
+            assert.truthy(notify_stub.calls[1][1]:find(corrupt_path, 1, true))
             assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
         end)
     end)

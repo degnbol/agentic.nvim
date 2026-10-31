@@ -114,7 +114,10 @@ describe("agentic.acp.CanonicalToolCall", function()
         it("inverts parse_read_range", function()
             local _, range = CanonicalToolCall.parse_read_range("f (10 - 14)")
             --- @cast range -nil
-            assert.equal("(10 - 14)", CanonicalToolCall.format_read_range(range))
+            assert.equal(
+                "(10 - 14)",
+                CanonicalToolCall.format_read_range(range)
+            )
         end)
 
         it("leaves an open range's end open", function()

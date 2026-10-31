@@ -63,18 +63,15 @@ describe("agentic.Bootstrap", function()
             child.setup()
         end)
 
-        it(
-            "neither registers the language nor creates the autocmds",
-            function()
-                assert.equal(
-                    "AgenticChat",
-                    child.lua_get(
-                        [[vim.treesitter.language.get_lang("AgenticChat")]]
-                    )
+        it("neither registers the language nor creates the autocmds", function()
+            assert.equal(
+                "AgenticChat",
+                child.lua_get(
+                    [[vim.treesitter.language.get_lang("AgenticChat")]]
                 )
-                assert.is_false(cleanup_autocmds_exist())
-            end
-        )
+            )
+            assert.is_false(cleanup_autocmds_exist())
+        end)
     end)
 
     it("applies image_paste from a setup() before the first session", function()

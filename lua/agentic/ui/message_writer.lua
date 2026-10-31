@@ -697,7 +697,9 @@ function MessageWriter:_own_edit(fn)
         end
         return written
     end)
-    if vim.api.nvim_buf_is_valid(self.bufnr) and BufHelpers.in_insert_mode() then
+    if
+        vim.api.nvim_buf_is_valid(self.bufnr) and BufHelpers.in_insert_mode()
+    then
         self:_rebuild_folds_after_insert()
     end
     self:_mark_last_line()
@@ -2613,9 +2615,7 @@ function MessageWriter:_schedule_follow()
         -- Except in insert mode: the ops wait as long as the user keeps
         -- typing, and deferring to a flush that will not run until then
         -- freezes the viewport for every write in between.
-        if
-            #self._pending_fold_ops > 0 and not BufHelpers.in_insert_mode()
-        then
+        if #self._pending_fold_ops > 0 and not BufHelpers.in_insert_mode() then
             return
         end
 

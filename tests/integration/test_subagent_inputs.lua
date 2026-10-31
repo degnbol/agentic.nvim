@@ -142,7 +142,10 @@ _G.spawn("c1")
             ))
 
             assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
-            assert.equal(0, child.lua_get([[_G.wins_of(_G.transcript("c1").bufnr)]]))
+            assert.equal(
+                0,
+                child.lua_get([[_G.wins_of(_G.transcript("c1").bufnr)]])
+            )
             assert.equal(background, child.lua_get([[_G.input("c1") ~= nil]]))
         end)
     end
@@ -164,8 +167,10 @@ _G.read_record("c1")
         assert.is_true(child.lua_get([[_G.input("c1") ~= nil]]))
     end)
 
-    it("a record confirming background after the agent ended gives no input", function()
-        child.lua([[
+    it(
+        "a record confirming background after the agent ended gives no input",
+        function()
+            child.lua([[
 _G.s.agent.provider_config.subagents.force_background = false
 _G.spawn("c1")
 _G.state("c1", _G.COMPLETED)
@@ -173,8 +178,9 @@ _G.write_meta("c1", "background")
 _G.read_record("c1")
 ]])
 
-        assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
-    end)
+            assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
+        end
+    )
 
     it("a record confirming blocking destroys the input", function()
         child.lua([[
@@ -206,8 +212,10 @@ _G.spawn("c1")
         assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
     end)
 
-    it("a resumed agent keeps its input and its transcript's windows", function()
-        child.lua([[
+    it(
+        "a resumed agent keeps its input and its transcript's windows",
+        function()
+            child.lua([[
 _G.spawn("c1")
 _G.old = _G.transcript("c1").bufnr
 _G.show(_G.old)
@@ -216,10 +224,13 @@ _G.state("c1", _G.COMPLETED)
 _G.state("c1", { state = "running" })
 ]])
 
-        assert.is_true(child.lua_get([[_G.input("c1") == _G.first_input]]))
-        assert.equal(1, child.lua_get("_G.wins_of(_G.old)"))
-        assert.is_true(child.lua_get([[_G.transcript("c1").bufnr == _G.old]]))
-    end)
+            assert.is_true(child.lua_get([[_G.input("c1") == _G.first_input]]))
+            assert.equal(1, child.lua_get("_G.wins_of(_G.old)"))
+            assert.is_true(
+                child.lua_get([[_G.transcript("c1").bufnr == _G.old]])
+            )
+        end
+    )
 
     it("with no window, output lands and <C-c> stops that agent", function()
         child.lua([[
@@ -235,7 +246,9 @@ _G.press(_G.input("c1").bufnr, "<C-c>")
                 :find("still going", 1, true)
         )
         assert.equal(2, child.lua_get("#_G.sent"))
-        assert.truthy(child.lua_get("_G.sent_text(1)"):find("TaskStop", 1, true))
+        assert.truthy(
+            child.lua_get("_G.sent_text(1)"):find("TaskStop", 1, true)
+        )
         assert.truthy(child.lua_get("_G.sent_text(2)"):find('"c1"', 1, true))
     end)
 
@@ -247,7 +260,9 @@ _G.chunk("c1", "back")
 _G.press(_G.transcript("c1").bufnr, "<C-c>")
 ]])
 
-        assert.truthy(child.lua_get("_G.sent_text(1)"):find("TaskStop", 1, true))
+        assert.truthy(
+            child.lua_get("_G.sent_text(1)"):find("TaskStop", 1, true)
+        )
     end)
 
     it("stopping a finished agent notifies and sends nothing", function()
@@ -265,7 +280,10 @@ _G.s:_stop_agent("c1")
 
     for _, case in ipairs({
         { how = "the submit map", run = [[_G.press(_G.bufnr, "<F5>")]] },
-        { how = ":w", run = [[vim.api.nvim_buf_call(_G.bufnr, function() vim.cmd.write() end)]] },
+        {
+            how = ":w",
+            run = [[vim.api.nvim_buf_call(_G.bufnr, function() vim.cmd.write() end)]],
+        },
     }) do
         it(case.how .. " relays the message and clears the input", function()
             child.lua([[
@@ -300,8 +318,10 @@ vim.api.nvim_buf_call(_G.bufnr, function() vim.cmd.write() end)
         assert.equal(1, child.lua_get("#_G.sent"))
     end)
 
-    it("a relay that cannot go out stays in the input with the notice", function()
-        child.lua([[
+    it(
+        "a relay that cannot go out stays in the input with the notice",
+        function()
+            child.lua([[
 _G.spawn("c1")
 _G.s.agent.state = "disconnected"
 _G.bufnr = _G.input("c1").bufnr
@@ -310,15 +330,22 @@ _G.press(_G.bufnr, "<F5>")
 _G.s:_relay_to_agent("c1", "second", { force = false })
 ]])
 
-        assert.equal(0, child.lua_get("#_G.sent"))
-        assert.equal("first", child.lua_get("_G.text(_G.bufnr)"))
-        assert.is_true(child.lua_get("vim.bo[_G.bufnr].modified"))
-        assert.truthy(child.lua_get("_G.notices[1]"):find("no session yet", 1, true))
-        assert.is_true(child.lua_get("_G.s._pending_bufferless_prompt == nil"))
-    end)
+            assert.equal(0, child.lua_get("#_G.sent"))
+            assert.equal("first", child.lua_get("_G.text(_G.bufnr)"))
+            assert.is_true(child.lua_get("vim.bo[_G.bufnr].modified"))
+            assert.truthy(
+                child.lua_get("_G.notices[1]"):find("no session yet", 1, true)
+            )
+            assert.is_true(
+                child.lua_get("_G.s._pending_bufferless_prompt == nil")
+            )
+        end
+    )
 
-    it("a relay leaves the next turn's context, title and system info alone", function()
-        child.lua([[
+    it(
+        "a relay leaves the next turn's context, title and system info alone",
+        function()
+            child.lua([[
 _G.spawn("c1")
 _G.file = vim.fn.tempname()
 vim.fn.writefile({ "x" }, _G.file)
@@ -330,25 +357,26 @@ _G.s._history_to_send = { { type = "user", text = "earlier" } }
 _G.s:_relay_to_agent("c1", "hi", { force = false })
 ]])
 
-        assert.equal(1, child.lua_get("#_G.sent"))
-        assert.equal(1, child.lua_get("#_G.sent[1]"))
-        assert.is_true(child.lua_get("_G.had_file"))
-        assert.is_false(child.lua_get("_G.s.file_list:is_empty()"))
-        assert.is_true(child.lua_get("_G.s._is_first_message"))
-        assert.is_true(child.lua_get("_G.s._history_to_send ~= nil"))
-        assert.equal("", child.lua_get("_G.s.chat_history.title"))
-        assert.truthy(
-            child
-                .lua_get("_G.text(_G.s.widget.buf_nrs.agent)")
-                :find("SendMessage", 1, true)
-        )
-        assert.equal(
-            "user",
-            child.lua_get(
-                "_G.s.chat_history.messages[#_G.s.chat_history.messages].type"
+            assert.equal(1, child.lua_get("#_G.sent"))
+            assert.equal(1, child.lua_get("#_G.sent[1]"))
+            assert.is_true(child.lua_get("_G.had_file"))
+            assert.is_false(child.lua_get("_G.s.file_list:is_empty()"))
+            assert.is_true(child.lua_get("_G.s._is_first_message"))
+            assert.is_true(child.lua_get("_G.s._history_to_send ~= nil"))
+            assert.equal("", child.lua_get("_G.s.chat_history.title"))
+            assert.truthy(
+                child
+                    .lua_get("_G.text(_G.s.widget.buf_nrs.agent)")
+                    :find("SendMessage", 1, true)
             )
-        )
-    end)
+            assert.equal(
+                "user",
+                child.lua_get(
+                    "_G.s.chat_history.messages[#_G.s.chat_history.messages].type"
+                )
+            )
+        end
+    )
 
     it("an input reloaded after :bd gets its setup back", function()
         child.lua([[
@@ -377,8 +405,10 @@ end)]])
         )
     end)
 
-    it("a new session and a subagent reset wipe the inputs, giving back their text", function()
-        child.lua([[
+    it(
+        "a new session and a subagent reset wipe the inputs, giving back their text",
+        function()
+            child.lua([[
 _G.spawn("c1")
 _G.spawn("c2")
 _G.one = _G.input("c1").bufnr
@@ -390,16 +420,23 @@ _G.three = _G.input("c3").bufnr
 _G.s:_reset_subagents()
 ]])
 
-        assert.equal(0, child.lua_get("_G.after_epoch"))
-        assert.is_false(child.lua_get("vim.api.nvim_buf_is_valid(_G.one)"))
-        assert.is_false(child.lua_get("vim.api.nvim_buf_is_valid(_G.three)"))
-        assert.equal(0, child.lua_get("vim.tbl_count(_G.s._inputs)"))
-        assert.equal(1, child.lua_get("#_G.notices"))
-        assert.truthy(child.lua_get("_G.notices[1]"):find("unsent words", 1, true))
-    end)
+            assert.equal(0, child.lua_get("_G.after_epoch"))
+            assert.is_false(child.lua_get("vim.api.nvim_buf_is_valid(_G.one)"))
+            assert.is_false(
+                child.lua_get("vim.api.nvim_buf_is_valid(_G.three)")
+            )
+            assert.equal(0, child.lua_get("vim.tbl_count(_G.s._inputs)"))
+            assert.equal(1, child.lua_get("#_G.notices"))
+            assert.truthy(
+                child.lua_get("_G.notices[1]"):find("unsent words", 1, true)
+            )
+        end
+    )
 
-    it("a current tab holding only a transcript and its input closes when they go", function()
-        child.lua([[
+    it(
+        "a current tab holding only a transcript and its input closes when they go",
+        function()
+            child.lua([[
 _G.spawn("c1")
 _G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
@@ -407,8 +444,9 @@ _G.press(_G.transcript("c1").bufnr, "i")
 _G.s:_reset_subagents()
 ]])
 
-        assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
-    end)
+            assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
+        end
+    )
 end)
 
 describe("insert keys", function()
@@ -424,8 +462,10 @@ describe("insert keys", function()
         child.stop()
     end)
 
-    it("in a transcript with an input open the input below, then focus it", function()
-        child.lua([[
+    it(
+        "in a transcript with an input open the input below, then focus it",
+        function()
+            child.lua([[
 _G.spawn("c1")
 _G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
@@ -436,13 +476,17 @@ vim.api.nvim_set_current_win(_G.tr)
 _G.press(_G.transcript("c1").bufnr, "a")
 ]])
 
-        assert.equal(
-            child.lua_get([[_G.input("c1").bufnr]]),
-            child.lua_get("vim.api.nvim_get_current_buf()")
-        )
-        assert.equal(child.lua_get("_G.first"), child.lua_get("vim.api.nvim_get_current_win()"))
-        assert.equal(2, child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"))
-    end)
+            assert.equal(
+                child.lua_get([[_G.input("c1").bufnr]]),
+                child.lua_get("vim.api.nvim_get_current_buf()")
+            )
+            assert.equal(
+                child.lua_get("_G.first"),
+                child.lua_get("vim.api.nvim_get_current_win()")
+            )
+            assert.equal(2, child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"))
+        end
+    )
 
     it("in a blocking transcript go to the main input", function()
         child.lua([[
@@ -486,7 +530,10 @@ _G.press(_G.s.widget.buf_nrs.agent, "a")
             child.lua_get([[_G.s.widget:panel_win("input")]]),
             child.lua_get("vim.api.nvim_get_current_win()")
         )
-        assert.equal(child.lua_get("_G.first"), child.lua_get("vim.api.nvim_get_current_win()"))
+        assert.equal(
+            child.lua_get("_G.first"),
+            child.lua_get("vim.api.nvim_get_current_win()")
+        )
         assert.equal(1, child.lua_get("_G.wins_of(_G.s.widget.buf_nrs.input)"))
         assert.equal(
             child.lua_get("_G.home"),
@@ -508,27 +555,36 @@ _G.input_win = vim.api.nvim_get_current_win()
             child.lua_get("vim.api.nvim_win_get_buf(_G.input_win)")
         )
         assert.equal(2, child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"))
-        assert.equal(child.lua_get("_G.chat_win"), child.lua_get("_G.s.widget:home_win()"))
+        assert.equal(
+            child.lua_get("_G.chat_win"),
+            child.lua_get("_G.s.widget:home_win()")
+        )
         assert.equal(
             child.lua_get("_G.input_win"),
             child.lua_get([[_G.s.widget:panel_win("input")]])
         )
     end)
 
-    it("p in a chat window outside the home's tab pastes into its input", function()
-        child.lua([[
+    it(
+        "p in a chat window outside the home's tab pastes into its input",
+        function()
+            child.lua([[
 vim.fn.setreg('"', "pasted")
 vim.cmd("tabnew")
 vim.api.nvim_win_set_buf(0, _G.s.widget.buf_nrs.agent)
 _G.press(_G.s.widget.buf_nrs.agent, "p")
 ]])
 
-        assert.equal(
-            child.lua_get("_G.s.widget.buf_nrs.input"),
-            child.lua_get("vim.api.nvim_get_current_buf()")
-        )
-        assert.equal("pasted", child.lua_get("_G.text(_G.s.widget.buf_nrs.input)"))
-    end)
+            assert.equal(
+                child.lua_get("_G.s.widget.buf_nrs.input"),
+                child.lua_get("vim.api.nvim_get_current_buf()")
+            )
+            assert.equal(
+                "pasted",
+                child.lua_get("_G.text(_G.s.widget.buf_nrs.input)")
+            )
+        end
+    )
 end)
 
 describe("subagent permission prompts", function()
@@ -554,31 +610,36 @@ end
         child.stop()
     end)
 
-    it("a prompt not in the current tab is hidden until its tab is entered, and rings once", function()
-        child.lua([[
+    it(
+        "a prompt not in the current tab is hidden until its tab is entered, and rings once",
+        function()
+            child.lua([[
 _G.show(_G.transcript("c1").bufnr)
 _G.request()
 ]])
-        child.flush()
-        assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
-        assert.equal(1, child.lua_get("_G.bells"))
+            child.flush()
+            assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
+            assert.equal(1, child.lua_get("_G.bells"))
 
-        child.lua([[vim.cmd("tabnext 2")]])
-        child.flush()
-        assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
-        assert.equal(
-            "Select permission option allow",
-            child.lua_get([[vim.api.nvim_buf_call(_G.input("c1").bufnr, function()
+            child.lua([[vim.cmd("tabnext 2")]])
+            child.flush()
+            assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
+            assert.equal(
+                "Select permission option allow",
+                child.lua_get(
+                    [[vim.api.nvim_buf_call(_G.input("c1").bufnr, function()
     return vim.fn.maparg("<localLeader>y", "n", false, true).desc
-end)]])
-        )
+end)]]
+                )
+            )
 
-        child.lua([[vim.cmd("tabnext 1")]])
-        child.flush()
-        child.lua([[vim.cmd("tabnext 2")]])
-        child.flush()
-        assert.equal(1, child.lua_get("_G.bells"))
-    end)
+            child.lua([[vim.cmd("tabnext 1")]])
+            child.flush()
+            child.lua([[vim.cmd("tabnext 2")]])
+            child.flush()
+            assert.equal(1, child.lua_get("_G.bells"))
+        end
+    )
 
     it("the waiting state stays until the prompt is answered", function()
         child.lua([[
@@ -626,10 +687,7 @@ end
         local function request_and_press(lhs)
             child.lua([[_G.request()]])
             child.flush()
-            child.lua(
-                [[_G.press(_G.s.widget.buf_nrs.agent, ...)]],
-                { lhs }
-            )
+            child.lua([[_G.press(_G.s.widget.buf_nrs.agent, ...)]], { lhs })
             child.flush()
         end
 
@@ -638,8 +696,14 @@ end
             child.flush()
 
             assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
-            assert.equal(child.lua_get("_G.chat_win()"), child.lua_get("_G.float_win()"))
-            assert.equal(child.lua_get("_G.name_tail()"), child.lua_get("_G.title()"))
+            assert.equal(
+                child.lua_get("_G.chat_win()"),
+                child.lua_get("_G.float_win()")
+            )
+            assert.equal(
+                child.lua_get("_G.name_tail()"),
+                child.lua_get("_G.title()")
+            )
             assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
             assert.equal(
                 "c1",
@@ -650,8 +714,13 @@ end
         it("\\v opens a vsplit and the prompt moves there, pending", function()
             request_and_press("<localLeader>v")
 
-            assert.equal(1, child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)"))
-            assert.is_true(child.lua_get("_G.s.permission_manager.current_request ~= nil"))
+            assert.equal(
+                1,
+                child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)")
+            )
+            assert.is_true(
+                child.lua_get("_G.s.permission_manager.current_request ~= nil")
+            )
             assert.equal(
                 child.lua_get("_G.transcript_win()"),
                 child.lua_get("_G.float_win()")
@@ -659,11 +728,16 @@ end
             assert.equal(vim.NIL, child.lua_get("_G.title()"))
             assert.equal(
                 "",
-                child.lua_get([[vim.api.nvim_buf_call(_G.s.widget.buf_nrs.agent, function()
+                child.lua_get(
+                    [[vim.api.nvim_buf_call(_G.s.widget.buf_nrs.agent, function()
     return vim.fn.maparg("<localLeader>v", "n")
-end)]])
+end)]]
+                )
             )
-            assert.equal(vim.NIL, child.lua_get("_G.s.message_writer._held_tool_call_id"))
+            assert.equal(
+                vim.NIL,
+                child.lua_get("_G.s.message_writer._held_tool_call_id")
+            )
         end)
 
         it("with the transcript wiped, \\v opens the remade one", function()
@@ -677,7 +751,10 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
             child.flush()
 
             assert.is_true(child.lua_get("_G.transcript('c1').bufnr ~= _G.old"))
-            assert.equal(1, child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)"))
+            assert.equal(
+                1,
+                child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)")
+            )
             assert.equal(
                 child.lua_get("_G.transcript_win()"),
                 child.lua_get("_G.float_win()")
@@ -692,7 +769,10 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
             request_and_press("<localLeader>s")
 
             assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
-            assert.equal(1, child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)"))
+            assert.equal(
+                1,
+                child.lua_get("_G.wins_of(_G.transcript('c1').bufnr)")
+            )
         end)
 
         it("\\t opens a last tab and enters it", function()
@@ -717,39 +797,56 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
             assert.equal(vim.NIL, child.lua_get("_G.title()"))
         end)
 
-        it("\\e in the input replaces the chat window and focuses it", function()
-            local chat_win = child.lua_get("_G.chat_win()")
-            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:input_win())]])
+        it(
+            "\\e in the input replaces the chat window and focuses it",
+            function()
+                local chat_win = child.lua_get("_G.chat_win()")
+                child.lua(
+                    [[vim.api.nvim_set_current_win(_G.s.widget:input_win())]]
+                )
 
-            request_and_press("<localLeader>e")
+                request_and_press("<localLeader>e")
 
-            assert.equal(chat_win, child.lua_get("_G.transcript_win()"))
-            assert.equal(chat_win, child.lua_get("vim.api.nvim_get_current_win()"))
-            assert.equal(vim.NIL, child.lua_get("_G.title()"))
-        end)
+                assert.equal(chat_win, child.lua_get("_G.transcript_win()"))
+                assert.equal(
+                    chat_win,
+                    child.lua_get("vim.api.nvim_get_current_win()")
+                )
+                assert.equal(vim.NIL, child.lua_get("_G.title()"))
+            end
+        )
 
-        it("hidden with the chat in another tab, marks the chat waiting", function()
-            child.lua([[
+        it(
+            "hidden with the chat in another tab, marks the chat waiting",
+            function()
+                child.lua([[
 _G.waiting = function()
     return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.agent).waiting
 end
 vim.cmd("tabnew")
 _G.request()
 ]])
-            child.flush()
+                child.flush()
 
-            assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
-            assert.is_true(child.lua_get("_G.waiting()"))
-            assert.is_true(child.lua_get(
-                "_G.notices[#_G.notices]:find(_G.name_tail(), 1, true) ~= nil"
-            ))
+                assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
+                assert.is_true(child.lua_get("_G.waiting()"))
+                assert.is_true(
+                    child.lua_get(
+                        "_G.notices[#_G.notices]:find(_G.name_tail(), 1, true) ~= nil"
+                    )
+                )
 
-            child.lua([[_G.s.permission_manager:_complete_request("allow")]])
-            assert.equal(vim.NIL, child.lua_get("_G.waiting()"))
-        end)
+                child.lua(
+                    [[_G.s.permission_manager:_complete_request("allow")]]
+                )
+                assert.equal(vim.NIL, child.lua_get("_G.waiting()"))
+            end
+        )
 
-        it("with the chat not shown, marks the chat waiting and shows when :Agentic shows it", function()
-            child.lua([[
+        it(
+            "with the chat not shown, marks the chat waiting and shows when :Agentic shows it",
+            function()
+                child.lua([[
 _G.waiting = function()
     return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.agent).waiting
 end
@@ -759,18 +856,24 @@ vim.api.nvim_set_current_win(_G.chat_win())
 vim.cmd("enew")
 _G.request()
 ]])
-            child.flush()
-            assert.is_true(child.lua_get("_G.waiting()"))
+                child.flush()
+                assert.is_true(child.lua_get("_G.waiting()"))
 
-            child.cmd("Agentic")
-            child.flush()
+                child.cmd("Agentic")
+                child.flush()
 
-            assert.equal(child.lua_get("_G.chat_win()"), child.lua_get("_G.float_win()"))
-        end)
+                assert.equal(
+                    child.lua_get("_G.chat_win()"),
+                    child.lua_get("_G.float_win()")
+                )
+            end
+        )
     end)
 
-    it("after \\v, the transcript's prompting block is placed in view", function()
-        child.lua([[
+    it(
+        "after \\v, the transcript's prompting block is placed in view",
+        function()
+            child.lua([[
 local writer = _G.transcript("c1").writer
 for i = 1, 60 do
     _G.chunk("c1", "line " .. i .. "\n\n")
@@ -784,11 +887,11 @@ for i = 1, 60 do
 end
 _G.request()
 ]])
-        child.flush()
-        child.lua([[_G.press(_G.s.widget.buf_nrs.agent, "<localLeader>v")]])
-        child.flush()
+            child.flush()
+            child.lua([[_G.press(_G.s.widget.buf_nrs.agent, "<localLeader>v")]])
+            child.flush()
 
-        assert.is_true(child.lua_get([[(function()
+            assert.is_true(child.lua_get([[(function()
     local transcript = _G.transcript("c1")
     local writer = transcript.writer
     local s = writer:_block_rows(writer.tool_call_blocks.t9)
@@ -796,5 +899,6 @@ _G.request()
     local info = vim.fn.getwininfo(win)[1]
     return s ~= nil and info.topline <= s + 1 and info.botline >= s + 1
 end)()]]))
-    end)
+        end
+    )
 end)

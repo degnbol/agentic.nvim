@@ -14,7 +14,8 @@ describe("agentic.ui.SubagentTranscript", function()
     local calls
 
     --- @type agentic.ui.MessageWriter.SubagentInfo
-    local info = { label = "map the UI", mode = "background", confirmed = false }
+    local info =
+        { label = "map the UI", mode = "background", confirmed = false }
 
     -- One per test: a destroyed widget's chat keeps its name until the next
     -- tick.
@@ -200,33 +201,46 @@ describe("agentic.ui.SubagentTranscript", function()
         assert.is_false(vim.api.nvim_buf_is_loaded(transcript.bufnr))
     end)
 
-    it("shows the heading and context in its header, each kept by the other", function()
-        local transcript = new_transcript("aa11bb22cc33dd44")
-        transcript:set_context("completed")
-        transcript:set_header(info)
+    it(
+        "shows the heading and context in its header, each kept by the other",
+        function()
+            local transcript = new_transcript("aa11bb22cc33dd44")
+            transcript:set_context("completed")
+            transcript:set_header(info)
 
-        local header = vim.b[transcript.bufnr].agentic_header
-        assert.is_true(header.title:find("Background? map the UI", 1, true) ~= nil)
-        assert.equal("completed", header.context)
+            local header = vim.b[transcript.bufnr].agentic_header
+            assert.is_true(
+                header.title:find("Background? map the UI", 1, true) ~= nil
+            )
+            assert.equal("completed", header.context)
 
-        transcript:set_context(nil)
-        header = vim.b[transcript.bufnr].agentic_header
-        assert.is_nil(header.context)
-        assert.is_true(header.title:find("Background? map the UI", 1, true) ~= nil)
-    end)
+            transcript:set_context(nil)
+            header = vim.b[transcript.bufnr].agentic_header
+            assert.is_nil(header.context)
+            assert.is_true(
+                header.title:find("Background? map the UI", 1, true) ~= nil
+            )
+        end
+    )
 
-    it("heads its header with the robot and the session id breadcrumb", function()
-        local ToolCallLayout = require("agentic.ui.tool_call_layout")
-        local transcript = new_transcript("aa11bb22cc33dd44")
-        transcript:set_header(info)
+    it(
+        "heads its header with the robot and the session id breadcrumb",
+        function()
+            local ToolCallLayout = require("agentic.ui.tool_call_layout")
+            local transcript = new_transcript("aa11bb22cc33dd44")
+            transcript:set_header(info)
 
-        local header = vim.b[transcript.bufnr].agentic_header
-        assert.equal(Glyphs.AGENT, header.icon)
-        assert.equal(
-            "#" .. owner_id .. " › " .. ToolCallLayout.subagent_heading(info),
-            header.title
-        )
-    end)
+            local header = vim.b[transcript.bufnr].agentic_header
+            assert.equal(Glyphs.AGENT, header.icon)
+            assert.equal(
+                "#"
+                    .. owner_id
+                    .. " › "
+                    .. ToolCallLayout.subagent_heading(info),
+                header.title
+            )
+        end
+    )
 
     it("writes no header after :bd", function()
         local transcript = new_transcript("aa11bb22cc33dd44")

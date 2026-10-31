@@ -130,21 +130,24 @@ describe("ClaudeHookRecordReader", function()
         assert.same({ "second" }, records[1].body)
     end)
 
-    it("returns a hook run as passed and names the context it produced", function()
-        local reader = reader_at(transcript)
-        append({
-            ran("h-1", "/hooks/shell-guard.sh"),
-            injected("c-1", "h-1", "guard says hi"),
-        })
+    it(
+        "returns a hook run as passed and names the context it produced",
+        function()
+            local reader = reader_at(transcript)
+            append({
+                ran("h-1", "/hooks/shell-guard.sh"),
+                injected("c-1", "h-1", "guard says hi"),
+            })
 
-        local records = reader:drain()
+            local records = reader:drain()
 
-        assert.equal(2, #records)
-        assert.equal("passed", records[1].group)
-        assert.equal("shell-guard.sh", records[1].script)
-        assert.equal("context", records[2].group)
-        assert.equal("shell-guard.sh", records[2].script)
-    end)
+            assert.equal(2, #records)
+            assert.equal("passed", records[1].group)
+            assert.equal("shell-guard.sh", records[1].script)
+            assert.equal("context", records[2].group)
+            assert.equal("shell-guard.sh", records[2].script)
+        end
+    )
 
     it("consumes a run the turn's cancellation stopped", function()
         local reader = reader_at(transcript)

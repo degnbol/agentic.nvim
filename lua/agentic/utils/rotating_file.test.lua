@@ -38,16 +38,19 @@ describe("agentic.utils.RotatingFile", function()
         assert.is_nil(read(backup))
     end)
 
-    it("rotates once the cap is reached, keeping the crossing append", function()
-        assert.is_true(RotatingFile.append(path, "abcde", max_bytes))
-        assert.is_true(RotatingFile.append(path, "fghij", max_bytes))
-        assert.is_nil(read(path))
-        assert.equal("abcdefghij", read(backup))
+    it(
+        "rotates once the cap is reached, keeping the crossing append",
+        function()
+            assert.is_true(RotatingFile.append(path, "abcde", max_bytes))
+            assert.is_true(RotatingFile.append(path, "fghij", max_bytes))
+            assert.is_nil(read(path))
+            assert.equal("abcdefghij", read(backup))
 
-        assert.is_true(RotatingFile.append(path, "k", max_bytes))
-        assert.equal("k", read(path))
-        assert.equal("abcdefghij", read(backup))
-    end)
+            assert.is_true(RotatingFile.append(path, "k", max_bytes))
+            assert.equal("k", read(path))
+            assert.equal("abcdefghij", read(backup))
+        end
+    )
 
     it("replaces an earlier backup on the next rotation", function()
         assert.is_true(RotatingFile.append(path, "0123456789", max_bytes))
@@ -55,12 +58,15 @@ describe("agentic.utils.RotatingFile", function()
         assert.equal("abcdefghij", read(backup))
     end)
 
-    it("returns an error when the file cannot be moved to the backup", function()
-        vim.fn.mkdir(backup .. "/occupied", "p")
-        local ok, err = RotatingFile.append(path, "0123456789", max_bytes)
-        assert.is_false(ok)
-        assert.equal("string", type(err))
-    end)
+    it(
+        "returns an error when the file cannot be moved to the backup",
+        function()
+            vim.fn.mkdir(backup .. "/occupied", "p")
+            local ok, err = RotatingFile.append(path, "0123456789", max_bytes)
+            assert.is_false(ok)
+            assert.equal("string", type(err))
+        end
+    )
 
     it("returns an error for a path in a missing directory", function()
         local ok, err = RotatingFile.append(

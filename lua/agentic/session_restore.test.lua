@@ -248,7 +248,11 @@ describe("SessionRestore", function()
                     text = "Found it.\nIn lib/.",
                 },
                 { type = "subagent_end", state = "completed" },
-                { type = "subagent_end", state = "failed", error = "boom\ntwo" },
+                {
+                    type = "subagent_end",
+                    state = "failed",
+                    error = "boom\ntwo",
+                },
             })
             assert.same({
                 "## Found it.",
@@ -1040,7 +1044,11 @@ describe("SessionRestore", function()
                 { failed = "F", cancelled = "", completed = "❌" }
 
             local notices = replayed_notices({
-                { type = "subagent_end", state = "failed", error = "boom\ntwo" },
+                {
+                    type = "subagent_end",
+                    state = "failed",
+                    error = "boom\ntwo",
+                },
                 { type = "subagent_end", state = "cancelled" },
                 { type = "subagent_end", state = "end_turn_odd" },
                 { type = "subagent_end", state = "completed" },
@@ -1056,27 +1064,37 @@ describe("SessionRestore", function()
             assert.equal(Glyphs.RUN_ENDED, notices[4].glyph)
         end)
 
-        it("signs a message by its kind, and a plain one by its view", function()
-            local notices = replayed_notices({
-                message_row("task", "sent"),
-                message_row("result", "received"),
-                message_row("message", "sent"),
-                message_row("message", "received"),
-            }, no_buffer)
+        it(
+            "signs a message by its kind, and a plain one by its view",
+            function()
+                local notices = replayed_notices({
+                    message_row("task", "sent"),
+                    message_row("result", "received"),
+                    message_row("message", "sent"),
+                    message_row("message", "received"),
+                }, no_buffer)
 
-            assert.same({
-                Glyphs.MESSAGE.task,
-                Glyphs.MESSAGE.result,
-                Glyphs.KIND.sendmessage,
-                Glyphs.MESSAGE_RECEIVED,
-            }, vim.tbl_map(function(n)
-                return n.glyph
-            end, notices))
-        end)
+                assert.same(
+                    {
+                        Glyphs.MESSAGE.task,
+                        Glyphs.MESSAGE.result,
+                        Glyphs.KIND.sendmessage,
+                        Glyphs.MESSAGE_RECEIVED,
+                    },
+                    vim.tbl_map(function(n)
+                        return n.glyph
+                    end, notices)
+                )
+            end
+        )
 
         it("titles a message by its first line and folds the rest", function()
             local notice = replayed_notices({
-                message_row("task", "sent", "\nFind it.\n\nIn lib/.\nThen tests/.\n"),
+                message_row(
+                    "task",
+                    "sent",
+                    "\nFind it.\n\nIn lib/.\nThen tests/.\n"
+                ),
             }, no_buffer)[1]
 
             assert.equal("Find it.", notice.title)
@@ -1084,38 +1102,65 @@ describe("SessionRestore", function()
             assert.equal("m-task-sent", notice.id)
         end)
 
-        it("titles a message by its first sentence, without heading marks", function()
-            local notices = replayed_notices({
-                message_row("message", "sent", "Do it. Then check.\n\nMore."),
-                message_row("message", "sent", "# Report: done\nbody"),
-            }, no_buffer)
+        it(
+            "titles a message by its first sentence, without heading marks",
+            function()
+                local notices = replayed_notices({
+                    message_row(
+                        "message",
+                        "sent",
+                        "Do it. Then check.\n\nMore."
+                    ),
+                    message_row("message", "sent", "# Report: done\nbody"),
+                }, no_buffer)
 
-            assert.equal("Do it.", notices[1].title)
-            assert.same({ "Then check.", "", "More." }, notices[1].fold_body)
-            assert.equal("Report: done", notices[2].title)
-            assert.same({ "body" }, notices[2].fold_body)
-        end)
+                assert.equal("Do it.", notices[1].title)
+                assert.same(
+                    { "Then check.", "", "More." },
+                    notices[1].fold_body
+                )
+                assert.equal("Report: done", notices[2].title)
+                assert.same({ "body" }, notices[2].fold_body)
+            end
+        )
 
-        it("folds a trailing parenthetical, and titles a bare heading mark by a placeholder", function()
-            local notices = replayed_notices({
-                message_row("message", "sent", "Launched (never quote it)\nmore"),
-                message_row("message", "sent", "## \nbody"),
-            }, no_buffer)
+        it(
+            "folds a trailing parenthetical, and titles a bare heading mark by a placeholder",
+            function()
+                local notices = replayed_notices({
+                    message_row(
+                        "message",
+                        "sent",
+                        "Launched (never quote it)\nmore"
+                    ),
+                    message_row("message", "sent", "## \nbody"),
+                }, no_buffer)
 
-            assert.equal("Launched", notices[1].title)
-            assert.same({ "(never quote it)", "", "more" }, notices[1].fold_body)
-            assert.equal("(message)", notices[2].title)
-            assert.same({ "body" }, notices[2].fold_body)
-        end)
+                assert.equal("Launched", notices[1].title)
+                assert.same(
+                    { "(never quote it)", "", "more" },
+                    notices[1].fold_body
+                )
+                assert.equal("(message)", notices[2].title)
+                assert.same({ "body" }, notices[2].fold_body)
+            end
+        )
 
-        it("titles a message with a summary by it, folding the whole text", function()
-            local row = message_row("task", "sent", "\nReview it.\n\nCarefully.\n")
-            row.summary = "Code review"
-            local notice = replayed_notices({ row }, no_buffer)[1]
+        it(
+            "titles a message with a summary by it, folding the whole text",
+            function()
+                local row =
+                    message_row("task", "sent", "\nReview it.\n\nCarefully.\n")
+                row.summary = "Code review"
+                local notice = replayed_notices({ row }, no_buffer)[1]
 
-            assert.equal("Code review", notice.title)
-            assert.same({ "Review it.", "", "Carefully." }, notice.fold_body)
-        end)
+                assert.equal("Code review", notice.title)
+                assert.same(
+                    { "Review it.", "", "Carefully." },
+                    notice.fold_body
+                )
+            end
+        )
 
         it("gives the other end's buffer as the detail", function()
             local function buffer_name(session_id)

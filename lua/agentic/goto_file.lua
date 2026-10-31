@@ -19,8 +19,7 @@ function GotoFile.resolve(fname)
     if not name then
         return fname
     end
-    local session =
-        SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
+    local session = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
     if not session or not session.session_id then
         return fname
     end

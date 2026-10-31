@@ -251,7 +251,9 @@ describe("agentic.SessionManager", function()
 
             session:_update_chat_header()
 
-            assert.spy(render_header).was.called_with(session.widget, "agent", "123k")
+            assert
+                .spy(render_header).was
+                .called_with(session.widget, "agent", "123k")
         end)
     end)
 
@@ -339,7 +341,8 @@ describe("agentic.SessionManager", function()
                 session_id = nil, -- skip the cancel/clear-content block
                 _title_user_set = true, -- as if the user had /rename'd
                 permission_manager = {
-                    clear = function() end,                },
+                    clear = function() end,
+                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -383,7 +386,8 @@ describe("agentic.SessionManager", function()
                     is_generating = true, -- as if a turn were streaming
                     agent = { cancel_session = noop },
                     permission_manager = {
-                        clear = noop,                    },
+                        clear = noop,
+                    },
                     todo_list = { clear = noop },
                     file_list = { clear = noop },
                     code_selection = { clear = noop },
@@ -642,7 +646,8 @@ describe("agentic.SessionManager", function()
                 _usage_reset_epoch = os.time() + 3600,
                 _pending_bufferless_prompt = "stranded",
                 permission_manager = {
-                    clear = function() end,                },
+                    clear = function() end,
+                },
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
@@ -1508,7 +1513,12 @@ describe("agentic.SessionManager", function()
         it("keeps a legacy mode id past the returned options", function()
             local session = make_session(nil)
             local legacy_modes = session.config_options.legacy_agent_modes
-            session.agent.set_mode = function(_, _session_id, _mode_id, callback)
+            session.agent.set_mode = function(
+                _,
+                _session_id,
+                _mode_id,
+                callback
+            )
                 callback({ configOptions = {} }, nil)
             end
             -- As `set_options`, which clears the legacy state.
@@ -1740,7 +1750,8 @@ describe("agentic.SessionManager", function()
                         provider_config = { name = "Old Provider" },
                     },
                     permission_manager = {
-                        cancel_requests = perm_cancel_spy,                    },
+                        cancel_requests = perm_cancel_spy,
+                    },
                     todo_list = { clear = todo_clear_spy },
                     widget = { clear = widget_clear_spy },
                     file_list = { clear = file_list_clear_spy },
@@ -1808,7 +1819,8 @@ describe("agentic.SessionManager", function()
                         provider_config = { name = "Old" },
                     },
                     permission_manager = {
-                        cancel_requests = function() end,                    },
+                        cancel_requests = function() end,
+                    },
                     todo_list = { clear = function() end },
                     message_writer = { write_notice = spy.new(function() end) },
                     widget = { buf_nrs = {} },
@@ -1867,7 +1879,8 @@ describe("agentic.SessionManager", function()
                     provider_config = { name = "Old" },
                 },
                 permission_manager = {
-                    cancel_requests = function() end,                },
+                    cancel_requests = function() end,
+                },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = spy.new(function() end) },
                 chat_history = { messages = {}, session_id = "old" },
@@ -1903,7 +1916,8 @@ describe("agentic.SessionManager", function()
 
                 agent = mock_agent,
                 permission_manager = {
-                    cancel_requests = spy.new(function() end),                },
+                    cancel_requests = spy.new(function() end),
+                },
                 todo_list = { clear = spy.new(function() end) },
                 chat_history = { messages = {} },
                 _is_first_message = false,
@@ -1915,9 +1929,7 @@ describe("agentic.SessionManager", function()
             session:switch_provider()
 
             assert.spy(mock_agent.cancel_session).was.called(0)
-            assert
-                .spy(session.permission_manager.cancel_requests).was
-                .called(1)
+            assert.spy(session.permission_manager.cancel_requests).was.called(1)
             assert.spy(session.todo_list.clear).was.called(1)
             assert.spy(session.new_session).was.called(1)
         end)
@@ -1944,7 +1956,8 @@ describe("agentic.SessionManager", function()
                     provider_config = { name = "Old" },
                 },
                 permission_manager = {
-                    cancel_requests = function() end,                },
+                    cancel_requests = function() end,
+                },
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = notice_spy },
                 widget = { buf_nrs = {} },
@@ -2366,7 +2379,11 @@ describe("agentic.SessionManager", function()
             fast.duration_ms = 61
             local session, written = make_session({
                 fast,
-                { group = "context", body = { "ctx" }, tool_call_id = "toolu_1" },
+                {
+                    group = "context",
+                    body = { "ctx" },
+                    tool_call_id = "toolu_1",
+                },
                 slow,
                 pass("/hooks/untimed.sh"),
             })
@@ -3410,8 +3427,7 @@ describe("agentic.SessionManager", function()
 
             describe("of a subagent message", function()
                 it("returns it to the subagent's input", function()
-                    local session =
-                        refusing_session({ stopReason = "refusal" })
+                    local session = refusing_session({ stopReason = "refusal" })
 
                     session:_relay_to_agent("c1", "hi", { force = false })
 
@@ -4191,26 +4207,35 @@ describe("agentic.SessionManager", function()
             assert.equal("task", session:_message_info("m1", "root", "c1").kind)
         end)
 
-        it("summarises only the first delegation, by the agent's description", function()
-            local session = make_session()
+        it(
+            "summarises only the first delegation, by the agent's description",
+            function()
+                local session = make_session()
 
-            local first = session:_message_info("m1", "root", "c1")
-            assert.equal("Find the files", first.summary)
-            -- Its second view keeps the summary.
-            assert.equal("Find the files", session:_message_info("m1", "root", "c1").summary)
+                local first = session:_message_info("m1", "root", "c1")
+                assert.equal("Find the files", first.summary)
+                -- Its second view keeps the summary.
+                assert.equal(
+                    "Find the files",
+                    session:_message_info("m1", "root", "c1").summary
+                )
 
-            add_c1_row(session, "subagent_end")
-            local later = session:_message_info("m2", "root", "c1")
-            assert.equal("task", later.kind)
-            assert.is_nil(later.summary)
-        end)
+                add_c1_row(session, "subagent_end")
+                local later = session:_message_info("m2", "root", "c1")
+                assert.equal("task", later.kind)
+                assert.is_nil(later.summary)
+            end
+        )
 
         it("classes a later delegation to a working agent a message", function()
             local session = make_session()
             session:_message_info("m1", "root", "c1")
             add_c1_row(session, "agent")
 
-            assert.equal("message", session:_message_info("m2", "root", "c1").kind)
+            assert.equal(
+                "message",
+                session:_message_info("m2", "root", "c1").kind
+            )
         end)
 
         it("classes a delegation after an end row a task", function()
@@ -4221,7 +4246,10 @@ describe("agentic.SessionManager", function()
             assert.equal("task", session:_message_info("m2", "root", "c1").kind)
             -- Its received row now follows the end.
             add_c1_row(session, "session_message")
-            assert.equal("message", session:_message_info("m3", "root", "c1").kind)
+            assert.equal(
+                "message",
+                session:_message_info("m3", "root", "c1").kind
+            )
         end)
 
         it("classes a delegation after a saved end row a task", function()
@@ -4236,7 +4264,10 @@ describe("agentic.SessionManager", function()
         it("classes a child's message to its parent a result", function()
             local session = make_session()
 
-            assert.equal("result", session:_message_info("m1", "c1", "root").kind)
+            assert.equal(
+                "result",
+                session:_message_info("m1", "c1", "root").kind
+            )
             assert.equal("result", session:_message_info("m2", "c2", "c1").kind)
             assert.is_nil(session._delegated.root)
         end)
@@ -4245,7 +4276,10 @@ describe("agentic.SessionManager", function()
             local session = make_session()
 
             assert.equal("task", session:_message_info("m1", "c1", "c3").kind)
-            assert.equal("message", session:_message_info("m2", "c1", "c3").kind)
+            assert.equal(
+                "message",
+                session:_message_info("m2", "c1", "c3").kind
+            )
         end)
 
         it("classes a message to an unknown session a message", function()
@@ -4261,7 +4295,10 @@ describe("agentic.SessionManager", function()
 
             -- The second view keeps its kind, where a new message would not.
             assert.equal("task", session:_message_info("m1", "root", "c1").kind)
-            assert.equal("message", session:_message_info("m2", "root", "c1").kind)
+            assert.equal(
+                "message",
+                session:_message_info("m2", "root", "c1").kind
+            )
         end)
     end)
 
@@ -4311,8 +4348,10 @@ describe("agentic.SessionManager", function()
                 spy.stub(SlashCommands, "setCommands"),
             }
             bufnr = vim.api.nvim_create_buf(false, true)
-            local pm =
-                PermissionManager:new(MessageWriter:new(bufnr), { agent = bufnr })
+            local pm = PermissionManager:new(
+                MessageWriter:new(bufnr),
+                { agent = bufnr }
+            )
             table.insert(stubs, spy.stub(pm.permission_float, "open"))
             table.insert(stubs, spy.stub(pm.permission_float, "close"))
 
@@ -4494,14 +4533,12 @@ describe("agentic.SessionManager", function()
                     argument = "/tmp/f.lua (10 - 19)",
                 })
 
-                local tracker = session.message_writer.tool_call_blocks["tc-read"]
+                local tracker =
+                    session.message_writer.tool_call_blocks["tc-read"]
                 local record = session.chat_history.messages[1]
                 for _, message in ipairs({ tracker, record }) do
                     assert.equal("/tmp/f.lua", message.argument)
-                    assert.same(
-                        { offset = 10, limit = 10 },
-                        message.read_range
-                    )
+                    assert.same({ offset = 10, limit = 10 }, message.read_range)
                 end
             end)
 
@@ -5606,7 +5643,11 @@ describe("agentic.SessionManager", function()
                 widget = { buf_nrs = {} },
                 _prompt_pending = 1,
                 _agents = {
-                    c1 = { transcript = transcript, open = true, record_read = true },
+                    c1 = {
+                        transcript = transcript,
+                        open = true,
+                        record_read = true,
+                    },
                 },
                 _agent_by_task = { task = "c1" },
                 _transcript_for = function()

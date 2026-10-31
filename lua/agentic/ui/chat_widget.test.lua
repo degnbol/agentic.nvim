@@ -162,7 +162,13 @@ describe("agentic.ui.ChatWidget", function()
             local float = vim.api.nvim_open_win(
                 vim.api.nvim_create_buf(false, true),
                 true,
-                { relative = "editor", row = 1, col = 1, width = 20, height = 5 }
+                {
+                    relative = "editor",
+                    row = 1,
+                    col = 1,
+                    width = 20,
+                    height = 5,
+                }
             )
 
             widget:show_in(float)
@@ -633,51 +639,57 @@ describe("agentic.ui.ChatWidget", function()
                     assert.is_nil(widget:home_win())
                 end)
 
-                it("without a target, opens the home above the input", function()
-                    local input_win = widget:input_win()
-                    vim.api.nvim_set_current_win(input_win)
+                it(
+                    "without a target, opens the home above the input",
+                    function()
+                        local input_win = widget:input_win()
+                        vim.api.nvim_set_current_win(input_win)
 
-                    widget:reveal(nil)
+                        widget:reveal(nil)
 
-                    local home = widget:home_win()
-                    assert.equal(home, vim.api.nvim_get_current_win())
-                    assert.equal(
-                        widget.buf_nrs.agent,
-                        vim.api.nvim_win_get_buf(home)
-                    )
-                    assert.equal(
-                        widget.buf_nrs.input,
-                        vim.api.nvim_win_get_buf(input_win)
-                    )
-                    assert.is_true(row_of(home) < row_of(input_win))
-                end)
+                        local home = widget:home_win()
+                        assert.equal(home, vim.api.nvim_get_current_win())
+                        assert.equal(
+                            widget.buf_nrs.agent,
+                            vim.api.nvim_win_get_buf(home)
+                        )
+                        assert.equal(
+                            widget.buf_nrs.input,
+                            vim.api.nvim_win_get_buf(input_win)
+                        )
+                        assert.is_true(row_of(home) < row_of(input_win))
+                    end
+                )
             end)
         end)
 
         describe("activity panel", function()
-            it("moves the panels to a chat window in the current tab", function()
-                fill_buffer(widget, "code", { "line1" })
-                fill_buffer(widget, "activity", { "a.lua" })
-                local first = show(widget)
-                vim.cmd("tabnew")
-                MiniTest.finally(function()
-                    pcall(vim.cmd.tabclose)
-                end)
-                local second = vim.api.nvim_get_current_win()
-                vim.api.nvim_win_set_buf(second, widget.buf_nrs.agent)
-                assert.equal(first, widget:home_win())
+            it(
+                "moves the panels to a chat window in the current tab",
+                function()
+                    fill_buffer(widget, "code", { "line1" })
+                    fill_buffer(widget, "activity", { "a.lua" })
+                    local first = show(widget)
+                    vim.cmd("tabnew")
+                    MiniTest.finally(function()
+                        pcall(vim.cmd.tabclose)
+                    end)
+                    local second = vim.api.nvim_get_current_win()
+                    vim.api.nvim_win_set_buf(second, widget.buf_nrs.agent)
+                    assert.equal(first, widget:home_win())
 
-                widget:toggle_panel("activity")
+                    widget:toggle_panel("activity")
 
-                assert.equal(second, widget:home_win())
-                local tab = vim.api.nvim_get_current_tabpage()
-                for _, panel in ipairs({ "code", "activity" }) do
-                    assert.equal(
-                        tab,
-                        vim.api.nvim_win_get_tabpage(widget.win_nrs[panel])
-                    )
+                    assert.equal(second, widget:home_win())
+                    local tab = vim.api.nvim_get_current_tabpage()
+                    for _, panel in ipairs({ "code", "activity" }) do
+                        assert.equal(
+                            tab,
+                            vim.api.nvim_win_get_tabpage(widget.win_nrs[panel])
+                        )
+                    end
                 end
-            end)
+            )
 
             for panel, title in pairs({ activity = "Files", info = "Session" }) do
                 it(
@@ -1878,9 +1890,14 @@ describe("agentic.ui.ChatWidget", function()
         --- Map `<Plug>(agentic-test-stage)` in insert and visual mode on the
         --- input to stage "Continue", and focus the input.
         local function map_stage()
-            vim.keymap.set({ "i", "x", "s" }, "<Plug>(agentic-test-stage)", function()
-                widget:_stage_input("Continue")
-            end, { buffer = widget.buf_nrs.input })
+            vim.keymap.set(
+                { "i", "x", "s" },
+                "<Plug>(agentic-test-stage)",
+                function()
+                    widget:_stage_input("Continue")
+                end,
+                { buffer = widget.buf_nrs.input }
+            )
             vim.api.nvim_set_current_win(widget:input_win() --[[@as integer]])
         end
 

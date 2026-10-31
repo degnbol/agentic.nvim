@@ -24,25 +24,28 @@ end
         child.stop()
     end)
 
-    it("load_acp_session shows an open session instead of loading it", function()
-        child.lua([[_G.s.session_id = "sid-open"]])
-        child.cmd("tabnew")
+    it(
+        "load_acp_session shows an open session instead of loading it",
+        function()
+            child.lua([[_G.s.session_id = "sid-open"]])
+            child.cmd("tabnew")
 
-        child.lua([[require("agentic").load_acp_session("sid-open")]])
-        child.flush()
+            child.lua([[require("agentic").load_acp_session("sid-open")]])
+            child.flush()
 
-        assert.equal(
-            1,
-            child.lua_get(
-                [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+            assert.equal(
+                1,
+                child.lua_get(
+                    [[vim.tbl_count(require("agentic.session_registry").by_id)]]
+                )
             )
-        )
-        assert.equal(
-            child.lua_get("_G.s.widget.buf_nrs.agent"),
-            child.api.nvim_get_current_buf()
-        )
-        assert.is_true(child.lua_get("_G.load_cb == nil"))
-    end)
+            assert.equal(
+                child.lua_get("_G.s.widget.buf_nrs.agent"),
+                child.api.nvim_get_current_buf()
+            )
+            assert.is_true(child.lua_get("_G.load_cb == nil"))
+        end
+    )
 
     it("records the replayed and the later tool calls", function()
         child.lua([[

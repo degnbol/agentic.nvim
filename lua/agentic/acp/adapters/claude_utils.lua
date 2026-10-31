@@ -196,7 +196,13 @@ function M.message_result(body)
     end
     -- Most results are plain text; failing to parse is the common case.
     local ok, decoded = pcall(vim.json.decode, table.concat(body, "\n"))
-    if not (ok and type(decoded) == "table" and type(decoded.message) == "string") then
+    if
+        not (
+            ok
+            and type(decoded) == "table"
+            and type(decoded.message) == "string"
+        )
+    then
         return nil, nil
     end
     local delivered = decoded.success
@@ -257,7 +263,9 @@ end
 --- @return string|nil path Nil until the session has written a side file, such as a subagent's
 function M.find_session_dir(config_dir, session_id)
     for _, path in
-        ipairs(vim.fn.glob(config_dir .. "/projects/*/" .. session_id, false, true))
+        ipairs(
+            vim.fn.glob(config_dir .. "/projects/*/" .. session_id, false, true)
+        )
     do
         if vim.fn.isdirectory(path) == 1 then
             return path

@@ -98,7 +98,8 @@ function M.option_value(word, next_word, kinds)
         if kind == "taker" then
             local rest = letters:sub(i + 1)
             if rest == "" then
-                occurrence = next_word and { id = letter, values = { next_word } }
+                occurrence = next_word
+                    and { id = letter, values = { next_word } }
             else
                 local values = { rest }
                 if rest:sub(1, 1) == "=" then

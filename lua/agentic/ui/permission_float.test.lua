@@ -125,7 +125,8 @@ describe("agentic.ui.PermissionFloat", function()
 
         it("open() labels each option with its key", function()
             float:open(make_options())
-            local first = vim.api.nvim_buf_get_lines(float._bufnr, 0, 1, false)[1]
+            local first =
+                vim.api.nvim_buf_get_lines(float._bufnr, 0, 1, false)[1]
             local label = vim.fn.keytrans(vim.keycode("<localLeader>y"))
             assert.equal(1, first:find(label .. ".", 1, true))
         end)
@@ -197,7 +198,10 @@ describe("agentic.ui.PermissionFloat", function()
 
             float:open(make_options())
 
-            assert.equal(chat_winid, vim.api.nvim_win_get_config(float._winid).win)
+            assert.equal(
+                chat_winid,
+                vim.api.nvim_win_get_config(float._winid).win
+            )
             float:close()
             vim.cmd("tabclose")
         end)
@@ -294,7 +298,10 @@ describe("agentic.ui.PermissionFloat", function()
 
             before_each(function()
                 anchor_bufnr = vim.api.nvim_create_buf(false, true)
-                vim.api.nvim_buf_set_name(anchor_bufnr, "/tmp/agentic/transcript-a")
+                vim.api.nvim_buf_set_name(
+                    anchor_bufnr,
+                    "/tmp/agentic/transcript-a"
+                )
                 saved_open_keys = vim.deepcopy(Config.keymaps.permission_open)
                 saved_float_cfg = vim.deepcopy(Config.permission_float)
             end)
@@ -335,8 +342,12 @@ describe("agentic.ui.PermissionFloat", function()
             end)
 
             it("lists keys with no shared prefix in full", function()
-                Config.keymaps.permission_open =
-                    { edit = "<F1>", split = "<F2>", vsplit = false, tab = false }
+                Config.keymaps.permission_open = {
+                    edit = "<F1>",
+                    split = "<F2>",
+                    vsplit = false,
+                    tab = false,
+                }
 
                 float:open(make_options(), anchor_bufnr)
 
@@ -344,48 +355,63 @@ describe("agentic.ui.PermissionFloat", function()
                 assert.equal("<F1> <F2>", chunk_text(cfg.footer))
             end)
 
-            it("without a border, shows the hint as the last body line", function()
-                Config.permission_float.border = "none"
+            it(
+                "without a border, shows the hint as the last body line",
+                function()
+                    Config.permission_float.border = "none"
 
-                float:open(make_options(), anchor_bufnr)
+                    float:open(make_options(), anchor_bufnr)
 
-                local lines = vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
-                assert.equal(4, #lines)
-                assert.equal("\\{e,s,v,t}", lines[4])
-                assert.equal(4, vim.api.nvim_win_get_height(float._winid))
-            end)
+                    local lines =
+                        vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                    assert.equal(4, #lines)
+                    assert.equal("\\{e,s,v,t}", lines[4])
+                    assert.equal(4, vim.api.nvim_win_get_height(float._winid))
+                end
+            )
 
-            it("on a border with no top edge, shows the hint as a body line", function()
-                Config.permission_float.border = "shadow"
+            it(
+                "on a border with no top edge, shows the hint as a body line",
+                function()
+                    Config.permission_float.border = "shadow"
 
-                float:open(make_options(), anchor_bufnr)
+                    float:open(make_options(), anchor_bufnr)
 
-                local lines = vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
-                assert.equal("\\{e,s,v,t}", lines[4])
-                assert.is_nil(chunk_text(vim.api.nvim_win_get_config(float._winid).footer))
-            end)
+                    local lines =
+                        vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                    assert.equal("\\{e,s,v,t}", lines[4])
+                    assert.is_nil(
+                        chunk_text(
+                            vim.api.nvim_win_get_config(float._winid).footer
+                        )
+                    )
+                end
+            )
 
-            it("moves to a window showing the anchor, without title or hint", function()
-                Config.permission_float.border = "none"
-                float:open(make_options(), anchor_bufnr)
+            it(
+                "moves to a window showing the anchor, without title or hint",
+                function()
+                    Config.permission_float.border = "none"
+                    float:open(make_options(), anchor_bufnr)
 
-                local anchor_win = vim.api.nvim_open_win(
-                    anchor_bufnr,
-                    false,
-                    { split = "below", win = -1 }
-                )
-                float:place()
+                    local anchor_win = vim.api.nvim_open_win(
+                        anchor_bufnr,
+                        false,
+                        { split = "below", win = -1 }
+                    )
+                    float:place()
 
-                assert.is_false(float:is_on_fallback())
-                local cfg = vim.api.nvim_win_get_config(float._winid)
-                assert.equal(anchor_win, cfg.win)
-                assert.is_nil(chunk_text(cfg.title))
-                assert.equal(
-                    3,
-                    #vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
-                )
-                vim.api.nvim_win_close(anchor_win, true)
-            end)
+                    assert.is_false(float:is_on_fallback())
+                    local cfg = vim.api.nvim_win_get_config(float._winid)
+                    assert.equal(anchor_win, cfg.win)
+                    assert.is_nil(chunk_text(cfg.title))
+                    assert.equal(
+                        3,
+                        #vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                    )
+                    vim.api.nvim_win_close(anchor_win, true)
+                end
+            )
 
             it("is not shown while no window shows the chat either", function()
                 vim.api.nvim_win_close(chat_winid --[[@as integer]], true)

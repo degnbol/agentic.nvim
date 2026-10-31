@@ -593,10 +593,8 @@ local BODIES = {
             return {}
         end
         local range = call.block.read_range
-        local line_info = string.format(
-            "Read %d lines",
-            range and range.limit or line_count
-        )
+        local line_info =
+            string.format("Read %d lines", range and range.limit or line_count)
         if range then
             line_info = line_info
                 .. " "

@@ -179,7 +179,8 @@ describe("WidgetLayout", function()
     end)
 
     describe("split_target", function()
-        local stack = { "todos", "code", "files", "diagnostics", "activity", "input" }
+        local stack =
+            { "todos", "code", "files", "diagnostics", "activity", "input" }
 
         it("is below home when no panel is open", function()
             assert.same(
@@ -277,18 +278,15 @@ describe("WidgetLayout", function()
 
                 WidgetLayout.validate_stack()
 
-                assert.same(
-                    {
-                        "todos",
-                        "code",
-                        "files",
-                        "diagnostics",
-                        "activity",
-                        "info",
-                        "input",
-                    },
-                    Config.windows.stack
-                )
+                assert.same({
+                    "todos",
+                    "code",
+                    "files",
+                    "diagnostics",
+                    "activity",
+                    "info",
+                    "input",
+                }, Config.windows.stack)
                 assert.equal(1, notify_stub.call_count)
             end)
         end
@@ -309,13 +307,26 @@ describe("WidgetLayout", function()
         end)
 
         it("stacks panels below home in the configured order", function()
-            for _, panel in ipairs({ "todos", "code", "files", "diagnostics", "activity" }) do
+            for _, panel in ipairs({
+                "todos",
+                "code",
+                "files",
+                "diagnostics",
+                "activity",
+            }) do
                 panel_buf(panel, { "row" })
             end
             panel_buf("input")
             local win_nrs = {}
 
-            for _, panel in ipairs({ "input", "files", "todos", "activity", "code", "diagnostics" }) do
+            for _, panel in ipairs({
+                "input",
+                "files",
+                "todos",
+                "activity",
+                "code",
+                "diagnostics",
+            }) do
                 WidgetLayout.open_panel(win_nrs, buf_nrs, home, panel)
             end
 
@@ -345,7 +356,8 @@ describe("WidgetLayout", function()
         it("returns the open window instead of a second one", function()
             panel_buf("code", { "x" })
             local win_nrs = {}
-            local first = WidgetLayout.open_panel(win_nrs, buf_nrs, home, "code")
+            local first =
+                WidgetLayout.open_panel(win_nrs, buf_nrs, home, "code")
 
             assert.equal(
                 first,
@@ -359,7 +371,13 @@ describe("WidgetLayout", function()
             local float = vim.api.nvim_open_win(
                 vim.api.nvim_create_buf(false, true),
                 false,
-                { relative = "editor", row = 1, col = 1, width = 10, height = 3 }
+                {
+                    relative = "editor",
+                    row = 1,
+                    col = 1,
+                    width = 10,
+                    height = 3,
+                }
             )
 
             assert.is_nil(WidgetLayout.open_panel({}, buf_nrs, float, "code"))
@@ -459,16 +477,19 @@ describe("WidgetLayout", function()
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
-        it("edit shows the buffer in the given window and focuses it", function()
-            local other = vim.api.nvim_get_current_win()
-            vim.cmd("split")
+        it(
+            "edit shows the buffer in the given window and focuses it",
+            function()
+                local other = vim.api.nvim_get_current_win()
+                vim.cmd("split")
 
-            local winid = WidgetLayout.open_buf(bufnr, "edit", other)
+                local winid = WidgetLayout.open_buf(bufnr, "edit", other)
 
-            assert.equal(other, winid)
-            assert.equal(bufnr, vim.api.nvim_win_get_buf(other))
-            assert.equal(other, vim.api.nvim_get_current_win())
-        end)
+                assert.equal(other, winid)
+                assert.equal(bufnr, vim.api.nvim_win_get_buf(other))
+                assert.equal(other, vim.api.nvim_get_current_win())
+            end
+        )
 
         it("edit with no window splits", function()
             local n_wins = #vim.api.nvim_tabpage_list_wins(0)
