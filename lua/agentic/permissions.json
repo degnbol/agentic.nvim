@@ -128,12 +128,13 @@
 
   "find": {
     "read_only": [{}],
-    "deny":      [{ "options": ["exec", "execdir", "okdir", "delete", "ok"] }]
+    "ask":       [{ "options": ["exec", "execdir", "ok", "okdir", "fprint", "fprint0", "fprintf", "fls"] }],
+    "deny":      [{ "options": ["delete"] }]
   },
 
   "fd": {
     "read_only": [{}],
-    "deny":      [{ "options": ["x", "X", "exec", "exec-batch"] }]
+    "ask":       [{ "options": ["x", "X", "exec", "exec-batch"] }]
   },
 
   "diff": { "read_only": [{}] },

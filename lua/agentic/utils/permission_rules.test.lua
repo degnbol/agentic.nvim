@@ -726,7 +726,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     approves_at(
                         "safe_write",
-                        "diff <(find . -exec rm {} +) <(sort b)"
+                        "diff <(find . -delete) <(sort b)"
                     )
                 )
             end)
@@ -743,16 +743,27 @@ describe("PermissionRules", function()
             assert.is_false(PermissionRules.should_auto_approve("ls -la /tmp"))
         end)
 
-        it("rejects find -exec via plugin deny list", function()
+        it("prompts on find -exec via plugin ask list", function()
             assert.is_false(
                 approves_at("safe_write", "find . -name '*.lua' -exec rm {} +")
             )
         end)
 
-        it("rejects find -okdir via plugin deny list", function()
+        it("prompts on find -okdir via plugin ask list", function()
             assert.is_false(
                 approves_at("safe_write", "find . -name '*.lua' -okdir rm {} +")
             )
+        end)
+
+        it("prompts on find's file-writing primaries", function()
+            for _, cmd in ipairs({
+                "find . -fprint out",
+                "find . -fprint0 out",
+                "find . -fprintf out %p",
+                "find . -fls out",
+            }) do
+                assert.is_false(approves_at("safe_write", cmd))
+            end
         end)
 
         it("approves find without -exec", function()
@@ -1604,7 +1615,7 @@ describe("PermissionRules", function()
             )
 
             it(
-                'prompts on find "$(echo -exec rm)" — dynamic token wildcards find\'s -exec deny',
+                'prompts on find "$(echo -exec rm)" — dynamic token wildcards find\'s -exec ask',
                 function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
@@ -1656,7 +1667,7 @@ describe("PermissionRules", function()
             )
 
             it(
-                'prompts on find . "x$(echo -exec rm)" — dynamic token wildcards find\'s -exec deny',
+                'prompts on find . "x$(echo -exec rm)" — dynamic token wildcards find\'s -exec ask',
                 function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
@@ -2723,7 +2734,7 @@ describe("PermissionRules", function()
                     "prompts on find . $(echo -exec rm {} ;) (arg-substitution spliced)",
                     function()
                         -- The inner echo approves, but its output splices in as a
-                        -- dynamic token that wildcards find's -exec deny gate.
+                        -- dynamic token that wildcards find's -exec ask gate.
                         assert.is_false(
                             PermissionRules.should_auto_approve(
                                 "find . $(echo -exec rm {} \\;)"
@@ -3068,11 +3079,11 @@ describe("PermissionRules", function()
 
             -- With quoted-substitution handling the quoted `"$(echo x)"` is walked
             -- and spliced as a dynamic token; it prompts because that token
-            -- wildcard-fires find's `-exec` deny (the gate wildcard), not because
+            -- wildcard-fires find's `-exec` ask (the gate wildcard), not because
             -- the substitution bails. The bare `find $(echo x)` already prompts
             -- the same way, so quoted-substitution handling never flipped this boolean.
             it(
-                'prompts on base=/safe; find "$(echo x)" (dynamic token wildcards find\'s -exec deny)',
+                'prompts on base=/safe; find "$(echo x)" (dynamic token wildcards find\'s -exec ask)',
                 function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
@@ -3299,7 +3310,7 @@ describe("PermissionRules", function()
             )
 
             it(
-                "prompts on find . $d/x (dynamic wildcard fires find's -exec deny)",
+                "prompts on find . $d/x (dynamic wildcard fires find's -exec ask)",
                 function()
                     assert.is_false(
                         PermissionRules.should_auto_approve("find . $d/x")
@@ -3472,7 +3483,6 @@ describe("PermissionRules", function()
         describe("should_auto_reject", function()
             local rejected = {
                 "find . -delete",
-                "fd -x rm",
                 "date -s '2020-01-01'",
                 "awk 'BEGIN{system(\"rm -rf /\")}'",
                 "rm -f x",
@@ -3497,6 +3507,8 @@ describe("PermissionRules", function()
                 "rm x", -- plain rm is ask, not deny
                 "sed -i 's/a/b/' f", -- in-place edit is ask, not deny
                 "mlr -I foo", -- in-place edit is ask, not deny
+                "fd -x rm", -- exec is ask, not deny
+                "find . -exec rm {} \\;",
                 "rm $flags x", -- concrete-only: dynamic token does not reject
                 "rm -rf / |", -- parse failure: fail-closed to prompt, not reject
             }
@@ -3511,7 +3523,6 @@ describe("PermissionRules", function()
         -- flag meets the same gate as the plain one.
         describe("delivered-word token text", function()
             for _, cmd in ipairs({
-                [[find . \-exec rm {} \;]],
                 [[find . \-delete]],
             }) do
                 it("rejects: " .. cmd, function()
@@ -3520,6 +3531,7 @@ describe("PermissionRules", function()
             end
 
             for _, cmd in ipairs({
+                [[find . \-exec rm {} \;]],
                 [[sort \-o out f]],
                 [[zsh -c "echo \`rm -rf /tmp/zz\`"]],
             }) do
@@ -3793,7 +3805,7 @@ describe("PermissionRules", function()
             function()
                 -- `find $f` resolves to /safe (known-safe via the bundled find rule),
                 -- so only the unknown command highlights. Without the constant-
-                -- propagation mirror, $f would wildcard-fire find's -exec deny and
+                -- propagation mirror, $f would wildcard-fire find's -exec ask and
                 -- light up too. Needs the structured (bundled) gate — a glob deny
                 -- cannot get the dynamic-token wildcard treatment.
                 Config.permissions.use_plugin_defaults = true
