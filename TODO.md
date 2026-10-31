@@ -18,11 +18,15 @@ Tracks are independent unless a note says otherwise.
    which also needs `PLAN-usage-limit-queue.md`. Needs only to come before 4;
    it can land earlier.
 4. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
-5. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md)
+5. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
+   After `PLAN-discovered-skills.md` only to avoid a rebase.
 6. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
 
 **Claude code behind the adapter:** the order is in
 [§ Claude-specific code behind the adapter](#claude-specific-code-behind-the-adapter).
+
+**Harness context in chat:**
+- [`PLAN-discovered-skills.md`](notes/PLAN-discovered-skills.md)
 
 **Executed code**
 1. [`PLAN-permission-walker-dedup.md`](notes/PLAN-permission-walker-dedup.md)
@@ -50,7 +54,11 @@ needs the fix in
 [`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold),
 [`PLAN-terminal-streaming.md`](notes/PLAN-terminal-streaming.md),
-[`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md).
+[`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
+[`PLAN-exec-action-walk.md`](notes/PLAN-exec-action-walk.md) (either order
+with Executed code 1 and `PLAN-split-modules.md`; it edits the same
+`permission_rules.lua` walkers and `shell_parse.lua` `collect_command`/`inner_source`,
+outside move 5's parser range, so the second to land rebases).
 
 ## Bugs
 
