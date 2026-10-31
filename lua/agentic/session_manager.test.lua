@@ -2373,22 +2373,22 @@ describe("agentic.SessionManager", function()
 
                 session:_drain_side_records()
 
-                assert.same({ "/h/a.sh" }, written[1].body)
+                assert.same({ "`/h/a.sh`" }, written[1].body)
                 assert.is_nil(written[1].after_prompt)
-                assert.same({ "/h/b.sh" }, written[2].body)
+                assert.same({ "`/h/b.sh`" }, written[2].body)
                 assert.is_true(written[2].after_prompt)
             end
         )
 
         it("renders injected context", function()
             local session, written = make_session({
-                { group = "context", body = { "ctx" }, script = "guard.sh" },
+                { group = "context", body = { "ctx" }, command = "guard.sh" },
             })
 
             session:_drain_side_records()
 
             assert.same(
-                { { body = { "ctx" }, source = "guard.sh", failed = false } },
+                { { body = { "ctx" }, title = "`guard.sh`", failed = false } },
                 written
             )
         end)
@@ -2398,7 +2398,7 @@ describe("agentic.SessionManager", function()
                 {
                     group = "context",
                     body = { "ctx" },
-                    script = "guard.sh",
+                    command = "guard.sh",
                     tool_call_id = "toolu_01W2Ve",
                 },
             })
@@ -2406,6 +2406,63 @@ describe("agentic.SessionManager", function()
             session:_drain_side_records()
 
             assert.equal("toolu_01W2Ve", written[1].tool_call_id)
+        end)
+
+        describe("a block's title", function()
+            --- The title `_drain_side_records` gives a context record.
+            --- @param record table fields over a context record's
+            --- @return string|nil
+            local function title_of(record)
+                local session, written = make_session({
+                    vim.tbl_extend(
+                        "force",
+                        { group = "context", body = { "ctx" } },
+                        record
+                    ),
+                })
+                session:_drain_side_records()
+                return written[1].title
+            end
+
+            it("is the command as a code span, then the duration", function()
+                assert.equal(
+                    '`sh "$ROOT/init.sh"` · 199 ms',
+                    title_of({
+                        command = 'sh "$ROOT/init.sh"',
+                        duration_ms = 199,
+                        hook_name = "SessionStart:startup",
+                    })
+                )
+            end)
+
+            it("is the command alone when no duration is known", function()
+                assert.equal("`guard.sh`", title_of({ command = "guard.sh" }))
+            end)
+
+            it("is the hook name when no command is known", function()
+                assert.equal(
+                    "UserPromptSubmit",
+                    title_of({ hook_name = "UserPromptSubmit" })
+                )
+            end)
+
+            it("is `hook` when neither is known", function()
+                assert.equal("hook", title_of({}))
+            end)
+
+            it("joins a multi-line command onto one row", function()
+                assert.equal(
+                    "`cd /r && ./a.sh`",
+                    title_of({ command = "cd /r &&\n./a.sh" })
+                )
+            end)
+
+            it("keeps a command holding a backtick one span", function()
+                assert.equal(
+                    "`` echo `date` ``",
+                    title_of({ command = "echo `date`" })
+                )
+            end)
         end)
 
         it("renders a record whose line did not parse", function()
@@ -2473,11 +2530,10 @@ describe("agentic.SessionManager", function()
             assert.same({ "ctx" }, written[1].body)
             assert.same({
                 body = {
-                    "/hooks/a guard.sh  61 ms",
-                    "/hooks/lint.sh  2.8 s",
-                    "/hooks/untimed.sh",
+                    "`'/hooks/a guard.sh'` · 61 ms",
+                    "`/hooks/lint.sh` · 2.8 s",
+                    "`/hooks/untimed.sh`",
                 },
-                source = "passed",
                 tool_call_id = "toolu_1",
                 preformatted = true,
             }, written[2])
@@ -2497,33 +2553,9 @@ describe("agentic.SessionManager", function()
 
             session:_drain_side_records()
 
-            assert.same({ "/h/a.sh", "/h/c.sh" }, written[1].body)
+            assert.same({ "`/h/a.sh`", "`/h/c.sh`" }, written[1].body)
             assert.is_nil(written[1].tool_call_id)
-            assert.same({ "/h/b.sh" }, written[2].body)
-        end)
-
-        it("shows a pass's script under home with a tilde", function()
-            local session, written = make_session({
-                {
-                    group = "passed",
-                    body = {},
-                    command = vim.env.HOME .. "/hooks/guard.sh",
-                },
-            })
-
-            session:_drain_side_records()
-
-            assert.same({ "~/hooks/guard.sh" }, written[1].body)
-        end)
-
-        it("shows a command that is more than a path as written", function()
-            local session, written = make_session({
-                { group = "passed", body = {}, command = "bash ~/h.sh --fast" },
-            })
-
-            session:_drain_side_records()
-
-            assert.same({ "bash ~/h.sh --fast" }, written[1].body)
+            assert.same({ "`/h/b.sh`" }, written[2].body)
         end)
 
         it("writes nothing once the session is destroyed", function()

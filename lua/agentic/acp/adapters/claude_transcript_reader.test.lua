@@ -289,7 +289,7 @@ describe("ClaudeTranscriptReader", function()
 
             assert.equal(1, #records)
             assert.equal("context", records[1].group)
-            assert.equal("guard.sh", records[1].script)
+            assert.equal("/hooks/guard.sh", records[1].command)
             assert.equal(28, records[1].duration_ms)
         end)
 
@@ -320,11 +320,11 @@ describe("ClaudeTranscriptReader", function()
                 ),
             })
 
-            local scripts = vim.tbl_map(function(record)
-                return record.script
+            local commands = vim.tbl_map(function(record)
+                return record.command
             end, hooks(reader:drain()))
 
-            assert.same({ "b.sh", "a.sh" }, scripts)
+            assert.same({ "/hooks/b.sh", "/hooks/a.sh" }, commands)
         end)
 
         it("pairs by event and id when the text differs", function()
@@ -335,7 +335,7 @@ describe("ClaudeTranscriptReader", function()
                 merged("c-1", { "<persisted-output>…" }, post),
             })
 
-            assert.equal("big.sh", hooks(reader:drain())[1].script)
+            assert.equal("/hooks/big.sh", hooks(reader:drain())[1].command)
         end)
 
         it("leaves a run of another event unpaired", function()
@@ -347,7 +347,7 @@ describe("ClaudeTranscriptReader", function()
                 merged("c-1", { "same" }),
             })
 
-            assert.is_nil(hooks(reader:drain())[1].script)
+            assert.is_nil(hooks(reader:drain())[1].command)
         end)
 
         it("forgets unpaired runs on a new transcript path", function()
@@ -360,7 +360,7 @@ describe("ClaudeTranscriptReader", function()
             append({ merged("c-1", { "guard says hi" }) })
             reader:set_transcript_path(other)
 
-            assert.is_nil(hooks(reader:drain())[1].script)
+            assert.is_nil(hooks(reader:drain())[1].command)
         end)
 
         it("pairs two runs with the same text in order", function()
@@ -393,11 +393,14 @@ describe("ClaudeTranscriptReader", function()
                 ),
             })
 
-            local scripts = vim.tbl_map(function(record)
-                return record.script
+            local commands = vim.tbl_map(function(record)
+                return record.command
             end, hooks(reader:drain()))
 
-            assert.same({ "big.sh", "a.sh", "c.sh" }, scripts)
+            assert.same(
+                { "/hooks/big.sh", "/hooks/a.sh", "/hooks/c.sh" },
+                commands
+            )
         end)
 
         it("pairs a run in one drain with a context in the next", function()
@@ -407,7 +410,7 @@ describe("ClaudeTranscriptReader", function()
 
             append({ merged("c-1", { "guard says hi" }) })
 
-            assert.equal("guard.sh", hooks(reader:drain())[1].script)
+            assert.equal("/hooks/guard.sh", hooks(reader:drain())[1].command)
         end)
 
         it("pairs a context with a run that predates the reader", function()
@@ -417,7 +420,7 @@ describe("ClaudeTranscriptReader", function()
             local reader = reader_at(transcript)
             append({ merged("c-1", { "guard says hi" }) })
 
-            assert.equal("guard.sh", hooks(reader:drain())[1].script)
+            assert.equal("/hooks/guard.sh", hooks(reader:drain())[1].command)
         end)
 
         it("lets a context before the reader consume its run", function()
@@ -432,7 +435,7 @@ describe("ClaudeTranscriptReader", function()
             local records = hooks(reader:drain())
 
             assert.equal(1, #records)
-            assert.is_nil(records[1].script)
+            assert.is_nil(records[1].command)
         end)
     end)
 
@@ -451,19 +454,21 @@ describe("ClaudeTranscriptReader", function()
         local records = hooks(reader:drain())
 
         assert.equal(1, #records)
-        assert.equal("review.sh", records[1].script)
+        assert.equal("/hooks/review.sh", records[1].command)
     end)
 
-    it("names a record with no command after its hook", function()
+    it("carries the hook name of a record with no command", function()
         local reader = reader_at(transcript)
         local entry = injected("c-1", nil, "from a prompt submit hook")
         entry.attachment.hookName = "UserPromptSubmit"
         append({ entry })
 
-        assert.equal("UserPromptSubmit", hooks(reader:drain())[1].script)
+        local record = hooks(reader:drain())[1]
+        assert.is_nil(record.command)
+        assert.equal("UserPromptSubmit", record.hook_name)
     end)
 
-    it("prefers the command to the hook name", function()
+    it("carries both the command and the hook name", function()
         local reader = reader_at(transcript)
         append({
             {
@@ -481,14 +486,16 @@ describe("ClaudeTranscriptReader", function()
             },
         })
 
-        assert.equal("shell-guard.sh", hooks(reader:drain())[1].script)
+        local record = hooks(reader:drain())[1]
+        assert.equal("/hooks/shell-guard.sh", record.command)
+        assert.equal("PreToolUse:Bash", record.hook_name)
     end)
 
-    it("leaves the script unnamed when no run produced the body", function()
+    it("leaves the command unknown when no run produced the body", function()
         local reader = reader_at(transcript)
         append({ injected("c-1", nil, "from a prompt submit hook") })
 
-        assert.is_nil(hooks(reader:drain())[1].script)
+        assert.is_nil(hooks(reader:drain())[1].command)
     end)
 
     it("names a failure after its own command", function()
@@ -512,7 +519,7 @@ describe("ClaudeTranscriptReader", function()
         local records = hooks(reader:drain())
 
         assert.equal("failure", records[1].group)
-        assert.equal("permission_hook.sh", records[1].script)
+        assert.equal("/hooks/permission_hook.sh", records[1].command)
     end)
 
     it("drops an unparseable line the transcript already held", function()

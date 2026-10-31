@@ -150,11 +150,8 @@ all. Three variants: `<lang>-fold` (sidecar bodies past their threshold,
 thought runs and hook blocks via `_write_collapsed_region`),
 `<lang>-difffold` (every edit diff), and `<lang>-foldnext` (execute and search
 commands), which folds through the `console`/`console-fold` fence after it;
-the output's own fold nests inside. A second word
-after the language (`markdown-fold guard.sh`) is
-ignored by the queries and read by the foldtext as the body's name. Mechanism
-is split across four files; read them in this order when changing fold
-behaviour:
+the output's own fold nests inside. Mechanism is split across four files;
+read them in this order when changing fold behaviour:
 
 1. `queries/agentic/folds.scm` — folds `code_fence_content`, not the whole
    `fenced_code_block` (the file's top comment explains why and both patterns).
@@ -169,9 +166,10 @@ behaviour:
    deferred, why it goes through `BufHelpers.set_fold`, and how anchor
    extmarks survive edits and chat-window hides.
 
-`folds.lua` provides the `··· N lines ···` foldtext, led by the fence's name
-word, or for a command fold by its first row, plus a character count where the writer marks the
-fence row in `Folds.NS_CHAR_COUNT`.
+`folds.lua` provides the `··· N lines ···` foldtext, led by the body's first
+row for a `-foldnext` fold and where the writer marks the fence row in
+`Folds.NS_TITLED`, plus a character count where it marks the fence row in
+`Folds.NS_CHAR_COUNT`.
 
 Adding a new foldable kind:
 

@@ -261,16 +261,13 @@ local function session_start_anchor(hook_name)
     return anchor
 end
 
---- A hook record as a side record, named after its command's basename, else
---- its hook. One that names no tool call takes an anchor instead: a
---- SessionStart record its own, any other the anchor of its chain. Sets those
---- fields on `record` itself.
+--- A hook record as a side record. One that names no tool call takes an
+--- anchor instead: a SessionStart record its own, any other the anchor of its
+--- chain, written into `record` itself.
 --- @param record agentic.acp.ClaudeHookRecord
 --- @param place agentic.acp.TranscriptLink The link ending the record's chain
 --- @return agentic.acp.SideRecord side
 function ClaudeTranscriptReader:_hook_side_record(record, place)
-    record.script = record.command and vim.fs.basename(record.command)
-        or record.hook_name
     if not is_tool_call_id(record.tool_call_id) then
         local anchor = record.hook_event == "SessionStart"
                 and session_start_anchor(record.hook_name)

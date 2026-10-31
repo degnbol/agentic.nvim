@@ -1011,120 +1011,131 @@ describe("agentic.ui.MessageWriter", function()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
         end
 
-        it("names the script in the fence for the foldtext to read", function()
+        local TITLE = "`guard.sh` · 30 ms"
+
+        --- 0-indexed rows marked in `ns`.
+        --- @param ns integer
+        --- @return integer[]
+        local function marked_rows(ns)
+            return vim.tbl_map(function(mark)
+                return mark[2]
+            end, vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, {}))
+        end
+
+        it("leads the region with its title, in a bare fence", function()
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
             })
 
             assert.same({
-                "```markdown-fold guard.sh",
+                "```markdown-fold",
+                TITLE,
                 "injected",
                 "context",
                 "```",
                 "",
             }, buffer_lines())
-            assert.same({ { 1, G_HOOK }, { 2, "╰─" } }, rail())
+            assert.same(
+                { { 1, G_HOOK }, { 2, "│ " }, { 3, "╰─" } },
+                rail()
+            )
             assert_one_sign_per_row()
         end)
 
-        it("omits the name when no script is known", function()
+        it("wraps the body but not the title", function()
+            local title = "`/hooks/a-very-long-hook-name.sh` · 61 ms"
+            writer._get_wrap_width = function()
+                return 20
+            end
+            writer:write_hook_block({
+                body = { "one two three four five six seven" },
+                title = title,
+            })
+
+            local lines = buffer_lines()
+            assert.equal(title, lines[2])
+            -- Fence, title, at least two body rows, fence, blank.
+            assert.is_true(#lines >= 6)
+            for i = 3, #lines - 2 do
+                assert.is_true(vim.fn.strdisplaywidth(lines[i]) <= 20)
+            end
+        end)
+
+        it("marks a folded titled region's fence for the foldtext", function()
+            writer:write_hook_block({
+                body = { "injected", "context" },
+                title = TITLE,
+            })
+
+            assert.same({ 0 }, marked_rows(Folds.NS_TITLED))
+        end)
+
+        it("leaves an untitled region's fence unmarked", function()
             writer:write_hook_block({ body = { "injected", "context" } })
 
             assert.equal("```markdown-fold", buffer_lines()[1])
+            assert.same({}, marked_rows(Folds.NS_TITLED))
         end)
 
         it("leaves a one-line body unfenced under the glyph", function()
-            writer:write_hook_block({ body = { "brief" }, source = "guard.sh" })
+            writer:write_hook_block({ body = { "brief" } })
 
             assert.equal("brief", buffer_lines()[1])
             assert.same({ { 0, G_HOOK } }, rail())
         end)
 
-        it("shows a one-row block's script at the end of its row", function()
-            writer:write_hook_block({ body = { "brief" }, source = "guard.sh" })
+        it("leaves a titled one-row body open", function()
+            writer:write_hook_block({ body = { "brief" }, title = TITLE })
 
-            local virt_texts = {}
-            for _, mark in
-                ipairs(
-                    vim.api.nvim_buf_get_extmarks(
-                        bufnr,
-                        Renderer.NS_DECORATIONS,
-                        { 0, 0 },
-                        { 0, -1 },
-                        { details = true }
-                    )
-                )
-            do
-                if mark[4].virt_text then
-                    table.insert(virt_texts, mark[4].virt_text[1][1])
-                end
-            end
-            assert.same({ "guard.sh" }, virt_texts)
-        end)
-
-        it("shows a multi-row block's script on its first body row", function()
-            writer:write_hook_block({
-                body = { "injected", "context" },
-                source = "guard.sh",
-            })
-
-            local marks = vim.api.nvim_buf_get_extmarks(
-                bufnr,
-                Renderer.NS_DECORATIONS,
-                0,
-                -1,
-                { details = true }
+            assert.same(
+                { TITLE, "brief" },
+                vim.list_slice(buffer_lines(), 2, 3)
             )
-            local rows = {}
-            for _, mark in ipairs(marks) do
-                if mark[4].virt_text then
-                    table.insert(rows, mark[2])
-                end
-            end
-            assert.same({ 1 }, rows)
+            assert.equal(1, #writer._pending_fold_ops)
+            assert.is_true(writer._pending_fold_ops[1].open)
         end)
 
         it("keeps a preformatted block's rows whole", function()
-            local row = "/hooks/a-very-long-hook-name.sh  61 ms"
+            local row = "`/hooks/a-very-long-hook-name.sh` · 61 ms"
             writer._get_wrap_width = function()
                 return 20
             end
             writer:write_hook_block({
-                body = { row, "/h.sh  2.8 s" },
-                source = "passed",
+                body = { row, "`/h.sh` · 2.8 s" },
                 preformatted = true,
             })
 
             assert.equal(row, buffer_lines()[2])
-            assert.equal("/h.sh  2.8 s", buffer_lines()[3])
+            assert.equal("`/h.sh` · 2.8 s", buffer_lines()[3])
         end)
 
         it("marks a failed block with the failed glyph", function()
             writer:write_hook_block({
                 body = { "exited 127", "command not found" },
-                source = "guard.sh",
+                title = TITLE,
                 failed = true,
             })
 
-            assert.same(
-                { { 1, Glyphs.HOOK_FAILED .. " " }, { 2, "╰─" } },
-                rail()
-            )
+            assert.same({
+                { 1, Glyphs.HOOK_FAILED .. " " },
+                { 2, "│ " },
+                { 3, "╰─" },
+            }, rail())
         end)
 
         it("closes a block that did not fail", function()
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
             })
 
             assert.equal(1, #writer._pending_fold_ops)
             assert.is_false(writer._pending_fold_ops[1].open)
         end)
 
-        it("writes nothing for an empty body", function()
-            writer:write_hook_block({ body = {}, source = "guard.sh" })
+        it("writes nothing for an empty body, even with a title", function()
+            writer:write_hook_block({ body = {}, title = TITLE })
 
             assert.same({ "" }, buffer_lines())
             assert.same({}, rail())
@@ -1134,12 +1145,12 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_message_chunk(make_thought_update("one\ntwo"))
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
             })
 
             local lines = buffer_lines()
-            assert.equal("```markdown-fold", lines[1])
-            assert.equal("```markdown-fold guard.sh", lines[6])
+            assert.equal("one", lines[2])
+            assert.equal(TITLE, lines[7])
         end)
 
         --- 1-indexed row of the first line equal to `text`.
@@ -1170,17 +1181,34 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t1",
             })
 
-            local fence = row_of("```markdown-fold guard.sh")
-            assert.is_not_nil(fence)
-            assert.is_true(fence < row_of("after the call"))
-            -- The bare `###` closes the tool call's section, so
-            -- treesitter-context does not pin its heading over the region.
-            assert.equal("###", buffer_lines()[fence - 2])
+            local title = row_of(TITLE)
+            assert.is_not_nil(title)
+            assert.is_true(title < row_of("after the call"))
+            -- The region belongs to the call: no `###` closes its section
+            -- above the region.
+            local lines = buffer_lines()
+            assert.equal("```markdown-fold", lines[title - 1])
+            assert.equal("", lines[title - 2])
+            assert.is_not_nil(lines[title - 3]:find("completed", 1, true))
             assert_one_sign_per_row()
+        end)
+
+        it("opens the pending section break when it appends", function()
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+
+            writer:write_hook_block({
+                body = { "injected", "context" },
+                title = TITLE,
+            })
+
+            local title = row_of(TITLE)
+            assert.equal("###", buffer_lines()[title - 3])
         end)
 
         it("appends when no block carries the id", function()
@@ -1188,13 +1216,11 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t9",
             })
 
-            assert.is_true(
-                row_of("```markdown-fold guard.sh") > row_of("after the call")
-            )
+            assert.is_true(row_of(TITLE) > row_of("after the call"))
         end)
 
         it("appends when the anchor's range has collapsed", function()
@@ -1210,13 +1236,11 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t1",
             })
 
-            assert.is_true(
-                row_of("```markdown-fold guard.sh") > row_of("after the call")
-            )
+            assert.is_true(row_of(TITLE) > row_of("after the call"))
         end)
 
         it("keeps two records on one call in transcript order", function()
@@ -1224,24 +1248,22 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "first", "record" },
-                source = "a.sh",
+                title = "`a.sh`",
                 tool_call_id = "t1",
             })
             writer:write_hook_block({
                 body = { "second", "record" },
-                source = "b.sh",
+                title = "`b.sh`",
                 tool_call_id = "t1",
             })
 
-            local first = row_of("```markdown-fold a.sh")
-            local second = row_of("```markdown-fold b.sh")
+            local first = row_of("`a.sh`")
+            local second = row_of("`b.sh`")
             assert.is_true(first < second)
             assert.is_true(second < row_of("after the call"))
-            -- The first region already closed the block's section.
-            assert.is_false(buffer_lines()[second - 2] == "###")
         end)
 
-        it("closes the section once when it lands at the end", function()
+        it("leaves the section break to the prose after it", function()
             -- The description keeps the tool head off `###`, so a bare one is
             -- unambiguously a section boundary.
             local block = make_tool_call_block("t1", "completed")
@@ -1250,20 +1272,20 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t1",
             })
             writer:write_message_chunk(make_message_update("after the call\n"))
 
-            local boundaries = 0
-            for _, line in ipairs(buffer_lines()) do
+            local boundaries = {}
+            for i, line in ipairs(buffer_lines()) do
                 if line == "###" then
-                    boundaries = boundaries + 1
+                    table.insert(boundaries, i)
                 end
             end
-            -- One: the region sits where the pending break would have gone, so
-            -- its own `###` is that break and the prose must not emit a second.
-            assert.equal(1, boundaries)
+            assert.equal(1, #boundaries)
+            assert.is_true(row_of(TITLE) < boundaries[1])
+            assert.is_true(boundaries[1] < row_of("after the call"))
         end)
 
         it("leaves a newer block's pending break alone", function()
@@ -1278,14 +1300,12 @@ describe("agentic.ui.MessageWriter", function()
             -- Anchored to the older block, so the break t2 is owed still stands.
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t1",
             })
 
             assert.is_true(writer._pending_section_break)
-            assert.is_true(
-                row_of("```markdown-fold guard.sh") < row_of("between")
-            )
+            assert.is_true(row_of(TITLE) < row_of("between"))
         end)
 
         it("appends when the anchor's extmark is gone", function()
@@ -1298,13 +1318,11 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t1",
             })
 
-            assert.is_true(
-                row_of("```markdown-fold guard.sh") > row_of("after the call")
-            )
+            assert.is_true(row_of(TITLE) > row_of("after the call"))
         end)
 
         it("holds the prose pin on the content it was set on", function()
@@ -1314,7 +1332,7 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = TITLE,
                 tool_call_id = "t1",
             })
 
@@ -1328,7 +1346,7 @@ describe("agentic.ui.MessageWriter", function()
 
                 writer:write_hook_block({
                     body = { "injected", "context" },
-                    source = "guard.sh",
+                    title = TITLE,
                     tool_call_id = "t1",
                 })
                 writer:finalize_turn()
@@ -1392,8 +1410,6 @@ describe("agentic.ui.MessageWriter", function()
 
             assert.same({
                 "",
-                "###",
-                "",
                 file_row("/r/a.md"),
                 file_row("/r/b.md"),
                 "",
@@ -1411,18 +1427,17 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t1" })
             writer:write_hook_block({
                 body = { "injected", "context" },
-                source = "guard.sh",
+                title = "`guard.sh`",
                 tool_call_id = "t1",
             })
             writer:write_loaded_file({ path = "/r/b.md", tool_call_id = "t1" })
 
             assert.same({
                 "",
-                "###",
-                "",
                 file_row("/r/a.md"),
                 "",
-                "```markdown-fold guard.sh",
+                "```markdown-fold",
+                "`guard.sh`",
                 "injected",
                 "context",
                 "```",
@@ -1485,7 +1500,7 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_hook_block({
                 body = { "remember", "this" },
-                source = "UserPromptSubmit",
+                title = "UserPromptSubmit",
                 after_prompt = true,
             })
             writer:write_loaded_file({ path = "/r/a.md", after_prompt = true })
@@ -1493,7 +1508,8 @@ describe("agentic.ui.MessageWriter", function()
             assert.same({
                 "## go",
                 "",
-                "```markdown-fold UserPromptSubmit",
+                "```markdown-fold",
+                "UserPromptSubmit",
                 "remember",
                 "this",
                 "```",
@@ -1548,8 +1564,6 @@ describe("agentic.ui.MessageWriter", function()
 
             assert.same({
                 "",
-                "###",
-                "",
                 file_row("/r/a.md"),
                 "",
                 "###",
@@ -1599,8 +1613,6 @@ describe("agentic.ui.MessageWriter", function()
 
             assert.same({
                 "",
-                "###",
-                "",
                 file_row("/r/a.lua"),
                 "",
                 "###",
@@ -1638,7 +1650,7 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(vim.tbl_contains(lines, "between"))
         end)
 
-        it("closes the call's section once when it lands at the end", function()
+        it("leaves the call's section break to the prose after it", function()
             local block = make_tool_call_block("t1", "completed")
             block.description = "list the directory"
             writer:write_tool_call_block(block)
@@ -1646,13 +1658,31 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t1" })
             writer:write_message_chunk(make_message_update("after the call\n"))
 
-            local boundaries = 0
-            for _, line in ipairs(buffer_lines()) do
-                if line == "###" then
-                    boundaries = boundaries + 1
-                end
-            end
-            assert.equal(1, boundaries)
+            assert.same({
+                "",
+                file_row("/r/a.md"),
+                "",
+                "###",
+                "",
+                "after the call",
+                "",
+            }, lines_after_footer())
+        end)
+
+        it("opens the pending section break for an unanchored row", function()
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+
+            writer:write_loaded_file({ path = "/r/a.md" })
+
+            assert.same({
+                "",
+                "###",
+                "",
+                file_row("/r/a.md"),
+                "",
+            }, lines_after_footer())
         end)
 
         it("forgets the anchors on reset", function()
@@ -5653,17 +5683,17 @@ describe("agentic.ui.MessageWriter", function()
             )
         end
 
-        --- 1-indexed first body row of the hook block named `script`.
-        --- @param script string
+        --- 1-indexed first body row of the hook block titled `title`.
+        --- @param title string
         --- @return integer
-        local function hook_body_row(script)
+        local function hook_body_row(title)
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             for i, line in ipairs(lines) do
-                if line == "```markdown-fold " .. script then
-                    return i + 1
+                if line == title then
+                    return i
                 end
             end
-            error("no hook block named " .. script)
+            error("no hook block titled " .. title)
         end
 
         for _, anchored in ipairs({ false, true }) do
@@ -5683,7 +5713,7 @@ describe("agentic.ui.MessageWriter", function()
                     end
                     writer:write_hook_block({
                         body = { "one", "two", "three" },
-                        source = "ok.sh",
+                        title = "ok.sh",
                         tool_call_id = id,
                     })
                     -- Closed before the failed block's fold exists, which is
@@ -5691,7 +5721,7 @@ describe("agentic.ui.MessageWriter", function()
                     deferred.drain()
                     writer:write_hook_block({
                         body = { "exited 127", "not found", "at line 3" },
-                        source = "bad.sh",
+                        title = "bad.sh",
                         tool_call_id = id,
                         failed = true,
                     })
@@ -6371,9 +6401,10 @@ describe("agentic.ui.MessageWriter wrapped table rows", function()
     it("underlines a table in a hook block's body", function()
         writer:write_hook_block({
             body = vim.deepcopy(TABLE),
-            source = "guard.sh",
+            title = "`guard.sh`",
         })
-        assert.same({ 5, 6, 7 }, underlined_rows())
+        -- One row below a thought run's: the title leads the body.
+        assert.same({ 6, 7, 8 }, underlined_rows())
         assert.equal(
             Glyphs.HOOK .. " ",
             vim.api.nvim_buf_get_extmarks(
@@ -6416,7 +6447,7 @@ describe("agentic.ui.MessageWriter wrapped table rows", function()
         writer:write_message_chunk(update("after the call"))
         writer:write_hook_block({
             body = vim.deepcopy(TABLE),
-            source = "guard.sh",
+            title = "`guard.sh`",
             tool_call_id = "t1",
         })
 

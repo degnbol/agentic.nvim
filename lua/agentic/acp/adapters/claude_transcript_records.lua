@@ -3,9 +3,9 @@
 --- does not forward: hook activity, and files the CLI added to the model's
 --- context without a tool call.
 ---
---- Pure and stateless: one entry in, zero or more records out. Records carry
---- neither `script` nor the place they belong: both take joins across
---- entries. `link` gives each entry's part in the `parentUuid` join.
+--- Pure and stateless: one entry in, zero or more records out. Records do not
+--- carry the place they belong: that takes joins across entries. `link` gives
+--- each entry's part in the `parentUuid` join.
 local M = {}
 
 --- @alias agentic.acp.ClaudeHookRecordGroup
@@ -16,7 +16,6 @@ local M = {}
 --- @field kind "hook"
 --- @field group agentic.acp.ClaudeHookRecordGroup
 --- @field timestamp? string ISO-8601 UTC, fixed width so string order is time order
---- @field hook_name? string the hook's configured name, e.g. `PreToolUse:Bash`
 --- @field hook_event? string the event the hook fired on, e.g. `PreToolUse`
 --- @field tool_call_id? string what the hook fired on, verbatim from `toolUseID`. Only a `toolu_`-prefixed value is a tool call id: an event with no call to name puts `"SessionStart"`, `hook-<uuid>` or a bare message uuid in the same slot
 

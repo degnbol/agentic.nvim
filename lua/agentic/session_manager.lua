@@ -24,11 +24,11 @@ local GrantSafety = require("agentic.utils.grant_safety")
 local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
+local MarkdownGuard = require("agentic.utils.markdown_guard")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
 local SessionRestore = require("agentic.session_restore")
-local ShellParse = require("agentic.utils.shell_parse")
 local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
@@ -2624,24 +2624,6 @@ function SessionManager:_on_request_permission(request, callback)
     end
 end
 
---- A hook's command as a chat row: its script as a smart path when the
---- command is a lone path, so `gf` opens it; the command as written otherwise.
---- @param command string
---- @return string
-local function hook_location(command)
-    local commands = ShellParse.extract_commands(command)
-    local only = commands and #commands == 1 and commands[1]
-    if
-        only
-        and #only.argv == 0
-        and #only.via == 0
-        and only.name:find("/", 1, true)
-    then
-        return FileSystem.to_smart_path(only.name)
-    end
-    return command
-end
-
 --- A duration for reading at a glance: milliseconds below a second, then
 --- seconds to one decimal.
 --- @param ms number
@@ -2653,9 +2635,25 @@ local function format_duration(ms)
     return ("%.1f s"):format(ms / 1000)
 end
 
---- One block per anchor listing the hooks that passed there, in the order
---- they ran, each followed by how long it took. Passes with no anchor share
---- one block.
+--- One row naming a hook record: its command as one code span, else its
+--- `hook_name`, else `hook`, followed by ` · ` and its duration when one is
+--- recorded.
+--- @param record agentic.acp.HookRecord
+--- @return string
+local function hook_title(record)
+    -- One row: a code span renders a line ending as a space anyway.
+    local command = record.command and record.command:gsub("\r?\n", " ")
+    local title = command and MarkdownGuard.whole_within(command, math.huge)
+        or record.hook_name
+        or "hook"
+    if record.duration_ms then
+        title = title .. " · " .. format_duration(record.duration_ms)
+    end
+    return title
+end
+
+--- One block per anchor listing the hooks that passed there, one row per hook
+--- in the order they ran. Passes with no anchor share one block.
 --- @param records agentic.acp.HookRecord[] `passed` records
 --- @return agentic.ui.MessageWriter.HookBlock[]
 local function passed_blocks(records)
@@ -2672,7 +2670,6 @@ local function passed_blocks(records)
         if not block then
             block = {
                 body = {},
-                source = "passed",
                 tool_call_id = record.tool_call_id,
                 after_prompt = record.after_prompt,
                 after_compaction = record.after_compaction,
@@ -2681,13 +2678,7 @@ local function passed_blocks(records)
             by_anchor[key] = block
             table.insert(blocks, block)
         end
-        local row = record.command and hook_location(record.command)
-            or record.script
-            or "hook"
-        if record.duration_ms then
-            row = row .. "  " .. format_duration(record.duration_ms)
-        end
-        table.insert(block.body, row)
+        table.insert(block.body, hook_title(record))
     end
     return blocks
 end
@@ -2710,7 +2701,7 @@ function SessionManager:_drain_side_records()
             local record = side.hook
             self.message_writer:write_hook_block({
                 body = record.body,
-                source = record.script,
+                title = hook_title(record),
                 tool_call_id = record.tool_call_id,
                 after_prompt = record.after_prompt,
                 after_compaction = record.after_compaction,

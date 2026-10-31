@@ -446,14 +446,19 @@ end
 --- foldtext count the body's characters.
 M.NS_CHAR_COUNT = vim.api.nvim_create_namespace("agentic_fold_char_count")
 
---- Whether a 0-indexed row carries a mark in `NS_CHAR_COUNT`.
+--- Namespace in which a writer marks a fold's opening fence row to have the
+--- foldtext lead with the first body row.
+M.NS_TITLED = vim.api.nvim_create_namespace("agentic_fold_titled")
+
+--- Whether a 0-indexed row carries a mark in `ns`.
 --- @param bufnr integer
+--- @param ns integer
 --- @param row integer
 --- @return boolean
-local function counts_chars(bufnr, row)
+local function is_marked(bufnr, ns, row)
     local marks = vim.api.nvim_buf_get_extmarks(
         bufnr,
-        M.NS_CHAR_COUNT,
+        ns,
         { row, 0 },
         { row, -1 },
         { limit = 1 }
@@ -461,41 +466,23 @@ local function counts_chars(bufnr, row)
     return #marks > 0
 end
 
---- The name a fold's opening fence gives its content, or nil when it gives
---- none.
---- @param bufnr integer
---- @param fold_start integer 1-indexed first row of the fold
---- @return string|nil
-local function fence_source(bufnr, fold_start)
-    -- The fold spans `code_fence_content`, so the row above it is always the
-    -- opening fence; the writer puts the name in its info string, after the
-    -- language (`MessageWriter:_write_collapsed_region`).
-    local fence = vim.api.nvim_buf_get_lines(
-        bufnr,
-        fold_start - 2,
-        fold_start - 1,
-        false
-    )[1]
-    return fence and fence:match("^`+%S*fold%s+(%S+)%s*$")
-end
-
 local FOLDTEXT_LEAD, FOLDTEXT_TAIL = "    ··· ", " ···"
 
 --- Highlight group of the foldtext.
-M.FOLDTEXT_HL = "Comment"
+local FOLDTEXT_HL = "Comment"
 
 --- 'foldtext' for the chat buffer: a line-count summary styled as Comment. A
 --- fold spans `code_fence_content` nodes, so its line count is the rows of
 --- content `zo` shows: a joined fold (`M.levels`) leaves out the two fence
 --- rows between its fences.
 ---
---- A named body leads with its name — one hook block's summary is otherwise
---- indistinguishable from the next. A joined fold leads with its first row,
---- cut so the fold text fits the window's text width: a closed execute block
---- shows which command ran. A fold whose opening fence row is marked in
---- `NS_CHAR_COUNT` adds the body's character count. All figures are read back
---- out of the folded rows rather than recorded at write time, so they describe
---- what `zo` will actually show.
+--- A joined fold, and one whose opening fence row is marked in `NS_TITLED`,
+--- lead with their first row, cut so the fold text fits the window's text
+--- width: a closed execute block shows which command ran, and a titled body
+--- what it is. A fold whose opening fence row is marked in `NS_CHAR_COUNT`
+--- adds the body's character count. All figures are read back out of the
+--- folded rows rather than recorded at write time, so they describe what `zo`
+--- will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
@@ -505,8 +492,9 @@ function M.foldtext()
     local summary =
         string.format("%d lines", last - first + 1 - (joined and 2 or 0))
 
-    local source = fence_source(bufnr, first)
-    if joined then
+    -- `first` is 1-indexed, so the 0-indexed fence row above it is first - 2.
+    local fence_row = first - 2
+    if joined or is_marked(bufnr, M.NS_TITLED, fence_row) then
         local row = vim.trim(
             vim.api.nvim_buf_get_lines(bufnr, first - 1, first, false)[1]
         )
@@ -519,12 +507,9 @@ function M.foldtext()
         summary = TextWrap.truncate_to_width(row, text_width - frame)
             .. " · "
             .. summary
-    elseif source then
-        summary = source .. " · " .. summary
     end
 
-    -- `first` is 1-indexed, so the 0-indexed fence row above it is first - 2.
-    if counts_chars(bufnr, first - 2) then
+    if is_marked(bufnr, M.NS_CHAR_COUNT, fence_row) then
         local body = vim.api.nvim_buf_get_lines(bufnr, first - 1, last, false)
         -- strchars, not `#`: thought text is full of dashes, middots and
         -- box-drawing, whose byte counts overstate it by a third.
@@ -535,7 +520,7 @@ function M.foldtext()
             .. " chars"
     end
 
-    return { { FOLDTEXT_LEAD .. summary .. FOLDTEXT_TAIL, M.FOLDTEXT_HL } }
+    return { { FOLDTEXT_LEAD .. summary .. FOLDTEXT_TAIL, FOLDTEXT_HL } }
 end
 
 return M

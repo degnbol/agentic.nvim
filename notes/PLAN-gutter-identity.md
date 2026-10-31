@@ -109,7 +109,7 @@ no rendering work and left for the note that owns the submit paths.
    `b:changedtick` and placing an extmark does not bump it, so the render needs an
    explicit invalidation rather than relying on text landing afterwards; the
    non-nesting invariant holds by construction unless an agent writes a `fold$`
-   fence inside prose; and `fence_source`'s "the row above a fold is always its
+   fence inside prose; and `foldtext`'s "the row above a fold is always its
    fence" stops being true. Open-by-default is nearly free — `chat_win_opts` pins
    `foldlevel = 99` — but a fold created after a closed one still inherits the
    closed state, and prose lands directly beneath closed thought runs constantly,

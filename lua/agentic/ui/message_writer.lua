@@ -1096,23 +1096,15 @@ end
 ---
 --- A body too short to fold — vim cannot close a one-line fold — is emitted as
 --- that line alone, with no fence: a visible ``` around one line is worse than
---- the line itself. `source` then has no info string to ride in and is left
---- out of the lines.
+--- the line itself.
 --- @param body string[] Already prose-wrapped
---- @param source string|nil Where the body came from, for the foldtext to name
 --- @return string[] lines
 --- @return integer body_offset 0-indexed offset of the first body row within `lines`
-local function collapsed_region_lines(body, source)
+local function collapsed_region_lines(body)
     local lines = {}
     local fence = #body > 1 and TextWrap.safe_fence(body) or nil
     if fence then
-        -- `source` as a second word after the language: `folds.scm` and
-        -- `injections.scm` both key on the `(info_string (language))` node,
-        -- which is the first word alone, so the name rides along without
-        -- disturbing either.
-        lines[#lines + 1] = fence
-            .. "markdown-fold"
-            .. (source and (" " .. source) or "")
+        lines[#lines + 1] = fence .. "markdown-fold"
     end
 
     local body_offset = #lines
@@ -1123,17 +1115,9 @@ local function collapsed_region_lines(body, source)
     return lines, body_offset
 end
 
---- Mark a fold's opening fence row so its foldtext counts the body's
---- characters (`Folds.NS_CHAR_COUNT`).
---- @param bufnr integer
---- @param fence_row integer 0-indexed
-local function mark_char_count(bufnr, fence_row)
-    vim.api.nvim_buf_set_extmark(bufnr, Folds.NS_CHAR_COUNT, fence_row, 0, {})
-end
-
 --- How a collapsed region is named and folded.
 --- @class agentic.ui.MessageWriter.CollapsedRegionOpts
---- @field source? string Where the body came from
+--- @field titled? boolean The body's first row names it, and the foldtext leads with that row
 --- @field open? boolean Leave the fold open
 --- @field count_chars? boolean The fold's foldtext counts the body's characters
 --- @field table_row_ends? integer[] 1-based indices into the body of lines to highlight as table row ends
@@ -1141,11 +1125,6 @@ end
 --- Stamp a collapsed region already in the buffer: `sign` on its first body
 --- row, the rail beneath, the whole body dimmed, and the fold closed when the
 --- body has one, unless `opts.open`.
----
---- `opts.source` also goes at the end of the first body row, styled as the
---- foldtext: the info string that carries it is concealed while the fold is
---- open and absent from a one-row body. A closed fold hides the row, and its
---- foldtext names the source instead.
 --- @param bufnr integer
 --- @param body_start integer 0-indexed first body row of the region
 --- @param body_end integer 0-indexed last body row of the region, inclusive
@@ -1161,23 +1140,27 @@ function MessageWriter:_decorate_collapsed_region(
     render_collapsed_region(bufnr, body_start, body_end, sign)
     Renderer.set_dim_range(bufnr, body_start, body_end)
     mark_table_row_ends(bufnr, body_start, opts.table_row_ends or {})
-    if opts.source then
-        vim.api.nvim_buf_set_extmark(
-            bufnr,
-            Renderer.NS_DECORATIONS,
-            body_start,
-            0,
-            {
-                virt_text = { { opts.source, Folds.FOLDTEXT_HL } },
-                virt_text_pos = "eol",
-            }
-        )
-    end
     -- Same measure `collapsed_region_lines` folds on: a one-row body has no
     -- fence, and so no fold to set.
     if body_end > body_start then
+        local fence_row = body_start - 1
         if opts.count_chars then
-            mark_char_count(bufnr, body_start - 1)
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Folds.NS_CHAR_COUNT,
+                fence_row,
+                0,
+                {}
+            )
+        end
+        if opts.titled then
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Folds.NS_TITLED,
+                fence_row,
+                0,
+                {}
+            )
         end
         -- An open region is opened explicitly, not just left alone: a fold
         -- created after a closed one inherits its closed state
@@ -1195,7 +1178,7 @@ function MessageWriter:_write_collapsed_region(body, sign, opts)
         return
     end
 
-    local region, region_offset = collapsed_region_lines(body, opts.source)
+    local region, region_offset = collapsed_region_lines(body)
     local lines = self:_take_section_break()
     local body_offset = #lines + region_offset
     vim.list_extend(lines, region)
@@ -1256,7 +1239,6 @@ end
 --- @class agentic.ui.MessageWriter.Placed
 --- @field mark_id? integer NS_ANCHORS mark on the last row placed beneath the anchor, its trailing blank excluded. For the last prompt, on the prompt's last row until something is placed; absent under a tool call until then.
 --- @field last_kind? agentic.ui.MessageWriter.PlacedKind What was placed last; nil while nothing is
---- @field opens_section? boolean The first item placed opens with the empty `###` that closes the anchor's section: set under a tool call, while a row under a prompt is part of that prompt's section
 
 --- @alias agentic.ui.MessageWriter.PlacedKind
 --- | "row" one line, which joins the rows placed right before it
@@ -1283,7 +1265,7 @@ function MessageWriter:_resolve_anchor(anchor)
         or nil
     local tracker = id and self.tool_call_blocks[id]
     if tracker then
-        placed = tracker.placed or { opens_section = true }
+        placed = tracker.placed or {}
         if placed.mark_id then
             last_row = anchor_mark_row(self.bufnr, placed.mark_id)
         elseif tracker.extmark_id then
@@ -1323,26 +1305,26 @@ end
 --- record them as placed last.
 ---
 --- A row after a row joins its group, above the group's trailing blank.
---- Anything else goes after that blank, followed by a blank of its own,
---- opening the `###` section break first when `placed.opens_section` and
---- nothing is placed yet. Either blank may be missing: a prose chunk writes
---- into the buffer's last row, so prose that followed `last_row` at the end of
---- the buffer starts on it. A missing blank is put back, which keeps the prose
---- its own paragraph.
+--- Anything else goes after that blank, followed by a blank of its own.
+--- Either blank may be missing: a prose chunk writes into the buffer's last
+--- row, so prose that followed `last_row` at the end of the buffer starts on
+--- it. A missing blank is put back, which keeps the prose its own paragraph.
 ---
---- Three steps of the append path are deliberately skipped. `_end_prose_run`
+--- No `###` section break: what is placed at an anchor belongs to it, so the
+--- breadcrumb keeps naming the tool call or compaction above. The section
+--- still closes before the prose that follows: prose already in the buffer
+--- wrote its `###` at the insert row, so the lines go in above it, and prose
+--- not yet written finds `_pending_section_break` still set.
+---
+--- Two steps of the append path are deliberately skipped, `_end_prose_run`
 --- and `_release_prose_pin`: the run below a mid-buffer insert is still live,
 --- and inserted content follows nothing, so releasing the pin would discard a
---- viewport promise about unrelated content. `_pending_section_break`: the flag
---- names the most recently written block, which for a mid-buffer insert is not
---- the anchor, so the `###` is decided from the anchor instead. Inserted at the
---- end of the buffer, though, the section break is the one the flag stands
---- for, and so clears it: the next prose chunk would emit a second one.
+--- viewport promise about unrelated content.
 ---
 --- Raw: the caller runs it inside `_own_edit` and schedules the follow.
 --- @param placed agentic.ui.MessageWriter.Placed
 --- @param last_row integer 0-indexed
---- @param lines string[] Without the section break
+--- @param lines string[]
 --- @param kind agentic.ui.MessageWriter.PlacedKind
 --- @return integer first_row 0-indexed row of `lines[1]`
 function MessageWriter:_insert_after(placed, last_row, lines, kind)
@@ -1353,8 +1335,6 @@ function MessageWriter:_insert_after(placed, last_row, lines, kind)
         last_row + 2,
         false
     )[1] == ""
-    local opens_section = placed.opens_section == true
-        and placed.last_kind == nil
 
     local insert_row, prefix, suffix
     if kind == "row" and placed.last_kind == "row" then
@@ -1364,14 +1344,7 @@ function MessageWriter:_insert_after(placed, last_row, lines, kind)
     else
         insert_row = separated and last_row + 2 or last_row + 1
         prefix = separated and {} or { "" }
-        if opens_section then
-            vim.list_extend(prefix, { "###", "" })
-        end
         suffix = { "" }
-    end
-
-    if opens_section and insert_row == vim.api.nvim_buf_line_count(bufnr) then
-        self._pending_section_break = false
     end
 
     local inserted = vim.list_extend(vim.list_extend({}, prefix), lines)
@@ -1428,13 +1401,14 @@ end
 
 --- @class agentic.ui.MessageWriter.HookBlock : agentic.acp.Anchor
 --- @field body string[] The hook's output, unwrapped
---- @field source? string What the block is named by: its script, or what its rows have in common
+--- @field title? string First row of the region, above the body and never wrapped
 --- @field failed? boolean The hook timed out or exited non-zero with an error
 --- @field preformatted? boolean Write each body row as it is rather than prose-wrapped, so a path in it stays whole for `gf`
 
---- Render hook activity as a collapsed region carrying the hook glyph and
---- `block.source`. A failed hook's region carries
---- `Glyphs.HOOK_FAILED` and is left open, so its reason reads without `zo`.
+--- Render hook activity as a collapsed region carrying the hook glyph and led
+--- by `block.title`, which its closed fold's foldtext leads with too. An empty
+--- body writes nothing. A failed hook's region carries `Glyphs.HOOK_FAILED`
+--- and is left open, so its reason reads without `zo`.
 ---
 --- A region of its own rather than part of the tool call that triggered it: an
 --- injection is a separate input the model received. It carries no heading for
@@ -1460,17 +1434,25 @@ function MessageWriter:write_hook_block(block)
     if #wrapped == 0 then
         return
     end
+    -- A one-row body is open under its title, as it is without one.
+    local open = block.failed or #wrapped == 1
+    if block.title then
+        wrapped = vim.list_extend({ block.title }, wrapped)
+        table_row_ends = vim.tbl_map(function(i)
+            return i + 1
+        end, table_row_ends or {})
+    end
     local sign = (block.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK) .. " "
     --- @type agentic.ui.MessageWriter.CollapsedRegionOpts
     local opts = {
-        source = block.source,
-        open = block.failed,
+        titled = block.title ~= nil,
+        open = open,
         table_row_ends = table_row_ends,
     }
 
     local placed, last_row = self:_resolve_anchor(block)
     if placed and last_row then
-        local lines, body_offset = collapsed_region_lines(wrapped, block.source)
+        local lines, body_offset = collapsed_region_lines(wrapped)
         self:_schedule_follow()
         self:_own_edit(function(bufnr)
             local first_row =
@@ -1771,7 +1753,13 @@ function MessageWriter:write_notice(notice)
         -- Vim cannot close a one-line fold.
         if fold_offset and #fold_body > 1 then
             local fold_start = heading_row + fold_offset
-            mark_char_count(bufnr, fold_start - 1)
+            vim.api.nvim_buf_set_extmark(
+                bufnr,
+                Folds.NS_CHAR_COUNT,
+                fold_start - 1,
+                0,
+                {}
+            )
             self:_queue_fold(fold_start, false)
         end
 

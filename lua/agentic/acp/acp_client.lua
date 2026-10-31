@@ -166,7 +166,7 @@ end
 --- @class agentic.acp.HookRecord : agentic.acp.Anchor
 --- @field group agentic.acp.HookRecordGroup
 --- @field body string[]
---- @field script? string Basename of the hook command, else the hook's configured name
+--- @field hook_name? string The hook's configured name, e.g. `PreToolUse:Bash`
 --- @field command? string The hook's invocation, when the record is of one run
 --- @field duration_ms? number How long that run took
 

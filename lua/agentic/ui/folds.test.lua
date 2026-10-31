@@ -1,6 +1,7 @@
 local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local NS_CHAR_COUNT = require("agentic.ui.folds").NS_CHAR_COUNT
+local NS_TITLED = require("agentic.ui.folds").NS_TITLED
 
 describe("agentic.ui.folds", function()
     --- @type number
@@ -723,31 +724,41 @@ describe("agentic.ui.folds", function()
             assert.equal("    ··· 7 lines ···", foldtext_of(5, 11))
         end)
 
-        it("leads with the name the opening fence gives the body", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
-                "above",
-                "```markdown-fold shell-guard.sh",
-                "injected",
-                "context",
-                "```",
-            })
+        describe("of a fold titled by its first row", function()
+            before_each(function()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+                    "above",
+                    "```markdown-fold",
+                    "`guard.sh` · 30 ms",
+                    "context",
+                    "```",
+                })
+            end)
 
-            assert.equal(
-                "    ··· shell-guard.sh · 2 lines ···",
-                foldtext_of(3, 4)
-            )
-        end)
+            it("leads with the first row when the fence is marked", function()
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 1, 0, {})
 
-        it("names nothing when the fence carries only a language", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
-                "above",
-                "```markdown-fold",
-                "injected",
-                "context",
-                "```",
-            })
+                assert.equal(
+                    "    ··· `guard.sh` · 30 ms · 2 lines ···",
+                    foldtext_of(3, 4)
+                )
+            end)
 
-            assert.equal("    ··· 2 lines ···", foldtext_of(3, 4))
+            it("cuts the first row to the window's text width", function()
+                vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, {
+                    string.rep("x", 40),
+                })
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 1, 0, {})
+                vim.api.nvim_win_set_width(winid, 30)
+                local text = foldtext_of(3, 4)
+
+                assert.equal(30, vim.fn.strdisplaywidth(text))
+                assert.is_not_nil(text:match("x… · 2 lines ···$"))
+            end)
+
+            it("leads with the line count when unmarked", function()
+                assert.equal("    ··· 2 lines ···", foldtext_of(3, 4))
+            end)
         end)
 
         describe("of a joined fold", function()
