@@ -18,19 +18,32 @@ LOGDIR  ?= .luals-log
 # tests/init.lua additionally strips `$XDG_CONFIG_HOME/nvim` from rtp to keep
 # the user's outer nvim config out of the test environment, while leaving
 # other tools (git's core.excludesFile, etc.) intact.
+#
+# Files run JOBS at a time under `nice`, so several suites running at once
+# (e.g. one per agent) yield to interactive work. Each file's output is held
+# back and printed in file order once all have finished. An interrupt lists
+# the files that started but did not finish, to name a hung one.
+# `-i NONE` keeps concurrent runs from writing the user's shada.
 TEST_FILES := $(shell find lua tests hooks -name "*.test.lua") $(shell find tests -name "*_test.lua" -o -name "test_*.lua" 2>/dev/null)
+JOBS ?= $(shell echo $$(( ($$(getconf _NPROCESSORS_ONLN || echo 2) + 1) / 2 )))
 
 test:
-	@rc=0; for f in $(TEST_FILES); do \
+	@out=$$(mktemp -d) || exit; \
+	trap 'rm -r "$$out"' EXIT; \
+	trap 'for f in $(TEST_FILES); do [ -f "$$out/$$f.log" ] && ! grep -q "Fails (" "$$out/$$f.log" && echo "Unfinished: $$f"; done; exit 130' INT TERM; \
+	printf '%s\n' $(TEST_FILES) | xargs -n1 -P $(JOBS) sh -c \
+		'mkdir -p "$$0/$${1%/*}"; nice -n 10 $(NVIM) --headless -i NONE -u tests/init.lua -c "lua require(\"tests.runner\").run_file(\"$$1\")" > "$$0/$$1.log" 2>&1' "$$out"; \
+	rc=$$?; \
+	for f in $(TEST_FILES); do \
 		echo "=== $$f ==="; \
-		$(NVIM) --headless -u tests/init.lua -c "lua require('tests.runner').run_file('$$f')" || rc=1; \
+		cat "$$out/$$f.log"; \
 	done; \
 	exit $$rc
 
 test-verbose: test
 
 test-file:
-	$(NVIM) --headless -u tests/init.lua -c "lua require('tests.runner').run_file('$(FILE)')"
+	$(NVIM) --headless -i NONE -u tests/init.lua -c "lua require('tests.runner').run_file('$(FILE)')"
 
 # Lua Language Server headless diagnosis report
 luals:

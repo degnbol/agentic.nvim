@@ -357,28 +357,34 @@ describe("FileSystem", function()
             child.stop()
         end)
 
-        --- Wait up to 2 s for the child to see a change.
-        --- @return integer changes
-        local function await_changes()
+        --- Replace the watched file every 50 ms, for up to 2 s, until the
+        --- child sees a change. Repeated, since on macOS the watch goes live
+        --- after `watch` returns and misses a write made before then.
+        --- @return integer changes 0 if none were seen within 2 s
+        local function replace_until_seen()
             for _ = 1, 40 do
+                child.lua([[
+                    require("agentic.utils.file_system").write_atomic(_G.path, "x")
+                ]])
+                vim.uv.sleep(50)
                 local changes = child.lua_get("_G.changes")
                 if changes > 0 then
                     return changes
                 end
-                vim.uv.sleep(50)
             end
             return 0
         end
 
         it("calls back when the file is replaced", function()
-            child.lua([[
-                require("agentic.utils.file_system").write_atomic(_G.path, "x")
-            ]])
-
-            assert.is_true(await_changes() > 0)
+            assert.is_true(replace_until_seen() > 0)
         end)
 
         it("ignores a sibling file", function()
+            -- Only a live watch can show that the sibling is filtered out.
+            assert.is_true(replace_until_seen() > 0)
+            vim.uv.sleep(500)
+            child.lua("_G.changes = 0")
+
             child.lua([[
                 require("agentic.utils.file_system").write_atomic(_G.sibling, "x")
             ]])
@@ -390,7 +396,7 @@ describe("FileSystem", function()
 
     describe("mkdirp", function()
         it("creates nested directories", function()
-            local base = "/tmp/agentic_test_mkdirp_" .. os.time()
+            local base = vim.fn.tempname()
             local path = base .. "/nested/deep"
 
             local ok, err = FileSystem.mkdirp(path)
