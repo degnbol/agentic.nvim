@@ -105,6 +105,7 @@ end
 --- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
+--- @field _thought_response_id? string `messageId` of the main agent's last thought chunk
 --- @field _response_boundary agentic.acp.ResponseBoundary The chat's. Each transcript has its own. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
@@ -1476,6 +1477,37 @@ function SessionManager:_on_session_message(update, source_session_id)
     self:_write_row(source_session_id, row)
 end
 
+--- Show a message the session received outside the ACP feed as a received
+--- row in the chat, once per message id. The row names its sender's
+--- transcript when the sender is one of the subagents, else the sender's name.
+--- The row records no recipient.
+--- @param message agentic.acp.ReceivedMessage
+function SessionManager:_write_received_message(message)
+    local key = self.session_id .. ":" .. message.message_id
+    if self._seen_messages[key] then
+        Logger.debug("Received message shown already: " .. key)
+        return
+    end
+    self._seen_messages[key] = true
+
+    local sender = message.sender_id
+        and self.agent:sender_session(
+            message.sender_id,
+            vim.tbl_keys(self._agents)
+        )
+    --- @type agentic.ui.ChatHistory.SessionMessage
+    local row = {
+        type = "session_message",
+        message_id = message.message_id,
+        kind = "message",
+        view = "received",
+        sender_session_id = sender,
+        sender_name = message.sender_name,
+        text = message.text,
+    }
+    self:_write_row(self.session_id, row)
+end
+
 --- Mark every subagent closed and stop its indicator, leaving its block and
 --- transcript as they are.
 function SessionManager:_forget_agents()
@@ -1732,9 +1764,18 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         transcript.writer:write_message_chunk(chunk, starts_response)
         transcript.status_indicator:reposition()
     else
-        -- Hook records already recorded go above a new response, so a
-        -- reply to Stop hook feedback reads under that feedback.
-        if starts_response and not self._loading then
+        -- Records already recorded go above a new response, so a reply to
+        -- Stop hook feedback reads under that feedback. A turn no prompt
+        -- started, such as one a received message started, can open with
+        -- thinking, which marks no response start.
+        local starts_thinking = false
+        if not is_message then
+            local message_id = Json.present(update.messageId)
+            starts_thinking = message_id ~= self._thought_response_id
+            self._thought_response_id = message_id
+        end
+        local starts_unprompted = starts_thinking and self._prompt_pending == 0
+        if (starts_response or starts_unprompted) and not self._loading then
             self:_drain_side_records()
         end
         self.message_writer:write_message_chunk(chunk, starts_response)
@@ -2291,6 +2332,11 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         self:_note_agent_task(child_id, task_id)
         self:_read_agent_record(child_id)
         parent = self:_task_of(child_id)
+    elseif self._prompt_pending == 0 and not self._loading then
+        -- Records already recorded go above a turn no prompt started, which
+        -- can open with a tool call. Drain before taking the held fields:
+        -- the drain can add to them.
+        self:_drain_side_records()
     end
 
     local held = self._held_tool_call_updates[id]
@@ -2717,10 +2763,10 @@ local function passed_blocks(records)
     return blocks
 end
 
---- Write the hook activity and loaded files recorded since the last drain to
---- the chat buffer, each record at the anchor it names, and add recorded tool
---- call fields to their calls. Hooks that passed follow the rest, gathered
---- into one block per anchor.
+--- Write the hook activity, loaded files and received messages recorded since
+--- the last drain to the chat buffer, each hook record and loaded file at the
+--- anchor it names, and add recorded tool call fields to their calls. Hooks
+--- that passed follow the rest, gathered into one block per anchor.
 function SessionManager:_drain_side_records()
     if self.destroyed or not self.session_id then
         return
@@ -2732,6 +2778,8 @@ function SessionManager:_drain_side_records()
             self.message_writer:write_loaded_file(side.loaded_file)
         elseif side.kind == "tool_call" then
             self:_apply_side_tool_call(side.tool_call)
+        elseif side.kind == "received_message" then
+            self:_write_received_message(side.received_message)
         elseif side.hook.group == "passed" then
             table.insert(passes, side.hook)
         else

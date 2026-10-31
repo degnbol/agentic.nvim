@@ -38,10 +38,31 @@ local function tool_use_side_record(record)
     }
 end
 
+--- A peer message as a side record.
+--- @param record agentic.acp.ClaudePeerMessageRecord
+--- @return agentic.acp.SideRecord side
+local function peer_message_side_record(record)
+    return {
+        kind = "received_message",
+        received_message = {
+            message_id = record.message_id,
+            text = record.text,
+            sender_id = record.sender_id,
+            sender_name = record.sender_name,
+        },
+    }
+end
+
 --- Tails one Claude Code transcript jsonl, a session's or a subagent's, for
 --- what the ACP bridge does not forward: hook activity, files the CLI loaded
---- into the model's context without a tool call, and the input of
---- `SendMessage` calls. One reader per transcript.
+--- into the model's context without a tool call, the input of `SendMessage`
+--- calls, and messages from other sessions and subagents. One reader per
+--- transcript.
+---
+--- The bridge forwards no peer message: live it forwards only messages a
+--- human sent, and a child's `SendMessage` to its parent reaches no announced
+--- child (`isRemoteHumanMessage` and `routeRfdSendMessage` in
+--- claude-agent-acp).
 ---
 --- Drains are empty until a transcript path is set. Records older than the
 --- reader's start time are discarded, so by default the first drain of a
@@ -184,7 +205,7 @@ function ClaudeTranscriptReader:_read_line(line)
     end
     local place = link and self._links[link.uuid] or NO_PLACE
 
-    --- @type (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord|agentic.acp.ClaudeToolUseRecord)[]
+    --- @type agentic.acp.ClaudeTranscriptRecord[]
     local entry_records = {}
     for _, record in ipairs(ClaudeTranscriptRecords.records(entry)) do
         if record.kind == "hook" and record.group == "context_run" then
@@ -204,6 +225,8 @@ function ClaudeTranscriptReader:_read_line(line)
                 side = self:_hook_side_record(record, place)
             elseif record.kind == "loaded_file" then
                 side = self:_loaded_file_side_record(record, place)
+            elseif record.kind == "peer_message" then
+                side = peer_message_side_record(record)
             else
                 side = tool_use_side_record(record)
             end
@@ -219,7 +242,7 @@ end
 --- `duration_ms` and `hook_name` of the run in `_context_runs` that produced
 --- it, and remove that run from `_context_runs`. The record keeps its own
 --- body: it is what the model received.
---- @param records (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord|agentic.acp.ClaudeToolUseRecord)[] one entry's records. Paired ones are updated in place
+--- @param records agentic.acp.ClaudeTranscriptRecord[] one entry's records. Paired ones are updated in place
 function ClaudeTranscriptReader:_pair_contexts(records)
     -- A context's text equals its run's `additionalContext` unless the CLI
     -- replaced a large one with a pointer, and a SessionStart context's
@@ -334,7 +357,7 @@ function ClaudeTranscriptReader:_notify_unreadable(err)
     end
     self._notified = true
     Logger.notify(
-        "Claude transcript unreadable, hook activity, loaded files and SendMessage input will not show: "
+        "Claude transcript unreadable, hook activity, loaded files, SendMessage input and received messages will not show: "
             .. (err or "unknown error")
     )
 end

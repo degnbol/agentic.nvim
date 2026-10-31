@@ -322,6 +322,62 @@ describe("ClaudeTranscriptReader", function()
         end)
     end)
 
+    describe("peer messages", function()
+        --- A queued message from a subagent.
+        --- @param uuid string
+        --- @param timestamp string|nil
+        --- @return table
+        local function queued_peer(uuid, timestamp)
+            return transcript_entry("attachment", uuid, nil, {
+                timestamp = timestamp or AFTER,
+                attachment = {
+                    type = "queued_command",
+                    prompt = "<agent-message>…",
+                    origin = {
+                        kind = "peer",
+                        senderTaskId = "a1",
+                        name = "general-purpose",
+                        body = "Found it.",
+                    },
+                },
+            })
+        end
+
+        it("returns a received message", function()
+            local reader = reader_at(transcript)
+            append({ queued_peer("q-1") })
+
+            assert.same({
+                {
+                    kind = "received_message",
+                    received_message = {
+                        message_id = "q-1",
+                        text = "Found it.",
+                        sender_id = "a1",
+                        sender_name = "general-purpose",
+                    },
+                },
+            }, reader:drain())
+        end)
+
+        it("skips a message the transcript already held", function()
+            append({ queued_peer("q-0", BEFORE) })
+            local reader = reader_at(transcript)
+
+            assert.same({}, reader:drain())
+        end)
+
+        it("gives a rule under a queued message no prompt anchor", function()
+            local reader = reader_at(transcript)
+            append({ queued_peer("q-1"), rule("r-1", "q-1", "/r.md") })
+
+            local files = loaded_files(reader:drain())
+
+            assert.equal(1, #files)
+            assert.is_nil(files[1].after_prompt)
+        end)
+    end)
+
     it("drops a run the turn's cancellation stopped", function()
         local reader = reader_at(transcript)
         append({

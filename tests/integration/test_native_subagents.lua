@@ -1531,3 +1531,220 @@ vim.fn.line("w$") == vim.api.nvim_buf_line_count(_G.transcript("c1").bufnr)
         end
     )
 end)
+
+describe("received messages", function()
+    local child = Child.new()
+
+    before_each(function()
+        child.setup()
+        child.lua(SETUP)
+        child.lua([[
+-- Side records the next drain returns.
+_G.sides = {}
+_G.s.agent.drain_side_records = function()
+    local sides = _G.sides
+    _G.sides = {}
+    return sides
+end
+_G.receive = function(message)
+    table.insert(_G.sides, {
+        kind = "received_message",
+        received_message = vim.tbl_extend("force", {
+            message_id = "m-1",
+            text = "Please rebase. Then tell me.",
+            sender_name = "agentic-nvim-45",
+        }, message or {}),
+    })
+end
+_G.chat = function()
+    return _G.text(_G.s.widget.buf_nrs.agent)
+end
+_G.last = function()
+    return _G.s.chat_history.messages[#_G.s.chat_history.messages]
+end
+]])
+        child.flush()
+    end)
+
+    after_each(function()
+        child.stop()
+    end)
+
+    it("a drained message is a received row under the sender's name", function()
+        child.lua([[
+_G.receive()
+_G.s:_drain_side_records()
+]])
+
+        assert.truthy(
+            child
+                .lua_get("_G.chat()")
+                :find("## Please rebase.\nagentic-nvim-45", 1, true)
+        )
+        assert.same({
+            type = "session_message",
+            message_id = "m-1",
+            kind = "message",
+            view = "received",
+            sender_name = "agentic-nvim-45",
+            text = "Please rebase. Then tell me.",
+        }, child.lua_get("_G.last()"))
+    end)
+
+    it("a message drained twice writes one row", function()
+        child.lua([[
+_G.receive()
+_G.s:_drain_side_records()
+_G.receive()
+_G.s:_drain_side_records()
+]])
+
+        assert.equal(1, count(child.lua_get("_G.chat()"), "## Please rebase."))
+    end)
+
+    it("a subagent's message names its transcript", function()
+        child.lua([[
+_G.spawn("a1")
+_G.receive({ sender_id = "a1", sender_name = "general-purpose" })
+_G.s:_drain_side_records()
+]])
+
+        assert.equal("a1", child.lua_get("_G.last().sender_session_id"))
+        assert.truthy(
+            child.lua_get("_G.chat()"):find(
+                "## Please rebase.\n" .. child.lua_get([[_G.tname("a1")]]),
+                1,
+                true
+            )
+        )
+    end)
+
+    it("a resumed subagent's message names its latest generation", function()
+        child.lua([[
+_G.spawn("a1")
+_G.spawn("a1:generation:2")
+_G.spawn("a1:generation:10")
+_G.receive({ sender_id = "a1" })
+_G.s:_drain_side_records()
+]])
+
+        assert.equal(
+            "a1:generation:10",
+            child.lua_get("_G.last().sender_session_id")
+        )
+    end)
+
+    it(
+        "an unknown sender id leaves the row without a sender session",
+        function()
+            child.lua([[
+_G.receive({ sender_id = "zz" })
+_G.s:_drain_side_records()
+]])
+
+            assert.is_true(child.lua_get("_G.last().sender_session_id == nil"))
+            assert.truthy(
+                child
+                    .lua_get("_G.chat()")
+                    :find("## Please rebase.\nagentic-nvim-45", 1, true)
+            )
+        end
+    )
+
+    it("a turn the message started shows under it, thinking first", function()
+        child.lua([[
+_G.receive()
+_G.update("root", {
+    sessionUpdate = "agent_thought_chunk",
+    messageId = "msg_1",
+    content = { type = "text", text = "pondering" },
+})
+_G.s.message_writer:flush_thought_run()
+]])
+
+        local chat = child.lua_get("_G.chat()")
+        local row = chat:find("## Please rebase.", 1, true)
+        assert.truthy(row)
+        assert.truthy(chat:find("pondering", row, true))
+    end)
+
+    it("thinking drains once per response", function()
+        child.lua([[
+_G.think = function()
+    _G.update("root", {
+        sessionUpdate = "agent_thought_chunk",
+        messageId = "msg_1",
+        content = { type = "text", text = "pondering" },
+    })
+end
+_G.think()
+_G.receive()
+_G.think()
+]])
+
+        assert.equal(1, child.lua_get("#_G.sides"))
+    end)
+
+    it("a turn the message started shows under it, tool call first", function()
+        child.lua([[
+_G.receive()
+_G.s:_on_tool_call({
+    tool_call_id = "t1", kind = "read", status = "pending", argument = "a.txt",
+}, "root")
+]])
+
+        local chat = child.lua_get("_G.chat()")
+        local row = chat:find("## Please rebase.", 1, true)
+        assert.truthy(row)
+        assert.truthy(chat:find("a.txt", row, true))
+    end)
+
+    it("a prompted turn's thinking does not drain", function()
+        child.lua([[
+_G.s._prompt_pending = 1
+_G.receive()
+_G.update("root", {
+    sessionUpdate = "agent_thought_chunk",
+    messageId = "msg_1",
+    content = { type = "text", text = "pondering" },
+})
+]])
+
+        assert.is_nil(
+            child.lua_get("_G.chat()"):find("Please rebase.", 1, true)
+        )
+    end)
+
+    it("a load does not drain", function()
+        child.lua([[
+_G.s._loading = true
+_G.receive()
+_G.update("root", {
+    sessionUpdate = "agent_thought_chunk",
+    messageId = "msg_1",
+    content = { type = "text", text = "pondering" },
+})
+_G.s:_on_tool_call({
+    tool_call_id = "t1", kind = "read", status = "pending", argument = "a.txt",
+}, "root")
+]])
+
+        assert.equal(1, child.lua_get("#_G.sides"))
+    end)
+
+    it("a restored row shows the sender's name", function()
+        child.lua([[
+require("agentic.session_restore").replay_messages(_G.s.message_writer, { {
+    type = "session_message", message_id = "m-1", kind = "message",
+    view = "received", sender_name = "agentic-nvim-45",
+    text = "Please rebase. Then tell me.",
+} }, function() return nil end)
+]])
+
+        assert.truthy(
+            child
+                .lua_get("_G.chat()")
+                :find("## Please rebase.\nagentic-nvim-45", 1, true)
+        )
+    end)
+end)

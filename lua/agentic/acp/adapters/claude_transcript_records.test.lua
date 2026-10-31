@@ -476,6 +476,89 @@ describe("ClaudeTranscriptRecords", function()
         end)
     end)
 
+    describe("peer messages", function()
+        --- @param overrides table|nil
+        --- @return table
+        local function peer_origin(overrides)
+            return vim.tbl_extend("force", {
+                kind = "peer",
+                from = "uds:/tmp/cc-socks/1.sock",
+                msg_id = "m-1",
+                name = "agentic-nvim-45",
+                body = "Please rebase. Then tell me.",
+            }, overrides or {})
+        end
+
+        --- A user entry starting a turn with a peer message.
+        --- @param origin table
+        --- @return string
+        local function turn_entry(origin)
+            return vim.json.encode({
+                type = "user",
+                isMeta = true,
+                turnOrigin = "peer",
+                uuid = "u-7",
+                parentUuid = "u-6",
+                timestamp = "2026-08-28T10:00:00.000Z",
+                origin = origin,
+                message = { content = "<cross-session-message>…" },
+            })
+        end
+
+        it("gives a record for a message that starts a turn", function()
+            assert.same({
+                kind = "peer_message",
+                message_id = "m-1",
+                text = "Please rebase. Then tell me.",
+                sender_name = "agentic-nvim-45",
+                timestamp = "2026-08-28T10:00:00.000Z",
+            }, decode_one(turn_entry(peer_origin())))
+        end)
+
+        it("gives a record for a message queued while busy", function()
+            local record = decode_one(line({
+                type = "queued_command",
+                prompt = "<agent-message>…",
+                origin = peer_origin({
+                    msg_id = vim.NIL,
+                    from = "a1",
+                    senderTaskId = "a1",
+                    name = "general-purpose",
+                }),
+            }))
+
+            assert.same({
+                kind = "peer_message",
+                message_id = "u-1",
+                text = "Please rebase. Then tell me.",
+                sender_id = "a1",
+                sender_name = "general-purpose",
+                timestamp = "2026-08-28T10:00:00.000Z",
+            }, record)
+        end)
+
+        it("gives none for a handback", function()
+            assert.same(
+                {},
+                decode(turn_entry(peer_origin({ handback = true })))
+            )
+            assert.same(
+                {},
+                decode(turn_entry(peer_origin({
+                    handback = true,
+                    handbackReportText = "done",
+                })))
+            )
+        end)
+
+        it("gives none for another origin kind", function()
+            assert.same(
+                {},
+                decode(turn_entry(peer_origin({ kind = "task-notification" })))
+            )
+        end)
+    end)
+
     describe("lines that carry nothing", function()
         it("ignores a conversation entry", function()
             assert.same(
@@ -637,6 +720,21 @@ describe("ClaudeTranscriptRecords", function()
             assert.is_true(link.ends_chain)
             assert.is_true(link.after_prompt)
             assert.is_true(link.user_text)
+        end)
+
+        it("ends the chain at a queued peer message, not a prompt", function()
+            local link = link_of({
+                type = "attachment",
+                attachment = {
+                    type = "queued_command",
+                    prompt = "<agent-message>…",
+                    origin = { kind = "peer", body = "hi" },
+                },
+            })
+
+            assert.is_true(link.ends_chain)
+            assert.is_false(link.after_prompt)
+            assert.is_false(link.user_text)
         end)
 
         it("leaves an attachment to inherit from its parent", function()

@@ -422,10 +422,11 @@ end
 
 --- Write a session message or a subagent end as a notice. A message is signed
 --- with the glyph of its kind (`Glyphs.MESSAGE`), split into heading and body
---- by `SessionRestore.message_title`, with the other end's buffer name dimmed
---- under the heading and the body folded, and tagged with its message id. An end is signed with
---- its state's status icon when that is one cell wide, else
---- `Glyphs.RUN_ENDED`, and holds the error text.
+--- by `SessionRestore.message_title`, with the other end's buffer name, else
+--- the sender's name, dimmed under the heading and the body folded, and
+--- tagged with its message id. An end is signed with its state's status icon
+--- when that is one cell wide, else `Glyphs.RUN_ENDED`, and holds the error
+--- text.
 --- @param writer agentic.ui.MessageWriter
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd
 --- @param mid_turn boolean The writer's turn is still running, so the notice must not finalize it
@@ -453,7 +454,7 @@ function SessionRestore.write_row(writer, row, mid_turn, buffer_name)
         glyph = Glyphs.MESSAGE[row.kind == "message" and row.view or row.kind],
         glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
         title = title,
-        detail = peer and buffer_name(peer),
+        detail = peer and buffer_name(peer) or row.sender_name,
         fold_body = rest,
         mid_turn = mid_turn,
         id = row.message_id,

@@ -356,6 +356,25 @@ describe("ChatHistory", function()
                 )
             )
         end)
+
+        it("names a sender outside the conversation by its name", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "session_message",
+                    message_id = "m-1",
+                    kind = "message",
+                    view = "received",
+                    sender_name = "agentic-nvim-45",
+                    text = "Please rebase.",
+                },
+            }, prompt)
+
+            assert.equal(
+                "Message received from agentic-nvim-45:\nPlease rebase.",
+                prompt[1].text
+            )
+        end)
     end)
 
     describe("session_label", function()

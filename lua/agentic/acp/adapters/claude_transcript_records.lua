@@ -1,7 +1,8 @@
 --- Decoder for the records the Claude Code CLI writes to its transcript jsonl
 --- (`~/.claude/projects/<slug>/<session-id>.jsonl`) about what the ACP bridge
 --- does not forward: hook activity, files the CLI added to the model's
---- context without a tool call, and the input of tool calls.
+--- context without a tool call, the input of tool calls, and messages from
+--- other sessions and subagents.
 ---
 --- Pure and stateless: one entry in, zero or more records out. Records do not
 --- carry the place they belong: that takes joins across entries. `link` gives
@@ -32,13 +33,21 @@ local M = {}
 --- @field input table
 --- @field timestamp? string
 
+--- @class agentic.acp.ClaudePeerMessageRecord
+--- @field kind "peer_message"
+--- @field message_id string `origin.msg_id` of a message from another session, else the entry's `uuid`
+--- @field text string The message without the CLI's wrapper
+--- @field sender_id? string `origin.senderTaskId`: the agent id of a subagent sender
+--- @field sender_name? string The display name the CLI gave the sender
+--- @field timestamp? string
+
 --- What a transcript entry says about where a load under it belongs.
 --- @class agentic.acp.TranscriptLink
 --- @field uuid string
 --- @field parent_uuid? string
 --- @field ends_chain boolean A `tool_result` record, a meta record with `sourceToolUseID`, a compaction's output, a user-text record, a `queued_command` attachment, or an `assistant` record
 --- @field tool_call_id? string `tool_use_id` of a `tool_result` record, or `sourceToolUseID` of a meta record
---- @field after_prompt boolean Ends the chain at the prompt: user text or a `queued_command`
+--- @field after_prompt boolean Ends the chain at the prompt: user text or a `queued_command` the user sent
 --- @field after_compaction boolean Ends the chain at a compaction's output (`repeatsCompactSummary`)
 --- @field user_text boolean Ends the chain at the user's own text
 --- @field injected boolean Text the CLI injected under its parent (a meta record without `sourceToolUseID`: a skill run as `/name`, a Stop hook's feedback): the chain goes on through it, but past it the text is no longer the user's own
@@ -318,6 +327,63 @@ local function tool_use_records(entry)
     return records
 end
 
+--- @param value any
+--- @return string|nil
+local function string_or_nil(value)
+    return type(value) == "string" and value or nil
+end
+
+--- The `origin` of a message another session or a subagent sent: on a user
+--- entry when the message starts a turn, on a `queued_command` attachment
+--- when it arrives while the session is busy.
+--- @param entry table one decoded transcript line
+--- @return table|nil origin nil when the entry is not a peer message
+local function peer_origin(entry)
+    local origin
+    if entry.type == "user" then
+        origin = entry.origin
+    elseif
+        entry.type == "attachment"
+        and type(entry.attachment) == "table"
+        and entry.attachment.type == "queued_command"
+    then
+        origin = entry.attachment.origin
+    end
+    if type(origin) ~= "table" or origin.kind ~= "peer" then
+        return nil
+    end
+    return origin
+end
+
+--- The message a transcript entry carries from another session or a
+--- subagent. A subagent's handback is not one: it is its run's result.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.ClaudePeerMessageRecord|nil record nil when the entry carries none
+local function peer_message_record(entry)
+    local origin = peer_origin(entry)
+    local message_id = origin
+        and (string_or_nil(origin.msg_id) or string_or_nil(entry.uuid))
+    if
+        not origin
+        or origin.handback == true
+        or type(origin.body) ~= "string"
+        or not message_id
+    then
+        return nil
+    end
+
+    --- @type agentic.acp.ClaudePeerMessageRecord
+    local record = {
+        kind = "peer_message",
+        message_id = message_id,
+        text = origin.body,
+        sender_id = string_or_nil(origin.senderTaskId),
+        sender_name = string_or_nil(origin.name),
+        timestamp = entry.timestamp,
+    }
+    return record
+end
+
 --- Decode one transcript line.
 --- @param line string one raw line of the transcript jsonl
 --- @return table|nil entry nil when the line is not JSON
@@ -339,13 +405,24 @@ function M.verbatim(line)
     return record
 end
 
---- The hook records, loaded file and tool uses a transcript entry carries.
+--- @alias agentic.acp.ClaudeTranscriptRecord
+--- | agentic.acp.ClaudeHookRecord
+--- | agentic.acp.ClaudeLoadedFileRecord
+--- | agentic.acp.ClaudeToolUseRecord
+--- | agentic.acp.ClaudePeerMessageRecord
+
+--- The hook records, loaded file, tool uses and peer message a transcript
+--- entry carries.
 --- @param entry table one decoded transcript line
---- @return (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord|agentic.acp.ClaudeToolUseRecord)[] records empty for an entry that carries none
+--- @return agentic.acp.ClaudeTranscriptRecord[] records empty for an entry that carries none
 function M.records(entry)
     local loaded_file = loaded_file_record(entry)
     if loaded_file then
         return { loaded_file }
+    end
+    local peer_message = peer_message_record(entry)
+    if peer_message then
+        return { peer_message }
     end
     local hooks = attachment_records(entry)
     if #hooks > 0 then
@@ -418,9 +495,10 @@ function M.link(entry)
         or {}
     if entry.type == "attachment" then
         if attachment.type == "queued_command" then
+            local from_user = peer_origin(entry) == nil
             link.ends_chain = true
-            link.after_prompt = true
-            link.user_text = true
+            link.after_prompt = from_user
+            link.user_text = from_user
         end
         return link
     end

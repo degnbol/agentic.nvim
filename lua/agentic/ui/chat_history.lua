@@ -37,6 +37,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field message_id string Shared by the message's views
 --- @field view "sent"|"received" The view on the sender's session, or on the recipient's
 --- @field sender_session_id? string
+--- @field sender_name? string The display name the provider gave the sender
 --- @field recipient_session_id? string
 --- @field text string
 --- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's row
@@ -403,7 +404,8 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                     "%s %s %s:\n%s",
                     msg.kind:sub(1, 1):upper() .. msg.kind:sub(2),
                     sent and "sent to" or "received from",
-                    ChatHistory.session_label(messages, peer),
+                    not peer and msg.sender_name
+                        or ChatHistory.session_label(messages, peer),
                     msg.text
                 ),
             })

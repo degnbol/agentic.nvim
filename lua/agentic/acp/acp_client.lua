@@ -176,11 +176,19 @@ end
 --- @class agentic.acp.LoadedFile : agentic.acp.Anchor
 --- @field path string Absolute
 
+--- A message the session received from another session or a subagent.
+--- @class agentic.acp.ReceivedMessage
+--- @field message_id string
+--- @field text string
+--- @field sender_id? string The sending subagent's id, as the provider names it
+--- @field sender_name? string The display name the provider gave the sender
+
 --- `tool_call` carries fields of a tool call that the ACP feed left out.
 --- @alias agentic.acp.SideRecord
 --- | { kind: "hook", hook: agentic.acp.HookRecord }
 --- | { kind: "loaded_file", loaded_file: agentic.acp.LoadedFile }
 --- | { kind: "tool_call", tool_call: agentic.ui.MessageWriter.ToolCallBase }
+--- | { kind: "received_message", received_message: agentic.acp.ReceivedMessage }
 
 --- Records the provider wrote outside the ACP feed since the last call, for
 --- the session or for one of its subagents. Adapters for providers that keep
@@ -190,6 +198,14 @@ end
 --- @return agentic.acp.SideRecord[]
 function ACPClient:drain_side_records(_session_id, _child_id)
     return {}
+end
+
+--- The subagent that sent a received message.
+--- @param sender_id string The sender's id, as the provider names it
+--- @param child_ids string[] Child session ids of the session's subagents
+--- @return string|nil child_id nil when none of them sent it
+function ACPClient:sender_session(sender_id, child_ids)
+    return vim.tbl_contains(child_ids, sender_id) and sender_id or nil
 end
 
 --- The id of the tool use that spawned the subagent an update belongs to.

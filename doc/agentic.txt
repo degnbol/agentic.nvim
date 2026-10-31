@@ -1112,10 +1112,12 @@ session has a title; its header reads `#<id> <title>`, with 󰔟 while a turn
 runs.
 
 A message between agents, the launch prompt included, has a row in the chat
-or transcript of each agent it joins. Each row holds the message: a heading,
-the buffer name of the other end under it, and the rest folded closed. The
-launch prompt is headed by the subagent's description when it has one, any
-other message by its first sentence. The sign gives the kind:
+or transcript of each agent it joins. A message from another session, or a
+subagent's message to its parent, has a received row in the chat only. Each
+row holds the message: a heading, the buffer name of the other end under it,
+else the sender's name, and the rest folded closed. The launch prompt is
+headed by the subagent's description when it has one, any other message by
+its first sentence. The sign gives the kind:
 
     Sign  Kind ~
     󰙓     Task: the first message to a subagent, or the first since its last
@@ -1124,9 +1126,9 @@ other message by its first sentence. The sign gives the kind:
     󰒊     Any other message, sent
     󰇮     Any other message, received
 
-Each message is a tag named by its id, defined at both rows: |CTRL-]| on
-either row jumps to the other, |CTRL-T| jumps back, and |:tag| or
-|:tselect| with the id lists both.
+Each message is a tag named by its id, defined at each of its rows: |CTRL-]|
+on one of two rows jumps to the other, |CTRL-T| jumps back, and |:tag| or
+|:tselect| with the id lists them.
 
 Each subagent also has a block in the chat, which records its launch:
 

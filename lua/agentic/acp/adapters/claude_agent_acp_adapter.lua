@@ -253,9 +253,9 @@ function ClaudeAgentACPAdapter:_find_transcript(session_id, child_id)
         and ClaudeUtils.subagent_transcript(session_dir, child_id)
 end
 
---- Hook records, loaded files and tool call input from the CLI's transcript
---- of the session, or of one of its subagents. Empty until the CLI has
---- written the transcript.
+--- Hook records, loaded files, tool call input and received messages from the
+--- CLI's transcript of the session, or of one of its subagents. Empty until
+--- the CLI has written the transcript.
 --- @param session_id string The root session
 --- @param child_id string|nil The subagent's child session id
 --- @return agentic.acp.SideRecord[]
@@ -272,6 +272,27 @@ function ClaudeAgentACPAdapter:drain_side_records(session_id, child_id)
         end
     end
     return reader:drain()
+end
+
+--- The latest run of the agent `sender_id` names. The bridge gives an agent's
+--- first run the agent id as its child session id, and each resumed run
+--- `<agent id>:generation:<n>` (`nextChildSessionId` in claude-agent-acp's
+--- `native-subagents.js`).
+--- @param sender_id string The sender's agent id
+--- @param child_ids string[] Child session ids of the session's subagents
+--- @return string|nil child_id nil when no run of that agent is among them
+function ClaudeAgentACPAdapter:sender_session(sender_id, child_ids)
+    local prefix = sender_id .. ":generation:"
+    local latest, latest_generation
+    for _, child_id in ipairs(child_ids) do
+        local generation = child_id == sender_id and 1
+            or vim.startswith(child_id, prefix)
+                and tonumber(child_id:sub(#prefix + 1))
+        if generation and (not latest or generation > latest_generation) then
+            latest, latest_generation = child_id, generation
+        end
+    end
+    return latest
 end
 
 --- @return "bash"|"zsh"|nil
