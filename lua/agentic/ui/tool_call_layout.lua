@@ -573,8 +573,9 @@ local function generic_body(call)
     return { section }
 end
 
---- Fetch, WebSearch and SubAgent bodies are informational text the agent
---- wrote to itself: folded when multi-line, dimmed as sidecar content.
+--- Fetch, WebSearch, SubAgent and mode-switch bodies are informational text
+--- the agent wrote to itself, and a message body is a delivery report to the
+--- agent: folded when multi-line, dimmed as sidecar content.
 --- @type agentic.ui.ToolCallLayout.Builder
 local function sidecar_body(call)
     local body = call.block.body
@@ -650,15 +651,9 @@ local BODIES = {
     fetch = sidecar_body,
     websearch = sidecar_body,
     subagent = sidecar_body,
-
-    -- A mode switch's body is the agent's instructions to itself.
-    switch_mode = function(call)
-        local body = call.block.body
-        if not body then
-            return {}
-        end
-        return { prose_section(body, call.wrap_width) }
-    end,
+    sendmessage = sidecar_body,
+    subagenthandback = sidecar_body,
+    switch_mode = sidecar_body,
 
     -- The todo window shows the rendered todos, so the raw request folds away.
     todowrite = function(call)

@@ -212,6 +212,16 @@ function M.message_result(body)
     return vim.split(decoded.message, "\n", { plain = true }), delivered
 end
 
+--- The parts of a messaging tool's result text for a message to another
+--- session, `“<summary>” → <to> (<note>)`.
+--- @param text string Result text
+--- @return string|nil summary Nil when `text` has another shape
+--- @return string|nil to Addressee
+--- @return string|nil note Delivery state, written for the sending agent
+function M.cross_session_delivery(text)
+    return text:match("^“(.-)” → (%S+) %((.*)%)$")
+end
+
 --- Claude Code's config directory: `CLAUDE_CONFIG_DIR` from `env`, else from
 --- the environment, else `~/.claude`.
 --- @param env table<string, string|nil>|nil Environment the provider runs with

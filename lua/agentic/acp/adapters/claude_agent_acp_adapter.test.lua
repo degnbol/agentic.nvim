@@ -918,6 +918,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     "Second line.",
                 }, calls[1].body)
                 assert.equal("completed", calls[1].status)
+                assert.equal("a1b2", calls[1].argument)
             end)
 
             it("fails a call whose result was not delivered", function()
@@ -963,6 +964,32 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 assert.same({ "Sent." }, msg.body)
                 assert.equal("completed", msg.status)
             end)
+
+            it(
+                "takes the head of a cross-session message from its result",
+                function()
+                    local adapter, calls = make_capturing_adapter()
+                    local notification = with_result(
+                        vim.json.encode({
+                            message = "“Tell peer it can commit” → agentic-nvim-c5 (another Claude session on this machine; queued there)",
+                            success = true,
+                        }),
+                        "completed"
+                    )
+                    notification.rawInput = vim.empty_dict()
+
+                    adapter:__handle_tool_call("s-1", notification)
+
+                    assert.equal(
+                        "agentic-nvim-c5: Tell peer it can commit",
+                        calls[1].argument
+                    )
+                    assert.same({
+                        "another Claude session on this machine; queued there",
+                    }, calls[1].body)
+                    assert.equal("completed", calls[1].status)
+                end
+            )
         end)
 
         describe("the task-control family", function()

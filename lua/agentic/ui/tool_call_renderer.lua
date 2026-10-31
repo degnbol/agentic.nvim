@@ -398,7 +398,7 @@ function M.mark_table_row_end(bufnr, ns, row)
 end
 
 --- Register a dim extmark spanning a body range. Lines are highlighted with
---- AgenticDimmedBlock to de-emphasise sidecar content (fetch/WebSearch/SubAgent).
+--- AgenticDimmedBlock to de-emphasise sidecar content.
 --- Returns the extmark id so callers can track it for clearing alongside
 --- other decoration extmarks.
 --- @param bufnr integer

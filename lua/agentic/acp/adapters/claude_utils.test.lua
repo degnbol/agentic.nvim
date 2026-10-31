@@ -37,6 +37,31 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
+    describe("cross_session_delivery", function()
+        it("splits each observed note shape", function()
+            for _, note in ipairs({
+                "another Claude session on this machine",
+                "another Claude session on this machine; queued there — a [Cross-session delivery notice] follows (if any)",
+                "another Claude session on this machine; in that session's inbox, not yet read by its Claude — a notice follows",
+            }) do
+                local summary, to, parsed = ClaudeUtils.cross_session_delivery(
+                    "“Tell peer” → agentic-nvim-c5 (" .. note .. ")"
+                )
+                assert.equal("Tell peer", summary)
+                assert.equal("agentic-nvim-c5", to)
+                assert.equal(note, parsed)
+            end
+        end)
+
+        it("rejects a result of another shape", function()
+            assert.is_nil(
+                ClaudeUtils.cross_session_delivery(
+                    "Message queued for delivery to a1b2 at its next tool round."
+                )
+            )
+        end)
+    end)
+
     describe("config_dir", function()
         it("prefers the provider's env", function()
             assert.equal(

@@ -2236,6 +2236,18 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.same({ 2, 3 }, layout.dim)
         end)
 
+        for _, kind in ipairs({ "SendMessage", "SubagentHandback" }) do
+            it(
+                "folds a multi-row " .. kind .. " body closed, dimmed",
+                function()
+                    local layout = layout_of(kind, { "line 1", "line 2" })
+                    assert.equal("closed", layout.folds[1].state)
+                    assert.equal("```markdown-fold", layout.lines[2])
+                    assert.same({ 2, 3 }, layout.dim)
+                end
+            )
+        end
+
         it("leaves a one-row switch_mode body unfolded", function()
             assert.same({}, layout_of("switch_mode", { "line 1" }).folds)
         end)

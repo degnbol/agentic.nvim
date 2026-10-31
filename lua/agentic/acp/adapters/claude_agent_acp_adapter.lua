@@ -424,7 +424,8 @@ end
 
 --- Replace the JSON result of a `SendMessage` or `SubagentHandback` call with
 --- its text, and mark the call completed or failed by whether the message was
---- delivered. Any other body is left as it is.
+--- delivered. Any other body is left as it is. A message to another session
+--- takes its head from the result and keeps only the delivery note as body.
 ---
 --- The bridge leaves such a call visible when it queued the message or could
 --- not deliver it, and the raw result carries plumbing fields.
@@ -441,6 +442,22 @@ function ClaudeAgentACPAdapter:__apply_message_result(message)
     message.body = lines
     if delivered ~= nil then
         message.status = delivered and "completed" or "failed"
+    end
+
+    if message.kind ~= "SendMessage" then
+        return
+    end
+    -- The bridge reports a message to another session once, completed, with
+    -- empty rawInput, so the result is the only source of `to` and `summary`.
+    local summary, to, note =
+        ClaudeUtils.cross_session_delivery(table.concat(lines, "\n"))
+    if summary then
+        message.argument = ClaudeUtils.tool_head(
+            message.kind,
+            { to = to, summary = summary },
+            "SendMessage"
+        )
+        message.body = { note }
     end
 end
 
