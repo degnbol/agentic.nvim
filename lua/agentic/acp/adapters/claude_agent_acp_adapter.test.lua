@@ -19,6 +19,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             _session_roots = session_roots or {},
             _children = {},
             _transcript_readers = {},
+            _subagent_readers = {},
             provider_config = { subagents = { force_background = false } },
         }, { __index = ClaudeAgentACPAdapter })
     end
@@ -1232,8 +1233,81 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             return setmetatable({
                 provider_config = { env = { CLAUDE_CONFIG_DIR = config_dir } },
                 _session_dirs = {},
+                _transcript_readers = {},
+                _subagent_readers = {},
             }, { __index = ClaudeAgentACPAdapter })
         end
+
+        --- Append a SendMessage call to a subagent's transcript.
+        --- @param session_id string
+        --- @param agent_id string
+        local function write_subagent_send(session_id, agent_id)
+            write_meta(session_id, agent_id, "background")
+            local path = vim.fs.joinpath(
+                config_dir,
+                "projects",
+                "-tmp",
+                session_id,
+                "subagents",
+                "agent-" .. agent_id .. ".jsonl"
+            )
+            vim.fn.writefile({
+                vim.json.encode({
+                    type = "assistant",
+                    uuid = "u-1",
+                    timestamp = "2999-01-01T00:00:00.000Z",
+                    message = {
+                        content = {
+                            {
+                                type = "tool_use",
+                                id = "toolu_send",
+                                name = "SendMessage",
+                                input = { to = "main", message = "done" },
+                            },
+                        },
+                    },
+                }),
+            }, path)
+        end
+
+        --- An adapter with session `s1` open.
+        --- @return agentic.acp.ACPClient
+        local function open_adapter()
+            local client = adapter() --[[@as agentic.acp.ClaudeAgentACPAdapter]]
+            client._transcript_readers.s1 =
+                require("agentic.acp.adapters.claude_transcript_reader"):new()
+            return client
+        end
+
+        it("drains a subagent's transcript", function()
+            write_subagent_send("s1", "a1")
+
+            assert.same({
+                {
+                    kind = "tool_call",
+                    tool_call = {
+                        tool_call_id = "toolu_send",
+                        argument = "main",
+                        body = { "done" },
+                    },
+                },
+            }, open_adapter():drain_side_records("s1", "a1"))
+        end)
+
+        it("drains no subagent of a session that is not open", function()
+            write_subagent_send("s1", "a1")
+
+            assert.same({}, adapter():drain_side_records("s1", "a1"))
+        end)
+
+        it("drains nothing before a subagent's transcript exists", function()
+            local client = open_adapter()
+            assert.same({}, client:drain_side_records("s1", "a1"))
+
+            write_subagent_send("s1", "a1")
+
+            assert.equal(1, #client:drain_side_records("s1", "a1"))
+        end)
 
         it("reads a spawn's type, mode and Task id", function()
             write_meta("s1", "a1", "background")

@@ -2006,9 +2006,9 @@ describe("agentic.SessionManager", function()
 
         --- @param tool_call_blocks table<string, table>
         --- @return agentic.SessionManager
-        --- @return { n: integer } drains counted
+        --- @return { n: integer, subagents: string[] } drains counted, and the subagents drained
         local function make_session(tool_call_blocks)
-            local drains = { n = 0 }
+            local drains = { n = 0, subagents = {} }
             --- @type agentic.SessionManager
             local session = {
                 _transcript_for = function()
@@ -2047,6 +2047,10 @@ describe("agentic.SessionManager", function()
                 _drain_side_records = function()
                     drains.n = drains.n + 1
                 end,
+                _drain_subagent_side_records = function(_self, child_id)
+                    table.insert(drains.subagents, child_id)
+                end,
+                _drain_side_records_of = SessionManager._drain_side_records_of,
             } --[[@as agentic.SessionManager]]
             return session, drains
         end
@@ -2152,8 +2156,7 @@ describe("agentic.SessionManager", function()
             assert.equal(0, drains.n)
         end)
 
-        it("does not drain for a subagent's tool call", function()
-            -- Only the root session's hook records are drained.
+        it("drains the subagent's records for its tool call", function()
             local session, drains =
                 make_session({ ["tc-1"] = { kind = "read" } })
             session._tool_call_owner["tc-1"] = "task-1"
@@ -2164,6 +2167,7 @@ describe("agentic.SessionManager", function()
             )
 
             assert.equal(0, drains.n)
+            assert.same({ "task-1" }, drains.subagents)
         end)
     end)
 
@@ -2291,6 +2295,59 @@ describe("agentic.SessionManager", function()
             }).options
 
             assert.equal(1, #options)
+        end)
+    end)
+
+    describe("_drain_subagent_side_records", function()
+        it("applies only tool call fields, to the subagent's call", function()
+            local drained_with
+            local child_writer = {
+                tool_call_blocks = { ["toolu_send"] = { status = "completed" } },
+                update_tool_call_block = spy.new(function() end),
+            }
+            --- @type agentic.SessionManager
+            local session = {
+                destroyed = false,
+                session_id = "s-1",
+                _held_tool_call_updates = {},
+                _tool_call_owner = { ["toolu_send"] = "a1" },
+                _drain_subagent_side_records = SessionManager._drain_subagent_side_records,
+                _apply_side_tool_call = SessionManager._apply_side_tool_call,
+                _writer_for = function()
+                    return child_writer
+                end,
+                _history_changed = function() end,
+                chat_history = { update_tool_call = function() end },
+                agent = {
+                    drain_side_records = function(_self, session_id, child_id)
+                        drained_with = { session_id, child_id }
+                        return {
+                            {
+                                kind = "tool_call",
+                                tool_call = {
+                                    tool_call_id = "toolu_send",
+                                    argument = "main",
+                                },
+                            },
+                            {
+                                kind = "hook",
+                                hook = { group = "context", body = { "x" } },
+                            },
+                        }
+                    end,
+                },
+                -- A write here would put the subagent's record in the main chat.
+                message_writer = {},
+            } --[[@as agentic.SessionManager]]
+
+            session:_drain_subagent_side_records("a1")
+
+            assert.same({ "s-1", "a1" }, drained_with)
+            assert.equal(1, child_writer.update_tool_call_block.call_count)
+            assert.equal(
+                "main",
+                child_writer.update_tool_call_block.calls[1][2].argument
+            )
         end)
     end)
 
@@ -2877,6 +2934,7 @@ describe("agentic.SessionManager", function()
                 },
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_side_records = SessionManager._drain_side_records,
+                _held_tool_call_updates = {},
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = "s-1",
@@ -3079,6 +3137,7 @@ describe("agentic.SessionManager", function()
                 _tool_call_owner = {},
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_side_records = SessionManager._drain_side_records,
+                _held_tool_call_updates = {},
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = "s-1",
@@ -4560,6 +4619,8 @@ describe("agentic.SessionManager", function()
                 _agents = {},
                 _loading = false,
                 _drain_side_records = noop,
+                _drain_subagent_side_records = noop,
+                _drain_side_records_of = SessionManager._drain_side_records_of,
                 _agent_of = SessionManager._agent_of,
                 _writer_for = SessionManager._writer_for,
                 _indicator_for = SessionManager._indicator_for,
@@ -4707,6 +4768,20 @@ describe("agentic.SessionManager", function()
                     assert.equal("peer: Tell peer", tracker.argument)
                 end
             )
+
+            it("keeps a subagent's held updates past the turn's end", function()
+                record_tool_call(UPDATE)
+                session._drain_subagent_side_records =
+                    SessionManager._drain_subagent_side_records
+                session:_drain_subagent_side_records("a1")
+                session._finalize_turn = SessionManager._finalize_turn
+                session:_finalize_turn(nil)
+
+                assert.equal(
+                    "a1",
+                    session._held_tool_call_updates["tc-msg"].child_id
+                )
+            end)
 
             it("drops held updates at the turn's end", function()
                 drain_tool_call(UPDATE)

@@ -83,6 +83,7 @@ end
 --- @field provider_config agentic.acp.ClaudeProviderConfig
 --- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
 --- @field _transcript_readers table<string, agentic.acp.ClaudeTranscriptReader> Session id -> reader of the session's transcript, from the session's opening until `unsubscribe`
+--- @field _subagent_readers table<string, table<string, agentic.acp.ClaudeTranscriptReader>> Root session id -> child session id -> reader of the subagent's transcript, from its first drain until the root's `unsubscribe`
 --- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
@@ -117,6 +118,7 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
     local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
     client._session_dirs = {}
     client._transcript_readers = {}
+    client._subagent_readers = {}
     -- Resolved here: tool calls are built in the transport's fast callback,
     -- where reading `vim.env` is forbidden.
     client._exec_shell = ClaudeUtils.exec_shell(config.env)
@@ -199,6 +201,7 @@ function ClaudeAgentACPAdapter:load_session(
     -- Built before the request, so it keeps the SessionStart records the CLI
     -- writes before answering, and none of the replayed history.
     self._transcript_readers[session_id] = ClaudeTranscriptReader:new()
+    self._subagent_readers[session_id] = nil
     ACPClient.load_session(
         self,
         session_id,
@@ -213,23 +216,57 @@ end
 function ClaudeAgentACPAdapter:unsubscribe(session_id)
     self._session_dirs[session_id] = nil
     self._transcript_readers[session_id] = nil
+    self._subagent_readers[session_id] = nil
     ACPClient.unsubscribe(self, session_id)
 end
 
+--- The reader of a subagent's transcript, opened on first use with the start
+--- time of the session's reader.
+--- @param session_id string The root session
+--- @param child_id string The subagent's child session id
+--- @return agentic.acp.ClaudeTranscriptReader|nil reader Nil when the session has no reader
+function ClaudeAgentACPAdapter:_subagent_reader(session_id, child_id)
+    local session_reader = self._transcript_readers[session_id]
+    if not session_reader then
+        return nil
+    end
+    local readers = self._subagent_readers[session_id] or {}
+    self._subagent_readers[session_id] = readers
+    readers[child_id] = readers[child_id]
+        or ClaudeTranscriptReader:new(session_reader:since())
+    return readers[child_id]
+end
+
+--- The CLI's transcript of a session, or of one of its subagents.
+--- @param session_id string The root session
+--- @param child_id string|nil The subagent's child session id
+--- @return string|nil path Nil until the CLI has written it
+function ClaudeAgentACPAdapter:_find_transcript(session_id, child_id)
+    if not child_id then
+        return ClaudeUtils.find_transcript(
+            ClaudeUtils.config_dir(self.provider_config.env),
+            session_id
+        )
+    end
+    local session_dir = self:_session_dir(session_id)
+    return session_dir
+        and ClaudeUtils.subagent_transcript(session_dir, child_id)
+end
+
 --- Hook records, loaded files and tool call input from the CLI's transcript
---- of the session. Empty until the CLI has written the transcript.
---- @param session_id string
+--- of the session, or of one of its subagents. Empty until the CLI has
+--- written the transcript.
+--- @param session_id string The root session
+--- @param child_id string|nil The subagent's child session id
 --- @return agentic.acp.SideRecord[]
-function ClaudeAgentACPAdapter:drain_side_records(session_id)
-    local reader = self._transcript_readers[session_id]
+function ClaudeAgentACPAdapter:drain_side_records(session_id, child_id)
+    local reader = child_id and self:_subagent_reader(session_id, child_id)
+        or self._transcript_readers[session_id]
     if not reader then
         return {}
     end
     if not reader:has_transcript() then
-        local path = ClaudeUtils.find_transcript(
-            ClaudeUtils.config_dir(self.provider_config.env),
-            session_id
-        )
+        local path = self:_find_transcript(session_id, child_id)
         if path then
             reader:set_transcript_path(path)
         end
@@ -242,22 +279,28 @@ function ClaudeAgentACPAdapter:exec_shell()
     return self._exec_shell
 end
 
+--- Claude Code's side-file directory of a session, cached once found.
+--- @param session_id string The root session
+--- @return string|nil session_dir Nil until the session has written a side file
+function ClaudeAgentACPAdapter:_session_dir(session_id)
+    local session_dir = self._session_dirs[session_id]
+        or ClaudeUtils.find_session_dir(
+            ClaudeUtils.config_dir(self.provider_config.env),
+            session_id
+        )
+    self._session_dirs[session_id] = session_dir
+    return session_dir
+end
+
 --- The SDK's record of a subagent's spawn: its meta file beside the session
 --- transcript. Nil until the file exists.
 --- @param session_id string The root session
 --- @param child_id string The subagent's child session id
 --- @return agentic.acp.SubagentRecord|nil
 function ClaudeAgentACPAdapter:subagent_record(session_id, child_id)
-    local session_dir = self._session_dirs[session_id]
+    local session_dir = self:_session_dir(session_id)
     if not session_dir then
-        session_dir = ClaudeUtils.find_session_dir(
-            ClaudeUtils.config_dir(self.provider_config.env),
-            session_id
-        )
-        if not session_dir then
-            return nil
-        end
-        self._session_dirs[session_id] = session_dir
+        return nil
     end
     local meta = ClaudeUtils.subagent_meta(session_dir, child_id)
     if not meta then

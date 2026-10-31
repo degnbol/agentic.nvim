@@ -305,6 +305,29 @@ function M.find_transcript(config_dir, session_id)
     )[1]
 end
 
+--- `<session_dir>/subagents/agent-<agent_id>.<extension>`, where the CLI keeps
+--- a subagent's files.
+--- @param session_dir string A session's side-file directory
+--- @param agent_id string The subagent's id
+--- @param extension string
+--- @return string path
+local function subagent_file(session_dir, agent_id, extension)
+    return vim.fs.joinpath(
+        session_dir,
+        "subagents",
+        "agent-" .. agent_id .. "." .. extension
+    )
+end
+
+--- The CLI's transcript of a subagent, `<session_dir>/subagents/agent-<agent_id>.jsonl`.
+--- @param session_dir string A session's side-file directory
+--- @param agent_id string The subagent's id
+--- @return string|nil path Nil until the CLI has written it
+function M.subagent_transcript(session_dir, agent_id)
+    local path = subagent_file(session_dir, agent_id, "jsonl")
+    return vim.uv.fs_stat(path) and path or nil
+end
+
 --- @class agentic.acp.SubagentMeta
 --- @field agent_type string Subagent type the agent was spawned as
 --- @field request_shape string `background` or `foreground`, as the agent ran
@@ -317,12 +340,8 @@ end
 --- @param agent_id string
 --- @return agentic.acp.SubagentMeta|nil meta Nil when the file is missing or malformed
 function M.subagent_meta(session_dir, agent_id)
-    local path = vim.fs.joinpath(
-        session_dir,
-        "subagents",
-        "agent-" .. agent_id .. ".meta.json"
-    )
-    local decoded = FileSystem.read_json(path)
+    local decoded =
+        FileSystem.read_json(subagent_file(session_dir, agent_id, "meta.json"))
     if
         type(decoded) ~= "table"
         or type(decoded.agentType) ~= "string"

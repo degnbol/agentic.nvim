@@ -38,14 +38,14 @@ local function tool_use_side_record(record)
     }
 end
 
---- Tails one ACP session's Claude Code transcript jsonl for what the ACP
---- bridge does not forward: hook activity, files the CLI loaded into the
---- model's context without a tool call, and the input of `SendMessage` calls.
---- One reader per session.
+--- Tails one Claude Code transcript jsonl, a session's or a subagent's, for
+--- what the ACP bridge does not forward: hook activity, files the CLI loaded
+--- into the model's context without a tool call, and the input of
+--- `SendMessage` calls. One reader per transcript.
 ---
---- Drains are empty until a transcript path is set. Records that predate the
---- reader are discarded, so the first drain of a resumed session does not
---- replay its history.
+--- Drains are empty until a transcript path is set. Records older than the
+--- reader's start time are discarded, so by default the first drain of a
+--- resumed session does not replay its history.
 --- @class agentic.acp.ClaudeTranscriptReader
 --- @field _marker string ISO-8601 UTC; records at or after it belong to this reader
 --- @field _path? string
@@ -57,17 +57,24 @@ end
 local ClaudeTranscriptReader = {}
 ClaudeTranscriptReader.__index = ClaudeTranscriptReader
 
+--- @param since string|nil ISO-8601 UTC time the reader keeps records from, nil for now
 --- @return agentic.acp.ClaudeTranscriptReader
-function ClaudeTranscriptReader:new()
+function ClaudeTranscriptReader:new(since)
     return setmetatable({
         -- Same fixed-width format the CLI writes, so records compare as strings.
-        _marker = os.date("!%Y-%m-%dT%H:%M:%S.000Z"),
+        _marker = since or os.date("!%Y-%m-%dT%H:%M:%S.000Z"),
         _offset = 0,
         _catching_up = true,
         _links = {},
         _context_runs = {},
         _notified = false,
     }, self)
+end
+
+--- The time the reader keeps records from.
+--- @return string since ISO-8601 UTC
+function ClaudeTranscriptReader:since()
+    return self._marker
 end
 
 --- Point the reader at a transcript, read from its top on the next drain.
@@ -327,7 +334,7 @@ function ClaudeTranscriptReader:_notify_unreadable(err)
     end
     self._notified = true
     Logger.notify(
-        "Claude transcript unreadable, hook activity and loaded files will not show: "
+        "Claude transcript unreadable, hook activity, loaded files and SendMessage input will not show: "
             .. (err or "unknown error")
     )
 end

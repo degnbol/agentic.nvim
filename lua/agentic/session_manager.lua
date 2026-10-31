@@ -94,7 +94,7 @@ end
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
---- @field _held_tool_call_updates table<string, agentic.ui.MessageWriter.ToolCallBase> toolCallId -> fields a side record gave a call the chat does not show yet; dropped at the turn's end
+--- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
 --- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
 --- @field _message_infos table<string, agentic.SessionMessageInfo> Kind and summary of each session message by message id, decided at its first view
 --- @field _delegated table<string, true> Session ids of the subagents a delegation has reached
@@ -1211,6 +1211,17 @@ function SessionManager:_start_agent(child_id)
     self:_open_input(child_id)
 end
 
+--- Drop the held tool call fields an agent's side records gave.
+--- @param held table<string, { child_id?: string }> Held fields by tool call id, edited in place
+--- @param child_id string|nil The subagent, nil for the main agent
+local function drop_held(held, child_id)
+    for id, entry in pairs(held) do
+        if entry.child_id == child_id then
+            held[id] = nil
+        end
+    end
+end
+
 --- @type table<string, string>
 local END_WORD_OF_STOP_REASON = {
     end_turn = "completed",
@@ -1249,6 +1260,8 @@ function SessionManager:_end_agent(child_id, state)
         state = word,
         error = Json.present(vim.tbl_get(state, "error", "message")),
     }
+    self:_drain_subagent_side_records(child_id)
+    drop_held(self._held_tool_call_updates, child_id)
     if not agent.open then
         if row.error then
             self:_write_row(child_id, row)
@@ -1487,6 +1500,7 @@ function SessionManager:_reset_subagents()
     self:_sync_modified(self.chat_history)
     self._agent_by_task = {}
     self._tool_call_owner = {}
+    self._held_tool_call_updates = {}
     self._seen_messages = {}
     self._message_infos = {}
     self._delegated = {}
@@ -2282,7 +2296,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     local held = self._held_tool_call_updates[id]
     if held then
         self._held_tool_call_updates[id] = nil
-        tool_call = vim.tbl_extend("force", tool_call, held) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+        tool_call = vim.tbl_extend("force", tool_call, held.update) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
     end
     tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
     tool_call.decided_by = self.permission_manager:take_deciders(id)
@@ -2302,8 +2316,8 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     self:_record_file_op(tool_call.tool_call_id)
 
     -- A call can be first reported already ended; see `_on_tool_call_update`.
-    if not child_id and has_ended(tool_call.status) then
-        self:_drain_side_records()
+    if has_ended(tool_call.status) then
+        self:_drain_side_records_of(child_id)
     end
 end
 
@@ -2737,15 +2751,42 @@ function SessionManager:_drain_side_records()
     end
 end
 
+--- Add the tool call fields a subagent's side records give to its calls.
+--- Its hook activity and loaded files are not shown.
+--- @param child_id string
+function SessionManager:_drain_subagent_side_records(child_id)
+    if self.destroyed or not self.session_id then
+        return
+    end
+    local sides = self.agent:drain_side_records(self.session_id, child_id)
+    for _, side in ipairs(sides) do
+        if side.kind == "tool_call" then
+            self:_apply_side_tool_call(side.tool_call, child_id)
+        end
+    end
+end
+
+--- Drain an agent's side records.
+--- @param child_id string|nil The subagent, nil for the main agent
+function SessionManager:_drain_side_records_of(child_id)
+    if child_id then
+        self:_drain_subagent_side_records(child_id)
+    else
+        self:_drain_side_records()
+    end
+end
+
 --- Add fields a side record gave a tool call to its block and its history
 --- record, or hold them until the call is reported: a provider can record a
 --- call before reporting it.
 --- @param update agentic.ui.MessageWriter.ToolCallBase
-function SessionManager:_apply_side_tool_call(update)
+--- @param child_id string|nil The subagent whose records gave the fields, nil for the main agent's
+function SessionManager:_apply_side_tool_call(update, child_id)
     local id = update.tool_call_id
     local writer = self:_writer_for(id)
     if not writer.tool_call_blocks[id] then
-        self._held_tool_call_updates[id] = update
+        self._held_tool_call_updates[id] =
+            { update = update, child_id = child_id }
         return
     end
     writer:update_tool_call_block(update)
@@ -2813,7 +2854,7 @@ function SessionManager:_finalize_turn(usage)
     -- brackets the run it ends.
     self:_drain_side_records()
     -- A call not reported by the turn's end never will be.
-    self._held_tool_call_updates = {}
+    drop_held(self._held_tool_call_updates, nil)
 end
 
 --- Apply a tool call update to its chat block, the chat history and the
@@ -2912,10 +2953,9 @@ function SessionManager:_on_tool_call_update(tool_call_update)
 
     -- Look for records as soon as the call they fired on ends, rather than
     -- waiting for the turn-end drain — where they land is settled by the
-    -- anchor each record carries, not by when the drain runs. Subagent calls
-    -- do not trigger a drain: only the root session's records are drained.
-    if not is_subagent and has_ended(tool_call_update.status) then
-        self:_drain_side_records()
+    -- anchor each record carries, not by when the drain runs.
+    if has_ended(tool_call_update.status) then
+        self:_drain_side_records_of(child_id)
     end
 end
 

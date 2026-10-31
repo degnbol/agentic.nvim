@@ -182,11 +182,13 @@ end
 --- | { kind: "loaded_file", loaded_file: agentic.acp.LoadedFile }
 --- | { kind: "tool_call", tool_call: agentic.ui.MessageWriter.ToolCallBase }
 
---- Records the provider wrote outside the ACP feed since the last call.
---- Adapters for providers that keep such records override this.
---- @param _session_id string
+--- Records the provider wrote outside the ACP feed since the last call, for
+--- the session or for one of its subagents. Adapters for providers that keep
+--- such records override this.
+--- @param _session_id string The root session
+--- @param _child_id string|nil A subagent's child session id
 --- @return agentic.acp.SideRecord[]
-function ACPClient:drain_side_records(_session_id)
+function ACPClient:drain_side_records(_session_id, _child_id)
     return {}
 end
 

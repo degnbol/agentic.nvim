@@ -209,6 +209,20 @@ describe("ClaudeTranscriptReader", function()
         return reader
     end
 
+    it("keeps records from a given time on", function()
+        append({
+            injected("c-0", nil, "before", BEFORE),
+            injected("c-1", nil, "since", "2500-01-01T00:00:00.000Z"),
+        })
+        local reader = ClaudeTranscriptReader:new("2026-01-01T00:00:00.000Z")
+        reader:set_transcript_path(transcript)
+
+        local records = hooks(reader:drain())
+
+        assert.equal(1, #records)
+        assert.same({ "since" }, records[1].body)
+    end)
+
     it("drains nothing before a transcript path is known", function()
         assert.same({}, ClaudeTranscriptReader:new():drain())
     end)
