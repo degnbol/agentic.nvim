@@ -70,13 +70,17 @@ format:
 format-file:
 	"$(STYLUA)" "$(FILE)"
 
-# Convenience aggregator, NOT to be used in the CI
+# Static checks only; `validate` adds helptags and tests
 check: format-check luals selene
 
 # Run all validations with output redirection for AI agents
 validate:
 	@mkdir -p .local; \
 	total_start=$$(date +%s); \
+	start=$$(date +%s); \
+	make format-check > .local/agentic_format_output.log 2>&1; \
+	rc_format=$$?; \
+	echo "format: $$rc_format (took $$(($$(date +%s) - start))s) - log: .local/agentic_format_output.log"; \
 	start=$$(date +%s); \
 	make luals > .local/agentic_luals_output.log 2>&1; \
 	rc_luals=$$?; \
@@ -94,7 +98,7 @@ validate:
 	rc_test=$$?; \
 	echo "test: $$rc_test (took $$(($$(date +%s) - start))s) - log: .local/agentic_test_output.log"; \
 	echo "Total: $$(($$(date +%s) - total_start))s"; \
-	if [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ]; then \
+	if [ $$rc_format -ne 0 ] || [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ]; then \
 		echo "Validation failed! Check log files for details."; \
 		exit 1; \
 	fi

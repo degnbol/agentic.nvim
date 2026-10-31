@@ -36,10 +36,10 @@ That rule auto-loads when session/widget/registry files are accessed.
 make validate
 ```
 
-Outputs 5-6 lines (exit codes + log paths).
+Outputs one line per check (exit code + log path).
 On failure, read the log file with `tail` or `rg`, never the Read tool.
 
-Log paths: `.local/agentic_{luals,selene,helptags,test}_output.log`
+Log paths: `.local/agentic_{format,luals,selene,…}_output.log`
 
 ## Key files
 
