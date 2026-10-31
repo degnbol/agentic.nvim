@@ -2,13 +2,13 @@
 Status: spec
 
 ## Relevant files
-- `lua/agentic/acp/adapters/claude_hook_records.lua` and `.test.lua` — module doc, `classify`, `NO_STDERR`, `KNOWN_OUTPUT_KEYS`, `is_known_output`, alias `agentic.acp.HookRecordGroup`, class `agentic.acp.HookRecord`
-- `lua/agentic/hook_record_reader.lua` and `.test.lua` — `HookRecordReader:drain`, `_script_of`
+- `lua/agentic/acp/adapters/claude_hook_records.lua` and `.test.lua` — module doc, `classify`, `NO_STDERR`, `KNOWN_OUTPUT_KEYS`, `is_known_output`, alias `agentic.acp.ClaudeHookRecordGroup`, class `agentic.acp.ClaudeHookRecord`
+- `lua/agentic/acp/acp_client.lua` — alias `agentic.acp.HookRecordGroup`, class `agentic.acp.HookRecord`
+- `lua/agentic/acp/adapters/claude_hook_record_reader.lua` and `.test.lua` — `ClaudeHookRecordReader:drain`, `_script_of`
 - `lua/agentic/session_manager.lua` and `.test.lua` — `RENDERED_HOOK_GROUPS`, `SessionManager:_drain_hook_records`, describe `"_drain_hook_records"`
 - `lua/agentic/ui/message_writer.lua` and `.test.lua` — `write_hook_block`, `_write_collapsed_region`, `_insert_collapsed_region`, `_decorate_collapsed_region`
 - `lua/agentic/glyphs.lua` — `Glyphs.HOOK`
 - `notes/PLAN-gutter-identity.md` — unit 6 and § "Glyph vocabulary"
-- `notes/PLAN-adapter-hook-records.md` — moves the reader into the adapter (`claude_hook_record_reader.lua`) and the group alias into `acp_client.lua`. Either plan can land first; edit the files where they are.
 - Skills: `rendering`
 
 ## Background
@@ -70,8 +70,7 @@ The CLI's transcript jsonl is read for hook records (the ACP bridge drops hook e
    - `_decorate_collapsed_region(bufnr, body_start, body_end, sign, source, open)`: when `source` is set, stamp it as end-of-line `virt_text` on the first body row, in the highlight the foldtext uses. This covers one-row bodies and open folds; a closed fold hides the row and shows the foldtext instead. When `open` is set, skip the `_queue_fold(body_start, false)`. Thread `source` and `open` through `_write_collapsed_region` and `_insert_collapsed_region`.
 5. `session_manager.lua`: delete `RENDERED_HOOK_GROUPS` and its docstring. The reader returns only `context`, `unrecognised`, `failure` and `verbatim`, and all four render. `_drain_hook_records` calls `write_hook_block({ body, script, tool_call_id, failed = record.group == "failure" })`.
 6. `notes/PLAN-gutter-identity.md`: in unit 6, mark failures and unrecognised output as covered by this plan, and remove "renders through `write_notice`". In § "Glyph vocabulary", mark 󰛣 as spent.
-7. `notes/PLAN-adapter-hook-records.md` § Non-goals: remove the `RENDERED_HOOK_GROUPS` line if this plan lands first.
-8. Tests
+7. Tests
    - `claude_hook_records.test.lua`:
      - replace the four "surfaces …" `hook_success` cases with: empty content is silent; content on `UserPromptSubmit` is context; content on `PreToolUse` is unrecognised;
      - failures: a prefixed stderr gives `"exited 127"` and loses the prefix; an unprefixed stderr is kept as it is; a timeout names the seconds; an interrupted `hook_cancelled` is silent.
