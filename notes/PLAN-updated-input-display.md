@@ -1,11 +1,11 @@
 # PLAN: show when a hook rewrote a tool call's input
 
-Status: **draft — not investigated.** Written from a single observation while
-working on `notes/PLAN-hooks_in_chat.md`; nothing below has been verified beyond
-the counts in "What prompted this". Do not implement from this as-is.
+Status: **draft — not investigated.** Written from a single observation;
+nothing below has been verified beyond the counts in "What prompted this". Do
+not implement from this as-is.
 
-Out of scope for the hook-surfacing work — that plan renders hook *activity*.
-This one is about the tool call's own displayed input being wrong.
+The hook rows in the chat (`MessageWriter:write_hook_block`) show hook
+*activity*. This plan is about the tool call's own displayed input being wrong.
 
 ## Problem
 

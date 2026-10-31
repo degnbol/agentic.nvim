@@ -85,15 +85,13 @@ no rendering work and left for the note that owns the submit paths.
 
 ## Units and order
 
-6. [`PLAN-hooks_in_chat.md`](PLAN-hooks_in_chat.md) — hook activity (injected
-   context, timeouts) is invisible because the ACP bridge drops the hook lifecycle
-   events; recover it from the CLI's transcript jsonl and render each record as
-   one closed fold row. Injected context has shipped: it took 5's shape wholesale,
-   and the two now share `MessageWriter:_write_collapsed_region`. Still open there:
-   failures and unrecognised output, which need a second glyph, and persistence.
-   Separately it converts a site unit 1 left as prose: blocking-hook feedback
-   arrives as a genuine `agent_message_chunk`, identifiable by a bridge-generated
-   severity prefix — that part renders through `write_notice`.
+6. Hook activity — shipped. The ACP bridge drops the hook lifecycle events, so
+   it is recovered from the CLI's transcript jsonl and rendered through
+   `MessageWriter:write_hook_block`, which took 5's shape wholesale: the two
+   share `MessageWriter:_write_collapsed_region`. Persistence is
+   `PLAN-hook-history.md`. Still open: blocking-hook feedback, a site unit 1
+   left as prose, arrives as a genuine `agent_message_chunk`, identifiable by a
+   bridge-generated severity prefix.
 
 8. Foldable prose regions — a prose region should fold on `zc`, open by default.
    Unblocked by unit 7, which is where the region's range comes from.
@@ -123,4 +121,4 @@ no rendering work and left for the note that owns the submit paths.
 the tool kinds 󰈈 󰏫 󰆍 󰍉 󰖟 󰚩 󰒓. `sign_text` must be
 `glyph .. " "` — two cells, which is also what lets a wide-aspect glyph render
 across both. 󰋚 history is reserved for a future rewind. 󰧑 thinking (unit 5) and
-󰛢 hook (unit 6) are spent; unit 6's failure rows still need one.
+󰛢 hook and 󰛣 failed hook (unit 6) are spent.

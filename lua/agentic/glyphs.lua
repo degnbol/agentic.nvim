@@ -103,6 +103,10 @@ Glyphs.KIND.think = Glyphs.THINKING
 --- deliver anything, so the reader's question is which script spoke.
 Glyphs.HOOK = "󰛢"
 
+--- Identity of a hook run that failed: it timed out or exited non-zero with
+--- an error (`MessageWriter:write_hook_block`).
+Glyphs.HOOK_FAILED = "󰛣" -- nf-md-hook_off, U+F06E3
+
 --- Identity of a received `message` row. A letter against
 --- `KIND.sendmessage`'s send arrow, which marks a sent one.
 Glyphs.MESSAGE_RECEIVED = "󰇮"

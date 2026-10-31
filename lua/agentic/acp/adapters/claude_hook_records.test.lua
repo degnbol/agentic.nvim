@@ -125,69 +125,46 @@ describe("ClaudeHookRecords", function()
     end)
 
     describe("completed hooks", function()
-        it("is silent for a permission decision", function()
-            local record = decode_one(
-                line(success({ permissionDecision = "allow" }))
-            )
+        it("passes on empty content", function()
+            local record =
+                decode_one(line(success({ permissionDecision = "allow" })))
 
-            assert.equal("silent", record.group)
+            assert.equal("passed", record.group)
+            assert.same({}, record.body)
         end)
 
-        it("is silent for additional context, which repeats", function()
-            local record = decode_one(
-                line(success({ additionalContext = "already its own record" }))
-            )
+        it("treats content on UserPromptSubmit as context", function()
+            local record = decode_one(line(success(nil, {
+                hookEvent = "UserPromptSubmit",
+                hookName = "UserPromptSubmit",
+                stdout = "remember this",
+                content = "remember this",
+            })))
 
-            assert.equal("silent", record.group)
+            assert.equal("context", record.group)
+            assert.same({ "remember this" }, record.body)
         end)
 
-        it("is silent for a rewritten input", function()
-            local record = decode_one(
-                line(success({ updatedInput = { command = "rg foo" } }))
-            )
-
-            assert.equal("silent", record.group)
-        end)
-
-        it("surfaces output whose stdout is not JSON", function()
+        it("treats content on PreToolUse as stray", function()
             local record = decode_one(
                 line(success(nil, { stdout = "oops", content = "leaked" }))
             )
 
-            assert.equal("unrecognised", record.group)
+            assert.equal("stray", record.group)
             assert.same({ "leaked" }, record.body)
         end)
 
-        it("surfaces output with no hookSpecificOutput", function()
-            local record = decode_one(
-                line(success(nil, { stdout = '{"continue":true}' }))
-            )
-
-            assert.equal("unrecognised", record.group)
-        end)
-
-        it("surfaces output in an unknown schema", function()
-            local record = decode_one(line(success({ futureKey = 1 })))
-
-            assert.equal("unrecognised", record.group)
-        end)
-
-        it("surfaces an empty-stdout hook with no body", function()
-            local record = decode_one(line(success(nil)))
-
-            assert.equal("unrecognised", record.group)
-            assert.same({}, record.body)
-        end)
-
-        it("carries the command for attribution", function()
+        it("carries the command and hook name for attribution", function()
             local record = decode_one(line(success(nil)))
 
             assert.equal("/hooks/shell-guard.sh", record.command)
+            assert.equal("PreToolUse:Bash", record.hook_name)
+            assert.equal(12, record.duration_ms)
         end)
     end)
 
     describe("failures", function()
-        it("is silent for a non-zero exit that wrote no stderr", function()
+        it("passes on a non-zero exit that wrote no stderr", function()
             local record = decode_one(line({
                 type = "hook_non_blocking_error",
                 hookEvent = "PreToolUse",
@@ -198,10 +175,30 @@ describe("ClaudeHookRecords", function()
                 durationMs = 8,
             }))
 
-            assert.equal("silent", record.group)
+            assert.equal("passed", record.group)
         end)
 
-        it("surfaces a non-zero exit that wrote real stderr", function()
+        it("leads a non-zero exit's stderr with its exit code", function()
+            local record = decode_one(line({
+                type = "hook_non_blocking_error",
+                hookEvent = "PreToolUse",
+                command = "/hooks/plan-reminder.sh",
+                stdout = "",
+                stderr = "Failed with non-blocking status code: "
+                    .. "sh: plan-reminder.sh: not found\nsecond line",
+                exitCode = 127,
+                durationMs = 8,
+            }))
+
+            assert.equal("failure", record.group)
+            assert.same({
+                "exited 127",
+                "sh: plan-reminder.sh: not found",
+                "second line",
+            }, record.body)
+        end)
+
+        it("keeps an unprefixed stderr as it is", function()
             local record = decode_one(line({
                 type = "hook_non_blocking_error",
                 hookEvent = "PreToolUse",
@@ -216,7 +213,7 @@ describe("ClaudeHookRecords", function()
             assert.same({ "jq: parse error", "at line 3" }, record.body)
         end)
 
-        it("gives a timeout a body of its own, having no output", function()
+        it("names the seconds a timeout waited", function()
             local record = decode_one(line({
                 type = "hook_cancelled",
                 hookEvent = "PreToolUse",
@@ -227,8 +224,51 @@ describe("ClaudeHookRecords", function()
             }))
 
             assert.equal("failure", record.group)
-            assert.equal(1, #record.body)
-            assert.is_not_nil(record.body[1]:match("600 s"))
+            assert.same({ "timed out after 600 s" }, record.body)
+        end)
+
+        it("is silent for a hook skipped inside a hook's agent", function()
+            local record = decode_one(line({
+                type = "hook_cancelled",
+                hookEvent = "PreToolUse",
+                hookName = "PreToolUse:Bash",
+            }))
+
+            assert.equal("silent", record.group)
+        end)
+
+        it("says a failure wrote no stderr when it has none", function()
+            local record = decode_one(line({
+                type = "hook_non_blocking_error",
+                hookEvent = "PreToolUse",
+                stderr = "",
+                exitCode = 1,
+            }))
+
+            assert.equal("failure", record.group)
+            assert.same({ "failed with no stderr" }, record.body)
+        end)
+
+        it("omits the exit line when no exit code is recorded", function()
+            local record = decode_one(line({
+                type = "hook_non_blocking_error",
+                hookEvent = "PreToolUse",
+                stderr = "Failed with non-blocking status code: boom",
+            }))
+
+            assert.same({ "boom" }, record.body)
+        end)
+
+        it("is silent for a hook stopped by the turn's cancellation", function()
+            local record = decode_one(line({
+                type = "hook_cancelled",
+                hookEvent = "PreToolUse",
+                command = "/hooks/permission_hook.sh",
+                timedOut = false,
+                durationMs = 1200,
+            }))
+
+            assert.equal("silent", record.group)
         end)
     end)
 

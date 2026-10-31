@@ -63,9 +63,9 @@ end
 
 --- Read the hook records appended since the last drain.
 ---
---- Records whose group is `silent` are consumed rather than returned: they ran
---- with nothing to show, and exist here only to name the script a later
---- `context` record came from.
+--- Records whose group is `silent` are consumed rather than returned: they have
+--- nothing to show, and exist here only to name the script a later `context`
+--- record came from.
 --- @return agentic.acp.ClaudeHookRecord[] records in transcript order
 function ClaudeHookRecordReader:drain()
     if not self._path then
@@ -106,10 +106,11 @@ function ClaudeHookRecordReader:drain()
     return records
 end
 
---- Basename of the script a record's body came from, nil when none is
---- recorded. A record that ran a script names its own; injected context points
---- at its producer through `parentUuid`. `UserPromptSubmit` context records
---- point at no producer, and there is no other source for the name.
+--- Basename of the script a record's body came from, else the hook's
+--- configured name, nil when neither is recorded. A record that ran a script
+--- names its own; injected context points at its producer through
+--- `parentUuid`. `UserPromptSubmit` context records point at no producer, so
+--- only their hook name is left.
 --- @param record agentic.acp.ClaudeHookRecord
 --- @return string|nil
 function ClaudeHookRecordReader:_script_of(record)
@@ -117,7 +118,7 @@ function ClaudeHookRecordReader:_script_of(record)
     if not command and record.parent_uuid then
         command = self._commands[record.parent_uuid]
     end
-    return command and vim.fs.basename(command)
+    return command and vim.fs.basename(command) or record.hook_name
 end
 
 --- Tell the user hook activity is lost, once per reader — a transcript that

@@ -130,10 +130,36 @@ describe("ClaudeHookRecordReader", function()
         assert.same({ "second" }, records[1].body)
     end)
 
-    it("consumes a hook run but names the context it produced", function()
+    it("returns a hook run as passed and names the context it produced", function()
         local reader = reader_at(transcript)
         append({
             ran("h-1", "/hooks/shell-guard.sh"),
+            injected("c-1", "h-1", "guard says hi"),
+        })
+
+        local records = reader:drain()
+
+        assert.equal(2, #records)
+        assert.equal("passed", records[1].group)
+        assert.equal("shell-guard.sh", records[1].script)
+        assert.equal("context", records[2].group)
+        assert.equal("shell-guard.sh", records[2].script)
+    end)
+
+    it("consumes a run the turn's cancellation stopped", function()
+        local reader = reader_at(transcript)
+        append({
+            {
+                type = "attachment",
+                uuid = "h-1",
+                timestamp = AFTER,
+                attachment = {
+                    type = "hook_cancelled",
+                    hookEvent = "PreToolUse",
+                    command = "/hooks/shell-guard.sh",
+                    timedOut = false,
+                },
+            },
             injected("c-1", "h-1", "guard says hi"),
         })
 
@@ -180,6 +206,36 @@ describe("ClaudeHookRecordReader", function()
 
         assert.equal(1, #records)
         assert.equal("review.sh", records[1].script)
+    end)
+
+    it("names a record with no command after its hook", function()
+        local reader = reader_at(transcript)
+        local entry = injected("c-1", nil, "from a prompt submit hook")
+        entry.attachment.hookName = "UserPromptSubmit"
+        append({ entry })
+
+        assert.equal("UserPromptSubmit", reader:drain()[1].script)
+    end)
+
+    it("prefers the command to the hook name", function()
+        local reader = reader_at(transcript)
+        append({
+            {
+                type = "attachment",
+                uuid = "e-1",
+                timestamp = AFTER,
+                attachment = {
+                    type = "hook_non_blocking_error",
+                    hookEvent = "PreToolUse",
+                    hookName = "PreToolUse:Bash",
+                    command = "/hooks/shell-guard.sh",
+                    stderr = "boom",
+                    exitCode = 2,
+                },
+            },
+        })
+
+        assert.equal("shell-guard.sh", reader:drain()[1].script)
     end)
 
     it("leaves the script unnamed when no run produced the body", function()

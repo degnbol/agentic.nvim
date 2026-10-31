@@ -2266,7 +2266,7 @@ describe("agentic.SessionManager", function()
     describe("_drain_hook_records", function()
         --- @param records table[]
         --- @return agentic.SessionManager
-        --- @return table[] written `{ body, script }` per write_hook_block call
+        --- @return agentic.ui.MessageWriter.HookBlock[] written one per write_hook_block call
         local function make_session(records)
             local written = {}
             --- @type agentic.SessionManager
@@ -2280,17 +2280,8 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 message_writer = {
-                    write_hook_block = function(
-                        _self,
-                        body,
-                        script,
-                        tool_call_id
-                    )
-                        table.insert(written, {
-                            body = body,
-                            script = script,
-                            tool_call_id = tool_call_id,
-                        })
+                    write_hook_block = function(_self, block)
+                        table.insert(written, block)
                     end,
                 },
             } --[[@as agentic.SessionManager]]
@@ -2304,7 +2295,10 @@ describe("agentic.SessionManager", function()
 
             session:_drain_hook_records()
 
-            assert.same({ { body = { "ctx" }, script = "guard.sh" } }, written)
+            assert.same(
+                { { body = { "ctx" }, source = "guard.sh", failed = false } },
+                written
+            )
         end)
 
         it("forwards the tool call the record is anchored to", function()
@@ -2333,15 +2327,107 @@ describe("agentic.SessionManager", function()
             assert.same({ "{ trunc" }, written[1].body)
         end)
 
-        it("holds back the groups whose rendering is not built", function()
+        it("marks a failure as failed", function()
             local session, written = make_session({
-                { group = "failure", body = { "timed out" } },
-                { group = "unrecognised", body = { "???" } },
+                { group = "failure", body = { "timed out after 600 s" } },
             })
 
             session:_drain_hook_records()
 
-            assert.same({}, written)
+            assert.is_true(written[1].failed)
+        end)
+
+        it("renders stray output", function()
+            local session, written = make_session({
+                { group = "stray", body = { "leaked" } },
+            })
+
+            session:_drain_hook_records()
+
+            assert.equal(1, #written)
+            assert.same({ "leaked" }, written[1].body)
+            assert.is_false(written[1].failed)
+        end)
+
+        it("gathers a call's passes into one block after the rest", function()
+            --- @param command string
+            --- @return table
+            local function pass(command)
+                return {
+                    group = "passed",
+                    body = {},
+                    command = command,
+                    tool_call_id = "toolu_1",
+                }
+            end
+            local slow = pass("/hooks/lint.sh")
+            slow.duration_ms = 2760
+            local fast = pass("'/hooks/a guard.sh'")
+            fast.duration_ms = 61
+            local session, written = make_session({
+                fast,
+                { group = "context", body = { "ctx" }, tool_call_id = "toolu_1" },
+                slow,
+                pass("/hooks/untimed.sh"),
+            })
+
+            session:_drain_hook_records()
+
+            assert.equal(2, #written)
+            assert.same({ "ctx" }, written[1].body)
+            assert.same({
+                body = {
+                    "/hooks/a guard.sh  61 ms",
+                    "/hooks/lint.sh  2.8 s",
+                    "/hooks/untimed.sh",
+                },
+                source = "passed",
+                tool_call_id = "toolu_1",
+                preformatted = true,
+            }, written[2])
+        end)
+
+        it("gives the passes of each call a block of their own", function()
+            local session, written = make_session({
+                { group = "passed", body = {}, command = "/h/a.sh" },
+                {
+                    group = "passed",
+                    body = {},
+                    command = "/h/b.sh",
+                    tool_call_id = "toolu_1",
+                },
+                { group = "passed", body = {}, command = "/h/c.sh" },
+            })
+
+            session:_drain_hook_records()
+
+            assert.same({ "/h/a.sh", "/h/c.sh" }, written[1].body)
+            assert.is_nil(written[1].tool_call_id)
+            assert.same({ "/h/b.sh" }, written[2].body)
+        end)
+
+        it("shows a pass's script under home with a tilde", function()
+            local session, written = make_session({
+                {
+                    group = "passed",
+                    body = {},
+                    command = vim.env.HOME .. "/hooks/guard.sh",
+                },
+            })
+
+            session:_drain_hook_records()
+
+            assert.same({ "~/hooks/guard.sh" }, written[1].body)
+        end)
+
+        it("shows a command that is more than a path as written", function()
+            local session, written = make_session({
+                { group = "passed", body = {}, command = "bash ~/h.sh --fast" },
+            })
+
+            session:_drain_hook_records()
+
+            assert.same({ "bash ~/h.sh --fast" }, written[1].body)
         end)
 
         it("writes nothing once the session is destroyed", function()

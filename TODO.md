@@ -18,13 +18,8 @@ Tracks are independent unless a note says otherwise.
    which also needs `PLAN-usage-limit-queue.md`. Needs only to come before 4;
    it can land earlier.
 4. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
-5. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md), which also needs
-   `PLAN-hooks_in_chat.md`
+5. [`PLAN-hook-history.md`](notes/PLAN-hook-history.md)
 6. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
-
-**Hooks in chat**
-1. [`PLAN-hooks_in_chat.md`](notes/PLAN-hooks_in_chat.md). Either order with
-   `PLAN-adapter-hook-records.md`.
 
 **Claude code behind the adapter:** the order is in
 [§ Claude-specific code behind the adapter](#claude-specific-code-behind-the-adapter).

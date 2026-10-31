@@ -28,6 +28,7 @@ local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
 local SessionRestore = require("agentic.session_restore")
+local ShellParse = require("agentic.utils.shell_parse")
 local ResponseBoundary = require("agentic.acp.response_boundary")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
@@ -2564,28 +2565,92 @@ function SessionManager:_on_request_permission(request, callback)
     end
 end
 
---- Hook record groups that reach the chat buffer. `failure` and `unrecognised`
---- are dropped for now; `verbatim` renders because a record that did not parse
---- is exactly the one that must not disappear.
-local RENDERED_HOOK_GROUPS = {
-    context = true,
-    verbatim = true,
-}
+--- A hook's command as a chat row: its script as a smart path when the
+--- command is a lone path, so `gf` opens it; the command as written otherwise.
+--- @param command string
+--- @return string
+local function hook_location(command)
+    local commands = ShellParse.extract_commands(command)
+    local only = commands and #commands == 1 and commands[1]
+    if
+        only
+        and #only.argv == 0
+        and #only.via == 0
+        and only.name:find("/", 1, true)
+    then
+        return FileSystem.to_smart_path(only.name)
+    end
+    return command
+end
+
+--- A duration for reading at a glance: milliseconds below a second, then
+--- seconds to one decimal.
+--- @param ms number
+--- @return string
+local function format_duration(ms)
+    if ms < 1000 then
+        return ("%d ms"):format(ms)
+    end
+    return ("%.1f s"):format(ms / 1000)
+end
+
+--- One block per tool call listing the hooks that passed on it, in the order
+--- they ran, each followed by how long it took. Passes that name no call
+--- share one block.
+--- @param records agentic.acp.HookRecord[] `passed` records
+--- @return agentic.ui.MessageWriter.HookBlock[]
+local function passed_blocks(records)
+    --- @type agentic.ui.MessageWriter.HookBlock[]
+    local blocks = {}
+    --- @type table<string, agentic.ui.MessageWriter.HookBlock>
+    local by_call = {}
+    for _, record in ipairs(records) do
+        local key = record.tool_call_id or ""
+        local block = by_call[key]
+        if not block then
+            block = {
+                body = {},
+                source = "passed",
+                tool_call_id = record.tool_call_id,
+                preformatted = true,
+            }
+            by_call[key] = block
+            table.insert(blocks, block)
+        end
+        local row = record.command and hook_location(record.command)
+            or record.script
+            or "hook"
+        if record.duration_ms then
+            row = row .. "  " .. format_duration(record.duration_ms)
+        end
+        table.insert(block.body, row)
+    end
+    return blocks
+end
 
 --- Write the hook activity recorded since the last drain to the chat buffer,
---- each record under the tool call it names.
+--- each record under the tool call it names. Hooks that passed follow the
+--- rest, gathered into one block per call.
 function SessionManager:_drain_hook_records()
     if self.destroyed or not self.session_id then
         return
     end
+    --- @type agentic.acp.HookRecord[]
+    local passes = {}
     for _, record in ipairs(self.agent:drain_hook_records(self.session_id)) do
-        if RENDERED_HOOK_GROUPS[record.group] then
-            self.message_writer:write_hook_block(
-                record.body,
-                record.script,
-                record.tool_call_id
-            )
+        if record.group == "passed" then
+            table.insert(passes, record)
+        else
+            self.message_writer:write_hook_block({
+                body = record.body,
+                source = record.script,
+                tool_call_id = record.tool_call_id,
+                failed = record.group == "failure",
+            })
         end
+    end
+    for _, block in ipairs(passed_blocks(passes)) do
+        self.message_writer:write_hook_block(block)
     end
 end
 

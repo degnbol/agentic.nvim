@@ -1,9 +1,7 @@
 # Plan: keep hook rows in the chat history
 Status: spec
 
-Requires:
-- `notes/PLAN-hooks_in_chat.md`, which adds `agentic.ui.MessageWriter.HookBlock` and `write_hook_block(block)`.
-- `notes/PLAN-load-file-first.md`. Today a `session/load` rebuilds `messages` from the provider's replay, which has no hook rows, and the first save after it deletes them from the file. With that plan, a load renders and keeps the file's messages, hook messages included.
+Requires `notes/PLAN-load-file-first.md`. Today a `session/load` rebuilds `messages` from the provider's replay, which has no hook rows, and the first save after it deletes them from the file. With that plan, a load renders and keeps the file's messages, hook messages included.
 
 ## Relevant files
 - `lua/agentic/ui/chat_history.lua` and `.test.lua` — `agentic.ui.ChatHistory.Message` alias, `add_message`, `prepend_restored_messages`
@@ -28,7 +26,7 @@ Hook rows are not sent to a new session (`prepend_restored_messages`). That sess
    --- @class agentic.ui.ChatHistory.HookMessage : agentic.ui.MessageWriter.HookBlock
    --- @field type "hook"
    ```
-2. `session_manager.lua`, `_drain_hook_records`: build one `HookMessage` per record. Pass it to `write_hook_block` and to `chat_history:add_message`. When it added at least one, call `self:_history_changed(self.chat_history)` once. A drain also runs outside a turn (local commands reach `_finalize_turn`, and a late tool call update can arrive), and nothing else saves after it.
+2. `session_manager.lua`, `_drain_hook_records`: build one `HookMessage` per block it writes (one per record, and one per call for the `passed` records it gathers). Pass it to `write_hook_block` and to `chat_history:add_message`. When it added at least one, call `self:_history_changed(self.chat_history)` once. A drain also runs outside a turn (local commands reach `_finalize_turn`, and a late tool call update can arrive), and nothing else saves after it.
 3. `session_restore.lua`, `replay_messages`: `elseif msg.type == "hook" then writer:write_hook_block(msg)`.
 4. `message_writer.lua`: delete the "Not persisted" paragraph from the `write_hook_block` docstring.
 5. Tests

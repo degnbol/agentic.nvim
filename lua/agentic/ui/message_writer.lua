@@ -1071,7 +1071,8 @@ end
 ---
 --- A body too short to fold — vim cannot close a one-line fold — is emitted as
 --- that line alone, with no fence: a visible ``` around one line is worse than
---- the line itself. `source` goes with it, having no foldtext to name.
+--- the line itself. `source` then has no info string to ride in and is left
+--- out of the lines.
 --- @param body string[] Already prose-wrapped
 --- @param source string|nil Where the body came from, for the foldtext to name
 --- @param section_break boolean Open with the empty `###` that closes the section of the block above
@@ -1111,49 +1112,66 @@ local function mark_char_count(bufnr, fence_row)
     vim.api.nvim_buf_set_extmark(bufnr, Folds.NS_CHAR_COUNT, fence_row, 0, {})
 end
 
+--- How a collapsed region is named and folded.
+--- @class agentic.ui.MessageWriter.CollapsedRegionOpts
+--- @field source? string Where the body came from
+--- @field open? boolean Leave the fold open
+--- @field count_chars? boolean The fold's foldtext counts the body's characters
+--- @field table_row_ends? integer[] 1-based indices into the body of lines to highlight as table row ends
+
 --- Stamp a collapsed region already in the buffer: `sign` on its first body
 --- row, the rail beneath, the whole body dimmed, and the fold closed when the
---- body has one.
+--- body has one, unless `opts.open`.
+---
+--- `opts.source` also goes at the end of the first body row, styled as the
+--- foldtext: the info string that carries it is concealed while the fold is
+--- open and absent from a one-row body. A closed fold hides the row, and its
+--- foldtext names the source instead.
 --- @param bufnr integer
 --- @param body_start integer 0-indexed first body row of the region
 --- @param body_end integer 0-indexed last body row of the region, inclusive
 --- @param sign string `sign_text` identifying the region
---- @param count_chars boolean The fold's foldtext counts the body's characters
---- @param table_row_ends integer[]|nil 1-based row offsets from `body_start` to highlight as table row ends
+--- @param opts agentic.ui.MessageWriter.CollapsedRegionOpts
 function MessageWriter:_decorate_collapsed_region(
     bufnr,
     body_start,
     body_end,
     sign,
-    count_chars,
-    table_row_ends
+    opts
 )
     render_collapsed_region(bufnr, body_start, body_end, sign)
     Renderer.set_dim_range(bufnr, body_start, body_end)
-    mark_table_row_ends(bufnr, body_start, table_row_ends or {})
+    mark_table_row_ends(bufnr, body_start, opts.table_row_ends or {})
+    if opts.source then
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            Renderer.NS_DECORATIONS,
+            body_start,
+            0,
+            {
+                virt_text = { { opts.source, Folds.FOLDTEXT_HL } },
+                virt_text_pos = "eol",
+            }
+        )
+    end
     -- Same measure `collapsed_region_lines` folds on: a one-row body has no
-    -- fence, and so no fold to close.
+    -- fence, and so no fold to set.
     if body_end > body_start then
-        if count_chars then
+        if opts.count_chars then
             mark_char_count(bufnr, body_start - 1)
         end
-        self:_queue_fold(body_start, false)
+        -- An open region is opened explicitly, not just left alone: a fold
+        -- created after a closed one inherits its closed state
+        -- (`_pending_fold_ops`).
+        self:_queue_fold(body_start, opts.open == true)
     end
 end
 
 --- Append a body as one collapsed region at the end of the chat buffer.
 --- @param body string[] Already prose-wrapped
 --- @param sign string `sign_text` identifying the region
---- @param source string|nil Where the body came from, for the foldtext to name
---- @param count_chars boolean The fold's foldtext counts the body's characters
---- @param table_row_ends integer[]|nil 1-based indices into `body` of lines to highlight as table row ends
-function MessageWriter:_write_collapsed_region(
-    body,
-    sign,
-    source,
-    count_chars,
-    table_row_ends
-)
+--- @param opts agentic.ui.MessageWriter.CollapsedRegionOpts
+function MessageWriter:_write_collapsed_region(body, sign, opts)
     if #body == 0 then
         return
     end
@@ -1162,7 +1180,7 @@ function MessageWriter:_write_collapsed_region(
     -- `write_message_chunk` documents: the fence below would otherwise keep the
     -- breadcrumb on the tool call for as long as the region is on screen.
     local lines, body_offset =
-        collapsed_region_lines(body, source, self._pending_section_break)
+        collapsed_region_lines(body, opts.source, self._pending_section_break)
     self._pending_section_break = false
 
     -- A collapsed region ends the prose run it follows, so the viewport stops
@@ -1190,8 +1208,7 @@ function MessageWriter:_write_collapsed_region(
             body_start,
             body_start + #body - 1,
             sign,
-            count_chars,
-            table_row_ends
+            opts
         )
     end)
 end
@@ -1273,17 +1290,10 @@ end
 --- still reproduces the append path's byte for byte.
 --- @param body string[] Already prose-wrapped
 --- @param sign string `sign_text` identifying the region
---- @param source string|nil Where the body came from, for the foldtext to name
 --- @param tool_call_id string The call the region belongs to
---- @param table_row_ends integer[]|nil 1-based indices into `body` of lines to highlight as table row ends
+--- @param opts agentic.ui.MessageWriter.CollapsedRegionOpts
 --- @return boolean placed False when the anchor is unusable and the caller should append instead
-function MessageWriter:_insert_collapsed_region(
-    body,
-    sign,
-    source,
-    tool_call_id,
-    table_row_ends
-)
+function MessageWriter:_insert_collapsed_region(body, sign, tool_call_id, opts)
     local tracker = self.tool_call_blocks[tool_call_id]
     if #body == 0 or not tracker then
         return false
@@ -1297,7 +1307,7 @@ function MessageWriter:_insert_collapsed_region(
     -- follows one that already closed the block's `###` section.
     local lines, body_offset = collapsed_region_lines(
         body,
-        source,
+        opts.source,
         tracker.trailing_insert_mark_id == nil
     )
 
@@ -1333,8 +1343,7 @@ function MessageWriter:_insert_collapsed_region(
             insert_row + body_offset,
             insert_row + body_offset + #body - 1,
             sign,
-            false,
-            table_row_ends
+            opts
         )
         return true
     end) == true
@@ -1365,48 +1374,60 @@ function MessageWriter:flush_thought_run()
     )
     -- Count characters: lines are a weak proxy for how much thinking happened,
     -- and no provider reports thinking tokens.
-    self:_write_collapsed_region(
-        body,
-        Glyphs.THINKING_SIGN,
-        nil,
-        true,
-        table_row_ends
-    )
+    self:_write_collapsed_region(body, Glyphs.THINKING_SIGN, {
+        count_chars = true,
+        table_row_ends = table_row_ends,
+    })
 end
 
---- Render one hook's activity as a collapsed region carrying the hook glyph and
---- the name of the script it came from.
+--- @class agentic.ui.MessageWriter.HookBlock
+--- @field body string[] The hook's output, unwrapped
+--- @field source? string What the block is named by: its script, or what its rows have in common
+--- @field tool_call_id? string The call the hook fired on
+--- @field failed? boolean The hook timed out or exited non-zero with an error
+--- @field preformatted? boolean Write each body row as it is rather than prose-wrapped, so a path in it stays whole for `gf`
+
+--- Render hook activity as a collapsed region carrying the hook glyph and
+--- `block.source`. A failed hook's region carries
+--- `Glyphs.HOOK_FAILED` and is left open, so its reason reads without `zo`.
 ---
 --- A region of its own rather than part of the tool call that triggered it: an
 --- injection is a separate input the model received. It carries no heading for
 --- the reason `queries/agentic/context.scm` documents — a titled heading over a
 --- fenced body pins the treesitter-context breadcrumb.
 ---
---- Placed under the tool call the hook fired on when `tool_call_id` names one
---- still in the buffer, so the record reads under that call rather than under
---- whatever has been written since the hook ran — nothing signals when a
---- provider's records arrive, so a record can arrive after later output. Appended at the end otherwise: a record from a turn-boundary event
+--- Placed under the tool call the hook fired on when `block.tool_call_id`
+--- names one still in the buffer, so the record reads under that call rather
+--- than under whatever has been written since the hook ran — nothing signals
+--- when a provider's records arrive, so a record can arrive after later
+--- output. Appended at the end otherwise: a record from a turn-boundary event
 --- names no call, and one whose block was never rendered has nothing to sit
 --- under.
 ---
 --- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
 --- session shows none of these. Missing work, not a rendering bug.
---- @param body string[] The hook's output, unwrapped
---- @param script string|nil Basename of the script it came from, if known
---- @param tool_call_id string|nil The call the hook fired on, if any
-function MessageWriter:write_hook_block(body, script, tool_call_id)
-    local wrapped, table_row_ends =
-        TextWrap.wrap_prose(body, self:_get_wrap_width())
-    local sign = Glyphs.HOOK .. " "
+--- @param block agentic.ui.MessageWriter.HookBlock
+function MessageWriter:write_hook_block(block)
+    local wrapped, table_row_ends = block.body, nil
+    if not block.preformatted then
+        wrapped, table_row_ends =
+            TextWrap.wrap_prose(block.body, self:_get_wrap_width())
+    end
+    local sign = (block.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK) .. " "
+    --- @type agentic.ui.MessageWriter.CollapsedRegionOpts
+    local opts = {
+        source = block.source,
+        open = block.failed,
+        table_row_ends = table_row_ends,
+    }
 
     if
-        tool_call_id
+        block.tool_call_id
         and self:_insert_collapsed_region(
             wrapped,
             sign,
-            script,
-            tool_call_id,
-            table_row_ends
+            block.tool_call_id,
+            opts
         )
     then
         return
@@ -1415,7 +1436,7 @@ function MessageWriter:write_hook_block(body, script, tool_call_id)
     -- Appending under a buffered thought run would put the region above the
     -- thinking it followed; an anchored one has no such ordering to keep.
     self:flush_thought_run()
-    self:_write_collapsed_region(wrapped, sign, script, false, table_row_ends)
+    self:_write_collapsed_region(wrapped, sign, opts)
 end
 
 --- The identity sign for a prompt heading row: the command's own glyph when the

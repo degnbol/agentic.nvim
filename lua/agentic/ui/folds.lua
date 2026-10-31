@@ -481,6 +481,9 @@ end
 
 local FOLDTEXT_LEAD, FOLDTEXT_TAIL = "    ··· ", " ···"
 
+--- Highlight group of the foldtext.
+M.FOLDTEXT_HL = "Comment"
+
 --- 'foldtext' for the chat buffer: a line-count summary styled as Comment. A
 --- fold spans `code_fence_content` nodes, so its line count is the rows of
 --- content `zo` shows: a joined fold (`M.levels`) leaves out the two fence
@@ -532,7 +535,7 @@ function M.foldtext()
             .. " chars"
     end
 
-    return { { FOLDTEXT_LEAD .. summary .. FOLDTEXT_TAIL, "Comment" } }
+    return { { FOLDTEXT_LEAD .. summary .. FOLDTEXT_TAIL, M.FOLDTEXT_HL } }
 end
 
 return M

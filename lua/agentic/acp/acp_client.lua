@@ -150,15 +150,18 @@ end
 
 --- @alias agentic.acp.HookRecordGroup
 --- | "context" context a hook delivered to the model
---- | "unrecognised" output in a schema we do not know, surfaced rather than dropped
---- | "failure" timed out, or exited non-zero with real stderr
+--- | "passed" ran to completion with nothing to report; the body is empty
+--- | "stray" stdout the model did not see
+--- | "failure" timed out, or exited non-zero with an error
 --- | "verbatim" the provider's own record of it did not parse; the body is that record
 
 --- Hook activity a provider recorded outside the ACP feed.
 --- @class agentic.acp.HookRecord
 --- @field group agentic.acp.HookRecordGroup
 --- @field body string[]
---- @field script? string Basename of the hook command
+--- @field script? string Basename of the hook command, else the hook's configured name
+--- @field command? string The hook's invocation, when the record is of one run
+--- @field duration_ms? number How long that run took
 --- @field tool_call_id? string Tool call the record belongs to; may be an id that names no tool call
 
 --- Hook records of the session that arrived since the last call.

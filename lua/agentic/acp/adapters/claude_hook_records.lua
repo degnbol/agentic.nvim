@@ -9,31 +9,35 @@ local M = {}
 
 --- @alias agentic.acp.ClaudeHookRecordGroup
 --- | agentic.acp.HookRecordGroup
---- | "silent" ran with nothing to show; carried only so its `command` can attribute a later record
+--- | "silent" stopped by the turn's cancellation, or skipped; carried only so its `command` can attribute a later record
 
 --- @class agentic.acp.ClaudeHookRecord : agentic.acp.HookRecord
 --- @field group agentic.acp.ClaudeHookRecordGroup
 --- @field uuid? string
 --- @field parent_uuid? string
 --- @field timestamp? string ISO-8601 UTC, fixed width so string order is time order
---- @field command? string the hook script's invocation
+--- @field hook_name? string the hook's configured name, e.g. `PreToolUse:Bash`
 --- @field tool_call_id? string what the hook fired on, verbatim from `toolUseID`. Only a `toolu_`-prefixed value is a tool call id: an event with no call to name puts `"SessionStart"`, `hook-<uuid>` or a bare message uuid in the same slot
 
---- Keys of `stdout.hookSpecificOutput` whose meaning is already accounted for:
---- `permissionDecision` gates a call, `additionalContext` is repeated verbatim
---- as its own `hook_additional_context` record, `updatedInput` rewrites the
---- call. Anything else is unrecognised output.
-local KNOWN_OUTPUT_KEYS = {
-    "permissionDecision",
-    "additionalContext",
-    "updatedInput",
+--- Events whose plain-text stdout the model receives as context (hooks docs
+--- § "Exit code 0"). On any other event a successful hook's stdout reaches
+--- no one.
+local STDOUT_CONTEXT_EVENTS = {
+    SessionStart = true,
+    UserPromptSubmit = true,
+    UserPromptExpansion = true,
+    PostModelSwitch = true,
 }
+
+--- Prefix the SDK puts on the stderr of a hook that exited non-zero. Only a
+--- `hook_non_blocking_error` with this prefix has the process's own `exitCode`.
+--- Version-coupled to the CLI — recheck the wording on a bump.
+local FAILED_PREFIX = "Failed with non-blocking status code: "
 
 --- The SDK's stand-in for a non-zero exit that wrote no stderr. Exiting 1 to
 --- mean "nothing to say" is the common hook idiom, so a record carrying only
---- this literal is not a failure worth raising. Version-coupled to the CLI —
---- recheck the wording on a bump.
-local NO_STDERR = "Failed with non-blocking status code: No stderr output"
+--- this literal is a pass, not a failure.
+local NO_STDERR = FAILED_PREFIX .. "No stderr output"
 
 --- @param content string|string[]|nil
 --- @return string[]
@@ -51,28 +55,26 @@ local function body_lines(content)
     return vim.split(text, "\n")
 end
 
---- Whether a completed hook's stdout is output we already account for
---- elsewhere.
---- @param stdout string|nil
---- @return boolean
-local function is_known_output(stdout)
-    if type(stdout) ~= "string" or stdout == "" then
-        return false
+--- Body lines saying why a hook run failed: the timeout, or the exit code
+--- followed by the stderr. The script is not named.
+--- @param attachment table `hook_non_blocking_error` or a timed-out `hook_cancelled`
+--- @return string[]
+local function failure_body(attachment)
+    if attachment.type == "hook_cancelled" then
+        return { ("timed out after %g s"):format(attachment.timeoutMs / 1000) }
     end
-    local ok, parsed = pcall(vim.json.decode, stdout)
-    if not ok or type(parsed) ~= "table" then
-        return false
+
+    local stderr = type(attachment.stderr) == "string" and attachment.stderr
+        or ""
+    if not vim.startswith(stderr, FAILED_PREFIX) then
+        local lines = body_lines(stderr)
+        return #lines > 0 and lines or { "failed with no stderr" }
     end
-    local output = parsed.hookSpecificOutput
-    if type(output) ~= "table" then
-        return false
+    local lines = body_lines(stderr:sub(#FAILED_PREFIX + 1))
+    if type(attachment.exitCode) == "number" then
+        table.insert(lines, 1, ("exited %d"):format(attachment.exitCode))
     end
-    for _, key in ipairs(KNOWN_OUTPUT_KEYS) do
-        if output[key] ~= nil then
-            return true
-        end
-    end
-    return false
+    return lines
 end
 
 --- @param attachment table
@@ -86,23 +88,30 @@ local function classify(attachment)
     end
 
     if kind == "hook_success" then
-        if is_known_output(attachment.stdout) then
-            return "silent", {}
+        local body = body_lines(attachment.content)
+        if #body == 0 then
+            return "passed", body
         end
-        return "unrecognised", body_lines(attachment.content)
+        if STDOUT_CONTEXT_EVENTS[attachment.hookEvent] then
+            return "context", body
+        end
+        return "stray", body
     end
 
     if kind == "hook_non_blocking_error" then
         if attachment.stderr == NO_STDERR then
-            return "silent", {}
+            return "passed", {}
         end
-        return "failure", body_lines(attachment.stderr)
+        return "failure", failure_body(attachment)
     end
 
     if kind == "hook_cancelled" then
-        local seconds = math.floor((attachment.timeoutMs or 0) / 1000)
-        return "failure",
-            { ("no output — the hook timed out after %d s"):format(seconds) }
+        -- Not timed out: the turn was cancelled while the hook ran, or the
+        -- hook was skipped inside an agent a hook spawned (no `timedOut`).
+        if attachment.timedOut ~= true then
+            return "silent", {}
+        end
+        return "failure", failure_body(attachment)
     end
 
     return nil, {}
@@ -136,6 +145,8 @@ local function attachment_record(entry)
         parent_uuid = entry.parentUuid,
         timestamp = entry.timestamp,
         command = attachment.command,
+        hook_name = attachment.hookName,
+        duration_ms = attachment.durationMs,
         tool_call_id = attachment.toolUseID,
     }
     return record
