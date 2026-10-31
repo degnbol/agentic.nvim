@@ -1,6 +1,7 @@
 local ClaudeTranscriptRecords =
     require("agentic.acp.adapters.claude_transcript_records")
 local FileSystem = require("agentic.utils.file_system")
+local List = require("agentic.utils.list")
 local Logger = require("agentic.utils.logger")
 
 --- The link of a chain with no known end: it gives what is under it no place.
@@ -28,7 +29,7 @@ local NO_PLACE = {
 --- @field _offset integer bytes of `_path` already drained
 --- @field _catching_up boolean True until the first successful read of a newly discovered path; that read is the only one whose bytes can predate this reader
 --- @field _links table<string, agentic.acp.TranscriptLink> entry uuid -> the link ending its chain, shared by every entry on that chain; `NO_PLACE` for a chain with no known end
---- @field _commands table<string, string> entry uuid -> the hook command it ran
+--- @field _context_runs agentic.acp.ClaudeHookRecord[] `context_run` records no context has paired with yet, oldest first
 --- @field _notified boolean
 local ClaudeTranscriptReader = {}
 ClaudeTranscriptReader.__index = ClaudeTranscriptReader
@@ -41,7 +42,7 @@ function ClaudeTranscriptReader:new()
         _offset = 0,
         _catching_up = true,
         _links = {},
-        _commands = {},
+        _context_runs = {},
         _notified = false,
     }, self)
 end
@@ -52,6 +53,7 @@ function ClaudeTranscriptReader:set_transcript_path(path)
     self._path = path
     self._offset = 0
     self._catching_up = true
+    self._context_runs = {}
 end
 
 --- @return boolean
@@ -75,12 +77,9 @@ function ClaudeTranscriptReader:_is_current(record)
     return not self._catching_up
 end
 
---- Record an entry's link, and the hook command it ran.
+--- Record an entry's link.
 --- @param link agentic.acp.TranscriptLink
 function ClaudeTranscriptReader:_index(link)
-    if link.command then
-        self._commands[link.uuid] = link.command
-    end
     if link.ends_chain then
         self._links[link.uuid] = link
         return
@@ -97,9 +96,8 @@ end
 
 --- Read the records appended since the last drain.
 ---
---- Hook records whose group is `silent` are consumed rather than returned: they
---- have nothing to show, and exist here only to name the script a later
---- `context` record came from.
+--- Hook records whose group is `context_run` are consumed rather than
+--- returned: the `context` record they pair with shows the same run.
 --- @return agentic.acp.SideRecord[] records in transcript order
 function ClaudeTranscriptReader:drain()
     if not self._path then
@@ -149,19 +147,31 @@ function ClaudeTranscriptReader:_read_line(line)
     end
 
     local link = ClaudeTranscriptRecords.link(entry)
-    -- Before the currency test: a record can belong to a prompt or a hook run
-    -- written just before this reader started.
+    -- Before the currency test: a record can belong to a prompt written just
+    -- before this reader started.
     if link then
         self:_index(link)
     end
     local place = link and self._links[link.uuid] or NO_PLACE
-    local parent_uuid = link and link.parent_uuid
 
+    --- @type (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord)[]
+    local entry_records = {}
     for _, record in ipairs(ClaudeTranscriptRecords.records(entry)) do
+        if record.kind == "hook" and record.group == "context_run" then
+            table.insert(self._context_runs, record)
+        else
+            table.insert(entry_records, record)
+        end
+    end
+    -- Also before the currency test: a context written before this reader
+    -- started consumes its run.
+    self:_pair_contexts(entry_records)
+
+    for _, record in ipairs(entry_records) do
         if self:_is_current(record) then
             local side
             if record.kind == "hook" then
-                side = self:_hook_side_record(record, place, parent_uuid)
+                side = self:_hook_side_record(record, place)
             else
                 side = self:_loaded_file_side_record(record, place)
             end
@@ -171,6 +181,50 @@ function ClaudeTranscriptReader:_read_line(line)
         end
     end
     return records
+end
+
+--- Give each `context` record without a command the `command`,
+--- `duration_ms` and `hook_name` of the run in `_context_runs` that produced
+--- it, and remove that run from `_context_runs`. The record keeps its own
+--- body: it is what the model received.
+--- @param records (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord)[] one entry's records. Paired ones are updated in place
+function ClaudeTranscriptReader:_pair_contexts(records)
+    -- A context's text equals its run's `additionalContext` unless the CLI
+    -- replaced a large one with a pointer, and a SessionStart context's
+    -- `toolUseID` differs from its run's. So every record first tries a run
+    -- with the same text, and only then does a record still unpaired take a
+    -- run with the same tool call id.
+    --- @type agentic.acp.ClaudeHookRecord[]
+    local contexts = vim.tbl_filter(function(record)
+        return record.kind == "hook"
+            and record.group == "context"
+            and not record.command
+    end, records)
+
+    --- @type table<agentic.acp.ClaudeHookRecord, agentic.acp.ClaudeHookRecord>
+    local runs = {}
+    for _, context in ipairs(contexts) do
+        local function same_text(run)
+            return run.hook_event == context.hook_event
+                and vim.deep_equal(run.body, context.body)
+        end
+        runs[context] = List.take_first(self._context_runs, function(run)
+            return same_text(run) and run.tool_call_id == context.tool_call_id
+        end) or List.take_first(self._context_runs, same_text)
+    end
+    for _, context in ipairs(contexts) do
+        runs[context] = runs[context]
+            or List.take_first(self._context_runs, function(run)
+                return run.hook_event == context.hook_event
+                    and run.tool_call_id == context.tool_call_id
+            end)
+        local run = runs[context]
+        if run then
+            context.command = run.command
+            context.duration_ms = run.duration_ms
+            context.hook_name = run.hook_name
+        end
+    end
 end
 
 --- @param id string|nil
@@ -192,20 +246,35 @@ local function anchor_of(place)
     return anchor
 end
 
---- A hook record as a side record, named after its script. One that names no
---- tool call takes the anchor of its chain instead. Sets those fields on
---- `record` itself.
+--- The anchor of a SessionStart record. Its chain ends at no prompt: the hook
+--- ran before the session's first one, so the record is read after the
+--- prompt of the turn it is drained in, or after the compaction that fired it.
+--- @param hook_name string|nil
+--- @return agentic.acp.Anchor
+local function session_start_anchor(hook_name)
+    local compact = hook_name == "SessionStart:compact"
+    --- @type agentic.acp.Anchor
+    local anchor = {
+        after_prompt = not compact or nil,
+        after_compaction = compact or nil,
+    }
+    return anchor
+end
+
+--- A hook record as a side record, named after its command's basename, else
+--- its hook. One that names no tool call takes an anchor instead: a
+--- SessionStart record its own, any other the anchor of its chain. Sets those
+--- fields on `record` itself.
 --- @param record agentic.acp.ClaudeHookRecord
 --- @param place agentic.acp.TranscriptLink The link ending the record's chain
---- @param parent_uuid string|nil
---- @return agentic.acp.SideRecord|nil side nil for a `silent` record
-function ClaudeTranscriptReader:_hook_side_record(record, place, parent_uuid)
-    if record.group == "silent" then
-        return nil
-    end
-    record.script = self:_script_of(record, parent_uuid)
+--- @return agentic.acp.SideRecord side
+function ClaudeTranscriptReader:_hook_side_record(record, place)
+    record.script = record.command and vim.fs.basename(record.command)
+        or record.hook_name
     if not is_tool_call_id(record.tool_call_id) then
-        local anchor = anchor_of(place)
+        local anchor = record.hook_event == "SessionStart"
+                and session_start_anchor(record.hook_name)
+            or anchor_of(place)
         record.tool_call_id = anchor.tool_call_id
         record.after_prompt = anchor.after_prompt
         record.after_compaction = anchor.after_compaction
@@ -225,22 +294,6 @@ function ClaudeTranscriptReader:_loaded_file_side_record(record, place)
     local loaded_file = anchor_of(place) --[[@as agentic.acp.LoadedFile]]
     loaded_file.path = record.path
     return { kind = "loaded_file", loaded_file = loaded_file }
-end
-
---- Basename of the script a record's body came from, else the hook's
---- configured name, nil when neither is recorded. A record that ran a script
---- names its own; injected context points at its producer through
---- `parentUuid`. `UserPromptSubmit` context records point at no producer, so
---- only their hook name is left.
---- @param record agentic.acp.ClaudeHookRecord
---- @param parent_uuid string|nil `parentUuid` of the record's entry
---- @return string|nil
-function ClaudeTranscriptReader:_script_of(record, parent_uuid)
-    local command = record.command
-    if not command and parent_uuid then
-        command = self._commands[parent_uuid]
-    end
-    return command and vim.fs.basename(command) or record.hook_name
 end
 
 --- Tell the user side records are lost, once per reader — a transcript that

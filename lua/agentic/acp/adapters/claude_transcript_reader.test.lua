@@ -43,29 +43,6 @@ describe("ClaudeTranscriptReader", function()
     end
 
     --- @param uuid string
-    --- @param command string
-    --- @param timestamp string|nil
-    --- @return table
-    local function ran(uuid, command, timestamp)
-        return {
-            type = "attachment",
-            uuid = uuid,
-            timestamp = timestamp or AFTER,
-            attachment = {
-                type = "hook_success",
-                hookEvent = "PreToolUse",
-                command = command,
-                content = "",
-                stdout = vim.json.encode({
-                    hookSpecificOutput = { permissionDecision = "allow" },
-                }),
-                stderr = "",
-                exitCode = 0,
-            },
-        }
-    end
-
-    --- @param uuid string
     --- @param parent_uuid string|nil
     --- @param text string
     --- @param timestamp string|nil
@@ -82,6 +59,47 @@ describe("ClaudeTranscriptReader", function()
                 content = { text },
             },
         }
+    end
+
+    --- A hook run that delivered `context` as JSON `additionalContext`.
+    --- @param uuid string
+    --- @param command string
+    --- @param context string
+    --- @param attachment table|nil fields to override on the attachment
+    --- @return table
+    local function json_run(uuid, command, context, attachment)
+        return {
+            type = "attachment",
+            uuid = uuid,
+            timestamp = AFTER,
+            attachment = vim.tbl_extend("force", {
+                type = "hook_success",
+                hookEvent = "PreToolUse",
+                command = command,
+                content = "",
+                stdout = vim.json.encode({
+                    hookSpecificOutput = { additionalContext = context },
+                }),
+                stderr = "",
+                exitCode = 0,
+            }, attachment or {}),
+        }
+    end
+
+    --- A `hook_additional_context` entry with one `content` element per text.
+    --- @param uuid string
+    --- @param texts string[]
+    --- @param attachment table|nil fields to override on the attachment
+    --- @return table
+    local function merged(uuid, texts, attachment)
+        local entry = injected(uuid, nil, "")
+        entry.attachment = vim.tbl_extend(
+            "force",
+            entry.attachment,
+            { content = texts },
+            attachment or {}
+        )
+        return entry
     end
 
     --- The hook records among drained side records, in order.
@@ -229,26 +247,7 @@ describe("ClaudeTranscriptReader", function()
         assert.same({ "second" }, records[1].body)
     end)
 
-    it(
-        "returns a hook run as passed and names the context it produced",
-        function()
-            local reader = reader_at(transcript)
-            append({
-                ran("h-1", "/hooks/shell-guard.sh"),
-                injected("c-1", "h-1", "guard says hi"),
-            })
-
-            local records = hooks(reader:drain())
-
-            assert.equal(2, #records)
-            assert.equal("passed", records[1].group)
-            assert.equal("shell-guard.sh", records[1].script)
-            assert.equal("context", records[2].group)
-            assert.equal("shell-guard.sh", records[2].script)
-        end
-    )
-
-    it("consumes a run the turn's cancellation stopped", function()
+    it("drops a run the turn's cancellation stopped", function()
         local reader = reader_at(transcript)
         append({
             {
@@ -262,34 +261,179 @@ describe("ClaudeTranscriptReader", function()
                     timedOut = false,
                 },
             },
-            injected("c-1", "h-1", "guard says hi"),
         })
 
-        local records = hooks(reader:drain())
-
-        assert.equal(1, #records)
-        assert.equal("shell-guard.sh", records[1].script)
+        assert.same({}, reader:drain())
     end)
 
-    it("attributes context to a run that predates construction", function()
-        append({ ran("h-1", "/hooks/shell-guard.sh", BEFORE) })
-        local reader = reader_at(transcript)
-        append({ injected("c-1", "h-1", "guard says hi") })
+    describe("context pairing", function()
+        it("returns no record for a JSON context run", function()
+            local reader = reader_at(transcript)
+            append({ json_run("h-1", "/hooks/guard.sh", "guard says hi") })
 
-        local records = hooks(reader:drain())
+            assert.same({}, reader:drain())
+        end)
 
-        assert.equal("shell-guard.sh", records[1].script)
-    end)
+        it("names and times a context after its run", function()
+            local reader = reader_at(transcript)
+            append({
+                json_run("h-1", "/hooks/guard.sh", "guard says hi", {
+                    toolUseID = "toolu_1",
+                    hookName = "PreToolUse:Bash",
+                    durationMs = 28,
+                }),
+                merged("c-1", { "guard says hi" }, { toolUseID = "toolu_1" }),
+            })
 
-    it("attributes context to a run drained earlier", function()
-        local reader = reader_at(transcript)
-        append({ ran("h-1", "/hooks/shell-guard.sh") })
-        reader:drain()
+            local records = hooks(reader:drain())
 
-        append({ injected("c-1", "h-1", "guard says hi") })
-        local records = hooks(reader:drain())
+            assert.equal(1, #records)
+            assert.equal("context", records[1].group)
+            assert.equal("guard.sh", records[1].script)
+            assert.equal(28, records[1].duration_ms)
+        end)
 
-        assert.equal("shell-guard.sh", records[1].script)
+        it("pairs by text when the ids differ", function()
+            local reader = reader_at(transcript)
+            local start = { hookEvent = "SessionStart" }
+            append({
+                json_run(
+                    "h-1",
+                    "/hooks/a.sh",
+                    "from a",
+                    vim.tbl_extend("force", start, { toolUseID = "3f2a-uuid" })
+                ),
+                json_run(
+                    "h-2",
+                    "/hooks/b.sh",
+                    "from b",
+                    vim.tbl_extend("force", start, { toolUseID = "3f2a-uuid" })
+                ),
+                merged(
+                    "c-1",
+                    { "from b", "from a" },
+                    vim.tbl_extend(
+                        "force",
+                        start,
+                        { toolUseID = "SessionStart" }
+                    )
+                ),
+            })
+
+            local scripts = vim.tbl_map(function(record)
+                return record.script
+            end, hooks(reader:drain()))
+
+            assert.same({ "b.sh", "a.sh" }, scripts)
+        end)
+
+        it("pairs by event and id when the text differs", function()
+            local reader = reader_at(transcript)
+            local post = { hookEvent = "PostToolUse", toolUseID = "toolu_1" }
+            append({
+                json_run("h-1", "/hooks/big.sh", "a large context", post),
+                merged("c-1", { "<persisted-output>…" }, post),
+            })
+
+            assert.equal("big.sh", hooks(reader:drain())[1].script)
+        end)
+
+        it("leaves a run of another event unpaired", function()
+            local reader = reader_at(transcript)
+            append({
+                json_run("h-1", "/hooks/guard.sh", "same", {
+                    hookEvent = "SessionStart",
+                }),
+                merged("c-1", { "same" }),
+            })
+
+            assert.is_nil(hooks(reader:drain())[1].script)
+        end)
+
+        it("forgets unpaired runs on a new transcript path", function()
+            local reader = reader_at(transcript)
+            append({ json_run("h-1", "/hooks/guard.sh", "guard says hi") })
+            reader:drain()
+
+            local other = vim.fs.joinpath(dir, "other.jsonl")
+            transcript = other
+            append({ merged("c-1", { "guard says hi" }) })
+            reader:set_transcript_path(other)
+
+            assert.is_nil(hooks(reader:drain())[1].script)
+        end)
+
+        it("pairs two runs with the same text in order", function()
+            local reader = reader_at(transcript)
+            append({
+                json_run("h-1", "/hooks/guard.sh", "same", { durationMs = 1 }),
+                json_run("h-2", "/hooks/guard.sh", "same", { durationMs = 2 }),
+                merged("c-1", { "same" }),
+                merged("c-2", { "same" }),
+            })
+
+            local durations = vim.tbl_map(function(record)
+                return record.duration_ms
+            end, hooks(reader:drain()))
+
+            assert.same({ 1, 2 }, durations)
+        end)
+
+        it("takes text matches before the id fallback", function()
+            local reader = reader_at(transcript)
+            local post = { hookEvent = "PostToolUse", toolUseID = "toolu_1" }
+            append({
+                json_run("h-1", "/hooks/a.sh", "from a", post),
+                json_run("h-2", "/hooks/big.sh", "a large context", post),
+                json_run("h-3", "/hooks/c.sh", "from c", post),
+                merged(
+                    "c-1",
+                    { "<persisted-output>…", "from a", "from c" },
+                    post
+                ),
+            })
+
+            local scripts = vim.tbl_map(function(record)
+                return record.script
+            end, hooks(reader:drain()))
+
+            assert.same({ "big.sh", "a.sh", "c.sh" }, scripts)
+        end)
+
+        it("pairs a run in one drain with a context in the next", function()
+            local reader = reader_at(transcript)
+            append({ json_run("h-1", "/hooks/guard.sh", "guard says hi") })
+            reader:drain()
+
+            append({ merged("c-1", { "guard says hi" }) })
+
+            assert.equal("guard.sh", hooks(reader:drain())[1].script)
+        end)
+
+        it("pairs a context with a run that predates the reader", function()
+            local run = json_run("h-1", "/hooks/guard.sh", "guard says hi")
+            run.timestamp = BEFORE
+            append({ run })
+            local reader = reader_at(transcript)
+            append({ merged("c-1", { "guard says hi" }) })
+
+            assert.equal("guard.sh", hooks(reader:drain())[1].script)
+        end)
+
+        it("lets a context before the reader consume its run", function()
+            local run = json_run("h-1", "/hooks/guard.sh", "guard says hi")
+            local old = merged("c-0", { "guard says hi" })
+            run.timestamp = BEFORE
+            old.timestamp = BEFORE
+            append({ run, old })
+            local reader = reader_at(transcript)
+            append({ merged("c-1", { "guard says hi" }) })
+
+            local records = hooks(reader:drain())
+
+            assert.equal(1, #records)
+            assert.is_nil(records[1].script)
+        end)
     end)
 
     it("names stop hook feedback after its own command", function()
@@ -573,6 +717,87 @@ describe("ClaudeTranscriptReader", function()
 
             assert.equal("toolu_1", record.tool_call_id)
             assert.is_nil(record.after_prompt)
+        end)
+
+        it("places a SessionStart record after the prompt", function()
+            local reader = reader_at(transcript)
+            local start = { hookEvent = "SessionStart" }
+            append({
+                json_run(
+                    "h-1",
+                    "/hooks/guard.sh",
+                    "ctx",
+                    vim.tbl_extend("force", start, {
+                        hookName = "SessionStart:startup",
+                    })
+                ),
+                merged("c-1", { "ctx" }, start),
+            })
+
+            local record = hooks(reader:drain())[1]
+
+            assert.is_true(record.after_prompt)
+            assert.is_nil(record.after_compaction)
+        end)
+
+        it(
+            "places a SessionStart:compact record after the compaction",
+            function()
+                local reader = reader_at(transcript)
+                local start = { hookEvent = "SessionStart" }
+                append({
+                    json_run(
+                        "h-1",
+                        "/hooks/guard.sh",
+                        "ctx",
+                        vim.tbl_extend("force", start, {
+                            hookName = "SessionStart:compact",
+                        })
+                    ),
+                    merged("c-1", { "ctx" }, start),
+                })
+
+                local record = hooks(reader:drain())[1]
+
+                assert.is_true(record.after_compaction)
+                assert.is_nil(record.after_prompt)
+            end
+        )
+
+        it(
+            "places an unpaired SessionStart context after the prompt",
+            function()
+                local reader = reader_at(transcript)
+                append({
+                    merged("c-1", { "ctx" }, {
+                        hookEvent = "SessionStart",
+                        hookName = "SessionStart",
+                    }),
+                })
+
+                assert.is_true(hooks(reader:drain())[1].after_prompt)
+            end
+        )
+
+        it("places a SessionStart failure after the prompt", function()
+            local reader = reader_at(transcript)
+            append({
+                transcript_entry("attachment", "e-1", nil, {
+                    attachment = {
+                        type = "hook_non_blocking_error",
+                        hookEvent = "SessionStart",
+                        hookName = "SessionStart:startup",
+                        command = "/hooks/init.sh",
+                        stderr = "boom",
+                        exitCode = 2,
+                    },
+                }),
+            })
+
+            local record = hooks(reader:drain())[1]
+
+            assert.equal("failure", record.group)
+            assert.is_true(record.after_prompt)
         end)
 
         it("leaves an @ file in Stop hook feedback unplaced", function()

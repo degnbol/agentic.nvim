@@ -123,6 +123,43 @@ describe("ClaudeTranscriptRecords", function()
             assert.is_nil(record.tool_call_id)
         end)
 
+        it("gives one record per hook whose context was merged", function()
+            local records = decode(line({
+                type = "hook_additional_context",
+                content = { "from the first hook", "from the second\nhook" },
+                hookName = "SessionStart",
+                hookEvent = "SessionStart",
+                toolUseID = "SessionStart",
+            }))
+
+            assert.equal(2, #records)
+            assert.same({ "from the first hook" }, records[1].body)
+            assert.same({ "from the second", "hook" }, records[2].body)
+            assert.equal("SessionStart", records[2].hook_event)
+            assert.equal("SessionStart", records[2].tool_call_id)
+        end)
+
+        it("reads string content as one element", function()
+            local record = decode_one(line({
+                type = "hook_additional_context",
+                content = "one\ntwo",
+                hookEvent = "PostToolUse",
+            }))
+
+            assert.same({ "one", "two" }, record.body)
+        end)
+
+        it("gives none for empty content", function()
+            assert.same(
+                {},
+                decode(line({
+                    type = "hook_additional_context",
+                    content = {},
+                    hookEvent = "PostToolUse",
+                }))
+            )
+        end)
+
         it("leaves JSON-looking content as text", function()
             local record = decode_one(line({
                 type = "hook_additional_context",
@@ -141,6 +178,49 @@ describe("ClaudeTranscriptRecords", function()
 
             assert.equal("passed", record.group)
             assert.same({}, record.body)
+        end)
+
+        it("carries the context a JSON run delivers as its body", function()
+            local record = decode_one(line(success({
+                hookEventName = "PreToolUse",
+                additionalContext = "Reminder: one\ntwo",
+            })))
+
+            assert.equal("context_run", record.group)
+            assert.same({ "Reminder: one", "two" }, record.body)
+            assert.equal("PreToolUse", record.hook_event)
+            assert.equal("/hooks/shell-guard.sh", record.command)
+        end)
+
+        it("passes on invalid JSON stdout", function()
+            local record =
+                decode_one(line(success(nil, { stdout = "{ truncated" })))
+
+            assert.equal("passed", record.group)
+        end)
+
+        it("passes on JSON whose context is not a string", function()
+            local record = decode_one(line(success({ additionalContext = 42 })))
+
+            assert.equal("passed", record.group)
+        end)
+
+        it("passes on JSON whose context is empty", function()
+            local record = decode_one(line(success({ additionalContext = "" })))
+
+            assert.equal("passed", record.group)
+        end)
+
+        it("reads content over a JSON run's context", function()
+            local record = decode_one(line(success({
+                additionalContext = "ignored",
+            }, {
+                hookEvent = "SessionStart",
+                content = "shown",
+            })))
+
+            assert.equal("context", record.group)
+            assert.same({ "shown" }, record.body)
         end)
 
         it("treats content on UserPromptSubmit as context", function()
@@ -237,14 +317,15 @@ describe("ClaudeTranscriptRecords", function()
             assert.same({ "timed out after 600 s" }, record.body)
         end)
 
-        it("is silent for a hook skipped inside a hook's agent", function()
-            local record = decode_one(line({
-                type = "hook_cancelled",
-                hookEvent = "PreToolUse",
-                hookName = "PreToolUse:Bash",
-            }))
-
-            assert.equal("silent", record.group)
+        it("gives none for a hook skipped inside a hook's agent", function()
+            assert.same(
+                {},
+                decode(line({
+                    type = "hook_cancelled",
+                    hookEvent = "PreToolUse",
+                    hookName = "PreToolUse:Bash",
+                }))
+            )
         end)
 
         it("says a failure wrote no stderr when it has none", function()
@@ -269,17 +350,21 @@ describe("ClaudeTranscriptRecords", function()
             assert.same({ "boom" }, record.body)
         end)
 
-        it("is silent for a hook stopped by the turn's cancellation", function()
-            local record = decode_one(line({
-                type = "hook_cancelled",
-                hookEvent = "PreToolUse",
-                command = "/hooks/permission_hook.sh",
-                timedOut = false,
-                durationMs = 1200,
-            }))
-
-            assert.equal("silent", record.group)
-        end)
+        it(
+            "gives none for a hook stopped by the turn's cancellation",
+            function()
+                assert.same(
+                    {},
+                    decode(line({
+                        type = "hook_cancelled",
+                        hookEvent = "PreToolUse",
+                        command = "/hooks/permission_hook.sh",
+                        timedOut = false,
+                        durationMs = 1200,
+                    }))
+                )
+            end
+        )
     end)
 
     describe("stop hook feedback", function()
@@ -531,20 +616,6 @@ describe("ClaudeTranscriptRecords", function()
 
             assert.is_false(link.ends_chain)
             assert.equal("u-0", link.parent_uuid)
-        end)
-
-        it("carries a hook attachment's command", function()
-            local link = link_of({
-                type = "attachment",
-                attachment = {
-                    type = "hook_success",
-                    hookEvent = "PreToolUse",
-                    command = "/hooks/guard.sh",
-                },
-            })
-
-            assert.is_false(link.ends_chain)
-            assert.equal("/hooks/guard.sh", link.command)
         end)
 
         it("leaves a null parent unset", function()
