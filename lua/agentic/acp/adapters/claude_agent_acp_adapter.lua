@@ -3,8 +3,8 @@ local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
-local ClaudeHookRecordReader =
-    require("agentic.acp.adapters.claude_hook_record_reader")
+local ClaudeTranscriptReader =
+    require("agentic.acp.adapters.claude_transcript_reader")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local SkillPath = require("agentic.utils.skill_path")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -82,7 +82,7 @@ end
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 --- @field provider_config agentic.acp.ClaudeProviderConfig
 --- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
---- @field _hook_readers table<string, agentic.acp.ClaudeHookRecordReader> Session id -> reader of the session's transcript, from the session's opening until `unsubscribe`
+--- @field _transcript_readers table<string, agentic.acp.ClaudeTranscriptReader> Session id -> reader of the session's transcript, from the session's opening until `unsubscribe`
 --- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
@@ -116,7 +116,7 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
 
     local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
     client._session_dirs = {}
-    client._hook_readers = {}
+    client._transcript_readers = {}
     -- Resolved here: tool calls are built in the transport's fast callback,
     -- where reading `vim.env` is forbidden.
     client._exec_shell = ClaudeUtils.exec_shell(config.env)
@@ -163,7 +163,7 @@ function ClaudeAgentACPAdapter:session_meta(additional_dirs)
     }
 end
 
---- Creates a session and opens a hook record reader for it.
+--- Creates a session and opens a transcript reader for it.
 --- @param cwd string
 --- @param handlers agentic.acp.ClientHandlers
 --- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
@@ -171,17 +171,17 @@ function ClaudeAgentACPAdapter:create_session(cwd, handlers, callback)
     -- Built before the request: the reader keeps only records from its
     -- construction on, and the CLI writes SessionStart's before the bridge
     -- answers `session/new`.
-    local reader = ClaudeHookRecordReader:new()
+    local reader = ClaudeTranscriptReader:new()
     ACPClient.create_session(self, cwd, handlers, function(result, err)
         -- Before the callback, which may unsubscribe the session at once.
         if result and result.sessionId then
-            self._hook_readers[result.sessionId] = reader
+            self._transcript_readers[result.sessionId] = reader
         end
         callback(result, err)
     end)
 end
 
---- Loads a session and opens a hook record reader for it. The CLI resumes the
+--- Loads a session and opens a transcript reader for it. The CLI resumes the
 --- session without forking, so its records go on in the same
 --- `<session_id>.jsonl`.
 --- @param session_id string
@@ -198,7 +198,7 @@ function ClaudeAgentACPAdapter:load_session(
 )
     -- Built before the request, so it keeps the SessionStart records the CLI
     -- writes before answering, and none of the replayed history.
-    self._hook_readers[session_id] = ClaudeHookRecordReader:new()
+    self._transcript_readers[session_id] = ClaudeTranscriptReader:new()
     ACPClient.load_session(
         self,
         session_id,
@@ -212,16 +212,16 @@ end
 --- @param session_id string
 function ClaudeAgentACPAdapter:unsubscribe(session_id)
     self._session_dirs[session_id] = nil
-    self._hook_readers[session_id] = nil
+    self._transcript_readers[session_id] = nil
     ACPClient.unsubscribe(self, session_id)
 end
 
---- Hook records from the CLI's transcript of the session. Empty until the CLI
---- has written the transcript.
+--- Hook records and loaded files from the CLI's transcript of the session.
+--- Empty until the CLI has written the transcript.
 --- @param session_id string
---- @return agentic.acp.HookRecord[]
-function ClaudeAgentACPAdapter:drain_hook_records(session_id)
-    local reader = self._hook_readers[session_id]
+--- @return agentic.acp.SideRecord[]
+function ClaudeAgentACPAdapter:drain_side_records(session_id)
+    local reader = self._transcript_readers[session_id]
     if not reader then
         return {}
     end
@@ -385,6 +385,8 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
     self:__apply_message_result(message)
+    -- The bridge reports a compaction as a synthetic call of this name.
+    message.is_compaction = ClaudeUtils.tool_name(update) == "compact" or nil
     -- Top-level execute tool_calls arrive with empty rawInput (input streams
     -- separately), so __apply_raw_input's execute branch is skipped — lift the
     -- description echo out of the body here. Subagent execute carries rawInput

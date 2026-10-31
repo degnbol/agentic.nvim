@@ -1,10 +1,11 @@
---- Decoder for the hook records the Claude Code CLI writes to its transcript
---- jsonl (`~/.claude/projects/<slug>/<session-id>.jsonl`). The ACP bridge drops
---- the hook lifecycle events, so the transcript is the only channel carrying
---- what a hook injected, printed or how it failed.
+--- Decoder for the records the Claude Code CLI writes to its transcript jsonl
+--- (`~/.claude/projects/<slug>/<session-id>.jsonl`) about what the ACP bridge
+--- does not forward: hook activity, and files the CLI added to the model's
+--- context without a tool call.
 ---
---- Pure and stateless: one line in, zero or more records out. Records carry no
---- `script`: naming it takes the `parentUuid` join across records.
+--- Pure and stateless: one entry in, zero or more records out. Records carry
+--- neither `script` nor the place they belong: both take the `parentUuid` join
+--- across entries, for which `link` gives each entry's part.
 local M = {}
 
 --- @alias agentic.acp.ClaudeHookRecordGroup
@@ -12,12 +13,29 @@ local M = {}
 --- | "silent" stopped by the turn's cancellation, or skipped; carried only so its `command` can attribute a later record
 
 --- @class agentic.acp.ClaudeHookRecord : agentic.acp.HookRecord
+--- @field kind "hook"
 --- @field group agentic.acp.ClaudeHookRecordGroup
---- @field uuid? string
---- @field parent_uuid? string
 --- @field timestamp? string ISO-8601 UTC, fixed width so string order is time order
 --- @field hook_name? string the hook's configured name, e.g. `PreToolUse:Bash`
 --- @field tool_call_id? string what the hook fired on, verbatim from `toolUseID`. Only a `toolu_`-prefixed value is a tool call id: an event with no call to name puts `"SessionStart"`, `hook-<uuid>` or a bare message uuid in the same slot
+
+--- @class agentic.acp.ClaudeLoadedFileRecord
+--- @field kind "loaded_file"
+--- @field path string Absolute
+--- @field is_mention boolean An `@` file, not a rule
+--- @field timestamp? string
+
+--- What a transcript entry says about where a load under it belongs.
+--- @class agentic.acp.TranscriptLink
+--- @field uuid string
+--- @field parent_uuid? string
+--- @field ends_chain boolean A `tool_result` record, a meta record with `sourceToolUseID`, a compaction's output, a user-text record, a `queued_command` attachment, or an `assistant` record
+--- @field tool_call_id? string `tool_use_id` of a `tool_result` record, or `sourceToolUseID` of a meta record
+--- @field after_prompt boolean Ends the chain at the prompt: user text or a `queued_command`
+--- @field after_compaction boolean Ends the chain at a compaction's output (`repeatsCompactSummary`)
+--- @field user_text boolean Ends the chain at the user's own text
+--- @field injected boolean Text the CLI injected under its parent (a meta record without `sourceToolUseID`: a skill run as `/name`, a Stop hook's feedback): the chain goes on through it, but past it the text is no longer the user's own
+--- @field command? string The hook command, on a hook attachment
 
 --- Events whose plain-text stdout the model receives as context (hooks docs
 --- § "Exit code 0"). On any other event a successful hook's stdout reaches
@@ -139,10 +157,9 @@ local function attachment_record(entry)
 
     --- @type agentic.acp.ClaudeHookRecord
     local record = {
+        kind = "hook",
         group = group,
         body = body,
-        uuid = entry.uuid,
-        parent_uuid = entry.parentUuid,
         timestamp = entry.timestamp,
         command = attachment.command,
         hook_name = attachment.hookName,
@@ -184,6 +201,7 @@ local function stop_feedback_records(entry)
         end
         if command then
             table.insert(records, {
+                kind = "hook",
                 group = "context",
                 body = body_lines(body),
                 timestamp = entry.timestamp,
@@ -197,28 +215,164 @@ local function stop_feedback_records(entry)
     return records
 end
 
---- Decode one transcript line into hook records. A line that is not valid JSON
---- still yields a record, in the `verbatim` group: a transcript this decoder
---- cannot read is the thing least safe to drop.
---- @param line string one raw line of the transcript jsonl
---- @return agentic.acp.ClaudeHookRecord[] records empty for a line that carries no hook activity
-function M.decode(line)
-    if line:match("^%s*$") then
-        return {}
+--- Attachment types that carry a file the CLI added to the model's context,
+--- and the field holding its absolute path.
+local LOADED_FILE_PATH_FIELDS = {
+    nested_memory = "path",
+    file = "filename",
+}
+
+--- The loaded file a transcript entry carries as its attachment.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.ClaudeLoadedFileRecord|nil record nil when the entry is not a loaded file
+local function loaded_file_record(entry)
+    local attachment = entry.attachment
+    if entry.type ~= "attachment" or type(attachment) ~= "table" then
+        return nil
+    end
+    local field = LOADED_FILE_PATH_FIELDS[attachment.type]
+    local path = field and attachment[field]
+    if type(path) ~= "string" then
+        return nil
     end
 
+    --- @type agentic.acp.ClaudeLoadedFileRecord
+    local record = {
+        kind = "loaded_file",
+        path = path,
+        is_mention = attachment.type == "file",
+        timestamp = entry.timestamp,
+    }
+    return record
+end
+
+--- Decode one transcript line.
+--- @param line string one raw line of the transcript jsonl
+--- @return table|nil entry nil when the line is not JSON
+function M.parse(line)
     local ok, entry = pcall(vim.json.decode, line)
     if not ok or type(entry) ~= "table" then
-        --- @type agentic.acp.ClaudeHookRecord
-        local unparsed = { group = "verbatim", body = { line } }
-        return { unparsed }
+        return nil
     end
+    return entry
+end
 
-    local record = attachment_record(entry)
+--- The record a line that does not parse becomes: a transcript this decoder
+--- cannot read is the thing least safe to drop.
+--- @param line string
+--- @return agentic.acp.ClaudeHookRecord
+function M.verbatim(line)
+    --- @type agentic.acp.ClaudeHookRecord
+    local record = { kind = "hook", group = "verbatim", body = { line } }
+    return record
+end
+
+--- The hook records and loaded file a transcript entry carries.
+--- @param entry table one decoded transcript line
+--- @return (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord)[] records empty for an entry that carries neither
+function M.records(entry)
+    local record = attachment_record(entry) or loaded_file_record(entry)
     if record then
         return { record }
     end
     return stop_feedback_records(entry)
+end
+
+--- The first `tool_result` block of a message's content.
+--- @param content any
+--- @return table|nil
+local function tool_result_block(content)
+    if type(content) ~= "table" then
+        return nil
+    end
+    for _, block in ipairs(content) do
+        if type(block) == "table" and block.type == "tool_result" then
+            return block
+        end
+    end
+    return nil
+end
+
+--- Whether a message's content is text: a string, or holding a `text` block.
+--- @param content any
+--- @return boolean
+local function has_text(content)
+    if type(content) == "string" then
+        return true
+    end
+    if type(content) ~= "table" then
+        return false
+    end
+    for _, block in ipairs(content) do
+        if type(block) == "table" and block.type == "text" then
+            return true
+        end
+    end
+    return false
+end
+
+--- What a transcript entry says about where records under it belong.
+---
+--- An `assistant` entry ends the chain with no place set: what the CLI writes
+--- under the agent's own output, such as a Stop hook, came after that output.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.TranscriptLink|nil link nil for an entry without `uuid`
+function M.link(entry)
+    if type(entry.uuid) ~= "string" then
+        return nil
+    end
+
+    --- @type agentic.acp.TranscriptLink
+    local link = {
+        uuid = entry.uuid,
+        parent_uuid = type(entry.parentUuid) == "string" and entry.parentUuid
+            or nil,
+        ends_chain = false,
+        after_prompt = false,
+        after_compaction = false,
+        user_text = false,
+        injected = false,
+    }
+
+    local attachment = type(entry.attachment) == "table" and entry.attachment
+        or {}
+    if entry.type == "attachment" then
+        if attachment.hookEvent then
+            link.command = attachment.command
+        elseif attachment.type == "queued_command" then
+            link.ends_chain = true
+            link.after_prompt = true
+            link.user_text = true
+        end
+        return link
+    end
+
+    if entry.type == "assistant" then
+        link.ends_chain = true
+        return link
+    end
+    if entry.type ~= "user" then
+        return link
+    end
+
+    local content = type(entry.message) == "table" and entry.message.content
+    local result = tool_result_block(content)
+    if result then
+        link.ends_chain = true
+        link.tool_call_id = result.tool_use_id
+    elseif entry.isMeta then
+        link.ends_chain = entry.sourceToolUseID ~= nil
+        link.tool_call_id = entry.sourceToolUseID
+        link.injected = entry.sourceToolUseID == nil
+    elseif entry.repeatsCompactSummary then
+        link.ends_chain = true
+        link.after_compaction = true
+    elseif has_text(content) then
+        link.ends_chain = true
+        link.after_prompt = true
+        link.user_text = true
+    end
+    return link
 end
 
 return M

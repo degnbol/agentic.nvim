@@ -18,7 +18,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         return setmetatable({
             _session_roots = session_roots or {},
             _children = {},
-            _hook_readers = {},
+            _transcript_readers = {},
             provider_config = { subagents = { force_background = false } },
         }, { __index = ClaudeAgentACPAdapter })
     end
@@ -587,6 +587,28 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.equal("Normal", calls[1].argument)
             -- The body holds internal instructions, not user-facing content.
             assert.is_nil(calls[1].body)
+        end)
+
+        it("marks the bridge's compaction call", function()
+            local adapter, calls = make_capturing_adapter()
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "c-1",
+                title = "Compact conversation",
+                kind = "think",
+                status = "in_progress",
+                _meta = { claudeCode = { toolName = "compact" } },
+            })
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-read",
+                kind = "read",
+                status = "pending",
+                _meta = { claudeCode = { toolName = "Read" } },
+            })
+
+            assert.is_true(calls[1].is_compaction)
+            assert.is_nil(calls[2].is_compaction)
         end)
 
         describe("exits_plan", function()
@@ -1247,9 +1269,9 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
-    describe("hook records", function()
-        local ClaudeHookRecordReader =
-            require("agentic.acp.adapters.claude_hook_record_reader")
+    describe("side records", function()
+        local ClaudeTranscriptReader =
+            require("agentic.acp.adapters.claude_transcript_reader")
 
         --- @param responses table<string, table> method -> result the request answers with
         --- @return agentic.acp.ClaudeAgentACPAdapter adapter
@@ -1272,7 +1294,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         it("builds the reader before session/new is sent", function()
             -- The reader keeps records from its construction on, and the CLI
             -- writes SessionStart's before the bridge answers.
-            local new = spy.on(ClaudeHookRecordReader, "new")
+            local new = spy.on(ClaudeTranscriptReader, "new")
             local adapter = make_adapter()
             local built_before_send
             function adapter:_send_request()
@@ -1291,7 +1313,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local stored
 
             adapter:create_session("/tmp", {}, function()
-                stored = adapter._hook_readers["s-1"] ~= nil
+                stored = adapter._transcript_readers["s-1"] ~= nil
             end)
 
             assert.is_true(stored)
@@ -1301,7 +1323,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local adapter = wired_adapter({})
             local built_before_send
             function adapter:_send_request()
-                built_before_send = self._hook_readers["s-1"] ~= nil
+                built_before_send = self._transcript_readers["s-1"] ~= nil
             end
 
             adapter:load_session("s-1", "/tmp", {}, {}, function() end)
@@ -1316,11 +1338,11 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
 
             adapter:unsubscribe("s-1")
 
-            assert.is_nil(adapter._hook_readers["s-1"])
+            assert.is_nil(adapter._transcript_readers["s-1"])
         end)
 
         it("drains nothing for an unknown session", function()
-            assert.same({}, make_adapter():drain_hook_records("s-1"))
+            assert.same({}, make_adapter():drain_side_records("s-1"))
         end)
 
         describe("with a transcript", function()
@@ -1355,10 +1377,10 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     }),
                 }, vim.fs.joinpath(project, "s-1.jsonl"))
 
-                local records = adapter:drain_hook_records("s-1")
+                local records = adapter:drain_side_records("s-1")
 
                 assert.equal(1, #records)
-                assert.same({ "ctx" }, records[1].body)
+                assert.same({ "ctx" }, records[1].hook.body)
             end)
         end)
     end)

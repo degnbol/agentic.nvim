@@ -1663,7 +1663,7 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         -- Hook records already recorded go above a new response, so a
         -- reply to Stop hook feedback reads under that feedback.
         if starts_response and not self._loading then
-            self:_drain_hook_records()
+            self:_drain_side_records()
         end
         self.message_writer:write_message_chunk(chunk, starts_response)
         self.status_indicator:start(is_message and "generating" or "thinking")
@@ -2596,27 +2596,32 @@ local function format_duration(ms)
     return ("%.1f s"):format(ms / 1000)
 end
 
---- One block per tool call listing the hooks that passed on it, in the order
---- they ran, each followed by how long it took. Passes that name no call
---- share one block.
+--- One block per anchor listing the hooks that passed there, in the order
+--- they ran, each followed by how long it took. Passes with no anchor share
+--- one block.
 --- @param records agentic.acp.HookRecord[] `passed` records
 --- @return agentic.ui.MessageWriter.HookBlock[]
 local function passed_blocks(records)
     --- @type agentic.ui.MessageWriter.HookBlock[]
     local blocks = {}
     --- @type table<string, agentic.ui.MessageWriter.HookBlock>
-    local by_call = {}
+    local by_anchor = {}
     for _, record in ipairs(records) do
-        local key = record.tool_call_id or ""
-        local block = by_call[key]
+        local key = record.tool_call_id
+            or (record.after_prompt and "after_prompt")
+            or (record.after_compaction and "after_compaction")
+            or ""
+        local block = by_anchor[key]
         if not block then
             block = {
                 body = {},
                 source = "passed",
                 tool_call_id = record.tool_call_id,
+                after_prompt = record.after_prompt,
+                after_compaction = record.after_compaction,
                 preformatted = true,
             }
-            by_call[key] = block
+            by_anchor[key] = block
             table.insert(blocks, block)
         end
         local row = record.command and hook_location(record.command)
@@ -2630,23 +2635,28 @@ local function passed_blocks(records)
     return blocks
 end
 
---- Write the hook activity recorded since the last drain to the chat buffer,
---- each record under the tool call it names. Hooks that passed follow the
---- rest, gathered into one block per call.
-function SessionManager:_drain_hook_records()
+--- Write the hook activity and loaded files recorded since the last drain to
+--- the chat buffer, each record at the anchor it names. Hooks that passed
+--- follow the rest, gathered into one block per anchor.
+function SessionManager:_drain_side_records()
     if self.destroyed or not self.session_id then
         return
     end
     --- @type agentic.acp.HookRecord[]
     local passes = {}
-    for _, record in ipairs(self.agent:drain_hook_records(self.session_id)) do
-        if record.group == "passed" then
-            table.insert(passes, record)
+    for _, side in ipairs(self.agent:drain_side_records(self.session_id)) do
+        if side.kind == "loaded_file" then
+            self.message_writer:write_loaded_file(side.loaded_file)
+        elseif side.hook.group == "passed" then
+            table.insert(passes, side.hook)
         else
+            local record = side.hook
             self.message_writer:write_hook_block({
                 body = record.body,
                 source = record.script,
                 tool_call_id = record.tool_call_id,
+                after_prompt = record.after_prompt,
+                after_compaction = record.after_compaction,
                 failed = record.group == "failure",
             })
         end
@@ -2702,7 +2712,7 @@ function SessionManager:_mark_unresolved_tool_calls_cancelled()
 end
 
 --- Close out a turn dispatched to the agent: end it in the chat buffer, stamp
---- its usage footer, then append the hook activity it produced. The single
+--- its usage footer, then write the side records it produced. The single
 --- chokepoint for those three — client-side notices end their own turn through
 --- `MessageWriter:write_notice`, having dispatched nothing.
 --- @param usage { inputTokens?: number, outputTokens?: number }|nil
@@ -2711,10 +2721,10 @@ function SessionManager:_finalize_turn(usage)
     self.message_writer:set_turn_usage(usage)
     -- Last of the three: a region appended before the footer would move the row
     -- the footer is stamped on, and this drain still appends the remaining
-    -- records that name no tool call. Where an appended region falls relative
-    -- to the prose run does not matter; `_write_collapsed_region` brackets the
-    -- run it ends.
-    self:_drain_hook_records()
+    -- records that have no anchor in the buffer. Where an appended region falls
+    -- relative to the prose run does not matter; `_write_collapsed_region`
+    -- brackets the run it ends.
+    self:_drain_side_records()
 end
 
 --- Apply a tool call update to its chat block, the chat history and the
@@ -2816,9 +2826,9 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     end
 
     -- Look for records as soon as the call they fired on ends, rather than
-    -- waiting for the turn-end drain — where they land is settled by the id
-    -- each record carries, not by when the drain runs. Subagent calls do not
-    -- trigger a drain: only the root session's hook records are drained.
+    -- waiting for the turn-end drain — where they land is settled by the
+    -- anchor each record carries, not by when the drain runs. Subagent calls
+    -- do not trigger a drain: only the root session's records are drained.
     if
         not is_subagent
         and (
@@ -2826,7 +2836,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
             or tool_call_update.status == "failed"
         )
     then
-        self:_drain_hook_records()
+        self:_drain_side_records()
     end
 end
 

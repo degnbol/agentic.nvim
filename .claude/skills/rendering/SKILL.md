@@ -28,6 +28,12 @@ Two consequences worth carrying in your head:
 - Horizontal scroll moves every row by displayed columns, not raw ones, via
   the `agentic.ui.edge_conceal` decoration provider (rationale in its module
   docstring).
+- The chat is in time order: content shows where it happened relative to
+  everything else. Content the client learns of after later output is written,
+  such as hook records and loaded files read from the CLI transcript, goes
+  beneath the item it belongs to and below anything already placed there
+  (`MessageWriter:_resolve_anchor`, `_insert_after`). Only
+  content whose item is not in the buffer goes at the end.
 
 ## Heading levels
 

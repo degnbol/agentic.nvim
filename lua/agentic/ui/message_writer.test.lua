@@ -1344,6 +1344,326 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
+    describe("loaded files and anchors", function()
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- The row `write_loaded_file` writes for `path`.
+        --- @param path string
+        --- @return string
+        local function file_row(path)
+            return "  `" .. path .. "`"
+        end
+
+        --- A completed tool call `t1` followed by prose, so content placed
+        --- under the call has content below it.
+        local function call_then_prose()
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+            writer:write_message_chunk(make_message_update("after the call\n"))
+        end
+
+        --- The lines from the tool call's footer to the end of the buffer.
+        --- @return string[]
+        local function lines_after_footer()
+            local lines = buffer_lines()
+            for i, line in ipairs(lines) do
+                if line:find("completed", 1, true) then
+                    return vim.list_slice(lines, i + 1)
+                end
+            end
+            error("no footer")
+        end
+
+        it("writes a guarded path under the read glyph", function()
+            writer:write_loaded_file({ path = "/repo/a `b`.md" })
+
+            assert.same({ "  ``/repo/a `b`.md``", "" }, buffer_lines())
+            assert.same({ { 0, Glyphs.KIND.read .. " " } }, rail())
+        end)
+
+        it("keeps two rows under one call contiguous and in order", function()
+            call_then_prose()
+
+            writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t1" })
+            writer:write_loaded_file({ path = "/r/b.md", tool_call_id = "t1" })
+
+            assert.same({
+                "",
+                "###",
+                "",
+                file_row("/r/a.md"),
+                file_row("/r/b.md"),
+                "",
+                "###",
+                "",
+                "after the call",
+                "",
+            }, lines_after_footer())
+            assert_one_sign_per_row()
+        end)
+
+        it("keeps write order across rows and hook regions", function()
+            call_then_prose()
+
+            writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t1" })
+            writer:write_hook_block({
+                body = { "injected", "context" },
+                source = "guard.sh",
+                tool_call_id = "t1",
+            })
+            writer:write_loaded_file({ path = "/r/b.md", tool_call_id = "t1" })
+
+            assert.same({
+                "",
+                "###",
+                "",
+                file_row("/r/a.md"),
+                "",
+                "```markdown-fold guard.sh",
+                "injected",
+                "context",
+                "```",
+                "",
+                file_row("/r/b.md"),
+                "",
+                "###",
+                "",
+                "after the call",
+                "",
+            }, lines_after_footer())
+        end)
+
+        it("places a prompt's row after it, before the reply", function()
+            writer:write_user_prompt("go")
+            writer:write_message_chunk(make_message_update("the reply\n"))
+
+            writer:write_loaded_file({ path = "/r/a.md", after_prompt = true })
+
+            assert.same({
+                "## go",
+                "",
+                file_row("/r/a.md"),
+                "",
+                "the reply",
+                "",
+            }, buffer_lines())
+        end)
+
+        it(
+            "keeps a prompt's rows above a reply written between them",
+            function()
+                writer:write_user_prompt("go")
+                writer:write_loaded_file({
+                    path = "/r/a.md",
+                    after_prompt = true,
+                })
+                writer:write_message_chunk(make_message_update("the reply\n"))
+
+                writer:write_loaded_file({
+                    path = "/r/b.md",
+                    after_prompt = true,
+                })
+
+                assert.same({
+                    "## go",
+                    "",
+                    file_row("/r/a.md"),
+                    file_row("/r/b.md"),
+                    "",
+                    "the reply",
+                    "",
+                }, buffer_lines())
+            end
+        )
+
+        it("places a prompt's hook block after it, then its rows", function()
+            writer:write_user_prompt("go")
+            writer:write_message_chunk(make_message_update("the reply\n"))
+
+            writer:write_hook_block({
+                body = { "remember", "this" },
+                source = "UserPromptSubmit",
+                after_prompt = true,
+            })
+            writer:write_loaded_file({ path = "/r/a.md", after_prompt = true })
+
+            assert.same({
+                "## go",
+                "",
+                "```markdown-fold UserPromptSubmit",
+                "remember",
+                "this",
+                "```",
+                "",
+                file_row("/r/a.md"),
+                "",
+                "the reply",
+                "",
+            }, buffer_lines())
+            assert_one_sign_per_row()
+        end)
+
+        it(
+            "keeps a prompt's reply whole when it streams across a row",
+            function()
+                writer:write_user_prompt("go")
+                writer:write_message_chunk(
+                    make_message_update("first para\n\nsec")
+                )
+
+                writer:write_loaded_file({
+                    path = "/r/a.md",
+                    after_prompt = true,
+                })
+                writer:write_message_chunk(make_message_update("ond para\n"))
+                writer:finalize_turn()
+
+                assert.same({
+                    "## go",
+                    "",
+                    file_row("/r/a.md"),
+                    "",
+                    "first para",
+                    "",
+                    "second para",
+                    "",
+                    "",
+                }, buffer_lines())
+                assert_one_sign_per_row()
+            end
+        )
+
+        it("keeps a call's prose whole when it streams across a row", function()
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+            writer:write_message_chunk(make_message_update("first para\n\nsec"))
+
+            writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t1" })
+            writer:write_message_chunk(make_message_update("ond para\n"))
+            writer:finalize_turn()
+
+            assert.same({
+                "",
+                "###",
+                "",
+                file_row("/r/a.md"),
+                "",
+                "###",
+                "",
+                "first para",
+                "",
+                "second para",
+                "",
+                "",
+            }, lines_after_footer())
+            assert_one_sign_per_row()
+        end)
+
+        it("opens no section under a prompt", function()
+            writer:write_user_prompt("go")
+
+            writer:write_loaded_file({
+                path = "/r/a.md",
+                after_prompt = true,
+                after_compaction = false,
+            })
+
+            assert.is_false(vim.tbl_contains(buffer_lines(), "###"))
+        end)
+
+        it("anchors to the last prompt only", function()
+            writer:write_user_prompt("first")
+            writer:write_user_prompt("second")
+
+            writer:write_loaded_file({ path = "/r/a.md", after_prompt = true })
+
+            local lines = buffer_lines()
+            assert.equal(file_row("/r/a.md"), lines[#lines - 1])
+        end)
+
+        it("places a compaction's files after its block", function()
+            local compaction = make_tool_call_block("c-1", "completed")
+            compaction.description = "compact"
+            compaction.is_compaction = true
+            writer:write_tool_call_block(compaction)
+            writer:write_message_chunk(make_message_update("resumed\n"))
+
+            writer:write_loaded_file({
+                path = "/r/a.lua",
+                after_compaction = true,
+            })
+
+            assert.same({
+                "",
+                "###",
+                "",
+                file_row("/r/a.lua"),
+                "",
+                "###",
+                "",
+                "resumed",
+                "",
+            }, lines_after_footer())
+        end)
+
+        it("appends a row whose anchor is not in the buffer", function()
+            call_then_prose()
+
+            writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t9" })
+            writer:write_loaded_file({ path = "/r/b.md" })
+
+            local lines = buffer_lines()
+            assert.same({
+                "after the call",
+                "",
+                file_row("/r/a.md"),
+                file_row("/r/b.md"),
+                "",
+            }, vim.list_slice(lines, #lines - 4))
+        end)
+
+        it("starts a new end group once something follows the last", function()
+            writer:write_loaded_file({ path = "/r/a.md" })
+            writer:write_message_chunk(make_message_update("between\n\n"))
+            writer:finalize_turn()
+
+            writer:write_loaded_file({ path = "/r/b.md" })
+
+            local lines = buffer_lines()
+            assert.equal(file_row("/r/b.md"), lines[#lines - 1])
+            assert.is_true(vim.tbl_contains(lines, "between"))
+        end)
+
+        it("closes the call's section once when it lands at the end", function()
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+
+            writer:write_loaded_file({ path = "/r/a.md", tool_call_id = "t1" })
+            writer:write_message_chunk(make_message_update("after the call\n"))
+
+            local boundaries = 0
+            for _, line in ipairs(buffer_lines()) do
+                if line == "###" then
+                    boundaries = boundaries + 1
+                end
+            end
+            assert.equal(1, boundaries)
+        end)
+
+        it("forgets the anchors on reset", function()
+            writer:write_user_prompt("go")
+            writer:reset()
+
+            assert.is_nil(writer._prompt_anchor)
+            assert.is_nil(writer._end_rows)
+        end)
+    end)
+
     describe("prose run regions", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)

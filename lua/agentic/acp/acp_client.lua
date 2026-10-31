@@ -155,20 +155,34 @@ end
 --- | "failure" timed out, or exited non-zero with an error
 --- | "verbatim" the provider's own record of it did not parse; the body is that record
 
+--- Where a record the provider wrote outside the ACP feed belongs: right
+--- after what it happened with. None set: nowhere in particular.
+--- @class agentic.acp.Anchor
+--- @field tool_call_id? string After this tool call; may name a call the client never saw
+--- @field after_prompt? boolean After the last prompt
+--- @field after_compaction? boolean After the last compaction
+
 --- Hook activity a provider recorded outside the ACP feed.
---- @class agentic.acp.HookRecord
+--- @class agentic.acp.HookRecord : agentic.acp.Anchor
 --- @field group agentic.acp.HookRecordGroup
 --- @field body string[]
 --- @field script? string Basename of the hook command, else the hook's configured name
 --- @field command? string The hook's invocation, when the record is of one run
 --- @field duration_ms? number How long that run took
---- @field tool_call_id? string Tool call the record belongs to; may be an id that names no tool call
 
---- Hook records of the session that arrived since the last call.
---- Adapters for providers that record hook activity override this.
+--- A file the provider added to the model's context without a tool call.
+--- @class agentic.acp.LoadedFile : agentic.acp.Anchor
+--- @field path string Absolute
+
+--- @alias agentic.acp.SideRecord
+--- | { kind: "hook", hook: agentic.acp.HookRecord }
+--- | { kind: "loaded_file", loaded_file: agentic.acp.LoadedFile }
+
+--- Records the provider wrote outside the ACP feed since the last call.
+--- Adapters for providers that keep such records override this.
 --- @param _session_id string
---- @return agentic.acp.HookRecord[]
-function ACPClient:drain_hook_records(_session_id)
+--- @return agentic.acp.SideRecord[]
+function ACPClient:drain_side_records(_session_id)
     return {}
 end
 

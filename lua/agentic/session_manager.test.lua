@@ -2026,7 +2026,7 @@ describe("agentic.SessionManager", function()
                 _history_changed = function() end,
                 _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
-                _drain_hook_records = function()
+                _drain_side_records = function()
                     drains.n = drains.n + 1
                 end,
             } --[[@as agentic.SessionManager]]
@@ -2276,37 +2276,92 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_drain_hook_records", function()
-        --- @param records table[]
+    describe("_drain_side_records", function()
+        --- @param records table[] hook records, or side records as they are
         --- @return agentic.SessionManager
         --- @return agentic.ui.MessageWriter.HookBlock[] written one per write_hook_block call
+        --- @return agentic.acp.LoadedFile[] loaded one per write_loaded_file call
         local function make_session(records)
-            local written = {}
+            local sides = vim.tbl_map(function(record)
+                return record.kind and record
+                    or { kind = "hook", hook = record }
+            end, records)
+            local written, loaded = {}, {}
             --- @type agentic.SessionManager
             local session = {
                 destroyed = false,
                 session_id = "s-1",
-                _drain_hook_records = SessionManager._drain_hook_records,
+                _drain_side_records = SessionManager._drain_side_records,
                 agent = {
-                    drain_hook_records = function()
-                        return records
+                    drain_side_records = function()
+                        return sides
                     end,
                 },
                 message_writer = {
                     write_hook_block = function(_self, block)
                         table.insert(written, block)
                     end,
+                    write_loaded_file = function(_self, file)
+                        table.insert(loaded, file)
+                    end,
                 },
             } --[[@as agentic.SessionManager]]
-            return session, written
+            return session, written, loaded
         end
+
+        it("sends a loaded file to its writer method", function()
+            local file = { path = "/r/a.md", tool_call_id = "toolu_1" }
+            local session, written, loaded = make_session({
+                { kind = "loaded_file", loaded_file = file },
+                { group = "context", body = { "ctx" } },
+            })
+
+            session:_drain_side_records()
+
+            assert.same({ file }, loaded)
+            assert.equal(1, #written)
+        end)
+
+        it("forwards a hook record's prompt and compaction anchors", function()
+            local session, written = make_session({
+                { group = "context", body = { "a" }, after_prompt = true },
+                { group = "stray", body = { "b" }, after_compaction = true },
+            })
+
+            session:_drain_side_records()
+
+            assert.is_true(written[1].after_prompt)
+            assert.is_true(written[2].after_compaction)
+        end)
+
+        it(
+            "gathers passes after the prompt into a block of their own",
+            function()
+                local session, written = make_session({
+                    { group = "passed", body = {}, command = "/h/a.sh" },
+                    {
+                        group = "passed",
+                        body = {},
+                        command = "/h/b.sh",
+                        after_prompt = true,
+                    },
+                })
+
+                session:_drain_side_records()
+
+                assert.same({ "/h/a.sh" }, written[1].body)
+                assert.is_nil(written[1].after_prompt)
+                assert.same({ "/h/b.sh" }, written[2].body)
+                assert.is_true(written[2].after_prompt)
+            end
+        )
 
         it("renders injected context", function()
             local session, written = make_session({
                 { group = "context", body = { "ctx" }, script = "guard.sh" },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.same(
                 { { body = { "ctx" }, source = "guard.sh", failed = false } },
@@ -2324,7 +2379,7 @@ describe("agentic.SessionManager", function()
                 },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.equal("toolu_01W2Ve", written[1].tool_call_id)
         end)
@@ -2334,7 +2389,7 @@ describe("agentic.SessionManager", function()
             local session, written =
                 make_session({ { group = "verbatim", body = { "{ trunc" } } })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.equal(1, #written)
             assert.same({ "{ trunc" }, written[1].body)
@@ -2345,7 +2400,7 @@ describe("agentic.SessionManager", function()
                 { group = "failure", body = { "timed out after 600 s" } },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.is_true(written[1].failed)
         end)
@@ -2355,7 +2410,7 @@ describe("agentic.SessionManager", function()
                 { group = "stray", body = { "leaked" } },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.equal(1, #written)
             assert.same({ "leaked" }, written[1].body)
@@ -2388,7 +2443,7 @@ describe("agentic.SessionManager", function()
                 pass("/hooks/untimed.sh"),
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.equal(2, #written)
             assert.same({ "ctx" }, written[1].body)
@@ -2416,7 +2471,7 @@ describe("agentic.SessionManager", function()
                 { group = "passed", body = {}, command = "/h/c.sh" },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.same({ "/h/a.sh", "/h/c.sh" }, written[1].body)
             assert.is_nil(written[1].tool_call_id)
@@ -2432,7 +2487,7 @@ describe("agentic.SessionManager", function()
                 },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.same({ "~/hooks/guard.sh" }, written[1].body)
         end)
@@ -2442,7 +2497,7 @@ describe("agentic.SessionManager", function()
                 { group = "passed", body = {}, command = "bash ~/h.sh --fast" },
             })
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.same({ "bash ~/h.sh --fast" }, written[1].body)
         end)
@@ -2452,7 +2507,7 @@ describe("agentic.SessionManager", function()
                 make_session({ { group = "context", body = { "ctx" } } })
             session.destroyed = true
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.same({}, written)
         end)
@@ -2462,7 +2517,7 @@ describe("agentic.SessionManager", function()
                 make_session({ { group = "context", body = { "ctx" } } })
             session.session_id = nil
 
-            session:_drain_hook_records()
+            session:_drain_side_records()
 
             assert.same({}, written)
         end)
@@ -2755,7 +2810,7 @@ describe("agentic.SessionManager", function()
                     send_prompt = function(_self, _sid, _prompt, cb)
                         cb(nil, send_err)
                     end,
-                    drain_hook_records = function()
+                    drain_side_records = function()
                         return {}
                     end,
                 },
@@ -2771,7 +2826,7 @@ describe("agentic.SessionManager", function()
                     tool_call_blocks = {},
                 },
                 _finalize_turn = SessionManager._finalize_turn,
-                _drain_hook_records = SessionManager._drain_hook_records,
+                _drain_side_records = SessionManager._drain_side_records,
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = "s-1",
@@ -2929,7 +2984,7 @@ describe("agentic.SessionManager", function()
                         table.insert(sink.prompts, prompt)
                         cb(nil, send_err or { message = "boom" })
                     end,
-                    drain_hook_records = function()
+                    drain_side_records = function()
                         return {}
                     end,
                 },
@@ -2973,7 +3028,7 @@ describe("agentic.SessionManager", function()
                 _stamp_cancelled = SessionManager._stamp_cancelled,
                 _tool_call_owner = {},
                 _finalize_turn = SessionManager._finalize_turn,
-                _drain_hook_records = SessionManager._drain_hook_records,
+                _drain_side_records = SessionManager._drain_side_records,
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = "s-1",
@@ -4429,7 +4484,7 @@ describe("agentic.SessionManager", function()
                 _tool_call_owner = {},
                 _agents = {},
                 _loading = false,
-                _drain_hook_records = noop,
+                _drain_side_records = noop,
                 _agent_of = SessionManager._agent_of,
                 _writer_for = SessionManager._writer_for,
                 _indicator_for = SessionManager._indicator_for,
@@ -5653,7 +5708,7 @@ describe("agentic.SessionManager", function()
                 _transcript_for = function()
                     return transcript
                 end,
-                _drain_hook_records = drain,
+                _drain_side_records = drain,
             }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
         end)
 

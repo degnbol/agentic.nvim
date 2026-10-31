@@ -1,12 +1,13 @@
 local assert = require("tests.helpers.assert")
 
-describe("ClaudeHookRecords", function()
+describe("ClaudeTranscriptRecords", function()
     --- @type table
-    local ClaudeHookRecords
+    local ClaudeTranscriptRecords
 
     before_each(function()
-        package.loaded["agentic.acp.adapters.claude_hook_records"] = nil
-        ClaudeHookRecords = require("agentic.acp.adapters.claude_hook_records")
+        package.loaded["agentic.acp.adapters.claude_transcript_records"] = nil
+        ClaudeTranscriptRecords =
+            require("agentic.acp.adapters.claude_transcript_records")
     end)
 
     --- One transcript line wrapping a hook attachment.
@@ -25,11 +26,21 @@ describe("ClaudeHookRecords", function()
         return vim.json.encode(entry)
     end
 
+    --- The records of one transcript line.
+    --- @param raw string
+    --- @return table[]
+    local function decode(raw)
+        local entry = ClaudeTranscriptRecords.parse(raw)
+        assert.is_not_nil(entry)
+        ---@cast entry -nil
+        return ClaudeTranscriptRecords.records(entry)
+    end
+
     --- The record a line decodes to, asserting it is the only one.
     --- @param raw string
-    --- @return agentic.acp.ClaudeHookRecord
+    --- @return table
     local function decode_one(raw)
-        local records = ClaudeHookRecords.decode(raw)
+        local records = decode(raw)
         assert.equal(1, #records)
         return records[1]
     end
@@ -82,10 +93,9 @@ describe("ClaudeHookRecords", function()
             }))
 
             assert.is_not_nil(record)
+            assert.equal("hook", record.kind)
             assert.equal("context", record.group)
             assert.same({ "first line", "second line" }, record.body)
-            assert.equal("u-1", record.uuid)
-            assert.equal("u-0", record.parent_uuid)
             assert.equal("2026-08-28T10:00:00.000Z", record.timestamp)
             assert.equal("hook-abc", record.tool_call_id)
         end)
@@ -274,7 +284,7 @@ describe("ClaudeHookRecords", function()
 
     describe("stop hook feedback", function()
         it("gives each blocking hook a context record of its own", function()
-            local records = ClaudeHookRecords.decode(stop_summary({
+            local records = decode(stop_summary({
                 "[~/hooks/review.sh]: Two files changed\nsince the review",
                 "[~/hooks/lint.sh]: lint failed",
             }))
@@ -289,77 +299,261 @@ describe("ClaudeHookRecords", function()
             assert.equal("~/hooks/lint.sh", records[2].command)
             assert.same({ "lint failed" }, records[2].body)
             assert.equal("2026-08-28T10:00:00.000Z", records[1].timestamp)
-            assert.is_nil(records[1].uuid)
             assert.is_nil(records[1].tool_call_id)
         end)
 
         it("ends the body at the trailing newline", function()
-            local records = ClaudeHookRecords.decode(
-                stop_summary({ "[~/hooks/review.sh]: one line\n" })
-            )
+            local records =
+                decode(stop_summary({ "[~/hooks/review.sh]: one line\n" }))
 
             assert.same({ "one line" }, records[1].body)
         end)
 
         it("gives none when no hook blocked", function()
-            assert.same({}, ClaudeHookRecords.decode(stop_summary({})))
+            assert.same({}, decode(stop_summary({})))
         end)
 
         it("drops a non-blocking error, which has no command", function()
             assert.same(
                 {},
-                ClaudeHookRecords.decode(stop_summary({
+                decode(stop_summary({
                     "Failed with non-blocking status code: No stderr output",
                 }))
             )
         end)
 
         it("drops an entry that is not a string", function()
-            assert.same(
-                {},
-                ClaudeHookRecords.decode(stop_summary({ { command = "x" } }))
-            )
+            assert.same({}, decode(stop_summary({ { command = "x" } })))
         end)
     end)
 
-    describe("lines that carry no hook activity", function()
-        it("ignores a blank line", function()
-            assert.same({}, ClaudeHookRecords.decode(""))
-            assert.same({}, ClaudeHookRecords.decode("   "))
+    describe("loaded files", function()
+        it("gives a rule record for a nested_memory attachment", function()
+            local record = decode_one(line({
+                type = "nested_memory",
+                path = "/repo/.claude/rules/tests.md",
+                content = { type = "Project", content = "…" },
+            }))
+
+            assert.same({
+                kind = "loaded_file",
+                path = "/repo/.claude/rules/tests.md",
+                is_mention = false,
+                timestamp = "2026-08-28T10:00:00.000Z",
+            }, record)
         end)
 
+        it("gives a mention record for a file attachment", function()
+            local record = decode_one(line({
+                type = "file",
+                filename = "/repo/notes/plan.md",
+                content = { type = "text" },
+            }))
+
+            assert.equal("loaded_file", record.kind)
+            assert.equal("/repo/notes/plan.md", record.path)
+            assert.is_true(record.is_mention)
+        end)
+
+        it("gives none for a file attachment without a path", function()
+            assert.same({}, decode(line({ type = "file", content = "…" })))
+        end)
+    end)
+
+    describe("lines that carry nothing", function()
         it("ignores a conversation entry", function()
             assert.same(
                 {},
-                ClaudeHookRecords.decode(
-                    vim.json.encode({ type = "assistant", uuid = "u-9" })
-                )
+                decode(vim.json.encode({ type = "assistant", uuid = "u-9" }))
             )
         end)
 
-        it("ignores an attachment that is not a hook record", function()
-            assert.same(
-                {},
-                ClaudeHookRecords.decode(
-                    line({ type = "file", content = "…" })
-                )
-            )
+        it("ignores another attachment type", function()
+            assert.same({}, decode(line({ type = "skill_listing" })))
         end)
 
         it("ignores an unknown hook attachment type", function()
             assert.same(
                 {},
-                ClaudeHookRecords.decode(
-                    line({ type = "hook_future", hookEvent = "PreToolUse" })
-                )
+                decode(line({ type = "hook_future", hookEvent = "PreToolUse" }))
             )
         end)
+    end)
 
-        it("surfaces an unparseable line verbatim", function()
-            local record = decode_one("{ truncated")
+    describe("parse", function()
+        it("gives nil for a line that is not JSON", function()
+            assert.is_nil(ClaudeTranscriptRecords.parse("{ truncated"))
+        end)
 
-            assert.equal("verbatim", record.group)
-            assert.same({ "{ truncated" }, record.body)
+        it("gives nil for JSON that is not an object", function()
+            assert.is_nil(ClaudeTranscriptRecords.parse("42"))
+        end)
+    end)
+
+    it("surfaces an unparseable line verbatim", function()
+        assert.same(
+            { kind = "hook", group = "verbatim", body = { "{ truncated" } },
+            ClaudeTranscriptRecords.verbatim("{ truncated")
+        )
+    end)
+
+    describe("link", function()
+        --- @param entry table
+        --- @return agentic.acp.TranscriptLink
+        local function link_of(entry)
+            local link = ClaudeTranscriptRecords.link(
+                vim.tbl_extend(
+                    "force",
+                    { uuid = "u-1", parentUuid = "u-0" },
+                    entry
+                )
+            )
+            assert.is_not_nil(link)
+            ---@cast link -nil
+            return link
+        end
+
+        it("gives nil for an entry without a uuid", function()
+            assert.is_nil(ClaudeTranscriptRecords.link({ type = "user" }))
+        end)
+
+        it("ends the chain at a tool result, naming its call", function()
+            local link = link_of({
+                type = "user",
+                message = {
+                    content = {
+                        { type = "tool_result", tool_use_id = "toolu_1" },
+                    },
+                },
+            })
+
+            assert.same({
+                uuid = "u-1",
+                parent_uuid = "u-0",
+                ends_chain = true,
+                tool_call_id = "toolu_1",
+                after_prompt = false,
+                after_compaction = false,
+                user_text = false,
+                injected = false,
+            }, link)
+        end)
+
+        it("ends the chain at a Skill body, naming its call", function()
+            local link = link_of({
+                type = "user",
+                isMeta = true,
+                sourceToolUseID = "toolu_2",
+                message = { content = { { type = "text", text = "body" } } },
+            })
+
+            assert.is_true(link.ends_chain)
+            assert.equal("toolu_2", link.tool_call_id)
+            assert.is_false(link.after_prompt)
+            assert.is_false(link.user_text)
+        end)
+
+        it("passes the chain on through a skill run as /name", function()
+            local link = link_of({
+                type = "user",
+                isMeta = true,
+                message = { content = { { type = "text", text = "body" } } },
+            })
+
+            assert.is_false(link.ends_chain)
+            assert.is_true(link.injected)
+            assert.is_nil(link.tool_call_id)
+        end)
+
+        it("ends the chain at no place on the agent's output", function()
+            local link = link_of({
+                type = "assistant",
+                message = { content = { { type = "text", text = "done" } } },
+            })
+
+            assert.is_true(link.ends_chain)
+            assert.is_nil(link.tool_call_id)
+            assert.is_false(link.after_prompt)
+            assert.is_false(link.after_compaction)
+        end)
+
+        it("ends the chain at the user's own text", function()
+            local link =
+                link_of({ type = "user", message = { content = "fix it" } })
+
+            assert.is_true(link.ends_chain)
+            assert.is_true(link.after_prompt)
+            assert.is_true(link.user_text)
+        end)
+
+        it("reads a <command-message> record as the user's text", function()
+            local link = link_of({
+                type = "user",
+                message = {
+                    content = "<command-message>implement</command-message>\n"
+                        .. "<command-args>@./notes/plan.md</command-args>",
+                },
+            })
+
+            assert.is_true(link.after_prompt)
+            assert.is_true(link.user_text)
+        end)
+
+        it("ends the chain at a compaction's output", function()
+            local link = link_of({
+                type = "user",
+                repeatsCompactSummary = true,
+                message = { content = "This session is being continued…" },
+            })
+
+            assert.is_true(link.ends_chain)
+            assert.is_true(link.after_compaction)
+            assert.is_false(link.after_prompt)
+            assert.is_false(link.user_text)
+        end)
+
+        it("ends the chain at a queued_command attachment", function()
+            local link = link_of({
+                type = "attachment",
+                attachment = { type = "queued_command", prompt = { "next" } },
+            })
+
+            assert.is_true(link.ends_chain)
+            assert.is_true(link.after_prompt)
+            assert.is_true(link.user_text)
+        end)
+
+        it("leaves an attachment to inherit from its parent", function()
+            local link = link_of({
+                type = "attachment",
+                attachment = { type = "nested_memory", path = "/r.md" },
+            })
+
+            assert.is_false(link.ends_chain)
+            assert.equal("u-0", link.parent_uuid)
+        end)
+
+        it("carries a hook attachment's command", function()
+            local link = link_of({
+                type = "attachment",
+                attachment = {
+                    type = "hook_success",
+                    hookEvent = "PreToolUse",
+                    command = "/hooks/guard.sh",
+                },
+            })
+
+            assert.is_false(link.ends_chain)
+            assert.equal("/hooks/guard.sh", link.command)
+        end)
+
+        it("leaves a null parent unset", function()
+            local link = ClaudeTranscriptRecords.link(
+                vim.json.decode('{"uuid":"u-1","parentUuid":null}')
+            )
+            ---@cast link -nil
+
+            assert.is_nil(link.parent_uuid)
         end)
     end)
 end)
