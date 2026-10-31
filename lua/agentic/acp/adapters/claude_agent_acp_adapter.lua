@@ -181,7 +181,9 @@ function ClaudeAgentACPAdapter:create_session(cwd, handlers, callback)
     end)
 end
 
---- Loads a session and opens a hook record reader for it.
+--- Loads a session and opens a hook record reader for it. The CLI resumes the
+--- session without forking, so its records go on in the same
+--- `<session_id>.jsonl`.
 --- @param session_id string
 --- @param cwd string
 --- @param mcp_servers table[]|nil
