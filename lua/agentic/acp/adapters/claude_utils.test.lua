@@ -37,28 +37,30 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
-    describe("cross_session_delivery", function()
-        it("splits each observed note shape", function()
-            for _, note in ipairs({
-                "another Claude session on this machine",
-                "another Claude session on this machine; queued there — a [Cross-session delivery notice] follows (if any)",
-                "another Claude session on this machine; in that session's inbox, not yet read by its Claude — a notice follows",
-            }) do
-                local summary, to, parsed = ClaudeUtils.cross_session_delivery(
-                    "“Tell peer” → agentic-nvim-c5 (" .. note .. ")"
+    describe("send_message_update", function()
+        it(
+            "heads the call with addressee and summary, bodies the message",
+            function()
+                assert.same(
+                    {
+                        tool_call_id = "toolu_1",
+                        argument = "agentic-nvim-c5: Tell peer",
+                        body = { "line 1", "line 2" },
+                    },
+                    ClaudeUtils.send_message_update("toolu_1", {
+                        to = "agentic-nvim-c5",
+                        summary = "Tell peer",
+                        message = "line 1\nline 2",
+                    })
                 )
-                assert.equal("Tell peer", summary)
-                assert.equal("agentic-nvim-c5", to)
-                assert.equal(note, parsed)
             end
-        end)
+        )
 
-        it("rejects a result of another shape", function()
-            assert.is_nil(
-                ClaudeUtils.cross_session_delivery(
-                    "Message queued for delivery to a1b2 at its next tool round."
-                )
-            )
+        it("gives no body without a message", function()
+            local update =
+                ClaudeUtils.send_message_update("toolu_1", { to = "peer" })
+            assert.equal("peer", update.argument)
+            assert.is_nil(update.body)
         end)
     end)
 

@@ -1,7 +1,7 @@
 --- Decoder for the records the Claude Code CLI writes to its transcript jsonl
 --- (`~/.claude/projects/<slug>/<session-id>.jsonl`) about what the ACP bridge
---- does not forward: hook activity, and files the CLI added to the model's
---- context without a tool call.
+--- does not forward: hook activity, files the CLI added to the model's
+--- context without a tool call, and the input of tool calls.
 ---
 --- Pure and stateless: one entry in, zero or more records out. Records do not
 --- carry the place they belong: that takes joins across entries. `link` gives
@@ -23,6 +23,13 @@ local M = {}
 --- @field kind "loaded_file"
 --- @field path string Absolute
 --- @field is_mention boolean An `@` file, not a rule
+--- @field timestamp? string
+
+--- @class agentic.acp.ClaudeToolUseRecord
+--- @field kind "tool_use"
+--- @field tool_call_id string
+--- @field tool_name string
+--- @field input table
 --- @field timestamp? string
 
 --- What a transcript entry says about where a load under it belongs.
@@ -279,6 +286,38 @@ local function loaded_file_record(entry)
     return record
 end
 
+--- One record per `tool_use` block of an assistant entry.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.ClaudeToolUseRecord[] records empty when the entry is not an assistant entry calling a tool
+local function tool_use_records(entry)
+    --- @type agentic.acp.ClaudeToolUseRecord[]
+    local records = {}
+    local content = entry.type == "assistant"
+        and type(entry.message) == "table"
+        and entry.message.content
+    if type(content) ~= "table" then
+        return records
+    end
+    for _, block in ipairs(content) do
+        if
+            type(block) == "table"
+            and block.type == "tool_use"
+            and type(block.id) == "string"
+            and type(block.name) == "string"
+            and type(block.input) == "table"
+        then
+            table.insert(records, {
+                kind = "tool_use",
+                tool_call_id = block.id,
+                tool_name = block.name,
+                input = block.input,
+                timestamp = entry.timestamp,
+            })
+        end
+    end
+    return records
+end
+
 --- Decode one transcript line.
 --- @param line string one raw line of the transcript jsonl
 --- @return table|nil entry nil when the line is not JSON
@@ -300,9 +339,9 @@ function M.verbatim(line)
     return record
 end
 
---- The hook records and loaded file a transcript entry carries.
+--- The hook records, loaded file and tool uses a transcript entry carries.
 --- @param entry table one decoded transcript line
---- @return (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord)[] records empty for an entry that carries neither
+--- @return (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord|agentic.acp.ClaudeToolUseRecord)[] records empty for an entry that carries none
 function M.records(entry)
     local loaded_file = loaded_file_record(entry)
     if loaded_file then
@@ -311,6 +350,10 @@ function M.records(entry)
     local hooks = attachment_records(entry)
     if #hooks > 0 then
         return hooks
+    end
+    local tool_uses = tool_use_records(entry)
+    if #tool_uses > 0 then
+        return tool_uses
     end
     return stop_feedback_records(entry)
 end

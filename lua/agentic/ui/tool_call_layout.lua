@@ -573,8 +573,8 @@ local function generic_body(call)
 end
 
 --- Fetch, WebSearch, SubAgent and mode-switch bodies are informational text
---- the agent wrote to itself, and a message body is a delivery report to the
---- agent: folded when multi-line, dimmed as sidecar content.
+--- the agent wrote to itself, and message bodies are traffic between agents:
+--- folded when multi-line, dimmed as sidecar content.
 --- @type agentic.ui.ToolCallLayout.Builder
 local function sidecar_body(call)
     local body = call.block.body

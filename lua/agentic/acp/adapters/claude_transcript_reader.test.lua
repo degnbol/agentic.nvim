@@ -247,6 +247,67 @@ describe("ClaudeTranscriptReader", function()
         assert.same({ "second" }, records[1].body)
     end)
 
+    describe("tool input", function()
+        --- @param uuid string
+        --- @param name string
+        --- @param input table
+        --- @param timestamp string|nil
+        --- @return table
+        local function tool_use(uuid, name, input, timestamp)
+            return transcript_entry("assistant", uuid, nil, {
+                timestamp = timestamp or AFTER,
+                message = {
+                    content = {
+                        {
+                            type = "tool_use",
+                            id = "toolu_" .. uuid,
+                            name = name,
+                            input = input,
+                        },
+                    },
+                },
+            })
+        end
+
+        it("returns a SendMessage call's head and message", function()
+            local reader = reader_at(transcript)
+            append({
+                tool_use("a-1", "SendMessage", {
+                    to = "peer",
+                    summary = "Tell peer",
+                    message = "hi",
+                }),
+            })
+
+            assert.same({
+                {
+                    kind = "tool_call",
+                    tool_call = {
+                        tool_call_id = "toolu_a-1",
+                        argument = "peer: Tell peer",
+                        body = { "hi" },
+                    },
+                },
+            }, reader:drain())
+        end)
+
+        it("returns nothing for another tool", function()
+            local reader = reader_at(transcript)
+            append({ tool_use("a-1", "Bash", { command = "ls" }) })
+
+            assert.same({}, reader:drain())
+        end)
+
+        it("skips a call the transcript already held", function()
+            append({
+                tool_use("a-0", "SendMessage", { to = "peer" }, BEFORE),
+            })
+            local reader = reader_at(transcript)
+
+            assert.same({}, reader:drain())
+        end)
+    end)
+
     it("drops a run the turn's cancellation stopped", function()
         local reader = reader_at(transcript)
         append({

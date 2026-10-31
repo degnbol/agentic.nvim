@@ -216,8 +216,8 @@ function ClaudeAgentACPAdapter:unsubscribe(session_id)
     ACPClient.unsubscribe(self, session_id)
 end
 
---- Hook records and loaded files from the CLI's transcript of the session.
---- Empty until the CLI has written the transcript.
+--- Hook records, loaded files and tool call input from the CLI's transcript
+--- of the session. Empty until the CLI has written the transcript.
 --- @param session_id string
 --- @return agentic.acp.SideRecord[]
 function ClaudeAgentACPAdapter:drain_side_records(session_id)
@@ -382,9 +382,9 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
     local had_raw_input = update.rawInput
         and not vim.tbl_isempty(update.rawInput)
     self:__apply_tool_identity(message, update)
+    self:__apply_message_result(message)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
-    self:__apply_message_result(message)
     -- The bridge reports a compaction as a synthetic call of this name.
     message.is_compaction = ClaudeUtils.tool_name(update) == "compact" or nil
     -- Top-level execute tool_calls arrive with empty rawInput (input streams
@@ -415,17 +415,18 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     end
 
     self:__apply_tool_identity(message, update)
+    self:__apply_message_result(message)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_edit_diff(message, update)
-    self:__apply_message_result(message)
 
     return message
 end
 
---- Replace the JSON result of a `SendMessage` or `SubagentHandback` call with
---- its text, and mark the call completed or failed by whether the message was
---- delivered. Any other body is left as it is. A message to another session
---- takes its head from the result and keeps only the delivery note as body.
+--- Mark a `SendMessage` or `SubagentHandback` call completed or failed by
+--- whether its JSON result says the message was delivered. A handback's body
+--- becomes the result's text. A `SendMessage` loses the result from its body,
+--- which its input fills, and keeps the result as failure reason when the
+--- call failed. Any other call is left as it is.
 ---
 --- The bridge leaves such a call visible when it queued the message or could
 --- not deliver it, and the raw result carries plumbing fields.
@@ -436,28 +437,17 @@ function ClaudeAgentACPAdapter:__apply_message_result(message)
         return
     end
     local lines, delivered = ClaudeUtils.message_result(message.body)
-    if not lines then
-        return
-    end
-    message.body = lines
     if delivered ~= nil then
         message.status = delivered and "completed" or "failed"
     end
-
-    if message.kind ~= "SendMessage" then
+    if message.kind == "SubagentHandback" then
+        message.body = lines or message.body
         return
     end
-    -- The bridge reports a message to another session once, completed, with
-    -- empty rawInput, so the result is the only source of `to` and `summary`.
-    local summary, to, note =
-        ClaudeUtils.cross_session_delivery(table.concat(lines, "\n"))
-    if summary then
-        message.argument = ClaudeUtils.tool_head(
-            message.kind,
-            { to = to, summary = summary },
-            "SendMessage"
-        )
-        message.body = { note }
+    local result = lines or message.body
+    message.body = nil
+    if message.status == "failed" then
+        message.failure_reason = result or message.failure_reason
     end
 end
 
@@ -557,6 +547,12 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
         message.kind = "switch_mode"
         message.argument = mode_label
         message.exits_plan = tool_name == "ExitPlanMode" or nil
+        return
+    elseif kind == "SendMessage" then
+        local input_update =
+            ClaudeUtils.send_message_update(message.tool_call_id, rawInput)
+        set_head(message, input_update.argument)
+        message.body = input_update.body or message.body
         return
     end
 

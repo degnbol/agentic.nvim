@@ -4556,6 +4556,7 @@ describe("agentic.SessionManager", function()
                 chat_history = ChatHistory:new(),
                 status_indicator = { reposition = noop, start = noop },
                 _tool_call_owner = {},
+                _held_tool_call_updates = {},
                 _agents = {},
                 _loading = false,
                 _drain_side_records = noop,
@@ -4620,6 +4621,100 @@ describe("agentic.SessionManager", function()
             assert.equal("grep x f", record.argument)
             assert.equal("execute", record.kind)
             assert.equal("completed", record.status)
+        end)
+
+        describe("tool call side records", function()
+            --- Make `update` the side record the next drain returns, once.
+            --- @param update agentic.ui.MessageWriter.ToolCallBase
+            local function record_tool_call(update)
+                local sides = { { kind = "tool_call", tool_call = update } }
+                session.session_id = "s-1"
+                session.destroyed = false
+                session._drain_side_records = SessionManager._drain_side_records
+                session._apply_side_tool_call =
+                    SessionManager._apply_side_tool_call
+                session.agent = {
+                    drain_side_records = function()
+                        local drained = sides
+                        sides = {}
+                        return drained
+                    end,
+                } --[[@as agentic.acp.ACPClient]]
+            end
+
+            --- Drain `update` as a side record.
+            --- @param update agentic.ui.MessageWriter.ToolCallBase
+            local function drain_tool_call(update)
+                record_tool_call(update)
+                session:_drain_side_records()
+            end
+
+            --- @type agentic.ui.MessageWriter.ToolCallBase
+            local UPDATE = {
+                tool_call_id = "tc-msg",
+                argument = "peer: Tell peer",
+                body = { "hi" },
+            }
+
+            local function send_message()
+                session:_on_tool_call({
+                    tool_call_id = "tc-msg",
+                    kind = "SendMessage",
+                    argument = "",
+                    status = "completed",
+                })
+            end
+
+            it("adds to a call already in the chat", function()
+                send_message()
+                drain_tool_call(UPDATE)
+
+                local tracker =
+                    session.message_writer.tool_call_blocks["tc-msg"]
+                local record = session.chat_history.messages[1]
+                for _, message in ipairs({ tracker, record }) do
+                    assert.equal("peer: Tell peer", message.argument)
+                    assert.same({ "hi" }, message.body)
+                    assert.equal("completed", message.status)
+                end
+            end)
+
+            it("holds an update until its call is in the chat", function()
+                drain_tool_call(UPDATE)
+                assert.is_nil(session.message_writer.tool_call_blocks["tc-msg"])
+
+                send_message()
+
+                local tracker =
+                    session.message_writer.tool_call_blocks["tc-msg"]
+                local record = session.chat_history.messages[1]
+                for _, message in ipairs({ tracker, record }) do
+                    assert.equal("peer: Tell peer", message.argument)
+                    assert.same({ "hi" }, message.body)
+                end
+                assert.same({}, session._held_tool_call_updates)
+            end)
+
+            it(
+                "reads side records when a call is first reported ended",
+                function()
+                    record_tool_call(UPDATE)
+
+                    send_message()
+
+                    local tracker =
+                        session.message_writer.tool_call_blocks["tc-msg"]
+                    assert.equal("peer: Tell peer", tracker.argument)
+                end
+            )
+
+            it("drops held updates at the turn's end", function()
+                drain_tool_call(UPDATE)
+                session._finalize_turn = SessionManager._finalize_turn
+                session:_finalize_turn(nil)
+
+                assert.same({}, session._held_tool_call_updates)
+            end)
         end)
 
         it("records no rendering state in history", function()

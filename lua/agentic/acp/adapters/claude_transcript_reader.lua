@@ -1,5 +1,6 @@
 local ClaudeTranscriptRecords =
     require("agentic.acp.adapters.claude_transcript_records")
+local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local FileSystem = require("agentic.utils.file_system")
 local List = require("agentic.utils.list")
 local Logger = require("agentic.utils.logger")
@@ -16,9 +17,31 @@ local NO_PLACE = {
     injected = false,
 }
 
+--- The fields a `SendMessage` tool use adds to its tool call, nil for any
+--- other tool.
+---
+--- The bridge withholds a `SendMessage` call until it ends, then reports it
+--- from its first and last notifications, neither of which carries the input
+--- (`unexposedControlFallback` in claude-agent-acp's `native-subagents.js`).
+--- @param record agentic.acp.ClaudeToolUseRecord
+--- @return agentic.acp.SideRecord|nil side
+local function tool_use_side_record(record)
+    if record.tool_name ~= "SendMessage" then
+        return nil
+    end
+    return {
+        kind = "tool_call",
+        tool_call = ClaudeUtils.send_message_update(
+            record.tool_call_id,
+            record.input
+        ),
+    }
+end
+
 --- Tails one ACP session's Claude Code transcript jsonl for what the ACP
---- bridge does not forward: hook activity, and files the CLI loaded into the
---- model's context without a tool call. One reader per session.
+--- bridge does not forward: hook activity, files the CLI loaded into the
+--- model's context without a tool call, and the input of `SendMessage` calls.
+--- One reader per session.
 ---
 --- Drains are empty until a transcript path is set. Records that predate the
 --- reader are discarded, so the first drain of a resumed session does not
@@ -154,7 +177,7 @@ function ClaudeTranscriptReader:_read_line(line)
     end
     local place = link and self._links[link.uuid] or NO_PLACE
 
-    --- @type (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord)[]
+    --- @type (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord|agentic.acp.ClaudeToolUseRecord)[]
     local entry_records = {}
     for _, record in ipairs(ClaudeTranscriptRecords.records(entry)) do
         if record.kind == "hook" and record.group == "context_run" then
@@ -172,8 +195,10 @@ function ClaudeTranscriptReader:_read_line(line)
             local side
             if record.kind == "hook" then
                 side = self:_hook_side_record(record, place)
-            else
+            elseif record.kind == "loaded_file" then
                 side = self:_loaded_file_side_record(record, place)
+            else
+                side = tool_use_side_record(record)
             end
             if side then
                 table.insert(records, side)
@@ -187,7 +212,7 @@ end
 --- `duration_ms` and `hook_name` of the run in `_context_runs` that produced
 --- it, and remove that run from `_context_runs`. The record keeps its own
 --- body: it is what the model received.
---- @param records (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord)[] one entry's records. Paired ones are updated in place
+--- @param records (agentic.acp.ClaudeHookRecord|agentic.acp.ClaudeLoadedFileRecord|agentic.acp.ClaudeToolUseRecord)[] one entry's records. Paired ones are updated in place
 function ClaudeTranscriptReader:_pair_contexts(records)
     -- A context's text equals its run's `additionalContext` unless the CLI
     -- replaced a large one with a pointer, and a SessionStart context's

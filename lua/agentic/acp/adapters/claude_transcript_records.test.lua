@@ -445,6 +445,37 @@ describe("ClaudeTranscriptRecords", function()
         end)
     end)
 
+    describe("tool uses", function()
+        it("gives a record per tool_use block of an assistant entry", function()
+            local records = decode(vim.json.encode({
+                type = "assistant",
+                uuid = "u-9",
+                timestamp = "2026-08-28T10:00:00.000Z",
+                message = {
+                    content = {
+                        { type = "text", text = "Sending." },
+                        {
+                            type = "tool_use",
+                            id = "toolu_1",
+                            name = "SendMessage",
+                            input = { to = "peer", message = "hi" },
+                        },
+                    },
+                },
+            }))
+
+            assert.same({
+                {
+                    kind = "tool_use",
+                    tool_call_id = "toolu_1",
+                    tool_name = "SendMessage",
+                    input = { to = "peer", message = "hi" },
+                    timestamp = "2026-08-28T10:00:00.000Z",
+                },
+            }, records)
+        end)
+    end)
+
     describe("lines that carry nothing", function()
         it("ignores a conversation entry", function()
             assert.same(

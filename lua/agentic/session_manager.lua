@@ -94,6 +94,7 @@ end
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
+--- @field _held_tool_call_updates table<string, agentic.ui.MessageWriter.ToolCallBase> toolCallId -> fields a side record gave a call the chat does not show yet; dropped at the turn's end
 --- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
 --- @field _message_infos table<string, agentic.SessionMessageInfo> Kind and summary of each session message by message id, decided at its first view
 --- @field _delegated table<string, true> Session ids of the subagents a delegation has reached
@@ -374,6 +375,7 @@ function SessionManager:new(provider)
         _inputs = {},
         _agent_by_task = {},
         _tool_call_owner = {},
+        _held_tool_call_updates = {},
         _seen_messages = {},
         _message_infos = {},
         _delegated = {},
@@ -2249,6 +2251,13 @@ function SessionManager:_build_handlers()
     }
 end
 
+--- Whether a tool call status is one the provider reports as the call's end.
+--- @param status string|nil
+--- @return boolean
+local function has_ended(status)
+    return status == "completed" or status == "failed"
+end
+
 --- Handle initial tool_call: write to UI, store in history, track plan exit.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
@@ -2270,6 +2279,11 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         parent = self:_task_of(child_id)
     end
 
+    local held = self._held_tool_call_updates[id]
+    if held then
+        self._held_tool_call_updates[id] = nil
+        tool_call = vim.tbl_extend("force", tool_call, held) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
+    end
     tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
     tool_call.decided_by = self.permission_manager:take_deciders(id)
     self:_writer_for(id):write_tool_call_block(tool_call)
@@ -2286,6 +2300,11 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
 
     self:_try_record_edit_range(tool_call.tool_call_id)
     self:_record_file_op(tool_call.tool_call_id)
+
+    -- A call can be first reported already ended; see `_on_tool_call_update`.
+    if not child_id and has_ended(tool_call.status) then
+        self:_drain_side_records()
+    end
 end
 
 --- Show what decided a tool call's permission on its block and keep it in the
@@ -2685,8 +2704,9 @@ local function passed_blocks(records)
 end
 
 --- Write the hook activity and loaded files recorded since the last drain to
---- the chat buffer, each record at the anchor it names. Hooks that passed
---- follow the rest, gathered into one block per anchor.
+--- the chat buffer, each record at the anchor it names, and add recorded tool
+--- call fields to their calls. Hooks that passed follow the rest, gathered
+--- into one block per anchor.
 function SessionManager:_drain_side_records()
     if self.destroyed or not self.session_id then
         return
@@ -2696,6 +2716,8 @@ function SessionManager:_drain_side_records()
     for _, side in ipairs(self.agent:drain_side_records(self.session_id)) do
         if side.kind == "loaded_file" then
             self.message_writer:write_loaded_file(side.loaded_file)
+        elseif side.kind == "tool_call" then
+            self:_apply_side_tool_call(side.tool_call)
         elseif side.hook.group == "passed" then
             table.insert(passes, side.hook)
         else
@@ -2713,6 +2735,22 @@ function SessionManager:_drain_side_records()
     for _, block in ipairs(passed_blocks(passes)) do
         self.message_writer:write_hook_block(block)
     end
+end
+
+--- Add fields a side record gave a tool call to its block and its history
+--- record, or hold them until the call is reported: a provider can record a
+--- call before reporting it.
+--- @param update agentic.ui.MessageWriter.ToolCallBase
+function SessionManager:_apply_side_tool_call(update)
+    local id = update.tool_call_id
+    local writer = self:_writer_for(id)
+    if not writer.tool_call_blocks[id] then
+        self._held_tool_call_updates[id] = update
+        return
+    end
+    writer:update_tool_call_block(update)
+    self.chat_history:update_tool_call(id, ChatHistory.tool_call_record(update))
+    self:_history_changed(self.chat_history)
 end
 
 --- Stamp `cancelled` on one writer's tool call blocks that have no final
@@ -2774,6 +2812,8 @@ function SessionManager:_finalize_turn(usage)
     -- relative to the prose run does not matter; `_write_collapsed_region`
     -- brackets the run it ends.
     self:_drain_side_records()
+    -- A call not reported by the turn's end never will be.
+    self._held_tool_call_updates = {}
 end
 
 --- Apply a tool call update to its chat block, the chat history and the
@@ -2810,11 +2850,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     )
     -- A subagent can outlive its turn, so outside a turn its output is written
     -- as each of its calls ends, not per update.
-    if
-        is_subagent
-        and tool_call_update.status ~= "completed"
-        and tool_call_update.status ~= "failed"
-    then
+    if is_subagent and not has_ended(tool_call_update.status) then
         self:_sync_modified(self.chat_history)
     else
         self:_history_changed(self.chat_history)
@@ -2878,13 +2914,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- waiting for the turn-end drain — where they land is settled by the
     -- anchor each record carries, not by when the drain runs. Subagent calls
     -- do not trigger a drain: only the root session's records are drained.
-    if
-        not is_subagent
-        and (
-            tool_call_update.status == "completed"
-            or tool_call_update.status == "failed"
-        )
-    then
+    if not is_subagent and has_ended(tool_call_update.status) then
         self:_drain_side_records()
     end
 end

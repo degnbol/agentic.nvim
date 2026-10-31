@@ -900,25 +900,35 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 }
             end
 
-            it("shows only the message of a queued result", function()
+            --- A delivered result, as JSON.
+            local DELIVERED = vim.json.encode({
+                message = "Message queued for delivery to a1b2 at its next tool round.",
+                pin = { id = "a1b2", name = "a1b2", ref = "r1" },
+                success = true,
+            })
+
+            it("shows the message, not a delivered result", function()
                 local adapter, calls = make_capturing_adapter()
-                local result = vim.json.encode({
-                    message = "Message queued for delivery to a1b2 at its next tool round.\nSecond line.",
-                    pin = { id = "a1b2", name = "a1b2", ref = "r1" },
-                    success = true,
-                })
 
                 adapter:__handle_tool_call(
                     "s-1",
-                    with_result(result, "completed")
+                    with_result(DELIVERED, "completed")
                 )
 
-                assert.same({
-                    "Message queued for delivery to a1b2 at its next tool round.",
-                    "Second line.",
-                }, calls[1].body)
+                assert.same({ "Also lib/." }, calls[1].body)
                 assert.equal("completed", calls[1].status)
                 assert.equal("a1b2", calls[1].argument)
+            end)
+
+            it("shows no body when the input is withheld", function()
+                local adapter, calls = make_capturing_adapter()
+                local notification = with_result(DELIVERED, "completed")
+                notification.rawInput = vim.empty_dict()
+
+                adapter:__handle_tool_call("s-1", notification)
+
+                assert.is_nil(calls[1].body)
+                assert.equal("", calls[1].argument)
             end)
 
             it("fails a call whose result was not delivered", function()
@@ -932,7 +942,8 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                     )
                 )
 
-                assert.same({ "No such agent." }, msg.body)
+                assert.same({ "No such agent." }, msg.failure_reason)
+                assert.same({ "Also lib/." }, msg.body)
                 assert.equal("failed", msg.status)
             end)
 
@@ -956,40 +967,24 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 end
             )
 
-            it("leaves a body that is not such an object as it is", function()
-                local msg = make_adapter():__build_tool_call_update(
-                    with_result("Sent.", "completed")
-                )
+            it("drops a plain-text result from the body", function()
+                local notification = with_result("Sent.", "completed")
+                notification.rawInput = vim.empty_dict()
+                local msg =
+                    make_adapter():__build_tool_call_update(notification)
 
-                assert.same({ "Sent." }, msg.body)
+                assert.is_nil(msg.body)
                 assert.equal("completed", msg.status)
             end)
 
-            it(
-                "takes the head of a cross-session message from its result",
-                function()
-                    local adapter, calls = make_capturing_adapter()
-                    local notification = with_result(
-                        vim.json.encode({
-                            message = "“Tell peer it can commit” → agentic-nvim-c5 (another Claude session on this machine; queued there)",
-                            success = true,
-                        }),
-                        "completed"
-                    )
-                    notification.rawInput = vim.empty_dict()
+            it("keeps a failed call's plain-text result as reason", function()
+                local msg = make_adapter():__build_tool_call_update(
+                    with_result("Socket closed.", "failed")
+                )
 
-                    adapter:__handle_tool_call("s-1", notification)
-
-                    assert.equal(
-                        "agentic-nvim-c5: Tell peer it can commit",
-                        calls[1].argument
-                    )
-                    assert.same({
-                        "another Claude session on this machine; queued there",
-                    }, calls[1].body)
-                    assert.equal("completed", calls[1].status)
-                end
-            )
+                assert.same({ "Socket closed." }, msg.failure_reason)
+                assert.same({ "Also lib/." }, msg.body)
+            end)
         end)
 
         describe("the task-control family", function()

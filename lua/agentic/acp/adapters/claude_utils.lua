@@ -212,14 +212,22 @@ function M.message_result(body)
     return vim.split(decoded.message, "\n", { plain = true }), delivered
 end
 
---- The parts of a messaging tool's result text for a message to another
---- session, `“<summary>” → <to> (<note>)`.
---- @param text string Result text
---- @return string|nil summary Nil when `text` has another shape
---- @return string|nil to Addressee
---- @return string|nil note Delivery state, written for the sending agent
-function M.cross_session_delivery(text)
-    return text:match("^“(.-)” → (%S+) %((.*)%)$")
+--- The head and body a `SendMessage` call shows, from its input: the
+--- addressee and summary as head, the message as body.
+--- @param tool_call_id string
+--- @param input agentic.acp.ClaudeAgentRawInput
+--- @return agentic.ui.MessageWriter.ToolCallBase update No `status`; `argument` nil without an addressee, `body` nil without a message
+function M.send_message_update(tool_call_id, input)
+    local head = HEADS.SendMessage(input, "SendMessage")
+    local message = nonempty(input, "message")
+    --- @type agentic.ui.MessageWriter.ToolCallBase
+    --- @diagnostic disable-next-line: missing-fields
+    local update = {
+        tool_call_id = tool_call_id,
+        argument = head ~= "" and head or nil,
+        body = message and vim.split(message, "\n", { plain = true }),
+    }
+    return update
 end
 
 --- Claude Code's config directory: `CLAUDE_CONFIG_DIR` from `env`, else from
