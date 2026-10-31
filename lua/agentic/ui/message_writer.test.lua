@@ -1033,18 +1033,6 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(writer._pending_fold_ops[1].open)
         end)
 
-        it("keeps a preformatted block's rows whole", function()
-            local row = "`/hooks/a-very-long-hook-name.sh` · 61 ms"
-            Config.windows.wrap_width = 20
-            writer:write_hook_block({
-                body = { row, "`/h.sh` · 2.8 s" },
-                preformatted = true,
-            })
-
-            assert.equal(row, buffer_lines()[2])
-            assert.equal("`/h.sh` · 2.8 s", buffer_lines()[3])
-        end)
-
         it("marks a failed block with the failed glyph", function()
             writer:write_hook_block({
                 body = { "exited 127", "command not found" },
@@ -1604,20 +1592,143 @@ describe("agentic.ui.MessageWriter", function()
             }, lines_after_footer())
         end)
 
-        it("opens the pending section break for an unanchored row", function()
+        it("leaves the section break pending for an unanchored row", function()
             local block = make_tool_call_block("t1", "completed")
             block.description = "list the directory"
             writer:write_tool_call_block(block)
 
             writer:write_loaded_file({ path = "/r/a.md" })
+            assert.same({ "", file_row("/r/a.md"), "" }, lines_after_footer())
 
+            writer:write_message_chunk(make_message_update("after the call\n"))
             assert.same({
-                "",
-                "###",
                 "",
                 file_row("/r/a.md"),
                 "",
+                "###",
+                "",
+                "after the call",
+                "",
             }, lines_after_footer())
+        end)
+
+        it("opens the section break for a region after end rows", function()
+            local block = make_tool_call_block("t1", "completed")
+            block.description = "list the directory"
+            writer:write_tool_call_block(block)
+
+            writer:write_loaded_file({ path = "/r/a.md" })
+            writer:write_hook_block({
+                body = { "injected", "context" },
+                title = "`guard.sh`",
+            })
+
+            assert.same({
+                "",
+                file_row("/r/a.md"),
+                "",
+                "###",
+                "",
+                "```markdown-fold",
+                "`guard.sh`",
+                "injected",
+                "context",
+                "```",
+                "",
+            }, lines_after_footer())
+        end)
+
+        describe("write_hook_row", function()
+            local TEXT = "`/hooks/guard.sh` · 30 ms"
+
+            --- Rows dimmed as `AgenticDimmedBlock`, 0-indexed.
+            --- @return integer[]
+            local function dimmed_rows()
+                local rows = {}
+                for _, mark in
+                    ipairs(
+                        vim.api.nvim_buf_get_extmarks(
+                            bufnr,
+                            Renderer.NS_DECORATIONS,
+                            0,
+                            -1,
+                            { details = true }
+                        )
+                    )
+                do
+                    if mark[4].hl_group == "AgenticDimmedBlock" then
+                        for row = mark[2], mark[4].end_row - 1 do
+                            table.insert(rows, row)
+                        end
+                    end
+                end
+                return rows
+            end
+
+            it("writes a dimmed row under the hook glyph", function()
+                writer:write_hook_row({ text = TEXT })
+
+                assert.same({ "  " .. TEXT, "" }, buffer_lines())
+                assert.same({ { 0, Glyphs.HOOK .. " " } }, rail())
+                assert.same({ 0 }, dimmed_rows())
+            end)
+
+            it("keeps a row wider than the wrap width whole", function()
+                Config.windows.wrap_width = 20
+                writer:write_hook_row({ text = TEXT })
+
+                assert.equal("  " .. TEXT, buffer_lines()[1])
+            end)
+
+            it("keeps two rows under one call contiguous", function()
+                call_then_prose()
+
+                writer:write_hook_row({ text = "`a.sh`", tool_call_id = "t1" })
+                writer:write_hook_row({ text = "`b.sh`", tool_call_id = "t1" })
+
+                assert.same({
+                    "",
+                    "  `a.sh`",
+                    "  `b.sh`",
+                    "",
+                    "###",
+                    "",
+                    "after the call",
+                    "",
+                }, lines_after_footer())
+                local first = vim.fn.index(buffer_lines(), "  `a.sh`")
+                assert.same({ first, first + 1 }, dimmed_rows())
+                assert_one_sign_per_row()
+            end)
+
+            it("keeps two unanchored rows after a call contiguous", function()
+                local block = make_tool_call_block("t1", "completed")
+                block.description = "list the directory"
+                writer:write_tool_call_block(block)
+
+                writer:write_hook_row({ text = "`a.sh`" })
+                writer:write_hook_row({ text = "`b.sh`" })
+
+                assert.same(
+                    { "", "  `a.sh`", "  `b.sh`", "" },
+                    lines_after_footer()
+                )
+            end)
+
+            it("joins a loaded-file row group at the end", function()
+                writer:write_loaded_file({ path = "/r/a.md" })
+                writer:write_hook_row({ text = TEXT })
+                writer:write_loaded_file({ path = "/r/b.md" })
+
+                assert.same({
+                    file_row("/r/a.md"),
+                    "  " .. TEXT,
+                    file_row("/r/b.md"),
+                    "",
+                }, buffer_lines())
+                assert.same({ 1 }, dimmed_rows())
+                assert_one_sign_per_row()
+            end)
         end)
 
         it("forgets the anchors on reset", function()

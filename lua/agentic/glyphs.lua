@@ -98,9 +98,10 @@ Glyphs.THINKING_SIGN = Glyphs.THINKING .. " "
 --- what the reader wants to know is that the model stopped to think.
 Glyphs.KIND.think = Glyphs.THINKING
 
---- Identity of a hook's activity (`MessageWriter:write_hook_block`). The one
---- region whose glyph names the mechanism rather than the content: a hook can
---- deliver anything, so the reader's question is which script spoke.
+--- Identity of a hook's activity (`MessageWriter:write_hook_block`,
+--- `MessageWriter:write_hook_row`). The one glyph that names the mechanism
+--- rather than the content: a hook can deliver anything, so the reader's
+--- question is which script spoke.
 Glyphs.HOOK = "󰛢"
 
 --- Identity of a hook run that failed: it timed out or exited non-zero with

@@ -2356,32 +2356,48 @@ describe("agentic.SessionManager", function()
         --- @return agentic.SessionManager
         --- @return agentic.ui.MessageWriter.HookBlock[] written one per write_hook_block call
         --- @return agentic.acp.LoadedFile[] loaded one per write_loaded_file call
+        --- @return agentic.ui.MessageWriter.HookRow[] rows one per write_hook_row call
+        --- @return string[] calls the writer methods called, in order
         local function make_session(records)
             local sides = vim.tbl_map(function(record)
                 return record.kind and record
                     or { kind = "hook", hook = record }
             end, records)
-            local written, loaded = {}, {}
+            local written, loaded, rows, calls = {}, {}, {}, {}
+            --- @param list table[]
+            --- @param method string
+            --- @return fun(self: table, arg: table)
+            local function record_into(list, method)
+                return function(_self, arg)
+                    table.insert(list, arg)
+                    table.insert(calls, method)
+                end
+            end
             --- @type agentic.SessionManager
             local session = {
                 destroyed = false,
                 session_id = "s-1",
+                _agents = {},
+                _agent_by_task = {},
                 _drain_side_records = SessionManager._drain_side_records,
+                _block_id = SessionManager._block_id,
+                _read_agent_record = function() end,
                 agent = {
                     drain_side_records = function()
                         return sides
                     end,
                 },
                 message_writer = {
-                    write_hook_block = function(_self, block)
-                        table.insert(written, block)
-                    end,
-                    write_loaded_file = function(_self, file)
-                        table.insert(loaded, file)
-                    end,
+                    tool_call_blocks = {},
+                    write_hook_block = record_into(written, "write_hook_block"),
+                    write_hook_row = record_into(rows, "write_hook_row"),
+                    write_loaded_file = record_into(
+                        loaded,
+                        "write_loaded_file"
+                    ),
                 },
             } --[[@as agentic.SessionManager]]
-            return session, written, loaded
+            return session, written, loaded, rows, calls
         end
 
         it("sends a loaded file to its writer method", function()
@@ -2409,27 +2425,24 @@ describe("agentic.SessionManager", function()
             assert.is_true(written[2].after_compaction)
         end)
 
-        it(
-            "gathers passes after the prompt into a block of their own",
-            function()
-                local session, written = make_session({
-                    { group = "passed", body = {}, command = "/h/a.sh" },
-                    {
-                        group = "passed",
-                        body = {},
-                        command = "/h/b.sh",
-                        after_prompt = true,
-                    },
-                })
+        it("forwards a pass's prompt anchor to its row", function()
+            local session, _, _, rows = make_session({
+                { group = "passed", body = {}, command = "/h/a.sh" },
+                {
+                    group = "passed",
+                    body = {},
+                    command = "/h/b.sh",
+                    after_prompt = true,
+                },
+            })
 
-                session:_drain_side_records()
+            session:_drain_side_records()
 
-                assert.same({ "`/h/a.sh`" }, written[1].body)
-                assert.is_nil(written[1].after_prompt)
-                assert.same({ "`/h/b.sh`" }, written[2].body)
-                assert.is_true(written[2].after_prompt)
-            end
-        )
+            assert.equal("`/h/a.sh`", rows[1].text)
+            assert.is_nil(rows[1].after_prompt)
+            assert.equal("`/h/b.sh`", rows[2].text)
+            assert.is_true(rows[2].after_prompt)
+        end)
 
         it("renders injected context", function()
             local session, written = make_session({
@@ -2549,7 +2562,7 @@ describe("agentic.SessionManager", function()
             assert.is_false(written[1].failed)
         end)
 
-        it("gathers a call's passes into one block after the rest", function()
+        it("writes a call's passes as rows after the rest", function()
             --- @param command string
             --- @return table
             local function pass(command)
@@ -2564,7 +2577,7 @@ describe("agentic.SessionManager", function()
             slow.duration_ms = 2760
             local fast = pass("'/hooks/a guard.sh'")
             fast.duration_ms = 61
-            local session, written = make_session({
+            local session, written, _, rows, calls = make_session({
                 fast,
                 {
                     group = "context",
@@ -2577,37 +2590,143 @@ describe("agentic.SessionManager", function()
 
             session:_drain_side_records()
 
-            assert.equal(2, #written)
+            assert.same({
+                "write_hook_block",
+                "write_hook_row",
+                "write_hook_row",
+                "write_hook_row",
+            }, calls)
             assert.same({ "ctx" }, written[1].body)
             assert.same({
-                body = {
-                    "`'/hooks/a guard.sh'` · 61 ms",
-                    "`/hooks/lint.sh` · 2.8 s",
-                    "`/hooks/untimed.sh`",
-                },
-                tool_call_id = "toolu_1",
-                preformatted = true,
-            }, written[2])
-        end)
-
-        it("gives the passes of each call a block of their own", function()
-            local session, written = make_session({
-                { group = "passed", body = {}, command = "/h/a.sh" },
                 {
-                    group = "passed",
-                    body = {},
-                    command = "/h/b.sh",
+                    text = "`'/hooks/a guard.sh'` · 61 ms",
                     tool_call_id = "toolu_1",
                 },
-                { group = "passed", body = {}, command = "/h/c.sh" },
-            })
-
-            session:_drain_side_records()
-
-            assert.same({ "`/h/a.sh`", "`/h/c.sh`" }, written[1].body)
-            assert.is_nil(written[1].tool_call_id)
-            assert.same({ "`/h/b.sh`" }, written[2].body)
+                {
+                    text = "`/hooks/lint.sh` · 2.8 s",
+                    tool_call_id = "toolu_1",
+                },
+                { text = "`/hooks/untimed.sh`", tool_call_id = "toolu_1" },
+            }, rows)
         end)
+
+        describe(
+            "a record naming a call that delegated to a subagent",
+            function()
+                --- A context record, a pass and a loaded file, all naming `id`.
+                --- @param id string
+                --- @return table[]
+                local function records_naming(id)
+                    return {
+                        {
+                            group = "context",
+                            body = { "ctx" },
+                            tool_call_id = id,
+                        },
+                        { group = "passed", body = {}, tool_call_id = id },
+                        {
+                            kind = "loaded_file",
+                            loaded_file = {
+                                path = "/r/a.md",
+                                tool_call_id = id,
+                            },
+                        },
+                    }
+                end
+
+                it("goes under the subagent's block", function()
+                    local session, written, loaded, rows =
+                        make_session(records_naming("toolu_1"))
+                    session._agent_by_task.toolu_1 = "child-1"
+
+                    session:_drain_side_records()
+
+                    assert.equal("child-1", written[1].tool_call_id)
+                    assert.equal("child-1", loaded[1].tool_call_id)
+                    assert.equal("child-1", rows[1].tool_call_id)
+                end)
+
+                it(
+                    "keeps its id when the call has a block of its own",
+                    function()
+                        local session, written, loaded, rows =
+                            make_session(records_naming("toolu_1"))
+                        session._agent_by_task.toolu_1 = "child-1"
+                        session.message_writer.tool_call_blocks.toolu_1 = {}
+
+                        session:_drain_side_records()
+
+                        assert.equal("toolu_1", written[1].tool_call_id)
+                        assert.equal("toolu_1", loaded[1].tool_call_id)
+                        assert.equal("toolu_1", rows[1].tool_call_id)
+                    end
+                )
+
+                it("keeps an id no subagent is linked to", function()
+                    local session, written, loaded, rows =
+                        make_session(records_naming("toolu_1"))
+
+                    session:_drain_side_records()
+
+                    assert.equal("toolu_1", written[1].tool_call_id)
+                    assert.equal("toolu_1", loaded[1].tool_call_id)
+                    assert.equal("toolu_1", rows[1].tool_call_id)
+                end)
+
+                it("reads every subagent's record before mapping", function()
+                    local session, written =
+                        make_session(records_naming("toolu_1"))
+                    session._agents = { ["child-1"] = {}, ["child-2"] = {} }
+                    local read = {}
+                    session._read_agent_record = function(self, child_id)
+                        table.insert(read, child_id)
+                        if child_id == "child-1" then
+                            self._agent_by_task.toolu_1 = child_id
+                        end
+                    end
+
+                    session:_drain_side_records()
+
+                    table.sort(read)
+                    assert.same({ "child-1", "child-2" }, read)
+                    assert.equal("child-1", written[1].tool_call_id)
+                end)
+
+                --- How many subagent records a drain reads once `change` is
+                --- applied to the session.
+                --- @param change fun(session: agentic.SessionManager)
+                --- @return integer
+                local function reads_after(change)
+                    local session = make_session(records_naming("toolu_1"))
+                    session._agents = { ["child-1"] = {} }
+                    change(session)
+                    local reads = 0
+                    session._read_agent_record = function()
+                        reads = reads + 1
+                    end
+                    session:_drain_side_records()
+                    return reads
+                end
+
+                it("reads no record once the session is destroyed", function()
+                    assert.equal(
+                        0,
+                        reads_after(function(session)
+                            session.destroyed = true
+                        end)
+                    )
+                end)
+
+                it("reads no record without a session", function()
+                    assert.equal(
+                        0,
+                        reads_after(function(session)
+                            session.session_id = nil
+                        end)
+                    )
+                end)
+            end
+        )
 
         it("writes nothing once the session is destroyed", function()
             local session, written =
@@ -3137,6 +3256,7 @@ describe("agentic.SessionManager", function()
                 _tool_call_owner = {},
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_side_records = SessionManager._drain_side_records,
+                _read_agent_record = SessionManager._read_agent_record,
                 _held_tool_call_updates = {},
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {

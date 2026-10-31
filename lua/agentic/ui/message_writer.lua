@@ -186,7 +186,7 @@ end
 --- @field _newly_shown table<integer, true> Following windows that newly show the buffer, whose next scroll starts from the top: vim restores such a window's cursor from its history after BufWinEnter, possibly below the follow target, and `BufHelpers.scroll_down` never scrolls up. Cleared by that scroll, or when the window goes to user control.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter of a window that shows the buffer again. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
---- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
+--- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk or collapsed region appended at the end emit the empty `###` boundary that closes the interrupting section. Cleared by that write and at the turn boundary.
 --- @field _notices table<string, { mark: integer, height: integer }> Notice id -> the heading's mark in NS_USER_ACTIONS, and the number of rows of heading and body
 --- @field _prompt_anchor? agentic.ui.MessageWriter.Placed What was placed beneath the last prompt
 --- @field _last_compaction_id? string Tool call id of the last compaction's block
@@ -1335,7 +1335,6 @@ end
 --- @field body string[] The hook's output, unwrapped
 --- @field title? string First row of the region, above the body and never wrapped
 --- @field failed? boolean The hook timed out or exited non-zero with an error
---- @field preformatted? boolean Write each body row as it is rather than prose-wrapped, so a path in it stays whole for `gf`
 
 --- Render hook activity as a collapsed region carrying the hook glyph and led
 --- by `block.title`, which its closed fold's foldtext leads with too. An empty
@@ -1358,11 +1357,8 @@ end
 --- session shows none of these. Missing work, not a rendering bug.
 --- @param block agentic.ui.MessageWriter.HookBlock
 function MessageWriter:write_hook_block(block)
-    local wrapped, table_row_ends = block.body, nil
-    if not block.preformatted then
-        wrapped, table_row_ends =
-            TextWrap.wrap_prose(block.body, Config.windows.wrap_width)
-    end
+    local wrapped, table_row_ends =
+        TextWrap.wrap_prose(block.body, Config.windows.wrap_width)
     if #wrapped == 0 then
         return
     end
@@ -1406,33 +1402,59 @@ function MessageWriter:write_hook_block(block)
     self:_write_collapsed_region(wrapped, sign, opts)
 end
 
+--- @class agentic.ui.MessageWriter.HookRow : agentic.acp.Anchor
+--- @field text string The row, never wrapped
+
+--- Write one dimmed row under the hook glyph, right after what caused it, or
+--- at the end when that is not in the buffer (`_place_row`).
+--- @param hook agentic.ui.MessageWriter.HookRow
+function MessageWriter:write_hook_row(hook)
+    self:_place_row(hook, hook.text, function(bufnr, at)
+        vim.api.nvim_buf_set_extmark(bufnr, Renderer.NS_DECORATIONS, at, 0, {
+            sign_text = Glyphs.HOOK .. " ",
+            sign_hl_group = Theme.HL_GROUPS.GLYPH_AGENT,
+        })
+        Renderer.set_dim_range(bufnr, at, at)
+    end)
+end
+
 --- Write one file the provider loaded into context as a row right after what
---- caused it, or at the end when that is not in the buffer. The row is the
---- path as one code span, signed with the read glyph: a load is a file read.
---- Rows under one anchor are contiguous.
+--- caused it, or at the end when that is not in the buffer (`_place_row`).
+--- The row is the path as one code span, signed with the read glyph: a load
+--- is a file read.
 --- @param file agentic.acp.LoadedFile
 function MessageWriter:write_loaded_file(file)
-    -- Indented less than a code block's four spaces so markdown keeps it a
-    -- paragraph. The span's backtick run is safe for any path, and `gf` stops
-    -- at the concealed backticks.
-    local row = "  "
-        .. MarkdownGuard.whole_within(
-            FileSystem.to_smart_path(file.path),
-            math.huge
-        )
+    -- The span's backtick run is safe for any path, and `gf` stops at the
+    -- concealed backticks.
+    local path = MarkdownGuard.whole_within(
+        FileSystem.to_smart_path(file.path),
+        math.huge
+    )
     -- Undimmed, like a Read call's heading.
-    local function stamp_sign(bufnr, at)
+    self:_place_row(file, path, function(bufnr, at)
         vim.api.nvim_buf_set_extmark(bufnr, Renderer.NS_DECORATIONS, at, 0, {
             sign_text = Glyphs.KIND.read .. " ",
             sign_hl_group = Theme.HL_GROUPS.GLYPH_AGENT,
         })
-    end
+    end)
+end
+
+--- Write `text` as one row indented two spaces, right after `anchor`, or at
+--- the end when the anchor is not in the buffer. Rows under one anchor are
+--- contiguous.
+--- @param anchor agentic.acp.Anchor
+--- @param text string
+--- @param decorate fun(bufnr: integer, row: integer) Called with the written row, 0-indexed
+function MessageWriter:_place_row(anchor, text, decorate)
+    -- Indented less than a code block's four spaces so markdown keeps it a
+    -- paragraph.
+    local row = "  " .. text
 
     self:_schedule_follow()
-    local placed, last_row = self:_resolve_anchor(file)
+    local placed, last_row = self:_resolve_anchor(anchor)
     if placed and last_row then
         self:_own_edit(function(bufnr)
-            stamp_sign(
+            decorate(
                 bufnr,
                 self:_insert_after(placed, last_row, { row }, "row")
             )
@@ -1444,13 +1466,14 @@ function MessageWriter:write_loaded_file(file)
     self:_release_prose_pin()
     self:_own_edit(function(bufnr)
         self:_end_prose_run(bufnr)
-        stamp_sign(bufnr, self:_append_row(row))
+        decorate(bufnr, self:_append_row(row))
     end)
 end
 
 --- Append one row at the end of the buffer. It joins the row group the buffer
 --- ends with while nothing has been written after that group, and otherwise
---- starts one, opening the pending section break.
+--- starts one. A pending section break stays pending for the prose or region
+--- written next.
 --- @param row string
 --- @return integer row_index 0-indexed row the text went on
 function MessageWriter:_append_row(row)
@@ -1467,9 +1490,7 @@ function MessageWriter:_append_row(row)
         return self:_insert_after(group, group_end, { row }, "row")
     end
 
-    local lines = self:_take_section_break()
-    vim.list_extend(lines, { row, "" })
-    self:_append_lines(lines)
+    self:_append_lines({ row, "" })
     -- Derived from the line count AFTER the append: on an empty buffer
     -- _append_lines replaces row 0 rather than appending.
     local row_index = vim.api.nvim_buf_line_count(bufnr) - 2

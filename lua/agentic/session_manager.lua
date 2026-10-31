@@ -1071,6 +1071,21 @@ function SessionManager:_agent_of(source_session_id, task_id)
     return task_id and self._agent_by_task[task_id]
 end
 
+--- The id of the main chat's block for a tool call: the id itself when the
+--- call has a block of its own, else the child id of the subagent the id
+--- delegated to, else the id itself.
+--- @param tool_call_id string|nil
+--- @return string|nil block_id
+function SessionManager:_block_id(tool_call_id)
+    if
+        not tool_call_id
+        or self.message_writer.tool_call_blocks[tool_call_id]
+    then
+        return tool_call_id
+    end
+    return self._agent_by_task[tool_call_id] or tool_call_id
+end
+
 --- Route a tool use's id to a subagent, and record it as the subagent's Task
 --- id while none is known. A resumed subagent's updates carry the id of the
 --- call that resumed it; its record keeps the launch's.
@@ -2732,70 +2747,55 @@ local function hook_title(record)
     return title
 end
 
---- One block per anchor listing the hooks that passed there, one row per hook
---- in the order they ran. Passes with no anchor share one block.
---- @param records agentic.acp.HookRecord[] `passed` records
---- @return agentic.ui.MessageWriter.HookBlock[]
-local function passed_blocks(records)
-    --- @type agentic.ui.MessageWriter.HookBlock[]
-    local blocks = {}
-    --- @type table<string, agentic.ui.MessageWriter.HookBlock>
-    local by_anchor = {}
-    for _, record in ipairs(records) do
-        local key = record.tool_call_id
-            or (record.after_prompt and "after_prompt")
-            or (record.after_compaction and "after_compaction")
-            or ""
-        local block = by_anchor[key]
-        if not block then
-            block = {
-                body = {},
-                tool_call_id = record.tool_call_id,
-                after_prompt = record.after_prompt,
-                after_compaction = record.after_compaction,
-                preformatted = true,
-            }
-            by_anchor[key] = block
-            table.insert(blocks, block)
-        end
-        table.insert(block.body, hook_title(record))
-    end
-    return blocks
-end
-
 --- Write the hook activity, loaded files and received messages recorded since
 --- the last drain to the chat buffer, each hook record and loaded file at the
 --- anchor it names, and add recorded tool call fields to their calls. Hooks
---- that passed follow the rest, gathered into one block per anchor.
+--- that passed follow the rest, one row each. A record naming a call that
+--- delegated to a subagent goes under the subagent's block.
 function SessionManager:_drain_side_records()
     if self.destroyed or not self.session_id then
         return
+    end
+    -- A subagent's record links its call to it, and may not have existed when
+    -- the subagent was announced.
+    for child_id in pairs(self._agents) do
+        self:_read_agent_record(child_id)
     end
     --- @type agentic.acp.HookRecord[]
     local passes = {}
     for _, side in ipairs(self.agent:drain_side_records(self.session_id)) do
         if side.kind == "loaded_file" then
-            self.message_writer:write_loaded_file(side.loaded_file)
+            local file = side.loaded_file
+            file.tool_call_id = self:_block_id(file.tool_call_id)
+            self.message_writer:write_loaded_file(file)
         elseif side.kind == "tool_call" then
             self:_apply_side_tool_call(side.tool_call)
         elseif side.kind == "received_message" then
             self:_write_received_message(side.received_message)
-        elseif side.hook.group == "passed" then
-            table.insert(passes, side.hook)
         else
             local record = side.hook
-            self.message_writer:write_hook_block({
-                body = record.body,
-                title = hook_title(record),
-                tool_call_id = record.tool_call_id,
-                after_prompt = record.after_prompt,
-                after_compaction = record.after_compaction,
-                failed = record.group == "failure",
-            })
+            record.tool_call_id = self:_block_id(record.tool_call_id)
+            if record.group == "passed" then
+                table.insert(passes, record)
+            else
+                self.message_writer:write_hook_block({
+                    body = record.body,
+                    title = hook_title(record),
+                    tool_call_id = record.tool_call_id,
+                    after_prompt = record.after_prompt,
+                    after_compaction = record.after_compaction,
+                    failed = record.group == "failure",
+                })
+            end
         end
     end
-    for _, block in ipairs(passed_blocks(passes)) do
-        self.message_writer:write_hook_block(block)
+    for _, record in ipairs(passes) do
+        self.message_writer:write_hook_row({
+            text = hook_title(record),
+            tool_call_id = record.tool_call_id,
+            after_prompt = record.after_prompt,
+            after_compaction = record.after_compaction,
+        })
     end
 end
 
